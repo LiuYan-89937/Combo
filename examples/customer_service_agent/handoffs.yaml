@@ -1,0 +1,14 @@
+schema_version: "0.1"
+kind: "HandoffSpec"
+metadata:
+  name: "customer-service-agent"
+  version: "1.0.0"
+targets:
+  - id: "human_support"
+    type: "human"
+    target_ref: "queue.customer_service"
+    condition: "requires_human == true"
+    context_policy:
+      include_summary: true
+      include_trace_refs: true
+      include_sensitive_context: false

@@ -1,0 +1,496 @@
+from __future__ import annotations
+
+import asyncio
+import re
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from agent_factory.core import EventStatus, FactoryEvent
+from agent_factory.factory import FactoryError
+from agent_factory.factory.package_artifacts import (
+    PackageArtifactGenerator,
+    PackageArtifactReport,
+)
+from agent_factory.factory.package_writer import PackageWriter
+from agent_factory.factory.primitive_planner import PrimitivePlanner
+from agent_factory.factory.primitive_repair import PrimitiveRepair
+from agent_factory.factory_runtime import FactoryMemoryRecord, FactoryRunContext
+from agent_factory.factory_runtime.production.state import (
+    FactoryProductionState,
+    FactoryProductionStateDict,
+)
+from agent_factory.model import ModelConfigError, ModelService
+from agent_factory.specs import AgentPackagePrimitives
+
+
+class FactoryProductionNodes:
+    def __init__(
+        self,
+        context: FactoryRunContext,
+        *,
+        model_service: ModelService | None = None,
+        package_writer: PackageWriter | None = None,
+        artifact_generator: PackageArtifactGenerator | None = None,
+    ) -> None:
+        self.context = context
+        self.model_service = model_service
+        self.package_writer = package_writer or PackageWriter()
+        self.artifact_generator = artifact_generator or PackageArtifactGenerator()
+
+    def capture_requirement(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self.context.memory_store.append(
+            FactoryMemoryRecord(
+                run_id=current.run_id,
+                type="create_agent_requirement",
+                summary="Captured create-agent requirement.",
+                payload={
+                    "requirement": current.requirement,
+                    "draft": current.draft,
+                    "workspace_path": str(self.context.workspace_path),
+                },
+            )
+        )
+        return self._with_event(
+            current,
+            node="capture_requirement",
+            event=FactoryEvent(
+                run_id=current.run_id,
+                stage="capture_requirement",
+                status=EventStatus.COMPLETED,
+                title="Requirement captured",
+                message=current.requirement,
+                payload={"draft": current.draft},
+            ),
+        )
+
+    def load_factory_context(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        return self._with_event(
+            current,
+            node="load_factory_context",
+            event=FactoryEvent(
+                run_id=current.run_id,
+                stage="load_factory_context",
+                status=EventStatus.COMPLETED,
+                title="Factory context loaded",
+                message="Factory workspace, memory, trace, and tools are ready.",
+                payload={
+                    "workspace_path": str(self.context.workspace_path),
+                    "memory_path": str(self.context.memory_path),
+                    "trace_path": str(self.context.trace_path),
+                    "tool_count": len(self.context.tool_registry.list_tools()),
+                },
+            ),
+        )
+
+    def analyze_requirement(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        questions = _clarification_questions(current.requirement)
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="analyze_requirement",
+            status=EventStatus.WARNING if questions else EventStatus.COMPLETED,
+            title="Requirement analyzed",
+            message="Clarification needed." if questions else "Requirement is clear enough for a draft.",
+            payload={"clarification_questions": questions},
+        )
+        current.clarification_questions = questions
+        return self._with_event(current, node="analyze_requirement", event=event)
+
+    def maybe_clarify(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="maybe_clarify",
+            status=EventStatus.WARNING if current.clarification_questions else EventStatus.COMPLETED,
+            title="Clarification gate",
+            message=(
+                "Need user clarification before generating a package."
+                if current.clarification_questions
+                else "No clarification required."
+            ),
+            payload={"questions": current.clarification_questions},
+        )
+        return self._with_event(current, node="maybe_clarify", event=event)
+
+    def plan_primitives(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        try:
+            planner = PrimitivePlanner(self._model_service())
+            result = asyncio.run(planner.plan(self.context, requirement=current.requirement))
+            if result.error:
+                current.error = FactoryError(code=result.error.type, message=result.error.message)
+            else:
+                current.raw_model_data = _raw_mapping(result.data)
+        except ModelConfigError as error:
+            current.error = FactoryError(code="model_config_error", message=str(error))
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="plan_primitives",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title=_planner_event_title(current.error),
+            message=current.error.message if current.error else "Raw primitives JSON generated.",
+            payload={"code": current.error.code if current.error else None},
+        )
+        return self._with_event(current, node="plan_primitives", event=event)
+
+    def validate_primitives(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        current.error = None
+        try:
+            current.primitives = AgentPackagePrimitives.model_validate(current.raw_model_data)
+        except ValidationError as error:
+            current.primitives = None
+            current.error = FactoryError(
+                code="primitive_schema_validation_failed",
+                message=str(error),
+            )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="validate_primitives",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Primitives validation failed" if current.error else "Primitives validated",
+            message=current.error.message if current.error else None,
+            payload={
+                "repair_attempts": current.repair_attempts,
+                "max_repair_attempts": current.max_repair_attempts,
+            },
+        )
+        return self._with_event(current, node="validate_primitives", event=event)
+
+    def repair_primitives(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        validation_error = current.error.message if current.error else "unknown validation error"
+        current.error = None
+        current.repair_attempts += 1
+        try:
+            repairer = PrimitiveRepair(self._model_service())
+            result = asyncio.run(
+                repairer.repair(
+                    self.context,
+                    requirement=current.requirement,
+                    raw_model_data=current.raw_model_data,
+                    validation_errors=validation_error,
+                )
+            )
+            if result.error:
+                current.error = FactoryError(code=result.error.type, message=result.error.message)
+            else:
+                current.raw_model_data = _raw_mapping(result.data)
+        except ModelConfigError as error:
+            current.error = FactoryError(code="model_config_error", message=str(error))
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="repair_primitives",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Primitives repair failed" if current.error else "Primitives repaired",
+            message=current.error.message if current.error else f"repair_attempts={current.repair_attempts}",
+            payload={"repair_attempts": current.repair_attempts},
+        )
+        return self._with_event(current, node="repair_primitives", event=event)
+
+    def write_package(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        if current.primitives is None:
+            current.error = FactoryError(code="missing_primitives", message="No primitives to write.")
+        else:
+            output_dir = self.context.drafts_path / _slugify(current.requirement)
+            current.package_path = output_dir
+            current.validation_report = self.package_writer.write_primitives(output_dir, current.primitives)
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="write_package",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="YAML AgentPackage draft written" if not current.error else "Package write failed",
+            message=current.error.message if current.error else None,
+            artifact_path=str(current.package_path) if current.package_path else None,
+            payload={"files": 9 if not current.error else 0},
+        )
+        return self._with_event(current, node="write_package", event=event)
+
+    def generate_tool_scripts(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        if self._missing_package_inputs(current):
+            return self._artifact_failure_event(current, "generate_tool_scripts")
+        try:
+            assert current.package_path is not None and current.primitives is not None
+            report = self.artifact_generator.generate_tool_scripts(
+                current.package_path,
+                current.primitives,
+            )
+            _apply_artifact_report(current, report)
+        except Exception as error:
+            current.error = FactoryError(code="tool_script_generation_failed", message=str(error))
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="generate_tool_scripts",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Tool draft scripts generated" if not current.error else "Tool draft generation failed",
+            message=current.error.message if current.error else None,
+            artifact_path=str(current.package_path / "generated" / "draft_tools")
+            if current.package_path
+            else None,
+            payload={"tools": current.generated_tool_count},
+        )
+        return self._with_event(current, node="generate_tool_scripts", event=event)
+
+    def generate_tool_tests(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        if self._missing_package_inputs(current):
+            return self._artifact_failure_event(current, "generate_tool_tests")
+        try:
+            assert current.package_path is not None and current.primitives is not None
+            report = self.artifact_generator.generate_tool_tests(
+                current.package_path,
+                current.primitives,
+            )
+            _apply_artifact_report(current, report)
+        except Exception as error:
+            current.error = FactoryError(code="tool_test_generation_failed", message=str(error))
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="generate_tool_tests",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Tool draft tests generated" if not current.error else "Tool test generation failed",
+            message=current.error.message if current.error else None,
+            artifact_path=str(current.package_path / "generated" / "tool_tests")
+            if current.package_path
+            else None,
+            payload={"tool_tests": current.generated_tool_test_count},
+        )
+        return self._with_event(current, node="generate_tool_tests", event=event)
+
+    def generate_mcp_bindings(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        if self._missing_package_inputs(current):
+            return self._artifact_failure_event(current, "generate_mcp_bindings")
+        try:
+            assert current.package_path is not None and current.primitives is not None
+            report = self.artifact_generator.generate_mcp_bindings(
+                current.package_path,
+                current.primitives,
+            )
+            _apply_artifact_report(current, report)
+        except Exception as error:
+            current.error = FactoryError(code="mcp_binding_generation_failed", message=str(error))
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="generate_mcp_bindings",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="MCP bindings generated" if not current.error else "MCP binding generation failed",
+            message=current.error.message if current.error else None,
+            artifact_path=str(current.package_path / "mcp.yaml") if current.package_path else None,
+            payload={"mcp_bindings": current.mcp_binding_count},
+        )
+        return self._with_event(current, node="generate_mcp_bindings", event=event)
+
+    def generate_harness_scenarios(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        if self._missing_package_inputs(current):
+            return self._artifact_failure_event(current, "generate_harness_scenarios")
+        try:
+            assert current.package_path is not None and current.primitives is not None
+            report = self.artifact_generator.generate_harness_scenarios(
+                current.package_path,
+                current.primitives,
+            )
+            _apply_artifact_report(current, report)
+        except Exception as error:
+            current.error = FactoryError(code="harness_generation_failed", message=str(error))
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="generate_harness_scenarios",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Harness scenarios generated" if not current.error else "Harness generation failed",
+            message=current.error.message if current.error else None,
+            artifact_path=str(current.package_path / "harness.yaml") if current.package_path else None,
+            payload={"scenarios": current.harness_scenario_count},
+        )
+        return self._with_event(current, node="generate_harness_scenarios", event=event)
+
+    def validate_package(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        if current.validation_report is None:
+            current.error = FactoryError(
+                code="package_validation_missing",
+                message="Package validation report was not produced.",
+            )
+        elif not current.validation_report.ok:
+            current.error = FactoryError(
+                code="package_validation_failed",
+                message="Generated package failed validation.",
+            )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="validate_package",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Package validation failed" if current.error else "Generated AgentPackage validated",
+            message=current.error.message if current.error else None,
+            payload={"issues": len(current.validation_report.issues) if current.validation_report else 0},
+        )
+        return self._with_event(current, node="validate_package", event=event)
+
+    def record_factory_memory(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self.context.memory_store.append(
+            FactoryMemoryRecord(
+                run_id=current.run_id,
+                type="agent_package_draft_created",
+                summary="Created validated AgentPackage primitives draft.",
+                payload={
+                    "requirement": current.requirement,
+                    "output_path": str(current.package_path),
+                    "validation_ok": current.validation_report.ok if current.validation_report else False,
+                },
+            )
+        )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="record_factory_memory",
+            status=EventStatus.COMPLETED,
+            title="Factory memory recorded",
+            payload={"memory_path": str(self.context.memory_path)},
+        )
+        return self._with_event(current, node="record_factory_memory", event=event)
+
+    def complete(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        current.status = "completed"
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="complete",
+            status=EventStatus.COMPLETED,
+            title="Factory production completed",
+            artifact_path=str(current.package_path) if current.package_path else None,
+        )
+        return self._with_event(current, node="complete", event=event)
+
+    def failed(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        current.status = "failed"
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="failed",
+            status=EventStatus.FAILED,
+            title="Factory production failed",
+            message=current.error.message if current.error else "Unknown factory production error.",
+            payload={"code": current.error.code if current.error else "unknown"},
+        )
+        return self._with_event(current, node="failed", event=event)
+
+    def needs_clarification(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        current.status = "needs_clarification"
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="needs_clarification",
+            status=EventStatus.WARNING,
+            title="Clarification required",
+            message="AgentPackage was not generated.",
+            payload={"questions": current.clarification_questions},
+        )
+        return self._with_event(current, node="needs_clarification", event=event)
+
+    def _with_event(
+        self,
+        state: FactoryProductionState,
+        *,
+        node: str,
+        event: FactoryEvent,
+    ) -> FactoryProductionStateDict:
+        event.payload = {
+            **event.payload,
+            "graph_node": node,
+            "status": state.status,
+        }
+        self.context.trace_store.append_event(event)
+        state.current_stage = event.stage
+        state.graph_node = node
+        state.stage_history.append(node)
+        state.events.append(event)
+        return state.as_graph_state()
+
+    def _model_service(self) -> ModelService:
+        if self.model_service is not None:
+            return self.model_service
+        return ModelService.from_env()
+
+    @staticmethod
+    def _missing_package_inputs(state: FactoryProductionState) -> bool:
+        if state.package_path is None:
+            state.error = FactoryError(
+                code="missing_package_path",
+                message="Package path is required before generating package artifacts.",
+            )
+            return True
+        if state.primitives is None:
+            state.error = FactoryError(
+                code="missing_primitives",
+                message="Primitives are required before generating package artifacts.",
+            )
+            return True
+        return False
+
+    def _artifact_failure_event(
+        self,
+        state: FactoryProductionState,
+        node: str,
+    ) -> FactoryProductionStateDict:
+        event = FactoryEvent(
+            run_id=state.run_id,
+            stage=node,
+            status=EventStatus.FAILED,
+            title="Package artifact generation failed",
+            message=state.error.message if state.error else None,
+            payload={"code": state.error.code if state.error else "unknown"},
+        )
+        return self._with_event(state, node=node, event=event)
+
+
+def _raw_mapping(raw_data: object) -> dict[str, Any] | list[Any] | None:
+    if isinstance(raw_data, dict):
+        return raw_data
+    if isinstance(raw_data, list):
+        return raw_data
+    return None
+
+
+def _planner_event_title(error: FactoryError | None) -> str:
+    if error is None:
+        return "PrimitivePlanner finished"
+    if error.code == "model_config_error":
+        return "Factory model configuration is missing"
+    return "PrimitivePlanner failed"
+
+
+def _apply_artifact_report(
+    state: FactoryProductionState,
+    report: PackageArtifactReport,
+) -> None:
+    state.generated_artifacts.extend(report.artifact_paths)
+    state.generated_tool_count += report.tool_count
+    state.generated_tool_test_count += report.tool_test_count
+    state.mcp_binding_count += report.mcp_binding_count
+    state.harness_scenario_count += report.harness_scenario_count
+
+
+def _slugify(value: str) -> str:
+    ascii_slug = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+    return ascii_slug[:80] or "agent-package-draft"
+
+
+def _clarification_questions(requirement: str) -> list[str]:
+    stripped = requirement.strip()
+    if len(stripped) < 8:
+        return [
+            "请描述要创建的 Agent 领域和目标。",
+            "请说明它需要处理哪些用户问题或任务。",
+        ]
+    lower = stripped.lower()
+    domain_markers = ["agent", "助手", "机器人", "客服", "专家", "助理"]
+    if not any(marker in lower for marker in domain_markers):
+        return ["请说明你想创建的 Agent 类型、角色或使用场景。"]
+    return []

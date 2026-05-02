@@ -1,0 +1,25 @@
+schema_version: "0.1"
+kind: "OutputSpec"
+metadata:
+  name: "customer-service-agent"
+  version: "1.0.0"
+output_mode: "json_object"
+schema:
+  type: "object"
+  properties:
+    intent:
+      type: "string"
+    answer:
+      type: "string"
+    requires_human:
+      type: "boolean"
+  required:
+    - "intent"
+    - "answer"
+    - "requires_human"
+validation:
+  strict: true
+  max_repair_attempts: 1
+repair:
+  enabled: true
+  strategy: "validator_feedback"

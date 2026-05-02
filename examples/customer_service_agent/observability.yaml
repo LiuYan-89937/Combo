@@ -1,0 +1,26 @@
+schema_version: "0.1"
+kind: "ObservabilitySpec"
+metadata:
+  name: "customer-service-agent"
+  version: "1.0.0"
+trace_enabled: true
+spans:
+  - type: "agent_run"
+    enabled: true
+  - type: "model_generation"
+    enabled: true
+  - type: "tool_proposal"
+    enabled: true
+  - type: "tool_call"
+    enabled: true
+record_usage: true
+record_prompt_hash: true
+record_response_hash: true
+record_content: false
+forbidden_fields:
+  - "api_key"
+  - "secret"
+  - "authorization"
+  - "auth_header"
+  - "tool_auth_token"
+allowed_sensitive_fields: []

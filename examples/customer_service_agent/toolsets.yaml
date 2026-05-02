@@ -1,0 +1,15 @@
+schema_version: "0.1"
+kind: "ToolsetSpec"
+metadata:
+  name: "customer-service-agent"
+  version: "1.0.0"
+toolsets:
+  - id: "customer_service_tools"
+    description: "客服查询和策略工具组"
+    exposed_tools:
+      - "order_query"
+      - "refund_policy_query"
+    hidden_tools:
+      - "payment_refund_execute"
+    proposal_only: true
+    selection_strategy: "auto"
