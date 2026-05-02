@@ -135,7 +135,10 @@ class ChatPromptTemplate(BaseModel):
         *,
         temperature: float | None = None,
         max_output_tokens: int | None = None,
-        response_format: Literal["text", "json_object"] = "text",
+        response_format: Literal["text", "json_object", "json_schema"] = "text",
+        json_schema: dict[str, Any] | None = None,
+        json_schema_name: str | None = None,
+        json_schema_strict: bool = True,
         metadata: dict[str, Any] | None = None,
         **values: Any,
     ) -> LLMRequest:
@@ -144,6 +147,8 @@ class ChatPromptTemplate(BaseModel):
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             response_format=response_format,
+            json_schema=json_schema,
+            json_schema_name=json_schema_name,
+            json_schema_strict=json_schema_strict,
             metadata=metadata or {},
         )
-

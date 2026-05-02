@@ -154,6 +154,7 @@ agent_factory/cli/theme.py       颜色、符号、提示符风格
 ```bash
 agentfactory shell
 agentfactory create-agent
+agentfactory drafts
 agentfactory validate-agent
 agentfactory test-agent
 agentfactory register-agent
@@ -180,6 +181,8 @@ AgentFactory v0.1
 
 › 帮我创建一个客服 Agent，支持退款、返厂、投诉和转人工
 › /create-agent --draft
+› /drafts
+› /drafts use latest
 › /review-agent examples/customer_service_agent
 › /approve-agent examples/customer_service_agent
 › /validate examples/customer_service_agent
@@ -206,6 +209,7 @@ AgentFactory v0.1
 /exit
 /init
 /create-agent
+/drafts
 /review-agent
 /approve-agent
 /validate

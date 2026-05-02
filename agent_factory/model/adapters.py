@@ -164,7 +164,16 @@ class OpenAICompatibleChatAdapter:
             ),
             "stream": stream,
         }
-        if request.response_format == "json_object":
+        if request.response_format == "json_schema" and request.json_schema:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": request.json_schema_name or "structured_output",
+                    "schema": request.json_schema,
+                    "strict": request.json_schema_strict,
+                },
+            }
+        elif request.response_format == "json_object":
             payload["response_format"] = {"type": "json_object"}
         return payload
 
@@ -267,4 +276,3 @@ class OpenAICompatibleChatAdapter:
                 retryable=retryable,
             ),
         )
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -9,6 +10,14 @@ from pydantic import ConfigDict, Field
 from ruamel.yaml import YAML
 
 from agent_factory.core.types import JsonDumpMixin
+from agent_factory.factory.tool_generation import (
+    GeneratedToolCodeDraft,
+    build_tool_generation_request,
+    fallback_tool_code,
+    required_tool_test_cases,
+    validate_tool_source,
+)
+from agent_factory.model import ModelService
 from agent_factory.specs import AgentPackagePrimitives
 
 
@@ -25,7 +34,8 @@ class PackageArtifactReport(JsonDumpMixin):
 class PackageArtifactGenerator:
     """Generate draft implementation artifacts for a primitives package."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, model_service: ModelService | None = None) -> None:
+        self.model_service = model_service
         self._yaml = YAML()
         self._yaml.default_flow_style = False
 
@@ -33,6 +43,9 @@ class PackageArtifactGenerator:
         self,
         package_path: Path,
         primitives: AgentPackagePrimitives,
+        *,
+        requirement: str | None = None,
+        requirement_analysis: dict[str, Any] | None = None,
     ) -> PackageArtifactReport:
         report = PackageArtifactReport()
         draft_dir = package_path / "generated" / "draft_tools"
@@ -43,9 +56,17 @@ class PackageArtifactGenerator:
             stem = _safe_file_stem(draft["tool_id"])
             script_path = draft_dir / f"{stem}.py"
             metadata_path = draft_dir / f"{stem}.tool.yaml"
-            script_path.write_text(_tool_script_source(draft), encoding="utf-8")
-            self._dump_yaml(metadata_path, _tool_metadata(primitives, draft, script_path))
-            report.artifact_paths.extend([script_path, metadata_path])
+            code_draft = self._generate_tool_code(
+                primitives,
+                draft,
+                requirement=requirement,
+                requirement_analysis=requirement_analysis,
+            )
+            script_path.write_text(code_draft.python_source, encoding="utf-8")
+            self._dump_yaml(metadata_path, _tool_metadata(primitives, draft, script_path, code_draft))
+            codegen_path = draft_dir / f"{stem}.codegen.json"
+            codegen_path.write_text(code_draft.model_dump_json(indent=2), encoding="utf-8")
+            report.artifact_paths.extend([script_path, metadata_path, codegen_path])
 
         report.tool_count = len(tool_drafts)
         return report
@@ -72,7 +93,8 @@ class PackageArtifactGenerator:
         for draft in tool_drafts:
             stem = _safe_file_stem(draft["tool_id"])
             test_path = test_dir / f"test_{stem}.py"
-            test_path.write_text(_tool_test_source(draft), encoding="utf-8")
+            code_draft = _load_codegen(draft_dir=package_path / "generated" / "draft_tools", stem=stem)
+            test_path.write_text(_tool_test_source(draft, code_draft), encoding="utf-8")
             report.artifact_paths.append(test_path)
 
         report.tool_test_count = len(tool_drafts)
@@ -137,10 +159,10 @@ class PackageArtifactGenerator:
         report = PackageArtifactReport()
         tool_ids = [draft["tool_id"] for draft in _tool_drafts(primitives)]
         mcp_sources = [source for source in primitives.knowledge.sources if source.type == "mcp"]
-        scenarios = [_basic_harness_scenario(primitives)]
+        scenarios = [_basic_harness_scenario(primitives), _memory_harness_scenario()]
 
-        for tool_id in tool_ids:
-            scenarios.append(_tool_harness_scenario(tool_id))
+        for draft in _tool_drafts(primitives):
+            scenarios.append(_tool_harness_scenario(draft))
 
         path = package_path / "harness.yaml"
         self._dump_yaml(
@@ -188,10 +210,129 @@ class PackageArtifactGenerator:
         report.harness_scenario_count = len(scenarios)
         return report
 
+    def generate_package_specs(
+        self,
+        package_path: Path,
+        primitives: AgentPackagePrimitives,
+    ) -> PackageArtifactReport:
+        report = PackageArtifactReport()
+        metadata = primitives.instructions.metadata
+        agent_id = _safe_identifier(metadata.name)
+        tool_ids = [draft["tool_id"] for draft in _tool_drafts(primitives)]
+        files = {
+            "package.yaml": {
+                "schema_version": "0.1",
+                "kind": "PackageManifest",
+                "metadata": _metadata_dict(primitives, suffix="package"),
+                "agent_id": agent_id,
+                "agent_name": metadata.name,
+                "version": metadata.version,
+                "status": "draft",
+                "description": metadata.description,
+                "entrypoint": "agent_factory.agent.worker",
+                "package_format": "agentpackage.v1",
+                "tags": ["factory-generated", "mvp"],
+            },
+            "runtime.yaml": {
+                "schema_version": "0.1",
+                "kind": "RuntimeSpec",
+                "metadata": _metadata_dict(primitives, suffix="runtime"),
+                "runtime_type": "workflow",
+                "workflow_steps": [
+                    {"id": "load_context", "type": "load_context"},
+                    {"id": "load_memory", "type": "load_memory"},
+                    {"id": "model_turn", "type": "model_turn"},
+                    {"id": "route_tools", "type": "route_tools"},
+                    {"id": "write_memory", "type": "write_memory"},
+                    {"id": "write_trace", "type": "write_trace"},
+                ],
+                "graph": {},
+                "max_turns": primitives.conversation.history_window,
+                "timeout_seconds": 60,
+            },
+            "tools.yaml": {
+                "schema_version": "0.1",
+                "kind": "ToolsSpec",
+                "metadata": _metadata_dict(primitives, suffix="tools"),
+                "generated_tools": tool_ids,
+                "default_policy": "proposal_only",
+                "allow_draft_execution": False,
+                "require_approval_for_generated_code": True,
+            },
+            "context.yaml": {
+                "schema_version": "0.1",
+                "kind": "ContextSpec",
+                "metadata": _metadata_dict(primitives, suffix="context"),
+                "sources": _context_sources(primitives),
+                "max_visible_items": 8,
+                "redact_fields": [
+                    "api_key",
+                    "secret",
+                    "authorization",
+                    "auth_header",
+                    "tool_auth_token",
+                ],
+            },
+            "memory.yaml": {
+                "schema_version": "0.1",
+                "kind": "MemorySpec",
+                "metadata": _metadata_dict(primitives, suffix="memory"),
+                "backend": "filesystem",
+                "session_memory_file": "memory/session_memory.jsonl",
+                "summary_memory_file": "memory/summary_memory.jsonl",
+                "enabled": True,
+                "namespace_template": f"agent:{agent_id}:session:{{session_id}}",
+                "redact_before_storage": True,
+            },
+        }
+        for filename, data in files.items():
+            path = package_path / filename
+            self._dump_yaml(path, data)
+            report.artifact_paths.append(path)
+        return report
+
     def _dump_yaml(self, path: Path, data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as file:
             self._yaml.dump(data, file)
+
+    def _generate_tool_code(
+        self,
+        primitives: AgentPackagePrimitives,
+        draft: dict[str, Any],
+        *,
+        requirement: str | None = None,
+        requirement_analysis: dict[str, Any] | None = None,
+    ) -> GeneratedToolCodeDraft:
+        if self.model_service is not None:
+            for _attempt in range(2):
+                try:
+                    result = asyncio.run(
+                        self.model_service.generate_structured(
+                            build_tool_generation_request(
+                                primitives,
+                                draft,
+                                requirement=requirement,
+                                requirement_analysis=requirement_analysis,
+                            ),
+                            schema=GeneratedToolCodeDraft.model_json_schema(),
+                            schema_name="GeneratedToolCodeDraft",
+                        )
+                    )
+                    if result.ok and isinstance(result.data, dict):
+                        code = GeneratedToolCodeDraft.model_validate(result.data)
+                        if code.tool_id != draft["tool_id"]:
+                            continue
+                        source_issues = validate_tool_source(code.python_source)
+                        if not source_issues:
+                            code.test_cases = _merge_tool_test_cases(
+                                code.test_cases,
+                                required_tool_test_cases(draft),
+                            )
+                            return code
+                except Exception:
+                    continue
+        return fallback_tool_code(draft)
 
 
 def merge_artifact_reports(*reports: PackageArtifactReport) -> PackageArtifactReport:
@@ -217,7 +358,7 @@ def _tool_drafts(primitives: AgentPackagePrimitives) -> list[dict[str, Any]]:
                 if tool_id in seen:
                     continue
                 seen.add(tool_id)
-                risk_level = _infer_tool_risk(tool_id)
+                risk_level = _infer_tool_risk(tool_id, toolset.description)
                 drafts.append(
                     {
                         "tool_id": tool_id,
@@ -227,7 +368,7 @@ def _tool_drafts(primitives: AgentPackagePrimitives) -> list[dict[str, Any]]:
                         "proposal_only": toolset.proposal_only,
                         "selection_strategy": toolset.selection_strategy,
                         "risk_level": risk_level,
-                        "approval_required": True,
+                        "approval_required": risk_level in {"high", "critical"},
                     }
                 )
     return drafts
@@ -284,9 +425,21 @@ def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> di
 '''
 
 
-def _tool_test_source(draft: dict[str, Any]) -> str:
+def _tool_test_source(draft: dict[str, Any], code_draft: GeneratedToolCodeDraft) -> str:
     stem = _safe_file_stem(draft["tool_id"])
     class_name = "".join(part.capitalize() for part in stem.split("_")) or "GeneratedTool"
+    test_cases = _merge_tool_test_cases(
+        code_draft.test_cases or fallback_tool_code(draft).test_cases,
+        required_tool_test_cases(draft),
+    )
+    rendered_cases = [
+        {
+            "name": case.name,
+            "input_data": case.input_data,
+            "expected_contains": case.expected_contains,
+        }
+        for case in test_cases
+    ]
     return f'''from __future__ import annotations
 
 import importlib.util
@@ -295,6 +448,7 @@ import unittest
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "draft_tools" / "{stem}.py"
+TEST_CASES = {rendered_cases!r}
 
 
 def load_tool_module():
@@ -306,14 +460,15 @@ def load_tool_module():
 
 
 class {class_name}DraftTests(unittest.TestCase):
-    def test_run_returns_reviewable_draft_contract(self) -> None:
+    def test_run_returns_executable_local_contract(self) -> None:
         module = load_tool_module()
-        result = module.run({{"sample": "value"}})
-
-        self.assertEqual(result["status"], "not_implemented")
-        self.assertEqual(result["tool_id"], module.TOOL_ID)
-        self.assertTrue(result["requires_approval"])
-        self.assertEqual(result["input"], {{"sample": "value"}})
+        for case in TEST_CASES:
+            with self.subTest(case=case["name"]):
+                result = module.run(case["input_data"])
+                self.assertIsInstance(result, dict)
+                self.assertNotEqual(result.get("status"), "not_implemented")
+                for key, expected in case["expected_contains"].items():
+                    self.assertEqual(result.get(key), expected)
 
     def test_schema_contracts_are_objects(self) -> None:
         module = load_tool_module()
@@ -331,6 +486,7 @@ def _tool_metadata(
     primitives: AgentPackagePrimitives,
     draft: dict[str, Any],
     script_path: Path,
+    code_draft: GeneratedToolCodeDraft,
 ) -> dict[str, Any]:
     return {
         "schema_version": "0.1",
@@ -349,16 +505,44 @@ def _tool_metadata(
             "entrypoint": "run",
             "path": str(script_path.relative_to(script_path.parents[2])),
         },
-        "input_schema": {"type": "object", "additionalProperties": True},
-        "output_schema": {
-            "type": "object",
-            "required": ["status", "tool_id", "requires_approval", "input"],
-        },
+        "input_schema": code_draft.input_schema,
+        "output_schema": code_draft.output_schema,
         "approval": {
             "required": draft["approval_required"],
             "reason": "Factory-generated tool code must be reviewed before registration.",
         },
     }
+
+
+def _load_codegen(draft_dir: Path, stem: str) -> GeneratedToolCodeDraft:
+    path = draft_dir / f"{stem}.codegen.json"
+    if not path.exists():
+        return fallback_tool_code({"tool_id": stem, "risk_level": "low", "approval_required": False})
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return GeneratedToolCodeDraft.model_validate(data)
+
+
+def _merge_tool_test_cases(
+    base_cases: list[Any],
+    required_cases: list[Any],
+) -> list[Any]:
+    merged: list[Any] = list(base_cases)
+    seen = {
+        (
+            getattr(case, "name", None),
+            json.dumps(getattr(case, "expected_contains", {}), sort_keys=True, ensure_ascii=False),
+        )
+        for case in merged
+    }
+    for case in required_cases:
+        key = (
+            getattr(case, "name", None),
+            json.dumps(getattr(case, "expected_contains", {}), sort_keys=True, ensure_ascii=False),
+        )
+        if key not in seen:
+            merged.append(case)
+            seen.add(key)
+    return merged
 
 
 def _basic_harness_scenario(primitives: AgentPackagePrimitives) -> dict[str, Any]:
@@ -384,7 +568,35 @@ def _basic_harness_scenario(primitives: AgentPackagePrimitives) -> dict[str, Any
     }
 
 
-def _tool_harness_scenario(tool_id: str) -> dict[str, Any]:
+def _memory_harness_scenario() -> dict[str, Any]:
+    return {
+        "id": "memory_recall_001",
+        "name": "Conversation history recall",
+        "turns": [
+            {"user": "我叫刘岩"},
+            {"user": "我叫什么？"},
+        ],
+        "expected": {
+            "intent": "in_scope",
+            "memory_read_allowed": True,
+            "must_confirm": False,
+            "forbidden_direct_execution": True,
+            "response_constraints": {
+                "must_include": ["刘岩"],
+            },
+        },
+        "observe": {
+            "trace": True,
+            "runtime_path": True,
+            "context_bundle": True,
+            "memory_ops": True,
+            "final_response": True,
+        },
+    }
+
+
+def _tool_harness_scenario(draft: dict[str, Any]) -> dict[str, Any]:
+    tool_id = draft["tool_id"]
     scenario_id = f"{_safe_file_stem(tool_id)}_proposal_001"
     return {
         "id": scenario_id,
@@ -393,8 +605,11 @@ def _tool_harness_scenario(tool_id: str) -> dict[str, Any]:
         "expected": {
             "selected_tool": tool_id,
             "forbidden_tools": [],
-            "must_confirm": True,
-            "forbidden_direct_execution": True,
+            "must_confirm": draft["approval_required"],
+            "forbidden_direct_execution": draft["approval_required"],
+            "response_constraints": {
+                "must_include": ["order_status"] if tool_id == "order_query" else [],
+            },
         },
         "observe": {
             "trace": True,
@@ -415,6 +630,36 @@ def _metadata_dict(primitives: AgentPackagePrimitives, *, suffix: str) -> dict[s
     }
 
 
+def _context_sources(primitives: AgentPackagePrimitives) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = [
+        {
+            "id": "agent_instructions",
+            "type": "static",
+            "content": f"{primitives.instructions.persona}\n{primitives.instructions.goal}",
+            "visible_to_model": True,
+            "visible_to_tools": False,
+            "hidden_from_model": [],
+        }
+    ]
+    for source in primitives.knowledge.sources:
+        sources.append(
+            {
+                "id": source.id,
+                "type": "mcp" if source.type == "mcp" else "static",
+                "content": None,
+                "ref": source.ref,
+                "visible_to_model": source.visible_to_model,
+                "visible_to_tools": True,
+                "hidden_from_model": [
+                    "api_key",
+                    "authorization",
+                    "tool_auth_token",
+                ],
+            }
+        )
+    return sources
+
+
 def _safe_file_stem(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_").lower()
     return normalized or "generated_tool"
@@ -427,8 +672,27 @@ def _safe_identifier(value: str) -> str:
     return normalized
 
 
-def _infer_tool_risk(tool_id: str) -> str:
-    lowered = tool_id.lower()
+def _infer_tool_risk(tool_id: str, description: str | None = None) -> str:
+    lowered = f"{tool_id} {description or ''}".lower()
+    low_risk_markers = [
+        "calculate",
+        "calculator",
+        "compute",
+        "convert",
+        "query",
+        "search",
+        "lookup",
+        "get",
+        "list",
+        "read",
+        "find",
+        "math",
+        "number",
+        "计算",
+        "奇异",
+    ]
+    if any(marker in lowered for marker in low_risk_markers):
+        return "low"
     high_risk_markers = [
         "create",
         "delete",

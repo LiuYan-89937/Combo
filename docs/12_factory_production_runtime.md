@@ -10,11 +10,11 @@ AgentFactory 生产 AgentPackage 不是一次性 workflow，而是一个需要�
 
 ```text
 Factory Production Runtime
-  负责：需求分析、澄清判断、标准件生成、schema repair、写 YAML、校验、trace、memory、stream
-  不负责：AgentInstance 运行、工具真实执行、MCP 调用、Harness 完整执行
+  负责：需求分析、澄清判断、标准件生成、schema repair、写 YAML、生成本地工具/MCP/Harness 草稿、校验、trace、memory、stream
+  不负责：生产外部副作用、真实支付/退款/删除、绕过审批执行高风险工具
 
 AgentInstance Runtime
-  负责：读取 AgentPackage 后按声明运行
+  负责：读取 AgentPackage 后按声明运行、构建上下文、写 Agent memory/trace、路由工具 proposal
   可选：固定 Workflow 或复杂 Graph
 ```
 
@@ -26,7 +26,9 @@ requirement
   -> ModelService.generate_structured()
   -> AgentPackagePrimitives.model_validate()
   -> PackageWriter
-  -> PackageValidator
+  -> PackageArtifactGenerator
+  -> PackageValidator.validate_full_package()
+  -> PackageVerificationRunner
   -> .agentfactory/packages/drafts/<slug>/
 ```
 
@@ -46,6 +48,10 @@ generate_tool_tests
 generate_mcp_bindings
 generate_harness_scenarios
 validate_package
+static_check_tool_scripts
+run_generated_tool_tests
+validate_mcp_bindings_local
+dry_run_harness_scenarios
 record_factory_memory
 complete
 failed
@@ -93,6 +99,22 @@ generate_harness_scenarios
   -> failed
 
 validate_package
+  -> static_check_tool_scripts
+  -> failed
+
+static_check_tool_scripts
+  -> run_generated_tool_tests
+  -> failed
+
+run_generated_tool_tests
+  -> validate_mcp_bindings_local
+  -> failed
+
+validate_mcp_bindings_local
+  -> dry_run_harness_scenarios
+  -> failed
+
+dry_run_harness_scenarios
   -> record_factory_memory
   -> failed
 
@@ -120,6 +142,11 @@ generated_tool_count
 generated_tool_test_count
 mcp_binding_count
 harness_scenario_count
+verification_report
+tool_static_check_report
+tool_test_report
+mcp_binding_report
+harness_dry_run_report
 repair_attempts
 max_repair_attempts
 clarification_questions
@@ -136,8 +163,9 @@ stage_history
 2. 模型输出永远不可信，必须经过 Pydantic schema 校验。
 3. repair 默认最多一次，避免无限自修复。
 4. 工具脚本只生成 draft，不直接进入 Available。
-5. 需求不清晰时进入 needs_clarification，不写 AgentPackage。
-6. trace 和 memory 写入 Factory 自己的 .agentfactory/，与 AgentInstance 隔离。
+5. 本地验证只检查生成物，不连接真实外部 MCP，不运行完整 AgentInstance。
+6. 需求不清晰时进入 needs_clarification，不写 AgentPackage。
+7. trace 和 memory 写入 Factory 自己的 .agentfactory/，与 AgentInstance 隔离。
 ```
 
 ## CLI 流式输出
@@ -173,16 +201,22 @@ agentfactory create-agent --prompt "创建一个客服 Agent" --draft --json --n
 6. 生成 MCP binding 草稿配置。
 7. 生成 Harness 场景和 fixture 草稿。
 8. PackageValidator 立即校验生成目录。
-9. Factory trace / memory 记录。
-10. CLI human stream 和 JSONL stream。
+9. 执行工具脚本安全/语法静态检查、生成工具单测、MCP binding 本地校验、Harness dry-run。
+10. 写入 5 个 verification report。
+11. `test-agent` 读取强类型 HarnessSpec，逐个执行 scenario Runtime 断言，并写入 harness_run.json。
+12. Factory trace / memory 记录。
+13. CLI human stream 和 JSONL stream。
 ```
 
-后续接入：
+MVP 已接入：
 
 ```text
-1. 执行 generated tool tests。
-2. 运行 AgentHarness 场景。
-3. MCP stdio health_check / tools/list。
-4. 工具脚本静态检查和沙箱执行。
-5. 审批与 PackageDiff 节点。
+1. full AgentPackage schema：package/runtime/tools/mcp/context/memory/harness。
+2. WorkflowRuntime：读取 package、读取 session memory、构建模型请求、执行工具后总结、写 Agent trace/memory。
+3. ToolRouter / ToolExecutor：模型只提出 proposal，运行时决定执行或 interrupt。
+4. MCP stdio mock server 与本地 client manager。
+5. AgentHarness Runner 接入 Runtime-backed 执行。
+6. Filesystem Registry、本地 release/rollback。
+7. UpgradeRequest、PatchPlan、ApprovalRecord、PackageDiff 的 MVP 链路。
+8. CLI 普通命令和 slash shell 的主要操作入口。
 ```

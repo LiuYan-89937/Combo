@@ -177,6 +177,20 @@ class ModelLayerTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_structured_output_extracts_json_from_markdown_fence(self) -> None:
+        async def run() -> None:
+            config = ModelConfig(provider="fake")
+            adapter = FakeModelAdapter(['```json\n{"ok": true, "name": "小美"}\n```'])
+            service = ModelService.with_adapter(config, adapter)
+            result = await service.generate_structured(
+                LLMRequest(messages=[LLMMessage(role="user", content="hello")])
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.data, {"ok": True, "name": "小美"})
+
+        asyncio.run(run())
+
     def test_openai_compatible_adapter_builds_chat_completions_payload(self) -> None:
         captured: dict[str, object] = {}
 
@@ -233,6 +247,63 @@ class ModelLayerTests(unittest.TestCase):
                     "max_tokens": 128,
                     "stream": False,
                     "response_format": {"type": "json_object"},
+                },
+            )
+
+        asyncio.run(run())
+
+    def test_openai_compatible_adapter_builds_json_schema_payload(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["payload"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": '{"ok": true}'},
+                        }
+                    ],
+                },
+            )
+
+        async def run() -> None:
+            config = ModelConfig(
+                provider="openai_compatible_chat",
+                base_url="https://example.test/v1",
+                api_key="sk-test-key",
+                model="test-model",
+            )
+            schema = {
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            }
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                adapter = OpenAICompatibleChatAdapter(config, client=client)
+                await adapter.generate(
+                    LLMRequest(
+                        messages=[LLMMessage(role="user", content="hello")],
+                        response_format="json_schema",
+                        json_schema=schema,
+                        json_schema_name="TestSchema",
+                    )
+                )
+
+            payload = captured["payload"]
+            self.assertEqual(
+                payload["response_format"],
+                {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "TestSchema",
+                        "schema": schema,
+                        "strict": True,
+                    },
                 },
             )
 

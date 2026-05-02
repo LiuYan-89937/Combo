@@ -1,0 +1,22 @@
+schema_version: "0.1"
+kind: "RuntimeSpec"
+metadata:
+  name: "customer-service-agent-runtime"
+  version: "1.0.0"
+runtime_type: "workflow"
+workflow_steps:
+  - id: "load_context"
+    type: "load_context"
+  - id: "load_memory"
+    type: "load_memory"
+  - id: "model_turn"
+    type: "model_turn"
+  - id: "route_tools"
+    type: "route_tools"
+  - id: "write_memory"
+    type: "write_memory"
+  - id: "write_trace"
+    type: "write_trace"
+graph: {}
+max_turns: 6
+timeout_seconds: 60

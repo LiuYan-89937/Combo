@@ -19,6 +19,11 @@ class PrimitivePlanner:
         context: FactoryRunContext,
         *,
         requirement: str,
+        requirement_analysis: dict | None = None,
     ) -> StructuredOutputResult:
-        request = self.prompt_builder.build_primitives_request(context, requirement=requirement)
+        request = self.prompt_builder.build_primitives_request(
+            context,
+            requirement=requirement,
+            requirement_analysis=requirement_analysis,
+        )
         return await self.model_service.generate_structured(request)

@@ -1,0 +1,16 @@
+schema_version: "0.1"
+kind: "PackageManifest"
+metadata:
+  name: "customer-service-agent-package"
+  version: "1.0.0"
+  description: "客服 Agent full package example"
+agent_id: "customer_service_agent"
+agent_name: "customer-service-agent"
+version: "1.0.0"
+status: "draft"
+description: "客服 Agent full package example"
+entrypoint: "agent_factory.agent.worker"
+package_format: "agentpackage.v1"
+tags:
+  - "example"
+  - "customer-service"

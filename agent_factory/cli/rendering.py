@@ -6,11 +6,18 @@ from typing import Any
 
 from rich import box
 from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from agent_factory.application import CreateAgentResult, InitFactoryResult
+from agent_factory.application import (
+    CreateAgentResult,
+    DraftAgentDetail,
+    DraftsListResult,
+    InitFactoryResult,
+    TestAgentResult,
+)
 from agent_factory.cli.theme import (
     APP_BANNER,
     APP_SUBTITLE,
@@ -94,8 +101,81 @@ def render_event(event: FactoryEvent, console: Console | None = None) -> None:
     console.print(f"  {symbol} {event.title}", style=style)
     if event.message:
         console.print(f"    {event.message}", style=STYLE_MUTED)
+    questions = _event_questions(event)
+    for question in questions:
+        console.print(f"    {SYMBOL_WARNING} {question}", style=STYLE_WARNING)
+    if event.stage == "analyze_requirement" and not questions:
+        details = _analysis_details(event)
+        if details:
+            console.print(f"    {details}", style=STYLE_MUTED)
     if event.artifact_path:
         render_kv("path", event.artifact_path, console)
+
+
+class FactoryStreamRenderer:
+    """Render Factory stream as one active node plus collapsed summaries."""
+
+    def __init__(self, console: Console | None = None) -> None:
+        self.console = console or Console()
+        self._live: Live | None = None
+        self._current_stage: str | None = None
+
+    def render(self, event: FactoryEvent) -> None:
+        if event.status == EventStatus.PROGRESS and event.payload.get("stream_kind") == "node_thinking":
+            self._show_current_node(event)
+            return
+        self._close_current()
+        render_event(event, self.console)
+
+    def close(self) -> None:
+        self._close_current()
+
+    def _show_current_node(self, event: FactoryEvent) -> None:
+        if not self.console.is_terminal:
+            render_event(event, self.console)
+            return
+        if self._live is None:
+            self._current_stage = event.stage
+            self._live = Live(
+                self._node_panel(event),
+                console=self.console,
+                refresh_per_second=8,
+                transient=True,
+            )
+            self._live.start()
+            return
+        if self._current_stage != event.stage:
+            self._close_current()
+            self._show_current_node(event)
+            return
+        self._live.update(self._node_panel(event))
+
+    def _close_current(self) -> None:
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+            self._current_stage = None
+
+    def _node_panel(self, event: FactoryEvent) -> Panel:
+        lines = [Text(event.title, style=STYLE_TITLE)]
+        if event.message:
+            lines.append(Text(event.message, style=STYLE_MUTED))
+        thinking = event.payload.get("thinking")
+        if thinking:
+            lines.append(Text(""))
+            lines.append(Text("Working notes", style=STYLE_ACCENT))
+            lines.append(Text(str(thinking), style=STYLE_MUTED))
+        details = _analysis_details(event)
+        if details:
+            lines.append(Text(""))
+            lines.append(Text(details, style=STYLE_MUTED))
+        return Panel(
+            Group(*lines),
+            title=f"Factory node: {event.stage}",
+            border_style=STYLE_ACCENT,
+            box=box.ASCII,
+            padding=(1, 2),
+        )
 
 
 def render_create_result(result: CreateAgentResult, console: Console | None = None) -> None:
@@ -121,6 +201,23 @@ def render_create_result(result: CreateAgentResult, console: Console | None = No
         render_kv("Tool tests", result.generated_tool_test_count, console)
         render_kv("MCP bindings", result.mcp_binding_count, console)
         render_kv("Harness scenarios", result.harness_scenario_count, console)
+    if result.verification_report:
+        render_section("Local verification", console)
+        render_kv(
+            "Status",
+            result.verification_report.status,
+            console,
+            style=_result_status_style(_verification_status_style_key(result.verification_report.status)),
+        )
+        render_kv("Issues", result.verification_report.issue_count, console)
+        if result.verification_report.tool_static_check:
+            render_kv("Tool static", result.verification_report.tool_static_check.status, console)
+        if result.verification_report.tool_tests:
+            render_kv("Tool tests", result.verification_report.tool_tests.status, console)
+        if result.verification_report.mcp_binding_check:
+            render_kv("MCP binding", result.verification_report.mcp_binding_check.status, console)
+        if result.verification_report.harness_dry_run:
+            render_kv("Harness dry-run", result.verification_report.harness_dry_run.status, console)
     if result.error:
         render_kv("Error", result.error.code, console, style=STYLE_ERROR)
     if result.next_steps:
@@ -175,6 +272,136 @@ def render_validation_report(report: ValidationReport, console: Console | None =
         console.print("  Fix the reported YAML file and run /validate <path> again.", style=STYLE_MUTED)
 
 
+def render_test_agent_result(result: TestAgentResult, console: Console | None = None) -> None:
+    console = console or Console()
+    status_style = STYLE_SUCCESS if result.ok else STYLE_ERROR
+    render_section("AgentHarness", console)
+    render_kv("Status", result.status, console, style=status_style)
+    render_kv("Package", result.package_path, console)
+    render_kv("Validation", "passed" if result.validation_report.ok else "failed", console)
+    if result.verification_report:
+        render_kv("Verification", result.verification_report.status, console)
+    if result.harness_path:
+        render_kv("Harness", result.harness_path, console)
+    if result.harness_run and result.harness_run.report_path:
+        render_kv("Run report", result.harness_run.report_path, console)
+    render_kv("Scenarios", result.scenario_count, console)
+    if result.scenarios:
+        render_section("Scenarios", console)
+        table = Table(
+            box=box.ASCII,
+            show_header=True,
+            header_style=STYLE_TITLE,
+            expand=False,
+        )
+        table.add_column("ID")
+        table.add_column("Name")
+        table.add_column("Status")
+        table.add_column("Assertions")
+        for scenario in result.scenarios:
+            table.add_row(
+                scenario.id,
+                scenario.name or "-",
+                scenario.status,
+                f"{scenario.assertion_count - scenario.failed_assertions}/{scenario.assertion_count}",
+            )
+        console.print(table)
+    if result.issues:
+        render_section("Issues", console)
+        table = Table(
+            box=box.ASCII,
+            show_header=True,
+            header_style=STYLE_TITLE,
+            expand=False,
+        )
+        table.add_column("Code")
+        table.add_column("Location")
+        table.add_column("Message")
+        for issue in result.issues:
+            table.add_row(issue.code, issue.path or "-", issue.message)
+        console.print(table)
+    render_section(NEXT_LABEL, console)
+    for step in result.next_steps:
+        console.print(f"  {step}", style=STYLE_MUTED)
+
+
+def render_drafts_list(result: DraftsListResult, console: Console | None = None) -> None:
+    console = console or Console()
+    render_section("Draft agents", console)
+    render_kv("Drafts", result.drafts_path, console)
+    render_kv("Count", len(result.drafts), console)
+    if not result.drafts:
+        render_section(NEXT_LABEL, console)
+        console.print("  /create-agent --draft", style=STYLE_MUTED)
+        return
+
+    table = Table(
+        box=box.ASCII,
+        show_header=True,
+        header_style=STYLE_TITLE,
+        expand=False,
+    )
+    table.add_column("ID")
+    table.add_column("Name")
+    table.add_column("Version")
+    table.add_column("Validation")
+    table.add_column("Verification")
+    table.add_column("Tools")
+    table.add_column("Scenarios")
+    for draft in result.drafts:
+        table.add_row(
+            draft.id,
+            draft.agent_name,
+            draft.version or "-",
+            draft.validation_status,
+            draft.verification_status,
+            str(draft.tool_count),
+            str(draft.harness_scenario_count),
+        )
+    console.print(table)
+    render_section(NEXT_LABEL, console)
+    console.print("  /drafts show latest", style=STYLE_MUTED)
+    console.print("  /drafts use latest", style=STYLE_MUTED)
+    console.print("  /run --input \"...\"", style=STYLE_MUTED)
+
+
+def render_draft_detail(detail: DraftAgentDetail, console: Console | None = None) -> None:
+    console = console or Console()
+    summary = detail.summary
+    render_section("Draft agent", console)
+    render_kv("ID", summary.id, console)
+    render_kv("Name", summary.agent_name, console, style=STYLE_SUCCESS)
+    render_kv("Agent ID", summary.agent_id, console)
+    render_kv("Version", summary.version, console)
+    render_kv("Status", summary.status, console)
+    render_kv("Path", summary.path, console)
+    render_kv("Validation", summary.validation_status, console)
+    render_kv("Verification", summary.verification_status, console)
+    if detail.persona:
+        render_section("Behavior", console)
+        render_kv("Persona", detail.persona, console)
+    if detail.goal:
+        render_kv("Goal", detail.goal, console)
+    if detail.boundaries:
+        render_section("Boundaries", console)
+        for boundary in detail.boundaries[:8]:
+            console.print(f"  - {boundary}", style=STYLE_MUTED)
+    render_section("Capabilities", console)
+    render_kv("Tools", ", ".join(detail.tool_ids) or "none", console)
+    render_kv("MCP bindings", ", ".join(detail.mcp_binding_ids) or "none", console)
+    render_kv("Harness", ", ".join(detail.scenario_ids) or "none", console)
+    if detail.validation_report and detail.validation_report.issues:
+        render_section("Validation issues", console)
+        for issue in detail.validation_report.issues[:5]:
+            location = issue.file or "-"
+            if issue.path:
+                location = f"{location}:{issue.path}"
+            console.print(f"  {SYMBOL_WARNING} {issue.code} {location} {issue.message}", style=STYLE_WARNING)
+    render_section(NEXT_LABEL, console)
+    for step in detail.next_steps:
+        console.print(f"  {step}", style=STYLE_MUTED)
+
+
 def render_not_implemented(command: str, console: Console | None = None) -> None:
     console = console or Console()
     render_section("Command", console)
@@ -189,7 +416,7 @@ def render_requirement_captured(requirement: str, console: Console | None = None
     console.print(f"  {SYMBOL_ADD} Requirement captured", style=STYLE_SUCCESS)
     console.print(f"    {requirement}", style=STYLE_MUTED)
     render_section(NEXT_LABEL, console)
-    console.print("  /create-agent --draft", style=STYLE_MUTED)
+    console.print("  /create-agent", style=STYLE_MUTED)
 
 
 def render_help(
@@ -232,6 +459,22 @@ def _status_symbol_and_style(status: EventStatus) -> tuple[str, str]:
     return SYMBOL_PROGRESS, STYLE_ACCENT
 
 
+def _event_questions(event: FactoryEvent) -> list[str]:
+    raw_questions = event.payload.get("clarification_questions") or event.payload.get("questions")
+    if not isinstance(raw_questions, list):
+        return []
+    return [str(question) for question in raw_questions if str(question).strip()]
+
+
+def _analysis_details(event: FactoryEvent) -> str:
+    pairs = []
+    for key in ["agent_name", "agent_type", "safety_profile", "analysis_source"]:
+        value = event.payload.get(key)
+        if value:
+            pairs.append(f"{key}={value}")
+    return ", ".join(pairs)
+
+
 def _result_status_style(status: str) -> str:
     if status == "completed":
         return STYLE_SUCCESS
@@ -242,8 +485,16 @@ def _result_status_style(status: str) -> str:
     return STYLE_ACCENT
 
 
+def _verification_status_style_key(status: str) -> str:
+    if status == "passed":
+        return "completed"
+    if status == "failed":
+        return "failed"
+    return "running"
+
+
 def _command_groups(commands: list[str]) -> list[tuple[str, list[str]]]:
-    create = ["/help", "/exit", "/init", "/create-agent", "/review-agent", "/approve-agent"]
+    create = ["/help", "/exit", "/init", "/create-agent", "/drafts", "/review-agent", "/approve-agent"]
     run = ["/validate", "/test", "/register", "/run", "/upgrade", "/plan-upgrade"]
     ops = ["/review-patch", "/approve-patch", "/apply-patch-plan", "/trace", "/diff", "/approval", "/registry"]
     known = set(create + run + ops)

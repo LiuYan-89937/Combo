@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.test_factory_agent import service_with_responses, valid_primitives_payload
 
+from agent_factory.factory.package_artifacts import PackageArtifactGenerator, PackageArtifactReport
 from agent_factory.factory_runtime import FactoryRunContext
 from agent_factory.factory_runtime.production import FactoryProductionRuntime
 from agent_factory.specs import ValidationReport, ValidationSeverity
@@ -33,7 +36,12 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertTrue(state.validation_report.ok)
             self.assertEqual(state.generated_tool_count, 1)
             self.assertEqual(state.generated_tool_test_count, 1)
-            self.assertEqual(state.harness_scenario_count, 2)
+            self.assertEqual(state.harness_scenario_count, 3)
+            self.assertIsNotNone(state.verification_report)
+            self.assertEqual(state.verification_report.status, "passed")
+            self.assertTrue(
+                (state.package_path / "generated" / "reports" / "factory_verification.json").exists()
+            )
             self.assertIn("complete", state.stage_history)
 
     def test_vague_requirement_needs_clarification_without_package(self) -> None:
@@ -50,6 +58,38 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertIsNone(state.package_path)
             self.assertNotIn("plan_primitives", state.stage_history)
 
+    def test_companion_agent_requirement_is_clear_without_agent_keyword(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()])
+            )
+
+            state = runtime.run(requirement="创建一个虚拟恋爱女友叫小美", context=context)
+
+            self.assertEqual(state.status, "completed", state.error)
+            self.assertEqual(state.clarification_questions, [])
+            self.assertIn("plan_primitives", state.stage_history)
+            self.assertIsNotNone(state.requirement_analysis)
+            self.assertEqual(state.requirement_analysis["safety_profile"], "companion_agent")
+
+    def test_requirement_analysis_fallback_keeps_graph_running_without_model_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cwd = Path.cwd()
+            os.chdir(tmpdir)
+            try:
+                context = FactoryRunContext.create(start_path=tmpdir)
+                runtime = FactoryProductionRuntime()
+
+                with patch.dict(os.environ, {}, clear=True):
+                    state = runtime.run(requirement="创建一个虚拟恋爱女友叫小美", context=context)
+            finally:
+                os.chdir(cwd)
+
+            self.assertIn("plan_primitives", state.stage_history)
+            self.assertEqual(state.requirement_analysis["safety_profile"], "companion_agent")
+            self.assertIn(state.error.code, {"model_config_error", "provider_network_error"})
+
     def test_invalid_primitives_are_repaired_once(self) -> None:
         invalid = valid_primitives_payload()
         invalid["instructions"] = {**invalid["instructions"], "goal": ""}
@@ -64,6 +104,43 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertEqual(state.status, "completed", state.error)
             self.assertEqual(state.repair_attempts, 1)
             self.assertIn("repair_primitives", state.stage_history)
+
+    def test_repaired_primitives_normalize_observability_sensitive_fields(self) -> None:
+        repaired = valid_primitives_payload()
+        repaired["observability"] = {
+            **repaired["observability"],
+            "forbidden_fields": [
+                "api_key",
+                "secret",
+                "authorization",
+                "auth_header }",
+                "tool_auth_token",
+            ],
+            "allowed_sensitive_fields": ["auth_header", "safe_public_field"],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses(
+                    ['["Only manage customer_tickets and status values"]', repaired]
+                )
+            )
+
+            state = runtime.run(requirement="创建客服 Agent", context=context)
+
+            self.assertEqual(state.status, "completed", state.error)
+            self.assertEqual(state.repair_attempts, 1)
+            self.assertEqual(
+                state.primitives.observability.forbidden_fields,
+                [
+                    "api_key",
+                    "secret",
+                    "authorization",
+                    "auth_header",
+                    "tool_auth_token",
+                ],
+            )
+            self.assertEqual(state.primitives.observability.allowed_sensitive_fields, ["safe_public_field"])
 
     def test_repair_limit_failure(self) -> None:
         invalid = valid_primitives_payload()
@@ -95,6 +172,86 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertIn("generate_harness_scenarios", state.stage_history)
             self.assertIn("validate_package", state.stage_history)
 
+    def test_static_check_failure_fails_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()]),
+                artifact_generator=SyntaxErrorArtifactGenerator(),
+            )
+
+            state = runtime.run(requirement="创建客服 Agent", context=context)
+
+            self.assertEqual(state.status, "failed")
+            self.assertEqual(state.error.code, "tool_static_check_failed")
+            self.assertEqual(state.tool_static_check_report.status, "failed")
+            self.assertIn("static_check_tool_scripts", state.stage_history)
+
+    def test_generated_tool_test_failure_fails_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()]),
+                artifact_generator=FailingToolTestArtifactGenerator(),
+            )
+
+            state = runtime.run(requirement="创建客服 Agent", context=context)
+
+            self.assertEqual(state.status, "failed")
+            self.assertEqual(state.error.code, "generated_tool_tests_failed")
+            self.assertEqual(state.tool_test_report.status, "failed")
+            self.assertIn("run_generated_tool_tests", state.stage_history)
+
+    def test_duplicate_mcp_binding_fails_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()]),
+                artifact_generator=DuplicateMCPArtifactGenerator(),
+            )
+
+            state = runtime.run(requirement="创建客服 Agent", context=context)
+
+            self.assertEqual(state.status, "failed")
+            self.assertEqual(state.error.code, "mcp_binding_local_check_failed")
+            self.assertEqual(state.mcp_binding_report.status, "failed")
+            self.assertIn("validate_mcp_bindings_local", state.stage_history)
+
+    def test_duplicate_harness_scenario_fails_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()]),
+                artifact_generator=DuplicateHarnessArtifactGenerator(),
+            )
+
+            state = runtime.run(requirement="创建客服 Agent", context=context)
+
+            self.assertEqual(state.status, "failed")
+            self.assertEqual(state.error.code, "harness_dry_run_failed")
+            self.assertEqual(state.harness_dry_run_report.status, "failed")
+            self.assertIn("dry_run_harness_scenarios", state.stage_history)
+
+    def test_no_tool_agent_skips_tool_checks_and_completes(self) -> None:
+        payload = valid_primitives_payload()
+        payload["toolsets"] = {
+            **payload["toolsets"],
+            "toolsets": [],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([payload])
+            )
+
+            state = runtime.run(requirement="创建客服 Agent", context=context)
+
+            self.assertEqual(state.status, "completed")
+            self.assertEqual(state.tool_static_check_report.status, "skipped")
+            self.assertEqual(state.tool_test_report.status, "skipped")
+            self.assertEqual(state.mcp_binding_report.status, "skipped")
+            self.assertEqual(state.harness_dry_run_report.status, "passed")
+
     def test_stream_yields_progress_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             context = FactoryRunContext.create(start_path=tmpdir)
@@ -109,6 +266,8 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertEqual(events[-1].status, "completed")
             self.assertIn("generate_tool_scripts", [event.stage for event in events])
             self.assertIn("generate_harness_scenarios", [event.stage for event in events])
+            self.assertIn("run_generated_tool_tests", [event.stage for event in events])
+            self.assertIn("dry_run_harness_scenarios", [event.stage for event in events])
 
 
 class FailingPackageWriter:
@@ -121,6 +280,76 @@ class FailingPackageWriter:
             "forced failure",
         )
         return report
+
+
+class SyntaxErrorArtifactGenerator(PackageArtifactGenerator):
+    def generate_tool_scripts(self, package_path, primitives, **kwargs):
+        report = super().generate_tool_scripts(package_path, primitives, **kwargs)
+        bad_path = package_path / "generated" / "draft_tools" / "broken.py"
+        bad_path.write_text("def broken(:\n    pass\n", encoding="utf-8")
+        report.artifact_paths.append(bad_path)
+        return report
+
+
+class FailingToolTestArtifactGenerator(PackageArtifactGenerator):
+    def generate_tool_tests(self, package_path, primitives):
+        report = super().generate_tool_tests(package_path, primitives)
+        test_path = package_path / "generated" / "tool_tests" / "test_order_query.py"
+        test_path.write_text(
+            "import unittest\n\n"
+            "class FailingGeneratedToolTest(unittest.TestCase):\n"
+            "    def test_failure(self):\n"
+            "        self.fail('forced failure')\n",
+            encoding="utf-8",
+        )
+        return report
+
+
+class DuplicateMCPArtifactGenerator(PackageArtifactGenerator):
+    def generate_mcp_bindings(self, package_path, primitives):
+        path = package_path / "mcp.yaml"
+        path.write_text(
+            "schema_version: '0.1'\n"
+            "kind: MCPBindingSpec\n"
+            "servers:\n"
+            "  - id: duplicate\n"
+            "  - id: duplicate\n"
+            "bindings:\n"
+            "  - id: binding\n"
+            "    source_id: duplicate\n"
+            "    capability_ref: mcp.duplicate.default@1.0.0\n"
+            "    risk_level: medium\n"
+            "  - id: binding\n"
+            "    source_id: duplicate\n"
+            "    capability_ref: mcp.duplicate.default@1.0.0\n"
+            "    risk_level: medium\n",
+            encoding="utf-8",
+        )
+        return PackageArtifactReport(artifact_paths=[path], mcp_binding_count=2)
+
+
+class DuplicateHarnessArtifactGenerator(PackageArtifactGenerator):
+    def generate_harness_scenarios(self, package_path, primitives):
+        path = package_path / "harness.yaml"
+        path.write_text(
+            "schema_version: '0.1'\n"
+            "kind: HarnessSpec\n"
+            "fixtures:\n"
+            "  tools: {}\n"
+            "scenarios:\n"
+            "  - id: duplicate\n"
+            "    turns:\n"
+            "      - user: hello\n"
+            "    expected: {}\n"
+            "    observe: {}\n"
+            "  - id: duplicate\n"
+            "    turns:\n"
+            "      - user: hello again\n"
+            "    expected: {}\n"
+            "    observe: {}\n",
+            encoding="utf-8",
+        )
+        return PackageArtifactReport(artifact_paths=[path], harness_scenario_count=2)
 
 
 if __name__ == "__main__":

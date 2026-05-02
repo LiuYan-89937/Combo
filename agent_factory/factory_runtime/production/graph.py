@@ -11,6 +11,7 @@ from agent_factory.factory_runtime.production.routes import (
     route_after_repair,
     route_after_validate_package,
     route_after_validate_primitives,
+    route_after_verification,
 )
 from agent_factory.factory_runtime.production.state import FactoryProductionStateDict
 
@@ -30,6 +31,10 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
     graph.add_node("generate_mcp_bindings", nodes.generate_mcp_bindings)
     graph.add_node("generate_harness_scenarios", nodes.generate_harness_scenarios)
     graph.add_node("validate_package", nodes.validate_package)
+    graph.add_node("static_check_tool_scripts", nodes.static_check_tool_scripts)
+    graph.add_node("run_generated_tool_tests", nodes.run_generated_tool_tests)
+    graph.add_node("validate_mcp_bindings_local", nodes.validate_mcp_bindings_local)
+    graph.add_node("dry_run_harness_scenarios", nodes.dry_run_harness_scenarios)
     graph.add_node("record_factory_memory", nodes.record_factory_memory)
     graph.add_node("complete", nodes.complete)
     graph.add_node("failed", nodes.failed)
@@ -116,7 +121,39 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
         "validate_package",
         route_after_validate_package,
         {
-            "record_factory_memory": "record_factory_memory",
+            "static_check_tool_scripts": "static_check_tool_scripts",
+            "failed": "failed",
+        },
+    )
+    graph.add_conditional_edges(
+        "static_check_tool_scripts",
+        route_after_verification,
+        {
+            "continue": "run_generated_tool_tests",
+            "failed": "failed",
+        },
+    )
+    graph.add_conditional_edges(
+        "run_generated_tool_tests",
+        route_after_verification,
+        {
+            "continue": "validate_mcp_bindings_local",
+            "failed": "failed",
+        },
+    )
+    graph.add_conditional_edges(
+        "validate_mcp_bindings_local",
+        route_after_verification,
+        {
+            "continue": "dry_run_harness_scenarios",
+            "failed": "failed",
+        },
+    )
+    graph.add_conditional_edges(
+        "dry_run_harness_scenarios",
+        route_after_verification,
+        {
+            "continue": "record_factory_memory",
             "failed": "failed",
         },
     )

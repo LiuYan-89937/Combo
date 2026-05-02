@@ -34,12 +34,15 @@ class FactoryPromptBuilder:
         context: FactoryRunContext,
         *,
         requirement: str,
+        requirement_analysis: dict | None = None,
     ) -> LLMRequest:
         schema = AgentPackagePrimitives.model_json_schema(by_alias=True)
         factory_context = self.context_builder.build_prompt_text(context, requirement=requirement)
         user_prompt = (
             "Create an AgentPackagePrimitives JSON object for this requirement.\n\n"
             f"Requirement:\n{requirement}\n\n"
+            "RequirementAnalysis, if available:\n"
+            f"{json.dumps(requirement_analysis or {}, ensure_ascii=False)}\n\n"
             f"Factory context:\n{factory_context}\n\n"
             "AgentPackagePrimitives JSON Schema:\n"
             f"{json.dumps(schema, ensure_ascii=False)}"
@@ -49,7 +52,10 @@ class FactoryPromptBuilder:
             .system(FACTORY_SYSTEM_PROMPT)
             .user(user_prompt)
             .request(
-                response_format="json_object",
+                response_format="json_schema",
+                json_schema=schema,
+                json_schema_name="AgentPackagePrimitives",
+                json_schema_strict=True,
                 metadata={
                     "factory_run_id": context.run_id,
                     "operation": "create_agent_primitives",
@@ -81,7 +87,10 @@ class FactoryPromptBuilder:
             .system(FACTORY_SYSTEM_PROMPT)
             .user(user_prompt)
             .request(
-                response_format="json_object",
+                response_format="json_schema",
+                json_schema=schema,
+                json_schema_name="AgentPackagePrimitivesRepair",
+                json_schema_strict=True,
                 metadata={
                     "factory_run_id": context.run_id,
                     "operation": "repair_agent_primitives",

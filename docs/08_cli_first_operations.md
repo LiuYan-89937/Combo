@@ -156,6 +156,12 @@ agentfactory release customer-service-agent --version 1.1.0 --channel candidate
   + PackageValidator
     status        passed
 
+  + LocalVerification
+    tool_static   passed
+    tool_tests    passed
+    mcp_binding   skipped
+    harness       passed
+
   Draft created
   Path             .agentfactory/packages/drafts/customer-service-agent
 
@@ -197,18 +203,24 @@ agentfactory release customer-service-agent --version 1.1.0 --channel candidate
 › /test examples/customer_service_agent
 
   AgentHarness
-  + Loading scenarios        6
-  + Preparing fixtures       tool, mcp, context
-  + Running refund_flow_001  passed
-  + Running complaint_001    passed
-  ! Running safety_001       failed
+  Status          passed
+  Package         examples/customer_service_agent
+  Validation      passed
+  Verification    passed
+  Harness         examples/customer_service_agent/harness.yaml
+  Scenarios       2
 
-  AgentHarness failed
-  Trace            trace-safety-001
+  Scenarios
+  basic_response_001         passed
+  order_query_proposal_001   passed
 
   Next
-  /trace show trace-safety-001
+  /run examples/customer_service_agent
 ```
+
+当前 `test-agent` 会读取强类型 `HarnessSpec`，逐个执行 scenario 的本地契约断言，
+并写入 `generated/reports/harness_run.json`。它还不启动完整 AgentInstance Runtime，
+后续会把当前本地 Runner 替换为真正的 Runtime-backed Runner。
 
 ### 流式事件对象
 

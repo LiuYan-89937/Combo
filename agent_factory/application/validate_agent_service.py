@@ -14,6 +14,7 @@ class ValidateAgentRequest(JsonDumpMixin):
 
     path: Path
     strict: bool = False
+    primitives_only: bool = False
 
 
 class ValidateAgentResult(JsonDumpMixin):
@@ -31,5 +32,8 @@ class ValidateAgentService:
         self.validator = validator or PackageValidator()
 
     def validate_agent(self, request: ValidateAgentRequest) -> ValidateAgentResult:
-        report = self.validator.validate_primitives(request.path)
+        if request.primitives_only:
+            report = self.validator.validate_primitives(request.path)
+        else:
+            report = self.validator.validate_full_package(request.path)
         return ValidateAgentResult(report=report)

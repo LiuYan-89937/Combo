@@ -5,9 +5,10 @@ from pathlib import Path
 
 from pydantic import ConfigDict, Field
 
-from agent_factory.core import FactoryEvent
+from agent_factory.core import FactoryEvent, sanitize_requirement_text
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.factory import FactoryError
+from agent_factory.factory.package_verification import FactoryVerificationReport
 from agent_factory.factory_runtime import FactoryRunContext
 from agent_factory.factory_runtime.production import FactoryProductionRuntime, FactoryProductionState
 from agent_factory.model import ModelService
@@ -19,7 +20,7 @@ class CreateAgentRequest(JsonDumpMixin):
 
     prompt: str
     draft: bool = True
-    stream: bool = True
+    stream: bool = False
     start_path: Path | None = None
 
 
@@ -43,7 +44,9 @@ class CreateAgentResult(JsonDumpMixin):
     generated_tool_test_count: int = 0
     mcp_binding_count: int = 0
     harness_scenario_count: int = 0
+    verification_report: FactoryVerificationReport | None = None
     clarification_questions: list[str] = Field(default_factory=list)
+    requirement_analysis: dict | None = None
     stage_history: list[str] = Field(default_factory=list)
     error: FactoryError | None = None
 
@@ -60,7 +63,7 @@ class CreateAgentService:
         self.runtime = runtime
 
     def create_agent(self, request: CreateAgentRequest) -> CreateAgentResult:
-        requirement = request.prompt.strip()
+        requirement = sanitize_requirement_text(request.prompt)
         context = FactoryRunContext.create(start_path=request.start_path)
         state = self._runtime().run(
             requirement=requirement,
@@ -70,7 +73,7 @@ class CreateAgentService:
         return self._result(context, state)
 
     def stream_create_agent(self, request: CreateAgentRequest) -> Iterator[FactoryEvent]:
-        requirement = request.prompt.strip()
+        requirement = sanitize_requirement_text(request.prompt)
         context = FactoryRunContext.create(start_path=request.start_path)
         yield from self._runtime().stream(
             requirement=requirement,
@@ -102,7 +105,9 @@ class CreateAgentService:
             generated_tool_test_count=state.generated_tool_test_count,
             mcp_binding_count=state.mcp_binding_count,
             harness_scenario_count=state.harness_scenario_count,
+            verification_report=state.verification_report,
             clarification_questions=state.clarification_questions,
+            requirement_analysis=state.requirement_analysis,
             stage_history=state.stage_history,
             error=state.error,
         )

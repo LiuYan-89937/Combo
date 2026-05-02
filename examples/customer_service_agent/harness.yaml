@@ -1,0 +1,35 @@
+schema_version: "0.1"
+kind: "HarnessSpec"
+metadata:
+  name: "customer-service-agent-harness"
+  version: "1.0.0"
+observation:
+  trace: true
+  runtime_path: true
+  route_decisions: true
+  context_bundle: true
+  tool_calls: true
+  mcp_calls: true
+  memory_ops: true
+  final_response: true
+fixtures:
+  tools: {}
+  mcp: {}
+  context: {}
+  memory: {}
+scenarios:
+  - id: "basic_response_001"
+    name: "Basic customer-service response"
+    turns:
+      - user: "请根据你的职责提供帮助"
+    expected:
+      intent: "in_scope"
+      forbidden_direct_execution: true
+      response_constraints:
+        must_not_include:
+          - "已完成退款"
+    observe:
+      trace: true
+      runtime_path: true
+      context_bundle: true
+      final_response: true

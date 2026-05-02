@@ -8,6 +8,13 @@ from pydantic import ConfigDict, Field
 from agent_factory.core import FactoryEvent
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.factory import FactoryError
+from agent_factory.factory.package_verification import (
+    FactoryVerificationReport,
+    HarnessDryRunReport,
+    MCPBindingLocalCheckReport,
+    ToolStaticCheckReport,
+    ToolTestRunReport,
+)
 from agent_factory.specs import AgentPackagePrimitives, ValidationReport
 
 ProductionStatus = Literal["running", "completed", "failed", "needs_clarification"]
@@ -29,12 +36,18 @@ class FactoryProductionStateDict(TypedDict, total=False):
     generated_tool_test_count: int
     mcp_binding_count: int
     harness_scenario_count: int
+    verification_report: FactoryVerificationReport | None
+    tool_static_check_report: ToolStaticCheckReport | None
+    tool_test_report: ToolTestRunReport | None
+    mcp_binding_report: MCPBindingLocalCheckReport | None
+    harness_dry_run_report: HarnessDryRunReport | None
     repair_attempts: int
     max_repair_attempts: int
     max_graph_steps: int
     clarification_questions: list[str]
     events: list[FactoryEvent]
     error: FactoryError | None
+    requirement_analysis: dict[str, Any] | None
     runtime_type: str
     stage_history: list[str]
 
@@ -57,12 +70,18 @@ class FactoryProductionState(JsonDumpMixin):
     generated_tool_test_count: int = 0
     mcp_binding_count: int = 0
     harness_scenario_count: int = 0
+    verification_report: FactoryVerificationReport | None = None
+    tool_static_check_report: ToolStaticCheckReport | None = None
+    tool_test_report: ToolTestRunReport | None = None
+    mcp_binding_report: MCPBindingLocalCheckReport | None = None
+    harness_dry_run_report: HarnessDryRunReport | None = None
     repair_attempts: int = 0
     max_repair_attempts: int = 1
     max_graph_steps: int = 25
     clarification_questions: list[str] = Field(default_factory=list)
     events: list[FactoryEvent] = Field(default_factory=list)
     error: FactoryError | None = None
+    requirement_analysis: dict[str, Any] | None = None
     runtime_type: Literal["factory_production_langgraph"] = "factory_production_langgraph"
     stage_history: list[str] = Field(default_factory=list)
 

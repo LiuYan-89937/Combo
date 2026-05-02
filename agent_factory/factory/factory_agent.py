@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from agent_factory.factory.package_writer import PackageWriter
+from agent_factory.factory.primitive_normalizer import normalize_primitives_candidate
 from agent_factory.factory.primitive_planner import PrimitivePlanner
 from agent_factory.factory.primitive_repair import PrimitiveRepair
 from agent_factory.factory.types import FactoryCreateOptions, FactoryError, FactoryPrimitiveDraft
@@ -104,6 +105,7 @@ class FactoryAgent:
         *,
         repair_attempts: int,
     ) -> FactoryPrimitiveDraft:
+        raw_data = normalize_primitives_candidate(raw_data)
         try:
             primitives = AgentPackagePrimitives.model_validate(raw_data)
             return FactoryPrimitiveDraft(

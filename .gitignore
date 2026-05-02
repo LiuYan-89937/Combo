@@ -1,6 +1,8 @@
 .env
 .agentfactory/
 .venv/
+examples/customer_service_agent/memory/
+examples/customer_service_agent/traces/
 __pycache__/
 *.py[cod]
 .pytest_cache/

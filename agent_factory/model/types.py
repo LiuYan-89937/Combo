@@ -79,7 +79,10 @@ class LLMRequest(BaseModel):
     messages: list[LLMMessage]
     temperature: float | None = None
     max_output_tokens: int | None = None
-    response_format: Literal["text", "json_object"] = "text"
+    response_format: Literal["text", "json_object", "json_schema"] = "text"
+    json_schema: dict[str, Any] | None = None
+    json_schema_name: str | None = None
+    json_schema_strict: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

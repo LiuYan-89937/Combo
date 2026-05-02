@@ -9,13 +9,22 @@ from ruamel.yaml import YAML
 from agent_factory.specs import (
     AgentPackagePrimitives,
     ConversationSpec,
+    ContextSpec,
+    FullAgentPackage,
+    GeneratedToolDraftSpec,
     GuardrailSpec,
+    HarnessPackageSpec,
     HandoffSpec,
     InstructionSpec,
     KnowledgeSpec,
+    MCPBindingSpec,
+    MemorySpec,
     ObservabilitySpec,
     OutputSpec,
+    PackageManifest,
+    RuntimeSpec,
     RunContextSpec,
+    ToolsSpec,
     ToolsetSpec,
     ValidationIssue,
     ValidationSeverity,
@@ -38,6 +47,17 @@ REQUIRED_PRIMITIVE_FILES: dict[str, type[BaseModel]] = {
     "guardrails.yaml": GuardrailSpec,
     "handoffs.yaml": HandoffSpec,
     "observability.yaml": ObservabilitySpec,
+}
+
+
+REQUIRED_FULL_PACKAGE_FILES: dict[str, type[BaseModel]] = {
+    "package.yaml": PackageManifest,
+    "runtime.yaml": RuntimeSpec,
+    "tools.yaml": ToolsSpec,
+    "mcp.yaml": MCPBindingSpec,
+    "context.yaml": ContextSpec,
+    "memory.yaml": MemorySpec,
+    "harness.yaml": HarnessPackageSpec,
 }
 
 
@@ -83,6 +103,105 @@ class PackageLoader:
 
         return AgentPackagePrimitives.model_validate(loaded)
 
+    def load_manifest(self, root_path: str | Path) -> PackageManifest:
+        return self._load_model(Path(root_path), "package.yaml", PackageManifest)
+
+    def load_full_package(self, root_path: str | Path) -> FullAgentPackage:
+        root = Path(root_path)
+        issues: list[ValidationIssue] = []
+        try:
+            primitives = self.load_primitives(root)
+        except PackageLoadError as error:
+            issues.extend(error.issues)
+            primitives = None
+
+        loaded: dict[str, BaseModel] = {}
+        for filename, spec_type in REQUIRED_FULL_PACKAGE_FILES.items():
+            path = root / filename
+            if not path.exists():
+                issues.append(
+                    ValidationIssue(
+                        severity=ValidationSeverity.FATAL,
+                        code="missing_required_file",
+                        message=f"Missing required AgentPackage file: {filename}",
+                        file=filename,
+                    )
+                )
+                continue
+            try:
+                loaded[self._full_field_name(filename)] = spec_type.model_validate(
+                    self._load_yaml(path)
+                )
+            except ValidationError as error:
+                issues.extend(self._validation_issues(filename, error))
+            except Exception as error:
+                issues.append(
+                    ValidationIssue(
+                        severity=ValidationSeverity.FATAL,
+                        code="yaml_parse_error",
+                        message=str(error),
+                        file=filename,
+                    )
+                )
+
+        generated_tools = self._load_generated_tool_specs(root, issues)
+        if issues:
+            raise PackageLoadError(issues)
+        assert primitives is not None
+        return FullAgentPackage.model_validate(
+            {
+                "primitives": primitives,
+                "generated_tools": generated_tools,
+                **loaded,
+            }
+        )
+
+    def _load_model(
+        self,
+        root: Path,
+        filename: str,
+        spec_type: type[BaseModel],
+    ) -> BaseModel:
+        path = root / filename
+        if not path.exists():
+            raise PackageLoadError(
+                [
+                    ValidationIssue(
+                        severity=ValidationSeverity.FATAL,
+                        code="missing_required_file",
+                        message=f"Missing required AgentPackage file: {filename}",
+                        file=filename,
+                    )
+                ]
+            )
+        try:
+            return spec_type.model_validate(self._load_yaml(path))
+        except ValidationError as error:
+            raise PackageLoadError(self._validation_issues(filename, error)) from error
+
+    def _load_generated_tool_specs(
+        self,
+        root: Path,
+        issues: list[ValidationIssue],
+    ) -> list[GeneratedToolDraftSpec]:
+        specs: list[GeneratedToolDraftSpec] = []
+        for path in sorted((root / "generated" / "draft_tools").glob("*.tool.yaml")):
+            relative = str(path.relative_to(root))
+            try:
+                specs.append(GeneratedToolDraftSpec.model_validate(self._load_yaml(path)))
+            except ValidationError as error:
+                issues.extend(self._validation_issues(relative, error))
+            except Exception as error:
+                issues.append(
+                    ValidationIssue(
+                        severity=ValidationSeverity.FATAL,
+                        code="yaml_parse_error",
+                        message=str(error),
+                        file=relative,
+                    )
+                )
+        return specs
+
     def _load_yaml(self, path: Path) -> dict[str, Any]:
         data = self._yaml.load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -118,3 +237,14 @@ class PackageLoader:
             "observability.yaml": "observability",
         }[filename]
 
+    @staticmethod
+    def _full_field_name(filename: str) -> str:
+        return {
+            "package.yaml": "manifest",
+            "runtime.yaml": "runtime",
+            "tools.yaml": "tools",
+            "mcp.yaml": "mcp",
+            "context.yaml": "context",
+            "memory.yaml": "memory",
+            "harness.yaml": "harness",
+        }[filename]

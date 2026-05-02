@@ -1,0 +1,11 @@
+schema_version: "0.1"
+kind: "ToolsSpec"
+metadata:
+  name: "customer-service-agent-tools"
+  version: "1.0.0"
+generated_tools:
+  - "order_query"
+  - "refund_policy_query"
+default_policy: "proposal_only"
+allow_draft_execution: false
+require_approval_for_generated_code: true

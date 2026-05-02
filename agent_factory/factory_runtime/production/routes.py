@@ -37,6 +37,14 @@ def route_after_artifact_generation(
     return "failed"
 
 
+def route_after_verification(
+    state: FactoryProductionStateDict,
+) -> Literal["continue", "failed"]:
+    if state.get("error") is None:
+        return "continue"
+    return "failed"
+
+
 def route_after_validate_primitives(
     state: FactoryProductionStateDict,
 ) -> Literal["repair_primitives", "write_package", "failed"]:
@@ -57,22 +65,30 @@ def route_after_repair(
 
 def route_after_validate_package(
     state: FactoryProductionStateDict,
-) -> Literal["record_factory_memory", "failed"]:
+) -> Literal["static_check_tool_scripts", "failed"]:
     report = state.get("validation_report")
-    report_ok = _validation_report_ok(report)
+    report_ok = _validation_report_ok(report, ignore_files={"mcp.yaml", "harness.yaml"})
     if report is not None and report_ok and state.get("error") is None:
-        return "record_factory_memory"
+        return "static_check_tool_scripts"
     return "failed"
 
 
-def _validation_report_ok(report: object) -> bool:
+def _validation_report_ok(report: object, *, ignore_files: set[str] | None = None) -> bool:
+    ignore_files = ignore_files or set()
     if report is None:
         return False
     if not isinstance(report, dict):
-        return bool(getattr(report, "ok", False))
+        issues = getattr(report, "issues", [])
+        for issue in issues:
+            severity = getattr(issue, "severity", None)
+            file = getattr(issue, "file", None)
+            if severity in {"error", "fatal"} and file not in ignore_files:
+                return False
+        return True
     issues = report.get("issues") or []
     for issue in issues:
         severity = issue.get("severity") if isinstance(issue, dict) else getattr(issue, "severity", None)
-        if severity in {"error", "fatal"}:
+        file = issue.get("file") if isinstance(issue, dict) else getattr(issue, "file", None)
+        if severity in {"error", "fatal"} and file not in ignore_files:
             return False
     return True

@@ -1,0 +1,27 @@
+schema_version: "0.1"
+kind: "ContextSpec"
+metadata:
+  name: "customer-service-agent-context"
+  version: "1.0.0"
+sources:
+  - id: "agent_instructions"
+    type: "static"
+    content: "客服 Agent 需要以温和、专业方式处理售前、售后、退款、投诉、转人工和订单查询。"
+    visible_to_model: true
+    visible_to_tools: false
+    hidden_from_model: []
+  - id: "customer_policy_kb"
+    type: "mcp"
+    ref: "mcp.customer_kb.search_policy"
+    visible_to_model: true
+    visible_to_tools: true
+    hidden_from_model:
+      - "authorization"
+      - "tool_auth_token"
+max_visible_items: 8
+redact_fields:
+  - "api_key"
+  - "secret"
+  - "authorization"
+  - "auth_header"
+  - "tool_auth_token"

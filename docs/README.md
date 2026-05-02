@@ -33,6 +33,8 @@
   ↓
 09_mvp_candidate.md
   ↓
+mvp_customer_service_walkthrough.md
+  ↓
 10_future_enhancements.md
 ```
 
@@ -53,6 +55,7 @@
 | `07_upgrade_patch_release.md` | 实现 UpgradeRequest、PatchPlan、ApprovalRecord、PackageDiff、发布和回滚 |
 | `08_cli_first_operations.md` | 定义第一版 CLI 命令和成熟 agent CLI 操作体验 |
 | `09_mvp_candidate.md` | 记录 MVP 样例候选，框架主干搭完后再最终确定 |
+| `mvp_customer_service_walkthrough.md` | 客服 Agent MVP 端到端 CLI 演示：创建、校验、测试、注册、运行、升级、发布 |
 | `10_future_enhancements.md` | 记录 01/02/03 讨论中暂缓的后续增强点 |
 
 ## 第一版原则
@@ -65,6 +68,6 @@
 5. 先统一 Model / LLM 调用边界，后让 Runtime 和 Factory 使用模型。
 6. 先标准化 Agent Building Primitives，后让 Factory 生成个性化 Agent。
 7. Factory 自己的生产图使用 LangGraph，AgentInstance Runtime 仍按 AgentPackage 声明选择 Workflow 或 Graph。
-8. 先保留 MVP 候选，框架主干搭完后再确定最终样例。
+8. MVP 固定使用客服 Agent 作为端到端验收样例。
 9. 每个阶段都要有可运行命令和验收标准。
 ```
