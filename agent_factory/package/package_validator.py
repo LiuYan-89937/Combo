@@ -116,15 +116,17 @@ class PackageValidator:
                 path="workflow_steps",
             )
 
-        metadata_paths = {
-            str(tool.implementation.path): tool.tool_id for tool in generated_tools
-        }
-        for relative_path, tool_id in metadata_paths.items():
+        metadata_paths: dict[str, tuple[str, str]] = {}
+        for tool in generated_tools:
+            metadata_paths[str(tool.implementation.path)] = (tool.tool_id, "wrapper")
+            if tool.implementation.logic_path:
+                metadata_paths[str(tool.implementation.logic_path)] = (tool.tool_id, "logic")
+        for relative_path, (tool_id, artifact_type) in metadata_paths.items():
             if not (Path(report.root_path or ".") / relative_path).exists():
                 report.add(
                     ValidationSeverity.FATAL,
                     "generated_tool_implementation_missing",
-                    f"Generated tool implementation is missing for {tool_id}.",
+                    f"Generated tool {artifact_type} implementation is missing for {tool_id}.",
                     file=relative_path,
                 )
 

@@ -69,6 +69,7 @@ class ToolImplementationSpec(BaseModel):
     language: Literal["python"] = "python"
     path: str
     entrypoint: str = "run"
+    logic_path: str | None = None
 
 
 class ToolApprovalSpec(BaseModel):

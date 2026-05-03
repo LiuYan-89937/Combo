@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ruamel.yaml import YAML
+
 from agent_factory.factory import FactoryAgent
 from agent_factory.factory.package_artifacts import PackageArtifactGenerator
 from agent_factory.factory.package_verification import PackageVerificationRunner
@@ -27,7 +29,7 @@ from agent_factory.factory_runtime import (
 )
 from agent_factory.model import FakeModelAdapter, ModelConfig, ModelService
 from agent_factory.package import PackageLoader, PackageValidator
-from agent_factory.specs import AgentPackagePrimitives
+from agent_factory.specs import AgentPackagePrimitives, GeneratedToolDraftSpec
 from agent_factory.application import CreateAgentRequest, CreateAgentService
 from agent_factory.context import ContextManager, tool_runtime_context
 
@@ -493,6 +495,50 @@ def execute(input_data: dict[str, Any], resources: dict[str, Any]) -> dict[str, 
             self.assertEqual(codegen["generation_status"], "model_generated")
             self.assertFalse(codegen["fallback_used"])
             self.assertEqual(codegen["logic_path"], "generated/draft_tools/order_query_logic.py")
+            tool_yaml = YAML(typ="safe").load(
+                (root / "generated" / "draft_tools" / "order_query.tool.yaml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            tool_spec = GeneratedToolDraftSpec.model_validate(tool_yaml)
+            self.assertEqual(
+                tool_spec.implementation.logic_path,
+                "generated/draft_tools/order_query_logic.py",
+            )
+
+    def test_full_package_validator_accepts_and_checks_logic_path(self) -> None:
+        logic_source = '''from __future__ import annotations
+from typing import Any
+
+
+def execute(input_data: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    return {"status": "completed", "tool_id": "order_query", "order_status": "ok"}
+'''
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            primitives = AgentPackagePrimitives.model_validate(valid_primitives_payload())
+            writer = PackageWriter()
+            generator = PackageArtifactGenerator(
+                model_service=service_with_responses([logic_source])
+            )
+
+            writer.write_primitives(root, primitives)
+            generator.generate_tool_scripts(root, primitives)
+            generator.generate_mcp_bindings(root, primitives)
+            generator.generate_harness_scenarios(root, primitives)
+            generator.generate_package_specs(root, primitives)
+
+            report = PackageValidator().validate_full_package(root)
+            self.assertTrue(report.ok, report.issues)
+
+            (root / "generated" / "draft_tools" / "order_query_logic.py").unlink()
+            missing_report = PackageValidator().validate_full_package(root)
+
+            self.assertFalse(missing_report.ok)
+            self.assertIn(
+                "generated_tool_implementation_missing",
+                {issue.code for issue in missing_report.issues},
+            )
 
     def test_package_artifact_generator_falls_back_from_unsafe_tool_code(self) -> None:
         payload = {
