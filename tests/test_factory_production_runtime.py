@@ -57,6 +57,42 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertGreater(len(state.clarification_questions), 0)
             self.assertIsNone(state.package_path)
             self.assertNotIn("plan_primitives", state.stage_history)
+            self.assertIn("classify_factory_intent", state.stage_history)
+            self.assertGreater(len(state.clarification_options), 0)
+
+    def test_non_agent_request_returns_guidance_without_big_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()])
+            )
+
+            state = runtime.run(requirement="今天吃什么比较好", context=context)
+
+            self.assertEqual(state.status, "not_agent_request")
+            self.assertIn("AgentFactory", state.guidance_message or "")
+            self.assertIsNone(state.package_path)
+            self.assertEqual(state.clarification_questions, [])
+            self.assertNotIn("analyze_requirement", state.stage_history)
+            self.assertNotIn("plan_primitives", state.stage_history)
+
+    def test_non_agent_request_stream_guidance_is_not_duplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()])
+            )
+
+            events = list(runtime.stream(requirement="今天吃什么比较好", context=context))
+
+            guidance_events = [
+                event
+                for event in events
+                if "AgentFactory" in (event.message or "")
+            ]
+            self.assertEqual(len(guidance_events), 1)
+            self.assertEqual(guidance_events[0].stage, "not_agent_request")
+            self.assertEqual(events[-1].stage, "not_agent_request")
 
     def test_companion_agent_requirement_is_clear_without_agent_keyword(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -70,6 +106,7 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertEqual(state.status, "completed", state.error)
             self.assertEqual(state.clarification_questions, [])
             self.assertIn("plan_primitives", state.stage_history)
+            self.assertEqual(state.factory_intent["intent"], "create_agent_clear")
             self.assertIsNotNone(state.requirement_analysis)
             self.assertEqual(state.requirement_analysis["safety_profile"], "companion_agent")
 
@@ -200,7 +237,24 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertEqual(state.status, "failed")
             self.assertEqual(state.error.code, "generated_tool_tests_failed")
             self.assertEqual(state.tool_test_report.status, "failed")
+            self.assertEqual(state.tool_test_repair_attempts, 1)
+            self.assertIn("repair_tool_tests", state.stage_history)
             self.assertIn("run_generated_tool_tests", state.stage_history)
+
+    def test_generated_tool_test_failure_repairs_and_reruns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()]),
+                artifact_generator=RepairableBrittleToolTestArtifactGenerator(),
+            )
+
+            state = runtime.run(requirement="创建客服 Agent", context=context)
+
+            self.assertEqual(state.status, "completed", state.error)
+            self.assertEqual(state.tool_test_repair_attempts, 1)
+            self.assertIn("repair_tool_tests", state.stage_history)
+            self.assertEqual(state.tool_test_report.status, "passed")
 
     def test_duplicate_mcp_binding_fails_graph(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -316,6 +370,30 @@ class FailingToolTestArtifactGenerator(PackageArtifactGenerator):
             "class FailingGeneratedToolTest(unittest.TestCase):\n"
             "    def test_failure(self):\n"
             "        self.fail('forced failure')\n",
+            encoding="utf-8",
+        )
+        return report
+
+    def repair_generated_tool_tests(self, package_path, primitives, **kwargs):
+        return self.generate_tool_tests(package_path, primitives)
+
+
+class RepairableBrittleToolTestArtifactGenerator(PackageArtifactGenerator):
+    def generate_tool_tests(self, package_path, primitives):
+        report = super().generate_tool_tests(package_path, primitives)
+        test_path = package_path / "generated" / "tool_tests" / "test_order_query.py"
+        test_path.write_text(
+            "import importlib.util\n"
+            "from pathlib import Path\n"
+            "import unittest\n\n"
+            "MODULE_PATH = Path(__file__).resolve().parents[1] / 'draft_tools' / 'order_query.py'\n\n"
+            "class BrittleGeneratedToolTest(unittest.TestCase):\n"
+            "    def test_brittle_exact_field(self):\n"
+            "        spec = importlib.util.spec_from_file_location('generated_tool_order_query', MODULE_PATH)\n"
+            "        module = importlib.util.module_from_spec(spec)\n"
+            "        spec.loader.exec_module(module)\n"
+            "        result = module.run({'query': '订单 123'}, {})\n"
+            "        self.assertEqual(result.get('impossible_exact_field'), 'T-1001')\n",
             encoding="utf-8",
         )
         return report

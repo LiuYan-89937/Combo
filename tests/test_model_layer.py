@@ -390,6 +390,49 @@ class ModelLayerTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_request_can_override_model_and_thinking(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["payload"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "model": "deepseek-v4-flash",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": '{"ok": true}'},
+                        }
+                    ],
+                },
+            )
+
+        async def run() -> None:
+            config = ModelConfig(
+                provider="openai_compatible_chat",
+                base_url="https://api.deepseek.com",
+                api_key="sk-test-key",
+                model="deepseek-v4-pro",
+                thinking="enabled",
+            )
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                adapter = OpenAICompatibleChatAdapter(config, client=client)
+                await adapter.generate(
+                    LLMRequest(
+                        messages=[LLMMessage(role="user", content="return json")],
+                        model="deepseek-v4-flash",
+                        thinking="disabled",
+                        response_format="json_object",
+                    )
+                )
+
+            payload = captured["payload"]
+            self.assertEqual(payload["model"], "deepseek-v4-flash")
+            self.assertEqual(payload["thinking"], {"type": "disabled"})
+
+        asyncio.run(run())
+
     def test_model_config_loads_thinking_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env_file = Path(tmpdir) / ".env"
@@ -401,6 +444,10 @@ class ModelLayerTests(unittest.TestCase):
                         "AGENTFACTORY_OPENAI_API_KEY=sk-test-key",
                         "AGENTFACTORY_OPENAI_MODEL=deepseek-v4-pro",
                         "AGENTFACTORY_LLM_THINKING=enabled",
+                        "AGENTFACTORY_TASK_MODEL=deepseek-v4-flash",
+                        "AGENTFACTORY_TASK_TEMPERATURE=0.1",
+                        "AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS=1024",
+                        "AGENTFACTORY_TASK_THINKING=disabled",
                     ]
                 ),
                 encoding="utf-8",
@@ -409,7 +456,37 @@ class ModelLayerTests(unittest.TestCase):
             config = ModelConfig.from_env(env_file=env_file, environ={})
 
             self.assertEqual(config.thinking, "enabled")
+            self.assertEqual(config.task_model, "deepseek-v4-flash")
+            self.assertEqual(config.task_temperature, 0.1)
+            self.assertEqual(config.task_max_output_tokens, 1024)
+            self.assertEqual(config.task_thinking, "disabled")
             self.assertEqual(config.safe_summary()["thinking"], "enabled")
+            self.assertEqual(config.safe_summary()["task_model"], "deepseek-v4-flash")
+
+    def test_model_service_applies_task_model_to_structured_requests(self) -> None:
+        async def run() -> None:
+            config = ModelConfig(
+                provider="fake",
+                task_model="deepseek-v4-flash",
+                task_temperature=0.1,
+                task_max_output_tokens=1024,
+                task_thinking="disabled",
+            )
+            adapter = FakeModelAdapter([{"ok": True}])
+            service = ModelService.with_adapter(config, adapter)
+            result = await service.generate_task_structured(
+                LLMRequest(messages=[LLMMessage(role="user", content="return json")])
+            )
+
+            self.assertTrue(result.ok)
+            request = adapter.requests[0]
+            self.assertEqual(request.model, "deepseek-v4-flash")
+            self.assertEqual(request.temperature, 0.1)
+            self.assertEqual(request.max_output_tokens, 1024)
+            self.assertEqual(request.thinking, "disabled")
+            self.assertEqual(request.metadata["model_role"], "task")
+
+        asyncio.run(run())
 
     def test_stream_structured_returns_json_and_emits_deltas(self) -> None:
         async def run() -> None:

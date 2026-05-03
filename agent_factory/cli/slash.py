@@ -213,6 +213,7 @@ class SlashCommandDispatcher:
         if isinstance(request_or_error, SlashCommandResult):
             return request_or_error
         result = self.create_service.create_agent(request_or_error)
+        self._record_create_result(result)
         return SlashCommandResult(
             kind="create_agent",
             command="/create-agent",
@@ -379,6 +380,28 @@ class SlashCommandDispatcher:
             return request_or_error, None
         return None, self.create_service.stream_create_agent(request_or_error)
 
+    def stream_natural_language_create_events(
+        self,
+        line: str,
+    ) -> tuple[SlashCommandResult | None, Iterator[FactoryEvent] | None]:
+        self.session.capture_requirement(line)
+        if not self.session.pending_requirement:
+            return SlashCommandResult(kind="empty"), None
+        return self.stream_pending_create_events()
+
+    def stream_pending_create_events(
+        self,
+    ) -> tuple[SlashCommandResult | None, Iterator[FactoryEvent] | None]:
+        if not self.session.pending_requirement:
+            return SlashCommandResult(kind="empty"), None
+        request = CreateAgentRequest(
+            prompt=self.session.pending_requirement,
+            draft=True,
+            stream=True,
+            show_thinking=False,
+        )
+        return None, self.create_service.stream_create_agent(request)
+
     def _create_agent_request(self, args: list[str]) -> CreateAgentRequest | SlashCommandResult:
         prompt = self._create_agent_prompt_from_args(args)
         if not prompt:
@@ -401,11 +424,27 @@ class SlashCommandDispatcher:
         if isinstance(request_or_error, SlashCommandResult):
             return request_or_error
         result = self.create_service.create_agent(request_or_error)
+        self._record_create_result(result)
         return SlashCommandResult(
             kind="create_agent",
             command="/create-agent",
             create_result=result,
         )
+
+    def _record_create_result(self, result: CreateAgentResult) -> None:
+        if result.status == "needs_clarification":
+            self.session.capture_clarification(
+                questions=result.clarification_questions,
+                options=result.clarification_options,
+            )
+            return
+        if result.status == "completed":
+            self.session.clear_pending_clarification()
+            if result.output_path is not None:
+                self.session.selected_agent_path = result.output_path
+            return
+        if result.status == "not_agent_request":
+            self.session.clear_pending_requirement()
 
     def _create_agent_request_from_line(self, stripped: str) -> CreateAgentRequest | SlashCommandResult:
         raw_args = stripped[len("/create-agent") :].strip()

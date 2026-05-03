@@ -19,9 +19,14 @@ from agent_factory.application import (
 from agent_factory.cli.completion import ContextualSlashCompleter
 from agent_factory.cli.main import app
 from agent_factory.cli.rendering import FactoryStreamRenderer, render_banner
+from agent_factory.cli.rendering import render_event
 from agent_factory.cli.session import ShellSession
 from agent_factory.cli.shell import (
     _collect_requirement_lines,
+    _inline_option_label,
+    _normalized_question_options,
+    _resolve_clarification_answer,
+    _should_auto_create_from_text,
     _should_show_thinking,
     _should_stream_create_agent,
 )
@@ -240,13 +245,21 @@ class CliTests(unittest.TestCase):
             result = self.runner.invoke(
                 app,
                 ["shell"],
-                input="创建一个客服 Agent\n/create-agent --draft\n/exit\n",
+                input="创建一个客服 Agent\n/exit\n",
             )
 
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertIn("Requirement captured", result.output)
             self.assertIn("Factory context loaded", result.output)
             self.assertIn("Factory production failed", result.output)
+
+    def test_shell_plain_non_agent_input_gets_guidance_without_create_command(self) -> None:
+        with self.runner.isolated_filesystem():
+            result = self.runner.invoke(app, ["shell"], input="今天吃什么比较好\n/exit\n")
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("AgentFactory guidance", result.output)
+            self.assertNotIn("/create-agent --draft", result.output)
 
     def test_requirement_box_submits_on_enter(self) -> None:
         requirement = _collect_requirement_lines(
@@ -265,6 +278,11 @@ class CliTests(unittest.TestCase):
         self.assertTrue(_should_stream_create_agent("/create-agent --draft"))
         self.assertFalse(_should_stream_create_agent("/create-agent --no-stream"))
 
+    def test_shell_plain_text_auto_creates(self) -> None:
+        self.assertTrue(_should_auto_create_from_text("创建一个客服 Agent"))
+        self.assertFalse(_should_auto_create_from_text("/create-agent"))
+        self.assertFalse(_should_auto_create_from_text("   "))
+
     def test_shell_create_agent_thinking_toggle(self) -> None:
         self.assertFalse(_should_show_thinking("/create-agent --draft"))
         self.assertTrue(_should_show_thinking("/create-agent --draft --show-thinking"))
@@ -276,6 +294,26 @@ class CliTests(unittest.TestCase):
         session.capture_requirement("创建 Agent\n/done")
 
         self.assertEqual(session.pending_requirement, "创建 Agent")
+
+    def test_shell_session_appends_clarification_answer(self) -> None:
+        session = ShellSession(pending_requirement="创建一个 Agent")
+        session.capture_clarification(
+            questions=["你想创建哪一类 Agent？"],
+            options=[
+                {
+                    "id": "agent_type",
+                    "question": "你想创建哪一类 Agent？",
+                    "options": [{"id": "customer_service", "label": "客服 Agent"}],
+                }
+            ],
+        )
+
+        session.capture_requirement("选择客服 Agent，主要用于订单查询。")
+
+        self.assertIn("创建一个 Agent", session.pending_requirement or "")
+        self.assertIn("用户补充信息", session.pending_requirement or "")
+        self.assertIn("订单查询", session.pending_requirement or "")
+        self.assertEqual(session.pending_clarification_questions, [])
 
     def test_banner_falls_back_on_narrow_terminal(self) -> None:
         output = StringIO()
@@ -379,6 +417,101 @@ class CliTests(unittest.TestCase):
         self.assertIn("model call started", rendered)
         self.assertIn("model code accepted", rendered)
 
+    def test_render_event_shows_clarification_options(self) -> None:
+        event = FactoryEvent(
+            run_id="run-1",
+            stage="classify_factory_intent",
+            status=EventStatus.WARNING,
+            title="Factory intent classified",
+            message="Create-agent request needs clarification before production.",
+            payload={
+                "clarification_options": [
+                    {
+                        "id": "agent_type",
+                        "question": "你想创建哪一类 Agent？",
+                        "options": [
+                            {
+                                "id": "customer_service",
+                                "label": "客服 Agent",
+                                "description": "处理咨询、订单和售后。",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        output = StringIO()
+        console = Console(file=output, width=120, force_terminal=False)
+
+        render_event(event, console)
+
+        rendered = output.getvalue()
+        self.assertIn("你想创建哪一类 Agent", rendered)
+        self.assertIn("[customer_service] 客服 Agent", rendered)
+
+    def test_render_event_does_not_duplicate_clarification_question(self) -> None:
+        event = FactoryEvent(
+            run_id="run-1",
+            stage="needs_clarification",
+            status=EventStatus.WARNING,
+            title="Clarification required",
+            message="AgentPackage was not generated.",
+            payload={
+                "questions": ["你想创建哪一类 Agent？"],
+                "clarification_options": [
+                    {
+                        "id": "agent_type",
+                        "question": "你想创建哪一类 Agent？",
+                        "options": [{"id": "other", "label": "其他"}],
+                    }
+                ],
+            },
+        )
+        output = StringIO()
+        console = Console(file=output, width=120, force_terminal=False)
+
+        render_event(event, console)
+
+        rendered = output.getvalue()
+        self.assertEqual(rendered.count("你想创建哪一类 Agent"), 1)
+
+    def test_shell_clarification_options_always_include_other(self) -> None:
+        options = _normalized_question_options(
+            {
+                "question": "你想管理哪种数据库？",
+                "options": [{"id": "sqlite", "label": "SQLite"}],
+            }
+        )
+
+        self.assertIn("other", {option["id"] for option in options})
+
+    def test_shell_inline_option_label_includes_description(self) -> None:
+        label = _inline_option_label(
+            {
+                "id": "sqlite",
+                "label": "SQLite",
+                "description": "本地文件数据库。",
+            },
+            1,
+        )
+
+        self.assertEqual(label, "1. SQLite - 本地文件数据库。")
+
+    def test_shell_clarification_answer_accepts_number(self) -> None:
+        output = StringIO()
+        console = Console(file=output, width=120, force_terminal=False)
+        answer = _resolve_clarification_answer(
+            "1",
+            [
+                {"id": "sqlite", "label": "SQLite", "description": ""},
+                {"id": "other", "label": "其他", "description": ""},
+            ],
+            console,
+            prompt_session=None,
+        )
+
+        self.assertEqual(answer, "SQLite (sqlite)")
+
 
 class SlashShellTests(unittest.TestCase):
     def test_shell_session_captures_pending_requirement(self) -> None:
@@ -435,6 +568,40 @@ class SlashShellTests(unittest.TestCase):
                 self.assertTrue(result.create_result.memory_path.exists())
             finally:
                 os.chdir(cwd)
+
+    def test_slash_create_agent_records_clarification_state(self) -> None:
+        result = CreateAgentResult(
+            run_id="test-run",
+            requirement="创建一个 Agent",
+            status="needs_clarification",
+            workspace_path=Path.cwd() / ".agentfactory",
+            trace_path=Path.cwd() / ".agentfactory" / "traces" / "factory_runs.jsonl",
+            memory_path=Path.cwd() / ".agentfactory" / "memory" / "factory_memory.jsonl",
+            clarification_questions=["你想创建哪一类 Agent？"],
+            clarification_options=[
+                {
+                    "id": "agent_type",
+                    "question": "你想创建哪一类 Agent？",
+                    "options": [{"id": "customer_service", "label": "客服 Agent"}],
+                }
+            ],
+        )
+
+        class ClarifyingCreateService:
+            def create_agent(self, request: CreateAgentRequest) -> CreateAgentResult:
+                return result
+
+        session = ShellSession(pending_requirement="创建一个 Agent")
+        dispatcher = SlashCommandDispatcher(
+            session=session,
+            create_service=ClarifyingCreateService(),
+        )
+
+        slash_result = dispatcher.dispatch("/create-agent --draft")
+
+        self.assertEqual(slash_result.kind, "create_agent")
+        self.assertEqual(session.pending_clarification_questions, ["你想创建哪一类 Agent？"])
+        self.assertEqual(session.pending_clarification_options[0]["id"], "agent_type")
 
     def test_slash_create_agent_accepts_multiline_prompt_with_inner_quotes(self) -> None:
         service = RecordingCreateAgentService()

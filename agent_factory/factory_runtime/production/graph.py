@@ -5,10 +5,13 @@ from langgraph.graph import END, START, StateGraph
 from agent_factory.factory_runtime.production.nodes import FactoryProductionNodes
 from agent_factory.factory_runtime.production.routes import (
     route_after_artifact_generation,
+    route_after_intent_classification,
     route_after_maybe_clarify,
     route_after_package_write,
     route_after_plan_primitives,
     route_after_repair,
+    route_after_tool_test_repair,
+    route_after_tool_tests,
     route_after_validate_package,
     route_after_validate_primitives,
     route_after_verification,
@@ -20,6 +23,7 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
     graph = StateGraph(FactoryProductionStateDict)
     graph.add_node("capture_requirement", nodes.capture_requirement)
     graph.add_node("load_factory_context", nodes.load_factory_context)
+    graph.add_node("classify_factory_intent", nodes.classify_factory_intent)
     graph.add_node("analyze_requirement", nodes.analyze_requirement)
     graph.add_node("maybe_clarify", nodes.maybe_clarify)
     graph.add_node("plan_primitives", nodes.plan_primitives)
@@ -33,16 +37,27 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
     graph.add_node("validate_package", nodes.validate_package)
     graph.add_node("static_check_tool_scripts", nodes.static_check_tool_scripts)
     graph.add_node("run_generated_tool_tests", nodes.run_generated_tool_tests)
+    graph.add_node("repair_tool_tests", nodes.repair_tool_tests)
     graph.add_node("validate_mcp_bindings_local", nodes.validate_mcp_bindings_local)
     graph.add_node("dry_run_harness_scenarios", nodes.dry_run_harness_scenarios)
     graph.add_node("record_factory_memory", nodes.record_factory_memory)
     graph.add_node("complete", nodes.complete)
     graph.add_node("failed", nodes.failed)
     graph.add_node("needs_clarification", nodes.needs_clarification)
+    graph.add_node("not_agent_request", nodes.not_agent_request)
 
     graph.add_edge(START, "capture_requirement")
     graph.add_edge("capture_requirement", "load_factory_context")
-    graph.add_edge("load_factory_context", "analyze_requirement")
+    graph.add_edge("load_factory_context", "classify_factory_intent")
+    graph.add_conditional_edges(
+        "classify_factory_intent",
+        route_after_intent_classification,
+        {
+            "analyze_requirement": "analyze_requirement",
+            "needs_clarification": "needs_clarification",
+            "not_agent_request": "not_agent_request",
+        },
+    )
     graph.add_edge("analyze_requirement", "maybe_clarify")
     graph.add_conditional_edges(
         "maybe_clarify",
@@ -135,9 +150,18 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
     )
     graph.add_conditional_edges(
         "run_generated_tool_tests",
-        route_after_verification,
+        route_after_tool_tests,
         {
             "continue": "validate_mcp_bindings_local",
+            "repair_tool_tests": "repair_tool_tests",
+            "failed": "failed",
+        },
+    )
+    graph.add_conditional_edges(
+        "repair_tool_tests",
+        route_after_tool_test_repair,
+        {
+            "run_generated_tool_tests": "run_generated_tool_tests",
             "failed": "failed",
         },
     )
@@ -161,4 +185,5 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
     graph.add_edge("complete", END)
     graph.add_edge("failed", END)
     graph.add_edge("needs_clarification", END)
+    graph.add_edge("not_agent_request", END)
     return graph.compile()

@@ -5,6 +5,18 @@ from typing import Literal
 from agent_factory.factory_runtime.production.state import FactoryProductionStateDict
 
 
+def route_after_intent_classification(
+    state: FactoryProductionStateDict,
+) -> Literal["analyze_requirement", "needs_clarification", "not_agent_request"]:
+    intent_payload = state.get("factory_intent") or {}
+    intent = intent_payload.get("intent") if isinstance(intent_payload, dict) else None
+    if intent == "create_agent_clear":
+        return "analyze_requirement"
+    if intent == "create_agent_unclear":
+        return "needs_clarification"
+    return "not_agent_request"
+
+
 def route_after_maybe_clarify(
     state: FactoryProductionStateDict,
 ) -> Literal["needs_clarification", "plan_primitives"]:
@@ -42,6 +54,30 @@ def route_after_verification(
 ) -> Literal["continue", "failed"]:
     if state.get("error") is None:
         return "continue"
+    return "failed"
+
+
+def route_after_tool_tests(
+    state: FactoryProductionStateDict,
+) -> Literal["continue", "repair_tool_tests", "failed"]:
+    if state.get("error") is None:
+        return "continue"
+    error = state.get("error")
+    code = error.get("code") if isinstance(error, dict) else getattr(error, "code", None)
+    if (
+        code == "generated_tool_tests_failed"
+        and state.get("tool_test_repair_attempts", 0)
+        < state.get("max_tool_test_repair_attempts", 1)
+    ):
+        return "repair_tool_tests"
+    return "failed"
+
+
+def route_after_tool_test_repair(
+    state: FactoryProductionStateDict,
+) -> Literal["run_generated_tool_tests", "failed"]:
+    if state.get("error") is None:
+        return "run_generated_tool_tests"
     return "failed"
 
 

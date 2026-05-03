@@ -24,6 +24,8 @@ class GeneratedToolCodeDraft(BaseModel):
 
     tool_id: str
     python_source: str
+    logic_source: str | None = None
+    logic_path: str | None = None
     input_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     output_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     test_cases: list[GeneratedToolTestCase] = Field(default_factory=list)
@@ -103,7 +105,6 @@ def build_tool_generation_request(
     requirement: str | None = None,
     requirement_analysis: dict[str, Any] | None = None,
 ) -> LLMRequest:
-    schema = GeneratedToolCodeDraft.model_json_schema()
     contract = contract or derive_tool_contract(
         primitives,
         draft,
@@ -113,35 +114,30 @@ def build_tool_generation_request(
     return (
         MessageBuilder.start()
         .system(
-            "You generate one safe, deterministic local Python tool implementation. "
-            "Return exactly one JSON object matching GeneratedToolCodeDraft. Never return a list, "
-            "a {'tools': [...]} wrapper, markdown, or explanations. The Python code must not access "
-            "network, environment variables, shell, secrets, or filesystem paths outside explicit "
-            "runtime resources. Implement only the single tool contract provided."
+            "You generate only the business logic for one safe local Python tool. "
+            "Return raw Python code only, not JSON, not markdown, and not explanations. "
+            "The code must define exactly this callable: execute(input_data, resources). "
+            "Do not define run(), input_schema(), output_schema(), CLI entrypoints, tests, or wrappers. "
+            "The code must not access network, environment variables, shell, secrets, or files outside "
+            "the explicit resources argument. Implement only the single tool contract provided."
         )
         .user(
-            "Generate code for exactly this one tool. Do not implement any other tool.\n\n"
+            "Generate the logic.py content for exactly this one tool. Do not implement any other tool.\n\n"
             f"Agent persona: {primitives.instructions.persona}\n"
             f"Agent goal: {primitives.instructions.goal}\n"
             f"Agent boundaries: {json.dumps(primitives.instructions.boundaries, ensure_ascii=False)}\n"
             f"Requirement analysis summary:\n"
             f"{json.dumps(_compact_requirement_analysis(requirement_analysis), ensure_ascii=False, indent=2)}\n\n"
             f"Single tool contract:\n{contract.model_dump_json(indent=2)}\n\n"
-            "The python_source must define input_schema(), output_schema(), and run(input_data, context=None). "
-            "run() must return a dict with status='completed' for successful low-risk mock execution.\n"
-            "Tools must resolve runtime resources from context first. Use context['resources'], "
-            "context['sqlite_databases'], context['filesystem_root'], or context['runtime']; do not make "
-            "a real user path the only data source in python_source.\n"
-            "test_cases must verify this single tool's core business logic, not only status/tool_id.\n\n"
+            "execute(input_data, resources) must return a dict. On success include status='completed'. "
+            "Use resources['resources'], resources['sqlite_databases'], resources['filesystem_root'], "
+            "or resources['runtime']; do not make a real user path the only data source.\n\n"
             "If the requirement describes a local SQLite database tool, implement it with sqlite3, "
             "parameterized SQL only, and no schema-changing statements. Resolve the database path from "
-            "context['sqlite_databases'] before falling back to metadata. Never fake database results."
+            "resources['sqlite_databases'] or resources['resources'] first. Never fake database results."
         )
         .request(
-            response_format="json_schema",
-            json_schema=schema,
-            json_schema_name="GeneratedToolCodeDraft",
-            json_schema_strict=True,
+            response_format="text",
             metadata={"tool_id": str(draft.get("tool_id") or "")},
         )
     )
@@ -157,7 +153,6 @@ def build_tool_repair_request(
     requirement: str | None = None,
     requirement_analysis: dict[str, Any] | None = None,
 ) -> LLMRequest:
-    schema = GeneratedToolCodeDraft.model_json_schema()
     contract = contract or derive_tool_contract(
         primitives,
         draft,
@@ -167,29 +162,25 @@ def build_tool_repair_request(
     return (
         MessageBuilder.start()
         .system(
-            "You repair unsafe or invalid Factory-generated Python tool drafts. "
-            "Return exactly one JSON object matching GeneratedToolCodeDraft. Preserve the original "
-            "tool_id. Never return a list or a {'tools': [...]} wrapper. Repair only this one tool."
+            "You repair unsafe or invalid Factory-generated Python tool logic. "
+            "Return raw Python code only, not JSON, not markdown, and not explanations. "
+            "The code must define execute(input_data, resources). Repair only this one tool."
         )
         .user(
-            "Repair the generated tool code so it is safe, executable, and business-complete.\n\n"
+            "Repair the generated tool logic so it is safe, executable, and business-complete.\n\n"
             f"Agent goal: {primitives.instructions.goal}\n"
             f"Single tool contract:\n{contract.model_dump_json(indent=2)}\n\n"
-            "Previous generated data:\n"
+            "Previous generated code or data:\n"
             f"{json.dumps(previous_data, ensure_ascii=False, indent=2, default=str)}\n\n"
             "Validation/security/test-generation errors:\n"
             f"{json.dumps(validation_errors, ensure_ascii=False, indent=2)}\n\n"
-            "The repaired python_source must define input_schema(), output_schema(), and "
-            "run(input_data, context=None). It must not access network, environment variables, "
-            "shell, secrets, or files outside the explicitly requested local data source. "
+            "The repaired logic must define execute(input_data, resources). It must not access network, "
+            "environment variables, shell, secrets, or files outside the explicitly requested local data source. "
             "For SQLite tools, use sqlite3 with parameterized SQL only and resolve the database path "
-            "from context['sqlite_databases'] or context['resources'] before falling back to metadata."
+            "from resources['sqlite_databases'] or resources['resources']."
         )
         .request(
-            response_format="json_schema",
-            json_schema=schema,
-            json_schema_name="GeneratedToolCodeDraft",
-            json_schema_strict=True,
+            response_format="text",
             metadata={"tool_id": str(draft.get("tool_id") or ""), "repair": True},
         )
     )
@@ -317,6 +308,49 @@ def validate_tool_source(source: str) -> list[str]:
     for required in {"input_schema", "output_schema", "run"}:
         if required not in functions:
             issues.append(f"missing_required_function: {required}")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root in FORBIDDEN_IMPORT_ROOTS:
+                    issues.append(f"forbidden_import: {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root in FORBIDDEN_IMPORT_ROOTS:
+                issues.append(f"forbidden_import: {node.module}")
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_CALLS:
+                issues.append(f"forbidden_call: {node.func.id}")
+            if isinstance(node.func, ast.Attribute) and node.func.attr in FORBIDDEN_ATTRS:
+                issues.append(f"forbidden_call: {node.func.attr}")
+    return issues
+
+
+def validate_tool_logic_source(source: str) -> list[str]:
+    issues = _validate_python_safety(source)
+    if issues and any(issue.startswith("syntax_error") for issue in issues):
+        return issues
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as error:
+        return [f"syntax_error: {error}"]
+    functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    if "execute" not in functions:
+        issues.append("missing_required_function: execute")
+    forbidden_wrapper_functions = {"run", "input_schema", "output_schema"}
+    overlap = functions.intersection(forbidden_wrapper_functions)
+    for name in sorted(overlap):
+        issues.append(f"logic_must_not_define_wrapper_function: {name}")
+    return issues
+
+
+def _validate_python_safety(source: str) -> list[str]:
+    issues: list[str] = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as error:
+        return [f"syntax_error: {error}"]
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

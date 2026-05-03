@@ -122,6 +122,40 @@ class ModelService:
 
         return StructuredOutputResult(data=parsed, response=response)
 
+    async def generate_task_structured(
+        self,
+        request: LLMRequest,
+        *,
+        schema: dict[str, Any] | None = None,
+        schema_name: str | None = None,
+        strict: bool = True,
+        max_empty_content_retries: int = 2,
+    ) -> StructuredOutputResult:
+        return await self.generate_structured(
+            self.task_request(request),
+            schema=schema,
+            schema_name=schema_name,
+            strict=strict,
+            max_empty_content_retries=max_empty_content_retries,
+        )
+
+    def task_request(self, request: LLMRequest) -> LLMRequest:
+        config = self.router.config
+        updates: dict[str, Any] = {}
+        if config.task_model:
+            updates["model"] = config.task_model
+        if config.task_temperature is not None:
+            updates["temperature"] = config.task_temperature
+        if config.task_max_output_tokens is not None:
+            updates["max_output_tokens"] = config.task_max_output_tokens
+        if config.task_thinking is not None:
+            updates["thinking"] = config.task_thinking
+        if not updates:
+            return request
+        metadata = {**request.metadata, "model_role": "task"}
+        updates["metadata"] = metadata
+        return request.model_copy(update=updates)
+
     async def stream_structured(
         self,
         request: LLMRequest,

@@ -157,7 +157,17 @@ class ContextSourceSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: str
-    type: Literal["static", "fixture", "memory", "mcp"]
+    type: Literal[
+        "static",
+        "fixture",
+        "memory",
+        "mcp",
+        "file",
+        "directory",
+        "sqlite",
+        "url",
+        "vector_store",
+    ]
     content: str | None = None
     ref: str | None = None
     visible_to_model: bool = True

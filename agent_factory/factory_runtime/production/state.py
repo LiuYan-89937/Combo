@@ -17,7 +17,13 @@ from agent_factory.factory.package_verification import (
 )
 from agent_factory.specs import AgentPackagePrimitives, ValidationReport
 
-ProductionStatus = Literal["running", "completed", "failed", "needs_clarification"]
+ProductionStatus = Literal[
+    "running",
+    "completed",
+    "failed",
+    "needs_clarification",
+    "not_agent_request",
+]
 
 
 class FactoryProductionStateDict(TypedDict, total=False):
@@ -41,10 +47,15 @@ class FactoryProductionStateDict(TypedDict, total=False):
     tool_test_report: ToolTestRunReport | None
     mcp_binding_report: MCPBindingLocalCheckReport | None
     harness_dry_run_report: HarnessDryRunReport | None
+    tool_test_repair_attempts: int
+    max_tool_test_repair_attempts: int
     repair_attempts: int
     max_repair_attempts: int
     max_graph_steps: int
     clarification_questions: list[str]
+    clarification_options: list[dict[str, Any]]
+    factory_intent: dict[str, Any] | None
+    guidance_message: str | None
     events: list[FactoryEvent]
     error: FactoryError | None
     requirement_analysis: dict[str, Any] | None
@@ -75,10 +86,15 @@ class FactoryProductionState(JsonDumpMixin):
     tool_test_report: ToolTestRunReport | None = None
     mcp_binding_report: MCPBindingLocalCheckReport | None = None
     harness_dry_run_report: HarnessDryRunReport | None = None
+    tool_test_repair_attempts: int = 0
+    max_tool_test_repair_attempts: int = 1
     repair_attempts: int = 0
     max_repair_attempts: int = 1
     max_graph_steps: int = 25
     clarification_questions: list[str] = Field(default_factory=list)
+    clarification_options: list[dict[str, Any]] = Field(default_factory=list)
+    factory_intent: dict[str, Any] | None = None
+    guidance_message: str | None = None
     events: list[FactoryEvent] = Field(default_factory=list)
     error: FactoryError | None = None
     requirement_analysis: dict[str, Any] | None = None

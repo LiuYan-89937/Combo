@@ -11,6 +11,10 @@ from agent_factory.factory import FactoryAgent
 from agent_factory.factory.package_artifacts import PackageArtifactGenerator
 from agent_factory.factory.package_verification import PackageVerificationRunner
 from agent_factory.factory.package_writer import PackageWriter
+from agent_factory.factory.resource_binding import (
+    bind_requirement_resources,
+    extract_local_resources,
+)
 from agent_factory.factory.tool_generation import (
     build_tool_generation_request,
     derive_tool_contract,
@@ -25,6 +29,7 @@ from agent_factory.model import FakeModelAdapter, ModelConfig, ModelService
 from agent_factory.package import PackageLoader, PackageValidator
 from agent_factory.specs import AgentPackagePrimitives
 from agent_factory.application import CreateAgentRequest, CreateAgentService
+from agent_factory.context import ContextManager, tool_runtime_context
 
 
 def valid_primitives_payload() -> dict:
@@ -217,6 +222,10 @@ def service_with_responses(responses: list[dict | str]) -> ModelService:
     return ModelService.with_adapter(ModelConfig(provider="fake"), FakeModelAdapter(responses))
 
 
+class OpenAIProviderFakeAdapter(FakeModelAdapter):
+    provider = "openai_compatible_chat"
+
+
 class FactoryAgentTests(unittest.TestCase):
     def test_prompt_context_excludes_secrets_and_agent_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -255,6 +264,93 @@ class FactoryAgentTests(unittest.TestCase):
             self.assertIn("Never return a top-level JSON array/list", request.messages[-1].content)
             self.assertIn("Minimal valid json object example", request.messages[-1].content)
             self.assertIn("Never return a top-level JSON array/list", request.messages[0].content)
+
+    def test_requirement_resource_binding_adds_local_file_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "customer_ops.sqlite3"
+            _seed_customer_ticket_db(db_path)
+            primitives = AgentPackagePrimitives.model_validate(valid_primitives_payload())
+
+            bound = bind_requirement_resources(
+                primitives,
+                f"管理本地 SQLite 数据库：{db_path}",
+                start_path=root,
+            )
+
+            self.assertEqual(len(bound.knowledge.sources), 1)
+            source = bound.knowledge.sources[0]
+            self.assertEqual(source.id, "customer_ops_sqlite")
+            self.assertEqual(source.type, "file")
+            self.assertEqual(source.ref, str(db_path.resolve()))
+            self.assertFalse(source.visible_to_model)
+            self.assertTrue(source.visible_to_tools)
+            self.assertEqual(source.access_mode, "read_write")
+            self.assertTrue(source.sandbox_required)
+            self.assertEqual(bound.knowledge.inject_as, "tool")
+
+    def test_extract_local_resources_ignores_nonexistent_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            existing = root / "orders.csv"
+            existing.write_text("id,total\n1,9\n", encoding="utf-8")
+
+            resources = extract_local_resources(
+                f"读取 {existing} 和 {root / 'missing.csv'}",
+                start_path=root,
+            )
+
+            self.assertEqual(resources, [existing.resolve()])
+
+    def test_resource_binding_uses_task_model_for_semantic_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "customer_ops.sqlite3"
+            _seed_customer_ticket_db(db_path)
+            primitives = AgentPackagePrimitives.model_validate(valid_primitives_payload())
+            adapter = OpenAIProviderFakeAdapter(
+                [
+                    {
+                        "bindings": [
+                            {
+                                "candidate_id": "customer_ops_sqlite",
+                                "source_id": "tickets_resource",
+                                "purpose": "Customer ticket operations datastore.",
+                                "visible_to_model": False,
+                                "visible_to_tools": True,
+                                "access_mode": "read_write",
+                                "sandbox_required": True,
+                            }
+                        ]
+                    }
+                ]
+            )
+            service = ModelService.with_adapter(
+                ModelConfig(
+                    provider="openai_compatible_chat",
+                    base_url="https://api.deepseek.com",
+                    api_key="sk-test-key",
+                    model="deepseek-v4-pro",
+                    task_model="deepseek-v4-flash",
+                    task_thinking="disabled",
+                ),
+                adapter,
+            )
+
+            bound = bind_requirement_resources(
+                primitives,
+                f"管理本地 SQLite 数据库：{db_path}",
+                start_path=root,
+                model_service=service,
+            )
+
+            source = bound.knowledge.sources[0]
+            self.assertEqual(source.id, "tickets_resource")
+            self.assertEqual(source.ref, str(db_path.resolve()))
+            self.assertEqual(source.access_mode, "read_write")
+            self.assertEqual(adapter.requests[0].model, "deepseek-v4-flash")
+            self.assertEqual(adapter.requests[0].thinking, "disabled")
+            self.assertEqual(adapter.requests[0].metadata["model_role"], "task")
 
     def test_create_package_writes_and_validates_yaml(self) -> None:
         async def run() -> None:
@@ -363,6 +459,41 @@ def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> di
             self.assertIn("llm_generated", (root / "generated" / "draft_tools" / "order_query.py").read_text())
             self.assertTrue((root / "generated" / "draft_tools" / "order_query.codegen.json").exists())
 
+    def test_package_artifact_generator_writes_model_logic_artifact(self) -> None:
+        logic_source = '''from __future__ import annotations
+from typing import Any
+
+
+def execute(input_data: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    query = str(input_data.get("query") or "")
+    digits = "".join(ch for ch in query if ch.isdigit()) or "unknown"
+    return {"status": "completed", "tool_id": "order_query", "order_id": digits, "marker": "logic_artifact"}
+'''
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            primitives = AgentPackagePrimitives.model_validate(valid_primitives_payload())
+            generator = PackageArtifactGenerator(
+                model_service=service_with_responses([logic_source])
+            )
+
+            generator.generate_tool_scripts(root, primitives)
+            generator.generate_tool_tests(root, primitives)
+            report = PackageVerificationRunner().run_generated_tool_tests(root)
+            wrapper = root / "generated" / "draft_tools" / "order_query.py"
+            logic = root / "generated" / "draft_tools" / "order_query_logic.py"
+            codegen = json.loads(
+                (root / "generated" / "draft_tools" / "order_query.codegen.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertTrue(report.ok, report.stderr)
+            self.assertTrue(logic.exists())
+            self.assertIn("from order_query_logic import execute", wrapper.read_text(encoding="utf-8"))
+            self.assertEqual(codegen["generation_status"], "model_generated")
+            self.assertFalse(codegen["fallback_used"])
+            self.assertEqual(codegen["logic_path"], "generated/draft_tools/order_query_logic.py")
+
     def test_package_artifact_generator_falls_back_from_unsafe_tool_code(self) -> None:
         payload = {
             "tool_id": "order_query",
@@ -455,6 +586,59 @@ def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> di
             self.assertEqual(codegen["generation_status"], "model_repaired")
             self.assertEqual(codegen["repair_attempts"], 1)
 
+    def test_generated_tool_tests_treat_expected_contains_as_examples(self) -> None:
+        source = '''from __future__ import annotations
+from typing import Any
+
+TOOL_ID = "example_tool"
+
+def input_schema() -> dict[str, Any]:
+    return {"type": "object"}
+
+def output_schema() -> dict[str, Any]:
+    return {"type": "object"}
+
+def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"status": "completed", "tool_id": TOOL_ID, "items": [{"id": "actual"}]}
+'''
+        code_draft_payload = {
+            "tool_id": "example_tool",
+            "python_source": source,
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "test_cases": [
+                {
+                    "name": "example_not_hard_assertion",
+                    "input_data": {"query": "anything"},
+                    "expected_contains": {"id": "not-present"},
+                }
+            ],
+            "risk_notes": [],
+        }
+        payload = valid_primitives_payload()
+        payload["toolsets"]["toolsets"] = [
+            {
+                "id": "example_tools",
+                "description": "示例工具",
+                "exposed_tools": ["example_tool"],
+                "hidden_tools": [],
+                "proposal_only": True,
+                "selection_strategy": "auto",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            primitives = AgentPackagePrimitives.model_validate(payload)
+            generator = PackageArtifactGenerator(
+                model_service=service_with_responses([code_draft_payload])
+            )
+
+            generator.generate_tool_scripts(root, primitives)
+            generator.generate_tool_tests(root, primitives)
+            report = PackageVerificationRunner().run_generated_tool_tests(root)
+
+            self.assertTrue(report.ok, report.stderr)
+
     def test_generic_tool_generation_failure_is_reported(self) -> None:
         payload = valid_primitives_payload()
         payload["toolsets"]["toolsets"] = [
@@ -530,6 +714,28 @@ def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> di
             assert result.output_path is not None
             generated = result.output_path / "generated" / "draft_tools" / "order_query.py"
             self.assertIn("same_model_service", generated.read_text(encoding="utf-8"))
+
+    def test_create_agent_binds_requirement_resources_into_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "customer_ops.sqlite3"
+            _seed_customer_ticket_db(db_path)
+            service = CreateAgentService(
+                model_service=service_with_responses([valid_primitives_payload()])
+            )
+
+            result = service.create_agent(
+                CreateAgentRequest(
+                    prompt=f"创建一个 Agent 管理本地资源 {db_path}",
+                    start_path=root,
+                )
+            )
+
+            self.assertTrue(result.implemented, result.error)
+            assert result.output_path is not None
+            loaded = PackageLoader().load_primitives(result.output_path)
+            refs = {source.id: source.ref for source in loaded.knowledge.sources}
+            self.assertEqual(refs["customer_ops_sqlite"], str(db_path.resolve()))
 
     def test_tool_code_prompt_is_scoped_to_one_contract(self) -> None:
         payload = sqlite_customer_ticket_primitives_payload("/tmp/customer_ops.sqlite3")
@@ -632,6 +838,30 @@ def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> di
             self.assertEqual(test_report.resource_count, 1)
             self.assertEqual(search_report["changed_count"], 0)
             self.assertEqual(_ticket_rows(db_path), before_rows)
+
+    def test_context_keeps_sqlite_binary_hidden_from_model_and_visible_to_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "customer_ops.sqlite3"
+            _seed_customer_ticket_db(db_path)
+            primitives = AgentPackagePrimitives.model_validate(
+                sqlite_customer_ticket_primitives_payload(str(db_path))
+            )
+            PackageWriter().write_primitives(root, primitives)
+            generator = PackageArtifactGenerator()
+            generator.generate_tool_scripts(root, primitives, requirement=f"数据库路径：{db_path}")
+            generator.generate_mcp_bindings(root, primitives)
+            generator.generate_harness_scenarios(root, primitives)
+            generator.generate_package_specs(root, primitives)
+
+            bundle = ContextManager().compile(root)
+            runtime_context = tool_runtime_context(bundle)
+
+            self.assertFalse(any("SQLite format 3" in item for item in bundle.visible_to_model))
+            self.assertNotIn("customer_ops_sqlite", "\n".join(bundle.visible_to_model))
+            self.assertEqual(runtime_context["sqlite_databases"]["customer_ops_sqlite"], str(db_path))
+            self.assertEqual(runtime_context["resources"]["customer_ops_sqlite"]["type"], "sqlite")
+            self.assertIsNone(runtime_context["resources"]["customer_ops_sqlite"].get("content"))
 
     def test_tool_test_sandbox_blocks_legacy_real_path_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

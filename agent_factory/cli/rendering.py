@@ -100,10 +100,16 @@ def render_event(event: FactoryEvent, console: Console | None = None) -> None:
     symbol, style = _status_symbol_and_style(event.status)
     console.print(f"  {symbol} {event.title}", style=style)
     if event.message:
-        console.print(f"    {event.message}", style=STYLE_MUTED)
-    questions = _event_questions(event)
-    for question in questions:
-        console.print(f"    {SYMBOL_WARNING} {question}", style=STYLE_WARNING)
+        message_style = STYLE_WARNING if event.stage == "not_agent_request" else STYLE_MUTED
+        console.print(f"    {event.message}", style=message_style)
+    clarification_options = event.payload.get("clarification_options")
+    if isinstance(clarification_options, list) and clarification_options:
+        _render_clarification_option_payload(clarification_options, console, indent="    ")
+        questions: list[str] = []
+    else:
+        questions = _event_questions(event)
+        for question in questions:
+            console.print(f"    {SYMBOL_WARNING} {question}", style=STYLE_WARNING)
     if event.stage == "analyze_requirement" and not questions:
         details = _analysis_details(event)
         if details:
@@ -253,8 +259,14 @@ def render_create_result(result: CreateAgentResult, console: Console | None = No
         render_event(event, console)
     if result.clarification_questions:
         render_section("Clarification", console)
-        for question in result.clarification_questions:
-            console.print(f"  {SYMBOL_WARNING} {question}", style=STYLE_WARNING)
+        if result.clarification_options:
+            _render_clarification_option_payload(result.clarification_options, console, indent="  ")
+        else:
+            for question in result.clarification_questions:
+                console.print(f"  {SYMBOL_WARNING} {question}", style=STYLE_WARNING)
+    if result.guidance_message and result.status == "not_agent_request":
+        render_section("AgentFactory", console)
+        console.print(f"  {result.guidance_message}", style=STYLE_WARNING)
     render_section("Factory workspace", console)
     render_kv("Workspace", result.workspace_path, console)
     render_kv("Trace", result.trace_path, console)
@@ -532,9 +544,38 @@ def _event_questions(event: FactoryEvent) -> list[str]:
     return [str(question) for question in raw_questions if str(question).strip()]
 
 
+def _render_clarification_option_payload(
+    raw_options: Any,
+    console: Console,
+    *,
+    indent: str,
+) -> None:
+    if not isinstance(raw_options, list):
+        return
+    for raw_question in raw_options:
+        if not isinstance(raw_question, dict):
+            continue
+        question = str(raw_question.get("question") or "").strip()
+        if question:
+            console.print(f"{indent}? {question}", style=STYLE_WARNING)
+        options = raw_question.get("options")
+        if not isinstance(options, list):
+            continue
+        for raw_option in options:
+            if not isinstance(raw_option, dict):
+                continue
+            option_id = str(raw_option.get("id") or "-").strip()
+            label = str(raw_option.get("label") or "").strip()
+            description = str(raw_option.get("description") or "").strip()
+            line = f"{indent}  [{option_id}] {label}"
+            if description:
+                line = f"{line} - {description}"
+            console.print(Text(line, style=STYLE_MUTED))
+
+
 def _analysis_details(event: FactoryEvent) -> str:
     pairs = []
-    for key in ["agent_name", "agent_type", "safety_profile", "analysis_source"]:
+    for key in ["intent", "intent_source", "agent_name", "agent_type", "safety_profile", "analysis_source"]:
         value = event.payload.get(key)
         if value:
             pairs.append(f"{key}={value}")
@@ -631,7 +672,7 @@ def _human_flow_phase(phase: str) -> str:
 def _result_status_style(status: str) -> str:
     if status == "completed":
         return STYLE_SUCCESS
-    if status == "needs_clarification":
+    if status in {"needs_clarification", "not_agent_request"}:
         return STYLE_WARNING
     if status == "failed":
         return STYLE_ERROR

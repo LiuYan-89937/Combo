@@ -47,6 +47,9 @@ class CreateAgentResult(JsonDumpMixin):
     harness_scenario_count: int = 0
     verification_report: FactoryVerificationReport | None = None
     clarification_questions: list[str] = Field(default_factory=list)
+    clarification_options: list[dict] = Field(default_factory=list)
+    guidance_message: str | None = None
+    factory_intent: dict | None = None
     requirement_analysis: dict | None = None
     stage_history: list[str] = Field(default_factory=list)
     error: FactoryError | None = None
@@ -108,6 +111,9 @@ class CreateAgentService:
             harness_scenario_count=state.harness_scenario_count,
             verification_report=state.verification_report,
             clarification_questions=state.clarification_questions,
+            clarification_options=state.clarification_options,
+            guidance_message=state.guidance_message,
+            factory_intent=state.factory_intent,
             requirement_analysis=state.requirement_analysis,
             stage_history=state.stage_history,
             error=state.error,
@@ -127,7 +133,12 @@ class CreateAgentService:
             ]
         if state.status == "needs_clarification":
             return [
-                "Answer the clarification questions, then run /create-agent --draft again.",
+                "Choose or answer the clarification questions, then run /create-agent --draft again with the completed requirement.",
+            ]
+        if state.status == "not_agent_request":
+            return [
+                "Try: 创建一个客服 Agent，支持订单查询、退款处理、投诉记录和转人工。",
+                "Or type /help to see available Factory commands.",
             ]
         if state.error and state.error.code == "model_config_error":
             return [

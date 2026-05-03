@@ -169,7 +169,7 @@ class OpenAICompatibleChatAdapter:
 
     def _build_payload(self, request: LLMRequest, *, stream: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self.config.model,
+            "model": request.model or self.config.model,
             "messages": [self._message_to_payload(message) for message in request.messages],
             "temperature": (
                 request.temperature
@@ -198,7 +198,7 @@ class OpenAICompatibleChatAdapter:
         elif request.response_format == "json_object":
             payload["response_format"] = {"type": "json_object"}
         if self._uses_deepseek_json_object_mode():
-            payload["thinking"] = {"type": self.config.thinking or "enabled"}
+            payload["thinking"] = {"type": request.thinking or self.config.thinking or "enabled"}
         return payload
 
     def _headers(self) -> dict[str, str]:

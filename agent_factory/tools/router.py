@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import uuid
 from pathlib import Path
 from typing import Any, Literal
@@ -134,6 +135,9 @@ class ToolExecutor:
 
 
 def _load_module(path: Path) -> Any:
+    module_dir = str(path.parent)
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
     spec = importlib.util.spec_from_file_location(f"agent_factory_generated_{path.stem}", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load module: {path}")

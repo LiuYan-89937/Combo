@@ -63,6 +63,10 @@ class ModelConfig(BaseModel):
     temperature: float = Field(default=0.2, ge=0)
     max_output_tokens: int = Field(default=2048, ge=1)
     thinking: Literal["enabled", "disabled"] | None = None
+    task_model: str | None = None
+    task_temperature: float | None = Field(default=None, ge=0)
+    task_max_output_tokens: int | None = Field(default=None, ge=1)
+    task_thinking: Literal["enabled", "disabled"] | None = None
 
     @field_validator("base_url", mode="before")
     @classmethod
@@ -97,6 +101,18 @@ class ModelConfig(BaseModel):
             temperature=_to_float(values.get("AGENTFACTORY_LLM_TEMPERATURE"), 0.2),
             max_output_tokens=_to_int(values.get("AGENTFACTORY_LLM_MAX_OUTPUT_TOKENS"), 2048),
             thinking=_blank_to_none(values.get("AGENTFACTORY_LLM_THINKING")),
+            task_model=_blank_to_none(values.get("AGENTFACTORY_TASK_MODEL")),
+            task_temperature=(
+                _to_float(values.get("AGENTFACTORY_TASK_TEMPERATURE"), 0.1)
+                if _blank_to_none(values.get("AGENTFACTORY_TASK_TEMPERATURE")) is not None
+                else None
+            ),
+            task_max_output_tokens=(
+                _to_int(values.get("AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS"), 2048)
+                if _blank_to_none(values.get("AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS")) is not None
+                else None
+            ),
+            task_thinking=_blank_to_none(values.get("AGENTFACTORY_TASK_THINKING")),
         )
         if validate_required:
             config.validate_required_fields()
@@ -127,4 +143,8 @@ class ModelConfig(BaseModel):
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
             "thinking": self.thinking,
+            "task_model": self.task_model,
+            "task_temperature": self.task_temperature,
+            "task_max_output_tokens": self.task_max_output_tokens,
+            "task_thinking": self.task_thinking,
         }

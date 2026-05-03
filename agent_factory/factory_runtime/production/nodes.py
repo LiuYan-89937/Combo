@@ -14,7 +14,9 @@ from agent_factory.factory.package_artifacts import (
     PackageArtifactGenerator,
     PackageArtifactReport,
 )
+from agent_factory.factory.intent_classifier import FactoryIntentClassifier
 from agent_factory.factory.primitive_normalizer import normalize_primitives_candidate
+from agent_factory.factory.resource_binding import bind_requirement_resources
 from agent_factory.factory.requirement_analyzer import RequirementAnalyzer
 from agent_factory.factory.package_verification import (
     HarnessDryRunReport,
@@ -98,6 +100,73 @@ class FactoryProductionNodes:
                 },
             ),
         )
+
+    def classify_factory_intent(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self._stream_progress(
+            current,
+            stage="classify_factory_intent",
+            title="Classifying Factory input",
+            message="Using the task model to decide whether this is an Agent creation request.",
+            payload={"flow_summary": "Intent gate: clear create request, unclear create request, or unrelated input."},
+        )
+        result = FactoryIntentClassifier(self._optional_model_service()).classify_sync(
+            self.context,
+            requirement=current.requirement,
+        )
+        classification = result.classification
+        current.factory_intent = classification.model_dump(mode="json")
+        current.guidance_message = classification.guidance_message
+        current.clarification_options = [
+            question.model_dump(mode="json")
+            for question in classification.clarification_questions
+        ]
+        current.clarification_questions = [
+            question.question for question in classification.clarification_questions
+        ]
+        status = EventStatus.COMPLETED
+        title = "Factory intent classified"
+        message = "Create-agent request detected."
+        if classification.intent == "create_agent_unclear":
+            status = EventStatus.WARNING
+            message = "Create-agent request needs clarification before production."
+        elif classification.intent == "not_agent_request":
+            status = EventStatus.WARNING
+            message = "Input is not an Agent creation request."
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="classify_factory_intent",
+            status=status,
+            title=title,
+            message=message,
+            payload={
+                "intent": classification.intent,
+                "confidence": classification.confidence,
+                "intent_source": result.source,
+                "agent_hint": classification.agent_hint,
+                "normalized_requirement": classification.normalized_requirement,
+                "clarification_count": len(current.clarification_questions),
+                "guidance_message": current.guidance_message,
+                "fallback_error": result.error.type if result.error else None,
+            },
+        )
+        self._stream_progress(
+            current,
+            stage="classify_factory_intent",
+            title="Intent gate result",
+            message=(
+                f"intent={classification.intent}, "
+                f"confidence={classification.confidence:.2f}, source={result.source}"
+            ),
+            payload={
+                "flow_summary": (
+                    "Routing to production."
+                    if classification.intent == "create_agent_clear"
+                    else "Routing to clarification or guidance."
+                )
+            },
+        )
+        return self._with_event(current, node="classify_factory_intent", event=event)
 
     def analyze_requirement(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
@@ -317,6 +386,12 @@ class FactoryProductionNodes:
         if current.primitives is None:
             current.error = FactoryError(code="missing_primitives", message="No primitives to write.")
         else:
+            current.primitives = bind_requirement_resources(
+                current.primitives,
+                current.requirement,
+                start_path=self.context.workspace_path.parent,
+                model_service=self._optional_model_service(),
+            )
             output_dir = self.context.drafts_path / _slugify(current.requirement)
             current.package_path = output_dir
             current.validation_report = self.package_writer.write_primitives(output_dir, current.primitives)
@@ -327,7 +402,14 @@ class FactoryProductionNodes:
             title="YAML AgentPackage draft written" if not current.error else "Package write failed",
             message=current.error.message if current.error else None,
             artifact_path=str(current.package_path) if current.package_path else None,
-            payload={"files": 9 if not current.error else 0},
+            payload={
+                "files": 9 if not current.error else 0,
+                "resource_count": (
+                    len(current.primitives.knowledge.sources)
+                    if current.primitives is not None and not current.error
+                    else 0
+                ),
+            },
         )
         return self._with_event(current, node="write_package", event=event)
 
@@ -595,6 +677,66 @@ class FactoryProductionNodes:
         )
         return self._with_event(current, node="run_generated_tool_tests", event=event)
 
+    def repair_tool_tests(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        previous_report = current.tool_test_report
+        current.error = None
+        current.tool_test_repair_attempts += 1
+        self._stream_progress(
+            current,
+            stage="repair_tool_tests",
+            title="Repairing generated tool tests",
+            message=(
+                "Rewriting tool tests as relaxed executable-contract checks, "
+                f"attempt {current.tool_test_repair_attempts}/{current.max_tool_test_repair_attempts}."
+            ),
+        )
+        if current.package_path is None or current.primitives is None:
+            current.error = FactoryError(
+                code="tool_test_repair_missing_inputs",
+                message="Package path and primitives are required before repairing generated tool tests.",
+            )
+            report = None
+        else:
+            try:
+                report = self._artifact_generator().repair_generated_tool_tests(
+                    current.package_path,
+                    current.primitives,
+                    failed_report=previous_report,
+                )
+                _apply_artifact_report(current, report)
+            except Exception as error:
+                report = None
+                current.error = FactoryError(
+                    code="tool_test_repair_failed",
+                    message=str(error),
+                )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="repair_tool_tests",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Generated tool tests repair failed"
+            if current.error
+            else "Generated tool tests repaired",
+            message=(
+                current.error.message
+                if current.error
+                else f"repair_attempts={current.tool_test_repair_attempts}"
+            ),
+            artifact_path=(
+                str(current.package_path / "generated" / "tool_tests")
+                if current.package_path
+                else None
+            ),
+            payload={
+                "repair_attempts": current.tool_test_repair_attempts,
+                "max_repair_attempts": current.max_tool_test_repair_attempts,
+                "previous_issues": len(previous_report.issues) if previous_report else 0,
+                "tool_tests": report.tool_test_count if report else 0,
+            },
+        )
+        return self._with_event(current, node="repair_tool_tests", event=event)
+
     def validate_mcp_bindings_local(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
         self._stream_progress(
@@ -737,9 +879,30 @@ class FactoryProductionNodes:
             status=EventStatus.WARNING,
             title="Clarification required",
             message="AgentPackage was not generated.",
-            payload={"questions": current.clarification_questions},
+            payload={
+                "questions": current.clarification_questions,
+                "clarification_options": current.clarification_options,
+                "guidance_message": current.guidance_message,
+            },
         )
         return self._with_event(current, node="needs_clarification", event=event)
+
+    def not_agent_request(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        current.status = "not_agent_request"
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="not_agent_request",
+            status=EventStatus.WARNING,
+            title="AgentFactory guidance",
+            message=current.guidance_message
+            or "This input is not an Agent creation request.",
+            payload={
+                "guidance_message": current.guidance_message,
+                "factory_intent": current.factory_intent,
+            },
+        )
+        return self._with_event(current, node="not_agent_request", event=event)
 
     def _with_event(
         self,

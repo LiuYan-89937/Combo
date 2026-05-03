@@ -11,6 +11,13 @@ from agent_factory.factory.package_verification import (
     ToolTestRunReport,
     VerificationIssue,
 )
+from agent_factory.factory.intent_classifier import (
+    ClarificationOption,
+    FactoryIntentClassification,
+    FactoryIntentClassifier,
+    FactoryIntentResult,
+    IntentClarificationQuestion,
+)
 from agent_factory.factory.primitive_planner import PrimitivePlanner
 from agent_factory.factory.primitive_repair import PrimitiveRepair
 from agent_factory.factory.requirement_analyzer import (
@@ -22,8 +29,12 @@ from agent_factory.factory.types import FactoryCreateOptions, FactoryError, Fact
 
 __all__ = [
     "FactoryAgent",
+    "ClarificationOption",
     "FactoryCreateOptions",
     "FactoryError",
+    "FactoryIntentClassification",
+    "FactoryIntentClassifier",
+    "FactoryIntentResult",
     "FactoryPrimitiveDraft",
     "FactoryVerificationReport",
     "HarnessDryRunReport",
@@ -32,6 +43,7 @@ __all__ = [
     "PackageWriter",
     "PrimitivePlanner",
     "PrimitiveRepair",
+    "IntentClarificationQuestion",
     "RequirementAnalysis",
     "RequirementAnalysisResult",
     "RequirementAnalyzer",

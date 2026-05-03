@@ -22,7 +22,7 @@ from agent_factory.cli.rendering import (
 )
 from agent_factory.cli.completion import ContextualSlashCompleter
 from agent_factory.cli.slash import SLASH_COMMANDS, SlashCommandDispatcher, SlashCommandResult
-from agent_factory.cli.theme import PROMPT, STYLE_ACCENT, STYLE_MUTED
+from agent_factory.cli.theme import PROMPT, STYLE_ACCENT, STYLE_MUTED, STYLE_WARNING
 
 
 def run_shell() -> None:
@@ -46,6 +46,20 @@ def run_shell() -> None:
             dispatcher.session.capture_requirement(requirement)
             render_requirement_captured(requirement, console)
 
+        if _should_auto_create_from_text(line):
+            error, events = dispatcher.stream_natural_language_create_events(line)
+            if error:
+                render_slash_result(error, console)
+                continue
+            assert events is not None
+            stream_renderer = FactoryStreamRenderer(console)
+            for event in events:
+                stream_renderer.render(event)
+                _record_streamed_create_event(dispatcher, event)
+            stream_renderer.close()
+            _prompt_and_continue_clarification(console, prompt_session, dispatcher)
+            continue
+
         if _should_stream_create_agent(line):
             error, events = dispatcher.stream_create_agent_events(line)
             if error:
@@ -55,7 +69,9 @@ def run_shell() -> None:
             stream_renderer = FactoryStreamRenderer(console, show_thinking=_should_show_thinking(line))
             for event in events:
                 stream_renderer.render(event)
+                _record_streamed_create_event(dispatcher, event)
             stream_renderer.close()
+            _prompt_and_continue_clarification(console, prompt_session, dispatcher)
             continue
 
         result = dispatcher.dispatch(line)
@@ -143,6 +159,168 @@ def _render_repair_payload(payload: dict, console: Console) -> None:
         console.print(f"    Candidate: {payload.get('candidate_path')}")
 
 
+def _record_streamed_create_event(dispatcher: SlashCommandDispatcher, event) -> None:
+    if event.stage == "needs_clarification":
+        raw_questions = event.payload.get("questions") or event.payload.get("clarification_questions") or []
+        questions = [str(question) for question in raw_questions if str(question).strip()] if isinstance(raw_questions, list) else []
+        options = event.payload.get("clarification_options")
+        dispatcher.session.capture_clarification(
+            questions=questions,
+            options=options if isinstance(options, list) else [],
+        )
+        return
+    if event.stage == "complete":
+        dispatcher.session.clear_pending_clarification()
+        if event.artifact_path:
+            dispatcher.session.selected_agent_path = Path(event.artifact_path)
+        return
+    if event.stage == "not_agent_request":
+        dispatcher.session.clear_pending_requirement()
+
+
+def _prompt_and_continue_clarification(
+    console: Console,
+    prompt_session,
+    dispatcher: SlashCommandDispatcher,
+) -> None:
+    if prompt_session is None:
+        return
+    if not dispatcher.session.pending_clarification_options:
+        return
+    answers = _prompt_for_clarification(console, prompt_session, dispatcher.session.pending_clarification_options)
+    if not answers:
+        return
+    dispatcher.session.capture_requirement("\n".join(answers))
+    console.print("")
+    console.print(Text("  Clarification captured. Continuing Factory production...", style=STYLE_ACCENT))
+    error, events = dispatcher.stream_pending_create_events()
+    if error:
+        render_slash_result(error, console)
+        return
+    assert events is not None
+    stream_renderer = FactoryStreamRenderer(console)
+    for event in events:
+        stream_renderer.render(event)
+        _record_streamed_create_event(dispatcher, event)
+    stream_renderer.close()
+
+
+def _prompt_for_clarification(
+    console: Console,
+    prompt_session,
+    questions: list[dict],
+) -> list[str]:
+    answers: list[str] = []
+    for index, question in enumerate(questions, start=1):
+        prompt_text = str(question.get("question") or "").strip()
+        if not prompt_text:
+            continue
+        options = _normalized_question_options(question)
+        _render_interactive_question(console, index, len(questions), prompt_text, options)
+        completions = [
+            *[str(option_index) for option_index in range(1, len(options) + 1)],
+            *[option["id"] for option in options],
+            *[option["label"] for option in options],
+        ]
+        try:
+            from prompt_toolkit.completion import WordCompleter
+
+            completer = WordCompleter(completions, ignore_case=True)
+            raw_answer = prompt_session.prompt("选择 › ", completer=completer)
+        except Exception:
+            raw_answer = prompt_session.prompt("选择 › ")
+        answer = _resolve_clarification_answer(raw_answer, options, console, prompt_session)
+        if answer is None:
+            return []
+        answers.append(f"{prompt_text}\n回答：{answer}")
+    return answers
+
+
+def _inline_option_label(option: dict[str, str], index: int) -> str:
+    label = option["label"]
+    description = option["description"]
+    if description:
+        return f"{index}. {label} - {description}"
+    return f"{index}. {label}"
+
+
+def _render_interactive_question(
+    console: Console,
+    index: int,
+    total: int,
+    question: str,
+    options: list[dict[str, str]],
+) -> None:
+    console.print("")
+    console.print(Text(f"  Clarification {index}/{total}", style=STYLE_ACCENT))
+    console.print(Text(f"  {question}", style=STYLE_WARNING))
+    for option_index, option in enumerate(options, start=1):
+        console.print(Text(f"    {_inline_option_label(option, option_index)}", style=STYLE_MUTED))
+    console.print(Text("  输入数字、选项 id/名称，或直接输入自定义答案。", style=STYLE_MUTED))
+
+
+def _resolve_clarification_answer(
+    raw_answer: str,
+    options: list[dict[str, str]],
+    console: Console,
+    prompt_session,
+) -> str | None:
+    answer = raw_answer.strip()
+    if not answer:
+        return None
+    if answer.isdigit():
+        index = int(answer)
+        if 1 <= index <= len(options):
+            chosen_by_number = options[index - 1]
+            if chosen_by_number["id"].lower() == "other":
+                custom = prompt_session.prompt("自定义 › ").strip()
+                return custom or None
+            return f"{chosen_by_number['label']} ({chosen_by_number['id']})"
+    by_id = {option["id"].lower(): option for option in options}
+    by_label = {option["label"].lower(): option for option in options}
+    chosen = by_id.get(answer.lower()) or by_label.get(answer.lower())
+    if chosen and chosen["id"].lower() == "other":
+        custom = prompt_session.prompt("自定义 › ").strip()
+        return custom or None
+    if chosen:
+        return f"{chosen['label']} ({chosen['id']})"
+    console.print(Text("  Custom answer accepted.", style=STYLE_MUTED))
+    return answer
+
+
+def _normalized_question_options(question: dict) -> list[dict[str, str]]:
+    raw_options = question.get("options")
+    options: list[dict[str, str]] = []
+    if isinstance(raw_options, list):
+        for raw_option in raw_options:
+            if not isinstance(raw_option, dict):
+                continue
+            option_id = str(raw_option.get("id") or "").strip()
+            label = str(raw_option.get("label") or "").strip()
+            if not option_id and not label:
+                continue
+            options.append(
+                {
+                    "id": option_id or label,
+                    "label": label or option_id,
+                    "description": str(raw_option.get("description") or "").strip(),
+                }
+            )
+    has_other = any(
+        option["id"].lower() == "other" or option["label"] == "其他"
+        for option in options
+    )
+    if not has_other:
+        options.append(
+            {
+                "id": "other",
+                "label": "其他",
+                "description": "自己输入更具体的答案。",
+            }
+        )
+    return options
+
+
 def _prompt_session(dispatcher: SlashCommandDispatcher):
     if not sys.stdin.isatty():
         return None
@@ -164,6 +342,11 @@ def _should_stream_create_agent(line: str) -> bool:
     if not stripped.startswith("/create-agent"):
         return False
     return "--no-stream" not in stripped.split()
+
+
+def _should_auto_create_from_text(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and not stripped.startswith("/")
 
 
 def _should_show_thinking(line: str) -> bool:

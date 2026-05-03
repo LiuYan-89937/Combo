@@ -77,8 +77,10 @@ class LLMRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     messages: list[LLMMessage]
+    model: str | None = None
     temperature: float | None = None
     max_output_tokens: int | None = None
+    thinking: Literal["enabled", "disabled"] | None = None
     response_format: Literal["text", "json_object", "json_schema"] = "text"
     json_schema: dict[str, Any] | None = None
     json_schema_name: str | None = None

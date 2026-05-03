@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import ConfigDict, Field
 
-from agent_factory.context import ContextBundle, ContextManager
+from agent_factory.context import ContextBundle, ContextManager, tool_runtime_context
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.memory import AgentMemoryRecord, AgentMemoryStore
 from agent_factory.model import (
@@ -152,7 +152,7 @@ class WorkflowRuntime:
 
             intent = _infer_intent(request.user_input, response.content, package)
             proposals = _proposals_from_response(response.tool_call_proposals, request.user_input, package)
-            tool_results = self._handle_tools(package_path, proposals, request)
+            tool_results = self._handle_tools(package_path, proposals, request, context_bundle)
             tool_summary_fallback = False
             status: Literal["completed", "failed", "interrupted", "needs_upgrade"] = "completed"
             if any(result.status == "interrupted" for result in tool_results):
@@ -341,6 +341,7 @@ class WorkflowRuntime:
         package_path: Path,
         proposals: list[ToolCallProposal],
         request: AgentRunRequest,
+        context_bundle: ContextBundle,
     ) -> list[ToolResult]:
         if not proposals:
             return []
@@ -358,7 +359,14 @@ class WorkflowRuntime:
             if isinstance(route, ToolResult):
                 results.append(route)
             else:
-                results.append(executor.execute(package_path, route, invocation))
+                results.append(
+                    executor.execute(
+                        package_path,
+                        route,
+                        invocation,
+                        runtime_context=tool_runtime_context(context_bundle),
+                    )
+                )
         return results
 
     def _model(self) -> ModelService:
@@ -432,7 +440,56 @@ def _proposals_from_response(
                 arguments={"query": user_input},
             )
         ]
+    sqlite_proposal = _sqlite_ticket_tool_proposal(user_input, package)
+    if sqlite_proposal is not None:
+        return [sqlite_proposal]
     return []
+
+
+def _sqlite_ticket_tool_proposal(user_input: str, package: Any) -> ToolCallProposal | None:
+    tools = {tool.tool_id for tool in package.generated_tools}
+    text = user_input.lower()
+    if "customer_ticket" not in " ".join(tools) and not any(
+        tool_id in tools
+        for tool_id in {
+            "list_customer_tickets",
+            "get_customer_ticket",
+            "search_customer_tickets",
+            "create_customer_ticket",
+            "update_customer_ticket_status",
+            "close_customer_ticket",
+        }
+    ):
+        return None
+    ticket_match = re.search(r"T[-_]?\d+", user_input, flags=re.IGNORECASE)
+    if ticket_match and "get_customer_ticket" in tools and not any(
+        marker in user_input for marker in ["更新", "修改", "关闭", "close", "resolved", "closed"]
+    ):
+        ticket_id = ticket_match.group(0).replace("_", "-").upper()
+        return ToolCallProposal(
+            id=uuid.uuid4().hex,
+            name="get_customer_ticket",
+            arguments={"ticket_id": ticket_id},
+        )
+    if any(marker in user_input for marker in ["列出", "有哪些", "有什么", "现在数据库", "全部", "列表"]):
+        if "list_customer_tickets" in tools:
+            return ToolCallProposal(
+                id=uuid.uuid4().hex,
+                name="list_customer_tickets",
+                arguments={"limit": 20, "offset": 0},
+            )
+    if any(marker in user_input for marker in ["搜索", "查找", "查一下", "查询", "search"]) and "search_customer_tickets" in tools:
+        arguments: dict[str, Any] = {"query": user_input, "limit": 20}
+        for status in ("open", "pending", "resolved", "closed"):
+            if status in text:
+                arguments["status"] = status
+                break
+        return ToolCallProposal(
+            id=uuid.uuid4().hex,
+            name="search_customer_tickets",
+            arguments=arguments,
+        )
+    return None
 
 
 def _find_generated_tool(

@@ -141,6 +141,9 @@ class KnowledgeSource(BaseModel):
     type: Literal["file", "directory", "url", "mcp", "vector_store", "none"]
     ref: str | None = None
     visible_to_model: bool = True
+    visible_to_tools: bool = True
+    access_mode: Literal["read_only", "read_write"] = "read_only"
+    sandbox_required: bool = True
     citation_required: bool = False
 
 
@@ -315,4 +318,3 @@ def _ensure_unique(values: list[str], label: str) -> None:
     if duplicates:
         joined = ", ".join(sorted(duplicates))
         raise ValueError(f"duplicate {label}: {joined}")
-
