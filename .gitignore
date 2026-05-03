@@ -1,6 +1,8 @@
 .env
 .agentfactory/
 .venv/
+docs/
+开发规范以及架构初版.md
 examples/customer_service_agent/memory/
 examples/customer_service_agent/traces/
 __pycache__/
