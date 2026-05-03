@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from agent_factory.core import EventStatus, FactoryEvent
 from agent_factory.factory import FactoryError
+from agent_factory.factory.environment import EnvironmentProbeRunner
 from agent_factory.factory.package_artifacts import (
     PackageArtifactGenerator,
     PackageArtifactReport,
@@ -375,6 +376,155 @@ class FactoryProductionNodes:
         )
         return self._with_event(current, node="repair_primitives", event=event)
 
+    def plan_capability_preconditions(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        tool_count = 0
+        if current.primitives is not None:
+            tool_count = sum(
+                len(toolset.exposed_tools) + len(toolset.hidden_tools)
+                for toolset in current.primitives.toolsets.toolsets
+            )
+        self._stream_progress(
+            current,
+            stage="plan_capability_preconditions",
+            title="Planning capability preconditions",
+            message="Identifying resource, dependency, sandbox, and shell conditions before writing tools.",
+            payload={"flow_summary": f"Preflight plan prepared for {tool_count} requested tools."},
+        )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="plan_capability_preconditions",
+            status=EventStatus.COMPLETED,
+            title="Capability preconditions planned",
+            message=f"tool_count={tool_count}",
+            payload={"tool_count": tool_count},
+        )
+        return self._with_event(current, node="plan_capability_preconditions", event=event)
+
+    def discover_resources(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self._stream_progress(
+            current,
+            stage="discover_resources",
+            title="Discovering requirement resources",
+            message="Binding local paths from the requirement to tool-visible package resources.",
+        )
+        if current.primitives is None:
+            current.error = FactoryError(
+                code="missing_primitives",
+                message="No primitives available for resource discovery.",
+            )
+            resource_count = 0
+        else:
+            current.primitives = bind_requirement_resources(
+                current.primitives,
+                current.requirement,
+                start_path=self.context.workspace_path.parent,
+                model_service=self._optional_model_service(),
+            )
+            resource_count = len(current.primitives.knowledge.sources)
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="discover_resources",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Resources discovered" if not current.error else "Resource discovery failed",
+            message=current.error.message if current.error else f"resource_count={resource_count}",
+            payload={"resource_count": resource_count},
+        )
+        return self._with_event(current, node="discover_resources", event=event)
+
+    def probe_environment(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self._stream_progress(
+            current,
+            stage="probe_environment",
+            title="Probing environment and resources",
+            message="Checking local resources, SQLite schemas, Python support, optional CLI tools, and sandbox readiness.",
+        )
+        if current.primitives is None:
+            current.error = FactoryError(
+                code="missing_primitives",
+                message="No primitives available for environment probing.",
+            )
+        else:
+            try:
+                environment, contracts, readiness = EnvironmentProbeRunner().probe(
+                    current.primitives,
+                    requirement=current.requirement,
+                    start_path=self.context.workspace_path.parent,
+                )
+                current.environment_report = environment
+                current.resource_contracts = contracts
+                current.readiness_report = readiness
+            except Exception as error:
+                current.error = FactoryError(
+                    code="environment_probe_failed",
+                    message=str(error),
+                )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="probe_environment",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Environment probe failed" if current.error else "Environment probed",
+            message=(
+                current.error.message
+                if current.error
+                else f"resources={len(current.resource_contracts.resources) if current.resource_contracts else 0}"
+            ),
+            payload={
+                "resource_count": len(current.resource_contracts.resources) if current.resource_contracts else 0,
+                "precondition_count": len(current.environment_report.preconditions) if current.environment_report else 0,
+            },
+        )
+        return self._with_event(current, node="probe_environment", event=event)
+
+    def resolve_readiness(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        readiness = current.readiness_report
+        status = readiness.status if readiness else "blocked"
+        if status == "needs_user_input" and readiness is not None:
+            question = "前置条件还不完整。你希望 AgentFactory 怎么处理？"
+            current.clarification_questions = [question]
+            current.clarification_options = [
+                {
+                    "id": "readiness_action",
+                    "question": question,
+                    "options": [
+                        {
+                            "id": option.id,
+                            "label": option.label,
+                            "description": option.description,
+                        }
+                        for option in readiness.options
+                    ]
+                    + [
+                        {
+                            "id": "other",
+                            "label": "其他",
+                            "description": "输入你自己的处理方式。",
+                        }
+                    ],
+                }
+            ]
+        elif status == "blocked":
+            current.error = FactoryError(
+                code="readiness_blocked",
+                message="Required preconditions are blocked.",
+            )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="resolve_readiness",
+            status=EventStatus.COMPLETED if status == "ready" else EventStatus.WARNING,
+            title="Readiness resolved",
+            message=f"status={status}",
+            payload={
+                "status": status,
+                "issues": len(readiness.issues) if readiness else 0,
+                "options": len(readiness.options) if readiness else 0,
+            },
+        )
+        return self._with_event(current, node="resolve_readiness", event=event)
+
     def write_package(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
         self._stream_progress(
@@ -386,15 +536,21 @@ class FactoryProductionNodes:
         if current.primitives is None:
             current.error = FactoryError(code="missing_primitives", message="No primitives to write.")
         else:
-            current.primitives = bind_requirement_resources(
-                current.primitives,
-                current.requirement,
-                start_path=self.context.workspace_path.parent,
-                model_service=self._optional_model_service(),
-            )
             output_dir = self.context.drafts_path / _slugify(current.requirement)
             current.package_path = output_dir
             current.validation_report = self.package_writer.write_primitives(output_dir, current.primitives)
+            if (
+                current.environment_report is not None
+                and current.resource_contracts is not None
+                and current.readiness_report is not None
+                and hasattr(self.package_writer, "write_condition_specs")
+            ):
+                self.package_writer.write_condition_specs(
+                    output_dir,
+                    environment=current.environment_report,
+                    resource_contracts=current.resource_contracts,
+                    readiness=current.readiness_report,
+                )
         event = FactoryEvent(
             run_id=current.run_id,
             stage="write_package",
@@ -430,6 +586,7 @@ class FactoryProductionNodes:
                 current.primitives,
                 requirement=current.requirement,
                 requirement_analysis=current.requirement_analysis,
+                resource_contracts=current.resource_contracts,
                 on_stream_event=self._model_stream_callback(
                     current,
                     stage="generate_tool_scripts",

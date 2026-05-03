@@ -5,7 +5,12 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from agent_factory.package import PackageValidator
-from agent_factory.specs import AgentPackagePrimitives
+from agent_factory.specs import (
+    AgentPackagePrimitives,
+    EnvironmentProbeReport,
+    ReadinessReport,
+    ResourceContractsSpec,
+)
 
 
 PRIMITIVE_FILE_MAP = {
@@ -39,3 +44,25 @@ class PackageWriter:
             with (root / filename).open("w", encoding="utf-8") as handle:
                 self.yaml.dump(dumped[field_name], handle)
         return self.validator.validate_primitives(root)
+
+    def write_condition_specs(
+        self,
+        output_dir: str | Path,
+        *,
+        environment: EnvironmentProbeReport,
+        resource_contracts: ResourceContractsSpec,
+        readiness: ReadinessReport,
+    ) -> None:
+        root = Path(output_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        files = {
+            "environment.yaml": environment,
+            "resource_contracts.yaml": resource_contracts,
+            "readiness.yaml": readiness,
+        }
+        for filename, model in files.items():
+            with (root / filename).open("w", encoding="utf-8") as handle:
+                self.yaml.dump(
+                    model.model_dump(mode="json", by_alias=True, exclude_none=True),
+                    handle,
+                )

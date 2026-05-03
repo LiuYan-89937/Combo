@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_factory.package.package_loader import (
+    OPTIONAL_CONDITION_FILES,
     REQUIRED_FULL_PACKAGE_FILES,
     REQUIRED_PRIMITIVE_FILES,
     PackageLoadError,
@@ -40,7 +41,7 @@ class PackageValidator:
         self._semantic_validation(primitives, report)
         return report
 
-    def validate_full_package(self, root_path: str | Path) -> ValidationReport:
+    def validate_full_package(self, root_path: str | Path, *, strict: bool = False) -> ValidationReport:
         root = Path(root_path)
         report = self.validate_primitives(root)
 
@@ -50,6 +51,15 @@ class PackageValidator:
                     ValidationSeverity.FATAL,
                     "missing_required_file",
                     f"Missing required AgentPackage file: {filename}",
+                    file=filename,
+                )
+
+        for filename in OPTIONAL_CONDITION_FILES:
+            if not (root / filename).exists():
+                report.add(
+                    ValidationSeverity.FATAL if strict else ValidationSeverity.WARNING,
+                    "missing_condition_file",
+                    f"Missing AgentPackage condition file: {filename}",
                     file=filename,
                 )
 
@@ -150,3 +160,25 @@ class PackageValidator:
                 file="harness.yaml",
                 path="scenarios",
             )
+
+        if package.readiness is not None and package.readiness.status != "ready":
+            report.add(
+                ValidationSeverity.FATAL,
+                "package_not_ready",
+                f"readiness.yaml status is {package.readiness.status}.",
+                file="readiness.yaml",
+                path="status",
+            )
+
+        if package.resource_contracts is not None:
+            known_source_ids = {source.id for source in primitives.knowledge.sources}
+            known_source_ids.update(source.id for source in package.context.sources)
+            for resource in package.resource_contracts.resources:
+                if resource.id not in known_source_ids:
+                    report.add(
+                        ValidationSeverity.WARNING,
+                        "resource_contract_without_source",
+                        "resource_contracts.yaml contains a resource not referenced by knowledge/context sources.",
+                        file="resource_contracts.yaml",
+                        path=f"resources.{resource.id}",
+                    )

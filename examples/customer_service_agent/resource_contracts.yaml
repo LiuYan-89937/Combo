@@ -1,0 +1,7 @@
+schema_version: "0.1"
+kind: "ResourceContractsSpec"
+metadata:
+  name: "customer-service-agent-resource-contracts"
+  version: "1.0.0"
+  description: "客服 Agent resource contracts example"
+resources: []

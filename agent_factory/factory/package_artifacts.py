@@ -25,7 +25,7 @@ from agent_factory.factory.tool_generation import (
     validate_tool_source,
 )
 from agent_factory.model import LLMRequest, LLMResponse, LLMStreamEvent, ModelService
-from agent_factory.specs import AgentPackagePrimitives
+from agent_factory.specs import AgentPackagePrimitives, ResourceContractsSpec, ToolImplementationPlan
 
 
 class PackageArtifactReport(JsonDumpMixin):
@@ -54,6 +54,7 @@ class PackageArtifactGenerator:
         *,
         requirement: str | None = None,
         requirement_analysis: dict[str, Any] | None = None,
+        resource_contracts: ResourceContractsSpec | None = None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
         on_tool_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> PackageArtifactReport:
@@ -68,6 +69,7 @@ class PackageArtifactGenerator:
             tool_drafts,
             requirement=requirement,
             requirement_analysis=requirement_analysis,
+            resource_contracts=resource_contracts,
             on_stream_event=on_stream_event,
         )
         _emit_contract_progress(on_tool_progress, contracts, total=total_tools)
@@ -84,6 +86,7 @@ class PackageArtifactGenerator:
                         contracts.get(str(draft["tool_id"])),
                         requirement=requirement,
                         requirement_analysis=requirement_analysis,
+                        resource_contracts=resource_contracts,
                         on_stream_event=on_stream_event,
                         on_tool_progress=on_tool_progress,
                         total_tools=total_tools,
@@ -111,6 +114,7 @@ class PackageArtifactGenerator:
                         contract=contracts.get(str(draft["tool_id"])),
                         requirement=requirement,
                         requirement_analysis=requirement_analysis,
+                        resource_contracts=resource_contracts,
                         on_stream_event=None,
                     )
                     future_map[future] = (index, draft)
@@ -427,6 +431,7 @@ class PackageArtifactGenerator:
         *,
         requirement: str | None,
         requirement_analysis: dict[str, Any] | None,
+        resource_contracts: ResourceContractsSpec | None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None,
     ) -> dict[str, ToolContract]:
         derived = {
@@ -435,6 +440,7 @@ class PackageArtifactGenerator:
                 draft,
                 requirement=requirement,
                 requirement_analysis=requirement_analysis,
+                resource_contracts=resource_contracts,
             )
             for draft in tool_drafts
         }
@@ -450,6 +456,7 @@ class PackageArtifactGenerator:
                 tool_drafts,
                 requirement=requirement,
                 requirement_analysis=requirement_analysis,
+                resource_contracts=resource_contracts,
             )
             method = (
                 self.model_service.stream_structured
@@ -485,6 +492,7 @@ class PackageArtifactGenerator:
         *,
         requirement: str | None,
         requirement_analysis: dict[str, Any] | None,
+        resource_contracts: ResourceContractsSpec | None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None,
         on_tool_progress: Callable[[dict[str, Any]], None] | None,
         total_tools: int,
@@ -503,6 +511,7 @@ class PackageArtifactGenerator:
             contract=contract,
             requirement=requirement,
             requirement_analysis=requirement_analysis,
+            resource_contracts=resource_contracts,
             on_stream_event=on_stream_event,
         )
         _emit_tool_progress(
@@ -531,6 +540,7 @@ class PackageArtifactGenerator:
         contract: ToolContract | None = None,
         requirement: str | None = None,
         requirement_analysis: dict[str, Any] | None = None,
+        resource_contracts: ResourceContractsSpec | None = None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> GeneratedToolCodeDraft:
         if self.model_service is not None:
@@ -543,6 +553,7 @@ class PackageArtifactGenerator:
                     contract=contract,
                     requirement=requirement,
                     requirement_analysis=requirement_analysis,
+                    resource_contracts=resource_contracts,
                 )
                 result = asyncio.run(
                     _generate_tool_text(
@@ -563,6 +574,7 @@ class PackageArtifactGenerator:
                         primitives=primitives,
                         requirement=requirement,
                         contract=contract,
+                        resource_contracts=resource_contracts,
                         generation_status="model_generated",
                         repair_attempts=0,
                         prior_errors=[],
@@ -582,6 +594,7 @@ class PackageArtifactGenerator:
                     validation_errors=generation_errors,
                     requirement=requirement,
                     requirement_analysis=requirement_analysis,
+                    resource_contracts=resource_contracts,
                 )
                 repair_result = asyncio.run(
                     _generate_tool_text(
@@ -601,6 +614,7 @@ class PackageArtifactGenerator:
                         primitives=primitives,
                         requirement=requirement,
                         contract=contract,
+                        resource_contracts=resource_contracts,
                         generation_status="model_repaired",
                         repair_attempts=1,
                         prior_errors=generation_errors,
@@ -916,6 +930,11 @@ def _tool_metadata(
             "required": draft["approval_required"],
             "reason": "Factory-generated tool code must be reviewed before registration.",
         },
+        **(
+            {"implementation_plan": code_draft.implementation_plan.model_dump(mode="json")}
+            if code_draft.implementation_plan
+            else {}
+        ),
         "generation": {
             "status": code_draft.generation_status,
             "fallback_used": code_draft.fallback_used,
@@ -946,6 +965,7 @@ def _coerce_tool_code(
     primitives: AgentPackagePrimitives,
     requirement: str | None,
     contract: ToolContract | None,
+    resource_contracts: ResourceContractsSpec | None,
     generation_status: str,
     repair_attempts: int,
     prior_errors: list[str],
@@ -966,6 +986,7 @@ def _coerce_tool_code(
                 logic_source,
                 draft,
                 contract=contract,
+                resource_contracts=resource_contracts,
                 generation_status=generation_status,
                 repair_attempts=repair_attempts,
                 prior_errors=prior_errors,
@@ -999,6 +1020,7 @@ def _code_draft_from_logic(
     draft: dict[str, Any],
     *,
     contract: ToolContract | None,
+    resource_contracts: ResourceContractsSpec | None,
     generation_status: str,
     repair_attempts: int,
     prior_errors: list[str],
@@ -1007,6 +1029,11 @@ def _code_draft_from_logic(
     stem = _safe_file_stem(tool_id)
     input_schema = contract.input_schema if contract is not None else {"type": "object"}
     output_schema = contract.output_schema if contract is not None else {"type": "object"}
+    implementation_plan = _implementation_plan_from_contract(
+        tool_id,
+        contract=contract,
+        resource_contracts=resource_contracts,
+    )
     return GeneratedToolCodeDraft(
         tool_id=tool_id,
         python_source=_tool_wrapper_source(
@@ -1020,11 +1047,52 @@ def _code_draft_from_logic(
         input_schema=input_schema,
         output_schema=output_schema,
         test_cases=contract.test_requirements if contract is not None else [],
+        implementation_plan=implementation_plan,
         risk_notes=["model-generated logic artifact"],
         generation_status=generation_status,
         fallback_used=False,
         repair_attempts=repair_attempts,
         generation_errors=list(prior_errors),
+    )
+
+
+def _implementation_plan_from_contract(
+    tool_id: str,
+    *,
+    contract: ToolContract | None,
+    resource_contracts: ResourceContractsSpec | None,
+) -> ToolImplementationPlan:
+    resource_refs = list(contract.resource_refs) if contract is not None else []
+    if resource_contracts is not None:
+        known_contract_ids = {resource.id for resource in resource_contracts.resources}
+        resource_refs = [resource_id for resource_id in resource_refs if resource_id in known_contract_ids]
+    return ToolImplementationPlan(
+        tool_id=tool_id,
+        resource_refs=resource_refs,
+        preconditions=[
+            "resource_contract_available" if resource_refs else "no_external_resource_required",
+            "sandbox_context_available",
+        ],
+        allowed_operations=[
+            "use_explicit_runtime_resources",
+            "return_structured_dict_result",
+            "use_parameterized_sql_for_sqlite" if resource_refs else "local_deterministic_logic",
+        ],
+        forbidden_operations=(
+            list(contract.forbidden_behaviors)
+            if contract is not None
+            else [
+                "do_not_read_env_or_secrets",
+                "do_not_execute_shell",
+                "do_not_access_network",
+            ]
+        ),
+        failure_cases=[
+            "missing_required_input",
+            "resource_unavailable" if resource_refs else "invalid_input",
+            "operation_rejected_by_policy",
+        ],
+        sandbox_context_required=bool(resource_refs),
     )
 
 

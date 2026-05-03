@@ -83,11 +83,29 @@ def route_after_tool_test_repair(
 
 def route_after_validate_primitives(
     state: FactoryProductionStateDict,
-) -> Literal["repair_primitives", "write_package", "failed"]:
+) -> Literal["repair_primitives", "plan_capability_preconditions", "failed"]:
     if state.get("primitives") is not None and state.get("error") is None:
-        return "write_package"
+        return "plan_capability_preconditions"
     if state.get("repair_attempts", 0) < state.get("max_repair_attempts", 1):
         return "repair_primitives"
+    return "failed"
+
+
+def route_after_readiness(
+    state: FactoryProductionStateDict,
+) -> Literal["write_package", "needs_clarification", "failed"]:
+    if state.get("error") is not None:
+        return "failed"
+    readiness = state.get("readiness_report")
+    status = None
+    if isinstance(readiness, dict):
+        status = readiness.get("status")
+    elif readiness is not None:
+        status = getattr(readiness, "status", None)
+    if status == "ready":
+        return "write_package"
+    if status == "needs_user_input":
+        return "needs_clarification"
     return "failed"
 
 

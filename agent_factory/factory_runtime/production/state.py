@@ -16,6 +16,7 @@ from agent_factory.factory.package_verification import (
     ToolTestRunReport,
 )
 from agent_factory.specs import AgentPackagePrimitives, ValidationReport
+from agent_factory.specs import EnvironmentProbeReport, ReadinessReport, ResourceContractsSpec
 
 ProductionStatus = Literal[
     "running",
@@ -36,6 +37,9 @@ class FactoryProductionStateDict(TypedDict, total=False):
     package_path: Path | None
     raw_model_data: dict[str, Any] | list[Any] | None
     primitives: AgentPackagePrimitives | None
+    environment_report: EnvironmentProbeReport | None
+    resource_contracts: ResourceContractsSpec | None
+    readiness_report: ReadinessReport | None
     validation_report: ValidationReport | None
     generated_artifacts: list[Path]
     generated_tool_count: int
@@ -75,6 +79,9 @@ class FactoryProductionState(JsonDumpMixin):
     package_path: Path | None = None
     raw_model_data: dict[str, Any] | list[Any] | None = None
     primitives: AgentPackagePrimitives | None = None
+    environment_report: EnvironmentProbeReport | None = None
+    resource_contracts: ResourceContractsSpec | None = None
+    readiness_report: ReadinessReport | None = None
     validation_report: ValidationReport | None = None
     generated_artifacts: list[Path] = Field(default_factory=list)
     generated_tool_count: int = 0

@@ -72,6 +72,18 @@ class ToolImplementationSpec(BaseModel):
     logic_path: str | None = None
 
 
+class ToolImplementationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    tool_id: str
+    resource_refs: list[str] = Field(default_factory=list)
+    preconditions: list[str] = Field(default_factory=list)
+    allowed_operations: list[str] = Field(default_factory=list)
+    forbidden_operations: list[str] = Field(default_factory=list)
+    failure_cases: list[str] = Field(default_factory=list)
+    sandbox_context_required: bool = True
+
+
 class ToolApprovalSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -97,6 +109,7 @@ class GeneratedToolDraftSpec(BaseModel):
     input_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     output_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     approval: ToolApprovalSpec = Field(default_factory=ToolApprovalSpec)
+    implementation_plan: ToolImplementationPlan | None = None
     generation: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -203,6 +216,135 @@ class MemorySpec(BaseSpec):
     redact_before_storage: bool = True
 
 
+ReadinessStatus = Literal["ready", "blocked", "needs_user_input"]
+ProbeStatus = Literal["passed", "failed", "skipped"]
+
+
+class PreconditionSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    id: str
+    type: Literal[
+        "resource_exists",
+        "resource_readable",
+        "resource_writable",
+        "sqlite_openable",
+        "sqlite_schema_available",
+        "python_module_available",
+        "cli_available",
+        "sandbox_copyable",
+    ]
+    description: str
+    required: bool = True
+    status: ProbeStatus = "skipped"
+    resource_ref: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShellCapabilitySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    id: str = "shell.command"
+    allowed_commands: list[str] = Field(default_factory=list)
+    allowed_scripts: list[str] = Field(default_factory=list)
+    proposal_only: bool = True
+    approval_required: bool = True
+    sandbox_required: bool = True
+    timeout_seconds: int = Field(default=10, gt=0)
+    risk_level: RiskLevel = RiskLevel.HIGH
+
+
+class EnvironmentProbe(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    id: str
+    type: str
+    status: ProbeStatus
+    message: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class EnvironmentProbeReport(BaseSpec):
+    kind: Literal["EnvironmentProbeReport"] = "EnvironmentProbeReport"
+
+    preconditions: list[PreconditionSpec] = Field(default_factory=list)
+    probes: list[EnvironmentProbe] = Field(default_factory=list)
+    shell_capabilities: list[ShellCapabilitySpec] = Field(default_factory=list)
+
+
+class SQLiteColumnContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    name: str
+    type: str | None = None
+    not_null: bool = False
+    primary_key: bool = False
+    default: str | None = None
+
+
+class SQLiteTableContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    name: str
+    columns: list[SQLiteColumnContract] = Field(default_factory=list)
+    primary_keys: list[str] = Field(default_factory=list)
+    required_columns: list[str] = Field(default_factory=list)
+    check_constraints: list[str] = Field(default_factory=list)
+
+
+class ResourceContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    id: str
+    type: Literal["file", "directory", "sqlite", "mcp", "url", "vector_store", "unknown"]
+    ref: str | None = None
+    exists: bool = False
+    status: Literal["ready", "missing", "inaccessible", "unsupported", "error"] = "missing"
+    access_mode: Literal["read_only", "read_write"] = "read_only"
+    visible_to_tools: bool = True
+    sandbox_required: bool = True
+    details: dict[str, Any] = Field(default_factory=dict)
+    sqlite_tables: list[SQLiteTableContract] = Field(default_factory=list)
+
+
+class ResourceContractsSpec(BaseSpec):
+    kind: Literal["ResourceContractsSpec"] = "ResourceContractsSpec"
+
+    resources: list[ResourceContract] = Field(default_factory=list)
+
+
+class ReadinessIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    code: str
+    message: str
+    severity: Literal["info", "warning", "error", "fatal"] = "warning"
+    resource_id: str | None = None
+
+
+class ReadinessOption(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    id: str
+    label: str
+    description: str
+    action: Literal[
+        "ask_user",
+        "create_sample_resource",
+        "replace_resource_path",
+        "generate_draft_only",
+        "skip_optional_capability",
+    ] = "ask_user"
+
+
+class ReadinessReport(BaseSpec):
+    kind: Literal["ReadinessReport"] = "ReadinessReport"
+
+    status: ReadinessStatus = "ready"
+    issues: list[ReadinessIssue] = Field(default_factory=list)
+    options: list[ReadinessOption] = Field(default_factory=list)
+
+
 class HarnessPackageScenario(BaseModel):
     model_config = ConfigDict(extra="allow", validate_assignment=True)
 
@@ -230,6 +372,9 @@ class FullAgentPackage(BaseModel):
     mcp: MCPBindingSpec
     context: ContextSpec
     memory: MemorySpec
+    environment: EnvironmentProbeReport | None = None
+    resource_contracts: ResourceContractsSpec | None = None
+    readiness: ReadinessReport | None = None
     harness: HarnessPackageSpec
     generated_tools: list[GeneratedToolDraftSpec] = Field(default_factory=list)
 

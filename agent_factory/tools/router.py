@@ -60,7 +60,7 @@ class ToolRouter:
                 error=f"Unknown tool: {invocation.tool_id}",
             )
         if tool.status == "draft" and not self.tools_spec.allow_draft_execution:
-            if _safe_mock_tool(tool) and _tool_tests_passed(self.package_path):
+            if _safe_mock_tool(tool) and _tool_tests_passed(self.package_path, tool.tool_id):
                 return tool
             return ToolResult(
                 invocation_id=invocation.invocation_id,
@@ -154,7 +154,7 @@ def _safe_mock_tool(tool: GeneratedToolDraftSpec) -> bool:
     return tool.risk_level == RiskLevel.LOW and not tool.approval.required
 
 
-def _tool_tests_passed(package_path: Path) -> bool:
+def _tool_tests_passed(package_path: Path, tool_id: str | None = None) -> bool:
     report_path = package_path / "generated" / "reports" / "tool_tests.json"
     if not report_path.exists():
         return False
@@ -162,4 +162,8 @@ def _tool_tests_passed(package_path: Path) -> bool:
         data = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    if tool_id:
+        per_tool = data.get("per_tool_status")
+        if isinstance(per_tool, dict) and tool_id in per_tool:
+            return per_tool.get(tool_id) == "passed"
     return data.get("status") == "passed"

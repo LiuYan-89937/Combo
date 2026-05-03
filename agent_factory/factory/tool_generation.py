@@ -8,7 +8,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.model import LLMRequest, MessageBuilder
-from agent_factory.specs import AgentPackagePrimitives, JsonSchema
+from agent_factory.specs import (
+    AgentPackagePrimitives,
+    JsonSchema,
+    ResourceContractsSpec,
+    ToolImplementationPlan,
+)
 
 
 class GeneratedToolTestCase(BaseModel):
@@ -29,6 +34,7 @@ class GeneratedToolCodeDraft(BaseModel):
     input_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     output_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     test_cases: list[GeneratedToolTestCase] = Field(default_factory=list)
+    implementation_plan: ToolImplementationPlan | None = None
     risk_notes: list[str] = Field(default_factory=list)
     generation_status: Literal[
         "model_generated",
@@ -104,12 +110,14 @@ def build_tool_generation_request(
     contract: ToolContract | None = None,
     requirement: str | None = None,
     requirement_analysis: dict[str, Any] | None = None,
+    resource_contracts: ResourceContractsSpec | None = None,
 ) -> LLMRequest:
     contract = contract or derive_tool_contract(
         primitives,
         draft,
         requirement=requirement,
         requirement_analysis=requirement_analysis,
+        resource_contracts=resource_contracts,
     )
     return (
         MessageBuilder.start()
@@ -129,6 +137,8 @@ def build_tool_generation_request(
             f"Requirement analysis summary:\n"
             f"{json.dumps(_compact_requirement_analysis(requirement_analysis), ensure_ascii=False, indent=2)}\n\n"
             f"Single tool contract:\n{contract.model_dump_json(indent=2)}\n\n"
+            f"Resource contracts and environment facts:\n"
+            f"{_resource_contracts_json(resource_contracts)}\n\n"
             "execute(input_data, resources) must return a dict. On success include status='completed'. "
             "Use resources['resources'], resources['sqlite_databases'], resources['filesystem_root'], "
             "or resources['runtime']; do not make a real user path the only data source.\n\n"
@@ -152,12 +162,14 @@ def build_tool_repair_request(
     validation_errors: list[str],
     requirement: str | None = None,
     requirement_analysis: dict[str, Any] | None = None,
+    resource_contracts: ResourceContractsSpec | None = None,
 ) -> LLMRequest:
     contract = contract or derive_tool_contract(
         primitives,
         draft,
         requirement=requirement,
         requirement_analysis=requirement_analysis,
+        resource_contracts=resource_contracts,
     )
     return (
         MessageBuilder.start()
@@ -170,6 +182,8 @@ def build_tool_repair_request(
             "Repair the generated tool logic so it is safe, executable, and business-complete.\n\n"
             f"Agent goal: {primitives.instructions.goal}\n"
             f"Single tool contract:\n{contract.model_dump_json(indent=2)}\n\n"
+            f"Resource contracts and environment facts:\n"
+            f"{_resource_contracts_json(resource_contracts)}\n\n"
             "Previous generated code or data:\n"
             f"{json.dumps(previous_data, ensure_ascii=False, indent=2, default=str)}\n\n"
             "Validation/security/test-generation errors:\n"
@@ -192,6 +206,7 @@ def build_tool_contracts_request(
     *,
     requirement: str | None = None,
     requirement_analysis: dict[str, Any] | None = None,
+    resource_contracts: ResourceContractsSpec | None = None,
 ) -> LLMRequest:
     schema = ToolContractBatch.model_json_schema()
     sources = [
@@ -213,6 +228,7 @@ def build_tool_contracts_request(
             f"Agent goal: {primitives.instructions.goal}\n"
             f"Agent boundaries: {json.dumps(primitives.instructions.boundaries, ensure_ascii=False)}\n"
             f"Knowledge/resource sources:\n{json.dumps(sources, ensure_ascii=False, indent=2)}\n\n"
+            f"Resource contracts and environment facts:\n{_resource_contracts_json(resource_contracts)}\n\n"
             f"Tool drafts:\n{json.dumps(tool_drafts, ensure_ascii=False, indent=2)}\n\n"
             "Return contracts only. Never include Python code."
         )
@@ -232,6 +248,7 @@ def derive_tool_contract(
     *,
     requirement: str | None = None,
     requirement_analysis: dict[str, Any] | None = None,
+    resource_contracts: ResourceContractsSpec | None = None,
 ) -> ToolContract:
     test_cases = required_tool_test_cases(
         draft,
@@ -241,8 +258,12 @@ def derive_tool_contract(
     resource_refs = [
         source.id
         for source in primitives.knowledge.sources
-        if source.type in {"file", "mcp"}
+        if source.type in {"file", "directory", "mcp"}
     ]
+    if resource_contracts is not None:
+        for resource in resource_contracts.resources:
+            if resource.id not in resource_refs:
+                resource_refs.append(resource.id)
     forbidden = [
         "do_not_read_env_or_secrets",
         "do_not_execute_shell",
@@ -270,6 +291,12 @@ def derive_tool_contract(
         resource_refs=resource_refs,
         test_requirements=test_cases,
     )
+
+
+def _resource_contracts_json(resource_contracts: ResourceContractsSpec | None) -> str:
+    if resource_contracts is None:
+        return "{}"
+    return resource_contracts.model_dump_json(indent=2)
 
 
 def _compact_requirement_analysis(value: dict[str, Any] | None) -> dict[str, Any]:
@@ -430,6 +457,21 @@ def fallback_tool_code(
         input_schema={"type": "object", "additionalProperties": True},
         output_schema={"type": "object", "additionalProperties": True},
         test_cases=test_cases,
+        implementation_plan=ToolImplementationPlan(
+            tool_id=tool_id,
+            resource_refs=[find_sqlite_resource(primitives=primitives, requirement=requirement)[0] or "customer_ops_sqlite"]
+            if is_sqlite_customer_ticket_tool(draft, primitives=primitives, requirement=requirement)
+            else [],
+            preconditions=["tool_contract_available", "sandbox_context_available"],
+            allowed_operations=["local_deterministic_operation"],
+            forbidden_operations=[
+                "read_env_or_secrets",
+                "execute_shell",
+                "network_access",
+                "access_files_outside_runtime_context",
+            ],
+            failure_cases=["missing_required_input", "resource_unavailable"],
+        ),
         risk_notes=["deterministic local implementation" if status == "deterministic_fallback" else "generic fallback placeholder"],
         generation_status=status,
         fallback_used=True,
@@ -771,6 +813,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any
 
@@ -857,7 +900,7 @@ def _connect() -> sqlite3.Connection:
 def _list_tickets(input_data: dict[str, Any]) -> dict[str, Any]:
     limit = _bounded_int(input_data.get("limit"), default=20, minimum=1, maximum=100)
     offset = _bounded_int(input_data.get("offset"), default=0, minimum=0, maximum=100000)
-    with _connect() as conn:
+    with closing(_connect()) as conn, conn:
         rows = conn.execute(
             f"SELECT {{SELECT_COLUMNS}} FROM customer_tickets ORDER BY created_at DESC, ticket_id ASC LIMIT ? OFFSET ?",
             (limit, offset),
@@ -878,7 +921,7 @@ def _get_ticket(input_data: dict[str, Any]) -> dict[str, Any]:
     ticket_id = _coerce_ticket_id(input_data)
     if not ticket_id:
         return _failure("missing_ticket_id", "ticket_id is required.", input_data)
-    with _connect() as conn:
+    with closing(_connect()) as conn, conn:
         row = conn.execute(
             f"SELECT {{SELECT_COLUMNS}} FROM customer_tickets WHERE ticket_id = ?",
             (ticket_id,),
@@ -928,7 +971,7 @@ def _search_tickets(input_data: dict[str, Any]) -> dict[str, Any]:
             params.append(f"%{{value}}%")
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     limit = _bounded_int(input_data.get("limit"), default=20, minimum=1, maximum=100)
-    with _connect() as conn:
+    with closing(_connect()) as conn, conn:
         rows = conn.execute(
             f"SELECT {{SELECT_COLUMNS}} FROM customer_tickets{{where}} ORDER BY created_at DESC, ticket_id ASC LIMIT ?",
             (*params, limit),
@@ -963,7 +1006,7 @@ def _create_ticket(input_data: dict[str, Any]) -> dict[str, Any]:
         "created_at": str(input_data.get("created_at") or now).strip(),
         "updated_at": str(input_data.get("updated_at") or now).strip(),
     }}
-    with _connect() as conn:
+    with closing(_connect()) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO customer_tickets "
             "(ticket_id, customer_name, channel, title, description, status, priority, assignee, created_at, updated_at) "
@@ -998,7 +1041,7 @@ def _update_ticket_status(input_data: dict[str, Any]) -> dict[str, Any]:
     if new_status not in ALLOWED_STATUS:
         return _failure("invalid_status", "status must be open/pending/resolved/closed.", input_data)
     updated_at = _now()
-    with _connect() as conn:
+    with closing(_connect()) as conn, conn:
         cursor = conn.execute(
             "UPDATE customer_tickets SET status = ?, updated_at = ? WHERE ticket_id = ?",
             (new_status, updated_at, ticket_id),

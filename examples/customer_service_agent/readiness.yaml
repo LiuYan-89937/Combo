@@ -1,0 +1,9 @@
+schema_version: "0.1"
+kind: "ReadinessReport"
+metadata:
+  name: "customer-service-agent-readiness"
+  version: "1.0.0"
+  description: "客服 Agent readiness example"
+status: "ready"
+issues: []
+options: []

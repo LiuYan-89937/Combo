@@ -9,6 +9,7 @@ from agent_factory.factory_runtime.production.routes import (
     route_after_maybe_clarify,
     route_after_package_write,
     route_after_plan_primitives,
+    route_after_readiness,
     route_after_repair,
     route_after_tool_test_repair,
     route_after_tool_tests,
@@ -29,6 +30,10 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
     graph.add_node("plan_primitives", nodes.plan_primitives)
     graph.add_node("validate_primitives", nodes.validate_primitives)
     graph.add_node("repair_primitives", nodes.repair_primitives)
+    graph.add_node("plan_capability_preconditions", nodes.plan_capability_preconditions)
+    graph.add_node("discover_resources", nodes.discover_resources)
+    graph.add_node("probe_environment", nodes.probe_environment)
+    graph.add_node("resolve_readiness", nodes.resolve_readiness)
     graph.add_node("write_package", nodes.write_package)
     graph.add_node("generate_tool_scripts", nodes.generate_tool_scripts)
     graph.add_node("generate_tool_tests", nodes.generate_tool_tests)
@@ -80,7 +85,7 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
         route_after_validate_primitives,
         {
             "repair_primitives": "repair_primitives",
-            "write_package": "write_package",
+            "plan_capability_preconditions": "plan_capability_preconditions",
             "failed": "failed",
         },
     )
@@ -89,6 +94,18 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
         route_after_repair,
         {
             "validate_primitives": "validate_primitives",
+            "failed": "failed",
+        },
+    )
+    graph.add_edge("plan_capability_preconditions", "discover_resources")
+    graph.add_edge("discover_resources", "probe_environment")
+    graph.add_edge("probe_environment", "resolve_readiness")
+    graph.add_conditional_edges(
+        "resolve_readiness",
+        route_after_readiness,
+        {
+            "write_package": "write_package",
+            "needs_clarification": "needs_clarification",
             "failed": "failed",
         },
     )

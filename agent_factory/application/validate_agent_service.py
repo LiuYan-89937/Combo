@@ -35,5 +35,5 @@ class ValidateAgentService:
         if request.primitives_only:
             report = self.validator.validate_primitives(request.path)
         else:
-            report = self.validator.validate_full_package(request.path)
+            report = self.validator.validate_full_package(request.path, strict=request.strict)
         return ValidateAgentResult(report=report)

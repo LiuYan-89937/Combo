@@ -54,6 +54,7 @@ class ToolTestRunReport(JsonDumpMixin):
     resource_count: int = 0
     resource_map_redacted: dict[str, Any] = Field(default_factory=dict)
     diff_summary: dict[str, Any] = Field(default_factory=dict)
+    per_tool_status: dict[str, VerificationStatus] = Field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -175,9 +176,11 @@ class PackageVerificationRunner:
         resource_count = 0
         resource_map_redacted: dict[str, Any] = {}
         diff_by_test: dict[str, Any] = {}
+        per_tool_status: dict[str, VerificationStatus] = {}
 
         for test_file in test_files:
             sandbox = None
+            tool_id = _tool_id_from_test_file(test_file)
             try:
                 sandbox = SandboxResourceResolver().prepare(package_path)
                 resource_count = max(resource_count, sandbox.resource_count)
@@ -189,6 +192,7 @@ class PackageVerificationRunner:
                 if unsafe_issues:
                     issues.extend(unsafe_issues)
                     return_code = 1
+                    per_tool_status[tool_id] = "failed"
                     diff_by_test[test_file.name] = sandbox.diff_summary()
                     continue
 
@@ -223,6 +227,7 @@ class PackageVerificationRunner:
                     stderr_parts.append(f"== {test_file.name} ==\n{completed.stderr}")
                 if completed.returncode != 0:
                     return_code = completed.returncode
+                    per_tool_status[tool_id] = "failed"
                     issues.append(
                         VerificationIssue(
                             code="generated_tool_tests_failed",
@@ -230,9 +235,12 @@ class PackageVerificationRunner:
                             path=str(test_file.relative_to(package_path)),
                         )
                     )
+                else:
+                    per_tool_status[tool_id] = "passed"
                 diff_by_test[test_file.name] = sandbox.diff_summary()
             except subprocess.TimeoutExpired as error:
                 return_code = 1
+                per_tool_status[tool_id] = "failed"
                 stdout_parts.append(f"== {test_file.name} ==\n{_clean_text(error.stdout or '', self.output_limit)}")
                 stderr_parts.append(f"== {test_file.name} ==\n{_clean_text(error.stderr or '', self.output_limit)}")
                 issues.append(
@@ -246,6 +254,7 @@ class PackageVerificationRunner:
                     diff_by_test[test_file.name] = sandbox.diff_summary()
             except Exception as error:
                 return_code = 1
+                per_tool_status[tool_id] = "failed"
                 issues.append(
                     VerificationIssue(
                         code="tool_test_sandbox_error",
@@ -277,6 +286,7 @@ class PackageVerificationRunner:
                 "test_file_count": len(test_files),
                 "failed_test_file_count": len({issue.path for issue in issues if issue.path}),
             },
+            per_tool_status=per_tool_status,
         )
 
         self._write_report(report_path, report)
@@ -551,6 +561,13 @@ def _subprocess_env() -> dict[str, str]:
     if "SystemRoot" in os.environ:
         env["SystemRoot"] = os.environ["SystemRoot"]
     return env
+
+
+def _tool_id_from_test_file(path: Path) -> str:
+    name = path.stem
+    if name.startswith("test_"):
+        return name.removeprefix("test_")
+    return name
 
 
 def _clean_text(value: str | bytes, limit: int = 4000) -> str:

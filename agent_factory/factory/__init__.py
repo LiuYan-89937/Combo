@@ -1,6 +1,7 @@
 """FactoryAgent and package generation modules."""
 
 from agent_factory.factory.factory_agent import FactoryAgent
+from agent_factory.factory.environment import EnvironmentProbeRunner
 from agent_factory.factory.package_writer import PackageWriter
 from agent_factory.factory.package_verification import (
     FactoryVerificationReport,
@@ -29,6 +30,7 @@ from agent_factory.factory.types import FactoryCreateOptions, FactoryError, Fact
 
 __all__ = [
     "FactoryAgent",
+    "EnvironmentProbeRunner",
     "ClarificationOption",
     "FactoryCreateOptions",
     "FactoryError",

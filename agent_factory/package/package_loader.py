@@ -19,9 +19,12 @@ from agent_factory.specs import (
     KnowledgeSpec,
     MCPBindingSpec,
     MemorySpec,
+    EnvironmentProbeReport,
     ObservabilitySpec,
     OutputSpec,
     PackageManifest,
+    ReadinessReport,
+    ResourceContractsSpec,
     RuntimeSpec,
     RunContextSpec,
     ToolsSpec,
@@ -58,6 +61,13 @@ REQUIRED_FULL_PACKAGE_FILES: dict[str, type[BaseModel]] = {
     "context.yaml": ContextSpec,
     "memory.yaml": MemorySpec,
     "harness.yaml": HarnessPackageSpec,
+}
+
+
+OPTIONAL_CONDITION_FILES: dict[str, type[BaseModel]] = {
+    "environment.yaml": EnvironmentProbeReport,
+    "resource_contracts.yaml": ResourceContractsSpec,
+    "readiness.yaml": ReadinessReport,
 }
 
 
@@ -130,6 +140,26 @@ class PackageLoader:
                 continue
             try:
                 loaded[self._full_field_name(filename)] = spec_type.model_validate(
+                    self._load_yaml(path)
+                )
+            except ValidationError as error:
+                issues.extend(self._validation_issues(filename, error))
+            except Exception as error:
+                issues.append(
+                    ValidationIssue(
+                        severity=ValidationSeverity.FATAL,
+                        code="yaml_parse_error",
+                        message=str(error),
+                        file=filename,
+                    )
+                )
+
+        for filename, spec_type in OPTIONAL_CONDITION_FILES.items():
+            path = root / filename
+            if not path.exists():
+                continue
+            try:
+                loaded[self._condition_field_name(filename)] = spec_type.model_validate(
                     self._load_yaml(path)
                 )
             except ValidationError as error:
@@ -247,4 +277,12 @@ class PackageLoader:
             "context.yaml": "context",
             "memory.yaml": "memory",
             "harness.yaml": "harness",
+        }[filename]
+
+    @staticmethod
+    def _condition_field_name(filename: str) -> str:
+        return {
+            "environment.yaml": "environment",
+            "resource_contracts.yaml": "resource_contracts",
+            "readiness.yaml": "readiness",
         }[filename]
