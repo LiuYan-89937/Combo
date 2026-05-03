@@ -108,6 +108,9 @@ class OpenAICompatibleChatAdapter:
     async def stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamEvent]:
         payload = self._build_payload(request, stream=True)
         yield LLMStreamEvent(type="started")
+        content_chunks: list[str] = []
+        reasoning_chunks: list[str] = []
+        finish_reason: str | None = None
         try:
             async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
                 async with client.stream(
@@ -128,6 +131,22 @@ class OpenAICompatibleChatAdapter:
                     async for line in response.aiter_lines():
                         event = self._parse_stream_line(line)
                         if event:
+                            if event.type == "delta" and event.delta:
+                                if event.metadata.get("delta_kind") == "reasoning":
+                                    reasoning_chunks.append(event.delta)
+                                else:
+                                    content_chunks.append(event.delta)
+                            if event.metadata.get("finish_reason"):
+                                finish_reason = str(event.metadata["finish_reason"])
+                            if event.type == "completed":
+                                event.response = LLMResponse(
+                                    content="".join(content_chunks),
+                                    provider=self.provider,
+                                    model=self.config.model,
+                                    finish_reason=finish_reason,
+                                )
+                                if reasoning_chunks:
+                                    event.metadata["reasoning_content"] = "".join(reasoning_chunks)
                             yield event
         except httpx.TimeoutException:
             yield LLMStreamEvent(
@@ -165,16 +184,21 @@ class OpenAICompatibleChatAdapter:
             "stream": stream,
         }
         if request.response_format == "json_schema" and request.json_schema:
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": request.json_schema_name or "structured_output",
-                    "schema": request.json_schema,
-                    "strict": request.json_schema_strict,
-                },
-            }
+            if self._uses_deepseek_json_object_mode():
+                payload["response_format"] = {"type": "json_object"}
+            else:
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": request.json_schema_name or "structured_output",
+                        "schema": request.json_schema,
+                        "strict": request.json_schema_strict,
+                    },
+                }
         elif request.response_format == "json_object":
             payload["response_format"] = {"type": "json_object"}
+        if self._uses_deepseek_json_object_mode():
+            payload["thinking"] = {"type": self.config.thinking or "enabled"}
         return payload
 
     def _headers(self) -> dict[str, str]:
@@ -187,6 +211,11 @@ class OpenAICompatibleChatAdapter:
     def _chat_completions_url(self) -> str:
         assert self.config.base_url is not None
         return f"{self.config.base_url}/chat/completions"
+
+    def _uses_deepseek_json_object_mode(self) -> bool:
+        base_url = (self.config.base_url or "").lower()
+        model = (self.config.model or "").lower()
+        return "api.deepseek.com" in base_url or model.startswith("deepseek")
 
     @staticmethod
     def _message_to_payload(message: LLMMessage) -> dict[str, str]:
@@ -244,8 +273,11 @@ class OpenAICompatibleChatAdapter:
             return LLMStreamEvent(type="completed")
         try:
             payload = json.loads(data)
-            delta = payload["choices"][0].get("delta", {})
+            choice = payload["choices"][0]
+            delta = choice.get("delta", {})
             content = delta.get("content")
+            reasoning_content = delta.get("reasoning_content")
+            finish_reason = choice.get("finish_reason")
         except (json.JSONDecodeError, KeyError, TypeError):
             return LLMStreamEvent(
                 type="error",
@@ -255,7 +287,19 @@ class OpenAICompatibleChatAdapter:
                 ),
             )
         if content:
-            return LLMStreamEvent(type="delta", delta=content)
+            return LLMStreamEvent(
+                type="delta",
+                delta=content,
+                metadata={"delta_kind": "content", "finish_reason": finish_reason},
+            )
+        if reasoning_content:
+            return LLMStreamEvent(
+                type="delta",
+                delta=reasoning_content,
+                metadata={"delta_kind": "reasoning", "finish_reason": finish_reason},
+            )
+        if finish_reason:
+            return LLMStreamEvent(type="delta", metadata={"finish_reason": finish_reason})
         return None
 
     def _error_response(

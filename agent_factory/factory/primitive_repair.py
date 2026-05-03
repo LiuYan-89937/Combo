@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from agent_factory.factory_runtime import FactoryPromptBuilder, FactoryRunContext
-from agent_factory.model import ModelService
+from agent_factory.model import LLMStreamEvent, ModelService
 from agent_factory.model.types import StructuredOutputResult
+from agent_factory.specs import AgentPackagePrimitives
 
 
 class PrimitiveRepair:
@@ -21,6 +24,7 @@ class PrimitiveRepair:
         requirement: str,
         raw_model_data: object,
         validation_errors: str,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> StructuredOutputResult:
         request = self.prompt_builder.build_repair_request(
             context,
@@ -28,4 +32,11 @@ class PrimitiveRepair:
             raw_model_data=raw_model_data,
             validation_errors=validation_errors,
         )
-        return await self.model_service.generate_structured(request)
+        method = self.model_service.stream_structured if on_stream_event else self.model_service.generate_structured
+        return await method(
+            request,
+            schema=AgentPackagePrimitives.model_json_schema(by_alias=True),
+            schema_name="AgentPackagePrimitivesRepair",
+            strict=True,
+            **({"on_event": on_stream_event} if on_stream_event else {}),
+        )

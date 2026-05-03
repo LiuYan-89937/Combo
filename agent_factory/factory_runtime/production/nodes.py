@@ -31,7 +31,7 @@ from agent_factory.factory_runtime.production.state import (
     FactoryProductionState,
     FactoryProductionStateDict,
 )
-from agent_factory.model import ModelConfigError, ModelService
+from agent_factory.model import LLMStreamEvent, ModelConfigError, ModelService
 from agent_factory.package import PackageValidator
 from agent_factory.specs import AgentPackagePrimitives
 
@@ -111,6 +111,12 @@ class FactoryProductionNodes:
         analysis_result = RequirementAnalyzer(self._optional_model_service()).analyze_sync(
             self.context,
             requirement=current.requirement,
+            on_stream_event=self._model_stream_callback(
+                current,
+                stage="analyze_requirement",
+                title="Analyzing requirement",
+                message="Streaming model reasoning and analysis JSON.",
+            ),
         )
         analysis = analysis_result.analysis
         questions = analysis.clarification_questions if not analysis.is_clear_enough else []
@@ -187,6 +193,12 @@ class FactoryProductionNodes:
                     self.context,
                     requirement=current.requirement,
                     requirement_analysis=current.requirement_analysis,
+                    on_stream_event=self._model_stream_callback(
+                        current,
+                        stage="plan_primitives",
+                        title="Generating AgentPackage primitives",
+                        message="Streaming model reasoning and primitives JSON.",
+                    ),
                 )
             )
             if result.error:
@@ -263,6 +275,12 @@ class FactoryProductionNodes:
                     requirement=current.requirement,
                     raw_model_data=current.raw_model_data,
                     validation_errors=validation_error,
+                    on_stream_event=self._model_stream_callback(
+                        current,
+                        stage="repair_primitives",
+                        title="Repairing primitive draft",
+                        message="Streaming model reasoning and repaired JSON.",
+                    ),
                 )
             )
             if result.error:
@@ -330,8 +348,20 @@ class FactoryProductionNodes:
                 current.primitives,
                 requirement=current.requirement,
                 requirement_analysis=current.requirement_analysis,
+                on_stream_event=self._model_stream_callback(
+                    current,
+                    stage="generate_tool_scripts",
+                    title="Generating tool scripts",
+                    message="Streaming model reasoning and tool code JSON.",
+                ),
+                on_tool_progress=self._tool_progress_callback(current),
             )
             _apply_artifact_report(current, report)
+            if report.issues:
+                current.error = FactoryError(
+                    code="tool_script_generation_failed",
+                    message="; ".join(report.issues[:3]),
+                )
         except Exception as error:
             current.error = FactoryError(code="tool_script_generation_failed", message=str(error))
         event = FactoryEvent(
@@ -343,7 +373,10 @@ class FactoryProductionNodes:
             artifact_path=str(current.package_path / "generated" / "draft_tools")
             if current.package_path
             else None,
-            payload={"tools": current.generated_tool_count},
+            payload={
+                "tools": current.generated_tool_count,
+                "issues": report.issues if "report" in locals() else [],
+            },
         )
         return self._with_event(current, node="generate_tool_scripts", event=event)
 
@@ -795,6 +828,8 @@ class FactoryProductionNodes:
         message: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        progress_payload = dict(payload or {})
+        progress_payload.setdefault("flow_summary", message or title)
         event = FactoryEvent(
             run_id=state.run_id,
             stage=stage,
@@ -802,7 +837,7 @@ class FactoryProductionNodes:
             title=title,
             message=message,
             payload={
-                **(payload or {}),
+                **progress_payload,
                 "graph_node": stage,
                 "stream_kind": "node_thinking",
             },
@@ -812,6 +847,86 @@ class FactoryProductionNodes:
             writer(event.model_dump(mode="json"))
         except Exception:
             return
+
+    def _model_stream_callback(
+        self,
+        state: FactoryProductionState,
+        *,
+        stage: str,
+        title: str,
+        message: str,
+    ):
+        reasoning_chunks: list[str] = []
+        content_chunks: list[str] = []
+        last_emit_size = 0
+
+        def on_event(event: LLMStreamEvent) -> None:
+            nonlocal last_emit_size
+            if event.type != "delta" or not event.delta:
+                return
+            kind = str(event.metadata.get("delta_kind") or "content")
+            if kind == "reasoning":
+                reasoning_chunks.append(event.delta)
+            else:
+                content_chunks.append(event.delta)
+            reasoning = "".join(reasoning_chunks)
+            content = "".join(content_chunks)
+            total_size = len(reasoning) + len(content)
+            if total_size - last_emit_size < 120:
+                return
+            last_emit_size = total_size
+            if content:
+                preview = "Structured JSON:\n" + _compact_preview(content, limit=900)
+                flow_summary = (
+                    f"Receiving structured JSON from the model "
+                    f"({len(content)} chars so far)."
+                )
+                thinking_kind = "content"
+            else:
+                preview = "Reasoning:\n" + _compact_preview(reasoning, limit=900)
+                flow_summary = (
+                    f"Model is reasoning about this node "
+                    f"({len(reasoning)} chars so far)."
+                )
+                thinking_kind = "reasoning"
+            self._stream_progress(
+                state,
+                stage=stage,
+                title=title,
+                message=message,
+                payload={
+                    "thinking": preview,
+                    "thinking_kind": thinking_kind,
+                    "flow_summary": flow_summary,
+                    "reasoning_chars": len(reasoning),
+                    "content_chars": len(content),
+                },
+            )
+
+        return on_event
+
+    def _tool_progress_callback(self, state: FactoryProductionState):
+        def on_progress(payload: dict[str, Any]) -> None:
+            tool_id = str(payload.get("tool_id") or "unknown_tool")
+            index = payload.get("tool_index")
+            total = payload.get("tool_total")
+            phase = str(payload.get("tool_phase") or payload.get("phase") or "processing")
+            prefix = f"Tool {index}/{total}" if index and total else "Tool"
+            summary = str(payload.get("flow_summary") or f"{prefix}: {tool_id} - {phase}.")
+            self._stream_progress(
+                state,
+                stage="generate_tool_scripts",
+                title="Generating tool scripts",
+                message=summary,
+                payload={
+                    **payload,
+                    "tool_id": tool_id,
+                    "tool_phase": phase,
+                    "flow_summary": summary,
+                },
+            )
+
+        return on_progress
 
 
 def _raw_mapping(raw_data: object) -> dict[str, Any] | list[Any] | None:

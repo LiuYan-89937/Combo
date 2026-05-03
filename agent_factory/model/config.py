@@ -62,6 +62,7 @@ class ModelConfig(BaseModel):
     timeout_seconds: int = Field(default=60, ge=1)
     temperature: float = Field(default=0.2, ge=0)
     max_output_tokens: int = Field(default=2048, ge=1)
+    thinking: Literal["enabled", "disabled"] | None = None
 
     @field_validator("base_url", mode="before")
     @classmethod
@@ -95,6 +96,7 @@ class ModelConfig(BaseModel):
             timeout_seconds=_to_int(values.get("AGENTFACTORY_LLM_TIMEOUT_SECONDS"), 60),
             temperature=_to_float(values.get("AGENTFACTORY_LLM_TEMPERATURE"), 0.2),
             max_output_tokens=_to_int(values.get("AGENTFACTORY_LLM_MAX_OUTPUT_TOKENS"), 2048),
+            thinking=_blank_to_none(values.get("AGENTFACTORY_LLM_THINKING")),
         )
         if validate_required:
             config.validate_required_fields()
@@ -124,4 +126,5 @@ class ModelConfig(BaseModel):
             "timeout_seconds": self.timeout_seconds,
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
+            "thinking": self.thinking,
         }

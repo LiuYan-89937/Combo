@@ -22,7 +22,10 @@ Rules:
 7. Toolsets are proposal-only; tools are declared, not executed.
 8. If a real external API/MCP/tool is not provided, declare boundaries/stubs instead of inventing capability.
 9. Prefer conservative, testable, traceable AgentPackage drafts.
-10. Do not wrap JSON in markdown fences."""
+10. Do not wrap json in markdown fences.
+11. The first non-whitespace character of the final answer must be "{".
+12. The last non-whitespace character of the final answer must be "}".
+13. Never return a top-level JSON array/list."""
 
 
 class FactoryPromptBuilder:
@@ -37,13 +40,19 @@ class FactoryPromptBuilder:
         requirement_analysis: dict | None = None,
     ) -> LLMRequest:
         schema = AgentPackagePrimitives.model_json_schema(by_alias=True)
+        example = _minimal_agent_package_example()
         factory_context = self.context_builder.build_prompt_text(context, requirement=requirement)
         user_prompt = (
-            "Create an AgentPackagePrimitives JSON object for this requirement.\n\n"
+            "Create an AgentPackagePrimitives json object for this requirement.\n"
+            "Return exactly one JSON object. Never return a top-level JSON array/list.\n"
+            "The top-level keys must be exactly: instructions, output, conversation, "
+            "run_context, toolsets, knowledge, guardrails, handoffs, observability.\n\n"
             f"Requirement:\n{requirement}\n\n"
             "RequirementAnalysis, if available:\n"
             f"{json.dumps(requirement_analysis or {}, ensure_ascii=False)}\n\n"
             f"Factory context:\n{factory_context}\n\n"
+            "Minimal valid json object example:\n"
+            f"{json.dumps(example, ensure_ascii=False)}\n\n"
             "AgentPackagePrimitives JSON Schema:\n"
             f"{json.dumps(schema, ensure_ascii=False)}"
         )
@@ -72,13 +81,20 @@ class FactoryPromptBuilder:
         validation_errors: str,
     ) -> LLMRequest:
         schema = AgentPackagePrimitives.model_json_schema(by_alias=True)
+        example = _minimal_agent_package_example()
         user_prompt = (
-            "Repair the previous AgentPackagePrimitives JSON so it matches the schema.\n"
+            "Repair the previous AgentPackagePrimitives json so it matches the schema.\n"
             "Only fix schema/validation problems. Do not expand the user's requirement.\n\n"
+            "Return exactly one JSON object. Never return a top-level JSON array/list.\n"
+            "If the previous value is a list, convert it into the required object shape.\n"
+            "The top-level keys must be exactly: instructions, output, conversation, "
+            "run_context, toolsets, knowledge, guardrails, handoffs, observability.\n\n"
             f"Requirement:\n{requirement}\n\n"
             f"Validation errors:\n{validation_errors}\n\n"
             "Previous JSON:\n"
             f"{json.dumps(raw_model_data, ensure_ascii=False)}\n\n"
+            "Minimal valid json object example:\n"
+            f"{json.dumps(example, ensure_ascii=False)}\n\n"
             "AgentPackagePrimitives JSON Schema:\n"
             f"{json.dumps(schema, ensure_ascii=False)}"
         )
@@ -97,3 +113,72 @@ class FactoryPromptBuilder:
                 },
             )
         )
+
+
+def _minimal_agent_package_example() -> dict[str, object]:
+    metadata = {
+        "name": "example-agent",
+        "version": "1.0.0",
+        "description": "Example generated agent package primitives.",
+    }
+    return {
+        "instructions": {
+            "schema_version": "0.1",
+            "kind": "InstructionSpec",
+            "metadata": metadata,
+            "persona": "A concise example assistant.",
+            "goal": "Help the user with the requested task.",
+            "style": "concise",
+            "boundaries": [],
+            "principles": [],
+            "few_shots": [],
+        },
+        "output": {
+            "schema_version": "0.1",
+            "kind": "OutputSpec",
+            "metadata": metadata,
+            "output_mode": "text",
+        },
+        "conversation": {
+            "schema_version": "0.1",
+            "kind": "ConversationSpec",
+            "metadata": metadata,
+        },
+        "run_context": {
+            "schema_version": "0.1",
+            "kind": "RunContextSpec",
+            "metadata": metadata,
+        },
+        "toolsets": {
+            "schema_version": "0.1",
+            "kind": "ToolsetSpec",
+            "metadata": metadata,
+            "toolsets": [],
+        },
+        "knowledge": {
+            "schema_version": "0.1",
+            "kind": "KnowledgeSpec",
+            "metadata": metadata,
+            "sources": [],
+            "retrievers": [],
+            "inject_as": "none",
+        },
+        "guardrails": {
+            "schema_version": "0.1",
+            "kind": "GuardrailSpec",
+            "metadata": metadata,
+            "rules": [],
+        },
+        "handoffs": {
+            "schema_version": "0.1",
+            "kind": "HandoffSpec",
+            "metadata": metadata,
+            "targets": [],
+        },
+        "observability": {
+            "schema_version": "0.1",
+            "kind": "ObservabilitySpec",
+            "metadata": metadata,
+            "record_content": False,
+        },
+    }

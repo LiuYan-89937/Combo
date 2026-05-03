@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from agent_factory.factory_runtime import FactoryPromptBuilder, FactoryRunContext
-from agent_factory.model import ModelService
+from agent_factory.model import LLMStreamEvent, ModelService
 from agent_factory.model.types import StructuredOutputResult
+from agent_factory.specs import AgentPackagePrimitives
 
 
 class PrimitivePlanner:
@@ -20,10 +23,18 @@ class PrimitivePlanner:
         *,
         requirement: str,
         requirement_analysis: dict | None = None,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> StructuredOutputResult:
         request = self.prompt_builder.build_primitives_request(
             context,
             requirement=requirement,
             requirement_analysis=requirement_analysis,
         )
-        return await self.model_service.generate_structured(request)
+        method = self.model_service.stream_structured if on_stream_event else self.model_service.generate_structured
+        return await method(
+            request,
+            schema=AgentPackagePrimitives.model_json_schema(by_alias=True),
+            schema_name="AgentPackagePrimitives",
+            strict=True,
+            **({"on_event": on_stream_event} if on_stream_event else {}),
+        )

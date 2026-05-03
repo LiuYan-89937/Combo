@@ -3,21 +3,27 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, ValidationError
 from ruamel.yaml import YAML
 
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.factory.tool_generation import (
     GeneratedToolCodeDraft,
+    ToolContract,
+    ToolContractBatch,
+    build_tool_contracts_request,
+    build_tool_repair_request,
     build_tool_generation_request,
+    derive_tool_contract,
     fallback_tool_code,
     required_tool_test_cases,
     validate_tool_source,
 )
-from agent_factory.model import ModelService
+from agent_factory.model import LLMStreamEvent, ModelService
 from agent_factory.specs import AgentPackagePrimitives
 
 
@@ -29,6 +35,7 @@ class PackageArtifactReport(JsonDumpMixin):
     tool_test_count: int = 0
     mcp_binding_count: int = 0
     harness_scenario_count: int = 0
+    issues: list[str] = Field(default_factory=list)
 
 
 class PackageArtifactGenerator:
@@ -46,27 +53,104 @@ class PackageArtifactGenerator:
         *,
         requirement: str | None = None,
         requirement_analysis: dict[str, Any] | None = None,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
+        on_tool_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> PackageArtifactReport:
         report = PackageArtifactReport()
         draft_dir = package_path / "generated" / "draft_tools"
         draft_dir.mkdir(parents=True, exist_ok=True)
 
         tool_drafts = _tool_drafts(primitives)
-        for draft in tool_drafts:
+        total_tools = len(tool_drafts)
+        contracts = self._generate_tool_contracts(
+            primitives,
+            tool_drafts,
+            requirement=requirement,
+            requirement_analysis=requirement_analysis,
+            on_stream_event=on_stream_event,
+        )
+        _emit_contract_progress(on_tool_progress, contracts, total=total_tools)
+        worker_count = self._tool_generation_worker_count(total_tools)
+        indexed_drafts = list(enumerate(tool_drafts, start=1))
+        if worker_count <= 1:
+            generated = [
+                (
+                    index,
+                    draft,
+                    self._generate_one_tool_code(
+                        primitives,
+                        draft,
+                        contracts.get(str(draft["tool_id"])),
+                        requirement=requirement,
+                        requirement_analysis=requirement_analysis,
+                        on_stream_event=on_stream_event,
+                        on_tool_progress=on_tool_progress,
+                        total_tools=total_tools,
+                        index=index,
+                    ),
+                )
+                for index, draft in indexed_drafts
+            ]
+        else:
+            generated = []
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_map = {}
+                for index, draft in indexed_drafts:
+                    _emit_tool_progress(
+                        on_tool_progress,
+                        draft,
+                        index=index,
+                        total=total_tools,
+                        phase="model_generation_started",
+                    )
+                    future = executor.submit(
+                        self._generate_tool_code,
+                        primitives,
+                        draft,
+                        contract=contracts.get(str(draft["tool_id"])),
+                        requirement=requirement,
+                        requirement_analysis=requirement_analysis,
+                        on_stream_event=None,
+                    )
+                    future_map[future] = (index, draft)
+                for future in as_completed(future_map):
+                    index, draft = future_map[future]
+                    code_draft = future.result()
+                    _emit_tool_progress(
+                        on_tool_progress,
+                        draft,
+                        index=index,
+                        total=total_tools,
+                        phase=code_draft.generation_status,
+                        fallback_used=code_draft.fallback_used,
+                        error_count=len(code_draft.generation_errors),
+                    )
+                    generated.append((index, draft, code_draft))
+            generated.sort(key=lambda item: item[0])
+
+        for index, draft, code_draft in generated:
             stem = _safe_file_stem(draft["tool_id"])
             script_path = draft_dir / f"{stem}.py"
             metadata_path = draft_dir / f"{stem}.tool.yaml"
-            code_draft = self._generate_tool_code(
-                primitives,
-                draft,
-                requirement=requirement,
-                requirement_analysis=requirement_analysis,
-            )
             script_path.write_text(code_draft.python_source, encoding="utf-8")
             self._dump_yaml(metadata_path, _tool_metadata(primitives, draft, script_path, code_draft))
             codegen_path = draft_dir / f"{stem}.codegen.json"
             codegen_path.write_text(code_draft.model_dump_json(indent=2), encoding="utf-8")
+            _emit_tool_progress(
+                on_tool_progress,
+                draft,
+                index=index,
+                total=total_tools,
+                phase="written",
+                fallback_used=code_draft.fallback_used,
+                error_count=len(code_draft.generation_errors),
+                artifact_path=str(script_path),
+            )
             report.artifact_paths.extend([script_path, metadata_path, codegen_path])
+            if code_draft.generation_status == "generic_fallback":
+                report.issues.append(
+                    _tool_generation_issue(draft["tool_id"], code_draft.generation_errors)
+                )
 
         report.tool_count = len(tool_drafts)
         return report
@@ -296,43 +380,215 @@ class PackageArtifactGenerator:
         with path.open("w", encoding="utf-8") as file:
             self._yaml.dump(data, file)
 
+    def _generate_tool_contracts(
+        self,
+        primitives: AgentPackagePrimitives,
+        tool_drafts: list[dict[str, Any]],
+        *,
+        requirement: str | None,
+        requirement_analysis: dict[str, Any] | None,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None,
+    ) -> dict[str, ToolContract]:
+        derived = {
+            str(draft["tool_id"]): derive_tool_contract(
+                primitives,
+                draft,
+                requirement=requirement,
+                requirement_analysis=requirement_analysis,
+            )
+            for draft in tool_drafts
+        }
+        if (
+            self.model_service is None
+            or not tool_drafts
+            or _provider_name(self.model_service) == "fake"
+        ):
+            return derived
+        try:
+            request = build_tool_contracts_request(
+                primitives,
+                tool_drafts,
+                requirement=requirement,
+                requirement_analysis=requirement_analysis,
+            )
+            method = (
+                self.model_service.stream_structured
+                if on_stream_event
+                else self.model_service.generate_structured
+            )
+            result = asyncio.run(
+                method(
+                    request,
+                    schema=ToolContractBatch.model_json_schema(),
+                    schema_name="ToolContractBatch",
+                    **({"on_event": on_stream_event} if on_stream_event else {}),
+                )
+            )
+            if result.error:
+                return derived
+            data = result.data
+            if isinstance(data, list):
+                data = {"tools": data}
+            batch = ToolContractBatch.model_validate(data)
+            for contract in batch.tools:
+                if contract.tool_id in derived:
+                    derived[contract.tool_id] = contract
+        except Exception:
+            return derived
+        return derived
+
+    def _generate_one_tool_code(
+        self,
+        primitives: AgentPackagePrimitives,
+        draft: dict[str, Any],
+        contract: ToolContract | None,
+        *,
+        requirement: str | None,
+        requirement_analysis: dict[str, Any] | None,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None,
+        on_tool_progress: Callable[[dict[str, Any]], None] | None,
+        total_tools: int,
+        index: int,
+    ) -> GeneratedToolCodeDraft:
+        _emit_tool_progress(
+            on_tool_progress,
+            draft,
+            index=index,
+            total=total_tools,
+            phase="model_generation_started",
+        )
+        code_draft = self._generate_tool_code(
+            primitives,
+            draft,
+            contract=contract,
+            requirement=requirement,
+            requirement_analysis=requirement_analysis,
+            on_stream_event=on_stream_event,
+        )
+        _emit_tool_progress(
+            on_tool_progress,
+            draft,
+            index=index,
+            total=total_tools,
+            phase=code_draft.generation_status,
+            fallback_used=code_draft.fallback_used,
+            error_count=len(code_draft.generation_errors),
+        )
+        return code_draft
+
+    def _tool_generation_worker_count(self, total_tools: int) -> int:
+        if total_tools <= 1 or self.model_service is None:
+            return 1
+        if _provider_name(self.model_service) == "fake":
+            return 1
+        return min(4, total_tools)
+
     def _generate_tool_code(
         self,
         primitives: AgentPackagePrimitives,
         draft: dict[str, Any],
         *,
+        contract: ToolContract | None = None,
         requirement: str | None = None,
         requirement_analysis: dict[str, Any] | None = None,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> GeneratedToolCodeDraft:
         if self.model_service is not None:
-            for _attempt in range(2):
-                try:
-                    result = asyncio.run(
-                        self.model_service.generate_structured(
-                            build_tool_generation_request(
-                                primitives,
-                                draft,
-                                requirement=requirement,
-                                requirement_analysis=requirement_analysis,
-                            ),
-                            schema=GeneratedToolCodeDraft.model_json_schema(),
-                            schema_name="GeneratedToolCodeDraft",
-                        )
+            generation_errors: list[str] = []
+            previous_data: Any = None
+            try:
+                request = build_tool_generation_request(
+                    primitives,
+                    draft,
+                    contract=contract,
+                    requirement=requirement,
+                    requirement_analysis=requirement_analysis,
+                )
+                method = (
+                    self.model_service.stream_structured
+                    if on_stream_event
+                    else self.model_service.generate_structured
+                )
+                result = asyncio.run(
+                    method(
+                        request,
+                        schema=GeneratedToolCodeDraft.model_json_schema(),
+                        schema_name="GeneratedToolCodeDraft",
+                        **({"on_event": on_stream_event} if on_stream_event else {}),
                     )
-                    if result.ok and isinstance(result.data, dict):
-                        code = GeneratedToolCodeDraft.model_validate(result.data)
-                        if code.tool_id != draft["tool_id"]:
-                            continue
-                        source_issues = validate_tool_source(code.python_source)
-                        if not source_issues:
-                            code.test_cases = _merge_tool_test_cases(
-                                code.test_cases,
-                                required_tool_test_cases(draft),
-                            )
-                            return code
-                except Exception:
-                    continue
-        return fallback_tool_code(draft)
+                )
+                previous_data = result.data
+                if result.error:
+                    generation_errors.append(
+                        f"model_generation_error:{result.error.type}:{result.error.message}"
+                    )
+                else:
+                    code, errors = _coerce_tool_code(
+                        result.data,
+                        draft,
+                        primitives=primitives,
+                        requirement=requirement,
+                        generation_status="model_generated",
+                        repair_attempts=0,
+                        prior_errors=[],
+                    )
+                    if code is not None:
+                        return code
+                    generation_errors.extend(errors)
+            except Exception as error:
+                generation_errors.append(f"model_generation_exception:{type(error).__name__}:{error}")
+
+            try:
+                repair_request = build_tool_repair_request(
+                    primitives,
+                    draft,
+                    contract=contract,
+                    previous_data=previous_data,
+                    validation_errors=generation_errors,
+                    requirement=requirement,
+                    requirement_analysis=requirement_analysis,
+                )
+                method = (
+                    self.model_service.stream_structured
+                    if on_stream_event
+                    else self.model_service.generate_structured
+                )
+                repair_result = asyncio.run(
+                    method(
+                        repair_request,
+                        schema=GeneratedToolCodeDraft.model_json_schema(),
+                        schema_name="GeneratedToolCodeDraft",
+                        **({"on_event": on_stream_event} if on_stream_event else {}),
+                    )
+                )
+                if repair_result.error:
+                    generation_errors.append(
+                        f"tool_repair_error:{repair_result.error.type}:{repair_result.error.message}"
+                    )
+                else:
+                    code, errors = _coerce_tool_code(
+                        repair_result.data,
+                        draft,
+                        primitives=primitives,
+                        requirement=requirement,
+                        generation_status="model_repaired",
+                        repair_attempts=1,
+                        prior_errors=generation_errors,
+                    )
+                    if code is not None:
+                        return code
+                    generation_errors.extend(f"repair:{error}" for error in errors)
+            except Exception as error:
+                generation_errors.append(f"tool_repair_exception:{type(error).__name__}:{error}")
+        else:
+            generation_errors = ["model_service_missing:tool code generation skipped"]
+        return fallback_tool_code(
+            draft,
+            primitives=primitives,
+            requirement=requirement,
+            generation_errors=generation_errors,
+            repair_attempts=1 if self.model_service is not None else 0,
+        )
 
 
 def merge_artifact_reports(*reports: PackageArtifactReport) -> PackageArtifactReport:
@@ -343,7 +599,75 @@ def merge_artifact_reports(*reports: PackageArtifactReport) -> PackageArtifactRe
         merged.tool_test_count += report.tool_test_count
         merged.mcp_binding_count += report.mcp_binding_count
         merged.harness_scenario_count += report.harness_scenario_count
+        merged.issues.extend(report.issues)
     return merged
+
+
+def _provider_name(model_service: ModelService) -> str:
+    config = getattr(getattr(model_service, "router", None), "config", None)
+    return str(getattr(config, "provider", "unknown"))
+
+
+def _emit_contract_progress(
+    callback: Callable[[dict[str, Any]], None] | None,
+    contracts: dict[str, ToolContract],
+    *,
+    total: int,
+) -> None:
+    if callback is None:
+        return
+    callback(
+        {
+            "tool_phase": "contracts_generated",
+            "tool_total": total,
+            "contract_count": len(contracts),
+            "flow_summary": f"Generated {len(contracts)}/{total} code-free tool contracts.",
+        }
+    )
+
+
+def _emit_tool_progress(
+    callback: Callable[[dict[str, Any]], None] | None,
+    draft: dict[str, Any],
+    *,
+    index: int,
+    total: int,
+    phase: str,
+    fallback_used: bool | None = None,
+    error_count: int | None = None,
+    artifact_path: str | None = None,
+) -> None:
+    if callback is None:
+        return
+    tool_id = str(draft["tool_id"])
+    summary = f"Tool {index}/{total}: {tool_id} - {_human_tool_phase(phase)}."
+    if fallback_used:
+        summary += " Fallback implementation was used."
+    if error_count:
+        summary += f" issues={error_count}."
+    callback(
+        {
+            "tool_id": tool_id,
+            "tool_index": index,
+            "tool_total": total,
+            "tool_phase": phase,
+            "fallback_used": fallback_used,
+            "error_count": error_count,
+            "artifact_path": artifact_path,
+            "flow_summary": summary,
+        }
+    )
+
+
+def _human_tool_phase(phase: str) -> str:
+    return {
+        "model_generation_started": "calling model for code",
+        "model_generated": "model code accepted",
+        "model_repaired": "model code repaired",
+        "deterministic_fallback": "deterministic template selected",
+        "generic_fallback": "generic fallback selected",
+        "written": "files written",
+    }.get(phase, phase.replace("_", " "))
 
 
 def _tool_drafts(primitives: AgentPackagePrimitives) -> list[dict[str, Any]]:
@@ -443,6 +767,8 @@ def _tool_test_source(draft: dict[str, Any], code_draft: GeneratedToolCodeDraft)
     return f'''from __future__ import annotations
 
 import importlib.util
+import json
+import os
 from pathlib import Path
 import unittest
 
@@ -459,12 +785,19 @@ def load_tool_module():
     return module
 
 
+def load_tool_test_context() -> dict:
+    raw = os.environ.get("AGENTFACTORY_TOOL_TEST_CONTEXT_JSON") or "{{}}"
+    data = json.loads(raw)
+    return data if isinstance(data, dict) else {{}}
+
+
 class {class_name}DraftTests(unittest.TestCase):
     def test_run_returns_executable_local_contract(self) -> None:
         module = load_tool_module()
+        context = load_tool_test_context()
         for case in TEST_CASES:
             with self.subTest(case=case["name"]):
-                result = module.run(case["input_data"])
+                result = module.run(case["input_data"], context)
                 self.assertIsInstance(result, dict)
                 self.assertNotEqual(result.get("status"), "not_implemented")
                 for key, expected in case["expected_contains"].items():
@@ -511,6 +844,12 @@ def _tool_metadata(
             "required": draft["approval_required"],
             "reason": "Factory-generated tool code must be reviewed before registration.",
         },
+        "generation": {
+            "status": code_draft.generation_status,
+            "fallback_used": code_draft.fallback_used,
+            "repair_attempts": code_draft.repair_attempts,
+            "errors": code_draft.generation_errors,
+        },
     }
 
 
@@ -520,6 +859,53 @@ def _load_codegen(draft_dir: Path, stem: str) -> GeneratedToolCodeDraft:
         return fallback_tool_code({"tool_id": stem, "risk_level": "low", "approval_required": False})
     data = json.loads(path.read_text(encoding="utf-8"))
     return GeneratedToolCodeDraft.model_validate(data)
+
+
+def _coerce_tool_code(
+    data: Any,
+    draft: dict[str, Any],
+    *,
+    primitives: AgentPackagePrimitives,
+    requirement: str | None,
+    generation_status: str,
+    repair_attempts: int,
+    prior_errors: list[str],
+) -> tuple[GeneratedToolCodeDraft | None, list[str]]:
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return None, [f"structured_output_not_object:{type(data).__name__}"]
+    try:
+        code = GeneratedToolCodeDraft.model_validate(data)
+    except ValidationError as error:
+        return None, [f"schema_validation_error:{_compact_error(str(error))}"]
+    if code.tool_id != draft["tool_id"]:
+        errors.append(f"tool_id_mismatch:expected={draft['tool_id']}:actual={code.tool_id}")
+    source_issues = validate_tool_source(code.python_source)
+    errors.extend(source_issues)
+    if errors:
+        return None, errors
+    code.generation_status = generation_status  # type: ignore[assignment]
+    code.fallback_used = False
+    code.repair_attempts = repair_attempts
+    code.generation_errors = list(prior_errors)
+    code.test_cases = _merge_tool_test_cases(
+        code.test_cases,
+        required_tool_test_cases(draft, primitives=primitives, requirement=requirement),
+    )
+    return code, []
+
+
+def _tool_generation_issue(tool_id: str, errors: list[str]) -> str:
+    detail = "; ".join(errors[:5]) if errors else "no detailed error was captured"
+    return (
+        f"{tool_id}: tool generation fell back to a generic placeholder. "
+        f"The package is not production-ready. Details: {detail}"
+    )
+
+
+def _compact_error(value: str, *, limit: int = 500) -> str:
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[: limit - 3] + "..."
 
 
 def _merge_tool_test_cases(

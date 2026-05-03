@@ -115,10 +115,12 @@ def render_event(event: FactoryEvent, console: Console | None = None) -> None:
 class FactoryStreamRenderer:
     """Render Factory stream as one active node plus collapsed summaries."""
 
-    def __init__(self, console: Console | None = None) -> None:
+    def __init__(self, console: Console | None = None, *, show_thinking: bool = False) -> None:
         self.console = console or Console()
+        self.show_thinking = show_thinking
         self._live: Live | None = None
         self._current_stage: str | None = None
+        self._tool_statuses: dict[str, dict[str, Any]] = {}
 
     def render(self, event: FactoryEvent) -> None:
         if event.status == EventStatus.PROGRESS and event.payload.get("stream_kind") == "node_thinking":
@@ -136,6 +138,8 @@ class FactoryStreamRenderer:
             return
         if self._live is None:
             self._current_stage = event.stage
+            self._tool_statuses = {}
+            self._record_node_progress(event)
             self._live = Live(
                 self._node_panel(event),
                 console=self.console,
@@ -148,6 +152,7 @@ class FactoryStreamRenderer:
             self._close_current()
             self._show_current_node(event)
             return
+        self._record_node_progress(event)
         self._live.update(self._node_panel(event))
 
     def _close_current(self) -> None:
@@ -155,27 +160,88 @@ class FactoryStreamRenderer:
             self._live.stop()
             self._live = None
             self._current_stage = None
+            self._tool_statuses = {}
+
+    def _record_node_progress(self, event: FactoryEvent) -> None:
+        if event.stage != "generate_tool_scripts":
+            return
+        tool_id = event.payload.get("tool_id")
+        if not tool_id:
+            return
+        key = str(tool_id)
+        previous = self._tool_statuses.get(key, {})
+        self._tool_statuses[key] = {**previous, **event.payload}
 
     def _node_panel(self, event: FactoryEvent) -> Panel:
-        lines = [Text(event.title, style=STYLE_TITLE)]
+        items: list[Any] = [Text(event.title, style=STYLE_TITLE)]
         if event.message:
-            lines.append(Text(event.message, style=STYLE_MUTED))
-        thinking = event.payload.get("thinking")
-        if thinking:
-            lines.append(Text(""))
-            lines.append(Text("Working notes", style=STYLE_ACCENT))
-            lines.append(Text(str(thinking), style=STYLE_MUTED))
+            items.append(Text(event.message, style=STYLE_MUTED))
+        if self.show_thinking:
+            thinking = event.payload.get("thinking")
+            if thinking:
+                items.append(Text(""))
+                items.append(Text(_thinking_label(event), style=STYLE_ACCENT))
+                items.append(Text(str(thinking), style=STYLE_MUTED))
+        else:
+            flow_lines = _flow_lines(event)
+            if flow_lines:
+                items.append(Text(""))
+                items.append(Text("Flow", style=STYLE_ACCENT))
+                for line in flow_lines:
+                    items.append(Text(line, style=STYLE_MUTED))
+            tool_table = self._tool_progress_table(event)
+            if tool_table:
+                items.append(Text(""))
+                items.append(Text("Tools", style=STYLE_ACCENT))
+                items.append(tool_table)
+            thinking_kind = event.payload.get("thinking_kind")
+            if thinking_kind:
+                items.append(Text(""))
+                items.append(
+                    Text(
+                        "Thinking detail hidden. Re-run with --show-thinking to inspect raw reasoning.",
+                        style=STYLE_MUTED,
+                    )
+                )
         details = _analysis_details(event)
         if details:
-            lines.append(Text(""))
-            lines.append(Text(details, style=STYLE_MUTED))
+            items.append(Text(""))
+            items.append(Text(details, style=STYLE_MUTED))
         return Panel(
-            Group(*lines),
+            Group(*items),
             title=f"Factory node: {event.stage}",
             border_style=STYLE_ACCENT,
             box=box.ASCII,
             padding=(1, 2),
         )
+
+    def _tool_progress_table(self, event: FactoryEvent) -> Table | None:
+        if event.stage != "generate_tool_scripts":
+            return None
+        statuses = dict(self._tool_statuses)
+        tool_id = event.payload.get("tool_id")
+        if tool_id and str(tool_id) not in statuses:
+            statuses[str(tool_id)] = dict(event.payload)
+        if not statuses:
+            return None
+        table = Table(
+            box=box.ASCII,
+            show_header=True,
+            header_style=STYLE_TITLE,
+            expand=False,
+        )
+        table.add_column("#", justify="right")
+        table.add_column("Tool")
+        table.add_column("Phase")
+        table.add_column("Result")
+        for payload in sorted(statuses.values(), key=_tool_sort_key):
+            table.add_row(
+                _tool_index_label(payload),
+                str(payload.get("tool_id") or "-"),
+                _human_flow_phase(str(payload.get("tool_phase") or "processing")),
+                _tool_result_label(payload),
+            )
+        return table
 
 
 def render_create_result(result: CreateAgentResult, console: Console | None = None) -> None:
@@ -473,6 +539,93 @@ def _analysis_details(event: FactoryEvent) -> str:
         if value:
             pairs.append(f"{key}={value}")
     return ", ".join(pairs)
+
+
+def _flow_lines(event: FactoryEvent) -> list[str]:
+    payload = event.payload
+    lines: list[str] = []
+    flow_summary = payload.get("flow_summary")
+    if flow_summary:
+        lines.extend(_split_flow_text(str(flow_summary)))
+    tool_id = payload.get("tool_id")
+    if tool_id:
+        index = payload.get("tool_index")
+        total = payload.get("tool_total")
+        phase = payload.get("tool_phase") or payload.get("phase") or "processing"
+        prefix = f"Tool {index}/{total}" if index and total else "Tool"
+        line = f"{prefix}: {tool_id} - {phase}"
+        if line not in lines:
+            lines.append(line)
+    if payload.get("reasoning_chars") or payload.get("content_chars"):
+        reasoning_chars = int(payload.get("reasoning_chars") or 0)
+        content_chars = int(payload.get("content_chars") or 0)
+        lines.append(
+            f"Model stream received: reasoning={reasoning_chars} chars, structured={content_chars} chars."
+        )
+    if not lines and event.message:
+        lines.append(event.message)
+    if not lines:
+        lines.append(event.title)
+    return lines[:6]
+
+
+def _split_flow_text(value: str) -> list[str]:
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    if not lines and value.strip():
+        lines = [value.strip()]
+    return lines
+
+
+def _thinking_label(event: FactoryEvent) -> str:
+    kind = event.payload.get("thinking_kind")
+    if kind == "reasoning":
+        return "Thinking detail"
+    if kind == "content":
+        return "Structured output detail"
+    return "Working notes"
+
+
+def _tool_sort_key(payload: dict[str, Any]) -> tuple[int, str]:
+    try:
+        index = int(payload.get("tool_index") or 9999)
+    except (TypeError, ValueError):
+        index = 9999
+    return index, str(payload.get("tool_id") or "")
+
+
+def _tool_index_label(payload: dict[str, Any]) -> str:
+    index = payload.get("tool_index")
+    total = payload.get("tool_total")
+    if index and total:
+        return f"{index}/{total}"
+    if index:
+        return str(index)
+    return "-"
+
+
+def _tool_result_label(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if payload.get("fallback_used"):
+        parts.append("fallback")
+    error_count = payload.get("error_count")
+    if error_count:
+        parts.append(f"issues={error_count}")
+    artifact_path = payload.get("artifact_path")
+    if artifact_path:
+        parts.append("written")
+    return ", ".join(parts) or "running"
+
+
+def _human_flow_phase(phase: str) -> str:
+    return {
+        "contracts_generated": "contracts generated",
+        "model_generation_started": "model call started",
+        "model_generated": "model code accepted",
+        "model_repaired": "model code repaired",
+        "deterministic_fallback": "deterministic fallback",
+        "generic_fallback": "generic fallback",
+        "written": "files written",
+    }.get(phase, phase.replace("_", " "))
 
 
 def _result_status_style(status: str) -> str:

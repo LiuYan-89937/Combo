@@ -12,6 +12,7 @@ from pydantic import ConfigDict, Field
 from ruamel.yaml import YAML
 
 from agent_factory.core.types import JsonDumpMixin
+from agent_factory.factory.tool_test_sandbox import SandboxResourceResolver
 
 VerificationStatus = Literal["passed", "failed", "skipped"]
 
@@ -48,6 +49,11 @@ class ToolTestRunReport(JsonDumpMixin):
     test_files: list[Path] = Field(default_factory=list)
     issues: list[VerificationIssue] = Field(default_factory=list)
     report_path: Path | None = None
+    sandbox_enabled: bool = False
+    sandbox_mode: str | None = None
+    resource_count: int = 0
+    resource_map_redacted: dict[str, Any] = Field(default_factory=dict)
+    diff_summary: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -154,52 +160,124 @@ class PackageVerificationRunner:
             self._write_report(report_path, report)
             return report
 
-        command = [sys.executable, "-m", "unittest", "discover", "-s", str(test_dir)]
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=package_path,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                env=_subprocess_env(),
-                check=False,
-            )
-            stdout = _clean_text(completed.stdout, self.output_limit)
-            stderr = _clean_text(completed.stderr, self.output_limit)
-            issues = []
-            if completed.returncode != 0:
+        report_command = [
+            sys.executable,
+            "-m",
+            "unittest",
+            "discover",
+            "-s <fresh-sandbox>/package/generated/tool_tests",
+            "-p <one generated test file at a time>",
+        ]
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        issues: list[VerificationIssue] = []
+        return_code = 0
+        resource_count = 0
+        resource_map_redacted: dict[str, Any] = {}
+        diff_by_test: dict[str, Any] = {}
+
+        for test_file in test_files:
+            sandbox = None
+            try:
+                sandbox = SandboxResourceResolver().prepare(package_path)
+                resource_count = max(resource_count, sandbox.resource_count)
+                resource_map_redacted.update(sandbox.resource_map_redacted)
+                unsafe_issues = [
+                    VerificationIssue(**issue)
+                    for issue in sandbox.unsafe_real_resource_issues()
+                ]
+                if unsafe_issues:
+                    issues.extend(unsafe_issues)
+                    return_code = 1
+                    diff_by_test[test_file.name] = sandbox.diff_summary()
+                    continue
+
+                env = _subprocess_env()
+                env["AGENTFACTORY_TOOL_TEST_CONTEXT_JSON"] = json.dumps(
+                    sandbox.context,
+                    ensure_ascii=False,
+                )
+                sandbox_test_dir = sandbox.package_path / "generated" / "tool_tests"
+                command = [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    str(sandbox_test_dir),
+                    "-p",
+                    test_file.name,
+                ]
+                completed = subprocess.run(
+                    command,
+                    cwd=sandbox.package_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                    env=env,
+                    check=False,
+                )
+                if completed.stdout:
+                    stdout_parts.append(f"== {test_file.name} ==\n{completed.stdout}")
+                if completed.stderr:
+                    stderr_parts.append(f"== {test_file.name} ==\n{completed.stderr}")
+                if completed.returncode != 0:
+                    return_code = completed.returncode
+                    issues.append(
+                        VerificationIssue(
+                            code="generated_tool_tests_failed",
+                            message=f"Generated tool tests failed: {test_file.name}",
+                            path=str(test_file.relative_to(package_path)),
+                        )
+                    )
+                diff_by_test[test_file.name] = sandbox.diff_summary()
+            except subprocess.TimeoutExpired as error:
+                return_code = 1
+                stdout_parts.append(f"== {test_file.name} ==\n{_clean_text(error.stdout or '', self.output_limit)}")
+                stderr_parts.append(f"== {test_file.name} ==\n{_clean_text(error.stderr or '', self.output_limit)}")
                 issues.append(
                     VerificationIssue(
-                        code="generated_tool_tests_failed",
-                        message="Generated tool tests failed.",
+                        code="generated_tool_tests_timeout",
+                        message=f"Generated tool tests timed out after {self.timeout_seconds} seconds: {test_file.name}",
+                        path=str(test_file.relative_to(package_path)),
                     )
                 )
-            report = ToolTestRunReport(
-                status="passed" if completed.returncode == 0 else "failed",
-                command=command,
-                return_code=completed.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                test_files=test_files,
-                issues=issues,
-                report_path=report_path,
-            )
-        except subprocess.TimeoutExpired as error:
-            report = ToolTestRunReport(
-                status="failed",
-                command=command,
-                stdout=_clean_text(error.stdout or "", self.output_limit),
-                stderr=_clean_text(error.stderr or "", self.output_limit),
-                test_files=test_files,
-                issues=[
+                if sandbox is not None:
+                    diff_by_test[test_file.name] = sandbox.diff_summary()
+            except Exception as error:
+                return_code = 1
+                issues.append(
                     VerificationIssue(
-                        code="generated_tool_tests_timeout",
-                        message=f"Generated tool tests timed out after {self.timeout_seconds} seconds.",
+                        code="tool_test_sandbox_error",
+                        message=_clean_text(str(error), self.output_limit),
+                        path=str(test_file.relative_to(package_path)),
                     )
-                ],
-                report_path=report_path,
-            )
+                )
+                if sandbox is not None:
+                    diff_by_test[test_file.name] = sandbox.diff_summary()
+            finally:
+                if sandbox is not None:
+                    sandbox.cleanup()
+
+        report = ToolTestRunReport(
+            status="passed" if not issues else "failed",
+            command=report_command,
+            return_code=0 if not issues else return_code or 1,
+            stdout=_clean_text("\n".join(stdout_parts), self.output_limit),
+            stderr=_clean_text("\n".join(stderr_parts), self.output_limit),
+            test_files=test_files,
+            issues=issues,
+            report_path=report_path,
+            sandbox_enabled=True,
+            sandbox_mode="process_directory",
+            resource_count=resource_count,
+            resource_map_redacted=resource_map_redacted,
+            diff_summary={
+                "per_test_file": diff_by_test,
+                "test_file_count": len(test_files),
+                "failed_test_file_count": len({issue.path for issue in issues if issue.path}),
+            },
+        )
 
         self._write_report(report_path, report)
         return report

@@ -269,6 +269,22 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertIn("run_generated_tool_tests", [event.stage for event in events])
             self.assertIn("dry_run_harness_scenarios", [event.stage for event in events])
 
+    def test_tool_generation_issues_fail_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = FactoryRunContext.create(start_path=tmpdir)
+            runtime = FactoryProductionRuntime(
+                model_service=service_with_responses([valid_primitives_payload()]),
+                artifact_generator=ToolGenerationIssueArtifactGenerator(),
+            )
+
+            events = list(runtime.stream(requirement="创建客服 Agent", context=context))
+            generation_events = [event for event in events if event.stage == "generate_tool_scripts"]
+            generation_event = generation_events[-1]
+
+            self.assertEqual(generation_event.status.value, "failed")
+            self.assertIn("tool generation fell back", generation_event.message or "")
+            self.assertEqual(events[-1].stage, "failed")
+
 
 class FailingPackageWriter:
     def write_primitives(self, output_dir: Path, primitives: object) -> ValidationReport:
@@ -302,6 +318,13 @@ class FailingToolTestArtifactGenerator(PackageArtifactGenerator):
             "        self.fail('forced failure')\n",
             encoding="utf-8",
         )
+        return report
+
+
+class ToolGenerationIssueArtifactGenerator(PackageArtifactGenerator):
+    def generate_tool_scripts(self, package_path, primitives, **kwargs):
+        report = PackageArtifactReport(tool_count=1)
+        report.issues.append("custom_tool: tool generation fell back to a generic placeholder")
         return report
 
 

@@ -15,6 +15,8 @@ from agent_factory.application import (
     InitFactoryService,
     RegisterAgentRequest,
     RegistryService,
+    RepairAgentRequest,
+    RepairAgentService,
     RunAgentService,
     RunAgentServiceRequest,
     TestAgentRequest,
@@ -108,6 +110,11 @@ def create_agent_command(
     prompt: Optional[str] = typer.Option(None, "--prompt", "-p", help="Natural language requirement."),
     draft: bool = typer.Option(True, "--draft/--no-draft", help="Create a draft package."),
     stream: bool = typer.Option(False, "--stream/--no-stream", help="Stream human-readable progress."),
+    show_thinking: bool = typer.Option(
+        False,
+        "--show-thinking/--hide-thinking",
+        help="Show raw model reasoning and structured-output previews in streamed human output.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     if not prompt or not prompt.strip():
@@ -118,9 +125,14 @@ def create_agent_command(
         raise typer.Exit(code=1)
 
     service = CreateAgentService()
-    request = CreateAgentRequest(prompt=prompt, draft=draft, stream=stream)
+    request = CreateAgentRequest(
+        prompt=prompt,
+        draft=draft,
+        stream=stream,
+        show_thinking=show_thinking,
+    )
     if stream:
-        stream_renderer = FactoryStreamRenderer()
+        stream_renderer = FactoryStreamRenderer(show_thinking=show_thinking)
         for event in service.stream_create_agent(request):
             if json_output:
                 _json_echo(event.model_dump(mode="json"))
@@ -304,6 +316,7 @@ def run_agent_command(
     session_id: str = typer.Option("default", "--session-id", help="Conversation session id."),
     chat: bool = typer.Option(False, "--chat", help="Start a simple interactive chat loop."),
     process: bool = typer.Option(False, "--process/--no-process", help="Run in an isolated process."),
+    auto_repair: bool = typer.Option(False, "--auto-repair", help="Return to Factory repair on failed run."),
     json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     if chat:
@@ -318,6 +331,7 @@ def run_agent_command(
                     version=version,
                     session_id=session_id,
                     process=process,
+                    auto_repair=auto_repair,
                 )
             )
             if json_output:
@@ -340,6 +354,7 @@ def run_agent_command(
             version=version,
             session_id=session_id,
             process=process,
+            auto_repair=auto_repair,
         )
     )
     if json_output:
@@ -353,8 +368,55 @@ def run_agent_command(
             typer.echo(f"Trace: {result.result.trace_path}")
         else:
             typer.echo(f"Error: {result.error}")
-    if not result.ok and not (result.result and result.result.status in {"interrupted", "needs_upgrade"}):
+        if result.repair_result:
+            _render_repair_summary(result.repair_result)
+    repair_ok = bool(result.repair_result and result.repair_result.get("status") == "repaired")
+    if not result.ok and not repair_ok and not (result.result and result.result.status in {"interrupted", "needs_upgrade"}):
         raise typer.Exit(code=1)
+
+
+@app.command("repair-agent")
+def repair_agent_command(
+    target: str = typer.Argument("latest", help="AgentPackage path, draft id, or registered agent name."),
+    user_input: Optional[str] = typer.Option(None, "--input", "-i", help="Input that failed; rerun after repair."),
+    version: Optional[str] = typer.Option(None, "--version", help="Registry version."),
+    session_id: str = typer.Option("default", "--session-id", help="Conversation session id."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    result = RepairAgentService().repair_agent(
+        RepairAgentRequest(
+            target=target,
+            user_input=user_input,
+            version=version,
+            session_id=session_id,
+        )
+    )
+    if json_output:
+        _json_echo(result.model_dump(mode="json"))
+    else:
+        typer.echo(f"Repair status: {result.status}")
+        if result.reason:
+            typer.echo(f"Reason: {result.reason}")
+        if result.candidate_path:
+            typer.echo(f"Candidate: {result.candidate_path}")
+        for patch in result.patches:
+            typer.echo(f"- {patch.action}: {patch.path} ({patch.message})")
+        if result.rerun_result:
+            typer.echo(f"Self-test: {result.rerun_result.status}")
+            typer.echo(f"Answer: {result.rerun_result.answer}")
+        for step in result.next_steps:
+            typer.echo(f"Next: {step}")
+    if result.status not in {"repaired", "not_needed"}:
+        raise typer.Exit(code=1)
+
+
+def _render_repair_summary(payload: dict[str, object]) -> None:
+    typer.echo("Repair:")
+    typer.echo(f"  Status: {payload.get('status')}")
+    if payload.get("reason"):
+        typer.echo(f"  Reason: {payload.get('reason')}")
+    if payload.get("candidate_path"):
+        typer.echo(f"  Candidate: {payload.get('candidate_path')}")
 
 
 @app.command("upgrade-agent")

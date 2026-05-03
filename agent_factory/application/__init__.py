@@ -27,6 +27,11 @@ from agent_factory.application.registry_service import (
     RegistryListResult,
     RegistryService,
 )
+from agent_factory.application.repair_agent_service import (
+    RepairAgentRequest,
+    RepairAgentResult,
+    RepairAgentService,
+)
 from agent_factory.application.test_agent_service import (
     HarnessScenarioSummary,
     TestAgentRequest,
@@ -57,6 +62,9 @@ __all__ = [
     "RegisterAgentRequest",
     "RegistryListResult",
     "RegistryService",
+    "RepairAgentRequest",
+    "RepairAgentResult",
+    "RepairAgentService",
     "HarnessScenarioSummary",
     "TestAgentRequest",
     "TestAgentResult",

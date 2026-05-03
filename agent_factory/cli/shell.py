@@ -52,7 +52,7 @@ def run_shell() -> None:
                 render_slash_result(error, console)
                 continue
             assert events is not None
-            stream_renderer = FactoryStreamRenderer(console)
+            stream_renderer = FactoryStreamRenderer(console, show_thinking=_should_show_thinking(line))
             for event in events:
                 stream_renderer.render(event)
             stream_renderer.close()
@@ -106,6 +106,21 @@ def render_slash_result(result: SlashCommandResult, console: Console | None = No
             console.print(f"  Trace: {result.run_result.result.trace_path}")
         else:
             console.print(f"  ! {result.run_result.error}")
+        if result.run_result.repair_result:
+            _render_repair_payload(result.run_result.repair_result, console)
+        return
+    if result.kind == "repair_agent" and result.repair_result:
+        console.print("")
+        console.print(f"  Repair status: {result.repair_result.status}")
+        if result.repair_result.reason:
+            console.print(f"  Reason: {result.repair_result.reason}")
+        if result.repair_result.candidate_path:
+            console.print(f"  Candidate: {result.repair_result.candidate_path}")
+        for patch in result.repair_result.patches:
+            console.print(f"  - {patch.action}: {patch.path}")
+        if result.repair_result.rerun_result:
+            console.print(f"  Self-test: {result.repair_result.rerun_result.status}")
+            console.print(f"  Answer: {result.repair_result.rerun_result.answer}")
         return
     if result.kind == "registry":
         console.print("")
@@ -117,6 +132,15 @@ def render_slash_result(result: SlashCommandResult, console: Console | None = No
     if result.message:
         console.print("")
         console.print(f"  ! {result.message}")
+
+
+def _render_repair_payload(payload: dict, console: Console) -> None:
+    console.print("  Repair:")
+    console.print(f"    Status: {payload.get('status')}")
+    if payload.get("reason"):
+        console.print(f"    Reason: {payload.get('reason')}")
+    if payload.get("candidate_path"):
+        console.print(f"    Candidate: {payload.get('candidate_path')}")
 
 
 def _prompt_session(dispatcher: SlashCommandDispatcher):
@@ -140,6 +164,11 @@ def _should_stream_create_agent(line: str) -> bool:
     if not stripped.startswith("/create-agent"):
         return False
     return "--no-stream" not in stripped.split()
+
+
+def _should_show_thinking(line: str) -> bool:
+    parts = line.strip().split()
+    return "--show-thinking" in parts and "--hide-thinking" not in parts
 
 
 def _should_open_requirement_box(

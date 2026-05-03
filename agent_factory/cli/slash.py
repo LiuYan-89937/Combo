@@ -17,6 +17,9 @@ from agent_factory.application import (
     DraftsService,
     RegisterAgentRequest,
     RegistryService,
+    RepairAgentRequest,
+    RepairAgentResult,
+    RepairAgentService,
     RunAgentService,
     RunAgentServiceRequest,
     RunAgentServiceResult,
@@ -42,6 +45,7 @@ SLASH_COMMANDS = [
     "/test",
     "/register",
     "/run",
+    "/repair-agent",
     "/upgrade",
     "/plan-upgrade",
     "/review-patch",
@@ -67,6 +71,7 @@ class SlashCommandResult(JsonDumpMixin):
         "validate_agent",
         "test_agent",
         "run_agent",
+        "repair_agent",
         "registry",
         "not_implemented",
         "error",
@@ -80,6 +85,7 @@ class SlashCommandResult(JsonDumpMixin):
     validation_report: ValidationReport | None = None
     test_result: TestAgentResult | None = None
     run_result: RunAgentServiceResult | None = None
+    repair_result: RepairAgentResult | None = None
     command: str | None = None
 
 
@@ -92,6 +98,7 @@ class SlashCommandDispatcher:
         validate_service: ValidateAgentService | None = None,
         test_service: TestAgentService | None = None,
         run_service: RunAgentService | None = None,
+        repair_service: RepairAgentService | None = None,
         registry_service: RegistryService | None = None,
         drafts_service: DraftsService | None = None,
     ) -> None:
@@ -100,6 +107,7 @@ class SlashCommandDispatcher:
         self.validate_service = validate_service or ValidateAgentService()
         self.test_service = test_service or TestAgentService()
         self.run_service = run_service or RunAgentService()
+        self.repair_service = repair_service or RepairAgentService()
         self.registry_service = registry_service
         self.drafts_service = drafts_service or DraftsService()
 
@@ -145,6 +153,8 @@ class SlashCommandDispatcher:
             return self._test(args)
         if command == "/run":
             return self._run(args)
+        if command == "/repair-agent":
+            return self._repair_agent(args)
         if command == "/register":
             return self._register(args)
         if command == "/registry":
@@ -227,9 +237,42 @@ class SlashCommandDispatcher:
                 message="Usage: /run [agent_package_path|agent_name] --input \"...\"",
             )
         result = self.run_service.run_agent(
-            RunAgentServiceRequest(target=path, user_input=user_input, session_id=session_id)
+            RunAgentServiceRequest(
+                target=path,
+                user_input=user_input,
+                session_id=session_id,
+                auto_repair="--auto-repair" in args,
+            )
         )
         return SlashCommandResult(kind="run_agent", command="/run", run_result=result)
+
+    def _repair_agent(self, args: list[str]) -> SlashCommandResult:
+        path = self._first_positional(args)
+        if not path:
+            path = str(self.session.selected_agent_path) if self.session.selected_agent_path else None
+        if not path:
+            latest = self.drafts_service.resolve_draft("latest")
+            if latest is not None:
+                path = str(latest)
+                self.session.selected_agent_path = latest
+        user_input = self._option_value(args, "--input") or self._option_value(args, "-i")
+        session_id = self._option_value(args, "--session-id") or "default"
+        if not path:
+            return SlashCommandResult(
+                kind="error",
+                command="/repair-agent",
+                message="Usage: /repair-agent [agent_package_path|latest] --input \"...\"",
+            )
+        result = self.repair_service.repair_agent(
+            RepairAgentRequest(
+                target=path,
+                user_input=user_input,
+                session_id=session_id,
+            )
+        )
+        if result.ok and result.candidate_path is not None:
+            self.session.selected_agent_path = result.candidate_path
+        return SlashCommandResult(kind="repair_agent", command="/repair-agent", repair_result=result)
 
     def _register(self, args: list[str]) -> SlashCommandResult:
         path = self._first_positional(args)
@@ -350,6 +393,7 @@ class SlashCommandDispatcher:
             prompt=prompt,
             draft="--no-draft" not in args,
             stream="--stream" in args,
+            show_thinking="--show-thinking" in args and "--hide-thinking" not in args,
         )
 
     def _dispatch_create_agent_line(self, stripped: str) -> SlashCommandResult:
@@ -378,11 +422,19 @@ class SlashCommandDispatcher:
             prompt=prompt,
             draft="--no-draft" not in flags,
             stream="--stream" in flags,
+            show_thinking="--show-thinking" in flags and "--hide-thinking" not in flags,
         )
 
     @classmethod
     def _parse_create_agent_raw_args(cls, raw_args: str) -> tuple[str | None, set[str]]:
-        known_flags = {"--draft", "--no-draft", "--stream", "--no-stream"}
+        known_flags = {
+            "--draft",
+            "--no-draft",
+            "--stream",
+            "--no-stream",
+            "--show-thinking",
+            "--hide-thinking",
+        }
         flags = {flag for flag in known_flags if cls._contains_flag(raw_args, flag)}
         prompt_start = cls._find_prompt_value_start(raw_args)
         if prompt_start is None:
@@ -410,7 +462,14 @@ class SlashCommandDispatcher:
     def _strip_trailing_create_flags(value: str) -> tuple[str, set[str]]:
         flags: set[str] = set()
         prompt = value.rstrip()
-        known_flags = {"--draft", "--no-draft", "--stream", "--no-stream"}
+        known_flags = {
+            "--draft",
+            "--no-draft",
+            "--stream",
+            "--no-stream",
+            "--show-thinking",
+            "--hide-thinking",
+        }
         changed = True
         while changed:
             changed = False
@@ -448,7 +507,14 @@ class SlashCommandDispatcher:
     @staticmethod
     def _create_agent_prompt_from_args(args: list[str]) -> str | None:
         prompt_options = {"--prompt", "-p"}
-        boolean_options = {"--draft", "--no-draft", "--stream", "--no-stream"}
+        boolean_options = {
+            "--draft",
+            "--no-draft",
+            "--stream",
+            "--no-stream",
+            "--show-thinking",
+            "--hide-thinking",
+        }
         for index, arg in enumerate(args):
             if arg.startswith("--prompt=") or arg.startswith("-p="):
                 return arg.split("=", 1)[1].strip() or None

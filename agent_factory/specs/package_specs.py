@@ -96,6 +96,7 @@ class GeneratedToolDraftSpec(BaseModel):
     input_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     output_schema: JsonSchema = Field(default_factory=lambda: {"type": "object"})
     approval: ToolApprovalSpec = Field(default_factory=ToolApprovalSpec)
+    generation: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_status(self) -> "GeneratedToolDraftSpec":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import ConfigDict
 
@@ -20,6 +21,7 @@ class RunAgentServiceRequest(JsonDumpMixin):
     version: str | None = None
     session_id: str = "default"
     process: bool = False
+    auto_repair: bool = False
 
 
 class RunAgentServiceResult(JsonDumpMixin):
@@ -29,6 +31,7 @@ class RunAgentServiceResult(JsonDumpMixin):
     package_path: Path | None = None
     result: AgentRunResult | None = None
     error: str | None = None
+    repair_result: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -63,11 +66,12 @@ class RunAgentService:
                 )
             )
             if not ipc.ok:
-                return RunAgentServiceResult(
+                service_result = RunAgentServiceResult(
                     target=request.target,
                     package_path=package_path,
                     error=ipc.error or "Agent process failed.",
                 )
+                return self._maybe_repair(request, service_result)
             return RunAgentServiceResult(
                 target=request.target,
                 package_path=package_path,
@@ -86,7 +90,36 @@ class RunAgentService:
                 process_isolated=request.process,
             )
         )
-        return RunAgentServiceResult(target=request.target, package_path=package_path, result=result)
+        service_result = RunAgentServiceResult(target=request.target, package_path=package_path, result=result)
+        return self._maybe_repair(request, service_result)
+
+    def _maybe_repair(
+        self,
+        request: RunAgentServiceRequest,
+        result: RunAgentServiceResult,
+    ) -> RunAgentServiceResult:
+        if not request.auto_repair or result.ok or result.package_path is None:
+            return result
+        original_error = result.error
+        if result.result and result.result.error:
+            original_error = result.result.error.message
+        if not original_error:
+            original_error = "Agent run failed."
+        from agent_factory.application.repair_agent_service import (
+            RepairAgentRequest,
+            RepairAgentService,
+        )
+
+        repair = RepairAgentService(model_service=self.model_service).repair_agent(
+            RepairAgentRequest(
+                target=str(result.package_path),
+                user_input=request.user_input,
+                session_id=request.session_id,
+                original_error=original_error,
+                rerun_after_repair=True,
+            )
+        )
+        return result.model_copy(update={"repair_result": repair.model_dump(mode="json")})
 
     def _resolve_package(self, target: str, version: str | None) -> Path | None:
         path = Path(target)

@@ -177,6 +177,39 @@ class ModelLayerTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_structured_output_retries_empty_content(self) -> None:
+        async def run() -> None:
+            config = ModelConfig(provider="fake")
+            adapter = FakeModelAdapter(["", {"ok": True}])
+            service = ModelService.with_adapter(config, adapter)
+            result = await service.generate_structured(
+                LLMRequest(messages=[LLMMessage(role="user", content="return json")])
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.data, {"ok": True})
+            self.assertEqual(len(adapter.requests), 2)
+
+        asyncio.run(run())
+
+    def test_structured_output_empty_content_exhaustion_returns_error(self) -> None:
+        async def run() -> None:
+            config = ModelConfig(provider="fake")
+            adapter = FakeModelAdapter(["", "", ""])
+            service = ModelService.with_adapter(config, adapter)
+            result = await service.generate_structured(
+                LLMRequest(messages=[LLMMessage(role="user", content="return json")]),
+                max_empty_content_retries=1,
+            )
+
+            self.assertFalse(result.ok)
+            self.assertIsNotNone(result.error)
+            self.assertEqual(result.error.type, "structured_output_empty_content")
+            self.assertTrue(result.error.retryable)
+            self.assertEqual(len(adapter.requests), 2)
+
+        asyncio.run(run())
+
     def test_structured_output_extracts_json_from_markdown_fence(self) -> None:
         async def run() -> None:
             config = ModelConfig(provider="fake")
@@ -308,6 +341,118 @@ class ModelLayerTests(unittest.TestCase):
             )
 
         asyncio.run(run())
+
+    def test_deepseek_adapter_uses_json_object_for_schema_requests(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["payload"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "model": "deepseek-v4-pro",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": '{"ok": true}'},
+                        }
+                    ],
+                },
+            )
+
+        async def run() -> None:
+            config = ModelConfig(
+                provider="openai_compatible_chat",
+                base_url="https://api.deepseek.com",
+                api_key="sk-test-key",
+                model="deepseek-v4-pro",
+            )
+            schema = {
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+            }
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                adapter = OpenAICompatibleChatAdapter(config, client=client)
+                await adapter.generate(
+                    LLMRequest(
+                        messages=[LLMMessage(role="user", content="return json")],
+                        response_format="json_schema",
+                        json_schema=schema,
+                        json_schema_name="TestSchema",
+                    )
+                )
+
+            payload = captured["payload"]
+            self.assertEqual(payload["response_format"], {"type": "json_object"})
+            self.assertEqual(payload["thinking"], {"type": "enabled"})
+            self.assertNotIn("json_schema", payload["response_format"])
+
+        asyncio.run(run())
+
+    def test_model_config_loads_thinking_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_file = Path(tmpdir) / ".env"
+            env_file.write_text(
+                "\n".join(
+                    [
+                        "AGENTFACTORY_LLM_PROVIDER=openai_compatible_chat",
+                        "AGENTFACTORY_OPENAI_BASE_URL=https://api.deepseek.com",
+                        "AGENTFACTORY_OPENAI_API_KEY=sk-test-key",
+                        "AGENTFACTORY_OPENAI_MODEL=deepseek-v4-pro",
+                        "AGENTFACTORY_LLM_THINKING=enabled",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = ModelConfig.from_env(env_file=env_file, environ={})
+
+            self.assertEqual(config.thinking, "enabled")
+            self.assertEqual(config.safe_summary()["thinking"], "enabled")
+
+    def test_stream_structured_returns_json_and_emits_deltas(self) -> None:
+        async def run() -> None:
+            config = ModelConfig(provider="fake")
+            adapter = FakeModelAdapter([{"ok": True}])
+            service = ModelService.with_adapter(config, adapter)
+            deltas: list[str] = []
+
+            result = await service.stream_structured(
+                LLMRequest(messages=[LLMMessage(role="user", content="return json")]),
+                on_event=lambda event: deltas.append(event.delta or "")
+                if event.type == "delta"
+                else None,
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.data, {"ok": True})
+            self.assertTrue(any(delta for delta in deltas))
+
+        asyncio.run(run())
+
+    def test_deepseek_stream_parser_keeps_reasoning_delta_separate(self) -> None:
+        config = ModelConfig(
+            provider="openai_compatible_chat",
+            base_url="https://api.deepseek.com",
+            api_key="sk-test-key",
+            model="deepseek-v4-pro",
+        )
+        adapter = OpenAICompatibleChatAdapter(config)
+
+        reasoning = adapter._parse_stream_line(
+            'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}'
+        )
+        content = adapter._parse_stream_line(
+            'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}'
+        )
+
+        self.assertIsNotNone(reasoning)
+        self.assertEqual(reasoning.delta, "thinking")
+        self.assertEqual(reasoning.metadata["delta_kind"], "reasoning")
+        self.assertIsNotNone(content)
+        self.assertEqual(content.delta, '{"ok":true}')
+        self.assertEqual(content.metadata["delta_kind"], "content")
 
 
 if __name__ == "__main__":

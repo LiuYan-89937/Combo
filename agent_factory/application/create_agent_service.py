@@ -21,6 +21,7 @@ class CreateAgentRequest(JsonDumpMixin):
     prompt: str
     draft: bool = True
     stream: bool = False
+    show_thinking: bool = False
     start_path: Path | None = None
 
 

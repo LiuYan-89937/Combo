@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Literal
+from collections.abc import Callable
 
 from pydantic import ConfigDict, Field, ValidationError
 
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.factory_runtime import FactoryRunContext
-from agent_factory.model import LLMRequest, MessageBuilder, ModelConfigError, ModelService
+from agent_factory.model import LLMRequest, LLMStreamEvent, MessageBuilder, ModelConfigError, ModelService
 from agent_factory.model.types import ModelError
 
 
@@ -63,6 +64,7 @@ class RequirementAnalyzer:
         context: FactoryRunContext,
         *,
         requirement: str,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> RequirementAnalysisResult:
         if self._should_use_fallback_without_model_call():
             return RequirementAnalysisResult(
@@ -70,9 +72,12 @@ class RequirementAnalyzer:
                 source="fallback",
             )
         try:
-            result = await self._model().generate_structured(
-                self._build_request(context, requirement=requirement)
-            )
+            model = self._model()
+            request = self._build_request(context, requirement=requirement)
+            if on_stream_event:
+                result = await model.stream_structured(request, on_event=on_stream_event)
+            else:
+                result = await model.generate_structured(request)
             if result.error:
                 return RequirementAnalysisResult(
                     analysis=_fallback_analysis(requirement),
@@ -97,8 +102,15 @@ class RequirementAnalyzer:
         context: FactoryRunContext,
         *,
         requirement: str,
+        on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> RequirementAnalysisResult:
-        return asyncio.run(self.analyze(context, requirement=requirement))
+        return asyncio.run(
+            self.analyze(
+                context,
+                requirement=requirement,
+                on_stream_event=on_stream_event,
+            )
+        )
 
     def _model(self) -> ModelService:
         if self.model_service is not None:

@@ -18,10 +18,15 @@ from agent_factory.application import (
 )
 from agent_factory.cli.completion import ContextualSlashCompleter
 from agent_factory.cli.main import app
-from agent_factory.cli.rendering import render_banner
+from agent_factory.cli.rendering import FactoryStreamRenderer, render_banner
 from agent_factory.cli.session import ShellSession
-from agent_factory.cli.shell import _collect_requirement_lines, _should_stream_create_agent
+from agent_factory.cli.shell import (
+    _collect_requirement_lines,
+    _should_show_thinking,
+    _should_stream_create_agent,
+)
 from agent_factory.cli.slash import SlashCommandDispatcher
+from agent_factory.core import EventStatus, FactoryEvent
 from tests.test_factory_agent import service_with_responses, valid_primitives_payload
 
 
@@ -260,6 +265,11 @@ class CliTests(unittest.TestCase):
         self.assertTrue(_should_stream_create_agent("/create-agent --draft"))
         self.assertFalse(_should_stream_create_agent("/create-agent --no-stream"))
 
+    def test_shell_create_agent_thinking_toggle(self) -> None:
+        self.assertFalse(_should_show_thinking("/create-agent --draft"))
+        self.assertTrue(_should_show_thinking("/create-agent --draft --show-thinking"))
+        self.assertFalse(_should_show_thinking("/create-agent --show-thinking --hide-thinking"))
+
     def test_shell_session_strips_requirement_box_markers(self) -> None:
         session = ShellSession()
 
@@ -276,6 +286,98 @@ class CliTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertIn("AgentFactory v0.1", rendered)
         self.assertNotIn(",---.-,", rendered)
+
+    def test_stream_renderer_hides_thinking_by_default(self) -> None:
+        event = FactoryEvent(
+            run_id="run-1",
+            stage="generate_tool_scripts",
+            status=EventStatus.PROGRESS,
+            title="Generating tool scripts",
+            message="Streaming model reasoning and tool code JSON.",
+            payload={
+                "stream_kind": "node_thinking",
+                "thinking": "Reasoning: raw private chain detail",
+                "thinking_kind": "reasoning",
+                "flow_summary": "Tool 1/2: order_query - calling model for code.",
+            },
+        )
+        output = StringIO()
+        console = Console(file=output, width=100, force_terminal=False)
+
+        console.print(FactoryStreamRenderer()._node_panel(event))
+
+        rendered = output.getvalue()
+        self.assertIn("Flow", rendered)
+        self.assertIn("Tool 1/2: order_query", rendered)
+        self.assertIn("--show-thinking", rendered)
+        self.assertNotIn("raw private chain detail", rendered)
+
+    def test_stream_renderer_can_show_thinking(self) -> None:
+        event = FactoryEvent(
+            run_id="run-1",
+            stage="analyze_requirement",
+            status=EventStatus.PROGRESS,
+            title="Analyzing requirement",
+            payload={
+                "stream_kind": "node_thinking",
+                "thinking": "Reasoning: raw model detail",
+                "thinking_kind": "reasoning",
+                "flow_summary": "Model is reasoning about this node.",
+            },
+        )
+        output = StringIO()
+        console = Console(file=output, width=100, force_terminal=False)
+
+        console.print(FactoryStreamRenderer(show_thinking=True)._node_panel(event))
+
+        rendered = output.getvalue()
+        self.assertIn("Thinking detail", rendered)
+        self.assertIn("raw model detail", rendered)
+        self.assertNotIn("Thinking detail hidden", rendered)
+
+    def test_stream_renderer_shows_multi_tool_progress(self) -> None:
+        renderer = FactoryStreamRenderer()
+        first = FactoryEvent(
+            run_id="run-1",
+            stage="generate_tool_scripts",
+            status=EventStatus.PROGRESS,
+            title="Generating tool scripts",
+            payload={
+                "stream_kind": "node_thinking",
+                "tool_id": "list_customer_tickets",
+                "tool_index": 1,
+                "tool_total": 2,
+                "tool_phase": "model_generation_started",
+                "flow_summary": "Tool 1/2: list_customer_tickets - calling model for code.",
+            },
+        )
+        second = FactoryEvent(
+            run_id="run-1",
+            stage="generate_tool_scripts",
+            status=EventStatus.PROGRESS,
+            title="Generating tool scripts",
+            payload={
+                "stream_kind": "node_thinking",
+                "tool_id": "get_customer_ticket",
+                "tool_index": 2,
+                "tool_total": 2,
+                "tool_phase": "model_generated",
+                "flow_summary": "Tool 2/2: get_customer_ticket - model code accepted.",
+            },
+        )
+        output = StringIO()
+        console = Console(file=output, width=120, force_terminal=False)
+
+        renderer._record_node_progress(first)
+        renderer._record_node_progress(second)
+        console.print(renderer._node_panel(second))
+
+        rendered = output.getvalue()
+        self.assertIn("Tools", rendered)
+        self.assertIn("list_customer_tickets", rendered)
+        self.assertIn("get_customer_ticket", rendered)
+        self.assertIn("model call started", rendered)
+        self.assertIn("model code accepted", rendered)
 
 
 class SlashShellTests(unittest.TestCase):
@@ -361,6 +463,16 @@ class SlashShellTests(unittest.TestCase):
 
         self.assertEqual(result.kind, "create_agent")
         self.assertEqual(service.requests[0].prompt, "生成一个虚拟恋爱女友小美")
+        self.assertTrue(service.requests[0].draft)
+
+    def test_slash_create_agent_accepts_show_thinking_flag(self) -> None:
+        service = RecordingCreateAgentService()
+        dispatcher = SlashCommandDispatcher(create_service=service)
+
+        result = dispatcher.dispatch('/create-agent --prompt "生成一个客服 Agent" --draft --show-thinking')
+
+        self.assertEqual(result.kind, "create_agent")
+        self.assertTrue(service.requests[0].show_thinking)
         self.assertTrue(service.requests[0].draft)
 
     def test_slash_drafts_use_selects_agent_for_run(self) -> None:
