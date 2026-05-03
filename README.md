@@ -1,5 +1,15 @@
 # FastAgentFactory
+!!!!!!!!!!!!!!!!!
+很多功能以及命令只是摆设
+并未完善！
 
+
+
+
+
+
+
+!!!!!!!!!!!!!!!!!
 FastAgentFactory 是一个 **CLI-first 的 Agent 工厂**。你可以用自然语言描述想要的 Agent，系统会生成一个本地可运行的 AgentPackage，并提供校验、测试、运行、草稿管理和本地 trace 能力。
 
 它不是只生成一段 prompt，而是生成一套可落地的本地包：
