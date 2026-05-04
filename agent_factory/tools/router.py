@@ -9,9 +9,11 @@ from typing import Any, Literal
 
 from pydantic import ConfigDict, Field
 
+from agent_factory.factory.web_search import FactoryWebSearchService
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.package import PackageLoader
-from agent_factory.specs import GeneratedToolDraftSpec, RiskLevel
+from agent_factory.specs import BuiltinCapabilitySpec, GeneratedToolDraftSpec, RiskLevel
+from agent_factory.tools.web import execute_browser_fetch, execute_web_search
 
 
 class ToolInvocation(JsonDumpMixin):
@@ -49,10 +51,27 @@ class ToolRouter:
         self.tools: dict[str, GeneratedToolDraftSpec] = {
             tool.tool_id: tool for tool in package.generated_tools
         }
+        self.builtin_capabilities: dict[str, BuiltinCapabilitySpec] = {
+            capability.id: capability
+            for capability in package.tools.builtin_capabilities
+            if capability.exposure == "exposed"
+        }
 
-    def route(self, invocation: ToolInvocation) -> ToolResult | GeneratedToolDraftSpec:
+    def route(self, invocation: ToolInvocation) -> ToolResult | GeneratedToolDraftSpec | BuiltinCapabilitySpec:
         tool = self.tools.get(invocation.tool_id)
         if tool is None:
+            capability = self.builtin_capabilities.get(invocation.tool_id)
+            if capability is not None:
+                if capability.approval_required and not invocation.approved:
+                    return ToolResult(
+                        invocation_id=invocation.invocation_id,
+                        tool_id=invocation.tool_id,
+                        status="interrupted",
+                        interrupt_type="human_confirm",
+                        approval_required=True,
+                        error="Builtin capability requires human confirmation.",
+                    )
+                return capability
             return ToolResult(
                 invocation_id=invocation.invocation_id,
                 tool_id=invocation.tool_id,
@@ -62,6 +81,18 @@ class ToolRouter:
         if tool.status == "draft" and not self.tools_spec.allow_draft_execution:
             if _safe_mock_tool(tool) and _tool_tests_passed(self.package_path, tool.tool_id):
                 return tool
+            if invocation.approved:
+                if _tool_tests_passed(self.package_path, tool.tool_id):
+                    return tool
+                return ToolResult(
+                    invocation_id=invocation.invocation_id,
+                    tool_id=invocation.tool_id,
+                    status="failed",
+                    error=(
+                        "Draft generated tool cannot execute because its generated tests "
+                        "have not passed."
+                    ),
+                )
             return ToolResult(
                 invocation_id=invocation.invocation_id,
                 tool_id=invocation.tool_id,
@@ -83,14 +114,25 @@ class ToolRouter:
 
 
 class ToolExecutor:
+    def __init__(
+        self,
+        *,
+        web_search_service: FactoryWebSearchService | None = None,
+        env_file: str | Path | None = None,
+    ) -> None:
+        self.web_search_service = web_search_service
+        self.env_file = Path(env_file) if env_file is not None else None
+
     def execute(
         self,
         package_path: str | Path,
-        tool: GeneratedToolDraftSpec,
+        tool: GeneratedToolDraftSpec | BuiltinCapabilitySpec,
         invocation: ToolInvocation,
         *,
         runtime_context: dict[str, Any] | None = None,
     ) -> ToolResult:
+        if isinstance(tool, BuiltinCapabilitySpec):
+            return self._execute_builtin(tool, invocation)
         implementation_path = Path(package_path) / tool.implementation.path
         if not implementation_path.exists():
             return ToolResult(
@@ -124,6 +166,42 @@ class ToolExecutor:
                 status="completed",
                 output=output,
                 approval_required=_requires_confirmation(tool),
+            )
+        except Exception as error:
+            return ToolResult(
+                invocation_id=invocation.invocation_id,
+                tool_id=invocation.tool_id,
+                status="failed",
+                error=str(error),
+            )
+
+    def _execute_builtin(
+        self,
+        capability: BuiltinCapabilitySpec,
+        invocation: ToolInvocation,
+    ) -> ToolResult:
+        try:
+            if capability.type == "web_search":
+                output = execute_web_search(
+                    capability,
+                    invocation.arguments,
+                    env_file=self.env_file,
+                    service=self.web_search_service,
+                )
+            elif capability.type == "browser_fetch":
+                output = execute_browser_fetch(
+                    capability,
+                    invocation.arguments,
+                    env_file=self.env_file,
+                )
+            else:
+                raise RuntimeError(f"Unsupported builtin capability: {capability.type}")
+            return ToolResult(
+                invocation_id=invocation.invocation_id,
+                tool_id=invocation.tool_id,
+                status="completed",
+                output=output,
+                approval_required=capability.approval_required,
             )
         except Exception as error:
             return ToolResult(

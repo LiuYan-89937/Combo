@@ -23,6 +23,7 @@ from agent_factory.model import (
     ModelConfigError,
     ModelService,
     OpenAICompatibleChatAdapter,
+    OpenAIToolDefinition,
     PromptTemplate,
     SystemMessage,
     ToolMessage,
@@ -282,6 +283,80 @@ class ModelLayerTests(unittest.TestCase):
                     "response_format": {"type": "json_object"},
                 },
             )
+
+        asyncio.run(run())
+
+    def test_openai_compatible_adapter_builds_tool_payload_and_parses_calls(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["payload"] = json.loads(request.content.decode("utf-8"))
+            return httpx.Response(
+                200,
+                json={
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_001",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "list_customer_tickets",
+                                            "arguments": '{"limit": 20, "offset": 0}',
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            )
+
+        async def run() -> None:
+            config = ModelConfig(
+                provider="openai_compatible_chat",
+                base_url="https://example.test/v1",
+                api_key="sk-test-key",
+                model="test-model",
+            )
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                adapter = OpenAICompatibleChatAdapter(config, client=client)
+                response = await adapter.generate(
+                    LLMRequest(
+                        messages=[LLMMessage(role="user", content="列出工单")],
+                        tools=[
+                            OpenAIToolDefinition(
+                                function={
+                                    "name": "list_customer_tickets",
+                                    "description": "List customer tickets.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "limit": {"type": "integer"},
+                                            "offset": {"type": "integer"},
+                                        },
+                                        "required": [],
+                                    },
+                                }
+                            )
+                        ],
+                        tool_choice="auto",
+                    )
+                )
+
+            payload = captured["payload"]
+            self.assertEqual(payload["tool_choice"], "auto")
+            self.assertEqual(payload["tools"][0]["type"], "function")
+            self.assertEqual(payload["tools"][0]["function"]["name"], "list_customer_tickets")
+            self.assertEqual(response.finish_reason, "tool_calls")
+            self.assertEqual(len(response.tool_call_proposals), 1)
+            self.assertEqual(response.tool_call_proposals[0].name, "list_customer_tickets")
+            self.assertEqual(response.tool_call_proposals[0].arguments["limit"], 20)
 
         asyncio.run(run())
 

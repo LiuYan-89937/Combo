@@ -38,6 +38,7 @@ def _entry_for(tool: FactoryTool) -> FactoryToolPolicyEntry:
         "filesystem.safe_write",
         "trace.record",
         "memory.append",
+        "factory.web_search",
     }
     if tool.id == "model.generate_structured":
         mode = "model_only"

@@ -161,7 +161,15 @@ class PackageValidator:
                 path="scenarios",
             )
 
-        if package.readiness is not None and package.readiness.status != "ready":
+        if package.readiness is not None and package.readiness.status == "mock_only_allowed":
+            report.add(
+                ValidationSeverity.WARNING,
+                "package_mock_only",
+                "readiness.yaml status is mock_only_allowed; external capabilities are simulated.",
+                file="readiness.yaml",
+                path="status",
+            )
+        elif package.readiness is not None and package.readiness.status != "ready":
             report.add(
                 ValidationSeverity.FATAL,
                 "package_not_ready",

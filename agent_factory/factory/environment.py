@@ -25,6 +25,8 @@ from agent_factory.specs import (
     SQLiteTableContract,
 )
 from agent_factory.tools.shell import ControlledShellRunner
+from agent_factory.factory.tool_preconditions import RequiredCondition, ToolPreconditionReport
+from agent_factory.factory.web_search import WebSearchReport
 
 
 LOCAL_RESOURCE_PATTERN = re.compile(r"(?:/|~|\./|\../)[^\s，。；：、'\"]+")
@@ -45,6 +47,8 @@ class EnvironmentProbeRunner:
         *,
         requirement: str,
         start_path: str | Path | None = None,
+        tool_precondition_report: dict[str, Any] | ToolPreconditionReport | None = None,
+        web_research_report: dict[str, Any] | WebSearchReport | None = None,
     ) -> tuple[EnvironmentProbeReport, ResourceContractsSpec, ReadinessReport]:
         metadata = _metadata(primitives, "environment")
         resource_metadata = _metadata(primitives, "resource-contracts")
@@ -54,7 +58,11 @@ class EnvironmentProbeRunner:
             self._probe_resource(source_id, ref, access_mode)
             for source_id, ref, access_mode in resource_inputs
         ]
+        tool_preconditions = _coerce_tool_precondition_report(tool_precondition_report)
+        web_research = _coerce_web_research_report(web_research_report)
+        contracts.extend(_condition_contracts(tool_preconditions, web_research))
         preconditions = _preconditions_from_contracts(contracts)
+        preconditions.extend(_generic_preconditions(tool_preconditions, web_research, contracts=contracts))
         probes = [
             EnvironmentProbe(
                 id="python.sqlite3",
@@ -89,7 +97,13 @@ class EnvironmentProbeRunner:
             metadata=resource_metadata,
             resources=contracts,
         )
-        readiness = _readiness_from_contracts(readiness_metadata, contracts, preconditions)
+        readiness = _readiness_from_contracts(
+            readiness_metadata,
+            contracts,
+            preconditions,
+            tool_preconditions=tool_preconditions,
+            web_research=web_research,
+        )
         report = EnvironmentProbeReport(
             schema_version="0.1",
             metadata=metadata,
@@ -244,6 +258,8 @@ def _resource_inputs(
 def _preconditions_from_contracts(contracts: list[ResourceContract]) -> list[PreconditionSpec]:
     preconditions: list[PreconditionSpec] = []
     for resource in contracts:
+        if resource.type in {"external_api", "web_search", "http_endpoint", "realtime_data"}:
+            continue
         preconditions.append(
             PreconditionSpec(
                 id=f"{resource.id}.exists",
@@ -296,11 +312,123 @@ def _preconditions_from_contracts(contracts: list[ResourceContract]) -> list[Pre
     return preconditions
 
 
+def _condition_contracts(
+    report: ToolPreconditionReport | None,
+    web_research: WebSearchReport | None,
+) -> list[ResourceContract]:
+    if report is None:
+        return []
+    contracts: list[ResourceContract] = []
+    for plan in report.plans:
+        probe_by_condition = {target.condition_id: target for target in plan.probe_targets}
+        for condition in plan.required_conditions:
+            resource_type = _resource_type_from_condition(condition)
+            if resource_type is None:
+                continue
+            status = _resource_status_from_condition(condition, report, web_research)
+            probe_target = probe_by_condition.get(condition.condition_id)
+            contracts.append(
+                ResourceContract(
+                    id=_resource_contract_id(plan.tool_id, condition),
+                    type=resource_type,
+                    ref=_condition_ref(condition, probe_target),
+                    exists=status == "ready",
+                    status=status,  # type: ignore[arg-type]
+                    access_mode=_access_mode_from_condition(condition),
+                    visible_to_tools=True,
+                    sandbox_required=condition.type
+                    in {"local_resource", "database_schema", "storage_backend", "data_contract"},
+                    details={
+                        "tool_id": plan.tool_id,
+                        "condition": condition.model_dump(mode="json"),
+                        "probe_target": probe_target.model_dump(mode="json") if probe_target else None,
+                        "mock_only_requested": report.mock_only_requested,
+                        "agent_should_inherit_web_search": plan.agent_should_inherit_web_search,
+                        "research_queries": plan.research_queries,
+                        "web_research_status": web_research.status if web_research else "skipped",
+                        "web_research_results": _web_research_results_for_prompt(web_research),
+                        "configuration_template": (
+                            {
+                                "file": "external_config.yaml",
+                                "required_values": _runtime_config_values_for_condition(condition),
+                                "note": "Fill this template before running the Agent against the real external service.",
+                            }
+                            if _condition_uses_external_config_template(condition)
+                            else None
+                        ),
+                    },
+                )
+            )
+    return contracts
+
+
+def _generic_preconditions(
+    report: ToolPreconditionReport | None,
+    web_research: WebSearchReport | None,
+    *,
+    contracts: list[ResourceContract],
+) -> list[PreconditionSpec]:
+    if report is None:
+        return []
+    preconditions: list[PreconditionSpec] = []
+    for plan in report.plans:
+        for condition in plan.required_conditions:
+            if _condition_satisfied_by_contract(condition, contracts):
+                status = "passed"
+            elif condition.type == "web_research" and web_research is not None and web_research.ok:
+                status = "passed"
+            elif report.mock_only_requested and condition.type in {
+                "external_service",
+                "credential",
+                "mock_fixture",
+                "browser_access",
+            }:
+                status = "passed"
+            else:
+                status = _precondition_status_from_condition(condition)
+            preconditions.append(
+                PreconditionSpec(
+                    id=condition.condition_id,
+                    type=condition.type,
+                    description=condition.description,
+                    required=condition.required,
+                    status=status,
+                    resource_ref=_resource_contract_id(plan.tool_id, condition)
+                    if _resource_type_from_condition(condition)
+                    else None,
+                    details={
+                        "tool_id": plan.tool_id,
+                        "probe_strategy": condition.probe_strategy,
+                        "user_input_needed": condition.user_input_needed,
+                        "evidence": condition.evidence,
+                        "web_research_status": web_research.status if web_research else "skipped",
+                    },
+                )
+            )
+    return preconditions
+
+
 def _readiness_from_contracts(
     metadata: Metadata,
     contracts: list[ResourceContract],
     preconditions: list[PreconditionSpec],
+    *,
+    tool_preconditions: ToolPreconditionReport | None = None,
+    web_research: WebSearchReport | None = None,
 ) -> ReadinessReport:
+    if tool_preconditions is not None and tool_preconditions.mock_only_requested:
+        return ReadinessReport(
+            schema_version="0.1",
+            metadata=metadata,
+            status="mock_only_allowed",
+            issues=[
+                ReadinessIssue(
+                    code="mock_only_selected",
+                    message="User selected mock-only draft for missing external conditions.",
+                    severity="warning",
+                )
+            ],
+        )
     failed_required = [item for item in preconditions if item.required and item.status == "failed"]
     issues = [
         ReadinessIssue(
@@ -313,21 +441,41 @@ def _readiness_from_contracts(
     ]
     if not failed_required:
         return ReadinessReport(schema_version="0.1", metadata=metadata, status="ready")
-    has_missing = any(resource.status == "missing" for resource in contracts)
-    options = [
-        ReadinessOption(
-            id="replace_resource_path",
-            label="提供新的资源路径",
-            description="用户提供一个已存在、可访问的本地资源路径。",
-            action="replace_resource_path",
-        ),
-        ReadinessOption(
-            id="generate_draft_only",
-            label="只生成草稿",
-            description="暂不执行工具测试，生成不可直接运行的草稿包。",
-            action="generate_draft_only",
-        ),
-    ]
+    if _can_continue_with_external_config_template(
+        failed_required,
+        contracts,
+        web_research=web_research,
+    ):
+        return ReadinessReport(
+            schema_version="0.1",
+            metadata=metadata,
+            status="ready",
+            issues=[
+                ReadinessIssue(
+                    code="external_config_template_required",
+                    message=(
+                        "External service details were not fully configured. "
+                        "Factory will write external_config.yaml with placeholders; "
+                        "fill it before real runtime."
+                    ),
+                    severity="warning",
+                ),
+                *[
+                    ReadinessIssue(
+                        code=item.type,
+                        message=f"Deferred to external_config.yaml: {item.description}",
+                        severity="warning",
+                        resource_id=item.resource_ref,
+                    )
+                    for item in failed_required
+                ],
+            ],
+        )
+    has_missing = any(
+        resource.status == "missing" and resource.type in {"file", "directory", "sqlite"}
+        for resource in contracts
+    )
+    options = _readiness_options_for_failed_preconditions(failed_required)
     if has_missing:
         options.insert(
             0,
@@ -345,6 +493,322 @@ def _readiness_from_contracts(
         issues=issues,
         options=options,
     )
+
+
+def _resource_contract_id(tool_id: str, condition: RequiredCondition) -> str:
+    raw = f"{tool_id}_{condition.type}"
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", raw).strip("_").lower() or "condition_resource"
+
+
+def _resource_type_from_condition(condition: RequiredCondition) -> str | None:
+    if condition.type in {"local_resource", "database_schema"}:
+        return None
+    if condition.type == "external_service":
+        return "external_api"
+    if condition.type == "web_research":
+        return "web_search"
+    if condition.type == "browser_access":
+        return "http_endpoint"
+    if condition.type == "mcp_server":
+        return "mcp"
+    if condition.type == "storage_backend":
+        return "storage"
+    if condition.type == "python_package":
+        return "python_package"
+    if condition.type == "system_command":
+        return "system_command"
+    if condition.type == "data_contract":
+        return "data_contract"
+    return None
+
+
+def _condition_uses_external_config_template(condition: RequiredCondition) -> bool:
+    return condition.type in {"external_service", "credential", "mock_fixture", "data_contract"}
+
+
+def _runtime_config_values_for_condition(condition: RequiredCondition) -> list[str]:
+    if condition.type == "external_service":
+        return ["provider", "base_url", "endpoints", "allowed_operations"]
+    if condition.type == "credential":
+        return ["auth.type", "auth.env_var", "auth.credential_ref"]
+    if condition.type == "mock_fixture":
+        return ["test_fixture.request", "test_fixture.response"]
+    if condition.type == "data_contract":
+        return ["request_schema", "response_schema", "error_schema"]
+    return []
+
+
+def _can_continue_with_external_config_template(
+    failed_required: list[PreconditionSpec],
+    contracts: list[ResourceContract],
+    *,
+    web_research: WebSearchReport | None,
+) -> bool:
+    if web_research is None or not web_research.ok:
+        return False
+    failed_types = {item.type for item in failed_required}
+    deferable = {"external_service", "credential", "mock_fixture", "data_contract"}
+    if not failed_types or not failed_types.issubset(deferable):
+        return False
+    return any(resource.type == "external_api" for resource in contracts)
+
+
+def _resource_status_from_condition(
+    condition: RequiredCondition,
+    report: ToolPreconditionReport,
+    web_research: WebSearchReport | None,
+) -> str:
+    if report.mock_only_requested and condition.type in {
+        "external_service",
+        "credential",
+        "mock_fixture",
+        "browser_access",
+    }:
+        return "ready"
+    if condition.type == "web_research" and web_research is not None and web_research.ok:
+        return "ready"
+    if condition.status == "satisfied":
+        return "ready"
+    if condition.status == "skipped" and not condition.required:
+        return "unsupported"
+    if condition.status == "failed":
+        return "error"
+    return "missing"
+
+
+def _precondition_status_from_condition(condition: RequiredCondition) -> str:
+    if condition.status == "satisfied":
+        return "passed"
+    if condition.status == "skipped" and not condition.required:
+        return "skipped"
+    if condition.required and condition.status in {"unknown", "missing", "failed"}:
+        return "failed"
+    if condition.user_input_needed and condition.required:
+        return "failed"
+    return "skipped"
+
+
+def _condition_satisfied_by_contract(
+    condition: RequiredCondition,
+    contracts: list[ResourceContract],
+) -> bool:
+    if condition.type == "local_resource":
+        return any(resource.status == "ready" for resource in contracts)
+    if condition.type == "database_schema":
+        return any(
+            resource.type == "sqlite" and resource.status == "ready" and resource.sqlite_tables
+            for resource in contracts
+        )
+    return False
+
+
+def _condition_ref(condition: RequiredCondition, probe_target: object | None) -> str | None:
+    evidence = condition.evidence or {}
+    for key in ("ref", "path", "url", "endpoint", "provider", "module", "command"):
+        value = evidence.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    ref = getattr(probe_target, "ref", None)
+    if isinstance(ref, str) and ref.strip():
+        return ref.strip()
+    return None
+
+
+def _access_mode_from_condition(condition: RequiredCondition) -> str:
+    description = condition.description.lower()
+    if any(marker in description for marker in ("write", "create", "update", "delete", "写", "创建", "更新", "删除")):
+        return "read_write"
+    if condition.type in {"storage_backend", "database_schema"} and "read_write" in str(condition.evidence):
+        return "read_write"
+    return "read_only"
+
+
+def _readiness_options_for_failed_preconditions(
+    failed_required: list[PreconditionSpec],
+) -> list[ReadinessOption]:
+    options: list[ReadinessOption] = []
+
+    def add(option: ReadinessOption) -> None:
+        if any(existing.id == option.id for existing in options):
+            return
+        options.append(option)
+
+    failed_types = {item.type for item in failed_required}
+    if failed_types.intersection({"external_service", "credential"}):
+        add(
+            ReadinessOption(
+                id="configure_external_api",
+                label="配置外部服务",
+                description="提供 provider、base_url、鉴权方式和测试 mock 后继续。",
+                action="configure_external_api",
+            )
+        )
+        add(
+            ReadinessOption(
+                id="provide_credential",
+                label="提供凭证",
+                description="提供安全存放的凭证引用，Factory 不会把密钥写入包或 trace。",
+                action="provide_credential",
+            )
+        )
+        add(
+            ReadinessOption(
+                id="provide_api_docs",
+                label="提供接口文档",
+                description="粘贴官方文档、endpoint、鉴权和示例返回。",
+                action="provide_api_docs",
+            )
+        )
+    if "web_research" in failed_types:
+        add(
+            ReadinessOption(
+                id="enable_web_search",
+                label="启用 Factory web_search",
+                description="允许 Factory 搜索官方文档，辅助生成工具契约。",
+                action="enable_web_search",
+            )
+        )
+    if failed_types.intersection(
+        {
+            "local_resource",
+            "database_schema",
+            "resource_exists",
+            "resource_readable",
+            "resource_writable",
+            "sqlite_openable",
+            "sqlite_schema_available",
+            "sandbox_copyable",
+        }
+    ):
+        add(
+            ReadinessOption(
+                id="replace_resource_path",
+                label="提供新的资源路径",
+                description="用户提供一个已存在、可访问的本地资源路径。",
+                action="replace_resource_path",
+            )
+        )
+    if failed_types.intersection({"python_package", "runtime_dependency", "system_command"}):
+        add(
+            ReadinessOption(
+                id="install_dependency",
+                label="安装或声明依赖",
+                description="补齐 Python 包、系统命令或运行时依赖后继续。",
+                action="install_dependency",
+            )
+        )
+    if failed_types.intersection({"permission", "human_approval"}):
+        add(
+            ReadinessOption(
+                id="grant_permission",
+                label="确认权限与审批",
+                description="明确允许的动作、审批方式和禁止边界。",
+                action="grant_permission",
+            )
+        )
+    if "mock_fixture" in failed_types:
+        add(
+            ReadinessOption(
+                id="provide_test_fixture",
+                label="提供测试 fixture",
+                description="提供稳定样例输入/输出、测试收件箱或 mock 响应。",
+                action="provide_test_fixture",
+            )
+        )
+        add(
+            ReadinessOption(
+                id="use_mock_only",
+                label="只生成 mock-only 草稿",
+                description="明确接受本地模拟实现，不声称是真实实时数据。",
+                action="use_mock_only",
+            )
+        )
+    if "browser_access" in failed_types:
+        add(
+            ReadinessOption(
+                id="configure_browser",
+                label="配置浏览/网页访问",
+                description="提供目标 URL、访问频率、允许域名和测试快照。",
+                action="configure_browser",
+            )
+        )
+    if "mcp_server" in failed_types:
+        add(
+            ReadinessOption(
+                id="configure_mcp",
+                label="配置 MCP Server",
+                description="提供 MCP server 命令、transport、工具列表和测试 fixture。",
+                action="configure_mcp",
+            )
+        )
+    if "schedule" in failed_types:
+        add(
+            ReadinessOption(
+                id="configure_schedule",
+                label="配置定时策略",
+                description="明确频率、时区、触发条件和失败重试策略。",
+                action="configure_schedule",
+            )
+        )
+    if "storage_backend" in failed_types:
+        add(
+            ReadinessOption(
+                id="configure_storage",
+                label="配置存储",
+                description="提供运行状态、历史记录或比对结果的存储位置。",
+                action="configure_storage",
+            )
+        )
+    if "data_contract" in failed_types:
+        add(
+            ReadinessOption(
+                id="provide_data_contract",
+                label="补充数据契约",
+                description="明确输入字段、输出字段、边界样例和错误样例。",
+                action="ask_user",
+            )
+        )
+    add(
+        ReadinessOption(
+            id="generate_draft_only",
+            label="只生成草稿",
+            description="暂不执行工具测试，生成不可直接运行的草稿包。",
+            action="generate_draft_only",
+        )
+    )
+    return options
+
+
+def _coerce_tool_precondition_report(
+    value: dict[str, Any] | ToolPreconditionReport | None,
+) -> ToolPreconditionReport | None:
+    if value is None:
+        return None
+    if isinstance(value, ToolPreconditionReport):
+        return value
+    return ToolPreconditionReport.model_validate(value)
+
+
+def _coerce_web_research_report(value: dict[str, Any] | WebSearchReport | None) -> WebSearchReport | None:
+    if value is None:
+        return None
+    if isinstance(value, WebSearchReport):
+        return value
+    return WebSearchReport.model_validate(value)
+
+
+def _web_research_results_for_prompt(web_research: WebSearchReport | None) -> list[dict[str, str]]:
+    if web_research is None:
+        return []
+    return [
+        {
+            "title": result.title,
+            "url": result.url,
+            "snippet": result.snippet[:500],
+            "source": result.source or "",
+        }
+        for result in web_research.results[:5]
+    ]
 
 
 def _metadata(primitives: AgentPackagePrimitives, suffix: str) -> Metadata:

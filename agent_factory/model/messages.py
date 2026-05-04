@@ -12,6 +12,7 @@ from agent_factory.model.types import (
     SystemMessage,
     ToolMessage,
     UserMessage,
+    OpenAIToolDefinition,
 )
 
 MessageRole: TypeAlias = Literal["system", "user", "assistant", "tool"]
@@ -155,6 +156,8 @@ class MessageBuilder:
         json_schema: dict[str, Any] | None = None,
         json_schema_name: str | None = None,
         json_schema_strict: bool = True,
+        tools: list[dict[str, Any] | OpenAIToolDefinition] | None = None,
+        tool_choice: Literal["auto", "none", "required"] | dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> LLMRequest:
         return LLMRequest(
@@ -165,6 +168,8 @@ class MessageBuilder:
             json_schema=json_schema,
             json_schema_name=json_schema_name,
             json_schema_strict=json_schema_strict,
+            tools=tools or [],
+            tool_choice=tool_choice,
             metadata=metadata or {},
         )
 
@@ -184,6 +189,8 @@ def messages_to_request(
     json_schema: dict[str, Any] | None = None,
     json_schema_name: str | None = None,
     json_schema_strict: bool = True,
+    tools: list[dict[str, Any] | OpenAIToolDefinition] | None = None,
+    tool_choice: Literal["auto", "none", "required"] | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> LLMRequest:
     return MessageBuilder(messages).request(
@@ -193,5 +200,7 @@ def messages_to_request(
         json_schema=json_schema,
         json_schema_name=json_schema_name,
         json_schema_strict=json_schema_strict,
+        tools=tools,
+        tool_choice=tool_choice,
         metadata=metadata,
     )

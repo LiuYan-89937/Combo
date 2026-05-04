@@ -40,6 +40,8 @@ class FactoryProductionStateDict(TypedDict, total=False):
     environment_report: EnvironmentProbeReport | None
     resource_contracts: ResourceContractsSpec | None
     readiness_report: ReadinessReport | None
+    tool_precondition_report: dict[str, Any] | None
+    web_research_report: dict[str, Any] | None
     validation_report: ValidationReport | None
     generated_artifacts: list[Path]
     generated_tool_count: int
@@ -82,6 +84,8 @@ class FactoryProductionState(JsonDumpMixin):
     environment_report: EnvironmentProbeReport | None = None
     resource_contracts: ResourceContractsSpec | None = None
     readiness_report: ReadinessReport | None = None
+    tool_precondition_report: dict[str, Any] | None = None
+    web_research_report: dict[str, Any] | None = None
     validation_report: ValidationReport | None = None
     generated_artifacts: list[Path] = Field(default_factory=list)
     generated_tool_count: int = 0

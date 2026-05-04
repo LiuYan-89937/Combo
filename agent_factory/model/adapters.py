@@ -197,6 +197,9 @@ class OpenAICompatibleChatAdapter:
                 }
         elif request.response_format == "json_object":
             payload["response_format"] = {"type": "json_object"}
+        if request.tools:
+            payload["tools"] = [tool.model_dump(mode="json") for tool in request.tools]
+            payload["tool_choice"] = request.tool_choice or "auto"
         if self._uses_deepseek_json_object_mode():
             payload["thinking"] = {"type": request.thinking or self.config.thinking or "enabled"}
         return payload

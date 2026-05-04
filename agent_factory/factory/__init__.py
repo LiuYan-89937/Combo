@@ -21,12 +21,29 @@ from agent_factory.factory.intent_classifier import (
 )
 from agent_factory.factory.primitive_planner import PrimitivePlanner
 from agent_factory.factory.primitive_repair import PrimitiveRepair
+from agent_factory.factory.tool_preconditions import (
+    ProbeTarget,
+    RequiredCondition,
+    RiskControl,
+    ToolPreconditionPlan,
+    ToolPreconditionReport,
+    analyze_tool_preconditions,
+)
 from agent_factory.factory.requirement_analyzer import (
     RequirementAnalysis,
     RequirementAnalysisResult,
     RequirementAnalyzer,
 )
 from agent_factory.factory.types import FactoryCreateOptions, FactoryError, FactoryPrimitiveDraft
+from agent_factory.factory.web_search import (
+    FactoryWebSearchService,
+    TavilyWebSearchProvider,
+    WebSearchConfig,
+    WebSearchProvider,
+    WebSearchRequest,
+    WebSearchReport,
+    WebSearchResult,
+)
 
 __all__ = [
     "FactoryAgent",
@@ -39,6 +56,7 @@ __all__ = [
     "FactoryIntentResult",
     "FactoryPrimitiveDraft",
     "FactoryVerificationReport",
+    "FactoryWebSearchService",
     "HarnessDryRunReport",
     "MCPBindingLocalCheckReport",
     "PackageVerificationRunner",
@@ -49,7 +67,19 @@ __all__ = [
     "RequirementAnalysis",
     "RequirementAnalysisResult",
     "RequirementAnalyzer",
+    "ProbeTarget",
+    "RequiredCondition",
+    "RiskControl",
+    "ToolPreconditionPlan",
+    "ToolPreconditionReport",
+    "analyze_tool_preconditions",
     "ToolStaticCheckReport",
     "ToolTestRunReport",
+    "TavilyWebSearchProvider",
     "VerificationIssue",
+    "WebSearchConfig",
+    "WebSearchProvider",
+    "WebSearchRequest",
+    "WebSearchReport",
+    "WebSearchResult",
 ]

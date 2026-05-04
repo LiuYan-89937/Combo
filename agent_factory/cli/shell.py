@@ -22,7 +22,10 @@ from agent_factory.cli.rendering import (
 )
 from agent_factory.cli.completion import ContextualSlashCompleter
 from agent_factory.cli.slash import SLASH_COMMANDS, SlashCommandDispatcher, SlashCommandResult
-from agent_factory.cli.theme import PROMPT, STYLE_ACCENT, STYLE_MUTED, STYLE_WARNING
+from agent_factory.cli.theme import PROMPT, STYLE_ACCENT, STYLE_MUTED, STYLE_SUCCESS, STYLE_WARNING
+from agent_factory.application import RunAgentServiceRequest
+from agent_factory.memory import AgentMemoryStore
+from agent_factory.registry import FilesystemRegistry
 
 
 def run_shell() -> None:
@@ -33,10 +36,15 @@ def run_shell() -> None:
     prompt_session = _prompt_session(dispatcher)
     while True:
         try:
-            line = prompt_session.prompt(PROMPT) if prompt_session else input(PROMPT)
+            prompt = _shell_prompt(dispatcher)
+            line = prompt_session.prompt(prompt) if prompt_session else input(prompt)
         except (EOFError, KeyboardInterrupt):
             console.print("")
             break
+
+        if dispatcher.session.in_agent_chat:
+            if _handle_agent_chat_line(line, console, dispatcher):
+                continue
 
         if _should_open_requirement_box(line, dispatcher, interactive=prompt_session is not None):
             requirement = _read_requirement_box(console, prompt_session)
@@ -124,6 +132,12 @@ def render_slash_result(result: SlashCommandResult, console: Console | None = No
             console.print(f"  ! {result.run_result.error}")
         if result.run_result.repair_result:
             _render_repair_payload(result.run_result.repair_result, console)
+        if result.message:
+            console.print(Text(f"  {result.message}", style=STYLE_MUTED))
+        return
+    if result.kind == "agent_chat":
+        console.print("")
+        console.print(Text(f"  {result.message or 'Agent chat started.'}", style=STYLE_SUCCESS))
         return
     if result.kind == "repair_agent" and result.repair_result:
         console.print("")
@@ -319,6 +333,169 @@ def _normalized_question_options(question: dict) -> list[dict[str, str]]:
             }
         )
     return options
+
+
+def _shell_prompt(dispatcher: SlashCommandDispatcher) -> str:
+    if not dispatcher.session.in_agent_chat:
+        return PROMPT
+    label = "agent"
+    if dispatcher.session.active_agent_path:
+        label = dispatcher.session.active_agent_path.name
+    elif dispatcher.session.active_agent_target:
+        label = Path(dispatcher.session.active_agent_target).name
+    return f"{label} › "
+
+
+def _handle_agent_chat_line(
+    line: str,
+    console: Console,
+    dispatcher: SlashCommandDispatcher,
+) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if stripped in {"/exit", "/quit"}:
+        dispatcher.session.exit_agent_chat()
+        console.print(Text("  Left Agent chat. Factory commands are available again.", style=STYLE_MUTED))
+        return True
+    if stripped == "/clear":
+        _clear_active_agent_session(console, dispatcher)
+        return True
+    if stripped.startswith("/run") and {"--yes", "-y"}.intersection(stripped.split()):
+        render_slash_result(dispatcher.dispatch(stripped), console)
+        return True
+    if _looks_like_tool_confirmation(stripped):
+        return _confirm_pending_tool(console, dispatcher)
+    if stripped == "/help":
+        console.print("")
+        console.print(Text("  Agent chat commands", style=STYLE_ACCENT))
+        console.print(Text("  /run --yes  Approve the pending interrupted tool call", style=STYLE_MUTED))
+        console.print(Text("  /exit       Leave this Agent chat", style=STYLE_MUTED))
+        console.print(Text("  /clear      Clear this Agent session memory", style=STYLE_MUTED))
+        return True
+    if stripped.startswith("/"):
+        console.print(
+            Text(
+                "  You are in Agent chat. Use /exit first, then run Factory commands.",
+                style=STYLE_WARNING,
+            )
+        )
+        return True
+    target = dispatcher.session.active_agent_target
+    if not target:
+        dispatcher.session.exit_agent_chat()
+        return False
+    result = dispatcher.run_service.run_agent(
+        RunAgentServiceRequest(
+            target=target,
+            user_input=stripped,
+            session_id=dispatcher.session.active_session_id,
+        )
+    )
+    _record_chat_tool_approval(dispatcher, result, stripped)
+    console.print("")
+    if result.result:
+        console.print(result.result.answer or f"[{result.result.status}]")
+        if result.result.status in {"interrupted", "needs_upgrade"}:
+            console.print(Text(f"  Status: {result.result.status}", style=STYLE_WARNING))
+    else:
+        console.print(Text(f"  ! {result.error}", style=STYLE_WARNING))
+    return True
+
+
+def _looks_like_tool_confirmation(text: str) -> bool:
+    normalized = text.strip().lower()
+    return normalized in {
+        "确认",
+        "确认执行",
+        "同意",
+        "批准",
+        "继续",
+        "执行",
+        "yes",
+        "y",
+        "approve",
+        "approved",
+        "confirm",
+        "--yes",
+        "-y",
+    }
+
+
+def _confirm_pending_tool(console: Console, dispatcher: SlashCommandDispatcher) -> bool:
+    pending = dispatcher.session.pending_tool_approval
+    target = dispatcher.session.active_agent_target
+    if not pending or not target:
+        console.print(Text("  No pending tool call to approve.", style=STYLE_WARNING))
+        return True
+    tool_id = str(pending.get("tool_id") or "tool")
+    user_input = str(pending.get("user_input") or "")
+    console.print(Text(f"  Approving pending tool call: {tool_id}", style=STYLE_ACCENT))
+    result = dispatcher.run_service.run_agent(
+        RunAgentServiceRequest(
+            target=target,
+            user_input=user_input,
+            session_id=dispatcher.session.active_session_id,
+            approved_tool_call_id=tool_id,
+        )
+    )
+    _record_chat_tool_approval(dispatcher, result, user_input)
+    console.print("")
+    if result.result:
+        console.print(result.result.answer or f"[{result.result.status}]")
+        if result.result.status in {"interrupted", "needs_upgrade"}:
+            console.print(Text(f"  Status: {result.result.status}", style=STYLE_WARNING))
+    else:
+        console.print(Text(f"  ! {result.error}", style=STYLE_WARNING))
+    return True
+
+
+def _record_chat_tool_approval(
+    dispatcher: SlashCommandDispatcher,
+    result,
+    user_input: str,
+) -> None:
+    if not result.result or result.result.status != "interrupted":
+        dispatcher.session.clear_tool_approval()
+        return
+    interrupted = [item for item in result.result.tool_results if item.status == "interrupted"]
+    if not interrupted:
+        dispatcher.session.clear_tool_approval()
+        return
+    item = interrupted[0]
+    dispatcher.session.capture_tool_approval(
+        user_input=user_input,
+        tool_call_id=item.invocation_id,
+        tool_id=item.tool_id,
+    )
+
+
+def _clear_active_agent_session(console: Console, dispatcher: SlashCommandDispatcher) -> None:
+    package_path = dispatcher.session.active_agent_path
+    if package_path is None and dispatcher.session.active_agent_target:
+        target_path = Path(dispatcher.session.active_agent_target)
+        if target_path.exists():
+            package_path = target_path
+        else:
+            draft_path = dispatcher.drafts_service.resolve_draft(dispatcher.session.active_agent_target)
+            if draft_path is not None:
+                package_path = draft_path
+            else:
+                record = FilesystemRegistry().get(dispatcher.session.active_agent_target)
+                if record is not None:
+                    package_path = record.package_path
+    if package_path is None:
+        console.print(Text("  Cannot resolve active Agent package for memory clearing.", style=STYLE_WARNING))
+        return
+    removed = AgentMemoryStore(package_path).clear_session(
+        session_id=dispatcher.session.active_session_id
+    )
+    console.print(
+        Text(
+            f"  Cleared session '{dispatcher.session.active_session_id}' ({removed} record(s)).",
+            style=STYLE_MUTED,
+        )
+    )
 
 
 def _prompt_session(dispatcher: SlashCommandDispatcher):

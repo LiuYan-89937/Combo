@@ -55,6 +55,19 @@ class ToolCallProposal(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class OpenAIToolDefinition(BaseModel):
+    """OpenAI-compatible function tool definition.
+
+    The model sees this schema, but it still only returns tool call proposals.
+    Runtime, ToolRouter, and ToolExecutor remain responsible for actual execution.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["function"] = "function"
+    function: dict[str, Any]
+
+
 class TokenUsage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,6 +98,8 @@ class LLMRequest(BaseModel):
     json_schema: dict[str, Any] | None = None
     json_schema_name: str | None = None
     json_schema_strict: bool = True
+    tools: list[OpenAIToolDefinition] = Field(default_factory=list)
+    tool_choice: Literal["auto", "none", "required"] | dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -12,6 +12,7 @@ from pydantic import ConfigDict, Field
 
 from agent_factory.context import ContextBundle, ContextManager, tool_runtime_context
 from agent_factory.core.types import JsonDumpMixin
+from agent_factory.factory.web_search import FactoryWebSearchService
 from agent_factory.memory import AgentMemoryRecord, AgentMemoryStore
 from agent_factory.model import (
     LLMMessage,
@@ -19,6 +20,7 @@ from agent_factory.model import (
     MessageBuilder,
     ModelConfigError,
     ModelService,
+    OpenAIToolDefinition,
 )
 from agent_factory.model.types import ModelError, TokenUsage, ToolCallProposal
 from agent_factory.package import PackageLoader
@@ -83,11 +85,13 @@ class WorkflowRuntime:
         env_file: str | Path | None = None,
         loader: PackageLoader | None = None,
         context_manager: ContextManager | None = None,
+        web_search_service: FactoryWebSearchService | None = None,
     ) -> None:
         self.model_service = model_service
         self.env_file = Path(env_file) if env_file is not None else None
         self.loader = loader or PackageLoader()
         self.context_manager = context_manager or ContextManager(loader=self.loader)
+        self.web_search_service = web_search_service
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         run_id = uuid.uuid4().hex
@@ -152,11 +156,25 @@ class WorkflowRuntime:
 
             intent = _infer_intent(request.user_input, response.content, package)
             proposals = _proposals_from_response(response.tool_call_proposals, request.user_input, package)
+            record(
+                RuntimeEvent(
+                    run_id=run_id,
+                    stage="route_tools",
+                    status="completed",
+                    payload={
+                        "model_tool_call_count": len(response.tool_call_proposals),
+                        "proposal_count": len(proposals),
+                        "tool_names": [proposal.name for proposal in proposals],
+                    },
+                )
+            )
             tool_results = self._handle_tools(package_path, proposals, request, context_bundle)
             tool_summary_fallback = False
             status: Literal["completed", "failed", "interrupted", "needs_upgrade"] = "completed"
             if any(result.status == "interrupted" for result in tool_results):
                 status = "interrupted"
+            elif any(result.status == "failed" for result in tool_results):
+                status = "failed"
             upgrade_path = None
             if intent == "unknown":
                 status = "needs_upgrade"
@@ -182,6 +200,10 @@ class WorkflowRuntime:
                 else:
                     tool_summary_fallback = True
                     answer = _fallback_answer(request.user_input, intent, tool_results)
+            elif tool_results and any(result.status == "interrupted" for result in tool_results):
+                answer = _fallback_answer(request.user_input, intent, tool_results)
+            elif _requires_resource_tool(request.user_input, package):
+                answer = _resource_tool_required_answer(package)
             if not answer:
                 answer = _answer_from_history(request.user_input, history) or _fallback_answer(
                     request.user_input,
@@ -206,7 +228,7 @@ class WorkflowRuntime:
                 RuntimeEvent(
                     run_id=run_id,
                     stage="complete" if status == "completed" else status,
-                    status="completed" if status in {"completed", "needs_upgrade"} else "interrupted",
+                    status="completed" if status in {"completed", "needs_upgrade"} else status,
                     payload={
                         "intent": intent,
                         "tool_count": len(tool_results),
@@ -281,7 +303,15 @@ class WorkflowRuntime:
             f"Persona: {instructions.persona}",
             f"Goal: {instructions.goal}",
             "The model may propose tools but must not claim it executed them directly.",
+            (
+                "When the user asks for facts from controlled resources such as databases, "
+                "files, MCP sources, or other package resources, call an available tool. "
+                "Do not answer with concrete resource contents unless a tool result is available."
+            ),
         ]
+        tool_definitions = _openai_tools_for_package(package)
+        if tool_definitions:
+            sections.append(_tool_manifest_text(package))
         if instructions.boundaries:
             sections.append("Boundaries:\n" + "\n".join(f"- {item}" for item in instructions.boundaries))
         if context_bundle.visible_to_model:
@@ -292,7 +322,11 @@ class WorkflowRuntime:
         for message in history[-package.primitives.conversation.history_window * 2 :]:
             builder.add(message)
         builder.user(request.user_input)
-        return builder.request(metadata={"agent": package.manifest.agent_id})
+        return builder.request(
+            metadata={"agent": package.manifest.agent_id},
+            tools=[tool.model_dump(mode="json") for tool in tool_definitions],
+            tool_choice="auto" if tool_definitions else None,
+        )
 
     def _build_tool_summary_request(
         self,
@@ -346,14 +380,15 @@ class WorkflowRuntime:
         if not proposals:
             return []
         router = ToolRouter(package_path, loader=self.loader)
-        executor = ToolExecutor()
+        executor = ToolExecutor(web_search_service=self.web_search_service, env_file=self.env_file)
         results: list[ToolResult] = []
         for proposal in proposals:
+            approved_ref = request.approved_tool_call_id
             invocation = ToolInvocation(
                 invocation_id=proposal.id,
                 tool_id=proposal.name,
                 arguments=proposal.arguments,
-                approved=request.approved_tool_call_id == proposal.id,
+                approved=approved_ref in {proposal.id, proposal.name},
             )
             route = router.route(invocation)
             if isinstance(route, ToolResult):
@@ -377,6 +412,143 @@ class WorkflowRuntime:
 
 class GraphRuntime(WorkflowRuntime):
     """Interface-compatible placeholder for future AgentInstance graph runtime."""
+
+
+def _openai_tools_for_package(package: Any) -> list[OpenAIToolDefinition]:
+    tools: list[OpenAIToolDefinition] = []
+    for tool in package.generated_tools:
+        if tool.exposure != "exposed":
+            continue
+        tools.append(
+            OpenAIToolDefinition(
+                function={
+                    "name": tool.tool_id,
+                    "description": _tool_description(tool),
+                    "parameters": _tool_parameters_schema(tool.input_schema),
+                }
+            )
+        )
+    for capability in package.tools.builtin_capabilities:
+        if capability.exposure != "exposed":
+            continue
+        tools.append(
+            OpenAIToolDefinition(
+                function={
+                    "name": capability.id,
+                    "description": _builtin_tool_description(capability),
+                    "parameters": _builtin_tool_parameters_schema(capability),
+                }
+            )
+        )
+    return tools
+
+
+def _tool_description(tool: Any) -> str:
+    parts = [tool.metadata.description or tool.metadata.name or tool.tool_id]
+    parts.append(f"Risk level: {tool.risk_level}.")
+    if tool.approval.required:
+        parts.append("Approval is required before execution.")
+    if tool.implementation_plan:
+        if tool.implementation_plan.resource_refs:
+            parts.append(
+                "Resource refs: " + ", ".join(tool.implementation_plan.resource_refs) + "."
+            )
+        if tool.implementation_plan.allowed_operations:
+            parts.append(
+                "Allowed operations: "
+                + "; ".join(tool.implementation_plan.allowed_operations[:6])
+                + "."
+            )
+        if tool.implementation_plan.forbidden_operations:
+            parts.append(
+                "Forbidden operations: "
+                + "; ".join(tool.implementation_plan.forbidden_operations[:6])
+                + "."
+            )
+    return " ".join(parts)
+
+
+def _builtin_tool_description(capability: Any) -> str:
+    parts = [capability.description, f"Risk level: {capability.risk_level}."]
+    if capability.approval_required:
+        parts.append("Approval is required before execution.")
+    if capability.allowed_domains:
+        parts.append("Allowed domains: " + ", ".join(capability.allowed_domains) + ".")
+    if capability.blocked_domains:
+        parts.append("Blocked domains: " + ", ".join(capability.blocked_domains) + ".")
+    return " ".join(parts)
+
+
+def _builtin_tool_parameters_schema(capability: Any) -> dict[str, Any]:
+    if capability.type == "web_search":
+        return {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query."},
+                "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": capability.max_results,
+                    "description": "Maximum result count.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        }
+    return {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "HTTP or HTTPS URL to fetch."},
+            "max_content_chars": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": capability.max_content_chars,
+                "description": "Maximum extracted text characters.",
+            },
+        },
+        "required": ["url"],
+        "additionalProperties": False,
+    }
+
+
+def _tool_parameters_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if schema.get("type") == "object":
+        parameters = dict(schema)
+    else:
+        parameters = {
+            "type": "object",
+            "properties": {
+                "input": schema or {"type": "string"},
+            },
+            "required": ["input"],
+        }
+    parameters.setdefault("properties", {})
+    parameters.setdefault("required", [])
+    parameters.setdefault("additionalProperties", False)
+    return parameters
+
+
+def _tool_manifest_text(package: Any) -> str:
+    lines = ["Available tools exposed through Runtime:"]
+    for tool in package.generated_tools:
+        if tool.exposure != "exposed":
+            continue
+        approval = "approval_required" if tool.approval.required else "auto_routable"
+        lines.append(
+            f"- {tool.tool_id}: {tool.metadata.description or tool.metadata.name}; "
+            f"risk={tool.risk_level}; {approval}; "
+            "return a tool call instead of pretending to execute it."
+        )
+    for capability in package.tools.builtin_capabilities:
+        if capability.exposure != "exposed":
+            continue
+        approval = "approval_required" if capability.approval_required else "auto_routable"
+        lines.append(
+            f"- {capability.id}: {capability.description}; "
+            f"type={capability.type}; risk={capability.risk_level}; {approval}; "
+            "return a tool call instead of pretending to execute it."
+        )
+    return "\n".join(lines)
 
 
 def _infer_intent(user_input: str, content: str, package: Any) -> str:
@@ -443,6 +615,12 @@ def _proposals_from_response(
     sqlite_proposal = _sqlite_ticket_tool_proposal(user_input, package)
     if sqlite_proposal is not None:
         return [sqlite_proposal]
+    web_proposal = _builtin_web_tool_proposal(user_input, package)
+    if web_proposal is not None:
+        return [web_proposal]
+    resource_proposal = _resource_bound_tool_proposal(user_input, package)
+    if resource_proposal is not None:
+        return [resource_proposal]
     return []
 
 
@@ -471,7 +649,10 @@ def _sqlite_ticket_tool_proposal(user_input: str, package: Any) -> ToolCallPropo
             name="get_customer_ticket",
             arguments={"ticket_id": ticket_id},
         )
-    if any(marker in user_input for marker in ["列出", "有哪些", "有什么", "现在数据库", "全部", "列表"]):
+    if any(
+        marker in user_input
+        for marker in ["列出", "有哪些", "有什么", "现在数据库", "全部", "列表", "详细", "内容", "有啥"]
+    ):
         if "list_customer_tickets" in tools:
             return ToolCallProposal(
                 id=uuid.uuid4().hex,
@@ -489,6 +670,114 @@ def _sqlite_ticket_tool_proposal(user_input: str, package: Any) -> ToolCallPropo
             name="search_customer_tickets",
             arguments=arguments,
         )
+    return None
+
+
+def _builtin_web_tool_proposal(user_input: str, package: Any) -> ToolCallProposal | None:
+    capabilities = {
+        capability.id: capability
+        for capability in package.tools.builtin_capabilities
+        if capability.exposure == "exposed"
+    }
+    url_match = re.search(r"https?://[^\s，。；：、'\"]+", user_input)
+    if url_match and "browser_fetch" in capabilities:
+        return ToolCallProposal(
+            id=uuid.uuid4().hex,
+            name="browser_fetch",
+            arguments={"url": url_match.group(0)},
+        )
+    if "web_search" not in capabilities:
+        return None
+    text = user_input.lower()
+    if any(
+        marker in user_input
+        for marker in ["天气", "新闻", "最新", "搜索", "查一下网上", "上网", "联网", "网页"]
+    ) or any(marker in text for marker in ["weather", "news", "latest", "search web", "web search"]):
+        return ToolCallProposal(
+            id=uuid.uuid4().hex,
+            name="web_search",
+            arguments={"query": user_input},
+        )
+    return None
+
+
+def _resource_bound_tool_proposal(user_input: str, package: Any) -> ToolCallProposal | None:
+    if not _requires_resource_tool(user_input, package):
+        return None
+    tools = [tool.tool_id for tool in package.generated_tools if tool.exposure == "exposed"]
+    lowered = user_input.lower()
+    if any(marker in user_input for marker in ["搜索", "查找", "筛选"]) or "search" in lowered:
+        search_tool = _first_tool_with_prefix(tools, ("search_", "find_", "query_"))
+        if search_tool:
+            return ToolCallProposal(
+                id=uuid.uuid4().hex,
+                name=search_tool,
+                arguments={"query": user_input, "limit": 20},
+            )
+    if any(marker in user_input for marker in ["列", "全部", "所有", "内容", "详细", "有啥", "有什么", "多少"]):
+        list_tool = _first_tool_with_prefix(tools, ("list_", "get_all_", "show_"))
+        if list_tool:
+            return ToolCallProposal(
+                id=uuid.uuid4().hex,
+                name=list_tool,
+                arguments={"limit": 20, "offset": 0},
+            )
+    query_tool = _first_tool_with_prefix(tools, ("query_", "search_", "list_", "get_"))
+    if query_tool:
+        return ToolCallProposal(
+            id=uuid.uuid4().hex,
+            name=query_tool,
+            arguments={"query": user_input, "limit": 20},
+        )
+    return None
+
+
+def _requires_resource_tool(user_input: str, package: Any) -> bool:
+    if not getattr(package, "resource_contracts", None):
+        return False
+    if not package.resource_contracts or not package.resource_contracts.resources:
+        return False
+    text = user_input.lower()
+    if any(marker in user_input for marker in ["工具", "能力", "你会什么", "可以做什么"]):
+        return False
+    resource_markers = [
+        "数据库",
+        "数据",
+        "表",
+        "记录",
+        "工单",
+        "内容",
+        "详情",
+        "详细",
+        "查询",
+        "查查",
+        "查一下",
+        "搜索",
+        "列出",
+        "全部",
+        "所有",
+        "有啥",
+        "有什么",
+    ]
+    if any(marker in user_input for marker in resource_markers):
+        return True
+    return any(marker in text for marker in ["database", "table", "record", "ticket", "search", "list"])
+
+
+def _resource_tool_required_answer(package: Any) -> str:
+    available = [tool.tool_id for tool in package.generated_tools if tool.exposure == "exposed"]
+    if available:
+        return "这个问题需要先调用受控工具读取真实资源；当前没有拿到工具结果，所以我不能给出具体数据。可用工具：" + "、".join(
+            available
+        )
+    return "这个问题需要读取受控资源；当前 AgentPackage 没有暴露可执行工具，所以我不能给出具体数据。"
+
+
+def _first_tool_with_prefix(tool_ids: list[str], prefixes: tuple[str, ...]) -> str | None:
+    for prefix in prefixes:
+        for tool_id in tool_ids:
+            if tool_id.startswith(prefix):
+                return tool_id
     return None
 
 

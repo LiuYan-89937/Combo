@@ -22,6 +22,7 @@ class RunAgentServiceRequest(JsonDumpMixin):
     session_id: str = "default"
     process: bool = False
     auto_repair: bool = False
+    approved_tool_call_id: str | None = None
 
 
 class RunAgentServiceResult(JsonDumpMixin):
@@ -58,6 +59,12 @@ class RunAgentService:
                 error=f"AgentPackage or registry record not found: {request.target}",
             )
         if request.process:
+            if request.approved_tool_call_id:
+                return RunAgentServiceResult(
+                    target=request.target,
+                    package_path=package_path,
+                    error="Tool approval rerun is not supported in process mode yet.",
+                )
             ipc = AgentProcessManager().run(
                 AgentIPCRequest(
                     package_path=package_path,
@@ -88,6 +95,7 @@ class RunAgentService:
                 user_input=request.user_input,
                 session_id=request.session_id,
                 process_isolated=request.process,
+                approved_tool_call_id=request.approved_tool_call_id,
             )
         )
         service_result = RunAgentServiceResult(target=request.target, package_path=package_path, result=result)

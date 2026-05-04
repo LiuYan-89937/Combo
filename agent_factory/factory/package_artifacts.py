@@ -342,6 +342,8 @@ class PackageArtifactGenerator:
         self,
         package_path: Path,
         primitives: AgentPackagePrimitives,
+        *,
+        resource_contracts: ResourceContractsSpec | None = None,
     ) -> PackageArtifactReport:
         report = PackageArtifactReport()
         metadata = primitives.instructions.metadata
@@ -383,6 +385,7 @@ class PackageArtifactGenerator:
                 "kind": "ToolsSpec",
                 "metadata": _metadata_dict(primitives, suffix="tools"),
                 "generated_tools": tool_ids,
+                "builtin_capabilities": _builtin_capabilities(resource_contracts),
                 "default_policy": "proposal_only",
                 "allow_draft_execution": False,
                 "require_approval_for_generated_code": True,
@@ -1063,9 +1066,27 @@ def _implementation_plan_from_contract(
     resource_contracts: ResourceContractsSpec | None,
 ) -> ToolImplementationPlan:
     resource_refs = list(contract.resource_refs) if contract is not None else []
+    condition_refs: list[str] = []
+    probe_evidence: dict[str, object] = {}
+    web_research_refs: list[str] = []
+    test_fixture_refs: list[str] = []
     if resource_contracts is not None:
-        known_contract_ids = {resource.id for resource in resource_contracts.resources}
-        resource_refs = [resource_id for resource_id in resource_refs if resource_id in known_contract_ids]
+        resources_by_id = {resource.id: resource for resource in resource_contracts.resources}
+        resource_refs = [resource_id for resource_id in resource_refs if resource_id in resources_by_id]
+        for resource_id in resource_refs:
+            details = resources_by_id[resource_id].details
+            condition = details.get("condition") if isinstance(details, dict) else None
+            if isinstance(condition, dict):
+                condition_id = str(condition.get("condition_id") or "")
+                if condition_id and condition_id not in condition_refs:
+                    condition_refs.append(condition_id)
+                if condition.get("type") == "web_research":
+                    web_research_refs.append(condition_id)
+                if condition.get("type") == "mock_fixture":
+                    test_fixture_refs.append(condition_id)
+            probe_target = details.get("probe_target") if isinstance(details, dict) else None
+            if isinstance(probe_target, dict):
+                probe_evidence[resource_id] = probe_target
     return ToolImplementationPlan(
         tool_id=tool_id,
         resource_refs=resource_refs,
@@ -1073,6 +1094,10 @@ def _implementation_plan_from_contract(
             "resource_contract_available" if resource_refs else "no_external_resource_required",
             "sandbox_context_available",
         ],
+        condition_refs=condition_refs,
+        probe_evidence=probe_evidence,
+        web_research_refs=web_research_refs,
+        test_fixture_refs=test_fixture_refs,
         allowed_operations=[
             "use_explicit_runtime_resources",
             "return_structured_dict_result",
@@ -1094,6 +1119,71 @@ def _implementation_plan_from_contract(
         ],
         sandbox_context_required=bool(resource_refs),
     )
+
+
+def _builtin_capabilities(resource_contracts: ResourceContractsSpec | None) -> list[dict[str, object]]:
+    if resource_contracts is None:
+        return []
+    inherit_web = False
+    inherit_browser = False
+    allowed_domains: list[str] = []
+    for resource in resource_contracts.resources:
+        details = resource.details if isinstance(resource.details, dict) else {}
+        if details.get("agent_should_inherit_web_search") is not True:
+            continue
+        inherit_web = True
+        if resource.type in {"http_endpoint", "web_search"}:
+            inherit_browser = True
+        condition = details.get("condition")
+        if isinstance(condition, dict) and condition.get("type") == "browser_access":
+            inherit_browser = True
+        if isinstance(resource.ref, str) and resource.ref.startswith(("http://", "https://")):
+            domain = _domain_from_url(resource.ref)
+            if domain and domain not in allowed_domains:
+                allowed_domains.append(domain)
+    capabilities: list[dict[str, object]] = []
+    if inherit_web:
+        capabilities.append(
+            {
+                "id": "web_search",
+                "type": "web_search",
+                "description": "Search the public web through the configured AgentFactory provider.",
+                "exposure": "exposed",
+                "risk_level": "low",
+                "proposal_only": False,
+                "approval_required": False,
+                "allowed_domains": allowed_domains,
+                "blocked_domains": [],
+                "max_uses": 5,
+                "max_results": 5,
+                "max_content_chars": 6000,
+            }
+        )
+    if inherit_browser:
+        capabilities.append(
+            {
+                "id": "browser_fetch",
+                "type": "browser_fetch",
+                "description": "Fetch and extract text from an allowed HTTP/HTTPS page.",
+                "exposure": "exposed",
+                "risk_level": "medium",
+                "proposal_only": False,
+                "approval_required": False,
+                "allowed_domains": allowed_domains,
+                "blocked_domains": [],
+                "max_uses": 5,
+                "max_results": 5,
+                "max_content_chars": 6000,
+            }
+        )
+    return capabilities
+
+
+def _domain_from_url(value: str) -> str | None:
+    match = re.match(r"https?://([^/:?#]+)", value, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).lower().strip(".")
 
 
 def _tool_wrapper_source(

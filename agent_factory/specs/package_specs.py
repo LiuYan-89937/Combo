@@ -78,6 +78,11 @@ class ToolImplementationPlan(BaseModel):
     tool_id: str
     resource_refs: list[str] = Field(default_factory=list)
     preconditions: list[str] = Field(default_factory=list)
+    condition_refs: list[str] = Field(default_factory=list)
+    probe_evidence: dict[str, Any] = Field(default_factory=dict)
+    risk_controls: list[str] = Field(default_factory=list)
+    web_research_refs: list[str] = Field(default_factory=list)
+    test_fixture_refs: list[str] = Field(default_factory=list)
     allowed_operations: list[str] = Field(default_factory=list)
     forbidden_operations: list[str] = Field(default_factory=list)
     failure_cases: list[str] = Field(default_factory=list)
@@ -119,10 +124,28 @@ class GeneratedToolDraftSpec(BaseModel):
         return self
 
 
+class BuiltinCapabilitySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    id: str
+    type: Literal["web_search", "browser_fetch"]
+    description: str
+    exposure: Literal["exposed", "hidden"] = "exposed"
+    risk_level: RiskLevel = RiskLevel.LOW
+    proposal_only: bool = False
+    approval_required: bool = False
+    allowed_domains: list[str] = Field(default_factory=list)
+    blocked_domains: list[str] = Field(default_factory=list)
+    max_uses: int = Field(default=5, gt=0)
+    max_results: int = Field(default=5, gt=0)
+    max_content_chars: int = Field(default=6000, gt=0)
+
+
 class ToolsSpec(BaseSpec):
     kind: Literal["ToolsSpec"] = "ToolsSpec"
 
     generated_tools: list[str] = Field(default_factory=list)
+    builtin_capabilities: list[BuiltinCapabilitySpec] = Field(default_factory=list)
     default_policy: Literal["proposal_only", "safe_execute", "human_confirm"] = "proposal_only"
     allow_draft_execution: bool = False
     require_approval_for_generated_code: bool = True
@@ -216,7 +239,7 @@ class MemorySpec(BaseSpec):
     redact_before_storage: bool = True
 
 
-ReadinessStatus = Literal["ready", "blocked", "needs_user_input"]
+ReadinessStatus = Literal["ready", "blocked", "needs_user_input", "mock_only_allowed"]
 ProbeStatus = Literal["passed", "failed", "skipped"]
 
 
@@ -233,6 +256,29 @@ class PreconditionSpec(BaseModel):
         "python_module_available",
         "cli_available",
         "sandbox_copyable",
+        "external_api_provider",
+        "external_api_auth",
+        "network_allowed",
+        "web_search_available",
+        "api_docs_available",
+        "test_mock_available",
+        "local_resource",
+        "runtime_dependency",
+        "python_package",
+        "system_command",
+        "database_schema",
+        "external_service",
+        "credential",
+        "permission",
+        "human_approval",
+        "sandbox",
+        "mock_fixture",
+        "browser_access",
+        "mcp_server",
+        "storage_backend",
+        "schedule",
+        "web_research",
+        "data_contract",
     ]
     description: str
     required: bool = True
@@ -296,7 +342,24 @@ class ResourceContract(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: str
-    type: Literal["file", "directory", "sqlite", "mcp", "url", "vector_store", "unknown"]
+    type: Literal[
+        "file",
+        "directory",
+        "sqlite",
+        "mcp",
+        "url",
+        "vector_store",
+        "external_api",
+        "web_search",
+        "http_endpoint",
+        "realtime_data",
+        "browser",
+        "storage",
+        "python_package",
+        "system_command",
+        "data_contract",
+        "unknown",
+    ]
     ref: str | None = None
     exists: bool = False
     status: Literal["ready", "missing", "inaccessible", "unsupported", "error"] = "missing"
@@ -333,6 +396,19 @@ class ReadinessOption(BaseModel):
         "create_sample_resource",
         "replace_resource_path",
         "generate_draft_only",
+        "configure_external_api",
+        "enable_web_search",
+        "use_mock_only",
+        "provide_api_docs",
+        "provide_credential",
+        "grant_permission",
+        "provide_test_fixture",
+        "install_dependency",
+        "configure_schedule",
+        "configure_storage",
+        "confirm_mock_only",
+        "configure_browser",
+        "configure_mcp",
         "skip_optional_capability",
     ] = "ask_user"
 

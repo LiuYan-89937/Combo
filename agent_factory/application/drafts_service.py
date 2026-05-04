@@ -31,6 +31,10 @@ class DraftAgentSummary(JsonDumpMixin):
     tool_count: int = 0
     harness_scenario_count: int = 0
 
+    @property
+    def display_id(self) -> str:
+        return _short_draft_id(self.id)
+
 
 class DraftsListResult(JsonDumpMixin):
     model_config = ConfigDict(extra="forbid")
@@ -135,10 +139,10 @@ class DraftsService:
             mcp_binding_ids=mcp_binding_ids,
             scenario_ids=scenario_ids,
             next_steps=[
-                f"/drafts use {summary.id}",
+                f"/drafts use {summary.display_id}",
                 f"/run --input \"...\"",
-                f"/validate {summary.path}",
-                f"/test {summary.path}",
+                f"/validate {summary.display_id}",
+                f"/test {summary.display_id}",
             ],
         )
 
@@ -161,6 +165,7 @@ class DraftsService:
         for draft in result.drafts:
             if raw in {
                 draft.id,
+                draft.display_id,
                 draft.path.name,
                 draft.agent_id or "",
                 draft.agent_name,
@@ -260,3 +265,19 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _short_draft_id(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        return "draft"
+    if len(normalized) <= 18:
+        return normalized
+    parts = [part for part in normalized.split("-") if part]
+    if len(parts) >= 2:
+        candidate = "-".join(parts[:2])
+        suffix = normalized[-6:]
+        compact = f"{candidate}-{suffix}"
+        if len(compact) <= 24:
+            return compact
+    return f"{normalized[:12]}-{normalized[-6:]}"

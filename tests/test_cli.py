@@ -15,14 +15,16 @@ from agent_factory.application import (
     CreateAgentResult,
     CreateAgentService,
     RunAgentService,
+    RunAgentServiceResult,
 )
 from agent_factory.cli.completion import ContextualSlashCompleter
 from agent_factory.cli.main import app
 from agent_factory.cli.rendering import FactoryStreamRenderer, render_banner
-from agent_factory.cli.rendering import render_event
+from agent_factory.cli.rendering import render_create_result, render_event
 from agent_factory.cli.session import ShellSession
 from agent_factory.cli.shell import (
     _collect_requirement_lines,
+    _handle_agent_chat_line,
     _inline_option_label,
     _normalized_question_options,
     _resolve_clarification_answer,
@@ -32,6 +34,7 @@ from agent_factory.cli.shell import (
 )
 from agent_factory.cli.slash import SlashCommandDispatcher
 from agent_factory.core import EventStatus, FactoryEvent
+from agent_factory.runtime import AgentRunResult
 from tests.test_factory_agent import service_with_responses, valid_primitives_payload
 
 
@@ -62,6 +65,25 @@ class RecordingCreateAgentService:
         )
 
 
+class RecordingRunAgentService:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def run_agent(self, request):
+        self.requests.append(request)
+        return RunAgentServiceResult(
+            target=request.target,
+            package_path=Path(request.target),
+            result=AgentRunResult(
+                run_id="approved-run",
+                package_path=Path(request.target),
+                status="completed",
+                answer="approved",
+                session_id=request.session_id,
+            ),
+        )
+
+
 class CliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
@@ -70,9 +92,14 @@ class CliTests(unittest.TestCase):
         result = self.runner.invoke(app, ["--help"])
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("validate-agent", result.output)
-        self.assertIn("create-agent", result.output)
+        self.assertIn("agent", result.output)
+        self.assertIn("drafts", result.output)
+        self.assertIn("registry", result.output)
+        self.assertIn("patch", result.output)
+        self.assertIn("ops", result.output)
         self.assertIn("shell", result.output)
+        self.assertNotIn("validate-agent", result.output)
+        self.assertNotIn("create-agent", result.output)
 
     def test_validate_agent_success(self) -> None:
         result = self.runner.invoke(app, ["validate-agent", "examples/customer_service_agent"])
@@ -237,7 +264,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("Slash commands", result.output)
         self.assertIn("/create-agent", result.output)
-        self.assertIn("/apply-patch-plan", result.output)
+        self.assertIn("/repair-agent", result.output)
+        self.assertNotIn("/apply-patch-plan", result.output)
         self.assertIn("Session", result.output)
 
     def test_shell_create_agent_streams_events(self) -> None:
@@ -372,6 +400,34 @@ class CliTests(unittest.TestCase):
         self.assertIn("Thinking detail", rendered)
         self.assertIn("raw model detail", rendered)
         self.assertNotIn("Thinking detail hidden", rendered)
+
+    def test_create_result_reminds_pending_external_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = Path(tmpdir) / "agent"
+            package_path.mkdir()
+            external_config = package_path / "external_config.yaml"
+            external_config.write_text("kind: ExternalConfigTemplate\n", encoding="utf-8")
+            result = CreateAgentResult(
+                run_id="run-1",
+                requirement="创建墨迹天气 Agent",
+                status="completed",
+                implemented=True,
+                workspace_path=Path(tmpdir) / ".agentfactory",
+                trace_path=Path(tmpdir) / ".agentfactory" / "traces" / "factory_runs.jsonl",
+                memory_path=Path(tmpdir) / ".agentfactory" / "memory" / "factory_memory.jsonl",
+                output_path=package_path,
+                pending_configuration_files=[external_config],
+                next_steps=[f"Fill runtime external configuration: {external_config}"],
+            )
+            output = StringIO()
+            console = Console(file=output, width=120, force_terminal=False)
+
+            render_create_result(result, console)
+
+            rendered = output.getvalue()
+            self.assertIn("Before Real Runtime", rendered)
+            self.assertIn("Fill these configuration templates", rendered)
+            self.assertIn("external_config.yaml", rendered)
 
     def test_stream_renderer_shows_multi_tool_progress(self) -> None:
         renderer = FactoryStreamRenderer()
@@ -684,6 +740,46 @@ class SlashShellTests(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
+    def test_slash_run_without_input_enters_agent_chat_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            package_path = _generated_package(root)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                dispatcher = SlashCommandDispatcher(
+                    run_service=RunAgentService(model_service=service_with_responses([""])),
+                )
+
+                result = dispatcher.dispatch("/run")
+
+                self.assertEqual(result.kind, "agent_chat")
+                self.assertTrue(dispatcher.session.in_agent_chat)
+                self.assertEqual(dispatcher.session.active_agent_path, package_path)
+                self.assertIn("/clear", result.message or "")
+            finally:
+                os.chdir(cwd)
+
+    def test_slash_run_with_input_enters_agent_chat_after_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            package_path = _generated_package(root)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                dispatcher = SlashCommandDispatcher(
+                    run_service=RunAgentService(model_service=service_with_responses([""])),
+                )
+
+                result = dispatcher.dispatch('/run --input "你好"')
+
+                self.assertEqual(result.kind, "run_agent")
+                self.assertTrue(result.run_result.ok)
+                self.assertTrue(dispatcher.session.in_agent_chat)
+                self.assertEqual(dispatcher.session.active_agent_path, package_path)
+            finally:
+                os.chdir(cwd)
+
     def test_slash_drafts_delete_requires_yes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -710,7 +806,7 @@ class SlashShellTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            _generated_package(root)
+            package_path = _generated_package(root)
             cwd = Path.cwd()
             os.chdir(root)
             try:
@@ -726,8 +822,79 @@ class SlashShellTests(unittest.TestCase):
                 self.assertIn("list", texts)
                 self.assertIn("latest", texts)
                 self.assertIn("agent", texts)
+                self.assertFalse(any(str(package_path) == text for text in texts))
                 self.assertNotIn("/run", texts)
                 self.assertNotIn("/create-agent", texts)
+            finally:
+                os.chdir(cwd)
+
+    def test_contextual_completion_in_agent_chat_only_shows_chat_commands(self) -> None:
+        from prompt_toolkit.document import Document
+
+        session = ShellSession()
+        session.enter_agent_chat(target="latest", session_id="default")
+        completer = ContextualSlashCompleter(session=session)
+
+        completions = list(completer.get_completions(Document("/"), None))
+        texts = [completion.text for completion in completions]
+
+        self.assertEqual(texts, ["/help", "/run --yes", "/exit", "/clear"])
+
+    def test_agent_chat_confirmation_reruns_pending_tool_by_tool_name(self) -> None:
+        service = RecordingRunAgentService()
+        session = ShellSession()
+        session.enter_agent_chat(target="/tmp/example-agent", session_id="default")
+        session.capture_tool_approval(
+            user_input="江西婺源天气",
+            tool_call_id="old-call-id",
+            tool_id="weather_query",
+        )
+        dispatcher = SlashCommandDispatcher(session=session, run_service=service)
+        console = Console(file=StringIO(), force_terminal=False)
+
+        handled = _handle_agent_chat_line("确认执行", console, dispatcher)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(service.requests), 1)
+        self.assertEqual(service.requests[0].user_input, "江西婺源天气")
+        self.assertEqual(service.requests[0].approved_tool_call_id, "weather_query")
+        self.assertIsNone(session.pending_tool_approval)
+
+    def test_agent_chat_run_yes_approves_pending_tool(self) -> None:
+        service = RecordingRunAgentService()
+        session = ShellSession()
+        session.enter_agent_chat(target="/tmp/example-agent", session_id="default")
+        session.capture_tool_approval(
+            user_input="江西婺源天气",
+            tool_call_id="old-call-id",
+            tool_id="weather_query",
+        )
+        dispatcher = SlashCommandDispatcher(session=session, run_service=service)
+        console = Console(file=StringIO(), force_terminal=False)
+
+        handled = _handle_agent_chat_line("/run --yes", console, dispatcher)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(service.requests), 1)
+        self.assertEqual(service.requests[0].user_input, "江西婺源天气")
+        self.assertEqual(service.requests[0].approved_tool_call_id, "weather_query")
+        self.assertIsNone(session.pending_tool_approval)
+
+    def test_drafts_can_resolve_short_display_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            package_path = _generated_package(root)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                dispatcher = SlashCommandDispatcher()
+                detail = dispatcher.drafts_service.show_draft("latest")
+                assert detail is not None
+
+                selected = dispatcher.dispatch(f"/drafts use {detail.summary.display_id}")
+
+                self.assertEqual(selected.kind, "drafts")
+                self.assertEqual(dispatcher.session.selected_agent_path, package_path)
             finally:
                 os.chdir(cwd)
 

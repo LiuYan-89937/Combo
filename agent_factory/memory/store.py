@@ -60,6 +60,29 @@ class AgentMemoryStore:
             rows.append(item)
         return rows[-limit:]
 
+    def clear_session(self, *, session_id: str) -> int:
+        if not self.path.exists():
+            return 0
+        kept: list[str] = []
+        removed = 0
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            if item.get("session_id") == session_id:
+                removed += 1
+                continue
+            kept.append(line)
+        content = "\n".join(kept)
+        if content:
+            content += "\n"
+        self.path.write_text(content, encoding="utf-8")
+        return removed
+
     def recent_messages(
         self,
         *,

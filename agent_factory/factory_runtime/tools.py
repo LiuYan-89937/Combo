@@ -10,7 +10,7 @@ class FactoryTool(BaseModel):
 
     id: str
     description: str
-    category: Literal["model", "package", "filesystem", "trace", "memory"]
+    category: Literal["model", "package", "filesystem", "trace", "memory", "web"]
     enabled: bool = True
 
 
@@ -25,6 +25,11 @@ class FactoryToolRegistry:
                 id="model.generate_structured",
                 description="Generate structured JSON through ModelService.",
                 category="model",
+            ),
+            FactoryTool(
+                id="factory.web_search",
+                description="Search the web during Factory production for current public API/docs context.",
+                category="web",
             ),
             FactoryTool(
                 id="package.write_primitives",

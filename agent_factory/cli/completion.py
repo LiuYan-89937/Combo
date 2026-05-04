@@ -17,10 +17,8 @@ COMMAND_OPTIONS: dict[str, list[str]] = {
     "/validate": ["latest"],
     "/test": ["latest", "--scenario"],
     "/register": ["latest"],
-    "/run": ["latest", "--input", "-i", "--session-id", "--version", "--process", "--no-process"],
+    "/run": ["latest", "--input", "-i", "--yes", "-y", "--session-id", "--version", "--process", "--no-process"],
     "/registry": ["list", "rollback"],
-    "/trace": ["list", "show", "--path"],
-    "/approval": ["list", "show"],
 }
 
 
@@ -45,6 +43,9 @@ class ContextualSlashCompleter(Completer):
     def get_completions(self, document: Document, complete_event):  # type: ignore[override]
         text = document.text_before_cursor
         if not text.startswith("/"):
+            return
+        if self.session.in_agent_chat:
+            yield from self._yield_matches(text, _agent_chat_command_candidates())
             return
 
         parts = text.split()
@@ -145,6 +146,15 @@ def _command_candidates() -> list[CompletionCandidate]:
     return [CompletionCandidate(command, "command") for command in SLASH_COMMANDS]
 
 
+def _agent_chat_command_candidates() -> list[CompletionCandidate]:
+    return [
+        CompletionCandidate("/help", "chat help"),
+        CompletionCandidate("/run --yes", "approve tool"),
+        CompletionCandidate("/exit", "leave chat"),
+        CompletionCandidate("/clear", "clear session"),
+    ]
+
+
 def _option_candidates(command: str) -> list[CompletionCandidate]:
     return [CompletionCandidate(option, "option") for option in COMMAND_OPTIONS.get(command, [])]
 
@@ -156,8 +166,7 @@ def _draft_candidates(drafts_service: DraftsService) -> list[CompletionCandidate
         return []
     candidates: list[CompletionCandidate] = []
     for draft in drafts:
-        candidates.append(CompletionCandidate(draft.id, draft.agent_name))
+        candidates.append(CompletionCandidate(draft.display_id, draft.agent_name))
         if draft.agent_id:
             candidates.append(CompletionCandidate(draft.agent_id, "agent id"))
-        candidates.append(CompletionCandidate(str(Path(draft.path)), "path"))
     return candidates

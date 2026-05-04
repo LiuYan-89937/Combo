@@ -443,7 +443,7 @@ def fallback_tool_code(
         )
     else:
         source = _generic_tool_source(tool_id, risk_level, approval_required)
-        test_cases = [
+        test_cases = required_tool_test_cases(draft, primitives=primitives, requirement=requirement) or [
             GeneratedToolTestCase(
                 name="generic_tool_returns_completed_contract",
                 input_data={"sample": "value"},
@@ -524,6 +524,14 @@ def required_tool_test_cases(
                     "rule": "negative_double",
                 },
             ),
+        ]
+    if _looks_like_weather_tool(draft, primitives=primitives, requirement=requirement):
+        return [
+            GeneratedToolTestCase(
+                name="weather_query_accepts_city",
+                input_data={"city": "江西婺源"},
+                expected_contains={"status": "completed", "tool_id": tool_id},
+            )
         ]
     if is_sqlite_customer_ticket_tool(draft, primitives=primitives, requirement=requirement):
         if tool_id == "list_customer_tickets":
@@ -622,6 +630,23 @@ def required_tool_test_cases(
                 )
             ]
     return []
+
+
+def _looks_like_weather_tool(
+    draft: dict[str, Any],
+    *,
+    primitives: AgentPackagePrimitives | None = None,
+    requirement: str | None = None,
+) -> bool:
+    text = " ".join(
+        [
+            str(draft.get("tool_id") or ""),
+            str(draft.get("description") or ""),
+            str(requirement or ""),
+            str(primitives.instructions.goal if primitives is not None else ""),
+        ]
+    ).lower()
+    return "weather" in text or "天气" in text
 
 
 def _order_query_source(tool_id: str, risk_level: str, approval_required: bool) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ from agent_factory.factory.intent_classifier import FactoryIntentClassifier
 from agent_factory.factory.primitive_normalizer import normalize_primitives_candidate
 from agent_factory.factory.resource_binding import bind_requirement_resources
 from agent_factory.factory.requirement_analyzer import RequirementAnalyzer
+from agent_factory.factory.tool_preconditions import analyze_tool_preconditions
+from agent_factory.factory.web_search import FactoryWebSearchService, WebSearchConfig
 from agent_factory.factory.package_verification import (
     HarnessDryRunReport,
     MCPBindingLocalCheckReport,
@@ -36,7 +39,7 @@ from agent_factory.factory_runtime.production.state import (
 )
 from agent_factory.model import LLMStreamEvent, ModelConfigError, ModelService
 from agent_factory.package import PackageValidator
-from agent_factory.specs import AgentPackagePrimitives
+from agent_factory.specs import AgentPackagePrimitives, ReadinessReport
 
 
 class FactoryProductionNodes:
@@ -401,6 +404,53 @@ class FactoryProductionNodes:
         )
         return self._with_event(current, node="plan_capability_preconditions", event=event)
 
+    def analyze_tool_preconditions(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self._stream_progress(
+            current,
+            stage="analyze_tool_preconditions",
+            title="Analyzing tool preconditions",
+            message="Semantically identifying local, external, dependency, permission, fixture, and sandbox conditions.",
+        )
+        if current.primitives is None:
+            current.error = FactoryError(
+                code="missing_primitives",
+                message="No primitives available for tool precondition analysis.",
+            )
+            plan_count = 0
+            condition_count = 0
+            missing_count = 0
+        else:
+            web_config = WebSearchConfig.from_env(self.context.workspace_path.parent / ".env")
+            report = analyze_tool_preconditions(
+                current.primitives,
+                current.requirement,
+                web_config=web_config,
+                model_service=self._optional_model_service(),
+            )
+            current.tool_precondition_report = report.model_dump(mode="json")
+            plan_count = len(report.plans)
+            condition_count = report.condition_count
+            missing_count = len(report.missing_required_conditions)
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="analyze_tool_preconditions",
+            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
+            title="Tool preconditions analyzed" if not current.error else "Tool precondition analysis failed",
+            message=(
+                current.error.message
+                if current.error
+                else f"plans={plan_count}, conditions={condition_count}, missing={missing_count}"
+            ),
+            payload={
+                "plan_count": plan_count if not current.error else 0,
+                "condition_count": condition_count if not current.error else 0,
+                "missing_condition_count": missing_count if not current.error else 0,
+                "tool_preconditions": current.tool_precondition_report or {},
+            },
+        )
+        return self._with_event(current, node="analyze_tool_preconditions", event=event)
+
     def discover_resources(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
         self._stream_progress(
@@ -433,6 +483,37 @@ class FactoryProductionNodes:
         )
         return self._with_event(current, node="discover_resources", event=event)
 
+    def factory_web_research(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self._stream_progress(
+            current,
+            stage="factory_web_research",
+            title="Factory web research",
+            message="Searching public docs for external API/tool context when configured.",
+        )
+        queries = _web_research_queries(current.tool_precondition_report)
+        if not queries:
+            report = FactoryWebSearchService(WebSearchConfig(provider="disabled")).search_many([])
+        else:
+            service = FactoryWebSearchService.from_env(self.context.workspace_path.parent / ".env")
+            report = service.search_many(queries)
+        current.web_research_report = report.model_dump(mode="json")
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="factory_web_research",
+            status=EventStatus.COMPLETED if report.status in {"passed", "skipped"} else EventStatus.WARNING,
+            title="Factory web research finished",
+            message=f"status={report.status}, results={len(report.results)}",
+            payload={
+                "status": report.status,
+                "provider": report.provider,
+                "query_count": len(report.queries),
+                "result_count": len(report.results),
+                "issues": report.issues,
+            },
+        )
+        return self._with_event(current, node="factory_web_research", event=event)
+
     def probe_environment(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
         self._stream_progress(
@@ -452,6 +533,8 @@ class FactoryProductionNodes:
                     current.primitives,
                     requirement=current.requirement,
                     start_path=self.context.workspace_path.parent,
+                    tool_precondition_report=current.tool_precondition_report,
+                    web_research_report=current.web_research_report,
                 )
                 current.environment_report = environment
                 current.resource_contracts = contracts
@@ -478,12 +561,40 @@ class FactoryProductionNodes:
         )
         return self._with_event(current, node="probe_environment", event=event)
 
+    def enrich_tool_contracts(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
+        current = FactoryProductionState.from_graph_state(state)
+        self._stream_progress(
+            current,
+            stage="enrich_tool_contracts",
+            title="Enriching tool contracts",
+            message="Preparing resource contracts and web research context for tool implementation.",
+        )
+        research_status = (
+            current.web_research_report.get("status")
+            if isinstance(current.web_research_report, dict)
+            else "skipped"
+        )
+        event = FactoryEvent(
+            run_id=current.run_id,
+            stage="enrich_tool_contracts",
+            status=EventStatus.COMPLETED,
+            title="Tool contracts enriched",
+            message=f"web_research={research_status}",
+            payload={
+                "web_research_status": research_status,
+                "resource_count": len(current.resource_contracts.resources)
+                if current.resource_contracts
+                else 0,
+            },
+        )
+        return self._with_event(current, node="enrich_tool_contracts", event=event)
+
     def resolve_readiness(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
         readiness = current.readiness_report
         status = readiness.status if readiness else "blocked"
         if status == "needs_user_input" and readiness is not None:
-            question = "前置条件还不完整。你希望 AgentFactory 怎么处理？"
+            question = _readiness_clarification_question(readiness)
             current.clarification_questions = [question]
             current.clarification_options = [
                 {
@@ -516,11 +627,14 @@ class FactoryProductionNodes:
             stage="resolve_readiness",
             status=EventStatus.COMPLETED if status == "ready" else EventStatus.WARNING,
             title="Readiness resolved",
-            message=f"status={status}",
+            message=_readiness_event_message(status, readiness),
             payload={
                 "status": status,
                 "issues": len(readiness.issues) if readiness else 0,
                 "options": len(readiness.options) if readiness else 0,
+                "issue_messages": [issue.message for issue in readiness.issues[:5]]
+                if readiness
+                else [],
             },
         )
         return self._with_event(current, node="resolve_readiness", event=event)
@@ -550,6 +664,13 @@ class FactoryProductionNodes:
                     environment=current.environment_report,
                     resource_contracts=current.resource_contracts,
                     readiness=current.readiness_report,
+                )
+            if current.web_research_report:
+                report_dir = output_dir / "generated" / "reports"
+                report_dir.mkdir(parents=True, exist_ok=True)
+                (report_dir / "factory_web_research.json").write_text(
+                    _json_dumps(current.web_research_report),
+                    encoding="utf-8",
                 )
         event = FactoryEvent(
             run_id=current.run_id,
@@ -739,6 +860,7 @@ class FactoryProductionNodes:
                 support_report = self._artifact_generator().generate_package_specs(
                     current.package_path,
                     current.primitives,
+                    resource_contracts=current.resource_contracts,
                 )
                 _apply_artifact_report(current, support_report)
                 current.validation_report = PackageValidator().validate_full_package(current.package_path)
@@ -1005,12 +1127,19 @@ class FactoryProductionNodes:
     def complete(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
         current.status = "completed"
+        pending_config_files = _pending_configuration_files(current.package_path)
         event = FactoryEvent(
             run_id=current.run_id,
             stage="complete",
             status=EventStatus.COMPLETED,
             title="Factory production completed",
+            message=(
+                "Pending runtime configuration: fill external_config.yaml before real external service calls."
+                if pending_config_files
+                else None
+            ),
             artifact_path=str(current.package_path) if current.package_path else None,
+            payload={"pending_configuration_files": [str(path) for path in pending_config_files]},
         )
         return self._with_event(current, node="complete", event=event)
 
@@ -1336,6 +1465,65 @@ def _has_blocking_full_validation_issues(report: object) -> bool:
             continue
         return True
     return False
+
+
+def _web_research_queries(report: dict[str, Any] | None) -> list[str]:
+    if not isinstance(report, dict):
+        return []
+    queries: list[str] = []
+    for plan in report.get("plans", []):
+        if not isinstance(plan, dict):
+            continue
+        needs_research = any(
+            isinstance(condition, dict)
+            and condition.get("type") == "web_research"
+            and condition.get("required", False) is not False
+            for condition in plan.get("required_conditions", [])
+        ) or bool(plan.get("research_queries"))
+        if not needs_research:
+            continue
+        for query in plan.get("research_queries", []):
+            if isinstance(query, str) and query.strip() and query not in queries:
+                queries.append(query)
+    return queries
+
+
+def _readiness_event_message(status: str, readiness: ReadinessReport | None) -> str:
+    if readiness is None:
+        return f"status={status}"
+    warnings = [issue for issue in readiness.issues if issue.severity == "warning"]
+    errors = [issue for issue in readiness.issues if issue.severity in {"error", "fatal"}]
+    if status == "ready" and warnings:
+        return f"status=ready, warnings={len(warnings)}"
+    if errors:
+        first = errors[0].message
+        return f"status={status}, missing={len(errors)}; {first}"
+    return f"status={status}"
+
+
+def _readiness_clarification_question(readiness: ReadinessReport) -> str:
+    blocking = [
+        issue.message
+        for issue in readiness.issues
+        if issue.severity in {"error", "fatal"}
+    ][:5]
+    if not blocking:
+        return "前置条件还不完整。你希望 AgentFactory 怎么处理？"
+    lines = ["前置条件还不完整，当前缺少："]
+    lines.extend(f"- {message}" for message in blocking)
+    lines.append("你希望 AgentFactory 怎么处理？")
+    return "\n".join(lines)
+
+
+def _pending_configuration_files(package_path: Path | None) -> list[Path]:
+    if package_path is None:
+        return []
+    candidates = [package_path / "external_config.yaml"]
+    return [path for path in candidates if path.exists()]
+
+
+def _json_dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2, default=str)
 
 
 def _slugify(value: str) -> str:

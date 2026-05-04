@@ -47,6 +47,56 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+agent_app = typer.Typer(
+    name="agent",
+    help="Create, validate, test, run, repair, and register agents.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+drafts_app = typer.Typer(
+    name="drafts",
+    help="Inspect, select, run, and delete local draft AgentPackages.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+registry_app = typer.Typer(
+    name="registry",
+    help="List, release, and roll back registered agents.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+patch_app = typer.Typer(
+    name="patch",
+    help="Plan, approve, and apply package patch plans.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+ops_app = typer.Typer(
+    name="ops",
+    help="Operational commands for traces, diffs, and approvals.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+trace_app = typer.Typer(
+    name="trace",
+    help="Inspect Factory and Agent trace events.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+approval_app = typer.Typer(
+    name="approval",
+    help="Inspect approval records.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+
+app.add_typer(agent_app, name="agent")
+app.add_typer(drafts_app, name="drafts")
+app.add_typer(registry_app, name="registry")
+app.add_typer(patch_app, name="patch")
+app.add_typer(ops_app, name="ops")
+ops_app.add_typer(trace_app, name="trace")
+ops_app.add_typer(approval_app, name="approval")
 
 
 def _json_echo(data: object) -> None:
@@ -105,7 +155,8 @@ def shell_command() -> None:
     run_shell()
 
 
-@app.command("create-agent")
+@app.command("create-agent", hidden=True)
+@agent_app.command("create")
 def create_agent_command(
     prompt: Optional[str] = typer.Option(None, "--prompt", "-p", help="Natural language requirement."),
     draft: bool = typer.Option(True, "--draft/--no-draft", help="Create a draft package."),
@@ -149,8 +200,7 @@ def create_agent_command(
         render_create_result(result)
 
 
-@app.command("drafts")
-def drafts_command(
+def _drafts_action(
     action: str = typer.Argument("list", help="list/show/run/use/delete"),
     draft: Optional[str] = typer.Argument(None, help="Draft id, agent name, path, or latest."),
     user_input: Optional[str] = typer.Option(None, "--input", "-i", help="Input for drafts run."),
@@ -241,13 +291,63 @@ def drafts_command(
             typer.echo(result.message)
             typer.echo(f"Path: {result.path}")
             if not result.deleted:
-                typer.echo(f"Run again with: agentfactory drafts delete {result.id} --yes")
+                typer.echo(f"Run again with: agentfactory drafts delete {draft or 'latest'} --yes")
         if not result.deleted:
             raise typer.Exit(code=1)
         return
 
     typer.echo("Usage: drafts list|show|use|run|delete [draft] [--input \"...\"] [--yes]")
     raise typer.Exit(code=1)
+
+
+@drafts_app.command("list")
+def drafts_list_command(
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    _drafts_action(action="list", json_output=json_output)
+
+
+@drafts_app.command("show")
+def drafts_show_command(
+    draft: Optional[str] = typer.Argument("latest", help="Draft id, agent name, path, or latest."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    _drafts_action(action="show", draft=draft, json_output=json_output)
+
+
+@drafts_app.command("use")
+def drafts_use_command(
+    draft: Optional[str] = typer.Argument("latest", help="Draft id, agent name, path, or latest."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    _drafts_action(action="use", draft=draft, json_output=json_output)
+
+
+@drafts_app.command("run")
+def drafts_run_command(
+    draft: Optional[str] = typer.Argument("latest", help="Draft id, agent name, path, or latest."),
+    user_input: Optional[str] = typer.Option(None, "--input", "-i", help="Input for drafts run."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    _drafts_action(action="run", draft=draft, user_input=user_input, json_output=json_output)
+
+
+@drafts_app.command("delete")
+def drafts_delete_command(
+    draft: Optional[str] = typer.Argument("latest", help="Draft id, agent name, path, or latest."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm destructive draft deletion."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    _drafts_action(action="delete", draft=draft, yes=yes, json_output=json_output)
+
+
+@drafts_app.command("rm", hidden=True)
+def drafts_rm_command(
+    draft: Optional[str] = typer.Argument("latest", help="Draft id, agent name, path, or latest."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm destructive draft deletion."),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    _drafts_action(action="delete", draft=draft, yes=yes, json_output=json_output)
 
 
 def _draft_not_found(draft: str | None, json_output: bool) -> None:
@@ -258,7 +358,8 @@ def _draft_not_found(draft: str | None, json_output: bool) -> None:
         typer.echo(f"Error: {message}")
 
 
-@app.command("validate-agent")
+@app.command("validate-agent", hidden=True)
+@agent_app.command("validate")
 def validate_agent_command(
     path: Path = typer.Argument(..., help="AgentPackage directory."),
     strict: bool = typer.Option(False, "--strict", help="Enable strict validation."),
@@ -280,7 +381,8 @@ def validate_agent_command(
         raise typer.Exit(code=1)
 
 
-@app.command("test-agent")
+@app.command("test-agent", hidden=True)
+@agent_app.command("test")
 def test_agent_command(
     path: Path = typer.Argument(..., help="AgentPackage directory."),
     scenario: Optional[str] = typer.Option(None, "--scenario", help="Run a specific scenario id."),
@@ -295,7 +397,8 @@ def test_agent_command(
         raise typer.Exit(code=1)
 
 
-@app.command("register-agent")
+@app.command("register-agent", hidden=True)
+@agent_app.command("register")
 def register_agent_command(
     path: Path = typer.Argument(..., help="AgentPackage directory."),
     status: str = typer.Option("candidate", "--status", help="Registry status."),
@@ -308,7 +411,8 @@ def register_agent_command(
         typer.echo(f"Registered {record.agent_name}@{record.version} as {record.status}")
 
 
-@app.command("run-agent")
+@app.command("run-agent", hidden=True)
+@agent_app.command("run")
 def run_agent_command(
     target: str = typer.Argument(..., help="AgentPackage path or registered agent name."),
     user_input: Optional[str] = typer.Option(None, "--input", "-i", help="User input."),
@@ -375,7 +479,8 @@ def run_agent_command(
         raise typer.Exit(code=1)
 
 
-@app.command("repair-agent")
+@app.command("repair-agent", hidden=True)
+@agent_app.command("repair")
 def repair_agent_command(
     target: str = typer.Argument("latest", help="AgentPackage path, draft id, or registered agent name."),
     user_input: Optional[str] = typer.Option(None, "--input", "-i", help="Input that failed; rerun after repair."),
@@ -419,7 +524,8 @@ def _render_repair_summary(payload: dict[str, object]) -> None:
         typer.echo(f"  Candidate: {payload.get('candidate_path')}")
 
 
-@app.command("upgrade-agent")
+@app.command("upgrade-agent", hidden=True)
+@agent_app.command("upgrade")
 def upgrade_agent_command(
     agent_name: str = typer.Argument(...),
     prompt: str = typer.Option(..., "--prompt", "-p"),
@@ -437,7 +543,8 @@ def upgrade_agent_command(
         typer.echo(f"UpgradeRequest: {request.request_id} ({request.proposed_intent})")
 
 
-@app.command("plan-upgrade")
+@app.command("plan-upgrade", hidden=True)
+@patch_app.command("plan")
 def plan_upgrade_command(
     package_path: Path = typer.Argument(..., help="Base AgentPackage directory."),
     prompt: str = typer.Option("增加返厂维修意图", "--prompt", "-p"),
@@ -457,7 +564,8 @@ def plan_upgrade_command(
             typer.echo(f"- {change.id}: {change.action} {change.path}")
 
 
-@app.command("approve-patch")
+@app.command("approve-patch", hidden=True)
+@patch_app.command("approve")
 def approve_patch_command(
     change_id: str = typer.Argument(...),
     actor: str = typer.Option("user", "--actor"),
@@ -471,7 +579,8 @@ def approve_patch_command(
         typer.echo(f"Approved {record.change_id} by {record.actor}")
 
 
-@app.command("apply-patch-plan")
+@app.command("apply-patch-plan", hidden=True)
+@patch_app.command("apply")
 def apply_patch_plan_command(
     package_path: Path = typer.Argument(..., help="Base AgentPackage directory."),
     output: Path = typer.Option(..., "--output"),
@@ -487,8 +596,7 @@ def apply_patch_plan_command(
         typer.echo(f"Applied patch plan to {path}")
 
 
-@app.command("registry")
-def registry_command(
+def _registry_action(
     action: str = typer.Argument("list", help="list/show/versions/rollback"),
     agent_name: Optional[str] = typer.Argument(None),
     version: Optional[str] = typer.Option(None, "--version"),
@@ -513,8 +621,23 @@ def registry_command(
     raise typer.Exit(code=1)
 
 
-@app.command("trace")
-def trace_command(
+@registry_app.command("list")
+def registry_list_command(
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _registry_action(action="list", json_output=json_output)
+
+
+@registry_app.command("rollback")
+def registry_rollback_command(
+    agent_name: str = typer.Argument(...),
+    version: str = typer.Option(..., "--version"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _registry_action(action="rollback", agent_name=agent_name, version=version, json_output=json_output)
+
+
+def _trace_action(
     action: str = typer.Argument("list"),
     path: Optional[Path] = typer.Option(None, "--path", help="Trace JSONL path or package directory."),
     json_output: bool = typer.Option(False, "--json"),
@@ -535,7 +658,33 @@ def trace_command(
     raise typer.Exit(code=1)
 
 
-@app.command("diff")
+@app.command("trace", hidden=True)
+def trace_command(
+    action: str = typer.Argument("list"),
+    path: Optional[Path] = typer.Option(None, "--path", help="Trace JSONL path or package directory."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _trace_action(action=action, path=path, json_output=json_output)
+
+
+@trace_app.command("list")
+def trace_list_command(
+    path: Optional[Path] = typer.Option(None, "--path", help="Trace JSONL path or package directory."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _trace_action(action="list", path=path, json_output=json_output)
+
+
+@trace_app.command("show")
+def trace_show_command(
+    path: Optional[Path] = typer.Option(None, "--path", help="Trace JSONL path or package directory."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _trace_action(action="show", path=path, json_output=json_output)
+
+
+@app.command("diff", hidden=True)
+@ops_app.command("diff")
 def diff_command(
     base_path: Path = typer.Argument(...),
     target_path: Path = typer.Argument(...),
@@ -549,8 +698,7 @@ def diff_command(
             typer.echo(f"{entry.change_type}: {entry.path}")
 
 
-@app.command("approval")
-def approval_command(
+def _approval_action(
     action: str = typer.Argument("list"),
     approval_id: Optional[str] = typer.Argument(None),
     json_output: bool = typer.Option(False, "--json"),
@@ -573,7 +721,32 @@ def approval_command(
     raise typer.Exit(code=1)
 
 
-@app.command("release")
+@app.command("approval", hidden=True)
+def approval_command(
+    action: str = typer.Argument("list"),
+    approval_id: Optional[str] = typer.Argument(None),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _approval_action(action=action, approval_id=approval_id, json_output=json_output)
+
+
+@approval_app.command("list")
+def approval_list_command(
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _approval_action(action="list", json_output=json_output)
+
+
+@approval_app.command("show")
+def approval_show_command(
+    approval_id: str = typer.Argument(...),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    _approval_action(action="show", approval_id=approval_id, json_output=json_output)
+
+
+@app.command("release", hidden=True)
+@registry_app.command("release")
 def release_command(
     agent_name: str = typer.Argument(...),
     version: str = typer.Option(..., "--version"),

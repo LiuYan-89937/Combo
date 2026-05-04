@@ -28,6 +28,7 @@ from agent_factory.specs.building_primitives import (
     ToolsetSpec,
 )
 from agent_factory.specs.package_specs import (
+    BuiltinCapabilitySpec,
     ContextSourceSpec,
     ContextSpec,
     EnvironmentProbe,
@@ -61,6 +62,7 @@ from agent_factory.specs.package_specs import (
 __all__ = [
     "AgentPackagePrimitives",
     "BaseSpec",
+    "BuiltinCapabilitySpec",
     "ConversationSpec",
     "GuardrailAction",
     "GuardrailRule",

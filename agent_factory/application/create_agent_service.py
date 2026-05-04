@@ -46,6 +46,7 @@ class CreateAgentResult(JsonDumpMixin):
     mcp_binding_count: int = 0
     harness_scenario_count: int = 0
     verification_report: FactoryVerificationReport | None = None
+    pending_configuration_files: list[Path] = Field(default_factory=list)
     clarification_questions: list[str] = Field(default_factory=list)
     clarification_options: list[dict] = Field(default_factory=list)
     guidance_message: str | None = None
@@ -110,6 +111,7 @@ class CreateAgentService:
             mcp_binding_count=state.mcp_binding_count,
             harness_scenario_count=state.harness_scenario_count,
             verification_report=state.verification_report,
+            pending_configuration_files=self._pending_configuration_files(output_path),
             clarification_questions=state.clarification_questions,
             clarification_options=state.clarification_options,
             guidance_message=state.guidance_message,
@@ -127,10 +129,17 @@ class CreateAgentService:
     @staticmethod
     def _next_steps(state: FactoryProductionState) -> list[str]:
         if state.status == "completed" and state.package_path is not None:
-            return [
+            steps = [
                 f"/validate {state.package_path}",
                 f"/test {state.package_path}",
             ]
+            external_config = state.package_path / "external_config.yaml"
+            if external_config.exists():
+                steps.insert(
+                    0,
+                    f"Fill runtime external configuration: {external_config}",
+                )
+            return steps
         if state.status == "needs_clarification":
             return [
                 "Choose or answer the clarification questions, then run /create-agent --draft again with the completed requirement.",
@@ -148,3 +157,10 @@ class CreateAgentService:
         return [
             "Inspect the Factory trace, fix the reported issue, and retry create-agent.",
         ]
+
+    @staticmethod
+    def _pending_configuration_files(output_path: Path | None) -> list[Path]:
+        if output_path is None:
+            return []
+        candidates = [output_path / "external_config.yaml"]
+        return [path for path in candidates if path.exists()]

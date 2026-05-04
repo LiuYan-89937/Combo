@@ -296,6 +296,14 @@ def render_create_result(result: CreateAgentResult, console: Console | None = No
             render_kv("MCP binding", result.verification_report.mcp_binding_check.status, console)
         if result.verification_report.harness_dry_run:
             render_kv("Harness dry-run", result.verification_report.harness_dry_run.status, console)
+    if result.pending_configuration_files:
+        render_section("Before Real Runtime", console)
+        console.print(
+            "  Fill these configuration templates before calling real external services:",
+            style=STYLE_WARNING,
+        )
+        for path in result.pending_configuration_files:
+            console.print(f"  {path}", style=STYLE_MUTED)
     if result.error:
         render_kv("Error", result.error.code, console, style=STYLE_ERROR)
     if result.next_steps:
@@ -428,7 +436,7 @@ def render_drafts_list(result: DraftsListResult, console: Console | None = None)
     table.add_column("Scenarios")
     for draft in result.drafts:
         table.add_row(
-            draft.id,
+            draft.display_id,
             draft.agent_name,
             draft.version or "-",
             draft.validation_status,
@@ -447,12 +455,17 @@ def render_draft_detail(detail: DraftAgentDetail, console: Console | None = None
     console = console or Console()
     summary = detail.summary
     render_section("Draft agent", console)
-    render_kv("ID", summary.id, console)
+    render_kv("ID", summary.display_id, console)
     render_kv("Name", summary.agent_name, console, style=STYLE_SUCCESS)
     render_kv("Agent ID", summary.agent_id, console)
+    render_kv(
+        "Aliases",
+        ", ".join(item for item in ["latest", summary.agent_name, summary.agent_id] if item),
+        console,
+    )
     render_kv("Version", summary.version, console)
     render_kv("Status", summary.status, console)
-    render_kv("Path", summary.path, console)
+    render_kv("Path", summary.path, console, style=STYLE_MUTED)
     render_kv("Validation", summary.validation_status, console)
     render_kv("Verification", summary.verification_status, console)
     if detail.persona:
@@ -688,9 +701,9 @@ def _verification_status_style_key(status: str) -> str:
 
 
 def _command_groups(commands: list[str]) -> list[tuple[str, list[str]]]:
-    create = ["/help", "/exit", "/init", "/create-agent", "/drafts", "/review-agent", "/approve-agent"]
-    run = ["/validate", "/test", "/register", "/run", "/upgrade", "/plan-upgrade"]
-    ops = ["/review-patch", "/approve-patch", "/apply-patch-plan", "/trace", "/diff", "/approval", "/registry"]
+    create = ["/help", "/exit", "/create-agent", "/drafts"]
+    run = ["/validate", "/test", "/register", "/run", "/repair-agent"]
+    ops = ["/registry"]
     known = set(create + run + ops)
     extras = [command for command in commands if command not in known]
     command_set = set(commands)

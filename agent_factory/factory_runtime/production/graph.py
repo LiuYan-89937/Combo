@@ -31,8 +31,11 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
     graph.add_node("validate_primitives", nodes.validate_primitives)
     graph.add_node("repair_primitives", nodes.repair_primitives)
     graph.add_node("plan_capability_preconditions", nodes.plan_capability_preconditions)
+    graph.add_node("analyze_tool_preconditions", nodes.analyze_tool_preconditions)
     graph.add_node("discover_resources", nodes.discover_resources)
+    graph.add_node("factory_web_research", nodes.factory_web_research)
     graph.add_node("probe_environment", nodes.probe_environment)
+    graph.add_node("enrich_tool_contracts", nodes.enrich_tool_contracts)
     graph.add_node("resolve_readiness", nodes.resolve_readiness)
     graph.add_node("write_package", nodes.write_package)
     graph.add_node("generate_tool_scripts", nodes.generate_tool_scripts)
@@ -97,9 +100,12 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
             "failed": "failed",
         },
     )
-    graph.add_edge("plan_capability_preconditions", "discover_resources")
-    graph.add_edge("discover_resources", "probe_environment")
-    graph.add_edge("probe_environment", "resolve_readiness")
+    graph.add_edge("plan_capability_preconditions", "analyze_tool_preconditions")
+    graph.add_edge("analyze_tool_preconditions", "discover_resources")
+    graph.add_edge("discover_resources", "factory_web_research")
+    graph.add_edge("factory_web_research", "probe_environment")
+    graph.add_edge("probe_environment", "enrich_tool_contracts")
+    graph.add_edge("enrich_tool_contracts", "resolve_readiness")
     graph.add_conditional_edges(
         "resolve_readiness",
         route_after_readiness,

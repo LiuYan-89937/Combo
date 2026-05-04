@@ -102,7 +102,7 @@ def route_after_readiness(
         status = readiness.get("status")
     elif readiness is not None:
         status = getattr(readiness, "status", None)
-    if status == "ready":
+    if status in {"ready", "mock_only_allowed"}:
         return "write_package"
     if status == "needs_user_input":
         return "needs_clarification"

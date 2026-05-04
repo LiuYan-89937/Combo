@@ -15,6 +15,10 @@ class ShellSession(BaseModel):
     pending_clarification_options: list[dict] = Field(default_factory=list)
     selected_agent_path: Path | None = None
     draft_paths: list[Path] = Field(default_factory=list)
+    active_agent_target: str | None = None
+    active_agent_path: Path | None = None
+    active_session_id: str = "default"
+    pending_tool_approval: dict | None = None
 
     def capture_requirement(self, text: str) -> None:
         stripped = sanitize_requirement_text(text)
@@ -44,3 +48,43 @@ class ShellSession(BaseModel):
     def clear_pending_requirement(self) -> None:
         self.pending_requirement = None
         self.clear_pending_clarification()
+
+    @property
+    def in_agent_chat(self) -> bool:
+        return bool(self.active_agent_target)
+
+    def enter_agent_chat(
+        self,
+        *,
+        target: str,
+        path: Path | None = None,
+        session_id: str = "default",
+    ) -> None:
+        self.active_agent_target = target
+        self.active_agent_path = path
+        self.active_session_id = session_id or "default"
+        self.pending_tool_approval = None
+        if path is not None:
+            self.selected_agent_path = path
+
+    def exit_agent_chat(self) -> None:
+        self.active_agent_target = None
+        self.active_agent_path = None
+        self.active_session_id = "default"
+        self.pending_tool_approval = None
+
+    def capture_tool_approval(
+        self,
+        *,
+        user_input: str,
+        tool_call_id: str,
+        tool_id: str,
+    ) -> None:
+        self.pending_tool_approval = {
+            "user_input": user_input,
+            "tool_call_id": tool_call_id,
+            "tool_id": tool_id,
+        }
+
+    def clear_tool_approval(self) -> None:
+        self.pending_tool_approval = None
