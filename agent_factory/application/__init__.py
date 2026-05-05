@@ -5,6 +5,8 @@ from agent_factory.application.create_agent_service import (
     CreateAgentResult,
     CreateAgentService,
 )
+from agent_factory.application.approval_service import ApprovalRecord, ApprovalService
+from agent_factory.application.diff_service import PackageDiff, PackageDiffEntry, DiffService
 from agent_factory.application.drafts_service import (
     DraftDeleteResult,
     DraftAgentDetail,
@@ -27,6 +29,7 @@ from agent_factory.application.registry_service import (
     RegistryListResult,
     RegistryService,
 )
+from agent_factory.application.patch_plan_service import PatchChange, PatchPlan, PatchPlanService
 from agent_factory.application.repair_agent_service import (
     RepairAgentRequest,
     RepairAgentResult,
@@ -38,6 +41,7 @@ from agent_factory.application.test_agent_service import (
     TestAgentResult,
     TestAgentService,
 )
+from agent_factory.application.upgrade_agent_service import UpgradeAgentService, UpgradeRequest
 from agent_factory.application.validate_agent_service import (
     ValidateAgentRequest,
     ValidateAgentResult,
@@ -48,6 +52,9 @@ __all__ = [
     "CreateAgentRequest",
     "CreateAgentResult",
     "CreateAgentService",
+    "ApprovalRecord",
+    "ApprovalService",
+    "DiffService",
     "DraftDeleteResult",
     "DraftAgentDetail",
     "DraftAgentSummary",
@@ -62,6 +69,11 @@ __all__ = [
     "RegisterAgentRequest",
     "RegistryListResult",
     "RegistryService",
+    "PackageDiff",
+    "PackageDiffEntry",
+    "PatchChange",
+    "PatchPlan",
+    "PatchPlanService",
     "RepairAgentRequest",
     "RepairAgentResult",
     "RepairAgentService",
@@ -72,4 +84,6 @@ __all__ = [
     "ValidateAgentRequest",
     "ValidateAgentResult",
     "ValidateAgentService",
+    "UpgradeAgentService",
+    "UpgradeRequest",
 ]

@@ -137,7 +137,7 @@ class FactoryProductionState(JsonDumpMixin):
     mcp_binding_report: MCPBindingLocalCheckReport | None = None
     harness_dry_run_report: HarnessDryRunReport | None = None
     tool_test_repair_attempts: int = 0
-    max_tool_test_repair_attempts: int = 1
+    max_tool_test_repair_attempts: int = 3
     repair_attempts: int = 0
     max_repair_attempts: int = 1
     max_graph_steps: int = 25

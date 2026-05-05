@@ -13,7 +13,7 @@ from agent_factory.application import (
     TestAgentService,
 )
 from agent_factory.harness import AgentHarnessRunner
-from agent_factory.runtime import WorkflowRuntime
+from agent_factory.runtime import AgentInstanceRuntime
 
 
 class TestAgentServiceTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class TestAgentServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             package_path = _generated_package(Path(tmpdir))
             runner = AgentHarnessRunner(
-                runtime=WorkflowRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
+                runtime=AgentInstanceRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
             )
 
             result = TestAgentService(runner=runner).test_agent(TestAgentRequest(path=package_path))

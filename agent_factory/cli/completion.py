@@ -17,7 +17,7 @@ COMMAND_OPTIONS: dict[str, list[str]] = {
     "/validate": ["latest"],
     "/test": ["latest", "--scenario"],
     "/register": ["latest"],
-    "/run": ["latest", "--input", "-i", "--yes", "-y", "--session-id", "--version", "--process", "--no-process"],
+    "/run": ["latest", "--input", "-i", "--yes", "-yes", "-y", "--session-id", "--version", "--process", "--no-process"],
     "/registry": ["list", "rollback"],
 }
 

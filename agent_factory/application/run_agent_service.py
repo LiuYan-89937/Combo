@@ -10,7 +10,7 @@ from agent_factory.factory_runtime import FactoryWorkspace
 from agent_factory.isolation import AgentIPCRequest, AgentProcessManager
 from agent_factory.model import ModelService
 from agent_factory.registry import FilesystemRegistry
-from agent_factory.runtime import AgentRunRequest, AgentRunResult, WorkflowRuntime
+from agent_factory.runtime import AgentInstanceRuntime, AgentRunRequest, AgentRunResult
 
 
 class RunAgentServiceRequest(JsonDumpMixin):
@@ -20,7 +20,7 @@ class RunAgentServiceRequest(JsonDumpMixin):
     user_input: str
     version: str | None = None
     session_id: str = "default"
-    process: bool = False
+    process: bool = True
     auto_repair: bool = False
     approved_tool_call_id: str | None = None
 
@@ -44,7 +44,7 @@ class RunAgentService:
         self,
         *,
         model_service: ModelService | None = None,
-        runtime: WorkflowRuntime | None = None,
+        runtime: AgentInstanceRuntime | None = None,
         registry: FilesystemRegistry | None = None,
     ) -> None:
         self.model_service = model_service
@@ -58,18 +58,14 @@ class RunAgentService:
                 target=request.target,
                 error=f"AgentPackage or registry record not found: {request.target}",
             )
-        if request.process:
-            if request.approved_tool_call_id:
-                return RunAgentServiceResult(
-                    target=request.target,
-                    package_path=package_path,
-                    error="Tool approval rerun is not supported in process mode yet.",
-                )
+        use_process = request.process and self.runtime is None and self.model_service is None
+        if use_process:
             ipc = AgentProcessManager().run(
                 AgentIPCRequest(
                     package_path=package_path,
                     user_input=request.user_input,
                     session_id=request.session_id,
+                    approved_tool_call_id=request.approved_tool_call_id,
                 )
             )
             if not ipc.ok:
@@ -85,7 +81,7 @@ class RunAgentService:
                 result=AgentRunResult.model_validate(ipc.payload),
             )
 
-        runtime = self.runtime or WorkflowRuntime(
+        runtime = self.runtime or AgentInstanceRuntime(
             model_service=self.model_service,
             env_file=_factory_env_file(package_path),
         )
@@ -94,7 +90,7 @@ class RunAgentService:
                 package_path=package_path,
                 user_input=request.user_input,
                 session_id=request.session_id,
-                process_isolated=request.process,
+                process_isolated=use_process,
                 approved_tool_call_id=request.approved_tool_call_id,
             )
         )

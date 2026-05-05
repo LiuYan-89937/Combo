@@ -15,23 +15,19 @@ from agent_factory.harness.result import (
 )
 from agent_factory.harness.scenario import HarnessScenario, HarnessSpec
 from agent_factory.model import FakeModelAdapter, ModelConfig, ModelService
-from agent_factory.runtime import AgentRunRequest, WorkflowRuntime
+from agent_factory.runtime import AgentInstanceRuntime, AgentRunRequest
 
 
 class AgentHarnessRunner:
-    """First executable AgentHarness runner.
-
-    This runner executes scenario contracts against generated package artifacts.
-    It does not yet start an AgentInstance runtime.
-    """
+    """Runtime-backed AgentHarness runner."""
 
     def __init__(
         self,
         loader: HarnessLoader | None = None,
-        runtime: WorkflowRuntime | None = None,
+        runtime: AgentInstanceRuntime | None = None,
     ) -> None:
         self.loader = loader or HarnessLoader()
-        self.runtime = runtime or WorkflowRuntime(
+        self.runtime = runtime or AgentInstanceRuntime(
             model_service=ModelService.with_adapter(
                 ModelConfig(provider="fake"),
                 FakeModelAdapter(["AF-TEST-USER"]),
@@ -79,9 +75,11 @@ class AgentHarnessRunner:
                     package_path=package_path,
                     user_input=turn.user,
                     session_id=session_id,
+                    context=harness.fixtures.context,
                 )
             )
         assert runtime_result is not None
+        context_bundle = runtime_result.context_bundle
         selected_tool = scenario.expected.selected_tool_id
         observed_tool = (
             runtime_result.tool_proposals[0].name
@@ -114,6 +112,16 @@ class AgentHarnessRunner:
             tool_summary_fallback=runtime_result.tool_summary_fallback,
             fixture_refs=scenario.fixtures,
             final_response=runtime_result.answer,
+            model_context_item_count=len(context_bundle.visible_to_model) if context_bundle else 0,
+            tool_context_keys=sorted(context_bundle.visible_to_tools) if context_bundle else [],
+            hidden_context_keys=sorted(context_bundle.hidden) if context_bundle else [],
+            context_compression_triggered=runtime_result.context_compression_triggered,
+            checkpoint_path_exists=bool(
+                runtime_result.checkpoint_path and runtime_result.checkpoint_path.exists()
+            ),
+            checkpoint_resume_observed=any(
+                event.stage == "checkpoint_resume" for event in runtime_result.events
+            ),
         )
         assertions = _assert_scenario(scenario, harness, observations)
         status = "passed" if all(result.status != "failed" for result in assertions) else "failed"
@@ -275,6 +283,8 @@ def _assert_scenario(
             )
         )
 
+    assertions.extend(_assert_context_visibility(scenario, observations))
+
     if scenario.expected.forbidden_direct_execution:
         assertions.append(
             AssertionResult(
@@ -316,6 +326,95 @@ def _assert_scenario(
     return assertions
 
 
+def _assert_context_visibility(
+    scenario: HarnessScenario,
+    observations: ScenarioObservation,
+) -> list[AssertionResult]:
+    visibility = scenario.expected.context_visibility
+    if not visibility:
+        return []
+    assertions: list[AssertionResult] = []
+    if "tool_keys" in visibility:
+        expected_keys = set(_as_string_list(visibility.get("tool_keys")))
+        assertions.append(
+            AssertionResult(
+                id="context_tool_keys",
+                status="passed"
+                if expected_keys.issubset(set(observations.tool_context_keys))
+                else "failed",
+                message="Tool-visible context keys are available to Runtime tools.",
+                expected=sorted(expected_keys),
+                actual=observations.tool_context_keys,
+            )
+        )
+    if "hidden_keys" in visibility:
+        expected_hidden = set(_as_string_list(visibility.get("hidden_keys")))
+        assertions.append(
+            AssertionResult(
+                id="context_hidden_keys",
+                status="passed"
+                if expected_hidden.issubset(set(observations.hidden_context_keys))
+                else "failed",
+                message="Hidden context keys are kept out of model-visible context.",
+                expected=sorted(expected_hidden),
+                actual=observations.hidden_context_keys,
+            )
+        )
+    if "model_item_count_at_least" in visibility:
+        minimum = int(visibility["model_item_count_at_least"])
+        assertions.append(
+            AssertionResult(
+                id="context_model_item_count",
+                status="passed"
+                if observations.model_context_item_count >= minimum
+                else "failed",
+                message="Model-visible context item count matches expectation.",
+                expected=f">= {minimum}",
+                actual=observations.model_context_item_count,
+            )
+        )
+    if "compression_triggered" in visibility:
+        expected = bool(visibility["compression_triggered"])
+        assertions.append(
+            AssertionResult(
+                id="context_compression",
+                status="passed"
+                if observations.context_compression_triggered == expected
+                else "failed",
+                message="Runtime context compression matches expectation.",
+                expected=expected,
+                actual=observations.context_compression_triggered,
+            )
+        )
+    if "checkpoint_resume" in visibility:
+        expected = bool(visibility["checkpoint_resume"])
+        assertions.append(
+            AssertionResult(
+                id="checkpoint_resume",
+                status="passed"
+                if observations.checkpoint_resume_observed == expected
+                else "failed",
+                message="Runtime checkpoint resume event matches expectation.",
+                expected=expected,
+                actual=observations.checkpoint_resume_observed,
+            )
+        )
+    if visibility.get("checkpoint_exists") is not None:
+        expected = bool(visibility["checkpoint_exists"])
+        assertions.append(
+            AssertionResult(
+                id="checkpoint_exists",
+                status="passed"
+                if observations.checkpoint_path_exists == expected
+                else "failed",
+                message="Runtime writes a checkpoint for the scenario session.",
+                expected=expected,
+                actual=observations.checkpoint_path_exists,
+            )
+        )
+    return assertions
+
+
 def _assert_fixture_refs(scenario: HarnessScenario, harness: HarnessSpec) -> AssertionResult:
     if not scenario.fixtures:
         return AssertionResult(
@@ -347,3 +446,11 @@ def _fixture_ref_exists(ref: str, harness: HarnessSpec) -> bool:
     group_name, item_id = ref.split(":", 1)
     group = groups.get(group_name)
     return group is not None and item_id in group
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if value is None:
+        return []
+    return [str(value)]

@@ -117,15 +117,6 @@ class PackageValidator:
                 path="agent_name",
             )
 
-        if runtime.runtime_type == "workflow" and not runtime.workflow_steps:
-            report.add(
-                ValidationSeverity.FATAL,
-                "runtime_workflow_steps_required",
-                "runtime.yaml workflow runtime must declare at least one enabled step.",
-                file="runtime.yaml",
-                path="workflow_steps",
-            )
-
         metadata_paths: dict[str, tuple[str, str]] = {}
         for tool in generated_tools:
             metadata_paths[str(tool.implementation.path)] = (tool.tool_id, "wrapper")

@@ -5,18 +5,20 @@ import sys
 from pathlib import Path
 
 from agent_factory.isolation import AgentIPCRequest, AgentIPCResponse
-from agent_factory.runtime import AgentRunRequest, WorkflowRuntime
+from agent_factory.runtime import AgentInstanceRuntime, AgentRunRequest
 
 
 def main() -> None:
     line = sys.stdin.readline()
     try:
         ipc_request = AgentIPCRequest.model_validate_json(line)
-        result = WorkflowRuntime(env_file=_factory_env_file(ipc_request.package_path)).run(
+        result = AgentInstanceRuntime(env_file=_factory_env_file(ipc_request.package_path)).run(
             AgentRunRequest(
                 package_path=ipc_request.package_path,
                 user_input=ipc_request.user_input,
                 session_id=ipc_request.session_id,
+                process_isolated=True,
+                approved_tool_call_id=ipc_request.approved_tool_call_id,
             )
         )
         response = AgentIPCResponse(ok=result.ok, payload=result.model_dump(mode="json"))

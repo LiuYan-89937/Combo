@@ -19,6 +19,7 @@ from agent_factory.model.prompts import (
     PromptTemplate,
 )
 from agent_factory.model.router import ModelRouter
+from agent_factory.model.runner import ModelCallRunner, ModelCallTraceSpan
 from agent_factory.model.service import ModelService
 from agent_factory.model.types import (
     AIMessage,
@@ -56,6 +57,8 @@ __all__ = [
     "MessagesPlaceholder",
     "ModelConfig",
     "ModelConfigError",
+    "ModelCallRunner",
+    "ModelCallTraceSpan",
     "ModelError",
     "ModelRouter",
     "ModelService",

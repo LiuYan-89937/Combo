@@ -371,7 +371,8 @@ class PackageArtifactGenerator:
                 "schema_version": "0.1",
                 "kind": "RuntimeSpec",
                 "metadata": _metadata_dict(primitives, suffix="runtime"),
-                "runtime_type": "workflow",
+                "runtime_type": "langgraph_react",
+                "compile_mode": "custom_state_graph",
                 "workflow_steps": [
                     {"id": "load_context", "type": "load_context"},
                     {"id": "load_memory", "type": "load_memory"},

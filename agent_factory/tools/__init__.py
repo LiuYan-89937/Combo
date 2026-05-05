@@ -4,7 +4,15 @@ from agent_factory.tools.external_http import (
     ExternalHttpClient,
     load_external_config_context,
 )
-from agent_factory.tools.router import ToolExecutor, ToolInvocation, ToolResult, ToolRouter
+from agent_factory.tools.router import (
+    PolicyDecision,
+    PolicyEngine,
+    ToolExecutor,
+    ToolInvocation,
+    ToolResult,
+    ToolResultEnvelope,
+    ToolRouter,
+)
 from agent_factory.tools.shell import ControlledShellRunner, ShellCommandResult, ShellCommandReview
 from agent_factory.tools.web import execute_browser_fetch, execute_web_search
 
@@ -14,9 +22,12 @@ __all__ = [
     "ExternalHttpClient",
     "ShellCommandResult",
     "ShellCommandReview",
+    "PolicyDecision",
+    "PolicyEngine",
     "ToolExecutor",
     "ToolInvocation",
     "ToolResult",
+    "ToolResultEnvelope",
     "ToolRouter",
     "execute_browser_fetch",
     "execute_web_search",

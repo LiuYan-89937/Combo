@@ -4,11 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ruamel.yaml import YAML
+
 from tests.test_factory_agent import service_with_responses, valid_primitives_payload
 
 from agent_factory.application import CreateAgentRequest, CreateAgentService
+from agent_factory.context import ContextBundle
 from agent_factory.harness import AgentHarnessRunner, HarnessLoader, HarnessSpec
-from agent_factory.runtime import WorkflowRuntime
+from agent_factory.runtime import AgentInstanceRuntime, AgentRunResult, RuntimeEvent
 
 
 class HarnessRunnerTests(unittest.TestCase):
@@ -27,7 +30,7 @@ class HarnessRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             package_path = _generated_package(Path(tmpdir))
             runner = AgentHarnessRunner(
-                runtime=WorkflowRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
+                runtime=AgentInstanceRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
             )
 
             result = runner.run(package_path)
@@ -37,6 +40,89 @@ class HarnessRunnerTests(unittest.TestCase):
             self.assertEqual(result.scenario_count, len(HarnessLoader().load(package_path).scenarios))
             self.assertTrue((package_path / "generated" / "reports" / "harness_run.json").exists())
 
+    def test_runner_asserts_context_compression_visibility_and_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = _generated_package(Path(tmpdir))
+            harness_path = package_path / "harness.yaml"
+            yaml = YAML()
+            data = yaml.load(harness_path.read_text(encoding="utf-8"))
+            data.setdefault("fixtures", {})
+            data["fixtures"].setdefault("context", {})
+            data["fixtures"]["context"] = {
+                "api_key": "secret-value",
+                "business_id": "tenant-001",
+            }
+            data["scenarios"] = [
+                {
+                    "id": "context_runtime_001",
+                    "name": "Context compression and visibility",
+                    "turns": [{"user": f"turn {index}"} for index in range(13)],
+                    "fixtures": ["context:business_id"],
+                    "expected": {
+                        "context_visibility": {
+                            "tool_keys": ["business_id"],
+                            "hidden_keys": ["api_key"],
+                            "compression_triggered": True,
+                            "checkpoint_exists": True,
+                        }
+                    },
+                    "observe": {"context_bundle": True, "memory_ops": True},
+                }
+            ]
+            with harness_path.open("w", encoding="utf-8") as file:
+                yaml.dump(data, file)
+            runner = AgentHarnessRunner(
+                runtime=AgentInstanceRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
+            )
+
+            result = runner.run(package_path)
+
+            self.assertTrue(result.ok)
+            assertion_statuses = {
+                assertion.id: assertion.status
+                for assertion in result.scenario_results[0].assertion_results
+            }
+            self.assertEqual(assertion_statuses["context_tool_keys"], "passed")
+            self.assertEqual(assertion_statuses["context_hidden_keys"], "passed")
+            self.assertEqual(assertion_statuses["context_compression"], "passed")
+            self.assertEqual(assertion_statuses["checkpoint_exists"], "passed")
+            report_text = result.report_path.read_text(encoding="utf-8")
+            self.assertNotIn("secret-value", report_text)
+
+    def test_runner_can_assert_checkpoint_resume_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = _generated_package(Path(tmpdir))
+            harness_path = package_path / "harness.yaml"
+            yaml = YAML()
+            data = yaml.load(harness_path.read_text(encoding="utf-8"))
+            data["scenarios"] = [
+                {
+                    "id": "checkpoint_resume_001",
+                    "name": "Checkpoint resume assertion",
+                    "turns": [{"user": "resume"}],
+                    "expected": {
+                        "context_visibility": {
+                            "checkpoint_resume": True,
+                            "checkpoint_exists": True,
+                        }
+                    },
+                    "observe": {"trace": True},
+                }
+            ]
+            with harness_path.open("w", encoding="utf-8") as file:
+                yaml.dump(data, file)
+            runner = AgentHarnessRunner(runtime=_CheckpointResumeRuntime())
+
+            result = runner.run(package_path)
+
+            self.assertTrue(result.ok)
+            assertion_statuses = {
+                assertion.id: assertion.status
+                for assertion in result.scenario_results[0].assertion_results
+            }
+            self.assertEqual(assertion_statuses["checkpoint_resume"], "passed")
+            self.assertEqual(assertion_statuses["checkpoint_exists"], "passed")
+
 
 def _generated_package(start_path: Path) -> Path:
     service = CreateAgentService(model_service=service_with_responses([valid_primitives_payload()]))
@@ -45,6 +131,29 @@ def _generated_package(start_path: Path) -> Path:
     )
     assert result.output_path is not None
     return result.output_path
+
+
+class _CheckpointResumeRuntime:
+    def run(self, request) -> AgentRunResult:
+        checkpoint_path = request.package_path / "checkpoints" / "resume-test.json"
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text('{"state_hash": "test"}', encoding="utf-8")
+        return AgentRunResult(
+            run_id="checkpoint-resume-test",
+            package_path=request.package_path,
+            status="completed",
+            answer="ok",
+            session_id=request.session_id,
+            checkpoint_path=checkpoint_path,
+            context_bundle=ContextBundle(),
+            events=[
+                RuntimeEvent(
+                    run_id="checkpoint-resume-test",
+                    stage="checkpoint_resume",
+                    status="completed",
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":

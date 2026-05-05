@@ -9,6 +9,7 @@ from typing import Any, Callable
 from agent_factory.model.config import ModelConfig
 from agent_factory.model.provider import ProviderAdapter
 from agent_factory.model.router import ModelRouter
+from agent_factory.model.runner import ModelCallRunner
 from agent_factory.model.types import (
     LLMRequest,
     LLMResponse,
@@ -23,6 +24,7 @@ class ModelService:
 
     def __init__(self, router: ModelRouter):
         self.router = router
+        self.runner = ModelCallRunner(router)
 
     @classmethod
     def from_env(
@@ -45,8 +47,7 @@ class ModelService:
         return cls(router)
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
-        adapter = self.router.adapter_for()
-        return await adapter.generate(request)
+        return await self.runner.generate(request)
 
     async def stream(self, request: LLMRequest) -> AsyncIterator[LLMStreamEvent]:
         adapter = self.router.adapter_for()
@@ -62,65 +63,13 @@ class ModelService:
         strict: bool = True,
         max_empty_content_retries: int = 2,
     ) -> StructuredOutputResult:
-        json_schema = schema or request.json_schema
-        structured_request = request.model_copy(
-            update={
-                "response_format": "json_schema" if json_schema else "json_object",
-                "json_schema": json_schema,
-                "json_schema_name": schema_name or request.json_schema_name,
-                "json_schema_strict": strict if schema is not None else request.json_schema_strict,
-            }
+        return await self.runner.generate_structured(
+            request,
+            schema=schema,
+            schema_name=schema_name,
+            strict=strict,
+            max_empty_content_retries=max_empty_content_retries,
         )
-        attempts = max(1, max_empty_content_retries + 1)
-        response: LLMResponse | None = None
-        for attempt in range(attempts):
-            response = await self.generate(structured_request)
-            if response.error:
-                return StructuredOutputResult(response=response, error=response.error)
-            if response.content.strip():
-                break
-            if attempt == attempts - 1:
-                error = ModelError(
-                    type="structured_output_empty_content",
-                    message=(
-                        "Model returned empty structured content "
-                        f"after {attempts} attempt(s)."
-                    ),
-                    retryable=True,
-                )
-                return StructuredOutputResult(response=response, error=error)
-
-        assert response is not None
-        if response.error:
-            return StructuredOutputResult(response=response, error=response.error)
-
-        try:
-            parsed = json.loads(response.content)
-        except json.JSONDecodeError:
-            candidate = _extract_json_candidate(response.content)
-            if candidate is None:
-                error = ModelError(
-                    type="structured_output_parse_error",
-                    message="Model response was not valid JSON.",
-                )
-                return StructuredOutputResult(response=response, error=error)
-            try:
-                parsed = json.loads(candidate)
-            except json.JSONDecodeError:
-                error = ModelError(
-                    type="structured_output_parse_error",
-                    message="Model response was not valid JSON.",
-                )
-                return StructuredOutputResult(response=response, error=error)
-
-        if not isinstance(parsed, (dict, list)):
-            error = ModelError(
-                type="structured_output_type_error",
-                message="Model structured output must be a JSON object or array.",
-            )
-            return StructuredOutputResult(response=response, error=error)
-
-        return StructuredOutputResult(data=parsed, response=response)
 
     async def generate_task_structured(
         self,

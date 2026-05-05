@@ -9,7 +9,8 @@ from agent_factory.specs.building_primitives import AgentPackagePrimitives
 
 
 ReleaseStatus = Literal["draft", "candidate", "available", "deprecated", "failed"]
-RuntimeKind = Literal["workflow", "graph"]
+RuntimeKind = Literal["langgraph_react"]
+RuntimeCompileMode = Literal["custom_state_graph"]
 
 
 class PackageManifest(BaseSpec):
@@ -47,7 +48,8 @@ class RuntimeStep(BaseModel):
 class RuntimeSpec(BaseSpec):
     kind: Literal["RuntimeSpec"] = "RuntimeSpec"
 
-    runtime_type: RuntimeKind = "workflow"
+    runtime_type: RuntimeKind = "langgraph_react"
+    compile_mode: RuntimeCompileMode = "custom_state_graph"
     workflow_steps: list[RuntimeStep] = Field(
         default_factory=lambda: [
             RuntimeStep(id="load_context", type="load_context"),

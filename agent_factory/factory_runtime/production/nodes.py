@@ -46,6 +46,7 @@ from agent_factory.factory.resource_binding import (
     bind_requirement_resources,
     discover_resource_candidates,
 )
+from agent_factory.factory.resource_resolvers import ResourceResolverRegistry
 from agent_factory.factory.requirement_analyzer import RequirementAnalyzer
 from agent_factory.factory.tool_preconditions import (
     analyze_capability_preconditions,
@@ -71,6 +72,7 @@ from agent_factory.factory_runtime.production.state import (
     FactoryProductionState,
     FactoryProductionStateDict,
 )
+from agent_factory.factory_runtime.production.policies import FactoryNodeAccessPolicy
 from agent_factory.model import LLMStreamEvent, ModelConfigError, ModelService
 from agent_factory.package import PackageValidator
 from agent_factory.specs import AgentPackagePrimitives, ReadinessReport
@@ -92,6 +94,10 @@ class FactoryProductionNodes:
         self.artifact_generator = artifact_generator
         self.verification_runner = verification_runner or PackageVerificationRunner()
         self.context_compiler = NodeContextCompiler()
+        self.node_access_policy = FactoryNodeAccessPolicy()
+
+    def guarded(self, node_name: str):
+        return self.node_access_policy.wrap(node_name, getattr(self, node_name))
 
     def capture_requirement(self, state: FactoryProductionStateDict) -> FactoryProductionStateDict:
         current = FactoryProductionState.from_graph_state(state)
@@ -784,6 +790,10 @@ class FactoryProductionNodes:
                     },
                 ),
             )
+            if current.resource_need_plan is not None:
+                resolver_registry = ResourceResolverRegistry()
+                for resource in current.resource_need_plan.resources:
+                    self._append_evidence_report(current, resolver_registry.resolve(resource))
         except Exception as error:
             current.error = FactoryError(
                 code="environment_probe_failed",
@@ -830,7 +840,7 @@ class FactoryProductionNodes:
             else "skipped"
         )
         current.implementation_plan = ImplementationPlan(
-            runtime_type="workflow",
+            runtime_type="langgraph_react",
             tool_contract_refs=_tool_contract_refs(current),
             resource_contract_refs=_resource_contract_refs(current),
             harness_focus=[
@@ -998,8 +1008,8 @@ class FactoryProductionNodes:
             report = self._artifact_generator().generate_tool_scripts(
                 current.package_path,
                 current.primitives,
-                requirement=current.requirement,
-                requirement_analysis=current.requirement_analysis,
+                requirement=None,
+                requirement_analysis=None,
                 resource_contracts=current.resource_contracts,
                 context_envelope=self._compile_context_envelope(current, "generate_tool_scripts"),
                 on_stream_event=self._model_stream_callback(
@@ -1567,7 +1577,7 @@ class FactoryProductionNodes:
         self.context.trace_store.append_event(event)
         state.current_stage = event.stage
         state.graph_node = node
-        state.stage_history.append(node)
+        state.stage_history.append(_canonical_stage_for_progress(node, event.stage))
         state.events.append(event)
         return state.as_graph_state()
 
@@ -2555,6 +2565,43 @@ def _production_next_steps(
 
 def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+
+
+def _canonical_stage_for_progress(node: str, stage: str) -> str:
+    mapping = {
+        "capture_requirement": "capture_requirement",
+        "load_factory_context": "capture_requirement",
+        "classify_factory_intent": "capture_requirement",
+        "analyze_requirement": "understand_requirement",
+        "maybe_clarify": "understand_requirement",
+        "plan_capability_preconditions": "plan_capabilities",
+        "analyze_tool_preconditions": "identify_conditions",
+        "discover_resources": "plan_resource_needs",
+        "factory_web_research": "collect_evidence",
+        "probe_environment": "build_resource_contracts",
+        "resolve_readiness": "decide_readiness",
+        "enrich_tool_contracts": "plan_implementation",
+        "plan_primitives": "generate_package_specs",
+        "validate_primitives": "generate_package_specs",
+        "repair_primitives": "generate_package_specs",
+        "write_package": "generate_package_specs",
+        "generate_tool_scripts": "generate_tools",
+        "generate_tool_tests": "sandbox_test_and_repair",
+        "static_check_tool_scripts": "sandbox_test_and_repair",
+        "run_generated_tool_tests": "sandbox_test_and_repair",
+        "repair_tool_tests": "sandbox_test_and_repair",
+        "generate_mcp_bindings": "generate_package_specs",
+        "generate_harness_scenarios": "generate_harness",
+        "validate_package": "generate_package_specs",
+        "validate_mcp_bindings_local": "sandbox_test_and_repair",
+        "dry_run_harness_scenarios": "generate_harness",
+        "record_factory_memory": "complete_summary",
+        "complete": "complete_summary",
+        "needs_clarification": "decide_readiness",
+        "not_agent_request": "capture_requirement",
+        "failed": stage,
+    }
+    return mapping.get(node, stage)
 
 
 def _slugify(value: str) -> str:

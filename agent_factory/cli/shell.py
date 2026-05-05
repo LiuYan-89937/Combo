@@ -414,6 +414,7 @@ def _looks_like_tool_confirmation(text: str) -> bool:
         "执行",
         "yes",
         "y",
+        "-yes",
         "approve",
         "approved",
         "confirm",

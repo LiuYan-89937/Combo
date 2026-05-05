@@ -17,6 +17,7 @@ class AgentIPCRequest(JsonDumpMixin):
     package_path: Path
     user_input: str
     session_id: str = "default"
+    approved_tool_call_id: str | None = None
 
 
 class AgentIPCResponse(JsonDumpMixin):

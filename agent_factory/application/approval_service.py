@@ -19,6 +19,8 @@ class ApprovalRecord(JsonDumpMixin):
     kind: str = "ApprovalRecord"
     approval_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     patch_plan: Path | None = None
+    patch_plan_id: str | None = None
+    package_path: Path | None = None
     change_id: str
     actor: str
     decision: Literal["approved", "rejected"] = "approved"
@@ -33,11 +35,15 @@ class ApprovalService:
         change_id: str,
         actor: str,
         patch_plan: Path | None = None,
+        patch_plan_id: str | None = None,
+        package_path: Path | None = None,
         decision: Literal["approved", "rejected"] = "approved",
         reason: str | None = None,
     ) -> ApprovalRecord:
         record = ApprovalRecord(
             patch_plan=patch_plan,
+            patch_plan_id=patch_plan_id,
+            package_path=package_path,
             change_id=change_id,
             actor=actor,
             decision=decision,

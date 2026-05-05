@@ -269,7 +269,9 @@ def _drafts_action(
                 typer.echo(f"Trace: {result.result.trace_path}")
             else:
                 typer.echo(f"Error: {result.error}")
-        if not result.ok and not (result.result and result.result.status in {"interrupted", "needs_upgrade"}):
+        if not result.ok and not (
+            result.result and result.result.status in {"interrupted", "needs_configuration", "needs_upgrade"}
+        ):
             raise typer.Exit(code=1)
         return
 
@@ -419,7 +421,8 @@ def run_agent_command(
     version: Optional[str] = typer.Option(None, "--version", help="Registry version."),
     session_id: str = typer.Option("default", "--session-id", help="Conversation session id."),
     chat: bool = typer.Option(False, "--chat", help="Start a simple interactive chat loop."),
-    process: bool = typer.Option(False, "--process/--no-process", help="Run in an isolated process."),
+    process: bool = typer.Option(True, "--process/--no-process", help="Run in an isolated process."),
+    approved_tool_call_id: Optional[str] = typer.Option(None, "--approve", help="Approved tool call id or tool id."),
     auto_repair: bool = typer.Option(False, "--auto-repair", help="Return to Factory repair on failed run."),
     json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
@@ -436,6 +439,7 @@ def run_agent_command(
                     session_id=session_id,
                     process=process,
                     auto_repair=auto_repair,
+                    approved_tool_call_id=approved_tool_call_id,
                 )
             )
             if json_output:
@@ -459,6 +463,7 @@ def run_agent_command(
             session_id=session_id,
             process=process,
             auto_repair=auto_repair,
+            approved_tool_call_id=approved_tool_call_id,
         )
     )
     if json_output:
@@ -475,7 +480,9 @@ def run_agent_command(
         if result.repair_result:
             _render_repair_summary(result.repair_result)
     repair_ok = bool(result.repair_result and result.repair_result.get("status") == "repaired")
-    if not result.ok and not repair_ok and not (result.result and result.result.status in {"interrupted", "needs_upgrade"}):
+    if not result.ok and not repair_ok and not (
+        result.result and result.result.status in {"interrupted", "needs_configuration", "needs_upgrade"}
+    ):
         raise typer.Exit(code=1)
 
 

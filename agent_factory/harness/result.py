@@ -36,6 +36,12 @@ class ScenarioObservation(JsonDumpMixin):
     tool_summary_fallback: bool = False
     fixture_refs: list[str] = Field(default_factory=list)
     final_response: str = ""
+    model_context_item_count: int = 0
+    tool_context_keys: list[str] = Field(default_factory=list)
+    hidden_context_keys: list[str] = Field(default_factory=list)
+    context_compression_triggered: bool = False
+    checkpoint_path_exists: bool = False
+    checkpoint_resume_observed: bool = False
 
 
 class ScenarioRunResult(JsonDumpMixin):

@@ -3,7 +3,8 @@ kind: "RuntimeSpec"
 metadata:
   name: "customer-service-agent-runtime"
   version: "1.0.0"
-runtime_type: "workflow"
+runtime_type: "langgraph_react"
+compile_mode: "custom_state_graph"
 workflow_steps:
   - id: "load_context"
     type: "load_context"

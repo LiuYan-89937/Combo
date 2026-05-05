@@ -228,6 +228,7 @@ class SlashCommandDispatcher:
                 self.session.selected_agent_path = latest
         user_input = self._option_value(args, "--input") or self._option_value(args, "-i")
         session_id = self._option_value(args, "--session-id") or "default"
+        approved_tool_call_id = self._option_value(args, "--approve")
         if not path:
             return SlashCommandResult(
                 kind="error",
@@ -254,6 +255,7 @@ class SlashCommandDispatcher:
                 user_input=user_input,
                 session_id=session_id,
                 auto_repair="--auto-repair" in args,
+                approved_tool_call_id=approved_tool_call_id,
             )
         )
         self._record_pending_tool_approval(result, user_input)

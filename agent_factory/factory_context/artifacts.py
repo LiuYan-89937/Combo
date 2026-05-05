@@ -163,7 +163,7 @@ class ResourceContractSet(BaseModel):
 class ImplementationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    runtime_type: Literal["workflow", "graph"] = "workflow"
+    runtime_type: Literal["langgraph_react"] = "langgraph_react"
     tool_contract_refs: list[str] = Field(default_factory=list)
     resource_contract_refs: list[str] = Field(default_factory=list)
     harness_focus: list[str] = Field(default_factory=list)
@@ -179,4 +179,3 @@ class ProductionSummary(BaseModel):
     pending_configuration_keys: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)
-

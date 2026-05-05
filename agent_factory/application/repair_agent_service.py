@@ -14,7 +14,7 @@ from agent_factory.factory_runtime import FactoryRunContext, FactoryWorkspace
 from agent_factory.model import ModelService
 from agent_factory.package import PackageValidator
 from agent_factory.registry import FilesystemRegistry
-from agent_factory.runtime import AgentRunRequest, AgentRunResult, WorkflowRuntime
+from agent_factory.runtime import AgentInstanceRuntime, AgentRunRequest, AgentRunResult
 from agent_factory.specs import ValidationReport
 
 
@@ -224,7 +224,7 @@ class RepairAgentService:
         return patches
 
     def _run_package(self, package_path: Path, user_input: str, session_id: str) -> AgentRunResult:
-        runtime = WorkflowRuntime(
+        runtime = AgentInstanceRuntime(
             model_service=self.model_service,
             env_file=_factory_env_file(package_path),
         )

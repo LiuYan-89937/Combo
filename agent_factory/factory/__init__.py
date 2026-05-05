@@ -3,6 +3,7 @@
 from agent_factory.factory.factory_agent import FactoryAgent
 from agent_factory.factory.environment import EnvironmentProbeRunner
 from agent_factory.factory.package_writer import PackageWriter
+from agent_factory.factory.tool_build_pipeline import ToolBuildPipeline, ToolBuildReport, ToolStateMachine
 from agent_factory.factory.package_verification import (
     FactoryVerificationReport,
     HarnessDryRunReport,
@@ -21,6 +22,16 @@ from agent_factory.factory.intent_classifier import (
 )
 from agent_factory.factory.primitive_planner import PrimitivePlanner
 from agent_factory.factory.primitive_repair import PrimitiveRepair
+from agent_factory.factory.resource_resolvers import (
+    CredentialConfigResolver,
+    HumanApprovalResolver,
+    LocalPathResolver,
+    PythonPackageResolver,
+    ResourceResolverRegistry,
+    SQLiteResolver,
+    SystemCommandResolver,
+    UrlDocumentationResolver,
+)
 from agent_factory.factory.tool_preconditions import (
     ProbeTarget,
     RequiredCondition,
@@ -79,6 +90,14 @@ __all__ = [
     "PackageWriter",
     "PrimitivePlanner",
     "PrimitiveRepair",
+    "CredentialConfigResolver",
+    "HumanApprovalResolver",
+    "LocalPathResolver",
+    "PythonPackageResolver",
+    "ResourceResolverRegistry",
+    "SQLiteResolver",
+    "SystemCommandResolver",
+    "UrlDocumentationResolver",
     "IntentClarificationQuestion",
     "RequirementAnalysis",
     "RequirementAnalysisResult",
@@ -93,6 +112,9 @@ __all__ = [
     "RiskControl",
     "ToolPreconditionPlan",
     "ToolPreconditionReport",
+    "ToolBuildPipeline",
+    "ToolBuildReport",
+    "ToolStateMachine",
     "analyze_tool_preconditions",
     "ToolStaticCheckReport",
     "ToolTestRunReport",
