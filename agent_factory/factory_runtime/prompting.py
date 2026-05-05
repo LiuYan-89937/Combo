@@ -25,7 +25,8 @@ Rules:
 10. Do not wrap json in markdown fences.
 11. The first non-whitespace character of the final answer must be "{".
 12. The last non-whitespace character of the final answer must be "}".
-13. Never return a top-level JSON array/list."""
+13. Never return a top-level JSON array/list.
+14. Respect Context-first production artifacts: capability plans, resource contracts, readiness decisions, and implementation plans are stronger than guesses from the original wording."""
 
 
 class FactoryPromptBuilder:
@@ -38,6 +39,7 @@ class FactoryPromptBuilder:
         *,
         requirement: str,
         requirement_analysis: dict | None = None,
+        production_context: dict | None = None,
     ) -> LLMRequest:
         schema = AgentPackagePrimitives.model_json_schema(by_alias=True)
         example = _minimal_agent_package_example()
@@ -50,6 +52,9 @@ class FactoryPromptBuilder:
             f"Requirement:\n{requirement}\n\n"
             "RequirementAnalysis, if available:\n"
             f"{json.dumps(requirement_analysis or {}, ensure_ascii=False)}\n\n"
+            "Context-first production artifacts. These are confirmed decisions/evidence summaries. "
+            "Use them as constraints; do not invent facts outside them:\n"
+            f"{json.dumps(production_context or {}, ensure_ascii=False)}\n\n"
             f"Factory context:\n{factory_context}\n\n"
             "Minimal valid json object example:\n"
             f"{json.dumps(example, ensure_ascii=False)}\n\n"

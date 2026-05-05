@@ -72,7 +72,22 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
         route_after_maybe_clarify,
         {
             "needs_clarification": "needs_clarification",
+            "plan_capability_preconditions": "plan_capability_preconditions",
+        },
+    )
+    graph.add_edge("plan_capability_preconditions", "analyze_tool_preconditions")
+    graph.add_edge("analyze_tool_preconditions", "discover_resources")
+    graph.add_edge("discover_resources", "factory_web_research")
+    graph.add_edge("factory_web_research", "probe_environment")
+    graph.add_edge("probe_environment", "enrich_tool_contracts")
+    graph.add_edge("enrich_tool_contracts", "resolve_readiness")
+    graph.add_conditional_edges(
+        "resolve_readiness",
+        route_after_readiness,
+        {
             "plan_primitives": "plan_primitives",
+            "needs_clarification": "needs_clarification",
+            "failed": "failed",
         },
     )
     graph.add_conditional_edges(
@@ -88,7 +103,7 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
         route_after_validate_primitives,
         {
             "repair_primitives": "repair_primitives",
-            "plan_capability_preconditions": "plan_capability_preconditions",
+            "write_package": "write_package",
             "failed": "failed",
         },
     )
@@ -97,21 +112,6 @@ def build_factory_production_graph(nodes: FactoryProductionNodes):
         route_after_repair,
         {
             "validate_primitives": "validate_primitives",
-            "failed": "failed",
-        },
-    )
-    graph.add_edge("plan_capability_preconditions", "analyze_tool_preconditions")
-    graph.add_edge("analyze_tool_preconditions", "discover_resources")
-    graph.add_edge("discover_resources", "factory_web_research")
-    graph.add_edge("factory_web_research", "probe_environment")
-    graph.add_edge("probe_environment", "enrich_tool_contracts")
-    graph.add_edge("enrich_tool_contracts", "resolve_readiness")
-    graph.add_conditional_edges(
-        "resolve_readiness",
-        route_after_readiness,
-        {
-            "write_package": "write_package",
-            "needs_clarification": "needs_clarification",
             "failed": "failed",
         },
     )

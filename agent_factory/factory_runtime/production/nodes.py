@@ -42,14 +42,19 @@ from agent_factory.factory.package_artifacts import (
 )
 from agent_factory.factory.intent_classifier import FactoryIntentClassifier
 from agent_factory.factory.primitive_normalizer import normalize_primitives_candidate
-from agent_factory.factory.resource_binding import bind_requirement_resources
+from agent_factory.factory.resource_binding import (
+    bind_requirement_resources,
+    discover_resource_candidates,
+)
 from agent_factory.factory.requirement_analyzer import RequirementAnalyzer
-from agent_factory.factory.tool_preconditions import analyze_tool_preconditions
-from agent_factory.factory.web_search import FactoryWebSearchService, WebSearchConfig
+from agent_factory.factory.tool_preconditions import (
+    analyze_capability_preconditions,
+    analyze_tool_preconditions,
+)
+from agent_factory.factory.web_search import WebSearchConfig
 from agent_factory.factory.web_research import (
     ResearchPlanBuilder,
-    WebSearchPipeline,
-    assess_research_completeness,
+    build_llm_advisor_research,
 )
 from agent_factory.factory.package_verification import (
     HarnessDryRunReport,
@@ -147,6 +152,7 @@ class FactoryProductionNodes:
         result = FactoryIntentClassifier(self._optional_model_service()).classify_sync(
             self.context,
             requirement=current.requirement,
+            context_envelope=self._compile_context_envelope(current, "classify_factory_intent"),
         )
         classification = result.classification
         current.factory_intent = classification.model_dump(mode="json")
@@ -214,6 +220,7 @@ class FactoryProductionNodes:
         analysis_result = RequirementAnalyzer(self._optional_model_service()).analyze_sync(
             self.context,
             requirement=current.requirement,
+            context_envelope=self._compile_context_envelope(current, "analyze_requirement"),
             on_stream_event=self._model_stream_callback(
                 current,
                 stage="analyze_requirement",
@@ -314,6 +321,8 @@ class FactoryProductionNodes:
                     self.context,
                     requirement=current.requirement,
                     requirement_analysis=current.requirement_analysis,
+                    production_context=_production_context_for_primitives(current),
+                    context_envelope=self._compile_context_envelope(current, "plan_primitives"),
                     on_stream_event=self._model_stream_callback(
                         current,
                         stage="plan_primitives",
@@ -357,6 +366,13 @@ class FactoryProductionNodes:
         try:
             current.raw_model_data = normalize_primitives_candidate(current.raw_model_data)
             current.primitives = AgentPackagePrimitives.model_validate(current.raw_model_data)
+            current.primitives = bind_requirement_resources(
+                current.primitives,
+                current.requirement,
+                start_path=self.context.workspace_path.parent,
+                model_service=self._optional_model_service(),
+                context_envelope=self._compile_context_envelope(current, "validate_primitives"),
+            )
         except ValidationError as error:
             current.primitives = None
             current.error = FactoryError(
@@ -396,6 +412,7 @@ class FactoryProductionNodes:
                     requirement=current.requirement,
                     raw_model_data=current.raw_model_data,
                     validation_errors=validation_error,
+                    context_envelope=self._compile_context_envelope(current, "repair_primitives"),
                     on_stream_event=self._model_stream_callback(
                         current,
                         stage="repair_primitives",
@@ -462,6 +479,21 @@ class FactoryProductionNodes:
                 summary=f"{len(capabilities)} capabilities planned.",
                 payload=current.capability_plan.model_dump(mode="json"),
             )
+        else:
+            capabilities = _capabilities_from_requirement_understanding(current)
+            tool_count = len([item for item in capabilities if item.likely_requires_tools])
+            current.capability_plan = CapabilityPlan(
+                capabilities=capabilities,
+                source="requirement_understanding",
+            )
+            self._append_decision(
+                current,
+                stage="plan_capability_preconditions",
+                artifact_type="CapabilityPlan",
+                title="Capability plan",
+                summary=f"{len(capabilities)} requirement-level capabilities planned before primitives.",
+                payload=current.capability_plan.model_dump(mode="json"),
+            )
         self._stream_progress(
             current,
             stage="plan_capability_preconditions",
@@ -487,21 +519,46 @@ class FactoryProductionNodes:
             title="Analyzing tool preconditions",
             message="Semantically identifying local, external, dependency, permission, fixture, and sandbox conditions.",
         )
+        web_config = WebSearchConfig.from_env(self.context.workspace_path.parent / ".env")
         if current.primitives is None:
-            current.error = FactoryError(
-                code="missing_primitives",
-                message="No primitives available for tool precondition analysis.",
+            capabilities = [
+                capability.model_dump(mode="json")
+                for capability in (current.capability_plan.capabilities if current.capability_plan else [])
+            ]
+            report = analyze_capability_preconditions(
+                capabilities,
+                current.requirement,
+                web_config=web_config,
+                model_service=self._optional_model_service(),
+                context_envelope=self._compile_context_envelope(current, "analyze_tool_preconditions"),
             )
-            plan_count = 0
-            condition_count = 0
-            missing_count = 0
+            current.tool_precondition_report = report.model_dump(mode="json")
+            current.condition_plan = _condition_plan_from_tool_preconditions(report)
+            current.resource_need_plan = _resource_need_plan_from_tool_preconditions(report)
+            self._append_decision(
+                current,
+                stage="analyze_tool_preconditions",
+                artifact_type="ConditionPlan",
+                title="Condition plan",
+                summary=(
+                    f"{len(current.condition_plan.conditions)} conditions, "
+                    f"{len(current.resource_need_plan.resources)} resources."
+                ),
+                payload={
+                    "condition_plan": current.condition_plan.model_dump(mode="json"),
+                    "resource_need_plan": current.resource_need_plan.model_dump(mode="json"),
+                },
+            )
+            plan_count = len(report.plans)
+            condition_count = report.condition_count
+            missing_count = len(report.missing_required_conditions)
         else:
-            web_config = WebSearchConfig.from_env(self.context.workspace_path.parent / ".env")
             report = analyze_tool_preconditions(
                 current.primitives,
                 current.requirement,
                 web_config=web_config,
                 model_service=self._optional_model_service(),
+                context_envelope=self._compile_context_envelope(current, "analyze_tool_preconditions"),
             )
             current.tool_precondition_report = report.model_dump(mode="json")
             current.condition_plan = _condition_plan_from_tool_preconditions(report)
@@ -551,17 +608,54 @@ class FactoryProductionNodes:
             message="Binding local paths from the requirement to tool-visible package resources.",
         )
         if current.primitives is None:
-            current.error = FactoryError(
-                code="missing_primitives",
-                message="No primitives available for resource discovery.",
+            candidates = discover_resource_candidates(
+                current.requirement,
+                start_path=self.context.workspace_path.parent,
             )
-            resource_count = 0
+            resource_count = len(candidates)
+            if candidates:
+                existing = {
+                    resource.resource_id: resource
+                    for resource in (
+                        current.resource_need_plan.resources
+                        if current.resource_need_plan
+                        else []
+                    )
+                }
+                for candidate in candidates:
+                    existing.setdefault(
+                        candidate.id,
+                        ResourceNeed(
+                            resource_id=candidate.id,
+                            family="data",
+                            kind=candidate.kind if candidate.kind == "directory" else candidate.suffix or "file",
+                            location=candidate.ref,
+                            access_mode=candidate.default_access_mode,
+                            visibility="tool_only",
+                            lifecycle="build_time",
+                            risk_level="low",
+                            required_evidence=["path exists", "readability", "sandbox copy"],
+                        ),
+                    )
+                current.resource_need_plan = ResourceNeedPlan(
+                    resources=list(existing.values()),
+                    source="resource_discovery",
+                )
+                self._append_decision(
+                    current,
+                    stage="discover_resources",
+                    artifact_type="ResourceNeedPlan",
+                    title="Local resources discovered",
+                    summary=f"{resource_count} local resources discovered from requirement.",
+                    payload=current.resource_need_plan.model_dump(mode="json"),
+                )
         else:
             current.primitives = bind_requirement_resources(
                 current.primitives,
                 current.requirement,
                 start_path=self.context.workspace_path.parent,
                 model_service=self._optional_model_service(),
+                context_envelope=self._compile_context_envelope(current, "discover_resources"),
             )
             resource_count = len(current.primitives.knowledge.sources)
         event = FactoryEvent(
@@ -579,22 +673,18 @@ class FactoryProductionNodes:
         self._stream_progress(
             current,
             stage="factory_web_research",
-            title="Factory web research pipeline",
-            message="Using user-provided external resource URLs, then fetching, cleaning, and extracting ResearchBrief.",
+            title="External resource LLM advisor",
+            message="WebSearch is disabled; using the configured model to complete external-resource setup candidates.",
         )
         plan = ResearchPlanBuilder().build(
             requirement=current.requirement,
             tool_precondition_report=current.tool_precondition_report,
         )
-        if not plan.requires_research:
-            service = FactoryWebSearchService(WebSearchConfig(provider="disabled"))
-        else:
-            service = FactoryWebSearchService.from_env(self.context.workspace_path.parent / ".env")
-        bundle = WebSearchPipeline(
-            search_service=service,
+        bundle, completeness = build_llm_advisor_research(
+            plan,
             model_service=self._optional_model_service(),
-        ).run(plan)
-        completeness = assess_research_completeness(bundle)
+            context_envelope=self._compile_context_envelope(current, "factory_web_research"),
+        )
         report = bundle.raw_search_report
         current.web_research_report = report.model_dump(mode="json")
         current.research_brief_report = bundle.model_dump(mode="json")
@@ -624,10 +714,9 @@ class FactoryProductionNodes:
             run_id=current.run_id,
             stage="factory_web_research",
             status=EventStatus.COMPLETED if bundle.status in {"passed", "skipped"} else EventStatus.WARNING,
-            title="Factory web research finished",
+            title="External resource advisor finished",
             message=(
-                f"status={bundle.status}, candidates={len(bundle.candidates)}, "
-                f"documents={len(bundle.clean_documents)}, brief={bundle.brief.status}, "
+                f"web_search=disabled, advisor={bundle.status}, brief={bundle.brief.status}, "
                 f"completeness={completeness.status}"
             ),
             payload={
@@ -655,57 +744,51 @@ class FactoryProductionNodes:
             title="Probing environment and resources",
             message="Checking local resources, SQLite schemas, Python support, optional CLI tools, and sandbox readiness.",
         )
-        if current.primitives is None:
-            current.error = FactoryError(
-                code="missing_primitives",
-                message="No primitives available for environment probing.",
+        try:
+            environment, contracts, readiness = EnvironmentProbeRunner().probe(
+                current.primitives,
+                requirement=current.requirement,
+                start_path=self.context.workspace_path.parent,
+                tool_precondition_report=current.tool_precondition_report,
+                web_research_report=current.web_research_report,
+                research_brief_report=current.research_brief_report,
+                research_completeness_report=current.research_completeness_report,
             )
-        else:
-            try:
-                environment, contracts, readiness = EnvironmentProbeRunner().probe(
-                    current.primitives,
-                    requirement=current.requirement,
-                    start_path=self.context.workspace_path.parent,
-                    tool_precondition_report=current.tool_precondition_report,
-                    web_research_report=current.web_research_report,
-                    research_brief_report=current.research_brief_report,
-                    research_completeness_report=current.research_completeness_report,
-                )
-                current.environment_report = environment
-                current.resource_contracts = contracts
-                current.readiness_report = readiness
-                current.resource_contract_set = ResourceContractSet(
-                    resources=[resource.model_dump(mode="json") for resource in contracts.resources],
-                    external_config_keys=_external_config_keys_from_research(current.research_brief_report),
-                    evidence_refs=[report.evidence_id for report in current.evidence_reports],
-                )
-                current.readiness_decision = _readiness_decision_from_report(
-                    readiness,
-                    research_completeness_report=current.research_completeness_report,
-                )
-                self._append_evidence_report(
-                    current,
-                    EvidenceReport(
-                        evidence_id="environment_probe",
-                        source="local_probe",
-                        status="passed" if readiness.status in {"ready", "mock_only_allowed"} else "partial",
-                        summary=(
-                            f"{len(contracts.resources)} resources, "
-                            f"{len(environment.preconditions)} preconditions, readiness={readiness.status}."
-                        ),
-                        safe_for_prompt=True,
-                        details={
-                            "resource_count": len(contracts.resources),
-                            "precondition_count": len(environment.preconditions),
-                            "readiness_status": readiness.status,
-                        },
+            current.environment_report = environment
+            current.resource_contracts = contracts
+            current.readiness_report = readiness
+            current.resource_contract_set = ResourceContractSet(
+                resources=[resource.model_dump(mode="json") for resource in contracts.resources],
+                external_config_keys=_external_config_keys_from_research(current.research_brief_report),
+                evidence_refs=[report.evidence_id for report in current.evidence_reports],
+            )
+            current.readiness_decision = _readiness_decision_from_report(
+                readiness,
+                research_completeness_report=current.research_completeness_report,
+            )
+            self._append_evidence_report(
+                current,
+                EvidenceReport(
+                    evidence_id="environment_probe",
+                    source="local_probe",
+                    status="passed" if readiness.status in {"ready", "mock_only_allowed"} else "partial",
+                    summary=(
+                        f"{len(contracts.resources)} resources, "
+                        f"{len(environment.preconditions)} preconditions, readiness={readiness.status}."
                     ),
-                )
-            except Exception as error:
-                current.error = FactoryError(
-                    code="environment_probe_failed",
-                    message=str(error),
-                )
+                    safe_for_prompt=True,
+                    details={
+                        "resource_count": len(contracts.resources),
+                        "precondition_count": len(environment.preconditions),
+                        "readiness_status": readiness.status,
+                    },
+                ),
+            )
+        except Exception as error:
+            current.error = FactoryError(
+                code="environment_probe_failed",
+                message=str(error),
+            )
         event = FactoryEvent(
             run_id=current.run_id,
             stage="probe_environment",
@@ -918,6 +1001,7 @@ class FactoryProductionNodes:
                 requirement=current.requirement,
                 requirement_analysis=current.requirement_analysis,
                 resource_contracts=current.resource_contracts,
+                context_envelope=self._compile_context_envelope(current, "generate_tool_scripts"),
                 on_stream_event=self._model_stream_callback(
                     current,
                     stage="generate_tool_scripts",
@@ -927,25 +1011,34 @@ class FactoryProductionNodes:
                 on_tool_progress=self._tool_progress_callback(current),
             )
             _apply_artifact_report(current, report)
-            if report.issues:
-                current.error = FactoryError(
-                    code="tool_script_generation_failed",
-                    message="; ".join(report.issues[:3]),
-                )
         except Exception as error:
             current.error = FactoryError(code="tool_script_generation_failed", message=str(error))
+            report = None
+        has_generation_issues = bool(getattr(report, "issues", [])) if "report" in locals() else False
         event = FactoryEvent(
             run_id=current.run_id,
             stage="generate_tool_scripts",
-            status=EventStatus.FAILED if current.error else EventStatus.COMPLETED,
-            title="Tool draft scripts generated" if not current.error else "Tool draft generation failed",
-            message=current.error.message if current.error else None,
+            status=EventStatus.FAILED
+            if current.error
+            else EventStatus.WARNING
+            if has_generation_issues
+            else EventStatus.COMPLETED,
+            title="Tool draft generation failed"
+            if current.error
+            else "Tool draft scripts generated with warnings"
+            if has_generation_issues
+            else "Tool draft scripts generated",
+            message=current.error.message
+            if current.error
+            else "; ".join(report.issues[:3])
+            if has_generation_issues and report is not None
+            else None,
             artifact_path=str(current.package_path / "generated" / "draft_tools")
             if current.package_path
             else None,
             payload={
                 "tools": current.generated_tool_count,
-                "issues": report.issues if "report" in locals() else [],
+                "issues": report.issues if report is not None else [],
             },
         )
         return self._with_event(current, node="generate_tool_scripts", event=event)
@@ -1479,6 +1572,13 @@ class FactoryProductionNodes:
         return state.as_graph_state()
 
     def _record_node_context(self, state: FactoryProductionState, stage: str) -> None:
+        state.context_envelopes.append(self._compile_context_envelope(state, stage))
+
+    def _compile_context_envelope(
+        self,
+        state: FactoryProductionState,
+        stage: str,
+    ):
         ledger = DecisionLedger(
             records=[
                 DecisionRecord.model_validate(record)
@@ -1498,13 +1598,12 @@ class FactoryProductionNodes:
                 for report in state.evidence_reports
             ]
         )
-        envelope = self.context_compiler.compile(
+        return self.context_compiler.compile(
             stage=stage,
             state=state,
             decision_ledger=ledger,
             evidence_store=evidence_store,
         )
-        state.context_envelopes.append(envelope)
 
     def _append_decision(
         self,
@@ -1738,6 +1837,116 @@ def _apply_artifact_report(
     state.generated_tool_test_count += report.tool_test_count
     state.mcp_binding_count += report.mcp_binding_count
     state.harness_scenario_count += report.harness_scenario_count
+
+
+def _capabilities_from_requirement_understanding(
+    state: FactoryProductionState,
+) -> list[CapabilityItem]:
+    analysis = state.requirement_analysis or {}
+    needed_tools = analysis.get("needed_tools") if isinstance(analysis, dict) else []
+    in_scope = analysis.get("in_scope_tasks") if isinstance(analysis, dict) else []
+    goals = analysis.get("goals") if isinstance(analysis, dict) else []
+    capabilities: list[CapabilityItem] = []
+    for index, tool in enumerate(needed_tools or [], start=1):
+        description = str(tool).strip()
+        if not description:
+            continue
+        capabilities.append(
+            CapabilityItem(
+                capability_id=_safe_capability_id(description, index),
+                description=description,
+                likely_requires_tools=True,
+            )
+        )
+    if not capabilities:
+        for index, task in enumerate(in_scope or [], start=1):
+            description = str(task).strip()
+            if not description:
+                continue
+            capabilities.append(
+                CapabilityItem(
+                    capability_id=_safe_capability_id(description, index),
+                    description=description,
+                    likely_requires_tools=_task_likely_requires_tool(description),
+                )
+            )
+    if not capabilities:
+        goal = "; ".join(str(item) for item in (goals or []) if str(item).strip())
+        if not goal and state.requirement_understanding is not None:
+            goal = state.requirement_understanding.goal
+        capabilities.append(
+            CapabilityItem(
+                capability_id="conversation",
+                description=goal or state.requirement,
+                likely_requires_tools=_task_likely_requires_tool(goal or state.requirement),
+            )
+        )
+    return capabilities
+
+
+def _safe_capability_id(value: str, index: int) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_").lower()
+    if not normalized:
+        normalized = f"capability_{index}"
+    if normalized[0].isdigit():
+        normalized = f"capability_{normalized}"
+    return normalized[:64]
+
+
+def _task_likely_requires_tool(value: str) -> bool:
+    lowered = value.lower()
+    return any(
+        marker in value or marker in lowered
+        for marker in [
+            "查询",
+            "搜索",
+            "计算",
+            "数据库",
+            "文件",
+            "api",
+            "http",
+            "url",
+            "天气",
+            "订单",
+            "创建",
+            "更新",
+            "删除",
+            "发送",
+            "sqlite",
+            "pdf",
+        ]
+    )
+
+
+def _production_context_for_primitives(state: FactoryProductionState) -> dict[str, Any]:
+    return {
+        "requirement_understanding": state.requirement_understanding.model_dump(mode="json")
+        if state.requirement_understanding
+        else None,
+        "capability_plan": state.capability_plan.model_dump(mode="json")
+        if state.capability_plan
+        else None,
+        "condition_plan": state.condition_plan.model_dump(mode="json")
+        if state.condition_plan
+        else None,
+        "resource_need_plan": state.resource_need_plan.model_dump(mode="json")
+        if state.resource_need_plan
+        else None,
+        "resource_contract_set": state.resource_contract_set.model_dump(mode="json")
+        if state.resource_contract_set
+        else None,
+        "readiness_decision": state.readiness_decision.model_dump(mode="json")
+        if state.readiness_decision
+        else None,
+        "implementation_plan": state.implementation_plan.model_dump(mode="json")
+        if state.implementation_plan
+        else None,
+        "evidence_summaries": [
+            report.model_dump(mode="json", exclude={"details"})
+            for report in state.evidence_reports
+            if report.safe_for_prompt
+        ],
+    }
 
 
 def _condition_plan_from_tool_preconditions(report: object) -> ConditionPlan:

@@ -700,8 +700,7 @@ def _human_flow_phase(phase: str) -> str:
         "model_generation_started": "model call started",
         "model_generated": "model code accepted",
         "model_repaired": "model code repaired",
-        "deterministic_fallback": "deterministic fallback",
-        "generic_fallback": "generic fallback",
+        "generation_failed": "model code unavailable",
         "written": "files written",
     }.get(phase, phase.replace("_", " "))
 

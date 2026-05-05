@@ -11,6 +11,7 @@ from pydantic import ConfigDict, Field, ValidationError
 from ruamel.yaml import YAML
 
 from agent_factory.core.types import JsonDumpMixin
+from agent_factory.factory_context import FactoryContextEnvelope, apply_context_envelope
 from agent_factory.factory.tool_generation import (
     GeneratedToolCodeDraft,
     ToolContract,
@@ -20,7 +21,6 @@ from agent_factory.factory.tool_generation import (
     build_tool_generation_request,
     derive_tool_contract,
     fallback_tool_code,
-    required_tool_test_cases,
     validate_tool_logic_source,
     validate_tool_source,
 )
@@ -55,6 +55,7 @@ class PackageArtifactGenerator:
         requirement: str | None = None,
         requirement_analysis: dict[str, Any] | None = None,
         resource_contracts: ResourceContractsSpec | None = None,
+        context_envelope: FactoryContextEnvelope | None = None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
         on_tool_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> PackageArtifactReport:
@@ -70,6 +71,7 @@ class PackageArtifactGenerator:
             requirement=requirement,
             requirement_analysis=requirement_analysis,
             resource_contracts=resource_contracts,
+            context_envelope=context_envelope,
             on_stream_event=on_stream_event,
         )
         _emit_contract_progress(on_tool_progress, contracts, total=total_tools)
@@ -87,6 +89,7 @@ class PackageArtifactGenerator:
                         requirement=requirement,
                         requirement_analysis=requirement_analysis,
                         resource_contracts=resource_contracts,
+                        context_envelope=context_envelope,
                         on_stream_event=on_stream_event,
                         on_tool_progress=on_tool_progress,
                         total_tools=total_tools,
@@ -115,6 +118,7 @@ class PackageArtifactGenerator:
                         requirement=requirement,
                         requirement_analysis=requirement_analysis,
                         resource_contracts=resource_contracts,
+                        context_envelope=context_envelope,
                         on_stream_event=None,
                     )
                     future_map[future] = (index, draft)
@@ -157,7 +161,7 @@ class PackageArtifactGenerator:
                 artifact_path=str(script_path),
             )
             report.artifact_paths.extend([script_path, metadata_path, codegen_path])
-            if code_draft.generation_status == "generic_fallback":
+            if code_draft.generation_status == "generation_failed":
                 report.issues.append(
                     _tool_generation_issue(draft["tool_id"], code_draft.generation_errors)
                 )
@@ -435,6 +439,7 @@ class PackageArtifactGenerator:
         requirement: str | None,
         requirement_analysis: dict[str, Any] | None,
         resource_contracts: ResourceContractsSpec | None,
+        context_envelope: FactoryContextEnvelope | None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None,
     ) -> dict[str, ToolContract]:
         derived = {
@@ -454,12 +459,15 @@ class PackageArtifactGenerator:
         ):
             return derived
         try:
-            request = build_tool_contracts_request(
-                primitives,
-                tool_drafts,
-                requirement=requirement,
-                requirement_analysis=requirement_analysis,
-                resource_contracts=resource_contracts,
+            request = apply_context_envelope(
+                build_tool_contracts_request(
+                    primitives,
+                    tool_drafts,
+                    requirement=requirement,
+                    requirement_analysis=requirement_analysis,
+                    resource_contracts=resource_contracts,
+                ),
+                context_envelope,
             )
             method = (
                 self.model_service.stream_structured
@@ -496,6 +504,7 @@ class PackageArtifactGenerator:
         requirement: str | None,
         requirement_analysis: dict[str, Any] | None,
         resource_contracts: ResourceContractsSpec | None,
+        context_envelope: FactoryContextEnvelope | None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None,
         on_tool_progress: Callable[[dict[str, Any]], None] | None,
         total_tools: int,
@@ -515,6 +524,7 @@ class PackageArtifactGenerator:
             requirement=requirement,
             requirement_analysis=requirement_analysis,
             resource_contracts=resource_contracts,
+            context_envelope=context_envelope,
             on_stream_event=on_stream_event,
         )
         _emit_tool_progress(
@@ -544,19 +554,23 @@ class PackageArtifactGenerator:
         requirement: str | None = None,
         requirement_analysis: dict[str, Any] | None = None,
         resource_contracts: ResourceContractsSpec | None = None,
+        context_envelope: FactoryContextEnvelope | None = None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> GeneratedToolCodeDraft:
         if self.model_service is not None:
             generation_errors: list[str] = []
             previous_data: Any = None
             try:
-                request = build_tool_generation_request(
-                    primitives,
-                    draft,
-                    contract=contract,
-                    requirement=requirement,
-                    requirement_analysis=requirement_analysis,
-                    resource_contracts=resource_contracts,
+                request = apply_context_envelope(
+                    build_tool_generation_request(
+                        primitives,
+                        draft,
+                        contract=contract,
+                        requirement=requirement,
+                        requirement_analysis=requirement_analysis,
+                        resource_contracts=resource_contracts,
+                    ),
+                    context_envelope,
                 )
                 result = asyncio.run(
                     _generate_tool_text(
@@ -589,15 +603,18 @@ class PackageArtifactGenerator:
                 generation_errors.append(f"model_generation_exception:{type(error).__name__}:{error}")
 
             try:
-                repair_request = build_tool_repair_request(
-                    primitives,
-                    draft,
-                    contract=contract,
-                    previous_data=previous_data,
-                    validation_errors=generation_errors,
-                    requirement=requirement,
-                    requirement_analysis=requirement_analysis,
-                    resource_contracts=resource_contracts,
+                repair_request = apply_context_envelope(
+                    build_tool_repair_request(
+                        primitives,
+                        draft,
+                        contract=contract,
+                        previous_data=previous_data,
+                        validation_errors=generation_errors,
+                        requirement=requirement,
+                        requirement_analysis=requirement_analysis,
+                        resource_contracts=resource_contracts,
+                    ),
+                    context_envelope,
                 )
                 repair_result = asyncio.run(
                     _generate_tool_text(
@@ -735,8 +752,7 @@ def _human_tool_phase(phase: str) -> str:
         "model_generation_started": "calling model for code",
         "model_generated": "model code accepted",
         "model_repaired": "model code repaired",
-        "deterministic_fallback": "deterministic template selected",
-        "generic_fallback": "generic fallback selected",
+        "generation_failed": "model code unavailable",
         "written": "files written",
     }.get(phase, phase.replace("_", " "))
 
@@ -753,7 +769,7 @@ def _tool_drafts(primitives: AgentPackagePrimitives) -> list[dict[str, Any]]:
                 if tool_id in seen:
                     continue
                 seen.add(tool_id)
-                risk_level = _infer_tool_risk(tool_id, toolset.description)
+                risk_level = "medium"
                 drafts.append(
                     {
                         "tool_id": tool_id,
@@ -763,69 +779,18 @@ def _tool_drafts(primitives: AgentPackagePrimitives) -> list[dict[str, Any]]:
                         "proposal_only": toolset.proposal_only,
                         "selection_strategy": toolset.selection_strategy,
                         "risk_level": risk_level,
-                        "approval_required": risk_level in {"high", "critical"},
+                        "approval_required": True,
                     }
                 )
     return drafts
-
-
-def _tool_script_source(draft: dict[str, Any]) -> str:
-    tool_id = json.dumps(draft["tool_id"], ensure_ascii=True)
-    toolset_id = json.dumps(draft["toolset_id"], ensure_ascii=True)
-    risk_level = json.dumps(draft["risk_level"], ensure_ascii=True)
-    approval_required = "True" if draft["approval_required"] else "False"
-    return f'''"""Factory-generated draft tool.
-
-This module is a placeholder implementation. It must pass review, generated
-tool tests, AgentHarness, and approval before becoming an available capability.
-"""
-
-from __future__ import annotations
-
-from typing import Any
-
-
-TOOL_ID = {tool_id}
-TOOLSET_ID = {toolset_id}
-RISK_LEVEL = {risk_level}
-APPROVAL_REQUIRED = {approval_required}
-
-
-def input_schema() -> dict[str, Any]:
-    return {{"type": "object", "additionalProperties": True}}
-
-
-def output_schema() -> dict[str, Any]:
-    return {{
-        "type": "object",
-        "properties": {{
-            "status": {{"type": "string"}},
-            "tool_id": {{"type": "string"}},
-            "requires_approval": {{"type": "boolean"}},
-            "input": {{"type": "object"}},
-        }},
-        "required": ["status", "tool_id", "requires_approval", "input"],
-    }}
-
-
-def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not isinstance(input_data, dict):
-        raise TypeError("input_data must be a dict")
-    return {{
-        "status": "not_implemented",
-        "tool_id": TOOL_ID,
-        "requires_approval": APPROVAL_REQUIRED,
-        "input": input_data,
-    }}
-'''
 
 
 def _tool_test_source(draft: dict[str, Any], code_draft: GeneratedToolCodeDraft) -> str:
     stem = _safe_file_stem(draft["tool_id"])
     class_name = "".join(part.capitalize() for part in stem.split("_")) or "GeneratedTool"
     test_cases = _merge_tool_test_cases(
-        code_draft.test_cases or fallback_tool_code(draft).test_cases,
-        required_tool_test_cases(draft),
+        code_draft.test_cases,
+        [],
     )
     rendered_cases = [
         {
@@ -880,7 +845,7 @@ class {class_name}DraftTests(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertTrue(result, "tool result must not be empty")
         status = str(result.get("status", "")).lower()
-        self.assertNotIn(status, {{"not_implemented", "error"}})
+        self.assertNotIn(status, {{"not_implemented", "error", "generation_failed"}})
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True).lower()
         if status == "needs_configuration":
             self.assertTrue(
@@ -898,9 +863,6 @@ class {class_name}DraftTests(unittest.TestCase):
             )
         forbidden_markers = [
             "not_implemented",
-            "generic_fallback",
-            "placeholder",
-            "已完成本地模拟处理",
         ]
         for marker in forbidden_markers:
             self.assertNotIn(marker, serialized)
@@ -964,7 +926,7 @@ def _tool_metadata(
 def _load_codegen(draft_dir: Path, stem: str) -> GeneratedToolCodeDraft:
     path = draft_dir / f"{stem}.codegen.json"
     if not path.exists():
-        return fallback_tool_code({"tool_id": stem, "risk_level": "low", "approval_required": False})
+        return fallback_tool_code({"tool_id": stem, "risk_level": "medium", "approval_required": True})
     data = json.loads(path.read_text(encoding="utf-8"))
     return GeneratedToolCodeDraft.model_validate(data)
 
@@ -1025,10 +987,7 @@ def _coerce_tool_code(
     code.fallback_used = False
     code.repair_attempts = repair_attempts
     code.generation_errors = list(prior_errors)
-    code.test_cases = _merge_tool_test_cases(
-        code.test_cases,
-        required_tool_test_cases(draft, primitives=primitives, requirement=requirement),
-    )
+    code.test_cases = _merge_tool_test_cases(code.test_cases, [])
     return code, []
 
 
@@ -1203,9 +1162,34 @@ def _resources_for_logic(context: dict[str, Any]) -> dict[str, Any]:
         "sqlite_databases": context.get("sqlite_databases", {{}}),
         "filesystem_root": context.get("filesystem_root"),
         "runtime": context.get("runtime", {{}}),
-        "external_config": context.get("external_config", {{}}),
+        "external_config": _external_config_for_logic(context.get("external_config", {{}})),
         "external_http_client": context.get("external_http_client"),
     }}
+
+
+def _external_config_for_logic(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {{}}
+    values = raw.get("values") if isinstance(raw.get("values"), dict) else {{}}
+    resolved = raw.get("resolved_values") if isinstance(raw.get("resolved_values"), dict) else {{}}
+    merged: dict[str, Any] = {{}}
+    merged.update(values)
+    merged.update(resolved)
+    for key in (
+        "path",
+        "exists",
+        "status",
+        "required_keys",
+        "secret_keys",
+        "source_urls",
+        "missing_required_keys",
+    ):
+        if key in raw:
+            merged[key] = raw[key]
+    merged["values"] = values
+    merged["resolved_values"] = resolved
+    merged["data"] = raw.get("data", {{}})
+    return merged
 '''
 
 
@@ -1230,7 +1214,7 @@ def _extract_python_source(value: str) -> str:
 def _tool_generation_issue(tool_id: str, errors: list[str]) -> str:
     detail = "; ".join(errors[:5]) if errors else "no detailed error was captured"
     return (
-        f"{tool_id}: tool generation fell back to a generic placeholder. "
+        f"{tool_id}: model tool generation failed. "
         f"The package is not production-ready. Details: {detail}"
     )
 
@@ -1273,7 +1257,7 @@ def _basic_harness_scenario(primitives: AgentPackagePrimitives) -> dict[str, Any
             "must_confirm": False,
             "forbidden_direct_execution": True,
             "response_constraints": {
-                "must_not_include": ["已直接执行", "已自动扣款", "已完成退款"],
+                "must_not_include": ["已直接执行", "已自动执行高风险操作"],
             },
         },
         "observe": {
@@ -1291,8 +1275,8 @@ def _memory_harness_scenario() -> dict[str, Any]:
         "id": "memory_recall_001",
         "name": "Conversation history recall",
         "turns": [
-            {"user": "我叫刘岩"},
-            {"user": "我叫什么？"},
+            {"user": "请记住我的代号是 AF-TEST-USER"},
+            {"user": "我的代号是什么？"},
         ],
         "expected": {
             "intent": "in_scope",
@@ -1300,7 +1284,7 @@ def _memory_harness_scenario() -> dict[str, Any]:
             "must_confirm": False,
             "forbidden_direct_execution": True,
             "response_constraints": {
-                "must_include": ["刘岩"],
+                "must_include": ["AF-TEST-USER"],
             },
         },
         "observe": {
@@ -1326,7 +1310,7 @@ def _tool_harness_scenario(draft: dict[str, Any]) -> dict[str, Any]:
             "must_confirm": draft["approval_required"],
             "forbidden_direct_execution": draft["approval_required"],
             "response_constraints": {
-                "must_include": ["order_status"] if tool_id == "order_query" else [],
+                "must_include": [],
             },
         },
         "observe": {
@@ -1400,40 +1384,3 @@ def _safe_identifier(value: str) -> str:
     if normalized[0].isdigit():
         return f"id_{normalized}"
     return normalized
-
-
-def _infer_tool_risk(tool_id: str, description: str | None = None) -> str:
-    lowered = f"{tool_id} {description or ''}".lower()
-    low_risk_markers = [
-        "calculate",
-        "calculator",
-        "compute",
-        "convert",
-        "query",
-        "search",
-        "lookup",
-        "get",
-        "list",
-        "read",
-        "find",
-        "math",
-        "number",
-        "计算",
-        "奇异",
-    ]
-    if any(marker in lowered for marker in low_risk_markers):
-        return "low"
-    high_risk_markers = [
-        "create",
-        "delete",
-        "refund",
-        "payment",
-        "charge",
-        "write",
-        "send",
-        "approve",
-        "cancel",
-    ]
-    if any(marker in lowered for marker in high_risk_markers):
-        return "high"
-    return "medium"

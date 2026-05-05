@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.factory_context import FactoryContextEnvelope, apply_context_envelope
 from agent_factory.factory.web_search import FactoryWebSearchService, WebSearchReport
 from agent_factory.model import ModelService
 from agent_factory.model.messages import MessageBuilder
@@ -166,6 +167,44 @@ class ExtractedEvidence(BaseModel):
     confidence: Literal["high", "medium", "low", "unknown"] = "unknown"
 
 
+class AdvisorOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    id: str
+    description: str = ""
+    method: str | None = None
+    endpoint: str | None = None
+    params: list[dict[str, Any]] = Field(default_factory=list)
+    sample_request: str | None = None
+    sample_response: str | None = None
+    error_shape: str | None = None
+
+
+class AdvisorConfigField(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    key: str
+    label: str = ""
+    required: bool = True
+    secret: bool = False
+    value: str = ""
+    notes: str = ""
+
+
+class ExternalAdvisorPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    service_name: str | None = None
+    confidence: Literal["high", "medium", "low", "unknown"] = "unknown"
+    summary: str = ""
+    auth_type: str | None = None
+    auth_notes: str | None = None
+    operations: list[AdvisorOperation] = Field(default_factory=list)
+    config_fields: list[AdvisorConfigField] = Field(default_factory=list)
+    unresolved_fields: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+
+
 class ResearchSource(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -272,7 +311,12 @@ class ResearchPlanBuilder:
             service_id=_safe_id(service_name),
             service_name=service_name,
             purpose=requirement[:500],
-            queries=query_hints[:6],
+            queries=_rewrite_learning_queries(
+                service_name=service_name,
+                requirement=requirement,
+                operations=operations,
+                query_hints=query_hints,
+            )[:6],
             source_urls=_unique(urls)[:8],
             preferred_domains=_preferred_domains(urls),
             operations=operations,
@@ -307,13 +351,18 @@ class WebSearchPipeline:
             max_link_depth=search_config.research_max_link_depth,
         )
 
-    def run(self, plan: ResearchPlan) -> ResearchBriefBundle:
+    def run(
+        self,
+        plan: ResearchPlan,
+        *,
+        context_envelope: FactoryContextEnvelope | None = None,
+    ) -> ResearchBriefBundle:
         raw_report = WebSearchReport(status="skipped", provider="manual_url")
         if not plan.requires_research:
             brief = _empty_brief(plan, status="skipped", issue="no_research_required")
             return ResearchBriefBundle(raw_search_report=raw_report, brief=brief, plan=plan)
 
-        if not plan.source_urls:
+        if not plan.source_urls and not self.search_service.config.enabled:
             issue = "external_resource_url_required"
             brief = _empty_brief(plan, status="unresolved", issue=issue)
             raw_report = WebSearchReport(
@@ -330,12 +379,31 @@ class WebSearchPipeline:
                 issues=[issue],
             )
 
-        candidates, fetched = self._fetch_with_related_pages(_manual_candidates(plan), plan)
+        initial_candidates = _manual_candidates(plan)
+        if not initial_candidates:
+            raw_report = self.search_service.search_many(plan.queries)
+            initial_candidates = _candidates_from_search_report(raw_report, plan)
+            if not initial_candidates:
+                issue = "external_search_no_usable_candidates"
+                brief = _empty_brief(plan, status="unresolved", issue=issue)
+                return ResearchBriefBundle(
+                    status="failed",
+                    plan=plan,
+                    raw_search_report=raw_report,
+                    brief=brief,
+                    issues=_unique([issue, *raw_report.issues]),
+                )
+
+        candidates, fetched = self._fetch_with_related_pages(initial_candidates, plan)
         cleaned = _rank_documents(
             [_clean_document(doc, plan) for doc in fetched if doc.status == "fetched"],
             plan,
         )
-        evidence = self._extract_evidence(plan, cleaned)
+        evidence = self._extract_evidence(
+            plan,
+            cleaned,
+            context_envelope=context_envelope,
+        )
         brief = _build_brief(plan, evidence, cleaned)
         issues: list[str] = []
         for doc in fetched:
@@ -422,15 +490,391 @@ class WebSearchPipeline:
         self,
         plan: ResearchPlan,
         documents: list[CleanDocument],
+        *,
+        context_envelope: FactoryContextEnvelope | None = None,
     ) -> ExtractedEvidence:
         openapi_evidence = _extract_openapi_evidence(plan, documents)
         if openapi_evidence is not None:
             return openapi_evidence
         if self.model_service is not None and documents:
-            model_evidence = _extract_evidence_with_model(self.model_service, plan, documents)
+            model_evidence = _extract_evidence_with_model(
+                self.model_service,
+                plan,
+                documents,
+                context_envelope=context_envelope,
+            )
             if model_evidence is not None:
                 return _validate_and_enrich_evidence(model_evidence, plan, documents)
         return _extract_evidence_by_rules(plan, documents)
+
+
+def build_llm_advisor_research(
+    plan: ResearchPlan,
+    *,
+    model_service: ModelService | None = None,
+    context_envelope: FactoryContextEnvelope | None = None,
+) -> tuple[ResearchBriefBundle, ResearchCompletenessReport]:
+    """Build external-resource context without WebSearch.
+
+    This is a temporary production mode for evaluating whether the configured
+    LLM can complete external-resource setup from requirement semantics alone.
+    The output is deliberately marked as unverified model advice.
+    """
+
+    advisor_issues: list[str] = []
+    evidence = _external_advice_with_model(
+        plan,
+        model_service=model_service,
+        context_envelope=context_envelope,
+        issues=advisor_issues,
+    )
+    if evidence is None:
+        evidence = _external_advice_by_requirement(plan)
+        advisor_issues.append("llm_advisor_fallback_used")
+    brief = _build_advisor_brief(plan, evidence)
+    raw_report = WebSearchReport(
+        status="skipped",
+        provider="llm_advisor",
+        queries=plan.queries,
+        issues=["web_search_disabled_llm_advisor_only", *advisor_issues],
+    )
+    bundle = ResearchBriefBundle(
+        status="skipped",
+        plan=plan,
+        raw_search_report=raw_report,
+        brief=brief,
+        issues=["facts_are_unverified_model_advice", *advisor_issues],
+    )
+    completeness = _advisor_completeness(plan, brief)
+    return bundle, completeness
+
+
+def _external_advice_with_model(
+    plan: ResearchPlan,
+    *,
+    model_service: ModelService | None,
+    context_envelope: FactoryContextEnvelope | None,
+    issues: list[str],
+) -> ExtractedEvidence | None:
+    if model_service is None or getattr(model_service.router.config, "provider", None) == "fake":
+        issues.append("llm_advisor_model_unavailable")
+        return None
+    request = apply_context_envelope(
+        MessageBuilder.start()
+        .system(
+            "You are AgentFactory's external resource advisor. WebSearch is disabled. "
+            "Use only your built-in knowledge and the user's requirement to propose what the Agent probably needs. "
+            "Return exactly one JSON object matching ExternalAdvisorPlan. "
+            "Mark uncertain fields in unresolved_fields. Never include real secret values. "
+            "Every fact is unverified unless the user later confirms it. "
+            "Prefer concrete env-like configuration keys and likely API operations when you know them."
+        )
+        .user(
+            "Build a candidate external resource plan for this Agent. "
+            "Focus on what the user must prepare, runtime configuration keys, likely operations, "
+            "credentials, setup steps, and any uncertainty.\n\n"
+            f"Research plan:\n{plan.model_dump_json(indent=2)}\n\n"
+            "Output guidance:\n"
+            "- config_fields should be env-like keys the user can fill later.\n"
+            "- If a value might be secret, set secret=true and leave value=''.\n"
+            "- If this is an API, include likely endpoint/path/method/params when your built-in knowledge is strong enough; otherwise put them in unresolved_fields.\n"
+            "- Do not invent a generic CREDENTIAL field. Only output config keys you believe are meaningful for this resource.\n"
+            "- If this is not an API, represent the needed web/resource facts in operations/params/unresolved_fields as best as possible."
+        )
+        .request(
+            response_format="json_schema",
+            json_schema=ExternalAdvisorPlan.model_json_schema(),
+            json_schema_name="ExternalAdvisorPlan",
+            metadata={"phase": "external_resource_llm_advisor", "model_role": "task"},
+        ),
+        context_envelope,
+    )
+    try:
+        result = asyncio.run(
+            model_service.generate_structured(
+                request,
+                schema=ExternalAdvisorPlan.model_json_schema(),
+                schema_name="ExternalAdvisorPlan",
+            )
+        )
+    except Exception as exc:
+        issues.append(f"llm_advisor_exception:{type(exc).__name__}")
+        return None
+    if result.error:
+        issues.append(f"llm_advisor_error:{result.error.type}")
+        return None
+    if not isinstance(result.data, dict):
+        issues.append("llm_advisor_non_object_output")
+        return None
+    try:
+        return _advisor_plan_to_evidence(plan, _coerce_external_advisor_plan(result.data))
+    except Exception as exc:
+        issues.append(f"llm_advisor_validation_error:{type(exc).__name__}")
+        return None
+
+
+def _coerce_external_advisor_plan(data: dict[str, Any]) -> ExternalAdvisorPlan:
+    operations_data = data.get("operations")
+    if not operations_data and isinstance(data.get("facts"), dict):
+        operations_data = data["facts"].get("operations")
+    operations: list[AdvisorOperation] = []
+    for index, raw_operation in enumerate(_as_list(operations_data)):
+        if isinstance(raw_operation, str):
+            operations.append(AdvisorOperation(id=f"operation_{index + 1}", description=raw_operation))
+            continue
+        if not isinstance(raw_operation, dict):
+            continue
+        operation_id = raw_operation.get("id") or raw_operation.get("operation_id") or raw_operation.get("tool_ref")
+        params = raw_operation.get("params") or raw_operation.get("parameters") or raw_operation.get("required_params") or []
+        operations.append(
+            AdvisorOperation(
+                id=str(operation_id or f"operation_{index + 1}"),
+                description=str(raw_operation.get("description") or raw_operation.get("summary") or ""),
+                method=_optional_str(raw_operation.get("method") or raw_operation.get("http_method")),
+                endpoint=_optional_str(raw_operation.get("endpoint") or raw_operation.get("path") or raw_operation.get("url")),
+                params=[_coerce_param(param) for param in _as_list(params)],
+                sample_request=_optional_str(raw_operation.get("sample_request") or raw_operation.get("request_example")),
+                sample_response=_optional_str(raw_operation.get("sample_response") or raw_operation.get("response_example")),
+                error_shape=_optional_str(raw_operation.get("error_shape") or raw_operation.get("error_response")),
+            )
+        )
+    fields_data = (
+        data.get("config_fields")
+        or data.get("recommended_config_fields")
+        or data.get("required_config")
+        or data.get("env_keys")
+        or []
+    )
+    config_fields: list[AdvisorConfigField] = []
+    for raw_field in _as_list(fields_data):
+        if isinstance(raw_field, str):
+            config_fields.append(AdvisorConfigField(key=raw_field, label=raw_field))
+            continue
+        if not isinstance(raw_field, dict):
+            continue
+        key = raw_field.get("key") or raw_field.get("name") or raw_field.get("env_key")
+        if not key:
+            continue
+        config_fields.append(
+            AdvisorConfigField(
+                key=str(key),
+                label=str(raw_field.get("label") or raw_field.get("description") or key),
+                required=bool(raw_field.get("required", True)),
+                secret=bool(raw_field.get("secret", raw_field.get("is_secret", False))),
+                value="" if raw_field.get("secret") else str(raw_field.get("value") or raw_field.get("default") or ""),
+                notes=str(raw_field.get("notes") or raw_field.get("description") or ""),
+            )
+        )
+    return ExternalAdvisorPlan(
+        service_name=_optional_str(data.get("service_name") or data.get("service")),
+        confidence=_coerce_confidence(data.get("confidence")),
+        summary=str(data.get("summary") or ""),
+        auth_type=_optional_str(data.get("auth_type") or _dict_get(data.get("auth"), "type")),
+        auth_notes=_optional_str(data.get("auth_notes") or _dict_get(data.get("auth"), "format") or _dict_get(data.get("auth"), "notes")),
+        operations=operations,
+        config_fields=config_fields,
+        unresolved_fields=[str(item) for item in _as_list(data.get("unresolved_fields"))],
+        issues=[str(item) for item in _as_list(data.get("issues"))],
+    )
+
+
+def _advisor_plan_to_evidence(plan: ResearchPlan, advisor: ExternalAdvisorPlan) -> ExtractedEvidence:
+    auth = None
+    if advisor.auth_type or advisor.auth_notes:
+        auth = EvidenceAuth(
+            type=advisor.auth_type,
+            header=None,
+            format=advisor.auth_notes,
+            placement=None,
+        )
+    operations: list[EvidenceOperation] = []
+    for operation in advisor.operations:
+        params = [
+            EvidenceParam(
+                key=str(param.get("key") or param.get("name") or param.get("field") or "input"),
+                required=bool(param.get("required", True)),
+                location=param.get("location"),
+                description=param.get("description") or param.get("notes"),
+                example=None if param.get("example") is None else str(param.get("example")),
+            )
+            for param in operation.params
+        ]
+        operations.append(
+            EvidenceOperation(
+                id=operation.id,
+                description=operation.description,
+                method=operation.method,
+                endpoint=operation.endpoint,
+                params=params,
+                sample_request=operation.sample_request,
+                sample_response=operation.sample_response or operation.error_shape,
+            )
+        )
+    if not operations:
+        operations = [
+            EvidenceOperation(
+                id=operation.id,
+                description=operation.description or plan.purpose,
+                params=[EvidenceParam(key="input", required=True, description="User-provided runtime input")],
+            )
+            for operation in plan.operations
+        ]
+    fields: list[RecommendedConfigField] = []
+    seen_keys: set[str] = set()
+    for field in advisor.config_fields:
+        key = _normalize_env_key(field.key)
+        if not key:
+            continue
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        fields.append(
+            RecommendedConfigField(
+                key=key,
+                label=field.label or key,
+                required=field.required,
+                secret=field.secret,
+                value="" if field.secret else str(field.value or ""),
+                confidence=advisor.confidence,
+                notes=field.notes,
+            )
+        )
+    return ExtractedEvidence(
+        service_name=advisor.service_name or plan.service_name,
+        auth=auth,
+        operations=operations,
+        recommended_config_fields=fields,
+        unresolved_fields=advisor.unresolved_fields,
+        issues=["facts_are_unverified_model_advice", *advisor.issues],
+        confidence=advisor.confidence,
+    )
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _dict_get(value: Any, key: str) -> Any:
+    return value.get(key) if isinstance(value, dict) else None
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _coerce_param(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        return {"key": value, "required": True}
+    if isinstance(value, dict):
+        return value
+    return {"key": "input", "required": True, "description": str(value)}
+
+
+def _coerce_confidence(value: Any) -> Literal["high", "medium", "low", "unknown"]:
+    text = str(value or "").strip().lower()
+    if text in {"high", "medium", "low", "unknown"}:
+        return text  # type: ignore[return-value]
+    return "unknown"
+
+
+def _external_advice_by_requirement(plan: ResearchPlan) -> ExtractedEvidence:
+    operations: list[EvidenceOperation] = []
+    for operation in plan.operations or [ResearchOperation(id=f"{_safe_id(plan.service_name)}_operation")]:
+        operations.append(
+            EvidenceOperation(
+                id=operation.id,
+                description=operation.description or plan.purpose,
+                params=[
+                    EvidenceParam(key="input", required=True, description="User-provided runtime input"),
+                ],
+            )
+        )
+    return ExtractedEvidence(
+        service_name=plan.service_name,
+        operations=operations,
+        recommended_config_fields=[],
+        unresolved_fields=["facts_unverified_without_web_search"],
+        issues=["llm_advisor_fallback_used"],
+        confidence="unknown",
+    )
+
+
+def _build_advisor_brief(plan: ResearchPlan, evidence: ExtractedEvidence) -> ResearchBrief:
+    sources = [
+        ResearchSource(url=url, title="User provided URL", type="text", trusted_level="unknown")
+        for url in plan.source_urls[:5]
+    ]
+    operations = [operation.model_dump(mode="json", exclude_none=True) for operation in evidence.operations]
+    auth = evidence.auth.model_dump(mode="json", exclude_none=True) if evidence.auth else None
+    unresolved = _unique([*evidence.unresolved_fields, "facts_unverified_without_web_search"])
+    return ResearchBrief(
+        service_id=plan.service_id,
+        service_name=evidence.service_name or plan.service_name,
+        status="partially_resolved",
+        confidence=evidence.confidence if evidence.confidence != "high" else "medium",
+        summary=(
+            "External resource plan produced by LLM prior knowledge only; "
+            "WebSearch/fetch is disabled, so facts require user confirmation."
+        ),
+        sources=sources,
+        facts={
+            "auth": auth,
+            "operations": operations,
+            "advice_source": "llm_prior_knowledge_unverified",
+        },
+        recommended_config_fields=evidence.recommended_config_fields,
+        unresolved_fields=unresolved,
+        issues=_unique([*evidence.issues, "facts_are_unverified_model_advice"]),
+    )
+
+
+def _advisor_completeness(
+    plan: ResearchPlan,
+    brief: ResearchBrief,
+) -> ResearchCompletenessReport:
+    operations = _operations_for_completeness(plan, brief)
+    operation_reports = [
+        ResearchCompletenessOperation(
+            operation_id=str(operation.get("id") or "operation"),
+            endpoint=bool(operation.get("endpoint")),
+            method=bool(operation.get("method")),
+            auth=bool(brief.facts.get("auth")),
+            required_params=bool(operation.get("params")),
+            response_shape=bool(operation.get("sample_response") or operation.get("error_codes")),
+            test_fixture_strategy=True,
+            missing_facts=[],
+        )
+        for operation in operations
+    ]
+    missing_config_keys = [
+        field.key
+        for field in brief.recommended_config_fields
+        if field.required and not str(field.value or "").strip()
+    ]
+    missing_facts: list[str] = []
+    if plan.requires_research and not brief.recommended_config_fields:
+        missing_facts.append("runtime_config_keys")
+    return ResearchCompletenessReport(
+        status="needs_config_values" if missing_config_keys or missing_facts else "sufficient",
+        service_id=brief.service_id,
+        service_name=brief.service_name,
+        summary=(
+            "LLM produced an external-resource candidate plan. "
+            "Runtime values still need user confirmation/configuration."
+        ),
+        operations=operation_reports,
+        missing_facts=missing_facts,
+        missing_config_keys=_unique(missing_config_keys),
+        source_urls=[source.url for source in brief.sources],
+        issues=_unique([*brief.issues, "web_search_disabled_llm_advisor_only"]),
+    )
 
 
 def assess_research_completeness(bundle: ResearchBriefBundle) -> ResearchCompletenessReport:
@@ -684,29 +1128,79 @@ def _clean_html(content: str) -> dict[str, Any]:
         from bs4 import BeautifulSoup
     except Exception:
         text = re.sub(r"<(script|style).*?</\1>", " ", content, flags=re.DOTALL | re.IGNORECASE)
+        for tag in ["nav", "footer", "header", "aside", "form", "noscript", "svg"]:
+            text = re.sub(rf"<{tag}\b.*?</{tag}>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+        headings = [
+            _normalize_text(re.sub(r"<[^>]+>", " ", match.group(1)))
+            for match in re.finditer(r"<h[1-6]\b[^>]*>(.*?)</h[1-6]>", content, flags=re.DOTALL | re.IGNORECASE)
+            if match.group(1).strip()
+        ]
+        tables = [
+            _normalize_text(re.sub(r"<[^>]+>", " | ", match.group(1)))
+            for match in re.finditer(r"<table\b[^>]*>(.*?)</table>", content, flags=re.DOTALL | re.IGNORECASE)
+            if match.group(1).strip()
+        ]
+        code_blocks = [
+            _normalize_text(re.sub(r"<[^>]+>", "\n", match.group(1)))
+            for match in re.finditer(r"<(?:pre|code)\b[^>]*>(.*?)</(?:pre|code)>", content, flags=re.DOTALL | re.IGNORECASE)
+            if match.group(1).strip()
+        ]
         text = re.sub(r"<[^>]+>", " ", text)
-        return {"title": "", "text": _normalize_text(text), "headings": [], "tables": [], "code_blocks": _code_blocks_from_text(content)}
+        return {
+            "title": "",
+            "text": _normalize_text(text),
+            "headings": headings,
+            "tables": tables,
+            "code_blocks": code_blocks or _code_blocks_from_text(content),
+        }
     soup = BeautifulSoup(content, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form", "noscript"]):
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form", "noscript", "svg"]):
         tag.decompose()
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    root = _main_content_root(soup)
     headings = [
         _normalize_text(tag.get_text(" ", strip=True))
-        for tag in soup.find_all(re.compile(r"^h[1-6]$"))
+        for tag in root.find_all(re.compile(r"^h[1-6]$"))
         if tag.get_text(strip=True)
     ]
     tables = [
         _normalize_text(table.get_text(" | ", strip=True))
-        for table in soup.find_all("table")
+        for table in root.find_all("table")
         if table.get_text(strip=True)
     ]
     code_blocks = [
         _normalize_text(tag.get_text("\n", strip=True))
-        for tag in soup.find_all(["code", "pre"])
+        for tag in root.find_all(["code", "pre"])
         if tag.get_text(strip=True)
     ]
-    text = _normalize_text(soup.get_text("\n", strip=True))
+    text = _normalize_text(root.get_text("\n", strip=True))
     return {"title": title, "text": text, "headings": headings, "tables": tables, "code_blocks": code_blocks}
+
+
+def _main_content_root(soup: Any) -> Any:
+    selectors = [
+        "main",
+        "article",
+        "[role='main']",
+        ".markdown-body",
+        ".docs-content",
+        ".doc-content",
+        ".documentation",
+        ".content",
+        ".post-content",
+        ".entry-content",
+        "#content",
+    ]
+    candidates: list[tuple[int, Any]] = []
+    for selector in selectors:
+        for node in soup.select(selector):
+            text = node.get_text(" ", strip=True)
+            if len(text) >= 120:
+                candidates.append((len(text), node))
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+    return soup.body or soup
 
 
 def _pdf_text(data: bytes) -> tuple[str, list[str]]:
@@ -735,9 +1229,11 @@ def _extract_evidence_with_model(
     model_service: ModelService,
     plan: ResearchPlan,
     documents: list[CleanDocument],
+    *,
+    context_envelope: FactoryContextEnvelope | None = None,
 ) -> ExtractedEvidence | None:
     corpus = _document_corpus(documents, max_chars=24000)
-    request = (
+    request = apply_context_envelope(
         MessageBuilder.start()
         .system(
             "You extract verifiable external resource evidence for AgentFactory. "
@@ -757,7 +1253,8 @@ def _extract_evidence_with_model(
             json_schema=ExtractedEvidence.model_json_schema(),
             json_schema_name="ExtractedEvidence",
             metadata={"phase": "web_research_evidence_extraction", "model_role": "task"},
-        )
+        ),
+        context_envelope,
     )
     try:
         result = asyncio.run(
@@ -1119,6 +1616,75 @@ def _manual_candidates(plan: ResearchPlan) -> list[SearchCandidate]:
         SearchCandidate(title=urlparse(url).netloc or url, url=url, trust=_source_trust(url, title=url, snippet=""))
         for url in plan.source_urls
     ]
+
+
+def _candidates_from_search_report(
+    report: WebSearchReport,
+    plan: ResearchPlan,
+) -> list[SearchCandidate]:
+    scored: list[tuple[float, SearchCandidate]] = []
+    seen: set[str] = set()
+    for result in report.results:
+        canonical = _canonical_url(result.url)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        candidate = SearchCandidate(
+            title=result.title,
+            url=canonical,
+            snippet="",
+            provider=result.source or report.provider,
+            score=result.score,
+            trust=_source_trust(canonical, title=result.title, snippet=result.snippet),
+        )
+        scored.append((_search_candidate_score(candidate, plan), candidate))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [candidate for _score, candidate in scored[: max(1, plan_max_candidates(plan))]]
+
+
+def plan_max_candidates(_plan: ResearchPlan) -> int:
+    return 8
+
+
+def _search_candidate_score(candidate: SearchCandidate, plan: ResearchPlan) -> float:
+    trust_score = {
+        "official": 20.0,
+        "marketplace": 14.0,
+        "vendor_article": 10.0,
+        "third_party": 4.0,
+        "unknown": 2.0,
+    }[candidate.trust]
+    text = f"{candidate.url} {candidate.title}".lower()
+    score = trust_score + float(candidate.score or 0.0)
+    learning_markers = [
+        "docs",
+        "doc",
+        "developer",
+        "guide",
+        "tutorial",
+        "configuration",
+        "getting-started",
+        "quickstart",
+        "api",
+        "文档",
+        "教程",
+        "配置",
+        "接入",
+        "指南",
+        "开发",
+    ]
+    for marker in learning_markers:
+        if marker in text:
+            score += 2.0
+    for token in _plan_tokens(plan):
+        lowered = token.lower()
+        if lowered and lowered in text:
+            score += 1.5
+    noisy_markers = ["blog", "news", "forum", "price", "pricing", "login", "signup", "博客", "新闻", "论坛", "价格", "登录"]
+    for marker in noisy_markers:
+        if marker in text:
+            score -= 3.0
+    return score
 
 
 def _related_candidates_from_document(
@@ -1679,16 +2245,109 @@ def _queries_from_report(report: dict[str, Any]) -> list[str]:
     return _unique(queries)
 
 
-def _guess_service_name(text: str) -> str:
+def _rewrite_learning_queries(
+    *,
+    service_name: str,
+    requirement: str,
+    operations: list[ResearchOperation],
+    query_hints: list[str],
+) -> list[str]:
+    """Generate human-style search queries for external resource learning.
+
+    Earlier versions generated narrow fact-hunting queries such as
+    "endpoint/auth/params", which worked poorly across non-API web resources.
+    The Factory should first find tutorials, configuration guides, and official
+    docs, then extract evidence from cleaned pages.
+    """
+
+    subject = _query_subject(service_name, requirement)
+    operation_terms = _operation_query_terms(operations)
+    queries = [
+        f"{subject} 使用教程",
+        f"{subject} 配置教程",
+        f"{subject} 官方文档 接入指南",
+    ]
+    if _looks_like_api_need(requirement, operations, query_hints):
+        queries.extend(
+            [
+                f"{subject} API 使用教程",
+                f"{subject} API 配置",
+            ]
+        )
+    for term in operation_terms[:2]:
+        queries.append(f"{subject} {term} 使用教程")
+        queries.append(f"{subject} {term} 配置")
+    return _unique(_clean_query(query) for query in queries if query.strip())[:6]
+
+
+def _query_subject(service_name: str, requirement: str) -> str:
+    service = service_name.strip()
+    if service and service.lower() not in {"external_service", "external resource", "unknown"}:
+        return service
+    without_urls = re.sub(r"https?://[^\s，。；；)）'\"]+", " ", requirement)
     for pattern in [
-        r"(墨迹天气)",
-        r"(QWeather|和风天气)",
-        r"(Tavily)",
-        r"(GitHub)",
-        r"(Slack)",
-        r"(Stripe)",
         r"创建一个([^，。\n]{2,40}?)(?:助手|Agent|agent)",
-        r"能够查询([^，。\n]{2,40}?)(?:的|天气|信息)",
+        r"查询([^，。\n]{2,40}?)(?:的|信息|数据)",
+        r"使用([^，。\n]{2,40}?)(?:服务|平台|网站|接口|API)",
+    ]:
+        match = re.search(pattern, without_urls, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return without_urls.strip()[:40] or "外部资源"
+
+
+def _operation_query_terms(operations: list[ResearchOperation]) -> list[str]:
+    terms: list[str] = []
+    for operation in operations:
+        text = " ".join([operation.id, operation.description, operation.tool_ref or ""])
+        text = re.sub(r"[_-]+", " ", text)
+        for raw in re.split(r"[^a-zA-Z0-9\u4e00-\u9fff]+", text):
+            item = raw.strip()
+            if len(item) < 3:
+                continue
+            if item.lower() in {
+                "api",
+                "docs",
+                "tool",
+                "query",
+                "external",
+                "service",
+                "required",
+                "condition",
+            }:
+                continue
+            terms.append(item)
+    return _unique(terms)
+
+
+def _looks_like_api_need(
+    requirement: str,
+    operations: list[ResearchOperation],
+    query_hints: list[str],
+) -> bool:
+    text = " ".join(
+        [
+            requirement,
+            " ".join(query_hints),
+            " ".join(operation.description for operation in operations),
+            " ".join(operation.id for operation in operations),
+        ]
+    ).lower()
+    return any(marker in text for marker in ["api", "接口", "endpoint", "http", "鉴权", "凭证", "请求", "响应"])
+
+
+def _clean_query(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _guess_service_name(text: str) -> str:
+    url_match = re.search(r"https?://([^/\s，。；；)）'\"]+)", text)
+    if url_match:
+        return url_match.group(1).strip().lower()
+    for pattern in [
+        r"创建一个([^，。\n]{2,40}?)(?:助手|Agent|agent)",
+        r"创建([^，。\n]{2,40}?)(?:助手|Agent|agent)",
+        r"能够(?:查询|管理|处理|分析)([^，。\n]{2,40}?)(?:的|信息|数据)?",
     ]:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
@@ -1732,6 +2391,12 @@ def _safe_id(value: str) -> str:
 def _env_key(value: str) -> str:
     key = re.sub(r"[^a-zA-Z0-9]+", "_", _safe_id(value)).strip("_").upper()
     return key or "EXTERNAL_RESOURCE"
+
+
+def _normalize_env_key(value: str) -> str:
+    key = re.sub(r"[^A-Za-z0-9_]+", "_", str(value).strip()).strip("_").upper()
+    key = re.sub(r"_+", "_", key)
+    return key
 
 
 def _unique(values: list[str]) -> list[str]:

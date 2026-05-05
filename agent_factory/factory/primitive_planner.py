@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from agent_factory.factory_context import FactoryContextEnvelope, apply_context_envelope
 from agent_factory.factory_runtime import FactoryPromptBuilder, FactoryRunContext
 from agent_factory.model import LLMStreamEvent, ModelService
 from agent_factory.model.types import StructuredOutputResult
@@ -23,12 +24,18 @@ class PrimitivePlanner:
         *,
         requirement: str,
         requirement_analysis: dict | None = None,
+        production_context: dict | None = None,
+        context_envelope: FactoryContextEnvelope | None = None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> StructuredOutputResult:
-        request = self.prompt_builder.build_primitives_request(
-            context,
-            requirement=requirement,
-            requirement_analysis=requirement_analysis,
+        request = apply_context_envelope(
+            self.prompt_builder.build_primitives_request(
+                context,
+                requirement=requirement,
+                requirement_analysis=requirement_analysis,
+                production_context=production_context,
+            ),
+            context_envelope,
         )
         method = self.model_service.stream_structured if on_stream_event else self.model_service.generate_structured
         return await method(

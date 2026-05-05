@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, ValidationError
 
 from agent_factory.core.types import JsonDumpMixin
+from agent_factory.factory_context import FactoryContextEnvelope, apply_context_envelope
 from agent_factory.factory_runtime import FactoryRunContext
 from agent_factory.model import LLMRequest, MessageBuilder, ModelConfigError, ModelService
 from agent_factory.model.types import ModelError
@@ -66,6 +67,7 @@ class FactoryIntentClassifier:
         context: FactoryRunContext,
         *,
         requirement: str,
+        context_envelope: FactoryContextEnvelope | None = None,
     ) -> FactoryIntentResult:
         if self._should_use_fallback_without_model_call():
             return FactoryIntentResult(
@@ -74,7 +76,10 @@ class FactoryIntentClassifier:
             )
         try:
             model = self._model()
-            request = self._build_request(context, requirement=requirement)
+            request = apply_context_envelope(
+                self._build_request(context, requirement=requirement),
+                context_envelope,
+            )
             result = await model.generate_task_structured(
                 request,
                 schema=FactoryIntentClassification.model_json_schema(),
@@ -105,8 +110,15 @@ class FactoryIntentClassifier:
         context: FactoryRunContext,
         *,
         requirement: str,
+        context_envelope: FactoryContextEnvelope | None = None,
     ) -> FactoryIntentResult:
-        return asyncio.run(self.classify(context, requirement=requirement))
+        return asyncio.run(
+            self.classify(
+                context,
+                requirement=requirement,
+                context_envelope=context_envelope,
+            )
+        )
 
     def _model(self) -> ModelService:
         if self.model_service is not None:
@@ -301,9 +313,9 @@ def _default_clarification_questions() -> list[IntentClarificationQuestion]:
             question="你想创建哪一类 Agent？",
             options=[
                 ClarificationOption(
-                    id="customer_service",
-                    label="客服 Agent",
-                    description="处理咨询、订单、售后、退款和转人工。",
+                    id="support_or_service",
+                    label="服务类 Agent",
+                    description="处理咨询、流程引导、记录和转接。",
                 ),
                 ClarificationOption(
                     id="data_manager",
@@ -375,5 +387,5 @@ def _ensure_other_option(question: IntentClarificationQuestion) -> IntentClarifi
 def _default_guidance_message() -> str:
     return (
         "我是 AgentFactory，可以帮你用自然语言创建、测试、运行和升级 Agent。"
-        "你可以这样说：创建一个客服 Agent，支持订单查询、退款处理、投诉记录和转人工。"
+        "你可以这样说：创建一个能读取指定资料并按规则回答问题的 Agent。"
     )

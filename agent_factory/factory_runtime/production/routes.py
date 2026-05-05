@@ -19,10 +19,10 @@ def route_after_intent_classification(
 
 def route_after_maybe_clarify(
     state: FactoryProductionStateDict,
-) -> Literal["needs_clarification", "plan_primitives"]:
+) -> Literal["needs_clarification", "plan_capability_preconditions"]:
     if state.get("clarification_questions"):
         return "needs_clarification"
-    return "plan_primitives"
+    return "plan_capability_preconditions"
 
 
 def route_after_plan_primitives(
@@ -85,9 +85,9 @@ def route_after_tool_test_repair(
 
 def route_after_validate_primitives(
     state: FactoryProductionStateDict,
-) -> Literal["repair_primitives", "plan_capability_preconditions", "failed"]:
+) -> Literal["repair_primitives", "write_package", "failed"]:
     if state.get("primitives") is not None and state.get("error") is None:
-        return "plan_capability_preconditions"
+        return "write_package"
     if state.get("repair_attempts", 0) < state.get("max_repair_attempts", 1):
         return "repair_primitives"
     return "failed"
@@ -95,7 +95,7 @@ def route_after_validate_primitives(
 
 def route_after_readiness(
     state: FactoryProductionStateDict,
-) -> Literal["write_package", "needs_clarification", "failed"]:
+) -> Literal["plan_primitives", "needs_clarification", "failed"]:
     if state.get("error") is not None:
         return "failed"
     readiness_decision = state.get("readiness_decision")
@@ -105,7 +105,7 @@ def route_after_readiness(
     elif readiness_decision is not None:
         decision_status = getattr(readiness_decision, "status", None)
     if decision_status in {"ready", "ready_with_deferred"}:
-        return "write_package"
+        return "plan_primitives"
     if decision_status == "needs_user_input":
         return "needs_clarification"
     if decision_status == "blocked":
@@ -117,7 +117,7 @@ def route_after_readiness(
     elif readiness is not None:
         status = getattr(readiness, "status", None)
     if status in {"ready", "mock_only_allowed"}:
-        return "write_package"
+        return "plan_primitives"
     if status == "needs_user_input":
         return "needs_clarification"
     return "failed"

@@ -7,6 +7,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from agent_factory.factory_context import FactoryContextEnvelope, apply_context_envelope
 from agent_factory.factory.web_search import WebSearchConfig
 from agent_factory.model import LLMRequest, MessageBuilder, ModelConfigError, ModelService
 from agent_factory.specs import AgentPackagePrimitives
@@ -169,6 +170,7 @@ def analyze_tool_preconditions(
     *,
     web_config: WebSearchConfig | None = None,
     model_service: ModelService | None = None,
+    context_envelope: FactoryContextEnvelope | None = None,
 ) -> ToolPreconditionReport:
     rule_report = analyze_tool_preconditions_by_rules(
         primitives,
@@ -180,6 +182,33 @@ def analyze_tool_preconditions(
         requirement,
         web_config=web_config,
         model_service=model_service,
+        context_envelope=context_envelope,
+    )
+    if model_report is None:
+        return rule_report
+    return _merge_model_and_rule_reports(model_report, rule_report)
+
+
+def analyze_capability_preconditions(
+    capabilities: list[dict[str, Any]],
+    requirement: str,
+    *,
+    web_config: WebSearchConfig | None = None,
+    model_service: ModelService | None = None,
+    context_envelope: FactoryContextEnvelope | None = None,
+) -> ToolPreconditionReport:
+    normalized = _normalize_capability_inputs(capabilities, requirement)
+    rule_report = _analyze_capability_preconditions_by_rules(
+        normalized,
+        requirement,
+        web_config=web_config,
+    )
+    model_report = _analyze_capability_preconditions_with_model(
+        normalized,
+        requirement,
+        web_config=web_config,
+        model_service=model_service,
+        context_envelope=context_envelope,
     )
     if model_report is None:
         return rule_report
@@ -219,6 +248,151 @@ def analyze_tool_preconditions_by_rules(
         agent_web_inheritance=inheritance,
         source="rule_fallback",
     )
+
+
+def _analyze_capability_preconditions_by_rules(
+    capabilities: list[dict[str, str]],
+    requirement: str,
+    *,
+    web_config: WebSearchConfig | None = None,
+) -> ToolPreconditionReport:
+    inheritance = (web_config or WebSearchConfig()).agent_web_inheritance
+    mock_only = _mock_only_requested(requirement)
+    plans = [
+        _rule_plan_for_tool(
+            capability["capability_id"],
+            " ".join([capability["capability_id"], capability["description"], requirement]),
+            operation_text=" ".join([capability["capability_id"], capability["description"]]),
+            inheritance=inheritance,
+            mock_only=mock_only,
+        )
+        for capability in capabilities
+    ]
+    return ToolPreconditionReport(
+        plans=plans,
+        mock_only_requested=mock_only,
+        agent_web_inheritance=inheritance,
+        source="rule_fallback",
+    )
+
+
+def _analyze_capability_preconditions_with_model(
+    capabilities: list[dict[str, str]],
+    requirement: str,
+    *,
+    web_config: WebSearchConfig | None,
+    model_service: ModelService | None,
+    context_envelope: FactoryContextEnvelope | None,
+) -> ToolPreconditionReport | None:
+    if model_service is None or _provider_name(model_service) == "fake":
+        return None
+    try:
+        request = apply_context_envelope(
+            _build_capability_precondition_request(
+                capabilities,
+                requirement,
+                web_config=web_config,
+            ),
+            context_envelope,
+        )
+        result = asyncio.run(
+            model_service.generate_task_structured(
+                request,
+                schema=ToolPreconditionReport.model_json_schema(),
+                schema_name="ToolPreconditionReport",
+            )
+        )
+        if result.error:
+            return None
+        report = ToolPreconditionReport.model_validate(result.data)
+    except (ModelConfigError, ValidationError, TypeError, ValueError, RuntimeError):
+        return None
+    return _normalize_capability_model_report(report, capabilities, web_config=web_config)
+
+
+def _build_capability_precondition_request(
+    capabilities: list[dict[str, str]],
+    requirement: str,
+    *,
+    web_config: WebSearchConfig | None = None,
+) -> LLMRequest:
+    schema = ToolPreconditionReport.model_json_schema()
+    return (
+        MessageBuilder.start()
+        .system(
+            "You are AgentFactory's context-first condition planner. "
+            "Analyze task completion conditions before AgentPackage primitives are generated. "
+            "Return exactly one JSON object matching ToolPreconditionReport."
+        )
+        .user(
+            "Identify every condition required to complete the user's requested Agent behavior. "
+            "Do not classify complexity by tool count. Do not lock conditions to local/external only. "
+            "Detect implicit local resources, databases, files, web/API docs, browser access, credentials, "
+            "permissions, storage, schedules, MCP, human approval, sandbox, test fixtures, and data contracts.\n\n"
+            f"Requirement:\n{requirement}\n\n"
+            "Capability candidates inferred from requirement understanding:\n"
+            f"{json.dumps(capabilities, ensure_ascii=False, indent=2)}\n\n"
+            "Rules:\n"
+            "- Create one plan per capability_id.\n"
+            "- Use only these condition type values: "
+            f"{', '.join(get_args(ConditionType))}.\n"
+            "- Mark runtime secrets/keys as credential and missing/deferred via user_input_needed=true.\n"
+            "- If an external service is needed and the user provided documentation URLs, record them in evidence.url.\n"
+            "- If docs are absent or insufficient, add web_research/user_input conditions.\n"
+            "- Generated agents must not inherit open web_search/browser tools unless the requirement explicitly asks for runtime browsing/search.\n"
+            "- Never request or include actual secret values."
+        )
+        .request(
+            response_format="json_schema",
+            json_schema=schema,
+            json_schema_name="ToolPreconditionReport",
+            json_schema_strict=True,
+            metadata={
+                "phase": "context_first_conditions",
+                "model_role": "task",
+                "agent_web_inheritance": (web_config or WebSearchConfig()).agent_web_inheritance,
+            },
+        )
+    )
+
+
+def _normalize_capability_model_report(
+    report: ToolPreconditionReport,
+    capabilities: list[dict[str, str]],
+    *,
+    web_config: WebSearchConfig | None,
+) -> ToolPreconditionReport:
+    known_ids = {capability["capability_id"] for capability in capabilities}
+    plans = [plan for plan in report.plans if plan.tool_id in known_ids]
+    existing = {plan.tool_id for plan in plans}
+    for capability in capabilities:
+        if capability["capability_id"] not in existing:
+            plans.append(ToolPreconditionPlan(tool_id=capability["capability_id"]))
+    return report.model_copy(
+        update={
+            "plans": plans,
+            "agent_web_inheritance": (web_config or WebSearchConfig()).agent_web_inheritance,
+            "source": "task_model",
+        }
+    )
+
+
+def _normalize_capability_inputs(
+    capabilities: list[dict[str, Any]],
+    requirement: str,
+) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for index, capability in enumerate(capabilities, start=1):
+        raw_id = str(capability.get("capability_id") or capability.get("id") or f"capability_{index}")
+        capability_id = re.sub(r"[^a-zA-Z0-9_]+", "_", raw_id).strip("_").lower()
+        if not capability_id:
+            capability_id = f"capability_{index}"
+        description = str(capability.get("description") or capability.get("goal") or requirement)
+        normalized.append({"capability_id": capability_id, "description": description})
+    if not normalized:
+        normalized.append({"capability_id": "conversation", "description": requirement})
+    return normalized
+
 
 
 def build_tool_precondition_request(
@@ -288,14 +462,18 @@ def _analyze_tool_preconditions_with_model(
     *,
     web_config: WebSearchConfig | None,
     model_service: ModelService | None,
+    context_envelope: FactoryContextEnvelope | None = None,
 ) -> ToolPreconditionReport | None:
     if model_service is None or _provider_name(model_service) == "fake":
         return None
     try:
-        request = build_tool_precondition_request(
-            primitives,
-            requirement,
-            web_config=web_config,
+        request = apply_context_envelope(
+            build_tool_precondition_request(
+                primitives,
+                requirement,
+                web_config=web_config,
+            ),
+            context_envelope,
         )
         result = asyncio.run(
             model_service.generate_task_structured(
@@ -788,7 +966,8 @@ def _mentions_sqlite(text: str) -> bool:
 
 
 def _mentions_local_files(text: str) -> bool:
-    return bool(re.search(r"(?:/|~|\./|\../)[^\s，。；：、'\"]+", text)) or any(
+    scan_text = _remove_urls(text)
+    return bool(re.search(r"(?:/|~|\./|\../)[^\s，。；：、'\"]+", scan_text)) or any(
         marker in text
         for marker in ["本地文件", "本地目录", "local file", "local directory", "csv", "excel", "xlsx", "pdf"]
     )
@@ -799,23 +978,22 @@ def _mentions_pdf(text: str) -> bool:
 
 
 def _mentions_browser_or_page(text: str) -> bool:
+    scan_text = _remove_urls(text)
     return any(
-        marker in text
+        marker in scan_text
         for marker in [
             "browser",
             "网页",
             "页面",
-            "官网",
             "竞品",
             "爬取",
             "抓取",
-            "网站",
-            "url",
-            "http",
-            "https",
-            "page",
-            "site",
-            "website",
+            "页面变化",
+            "网页变化",
+            "网站变化",
+            "browser automation",
+            "page change",
+            "website change",
         ]
     )
 
@@ -824,20 +1002,13 @@ def _mentions_external_service(text: str) -> bool:
     return any(
         marker in text
         for marker in [
-            "weather",
-            "天气",
-            "实时",
-            "current",
-            "live",
-            "stock",
-            "股票",
-            "汇率",
-            "价格",
-            "price",
-            "news",
-            "新闻",
             "api",
             "endpoint",
+            "http",
+            "https",
+            "url",
+            "webhook",
+            "service",
             "外部服务",
             "第三方",
             "联网",
@@ -851,10 +1022,18 @@ def _mentions_email(text: str) -> bool:
 
 
 def _mentions_schedule(text: str) -> bool:
+    scan_text = _remove_urls(text)
     return any(
         marker in text
-        for marker in ["schedule", "cron", "daily", "weekly", "每天", "每周", "定时", "周期", "监控", "盯住"]
+        for marker in ["每天", "每周", "定时", "周期", "监控", "盯住"]
+    ) or any(
+        marker in scan_text
+        for marker in ["schedule", "cron", "daily job", "weekly job", "scheduled task"]
     )
+
+
+def _remove_urls(text: str) -> str:
+    return re.sub(r"https?://[^\s，。；：、'\"]+", " ", text)
 
 
 def _mentions_mcp(text: str) -> bool:
@@ -887,7 +1066,6 @@ def _mentions_write_or_high_risk(text: str) -> bool:
             "remove",
             "send",
             "pay",
-            "refund",
             "close",
             "创建",
             "更新",
@@ -895,7 +1073,6 @@ def _mentions_write_or_high_risk(text: str) -> bool:
             "删除",
             "发送",
             "支付",
-            "退款",
             "关闭",
             "写",
         ]
@@ -903,7 +1080,7 @@ def _mentions_write_or_high_risk(text: str) -> bool:
 
 
 def _agent_runtime_search_needed(text: str) -> bool:
-    return any(marker in text for marker in ["实时", "latest", "current", "最新", "上网", "联网", "搜索", "weather", "天气"])
+    return any(marker in text for marker in ["latest", "current", "上网", "联网", "搜索", "web search"])
 
 
 def _mock_only_requested(text: str) -> bool:
@@ -917,53 +1094,14 @@ def _mock_only_requested(text: str) -> bool:
 
 
 def _search_queries(tool_id: str, text: str) -> list[str]:
-    named_weather_services = _named_weather_services(text)
-    if named_weather_services:
-        queries: list[str] = []
-        for service in named_weather_services:
-            queries.extend(
-                [
-                    f"{service} API 官方文档 endpoint 鉴权 示例返回",
-                    f"{service} 天气 API 空气质量 预报 官方接口",
-                ]
-            )
-        return _merge_unique(queries)[:5]
-    if "weather" in text or "天气" in text:
-        return [
-            "weather API official documentation current weather endpoint",
-            "free weather API current weather official docs",
+    normalized = tool_id.replace("_", " ").strip() or "external service"
+    return _merge_unique(
+        [
+            f"{normalized} 使用教程 配置 鉴权 参数 示例",
+            f"{normalized} official documentation integration guide authentication parameters",
+            f"{normalized} API reference credentials endpoint example response",
         ]
-    if "stock" in text or "股票" in text:
-        return ["stock quote API official documentation latest price"]
-    if "news" in text or "新闻" in text:
-        return ["news API official documentation latest headlines"]
-    if any(marker in text for marker in ["email", "smtp", "邮件"]):
-        return ["email sending API SMTP official documentation"]
-    if any(marker in text for marker in ["竞品", "网页", "官网", "page", "site"]):
-        return [f"{tool_id} website monitoring change detection best practices"]
-    return [f"{tool_id} API official documentation"]
-
-
-def _named_weather_services(text: str) -> list[str]:
-    values: list[str] = []
-    for marker in ["moji weather", "mojiweather", "墨迹"]:
-        if marker in text:
-            values.append("墨迹天气")
-    for match in re.finditer(r"([\u4e00-\u9fffA-Za-z0-9_-]{2,24}?天气)", text):
-        value = _clean_named_weather_service(match.group(1).strip())
-        if value and value not in {"查询天气", "实时天气", "天气"}:
-            values.append(value)
-    return _merge_unique(values)
-
-
-def _clean_named_weather_service(value: str) -> str:
-    if "墨迹" in value:
-        return "墨迹天气"
-    return re.sub(
-        r"^(?:帮我|请|创建|建立|生成|一个|一款|能够|可以|用于|查询)+",
-        "",
-        value,
-    ).strip()
+    )
 
 
 def _merge_unique(values: list[str]) -> list[str]:

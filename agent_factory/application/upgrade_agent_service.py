@@ -30,7 +30,7 @@ class UpgradeAgentService:
         agent_name: str,
         *,
         prompt: str,
-        proposed_intent: str = "repair_return",
+        proposed_intent: str = "user_requested_upgrade",
         source_path: Path | None = None,
     ) -> UpgradeRequest:
         request = UpgradeRequest(

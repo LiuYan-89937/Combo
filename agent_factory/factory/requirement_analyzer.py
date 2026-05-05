@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pydantic import ConfigDict, Field, ValidationError
 
 from agent_factory.core.types import JsonDumpMixin
+from agent_factory.factory_context import FactoryContextEnvelope, apply_context_envelope
 from agent_factory.factory_runtime import FactoryRunContext
 from agent_factory.model import LLMRequest, LLMStreamEvent, MessageBuilder, ModelConfigError, ModelService
 from agent_factory.model.types import ModelError
@@ -64,6 +65,7 @@ class RequirementAnalyzer:
         context: FactoryRunContext,
         *,
         requirement: str,
+        context_envelope: FactoryContextEnvelope | None = None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> RequirementAnalysisResult:
         if self._should_use_fallback_without_model_call():
@@ -73,7 +75,10 @@ class RequirementAnalyzer:
             )
         try:
             model = self._model()
-            request = self._build_request(context, requirement=requirement)
+            request = apply_context_envelope(
+                self._build_request(context, requirement=requirement),
+                context_envelope,
+            )
             if on_stream_event:
                 result = await model.stream_structured(request, on_event=on_stream_event)
             else:
@@ -102,12 +107,14 @@ class RequirementAnalyzer:
         context: FactoryRunContext,
         *,
         requirement: str,
+        context_envelope: FactoryContextEnvelope | None = None,
         on_stream_event: Callable[[LLMStreamEvent], None] | None = None,
     ) -> RequirementAnalysisResult:
         return asyncio.run(
             self.analyze(
                 context,
                 requirement=requirement,
+                context_envelope=context_envelope,
                 on_stream_event=on_stream_event,
             )
         )

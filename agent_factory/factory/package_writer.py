@@ -107,26 +107,12 @@ def _external_config_template(resource_contracts: ResourceContractsSpec) -> dict
                             required_keys.append(key)
                         if field.get("secret") and key not in secret_keys:
                             secret_keys.append(key)
-        docs_key = f"{_env_key(service_name)}_DOCS_URL"
-        if sources:
-            values.setdefault(docs_key, sources[0])
-        else:
-            values.setdefault(docs_key, "")
-        if docs_key not in required_keys:
-            required_keys.append(docs_key)
-        if not any(key in values for key in secret_keys):
-            credential_key = f"{_env_key(service_name)}_CREDENTIAL"
-            values.setdefault(credential_key, "")
-            if credential_key not in required_keys:
-                required_keys.append(credential_key)
-            if credential_key not in secret_keys:
-                secret_keys.append(credential_key)
         compact_tool_id = tool_id.split(".")[0]
         if compact_tool_id and compact_tool_id not in tool_refs:
             tool_refs.append(compact_tool_id)
         if resource.id not in resource_refs:
             resource_refs.append(resource.id)
-    if not values:
+    if not values and not sources and not resource_refs:
         return None
     values = _drop_generic_external_service_keys(values)
     required_keys = [key for key in required_keys if key in values]
@@ -135,7 +121,7 @@ def _external_config_template(resource_contracts: ResourceContractsSpec) -> dict
     return {
         "schema_version": "0.1",
         "kind": "ExternalResourceConfig",
-        "status": "needs_user_configuration" if missing_required else "ready",
+        "status": "needs_user_configuration" if missing_required or not values else "ready",
         "instructions": [
             "This file is intentionally env-like: one key maps to one value.",
             "Do not paste real secrets here; use a .env key or secret-manager reference.",
@@ -164,8 +150,6 @@ def _external_service_identity(
             str(condition),
         ]
     )
-    if "墨迹" in text or "moji" in text.lower():
-        return "moji_weather", "墨迹天气"
     name = _service_name_from_research(details) or "external_service"
     return _safe_field_key(name), name
 

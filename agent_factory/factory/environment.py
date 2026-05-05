@@ -44,7 +44,7 @@ class EnvironmentProbeRunner:
 
     def probe(
         self,
-        primitives: AgentPackagePrimitives,
+        primitives: AgentPackagePrimitives | None,
         *,
         requirement: str,
         start_path: str | Path | None = None,
@@ -243,19 +243,20 @@ class EnvironmentProbeRunner:
 
 
 def _resource_inputs(
-    primitives: AgentPackagePrimitives,
+    primitives: AgentPackagePrimitives | None,
     requirement: str,
     *,
     start_path: str | Path | None,
 ) -> list[tuple[str, str, str]]:
     seen: set[str] = set()
     values: list[tuple[str, str, str]] = []
-    for source in primitives.knowledge.sources:
-        if not source.ref:
-            continue
-        key = str(Path(source.ref).expanduser())
-        seen.add(key)
-        values.append((source.id, source.ref, source.access_mode))
+    if primitives is not None:
+        for source in primitives.knowledge.sources:
+            if not source.ref:
+                continue
+            key = str(Path(source.ref).expanduser())
+            seen.add(key)
+            values.append((source.id, source.ref, source.access_mode))
     root = Path(start_path or ".").resolve()
     scan_requirement = _remove_urls(requirement)
     for raw in LOCAL_RESOURCE_PATTERN.findall(scan_requirement):
@@ -280,7 +281,7 @@ def _remove_urls(text: str) -> str:
 def _preconditions_from_contracts(contracts: list[ResourceContract]) -> list[PreconditionSpec]:
     preconditions: list[PreconditionSpec] = []
     for resource in contracts:
-        if resource.type in {"external_api", "web_search", "http_endpoint", "realtime_data"}:
+        if resource.type not in {"file", "directory", "sqlite"}:
             continue
         preconditions.append(
             PreconditionSpec(
@@ -949,7 +950,12 @@ def _research_completeness_for_prompt(
     return research_completeness.model_dump(mode="json")
 
 
-def _metadata(primitives: AgentPackagePrimitives, suffix: str) -> Metadata:
+def _metadata(primitives: AgentPackagePrimitives | None, suffix: str) -> Metadata:
+    if primitives is None:
+        return Metadata(
+            name=f"agentfactory-context-first-{suffix}",
+            version="1.0.0",
+        )
     metadata = primitives.instructions.metadata
     return Metadata(
         name=f"{metadata.name}-{suffix}",

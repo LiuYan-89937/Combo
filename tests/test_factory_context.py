@@ -7,8 +7,10 @@ from agent_factory.factory_context import (
     EvidenceStore,
     NodeContextCompiler,
     RequirementUnderstanding,
+    apply_context_envelope,
 )
 from agent_factory.factory_runtime.production.state import FactoryProductionState
+from agent_factory.model import MessageBuilder
 
 
 class FactoryContextProtocolTests(unittest.TestCase):
@@ -67,6 +69,27 @@ class FactoryContextProtocolTests(unittest.TestCase):
         self.assertIn("sqlite.schema.readonly", envelope.available_tools)
         self.assertNotIn("file.write", envelope.available_tools)
         self.assertNotIn("shell.unrestricted", envelope.available_tools)
+
+    def test_llm_request_adapter_injects_envelope_contract(self) -> None:
+        envelope = NodeContextCompiler().compile(
+            stage="plan_primitives",
+            state=FactoryProductionState(run_id="run-3", requirement="创建天气助手"),
+            decision_ledger=DecisionLedger(),
+            evidence_store=EvidenceStore(),
+        )
+        request = MessageBuilder.start().system("base").user("task").request(
+            metadata={"operation": "create_agent_primitives"}
+        )
+
+        wrapped = apply_context_envelope(request, envelope)
+
+        self.assertEqual(
+            wrapped.metadata["factory_context_envelope"]["stage"],
+            "plan_primitives",
+        )
+        self.assertIn("Factory Context Envelope", wrapped.messages[0].content)
+        self.assertIn("forbidden_inputs", wrapped.messages[0].content)
+        self.assertEqual(wrapped.messages[1].content, "base")
 
 
 if __name__ == "__main__":

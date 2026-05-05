@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from agent_factory.factory_context import FactoryContextEnvelope, apply_context_envelope
 from agent_factory.model import LLMRequest, MessageBuilder, ModelService
 from agent_factory.specs import AgentPackagePrimitives, KnowledgeSource
 
@@ -65,6 +66,7 @@ def bind_requirement_resources(
     *,
     start_path: str | Path | None = None,
     model_service: ModelService | None = None,
+    context_envelope: FactoryContextEnvelope | None = None,
 ) -> AgentPackagePrimitives:
     """Attach local resources mentioned in the requirement to KnowledgeSpec.
 
@@ -89,6 +91,7 @@ def bind_requirement_resources(
         requirement,
         candidates,
         model_service=model_service,
+        context_envelope=context_envelope,
     )
     candidates_by_id = {candidate.id: candidate for candidate in candidates}
     for decision in binding_plan.bindings:
@@ -171,11 +174,15 @@ def _plan_resource_bindings(
     candidates: list[ResourceCandidate],
     *,
     model_service: ModelService | None,
+    context_envelope: FactoryContextEnvelope | None,
 ) -> ResourceBindingPlan:
     fallback = _fallback_binding_plan(candidates)
     if model_service is None or _provider_name(model_service) == "fake":
         return fallback
-    request = _resource_binding_request(primitives, requirement, candidates)
+    request = apply_context_envelope(
+        _resource_binding_request(primitives, requirement, candidates),
+        context_envelope,
+    )
     try:
         result = asyncio.run(
             model_service.generate_task_structured(

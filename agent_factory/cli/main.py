@@ -547,7 +547,7 @@ def upgrade_agent_command(
 @patch_app.command("plan")
 def plan_upgrade_command(
     package_path: Path = typer.Argument(..., help="Base AgentPackage directory."),
-    prompt: str = typer.Option("增加返厂维修意图", "--prompt", "-p"),
+    prompt: str = typer.Option("根据用户补充需求升级 Agent", "--prompt", "-p"),
     target_version: str = typer.Option("1.1.0", "--target-version"),
     output: Optional[Path] = typer.Option(None, "--output"),
     json_output: bool = typer.Option(False, "--json"),
@@ -588,7 +588,7 @@ def apply_patch_plan_command(
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     service = PatchPlanService()
-    plan = service.plan_upgrade(package_path, prompt="增加返厂维修意图", target_version=target_version)
+    plan = service.plan_upgrade(package_path, prompt="根据用户补充需求升级 Agent", target_version=target_version)
     path = service.apply_plan(plan, output)
     if json_output:
         _json_echo({"output_path": str(path), "plan": plan.model_dump(mode="json")})

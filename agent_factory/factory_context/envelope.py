@@ -45,6 +45,7 @@ class FactoryContextEnvelope(BaseModel):
             "stage": self.stage,
             "objective": self.objective,
             "allowed_inputs": self.allowed_inputs,
+            "forbidden_inputs": self.forbidden_inputs,
             "decision_refs": [
                 ref.model_dump(mode="json") for ref in self.decision_refs if ref.safe_for_prompt
             ],
@@ -55,4 +56,3 @@ class FactoryContextEnvelope(BaseModel):
             "output_schema": self.output_schema,
             "validation_rules": self.validation_rules,
         }
-

@@ -160,7 +160,7 @@ class CreateAgentService:
             ]
             external_config = state.package_path / "external_config.yaml"
             if external_config.exists():
-                keys = self._pending_configuration_keys(state.package_path)
+                keys = CreateAgentService._pending_configuration_keys(state.package_path)
                 steps.insert(
                     0,
                     f"Fill runtime external configuration: {external_config}"
@@ -174,7 +174,7 @@ class CreateAgentService:
             ]
         if state.status == "not_agent_request":
             return [
-                "Try: 创建一个客服 Agent，支持订单查询、退款处理、投诉记录和转人工。",
+                "Try: 创建一个能读取指定资料并按规则回答问题的 Agent。",
                 "Or type /help to see available Factory commands.",
             ]
         if state.error and state.error.code == "model_config_error":

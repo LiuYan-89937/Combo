@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -161,8 +160,8 @@ class WorkflowRuntime:
                     error=response.error,
                 )
 
-            intent = _infer_intent(request.user_input, response.content, package)
-            proposals = _proposals_from_response(response.tool_call_proposals, request.user_input, package)
+            proposals = list(response.tool_call_proposals)
+            intent = _intent_from_tool_proposals(proposals)
             record(
                 RuntimeEvent(
                     run_id=run_id,
@@ -183,10 +182,6 @@ class WorkflowRuntime:
             elif any(result.status == "failed" for result in tool_results):
                 status = "failed"
             upgrade_path = None
-            if intent == "unknown":
-                status = "needs_upgrade"
-                upgrade_path = _write_upgrade_request(package_path, run_id, request.user_input)
-
             answer = response.content
             if tool_results and any(result.status == "completed" for result in tool_results):
                 summary = asyncio.run(
@@ -209,14 +204,8 @@ class WorkflowRuntime:
                     answer = _fallback_answer(request.user_input, intent, tool_results)
             elif tool_results and any(result.status == "interrupted" for result in tool_results):
                 answer = _fallback_answer(request.user_input, intent, tool_results)
-            elif _requires_resource_tool(request.user_input, package):
-                answer = _resource_tool_required_answer(package)
             if not answer:
-                answer = _answer_from_history(request.user_input, history) or _fallback_answer(
-                    request.user_input,
-                    intent,
-                    tool_results,
-                )
+                answer = _fallback_answer(request.user_input, intent, tool_results)
             memory.append(
                 AgentMemoryRecord(
                     run_id=run_id,
@@ -562,264 +551,13 @@ def _tool_manifest_text(package: Any) -> str:
     return "\n".join(lines)
 
 
-def _infer_intent(user_input: str, content: str, package: Any) -> str:
-    text = f"{user_input}\n{content}".lower()
-    if _looks_like_strange_number_request(text) and _find_generated_tool(
-        package,
-        "calculate_strange_number",
-        markers=("strange", "calculate"),
-    ):
-        return "calculate_strange_number"
-    if "返厂" in text or "维修" in text or "repair" in text:
-        if any(tool.tool_id == "repair_ticket_create" for tool in package.generated_tools):
-            return "repair_return"
-        return "unknown"
-    if "订单" in text or "order" in text:
-        return "order_query"
-    if "退款" in text or "refund" in text:
-        return "refund"
-    if "投诉" in text or "complaint" in text:
-        return "complaint"
+def _intent_from_tool_proposals(proposals: list[ToolCallProposal]) -> str:
+    if proposals:
+        return proposals[0].name
     return "in_scope"
 
 
-def _proposals_from_response(
-    proposals: list[ToolCallProposal],
-    user_input: str,
-    package: Any,
-) -> list[ToolCallProposal]:
-    if proposals:
-        return proposals
-    if ("订单" in user_input or "order" in user_input.lower()) and any(
-        tool.tool_id == "order_query" for tool in package.generated_tools
-    ):
-        return [
-            ToolCallProposal(
-                id=uuid.uuid4().hex,
-                name="order_query",
-                arguments={"query": user_input},
-            )
-        ]
-    if ("返厂" in user_input or "维修" in user_input or "repair" in user_input.lower()) and any(
-        tool.tool_id == "repair_ticket_create" for tool in package.generated_tools
-    ):
-        return [
-            ToolCallProposal(
-                id=uuid.uuid4().hex,
-                name="repair_ticket_create",
-                arguments={"description": user_input},
-            )
-        ]
-    strange_tool = _find_generated_tool(
-        package,
-        "calculate_strange_number",
-        markers=("strange", "calculate"),
-    )
-    if strange_tool is not None and _looks_like_strange_number_request(user_input.lower()):
-        return [
-            ToolCallProposal(
-                id=uuid.uuid4().hex,
-                name=strange_tool.tool_id,
-                arguments={"query": user_input},
-            )
-        ]
-    sqlite_proposal = _sqlite_ticket_tool_proposal(user_input, package)
-    if sqlite_proposal is not None:
-        return [sqlite_proposal]
-    web_proposal = _builtin_web_tool_proposal(user_input, package)
-    if web_proposal is not None:
-        return [web_proposal]
-    resource_proposal = _resource_bound_tool_proposal(user_input, package)
-    if resource_proposal is not None:
-        return [resource_proposal]
-    return []
-
-
-def _sqlite_ticket_tool_proposal(user_input: str, package: Any) -> ToolCallProposal | None:
-    tools = {tool.tool_id for tool in package.generated_tools}
-    text = user_input.lower()
-    if "customer_ticket" not in " ".join(tools) and not any(
-        tool_id in tools
-        for tool_id in {
-            "list_customer_tickets",
-            "get_customer_ticket",
-            "search_customer_tickets",
-            "create_customer_ticket",
-            "update_customer_ticket_status",
-            "close_customer_ticket",
-        }
-    ):
-        return None
-    ticket_match = re.search(r"T[-_]?\d+", user_input, flags=re.IGNORECASE)
-    if ticket_match and "get_customer_ticket" in tools and not any(
-        marker in user_input for marker in ["更新", "修改", "关闭", "close", "resolved", "closed"]
-    ):
-        ticket_id = ticket_match.group(0).replace("_", "-").upper()
-        return ToolCallProposal(
-            id=uuid.uuid4().hex,
-            name="get_customer_ticket",
-            arguments={"ticket_id": ticket_id},
-        )
-    if any(
-        marker in user_input
-        for marker in ["列出", "有哪些", "有什么", "现在数据库", "全部", "列表", "详细", "内容", "有啥"]
-    ):
-        if "list_customer_tickets" in tools:
-            return ToolCallProposal(
-                id=uuid.uuid4().hex,
-                name="list_customer_tickets",
-                arguments={"limit": 20, "offset": 0},
-            )
-    if any(marker in user_input for marker in ["搜索", "查找", "查一下", "查询", "search"]) and "search_customer_tickets" in tools:
-        arguments: dict[str, Any] = {"query": user_input, "limit": 20}
-        for status in ("open", "pending", "resolved", "closed"):
-            if status in text:
-                arguments["status"] = status
-                break
-        return ToolCallProposal(
-            id=uuid.uuid4().hex,
-            name="search_customer_tickets",
-            arguments=arguments,
-        )
-    return None
-
-
-def _builtin_web_tool_proposal(user_input: str, package: Any) -> ToolCallProposal | None:
-    capabilities = {
-        capability.id: capability
-        for capability in package.tools.builtin_capabilities
-        if capability.exposure == "exposed"
-    }
-    url_match = re.search(r"https?://[^\s，。；：、'\"]+", user_input)
-    if url_match and "browser_fetch" in capabilities:
-        return ToolCallProposal(
-            id=uuid.uuid4().hex,
-            name="browser_fetch",
-            arguments={"url": url_match.group(0)},
-        )
-    if "web_search" not in capabilities:
-        return None
-    text = user_input.lower()
-    if any(
-        marker in user_input
-        for marker in ["天气", "新闻", "最新", "搜索", "查一下网上", "上网", "联网", "网页"]
-    ) or any(marker in text for marker in ["weather", "news", "latest", "search web", "web search"]):
-        return ToolCallProposal(
-            id=uuid.uuid4().hex,
-            name="web_search",
-            arguments={"query": user_input},
-        )
-    return None
-
-
-def _resource_bound_tool_proposal(user_input: str, package: Any) -> ToolCallProposal | None:
-    if not _requires_resource_tool(user_input, package):
-        return None
-    tools = [tool.tool_id for tool in package.generated_tools if tool.exposure == "exposed"]
-    lowered = user_input.lower()
-    if any(marker in user_input for marker in ["搜索", "查找", "筛选"]) or "search" in lowered:
-        search_tool = _first_tool_with_prefix(tools, ("search_", "find_", "query_"))
-        if search_tool:
-            return ToolCallProposal(
-                id=uuid.uuid4().hex,
-                name=search_tool,
-                arguments={"query": user_input, "limit": 20},
-            )
-    if any(marker in user_input for marker in ["列", "全部", "所有", "内容", "详细", "有啥", "有什么", "多少"]):
-        list_tool = _first_tool_with_prefix(tools, ("list_", "get_all_", "show_"))
-        if list_tool:
-            return ToolCallProposal(
-                id=uuid.uuid4().hex,
-                name=list_tool,
-                arguments={"limit": 20, "offset": 0},
-            )
-    query_tool = _first_tool_with_prefix(tools, ("query_", "search_", "list_", "get_"))
-    if query_tool:
-        return ToolCallProposal(
-            id=uuid.uuid4().hex,
-            name=query_tool,
-            arguments={"query": user_input, "limit": 20},
-        )
-    return None
-
-
-def _requires_resource_tool(user_input: str, package: Any) -> bool:
-    if not getattr(package, "resource_contracts", None):
-        return False
-    if not package.resource_contracts or not package.resource_contracts.resources:
-        return False
-    text = user_input.lower()
-    if any(marker in user_input for marker in ["工具", "能力", "你会什么", "可以做什么"]):
-        return False
-    resource_markers = [
-        "数据库",
-        "数据",
-        "表",
-        "记录",
-        "工单",
-        "内容",
-        "详情",
-        "详细",
-        "查询",
-        "查查",
-        "查一下",
-        "搜索",
-        "列出",
-        "全部",
-        "所有",
-        "有啥",
-        "有什么",
-    ]
-    if any(marker in user_input for marker in resource_markers):
-        return True
-    return any(marker in text for marker in ["database", "table", "record", "ticket", "search", "list"])
-
-
-def _resource_tool_required_answer(package: Any) -> str:
-    available = [tool.tool_id for tool in package.generated_tools if tool.exposure == "exposed"]
-    if available:
-        return "这个问题需要先调用受控工具读取真实资源；当前没有拿到工具结果，所以我不能给出具体数据。可用工具：" + "、".join(
-            available
-        )
-    return "这个问题需要读取受控资源；当前 AgentPackage 没有暴露可执行工具，所以我不能给出具体数据。"
-
-
-def _first_tool_with_prefix(tool_ids: list[str], prefixes: tuple[str, ...]) -> str | None:
-    for prefix in prefixes:
-        for tool_id in tool_ids:
-            if tool_id.startswith(prefix):
-                return tool_id
-    return None
-
-
-def _find_generated_tool(
-    package: Any,
-    preferred_tool_id: str,
-    *,
-    markers: tuple[str, ...] = (),
-) -> Any | None:
-    for tool in package.generated_tools:
-        if tool.tool_id == preferred_tool_id:
-            return tool
-    lowered_markers = tuple(marker.lower() for marker in markers)
-    for tool in package.generated_tools:
-        tool_id = tool.tool_id.lower()
-        if any(marker in tool_id for marker in lowered_markers):
-            return tool
-    return None
-
-
-def _looks_like_strange_number_request(text: str) -> bool:
-    return (
-        "奇异" in text
-        or "strange" in text
-        or ("计算" in text and re.search(r"[-+]?\d", text) is not None)
-    )
-
-
 def _fallback_answer(user_input: str, intent: str, tool_results: list[ToolResult]) -> str:
-    if intent == "unknown":
-        return "这个需求当前不在能力范围内，我已记录为升级请求。"
     if tool_results:
         completed = [item for item in tool_results if item.status == "completed"]
         interrupted = [item for item in tool_results if item.status == "interrupted"]
@@ -831,35 +569,8 @@ def _fallback_answer(user_input: str, intent: str, tool_results: list[ToolResult
             return "已通过受控工具链处理：" + "；".join(summaries)
         if interrupted:
             return f"该操作需要人工确认后才能执行：{interrupted[0].tool_id}。"
-    return "我会根据当前客服规则继续协助处理。"
-
-
-def _answer_from_history(user_input: str, history: list[LLMMessage]) -> str | None:
-    if not any(marker in user_input for marker in ["我叫什么", "我的名字", "我是谁"]):
-        return None
-    for message in reversed(history):
-        if message.role != "user":
-            continue
-        match = re.search(r"我叫\s*([^，。,.!！?\s]+)", message.content)
-        if match:
-            return f"你叫{match.group(1)}。"
-    return None
+    return "我已根据当前 AgentPackage 的能力边界处理这次请求。"
 
 
 def _history_turn_count(history: list[LLMMessage]) -> int:
     return sum(1 for message in history if message.role == "user")
-
-
-def _write_upgrade_request(package_path: Path, run_id: str, user_input: str) -> Path:
-    path = package_path / "upgrades" / f"upgrade_request_{run_id}.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = (
-        "schema_version: '0.1'\n"
-        "kind: UpgradeRequest\n"
-        f"run_id: {run_id}\n"
-        "reason: unknown_intent\n"
-        "proposed_intent: repair_return\n"
-        f"user_input: {json.dumps(user_input, ensure_ascii=False)}\n"
-    )
-    path.write_text(content, encoding="utf-8")
-    return path

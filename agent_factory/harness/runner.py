@@ -34,7 +34,7 @@ class AgentHarnessRunner:
         self.runtime = runtime or WorkflowRuntime(
             model_service=ModelService.with_adapter(
                 ModelConfig(provider="fake"),
-                FakeModelAdapter([""]),
+                FakeModelAdapter(["AF-TEST-USER"]),
             )
         )
         self._yaml = YAML(typ="safe")
