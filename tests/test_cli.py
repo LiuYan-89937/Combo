@@ -406,7 +406,7 @@ class CliTests(unittest.TestCase):
             package_path = Path(tmpdir) / "agent"
             package_path.mkdir()
             external_config = package_path / "external_config.yaml"
-            external_config.write_text("kind: ExternalConfigTemplate\n", encoding="utf-8")
+            external_config.write_text("kind: ExternalResourceConfig\n", encoding="utf-8")
             result = CreateAgentResult(
                 run_id="run-1",
                 requirement="创建墨迹天气 Agent",

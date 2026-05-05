@@ -249,6 +249,7 @@ class FactoryAgentTests(unittest.TestCase):
             self.assertEqual(modes["model.generate_structured"], "model_only")
             self.assertEqual(modes["package.validate"], "direct_internal")
             self.assertEqual(modes["memory.append"], "direct_internal")
+            self.assertEqual(modes["factory.shell_exec"], "proposal_or_future")
 
     def test_factory_prompt_requests_json_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -667,6 +668,64 @@ def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> di
                 "id": "example_tools",
                 "description": "示例工具",
                 "exposed_tools": ["example_tool"],
+                "hidden_tools": [],
+                "proposal_only": True,
+                "selection_strategy": "auto",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            primitives = AgentPackagePrimitives.model_validate(payload)
+            generator = PackageArtifactGenerator(
+                model_service=service_with_responses([code_draft_payload])
+            )
+
+            generator.generate_tool_scripts(root, primitives)
+            generator.generate_tool_tests(root, primitives)
+            report = PackageVerificationRunner().run_generated_tool_tests(root)
+
+            self.assertTrue(report.ok, report.stderr)
+
+    def test_generated_tool_tests_accept_pending_external_configuration(self) -> None:
+        source = '''from __future__ import annotations
+from typing import Any
+
+TOOL_ID = "weather_query"
+
+def input_schema() -> dict[str, Any]:
+    return {"type": "object"}
+
+def output_schema() -> dict[str, Any]:
+    return {"type": "object"}
+
+def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "status": "needs_configuration",
+        "tool_id": TOOL_ID,
+        "configuration_file": "external_config.yaml",
+        "missing_fields": ["credential_ref", "operation_weather_query"],
+    }
+'''
+        code_draft_payload = {
+            "tool_id": "weather_query",
+            "python_source": source,
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "test_cases": [
+                {
+                    "name": "weather_waits_for_configuration",
+                    "input_data": {"city": "婺源"},
+                    "expected_contains": {"status": "completed"},
+                }
+            ],
+            "risk_notes": [],
+        }
+        payload = valid_primitives_payload()
+        payload["toolsets"]["toolsets"] = [
+            {
+                "id": "weather_tools",
+                "description": "天气工具",
+                "exposed_tools": ["weather_query"],
                 "hidden_tools": [],
                 "proposal_only": True,
                 "selection_strategy": "auto",

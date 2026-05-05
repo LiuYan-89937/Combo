@@ -262,8 +262,9 @@ def _resource_binding_request(
 
 
 def _candidate_paths(text: str) -> list[str]:
+    scan_text = _remove_urls(text)
     candidates: list[str] = []
-    candidates.extend(re.findall(r"(?P<quote>['\"])(?P<path>(?:/|~|\.)[^'\"]+)(?P=quote)", text))
+    candidates.extend(re.findall(r"(?P<quote>['\"])(?P<path>(?:/|~|\.)[^'\"]+)(?P=quote)", scan_text))
     # The previous regex returns tuples because of the named quote group.
     normalized: list[str] = []
     for item in candidates:
@@ -273,9 +274,13 @@ def _candidate_paths(text: str) -> list[str]:
             normalized.append(item)
     normalized.extend(
         match.group(0)
-        for match in re.finditer(r"(?:/|~|\./|\../)[^\s，。；：、]+", text)
+        for match in re.finditer(r"(?:/|~|\./|\../)[^\s，。；：、]+", scan_text)
     )
     return [_strip_path_punctuation(value) for value in normalized if value.strip()]
+
+
+def _remove_urls(text: str) -> str:
+    return re.sub(r"https?://[^\s，。；：、'\"]+", " ", text)
 
 
 def _strip_path_punctuation(value: str) -> str:

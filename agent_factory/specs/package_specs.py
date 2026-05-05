@@ -396,7 +396,6 @@ class ReadinessOption(BaseModel):
         "create_sample_resource",
         "replace_resource_path",
         "generate_draft_only",
-        "configure_external_api",
         "enable_web_search",
         "use_mock_only",
         "provide_api_docs",

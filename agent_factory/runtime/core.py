@@ -24,7 +24,14 @@ from agent_factory.model import (
 )
 from agent_factory.model.types import ModelError, TokenUsage, ToolCallProposal
 from agent_factory.package import PackageLoader
-from agent_factory.tools import ToolExecutor, ToolInvocation, ToolResult, ToolRouter
+from agent_factory.tools import (
+    ExternalHttpClient,
+    ToolExecutor,
+    ToolInvocation,
+    ToolResult,
+    ToolRouter,
+    load_external_config_context,
+)
 
 
 class RuntimeEvent(JsonDumpMixin):
@@ -381,6 +388,10 @@ class WorkflowRuntime:
             return []
         router = ToolRouter(package_path, loader=self.loader)
         executor = ToolExecutor(web_search_service=self.web_search_service, env_file=self.env_file)
+        runtime_context = tool_runtime_context(context_bundle)
+        external_config = load_external_config_context(package_path, env_file=self.env_file or ".env")
+        runtime_context["external_config"] = external_config.model_dump(mode="json")
+        runtime_context["external_http_client"] = ExternalHttpClient(external_config)
         results: list[ToolResult] = []
         for proposal in proposals:
             approved_ref = request.approved_tool_call_id
@@ -399,7 +410,7 @@ class WorkflowRuntime:
                         package_path,
                         route,
                         invocation,
-                        runtime_context=tool_runtime_context(context_bundle),
+                        runtime_context=runtime_context,
                     )
                 )
         return results

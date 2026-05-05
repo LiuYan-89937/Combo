@@ -177,6 +177,19 @@ class SandboxResourceResolver:
         return data if isinstance(data, dict) else {}
 
     def _build_context(self, root: Path, resources: list[SandboxResource]) -> dict[str, Any]:
+        external_config_path = root / "package" / "external_config.yaml"
+        external_config_data = self._load_mapping(external_config_path)
+        external_values = external_config_data.get("values") if isinstance(external_config_data, dict) else {}
+        external_required = (
+            external_config_data.get("required_keys") if isinstance(external_config_data, dict) else []
+        )
+        external_secret = external_config_data.get("secret_keys") if isinstance(external_config_data, dict) else []
+        external_sources = (
+            external_config_data.get("source_urls") if isinstance(external_config_data, dict) else []
+        )
+        values = _string_map(external_values)
+        required_keys = _string_list(external_required)
+        missing_required = [key for key in required_keys if not values.get(key)]
         context: dict[str, Any] = {
             "sandbox": {"enabled": True, "mode": "process_directory"},
             "resources": {},
@@ -186,6 +199,24 @@ class SandboxResourceResolver:
                 "tmp_dir": str(root / "runtime" / "tmp"),
                 "memory_dir": str(root / "runtime" / "memory"),
                 "trace_dir": str(root / "runtime" / "traces"),
+            },
+            "external_config": {
+                "path": str(external_config_path),
+                "exists": external_config_path.exists(),
+                "status": (
+                    "needs_user_configuration"
+                    if external_config_path.exists() and missing_required
+                    else "ready"
+                    if external_config_path.exists()
+                    else "missing"
+                ),
+                "data": external_config_data,
+                "values": values,
+                "resolved_values": values,
+                "required_keys": required_keys,
+                "secret_keys": _string_list(external_secret),
+                "source_urls": _string_list(external_sources),
+                "missing_required_keys": missing_required,
             },
         }
         for resource in resources:
@@ -213,6 +244,18 @@ def _resource_type(path: Path, declared_type: str) -> str:
     if declared_type == "mcp":
         return "mcp"
     return "file"
+
+
+def _string_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
 
 
 def _target_path(root: Path, source_id: str, original: Path, resource_type: str) -> Path:

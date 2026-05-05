@@ -232,7 +232,6 @@ def build_tool_precondition_request(
         for tool_id, description in _iter_tools(primitives)
     ]
     schema = ToolPreconditionReport.model_json_schema()
-    inheritance = (web_config or WebSearchConfig()).agent_web_inheritance
     return (
         MessageBuilder.start()
         .system(
@@ -252,7 +251,6 @@ def build_tool_precondition_request(
             f"Agent goal: {primitives.instructions.goal}\n"
             f"Agent boundaries: {json.dumps(primitives.instructions.boundaries, ensure_ascii=False)}\n"
             f"Tool drafts:\n{json.dumps(tool_inputs, ensure_ascii=False, indent=2)}\n\n"
-            f"Agent runtime web_search inheritance policy: {inheritance}\n\n"
             "For each plan:\n"
             "- required_conditions must use only these type values: "
             f"{', '.join(get_args(ConditionType))}.\n"
@@ -264,8 +262,8 @@ def build_tool_precondition_request(
             "- Add risk_controls for writes, deletes, payments, emails, shell/browser/network, "
             "generated code, or sensitive data.\n"
             "- Use web_research only when Factory needs current public docs or API behavior while building.\n"
-            "- Only set agent_should_inherit_web_search when the generated Agent itself must search web "
-            "at runtime under explicit bounds.\n\n"
+            "- Generated agents must not inherit open web_search/browser_fetch tools in the MVP; "
+            "external docs are resolved by Factory from user-provided URLs during production.\n\n"
             "Examples:\n"
             "- 'track competitor page changes' implies browser_access/http target URL, schedule, "
             "storage_backend, mock_fixture, permission, and maybe web_research.\n"
@@ -328,8 +326,7 @@ def _normalize_model_report(
         plans.append(ToolPreconditionPlan(tool_id=tool_id))
     normalized: list[ToolPreconditionPlan] = []
     for plan in plans:
-        if inheritance != "explicit":
-            plan.agent_should_inherit_web_search = False
+        plan.agent_should_inherit_web_search = False
         plan.missing_conditions = [
             condition.condition_id
             for condition in plan.required_conditions
@@ -402,10 +399,7 @@ def _merge_tool_plans(
             "risk_controls": controls,
             "research_queries": research_queries,
             "mock_only_allowed": model_plan.mock_only_allowed or rule_plan.mock_only_allowed,
-            "agent_should_inherit_web_search": (
-                model_plan.agent_should_inherit_web_search
-                or rule_plan.agent_should_inherit_web_search
-            ),
+            "agent_should_inherit_web_search": False,
         }
     )
 
@@ -653,11 +647,7 @@ def _rule_plan_for_tool(
                 user_input_needed=False,
             ),
         )
-    plan.agent_should_inherit_web_search = (
-        inheritance == "explicit"
-        and any(condition.type in {"web_research", "browser_access"} for condition in plan.required_conditions)
-        and _agent_runtime_search_needed(lowered)
-    )
+    plan.agent_should_inherit_web_search = False
     plan.missing_conditions = [
         condition.condition_id for condition in plan.required_conditions if _condition_is_missing(condition)
     ]

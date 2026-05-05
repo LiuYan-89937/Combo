@@ -524,7 +524,7 @@ class SlashCommandDispatcher:
                 options=result.clarification_options,
             )
             return
-        if result.status == "completed":
+        if result.status in {"completed", "completed_with_warnings"}:
             self.session.clear_pending_clarification()
             if result.output_path is not None:
                 self.session.selected_agent_path = result.output_path

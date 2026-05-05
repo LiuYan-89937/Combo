@@ -882,6 +882,20 @@ class {class_name}DraftTests(unittest.TestCase):
         status = str(result.get("status", "")).lower()
         self.assertNotIn(status, {{"not_implemented", "error"}})
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True).lower()
+        if status == "needs_configuration":
+            self.assertTrue(
+                any(
+                    marker in serialized
+                    for marker in [
+                        "external_config",
+                        "configuration",
+                        "missing",
+                        "配置",
+                        "缺少",
+                    ]
+                ),
+                "needs_configuration results must explain missing configuration or point to external_config.yaml",
+            )
         forbidden_markers = [
             "not_implemented",
             "generic_fallback",
@@ -1122,68 +1136,9 @@ def _implementation_plan_from_contract(
 
 
 def _builtin_capabilities(resource_contracts: ResourceContractsSpec | None) -> list[dict[str, object]]:
-    if resource_contracts is None:
-        return []
-    inherit_web = False
-    inherit_browser = False
-    allowed_domains: list[str] = []
-    for resource in resource_contracts.resources:
-        details = resource.details if isinstance(resource.details, dict) else {}
-        if details.get("agent_should_inherit_web_search") is not True:
-            continue
-        inherit_web = True
-        if resource.type in {"http_endpoint", "web_search"}:
-            inherit_browser = True
-        condition = details.get("condition")
-        if isinstance(condition, dict) and condition.get("type") == "browser_access":
-            inherit_browser = True
-        if isinstance(resource.ref, str) and resource.ref.startswith(("http://", "https://")):
-            domain = _domain_from_url(resource.ref)
-            if domain and domain not in allowed_domains:
-                allowed_domains.append(domain)
-    capabilities: list[dict[str, object]] = []
-    if inherit_web:
-        capabilities.append(
-            {
-                "id": "web_search",
-                "type": "web_search",
-                "description": "Search the public web through the configured AgentFactory provider.",
-                "exposure": "exposed",
-                "risk_level": "low",
-                "proposal_only": False,
-                "approval_required": False,
-                "allowed_domains": allowed_domains,
-                "blocked_domains": [],
-                "max_uses": 5,
-                "max_results": 5,
-                "max_content_chars": 6000,
-            }
-        )
-    if inherit_browser:
-        capabilities.append(
-            {
-                "id": "browser_fetch",
-                "type": "browser_fetch",
-                "description": "Fetch and extract text from an allowed HTTP/HTTPS page.",
-                "exposure": "exposed",
-                "risk_level": "medium",
-                "proposal_only": False,
-                "approval_required": False,
-                "allowed_domains": allowed_domains,
-                "blocked_domains": [],
-                "max_uses": 5,
-                "max_results": 5,
-                "max_content_chars": 6000,
-            }
-        )
-    return capabilities
-
-
-def _domain_from_url(value: str) -> str | None:
-    match = re.match(r"https?://([^/:?#]+)", value, flags=re.IGNORECASE)
-    if not match:
-        return None
-    return match.group(1).lower().strip(".")
+    # MVP rule: Factory extracts user-provided external documentation during
+    # production, but generated agents do not inherit open web/search tools.
+    return []
 
 
 def _tool_wrapper_source(
@@ -1248,6 +1203,8 @@ def _resources_for_logic(context: dict[str, Any]) -> dict[str, Any]:
         "sqlite_databases": context.get("sqlite_databases", {{}}),
         "filesystem_root": context.get("filesystem_root"),
         "runtime": context.get("runtime", {{}}),
+        "external_config": context.get("external_config", {{}}),
+        "external_http_client": context.get("external_http_client"),
     }}
 '''
 

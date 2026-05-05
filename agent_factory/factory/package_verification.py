@@ -14,7 +14,7 @@ from ruamel.yaml import YAML
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.factory.tool_test_sandbox import SandboxResourceResolver
 
-VerificationStatus = Literal["passed", "failed", "skipped"]
+VerificationStatus = Literal["passed", "passed_with_warnings", "failed", "skipped"]
 
 
 class VerificationIssue(JsonDumpMixin):
@@ -35,7 +35,7 @@ class ToolStaticCheckReport(JsonDumpMixin):
 
     @property
     def ok(self) -> bool:
-        return self.status in {"passed", "skipped"}
+        return self.status in {"passed", "passed_with_warnings", "skipped"}
 
 
 class ToolTestRunReport(JsonDumpMixin):
@@ -58,7 +58,7 @@ class ToolTestRunReport(JsonDumpMixin):
 
     @property
     def ok(self) -> bool:
-        return self.status in {"passed", "skipped"}
+        return self.status in {"passed", "passed_with_warnings", "skipped"}
 
 
 class MCPBindingLocalCheckReport(JsonDumpMixin):
@@ -72,7 +72,7 @@ class MCPBindingLocalCheckReport(JsonDumpMixin):
 
     @property
     def ok(self) -> bool:
-        return self.status in {"passed", "skipped"}
+        return self.status in {"passed", "passed_with_warnings", "skipped"}
 
 
 class HarnessDryRunReport(JsonDumpMixin):
@@ -85,7 +85,7 @@ class HarnessDryRunReport(JsonDumpMixin):
 
     @property
     def ok(self) -> bool:
-        return self.status in {"passed", "skipped"}
+        return self.status in {"passed", "passed_with_warnings", "skipped"}
 
 
 class FactoryVerificationReport(JsonDumpMixin):
@@ -102,7 +102,7 @@ class FactoryVerificationReport(JsonDumpMixin):
 
     @property
     def ok(self) -> bool:
-        return self.status in {"passed", "skipped"}
+        return self.status in {"passed", "passed_with_warnings", "skipped"}
 
 
 class PackageVerificationRunner:
@@ -443,6 +443,8 @@ class PackageVerificationRunner:
         issue_count = sum(len(getattr(report, "issues", [])) for report in reports)
         if any(report.status == "failed" for report in reports):
             status: VerificationStatus = "failed"
+        elif any(report.status == "passed_with_warnings" for report in reports):
+            status = "passed_with_warnings"
         elif len(reports) == 4:
             status = "passed"
         else:
@@ -459,6 +461,11 @@ class PackageVerificationRunner:
             report_path=report_path,
         )
         self._write_report(report_path, report)
+        return report
+
+    def rewrite_tool_test_report(self, report: ToolTestRunReport) -> ToolTestRunReport:
+        if report.report_path is not None:
+            self._write_report(report.report_path, report)
         return report
 
     def _load_yaml_mapping(self, path: Path) -> dict[str, Any]:

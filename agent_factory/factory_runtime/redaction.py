@@ -9,13 +9,25 @@ SENSITIVE_FIELD_NAMES = {
     "auth_header",
     "tool_auth_token",
 }
+SENSITIVE_KEY_MARKERS = {
+    "api_key",
+    "secret",
+    "token",
+    "jwt",
+    "credential",
+    "authorization",
+    "auth_header",
+    "appcode",
+    "password",
+}
 
 
 def redact_secrets(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if key.lower() in SENSITIVE_FIELD_NAMES:
+            lowered = key.lower()
+            if lowered in SENSITIVE_FIELD_NAMES or any(marker in lowered for marker in SENSITIVE_KEY_MARKERS):
                 redacted[key] = "[REDACTED]"
             else:
                 redacted[key] = redact_secrets(item)

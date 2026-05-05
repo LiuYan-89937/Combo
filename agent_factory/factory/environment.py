@@ -27,6 +27,7 @@ from agent_factory.specs import (
 from agent_factory.tools.shell import ControlledShellRunner
 from agent_factory.factory.tool_preconditions import RequiredCondition, ToolPreconditionReport
 from agent_factory.factory.web_search import WebSearchReport
+from agent_factory.factory.web_research import ResearchBriefBundle, ResearchCompletenessReport
 
 
 LOCAL_RESOURCE_PATTERN = re.compile(r"(?:/|~|\./|\../)[^\s，。；：、'\"]+")
@@ -49,6 +50,8 @@ class EnvironmentProbeRunner:
         start_path: str | Path | None = None,
         tool_precondition_report: dict[str, Any] | ToolPreconditionReport | None = None,
         web_research_report: dict[str, Any] | WebSearchReport | None = None,
+        research_brief_report: dict[str, Any] | ResearchBriefBundle | None = None,
+        research_completeness_report: dict[str, Any] | ResearchCompletenessReport | None = None,
     ) -> tuple[EnvironmentProbeReport, ResourceContractsSpec, ReadinessReport]:
         metadata = _metadata(primitives, "environment")
         resource_metadata = _metadata(primitives, "resource-contracts")
@@ -60,9 +63,21 @@ class EnvironmentProbeRunner:
         ]
         tool_preconditions = _coerce_tool_precondition_report(tool_precondition_report)
         web_research = _coerce_web_research_report(web_research_report)
-        contracts.extend(_condition_contracts(tool_preconditions, web_research))
+        research_brief = _coerce_research_brief_report(research_brief_report)
+        research_completeness = _coerce_research_completeness_report(research_completeness_report)
+        contracts.extend(
+            _condition_contracts(tool_preconditions, web_research, research_brief, research_completeness)
+        )
         preconditions = _preconditions_from_contracts(contracts)
-        preconditions.extend(_generic_preconditions(tool_preconditions, web_research, contracts=contracts))
+        preconditions.extend(
+            _generic_preconditions(
+                tool_preconditions,
+                web_research,
+                research_brief=research_brief,
+                research_completeness=research_completeness,
+                contracts=contracts,
+            )
+        )
         probes = [
             EnvironmentProbe(
                 id="python.sqlite3",
@@ -103,6 +118,8 @@ class EnvironmentProbeRunner:
             preconditions,
             tool_preconditions=tool_preconditions,
             web_research=web_research,
+            research_brief=research_brief,
+            research_completeness=research_completeness,
         )
         report = EnvironmentProbeReport(
             schema_version="0.1",
@@ -240,7 +257,8 @@ def _resource_inputs(
         seen.add(key)
         values.append((source.id, source.ref, source.access_mode))
     root = Path(start_path or ".").resolve()
-    for raw in LOCAL_RESOURCE_PATTERN.findall(requirement):
+    scan_requirement = _remove_urls(requirement)
+    for raw in LOCAL_RESOURCE_PATTERN.findall(scan_requirement):
         ref = raw.rstrip(".,;:，。；：、)")
         path = Path(ref).expanduser()
         if not path.is_absolute():
@@ -253,6 +271,10 @@ def _resource_inputs(
         seen.add(key)
         values.append((_resource_id(path), str(path), _access_mode_from_requirement(requirement)))
     return values
+
+
+def _remove_urls(text: str) -> str:
+    return re.sub(r"https?://[^\s，。；：、'\"]+", " ", text)
 
 
 def _preconditions_from_contracts(contracts: list[ResourceContract]) -> list[PreconditionSpec]:
@@ -315,6 +337,8 @@ def _preconditions_from_contracts(contracts: list[ResourceContract]) -> list[Pre
 def _condition_contracts(
     report: ToolPreconditionReport | None,
     web_research: WebSearchReport | None,
+    research_brief: ResearchBriefBundle | None,
+    research_completeness: ResearchCompletenessReport | None,
 ) -> list[ResourceContract]:
     if report is None:
         return []
@@ -325,7 +349,7 @@ def _condition_contracts(
             resource_type = _resource_type_from_condition(condition)
             if resource_type is None:
                 continue
-            status = _resource_status_from_condition(condition, report, web_research)
+            status = _resource_status_from_condition(condition, report, web_research, research_brief)
             probe_target = probe_by_condition.get(condition.condition_id)
             contracts.append(
                 ResourceContract(
@@ -346,11 +370,17 @@ def _condition_contracts(
                         "agent_should_inherit_web_search": plan.agent_should_inherit_web_search,
                         "research_queries": plan.research_queries,
                         "web_research_status": web_research.status if web_research else "skipped",
-                        "web_research_results": _web_research_results_for_prompt(web_research),
+                        "research_brief": _research_brief_for_prompt(research_brief),
+                        "research_completeness": _research_completeness_for_prompt(
+                            research_completeness
+                        ),
                         "configuration_template": (
                             {
                                 "file": "external_config.yaml",
-                                "required_values": _runtime_config_values_for_condition(condition),
+                                "required_values": _runtime_config_values_for_condition(
+                                    condition,
+                                    research_brief=research_brief,
+                                ),
                                 "note": "Fill this template before running the Agent against the real external service.",
                             }
                             if _condition_uses_external_config_template(condition)
@@ -366,6 +396,8 @@ def _generic_preconditions(
     report: ToolPreconditionReport | None,
     web_research: WebSearchReport | None,
     *,
+    research_brief: ResearchBriefBundle | None,
+    research_completeness: ResearchCompletenessReport | None,
     contracts: list[ResourceContract],
 ) -> list[PreconditionSpec]:
     if report is None:
@@ -375,7 +407,10 @@ def _generic_preconditions(
         for condition in plan.required_conditions:
             if _condition_satisfied_by_contract(condition, contracts):
                 status = "passed"
-            elif condition.type == "web_research" and web_research is not None and web_research.ok:
+            elif condition.type == "web_research" and _research_evidence_can_generate(
+                research_brief,
+                research_completeness,
+            ):
                 status = "passed"
             elif report.mock_only_requested and condition.type in {
                 "external_service",
@@ -402,6 +437,12 @@ def _generic_preconditions(
                         "user_input_needed": condition.user_input_needed,
                         "evidence": condition.evidence,
                         "web_research_status": web_research.status if web_research else "skipped",
+                        "research_brief_status": (
+                            research_brief.brief.status if research_brief is not None else "skipped"
+                        ),
+                        "research_completeness_status": (
+                            research_completeness.status if research_completeness is not None else "skipped"
+                        ),
                     },
                 )
             )
@@ -415,6 +456,8 @@ def _readiness_from_contracts(
     *,
     tool_preconditions: ToolPreconditionReport | None = None,
     web_research: WebSearchReport | None = None,
+    research_brief: ResearchBriefBundle | None = None,
+    research_completeness: ResearchCompletenessReport | None = None,
 ) -> ReadinessReport:
     if tool_preconditions is not None and tool_preconditions.mock_only_requested:
         return ReadinessReport(
@@ -439,13 +482,35 @@ def _readiness_from_contracts(
         )
         for item in failed_required
     ]
+    if research_completeness is not None and research_completeness.status in {
+        "needs_more_url",
+        "unsupported",
+    }:
+        detail_parts = []
+        if research_completeness.missing_urls:
+            detail_parts.append("缺少 URL: " + ", ".join(research_completeness.missing_urls[:5]))
+        if research_completeness.missing_facts:
+            detail_parts.append("缺少事实: " + ", ".join(research_completeness.missing_facts[:8]))
+        message = research_completeness.summary
+        if detail_parts:
+            message = f"{message} ({'; '.join(detail_parts)})"
+        issues.append(
+            ReadinessIssue(
+                code="research_completeness",
+                message=message,
+                severity="error",
+            )
+        )
     if not failed_required:
         return ReadinessReport(schema_version="0.1", metadata=metadata, status="ready")
     if _can_continue_with_external_config_template(
         failed_required,
         contracts,
         web_research=web_research,
+        research_brief=research_brief,
+        research_completeness=research_completeness,
     ):
+        completeness_issue = _research_completeness_warning(research_completeness)
         return ReadinessReport(
             schema_version="0.1",
             metadata=metadata,
@@ -469,6 +534,7 @@ def _readiness_from_contracts(
                     )
                     for item in failed_required
                 ],
+                *([completeness_issue] if completeness_issue is not None else []),
             ],
         )
     has_missing = any(
@@ -526,13 +592,19 @@ def _condition_uses_external_config_template(condition: RequiredCondition) -> bo
     return condition.type in {"external_service", "credential", "mock_fixture", "data_contract"}
 
 
-def _runtime_config_values_for_condition(condition: RequiredCondition) -> list[str]:
+def _runtime_config_values_for_condition(
+    condition: RequiredCondition,
+    *,
+    research_brief: ResearchBriefBundle | None,
+) -> list[str]:
+    if research_brief is not None and research_brief.brief.recommended_config_fields:
+        return [field.key for field in research_brief.brief.recommended_config_fields]
     if condition.type == "external_service":
-        return ["provider", "base_url", "endpoints", "allowed_operations"]
+        return ["api_docs_url", "credential_ref", "operation_endpoint", "operation_method"]
     if condition.type == "credential":
-        return ["auth.type", "auth.env_var", "auth.credential_ref"]
+        return ["credential_ref"]
     if condition.type == "mock_fixture":
-        return ["test_fixture.request", "test_fixture.response"]
+        return ["test_fixture"]
     if condition.type == "data_contract":
         return ["request_schema", "response_schema", "error_schema"]
     return []
@@ -543,8 +615,10 @@ def _can_continue_with_external_config_template(
     contracts: list[ResourceContract],
     *,
     web_research: WebSearchReport | None,
+    research_brief: ResearchBriefBundle | None,
+    research_completeness: ResearchCompletenessReport | None,
 ) -> bool:
-    if web_research is None or not web_research.ok:
+    if not _research_evidence_can_generate(research_brief, research_completeness):
         return False
     failed_types = {item.type for item in failed_required}
     deferable = {"external_service", "credential", "mock_fixture", "data_contract"}
@@ -557,6 +631,7 @@ def _resource_status_from_condition(
     condition: RequiredCondition,
     report: ToolPreconditionReport,
     web_research: WebSearchReport | None,
+    research_brief: ResearchBriefBundle | None = None,
 ) -> str:
     if report.mock_only_requested and condition.type in {
         "external_service",
@@ -565,7 +640,7 @@ def _resource_status_from_condition(
         "browser_access",
     }:
         return "ready"
-    if condition.type == "web_research" and web_research is not None and web_research.ok:
+    if condition.type == "web_research" and _research_brief_is_usable(research_brief):
         return "ready"
     if condition.status == "satisfied":
         return "ready"
@@ -637,35 +712,27 @@ def _readiness_options_for_failed_preconditions(
     if failed_types.intersection({"external_service", "credential"}):
         add(
             ReadinessOption(
-                id="configure_external_api",
-                label="配置外部服务",
-                description="提供 provider、base_url、鉴权方式和测试 mock 后继续。",
-                action="configure_external_api",
-            )
-        )
-        add(
-            ReadinessOption(
-                id="provide_credential",
-                label="提供凭证",
-                description="提供安全存放的凭证引用，Factory 不会把密钥写入包或 trace。",
-                action="provide_credential",
-            )
-        )
-        add(
-            ReadinessOption(
-                id="provide_api_docs",
-                label="提供接口文档",
-                description="粘贴官方文档、endpoint、鉴权和示例返回。",
+                id="provide_external_url",
+                label="提供官方文档 URL",
+                description="粘贴外部服务的官方文档、API Reference、OpenAPI 或购买页 URL。",
                 action="provide_api_docs",
+            )
+        )
+        add(
+            ReadinessOption(
+                id="provide_external_config_values",
+                label="提供配置项名称",
+                description="像 .env 一样给出需要的键名，例如 MOJI_APP_CODE、WEATHER_DOC_URL。",
+                action="ask_user",
             )
         )
     if "web_research" in failed_types:
         add(
             ReadinessOption(
-                id="enable_web_search",
-                label="启用 Factory web_search",
-                description="允许 Factory 搜索官方文档，辅助生成工具契约。",
-                action="enable_web_search",
+                id="provide_external_url",
+                label="提供官方文档 URL",
+                description="Factory 不自动搜索；请提供要提取的单个官方页面 URL。",
+                action="provide_api_docs",
             )
         )
     if failed_types.intersection(
@@ -797,18 +864,89 @@ def _coerce_web_research_report(value: dict[str, Any] | WebSearchReport | None) 
     return WebSearchReport.model_validate(value)
 
 
-def _web_research_results_for_prompt(web_research: WebSearchReport | None) -> list[dict[str, str]]:
-    if web_research is None:
-        return []
-    return [
-        {
-            "title": result.title,
-            "url": result.url,
-            "snippet": result.snippet[:500],
-            "source": result.source or "",
-        }
-        for result in web_research.results[:5]
-    ]
+def _coerce_research_brief_report(
+    value: dict[str, Any] | ResearchBriefBundle | None,
+) -> ResearchBriefBundle | None:
+    if value is None:
+        return None
+    if isinstance(value, ResearchBriefBundle):
+        return value
+    return ResearchBriefBundle.model_validate(value)
+
+
+def _coerce_research_completeness_report(
+    value: dict[str, Any] | ResearchCompletenessReport | None,
+) -> ResearchCompletenessReport | None:
+    if value is None:
+        return None
+    if isinstance(value, ResearchCompletenessReport):
+        return value
+    return ResearchCompletenessReport.model_validate(value)
+
+
+def _research_brief_is_usable(research_brief: ResearchBriefBundle | None) -> bool:
+    return research_brief is not None and research_brief.brief.status in {
+        "resolved",
+        "partially_resolved",
+    }
+
+
+def _research_evidence_can_generate(
+    research_brief: ResearchBriefBundle | None,
+    research_completeness: ResearchCompletenessReport | None,
+) -> bool:
+    if research_completeness is not None:
+        return research_completeness.ok_for_generation
+    return _research_brief_is_usable(research_brief)
+
+
+def _research_completeness_warning(
+    research_completeness: ResearchCompletenessReport | None,
+) -> ReadinessIssue | None:
+    if research_completeness is None or research_completeness.status == "sufficient":
+        return None
+    if research_completeness.status == "needs_config_values":
+        return ReadinessIssue(
+            code="external_config_values_required",
+            message=(
+                "External documentation is sufficient, but runtime configuration keys still need values: "
+                + ", ".join(research_completeness.missing_config_keys[:8])
+            ),
+            severity="warning",
+        )
+    return ReadinessIssue(
+        code="research_completeness_incomplete",
+        message=research_completeness.summary,
+        severity="error",
+    )
+
+
+def _research_brief_for_prompt(research_brief: ResearchBriefBundle | None) -> dict[str, Any]:
+    if research_brief is None:
+        return {}
+    brief = research_brief.brief
+    return {
+        "service_id": brief.service_id,
+        "service_name": brief.service_name,
+        "status": brief.status,
+        "confidence": brief.confidence,
+        "summary": brief.summary,
+        "sources": [source.model_dump(mode="json") for source in brief.sources[:5]],
+        "facts": brief.facts,
+        "recommended_config_fields": [
+            field.model_dump(mode="json") for field in brief.recommended_config_fields
+        ],
+        "unresolved_fields": brief.unresolved_fields,
+        "issues": brief.issues[:10],
+    }
+
+
+def _research_completeness_for_prompt(
+    research_completeness: ResearchCompletenessReport | None,
+) -> dict[str, Any]:
+    if research_completeness is None:
+        return {}
+    return research_completeness.model_dump(mode="json")
 
 
 def _metadata(primitives: AgentPackagePrimitives, suffix: str) -> Metadata:

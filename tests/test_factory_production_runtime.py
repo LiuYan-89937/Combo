@@ -224,7 +224,7 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
             self.assertEqual(state.tool_static_check_report.status, "failed")
             self.assertIn("static_check_tool_scripts", state.stage_history)
 
-    def test_generated_tool_test_failure_fails_graph(self) -> None:
+    def test_generated_tool_test_failure_completes_with_warnings_after_repair(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             context = FactoryRunContext.create(start_path=tmpdir)
             runtime = FactoryProductionRuntime(
@@ -234,12 +234,14 @@ class FactoryProductionRuntimeTests(unittest.TestCase):
 
             state = runtime.run(requirement="创建客服 Agent", context=context)
 
-            self.assertEqual(state.status, "failed")
-            self.assertEqual(state.error.code, "generated_tool_tests_failed")
-            self.assertEqual(state.tool_test_report.status, "failed")
+            self.assertEqual(state.status, "completed_with_warnings")
+            self.assertIsNone(state.error)
+            self.assertEqual(state.tool_test_report.status, "passed_with_warnings")
+            self.assertEqual(state.verification_report.status, "passed_with_warnings")
             self.assertEqual(state.tool_test_repair_attempts, 1)
             self.assertIn("repair_tool_tests", state.stage_history)
             self.assertIn("run_generated_tool_tests", state.stage_history)
+            self.assertEqual(state.stage_history[-1], "complete")
 
     def test_generated_tool_test_failure_repairs_and_reruns(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

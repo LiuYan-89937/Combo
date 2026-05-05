@@ -15,12 +15,25 @@ from agent_factory.factory.package_verification import (
     ToolStaticCheckReport,
     ToolTestRunReport,
 )
+from agent_factory.factory_context import (
+    CapabilityPlan,
+    ConditionPlan,
+    EvidenceReport,
+    FactoryContextEnvelope,
+    ImplementationPlan,
+    ProductionSummary,
+    ReadinessDecision,
+    RequirementUnderstanding,
+    ResourceContractSet,
+    ResourceNeedPlan,
+)
 from agent_factory.specs import AgentPackagePrimitives, ValidationReport
 from agent_factory.specs import EnvironmentProbeReport, ReadinessReport, ResourceContractsSpec
 
 ProductionStatus = Literal[
     "running",
     "completed",
+    "completed_with_warnings",
     "failed",
     "needs_clarification",
     "not_agent_request",
@@ -42,6 +55,19 @@ class FactoryProductionStateDict(TypedDict, total=False):
     readiness_report: ReadinessReport | None
     tool_precondition_report: dict[str, Any] | None
     web_research_report: dict[str, Any] | None
+    research_brief_report: dict[str, Any] | None
+    research_completeness_report: dict[str, Any] | None
+    requirement_understanding: dict[str, Any] | None
+    capability_plan: dict[str, Any] | None
+    condition_plan: dict[str, Any] | None
+    resource_need_plan: dict[str, Any] | None
+    evidence_reports: list[dict[str, Any]]
+    resource_contract_set: dict[str, Any] | None
+    readiness_decision: dict[str, Any] | None
+    implementation_plan: dict[str, Any] | None
+    production_summary: dict[str, Any] | None
+    context_envelopes: list[dict[str, Any]]
+    decision_records: list[dict[str, Any]]
     validation_report: ValidationReport | None
     generated_artifacts: list[Path]
     generated_tool_count: int
@@ -86,6 +112,19 @@ class FactoryProductionState(JsonDumpMixin):
     readiness_report: ReadinessReport | None = None
     tool_precondition_report: dict[str, Any] | None = None
     web_research_report: dict[str, Any] | None = None
+    research_brief_report: dict[str, Any] | None = None
+    research_completeness_report: dict[str, Any] | None = None
+    requirement_understanding: RequirementUnderstanding | None = None
+    capability_plan: CapabilityPlan | None = None
+    condition_plan: ConditionPlan | None = None
+    resource_need_plan: ResourceNeedPlan | None = None
+    evidence_reports: list[EvidenceReport] = Field(default_factory=list)
+    resource_contract_set: ResourceContractSet | None = None
+    readiness_decision: ReadinessDecision | None = None
+    implementation_plan: ImplementationPlan | None = None
+    production_summary: ProductionSummary | None = None
+    context_envelopes: list[FactoryContextEnvelope] = Field(default_factory=list)
+    decision_records: list[dict[str, Any]] = Field(default_factory=list)
     validation_report: ValidationReport | None = None
     generated_artifacts: list[Path] = Field(default_factory=list)
     generated_tool_count: int = 0

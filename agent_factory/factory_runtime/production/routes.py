@@ -78,6 +78,8 @@ def route_after_tool_test_repair(
 ) -> Literal["run_generated_tool_tests", "failed"]:
     if state.get("error") is None:
         return "run_generated_tool_tests"
+    if state.get("package_path") is not None:
+        return "run_generated_tool_tests"
     return "failed"
 
 
@@ -95,6 +97,18 @@ def route_after_readiness(
     state: FactoryProductionStateDict,
 ) -> Literal["write_package", "needs_clarification", "failed"]:
     if state.get("error") is not None:
+        return "failed"
+    readiness_decision = state.get("readiness_decision")
+    decision_status = None
+    if isinstance(readiness_decision, dict):
+        decision_status = readiness_decision.get("status")
+    elif readiness_decision is not None:
+        decision_status = getattr(readiness_decision, "status", None)
+    if decision_status in {"ready", "ready_with_deferred"}:
+        return "write_package"
+    if decision_status == "needs_user_input":
+        return "needs_clarification"
+    if decision_status == "blocked":
         return "failed"
     readiness = state.get("readiness_report")
     status = None

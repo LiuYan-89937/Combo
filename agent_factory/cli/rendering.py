@@ -304,6 +304,30 @@ def render_create_result(result: CreateAgentResult, console: Console | None = No
         )
         for path in result.pending_configuration_files:
             console.print(f"  {path}", style=STYLE_MUTED)
+        if result.pending_configuration_keys:
+            render_kv("Required env keys", ", ".join(result.pending_configuration_keys), console)
+    if result.research_completeness_report:
+        render_section("Research", console)
+        render_kv("Completeness", result.research_completeness_report.get("status"), console)
+        missing = result.research_completeness_report.get("missing_config_keys") or []
+        if missing:
+            render_kv("Pending config", ", ".join(str(item) for item in missing[:8]), console)
+    if result.readiness_decision:
+        render_section("Readiness", console)
+        render_kv("Status", result.readiness_decision.get("status"), console)
+        for label, key in [("Blocking", "blocking"), ("Deferred", "deferred"), ("Warnings", "warnings")]:
+            items = result.readiness_decision.get(key) or []
+            if items:
+                render_kv(label, len(items), console)
+                for item in items[:3]:
+                    if isinstance(item, dict) and item.get("message"):
+                        console.print(f"  - {item['message']}", style=STYLE_MUTED)
+    if result.production_summary:
+        render_section("Summary", console)
+        for item in result.production_summary.get("generated") or []:
+            console.print(f"  + {item}", style=STYLE_SUCCESS)
+        for warning in result.production_summary.get("warnings") or []:
+            console.print(f"  ! {warning}", style=STYLE_WARNING)
     if result.error:
         render_kv("Error", result.error.code, console, style=STYLE_ERROR)
     if result.next_steps:
@@ -685,6 +709,8 @@ def _human_flow_phase(phase: str) -> str:
 def _result_status_style(status: str) -> str:
     if status == "completed":
         return STYLE_SUCCESS
+    if status == "completed_with_warnings":
+        return STYLE_WARNING
     if status in {"needs_clarification", "not_agent_request"}:
         return STYLE_WARNING
     if status == "failed":
@@ -695,6 +721,8 @@ def _result_status_style(status: str) -> str:
 def _verification_status_style_key(status: str) -> str:
     if status == "passed":
         return "completed"
+    if status == "passed_with_warnings":
+        return "completed_with_warnings"
     if status == "failed":
         return "failed"
     return "running"

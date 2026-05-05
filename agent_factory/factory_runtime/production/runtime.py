@@ -40,7 +40,7 @@ class FactoryProductionRuntime:
             requirement=requirement,
             draft=draft,
         )
-        final_state = graph.invoke(initial.as_graph_state())
+        final_state = graph.invoke(initial.as_graph_state(), config={"recursion_limit": 80})
         return FactoryProductionState.from_graph_state(final_state)
 
     def stream(
@@ -57,7 +57,11 @@ class FactoryProductionRuntime:
             draft=draft,
         )
         seen_event_ids: set[str] = set()
-        for update in graph.stream(initial.as_graph_state(), stream_mode=["custom", "updates"]):
+        for update in graph.stream(
+            initial.as_graph_state(),
+            stream_mode=["custom", "updates"],
+            config={"recursion_limit": 80},
+        ):
             if isinstance(update, tuple):
                 mode, payload = update
             else:

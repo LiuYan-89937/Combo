@@ -101,6 +101,7 @@ class FactoryRuntimeTests(unittest.TestCase):
 
         self.assertIn("model.generate_structured", tools)
         self.assertIn("package.write_primitives", tools)
+        self.assertIn("factory.shell_exec", tools)
         self.assertIn("trace.record", tools)
         self.assertIn("memory.append", tools)
 

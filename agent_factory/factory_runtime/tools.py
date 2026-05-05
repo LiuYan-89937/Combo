@@ -10,7 +10,7 @@ class FactoryTool(BaseModel):
 
     id: str
     description: str
-    category: Literal["model", "package", "filesystem", "trace", "memory", "web"]
+    category: Literal["model", "package", "filesystem", "trace", "memory", "web", "shell"]
     enabled: bool = True
 
 
@@ -45,6 +45,14 @@ class FactoryToolRegistry:
                 id="filesystem.safe_write",
                 description="Write files inside approved Factory workspace boundaries.",
                 category="filesystem",
+            ),
+            FactoryTool(
+                id="factory.shell_exec",
+                description=(
+                    "Run allowlisted shell commands through ControlledShellRunner; "
+                    "file writes and deletes require review before execution."
+                ),
+                category="shell",
             ),
             FactoryTool(
                 id="trace.record",

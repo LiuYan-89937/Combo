@@ -14,6 +14,7 @@ from agent_factory.model.config import _blank_to_none, _parse_env_file, _to_int
 WebSearchProviderName = Literal["disabled", "tavily"]
 WebSearchDepth = Literal["basic", "advanced", "fast", "ultra-fast"]
 WebSearchTopic = Literal["general", "news", "finance"]
+BrowserFetchMode = Literal["auto", "disabled", "required"]
 
 
 class WebSearchConfig(BaseModel):
@@ -34,6 +35,12 @@ class WebSearchConfig(BaseModel):
     exclude_domains: list[str] = Field(default_factory=list)
     country: str | None = None
     agent_web_inheritance: Literal["explicit", "never", "ask"] = "explicit"
+    research_max_candidates: int = Field(default=8, ge=1)
+    research_fetch_timeout_seconds: int = Field(default=20, ge=1)
+    research_max_document_chars: int = Field(default=60000, ge=1000)
+    research_browser_fetch: BrowserFetchMode = "auto"
+    research_max_related_pages: int = Field(default=5, ge=0)
+    research_max_link_depth: int = Field(default=1, ge=0)
 
     @classmethod
     def from_env(
@@ -63,6 +70,27 @@ class WebSearchConfig(BaseModel):
             exclude_domains=_csv_values(values.get("AGENTFACTORY_WEB_SEARCH_EXCLUDE_DOMAINS")),
             country=_blank_to_none(values.get("AGENTFACTORY_WEB_SEARCH_COUNTRY")),
             agent_web_inheritance=_blank_to_none(values.get("AGENTFACTORY_AGENT_WEB_INHERITANCE")) or "explicit",
+            research_max_candidates=_to_int(values.get("AGENTFACTORY_WEB_RESEARCH_MAX_CANDIDATES"), 8),
+            research_fetch_timeout_seconds=_to_int(
+                values.get("AGENTFACTORY_WEB_RESEARCH_FETCH_TIMEOUT_SECONDS"),
+                20,
+            ),
+            research_max_document_chars=_to_int(
+                values.get("AGENTFACTORY_WEB_RESEARCH_MAX_DOCUMENT_CHARS"),
+                60000,
+            ),
+            research_browser_fetch=_blank_to_none(
+                values.get("AGENTFACTORY_WEB_RESEARCH_BROWSER_FETCH")
+            )
+            or "auto",
+            research_max_related_pages=_to_int(
+                values.get("AGENTFACTORY_WEB_RESEARCH_MAX_RELATED_PAGES"),
+                5,
+            ),
+            research_max_link_depth=_to_int(
+                values.get("AGENTFACTORY_WEB_RESEARCH_MAX_LINK_DEPTH"),
+                1,
+            ),
         )
 
     @property
@@ -86,6 +114,12 @@ class WebSearchConfig(BaseModel):
             "exclude_domains": self.exclude_domains,
             "country": self.country,
             "agent_web_inheritance": self.agent_web_inheritance,
+            "research_max_candidates": self.research_max_candidates,
+            "research_fetch_timeout_seconds": self.research_fetch_timeout_seconds,
+            "research_max_document_chars": self.research_max_document_chars,
+            "research_browser_fetch": self.research_browser_fetch,
+            "research_max_related_pages": self.research_max_related_pages,
+            "research_max_link_depth": self.research_max_link_depth,
         }
 
 
