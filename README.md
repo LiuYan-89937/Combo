@@ -1,41 +1,78 @@
 # FastAgentFactory
-!!!!!!!!!!!!!!!!!
-很多功能以及命令只是摆设
-并未完善！
 
+FastAgentFactory 是一个 **CLI-first、文档驱动的 Agent 工厂**。你可以用自然语言描述想要的 Agent，系统会生成一个本地可运行、可测试、可发布治理的 AgentPackage。
 
+当前项目已经完成 `agentfactory_refactor_architecture.md` 描述的 8 个 Phase 重构，重构进度与验收记录见 [docs/refactor_progress.md](docs/refactor_progress.md)。
 
+## 当前状态
 
+- Runtime 已切换为 `langgraph_react`，旧 `WorkflowRuntime` / `GraphRuntime` 不再对外导出。
+- `AgentPackageCompiler` 会把完整 AgentPackage 编译为 LangGraph ReAct app、LangChain-compatible tools、RuntimeContext、PolicyWrappedToolNode、trace/memory 适配器。
+- Factory 生产图按 14 阶段传递 typed artifacts，并通过 `FactoryNodeAccessPolicy` 限制节点只能读取和修改 allow-list 字段。
+- Resource Setup 使用 resolver registry：local path、SQLite、Python package、system command、URL documentation、credential config、human approval。
+- ToolBuildPipeline 已拆出 contract-first 生成、状态机、静态检查、测试、sandbox、repair loop。
+- Harness 真实驱动 `AgentInstanceRuntime`，支持工具调用、上下文可见性、context compression、checkpoint resume 等断言。
+- Registry/Release 记录 PackageProvenance、PromotionGate、UpgradeRequest、PatchPlan、ApprovalRecord、PackageDiff 生命周期信息。
 
+最近本地验收：
 
+```bash
+uv run --extra dev pytest
+# 126 passed, 3 skipped, 2 warnings
+```
 
-!!!!!!!!!!!!!!!!!
-FastAgentFactory 是一个 **CLI-first 的 Agent 工厂**。你可以用自然语言描述想要的 Agent，系统会生成一个本地可运行的 AgentPackage，并提供校验、测试、运行、草稿管理和本地 trace 能力。
+真实模型端到端验收为 opt-in：
 
-它不是只生成一段 prompt，而是生成一套可落地的本地包：
+```bash
+AGENTFACTORY_RUN_PROVIDER_SMOKE=1 uv run --extra dev pytest tests/test_model_provider_smoke.py
+# 2 passed, 1 skipped
+```
+
+其中通过项覆盖自然语言生成 AgentPackage 和复杂 SQLite 资源型 AgentPackage；跳过项是极简 provider `ok` smoke，因为当前 provider 对该最小提示返回空 content。
+
+## 生成流程
 
 ```text
 自然语言需求
-  -> AgentPackage 草稿
-  -> 配置文件
-  -> 工具代码
-  -> 工具测试
-  -> Harness 场景
-  -> 本地验证报告
-  -> 可运行 Agent
+  -> FactoryContextEnvelope
+  -> RequirementUnderstanding
+  -> CapabilityPlan
+  -> ConditionPlan
+  -> ResourceNeedPlan
+  -> EvidenceReport
+  -> ReadinessDecision
+  -> ResourceContractSet
+  -> ImplementationPlan
+  -> AgentPackage
+  -> ToolBuildReport
+  -> HarnessSpec
+  -> ProductionSummary
 ```
 
-## 适合做什么
+生成的 AgentPackage 包含：
 
-当前版本适合本地 MVP、Agent 原型和工程化验证：
-
-- 创建客服 Agent、数据库管理 Agent、计算工具 Agent 等本地 Agent。
-- 让 Agent 通过工具访问本地资源，例如 SQLite 数据库。
-- 对生成的工具做静态检查和沙箱测试。
-- 在 CLI 里管理草稿、运行 Agent、查看测试结果和 trace。
-- 使用文件系统保存 Factory 状态、Agent 草稿、记忆和运行记录。
-
-当前项目仍是本地优先的开发版本，不建议直接用于生产系统。
+```text
+instructions.yaml
+output.yaml
+conversation.yaml
+run_context.yaml
+toolsets.yaml
+knowledge.yaml
+guardrails.yaml
+handoffs.yaml
+observability.yaml
+runtime.yaml
+tools.yaml
+mcp.yaml
+context.yaml
+memory.yaml
+harness.yaml
+package.yaml
+generated/
+  draft_tools/
+  tool_tests/
+  reports/
+```
 
 ## 环境要求
 
@@ -47,20 +84,13 @@ FastAgentFactory 是一个 **CLI-first 的 Agent 工厂**。你可以用自然�
 
 ```bash
 cd /Users/liuyan/Desktop/FastAgentFactory
-uv sync
+uv sync --extra dev
 ```
 
 检查 CLI：
 
 ```bash
 uv run agentfactory --help
-```
-
-如果你已经激活虚拟环境：
-
-```bash
-source .venv/bin/activate
-agentfactory --help
 ```
 
 ## 配置模型
@@ -92,18 +122,9 @@ AGENTFACTORY_TASK_MODEL=
 AGENTFACTORY_TASK_TEMPERATURE=0.1
 AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS=2048
 AGENTFACTORY_TASK_THINKING=disabled
-
-AGENTFACTORY_WEB_RESEARCH_MAX_CANDIDATES=8
-AGENTFACTORY_WEB_RESEARCH_FETCH_TIMEOUT_SECONDS=20
-AGENTFACTORY_WEB_RESEARCH_MAX_DOCUMENT_CHARS=60000
-AGENTFACTORY_WEB_RESEARCH_MAX_RELATED_PAGES=5
-AGENTFACTORY_WEB_RESEARCH_MAX_LINK_DEPTH=1
-AGENTFACTORY_WEB_RESEARCH_BROWSER_FETCH=auto
 ```
 
-`.env` 已经被 `.gitignore` 忽略，不会提交到 Git。
-
-外部资源采用极简交互：Factory 不默认自动搜索全网。生产过程中如果识别到需要外部服务、实时数据或官方接口文档，会先停下来让你提供一个入口 URL；Factory 会抓取这个页面，并在同域名内受控跟随少量相关文档页或选项卡链接，清洗并抽取必要信息，直到信息足够继续生成。`external_config.yaml` 也保持像 `.env` 一样的结构：一个键对应一个值，未确认的信息留空，后续由用户补齐。
+`.env` 已被 `.gitignore` 忽略。Factory 和 Runtime 会对 prompt、trace、memory、harness report 中的 secret 做 redaction；真实 secret 应通过 external config 或运行时上下文传入，不进入模型 prompt。
 
 ## 快速开始
 
@@ -119,7 +140,7 @@ uv run agentfactory init
 uv run agentfactory shell
 ```
 
-进入后可以直接输入自然语言需求，例如：
+在 shell 中输入自然语言需求，例如：
 
 ```text
 创建一个客服 Agent，支持订单查询、投诉、售后问题处理和转人工。
@@ -134,9 +155,7 @@ uv run agentfactory shell
 /run --input "你好，介绍一下你能做什么"
 ```
 
-## 普通命令用法
-
-不进入 shell，也可以直接用普通命令：
+也可以直接使用普通命令：
 
 ```bash
 uv run agentfactory create-agent \
@@ -145,22 +164,20 @@ uv run agentfactory create-agent \
   --stream
 ```
 
-查看草稿：
+## 常用命令
+
+草稿管理：
 
 ```bash
 uv run agentfactory drafts list
 uv run agentfactory drafts show latest
+uv run agentfactory drafts delete latest --yes
 ```
 
-校验草稿：
+校验和测试：
 
 ```bash
 uv run agentfactory validate-agent .agentfactory/packages/drafts/<draft-id>
-```
-
-运行测试：
-
-```bash
 uv run agentfactory test-agent .agentfactory/packages/drafts/<draft-id>
 ```
 
@@ -170,33 +187,29 @@ uv run agentfactory test-agent .agentfactory/packages/drafts/<draft-id>
 uv run agentfactory run-agent .agentfactory/packages/drafts/<draft-id> --input "你好"
 ```
 
-删除草稿：
+审批恢复高风险或需确认工具：
 
 ```bash
-uv run agentfactory drafts delete latest --yes
+uv run agentfactory run-agent .agentfactory/packages/drafts/<draft-id> \
+  --input "执行需要审批的操作" \
+  --approve <tool-call-id-or-tool-id>
 ```
 
-## Shell 常用命令
+Registry / 发布治理：
 
-```text
-/help
-/create-agent
-/drafts
-/drafts show latest
-/drafts use latest
-/validate
-/test
-/run --input "..."
-/repair-agent
-/register
-/registry
-/trace
-/diff
-/approval
-/exit
+```bash
+uv run agentfactory registry list
+uv run agentfactory registry release <agent-name> --version <version>
+uv run agentfactory registry rollback <agent-name> --version <version>
 ```
 
-在 shell 里，普通自然语言输入会先作为需求记录下来；`/create-agent` 会使用当前记录的需求生成 Agent 草稿。
+升级治理：
+
+```bash
+uv run agentfactory patch plan <package-path> --prompt "补充能力" --target-version 1.1.0
+uv run agentfactory patch approve <change-id> --actor user --patch-plan <plan-path>
+uv run agentfactory patch apply <package-path> --output <candidate-path>
+```
 
 ## SQLite Agent 示例
 
@@ -227,14 +240,14 @@ ticket_id, customer_name, channel, title, description, status, priority, assigne
 - 禁止删除数据库文件。
 - 禁止访问数据库路径之外的文件。
 - 读操作是 low risk，可以直接执行。
-- 写操作是 medium risk，需要在回复里清楚说明将要修改什么。
+- 写操作是 medium risk，需要审批或明确确认。
 - 不允许读取 .env、API key、secret、authorization、tool_auth_token。
 
 输出风格：
 简洁、明确，告诉用户查到了什么、改了什么、下一步可以做什么。
 ```
 
-生成后在 shell 里测试：
+生成后测试：
 
 ```text
 /drafts use latest
@@ -242,91 +255,74 @@ ticket_id, customer_name, channel, title, description, status, priority, assigne
 /run --input "查一下 T-1001"
 ```
 
-## 本地文件说明
+## Runtime 安全模型
 
-运行后会生成本地工作区：
+模型不能直接执行工具。运行链路是：
+
+```text
+Model 提出 ToolCallProposal
+  -> AgentInstanceRuntime
+  -> PolicyWrappedToolNode
+  -> ToolRouter
+  -> PolicyEngine
+  -> ToolExecutor
+  -> ToolResultEnvelope
+  -> compressed observation
+  -> Model 总结回复
+```
+
+`ToolResultEnvelope.status` 支持：
+
+```text
+completed | failed | interrupted | needs_configuration | blocked
+```
+
+上下文分三类：
+
+- `visible_to_model`：允许进入 prompt 的文本。
+- `visible_to_tools`：数据库路径、文件路径、external config refs 等工具运行资源。
+- `hidden`：API key、secret、authorization、tool_auth_token 等敏感信息。
+
+长对话会触发 context compression；工具 observation 会被压缩和 redaction 后再回注模型；checkpoint/resume metadata 只保存 hash/ref，不保存原始 secret。
+
+## 本地工作区
+
+运行后会生成：
 
 ```text
 .agentfactory/
   config.yaml
   memory/
   traces/
+  approvals/
+  upgrades/
   packages/
     drafts/
+  registry/
 ```
 
-常见目录：
-
-```text
-.agentfactory/packages/drafts/
-  <draft-id>/
-    instructions.yaml
-    output.yaml
-    conversation.yaml
-    run_context.yaml
-    toolsets.yaml
-    knowledge.yaml
-    guardrails.yaml
-    handoffs.yaml
-    observability.yaml
-    runtime.yaml
-    tools.yaml
-    mcp.yaml
-    context.yaml
-    memory.yaml
-    harness.yaml
-    package.yaml
-    generated/
-      draft_tools/
-      tool_tests/
-      reports/
-    memory/
-    traces/
-```
-
-这些内容都是本地运行状态，默认不提交到 Git。
-
-## 工具与资源安全
-
-FastAgentFactory 里，模型不能直接执行工具。
-
-运行链路是：
-
-```text
-Model 提出 ToolCallProposal
-  -> Runtime
-  -> ToolRouter
-  -> ToolExecutor
-  -> 工具结果
-  -> Model 总结回复
-```
-
-上下文分三类：
-
-- 模型可见：允许进入 prompt 的文本。
-- 工具可见：数据库路径、文件路径等工具运行资源。
-- 隐藏字段：API key、secret、authorization、tool_auth_token 等敏感信息。
-
-SQLite 这类二进制资源不会作为文本读进模型 prompt，只会作为工具资源路径传给工具。
+这些目录保存本地运行状态、草稿、trace、memory、审批记录和 registry 索引，默认不提交到 Git。
 
 ## 测试
 
-运行单元测试：
+默认测试：
 
 ```bash
-uv run python -m unittest discover -s tests
+uv run --extra dev pytest
 ```
 
-运行语法检查：
+Focused tests：
 
 ```bash
-uv run python -m compileall agent_factory tests examples
+uv run --extra dev pytest tests/test_agent_instance_runtime.py
+uv run --extra dev pytest tests/test_refactor_architecture.py
+uv run --extra dev pytest tests/test_harness_runner.py
 ```
 
-真实 provider smoke test 默认关闭。需要主动打开：
+真实模型端到端测试默认关闭，需要显式打开：
 
 ```bash
-AGENTFACTORY_RUN_PROVIDER_SMOKE=1 uv run python -m unittest tests.test_model_provider_smoke
+AGENTFACTORY_RUN_PROVIDER_SMOKE=1 uv run --extra dev pytest tests/test_model_provider_smoke.py
 ```
 
 ## 常见问题
@@ -346,24 +342,9 @@ source .venv/bin/activate
 agentfactory --help
 ```
 
-### `uv run agentfactory` 找不到命令
-
-确认已经执行：
-
-```bash
-uv sync
-```
-
-项目需要作为 package 安装，`pyproject.toml` 已经配置了：
-
-```toml
-[tool.uv]
-package = true
-```
-
 ### 模型请求超时
 
-Factory 生成 Agent 时可能会进行多次模型调用，复杂工具生成会比较慢。可以在 `.env` 里调大：
+Factory 生成 AgentPackage 会进行多次模型调用，复杂资源和工具生成会更慢。可以在 `.env` 中调大：
 
 ```env
 AGENTFACTORY_LLM_TIMEOUT_SECONDS=600
@@ -383,14 +364,10 @@ AGENTFACTORY_LLM_TIMEOUT_SECONDS=600
 uv run agentfactory drafts list
 ```
 
-### 如何清理草稿
+### 如何查看完整重构验收状态
+
+查看：
 
 ```bash
-uv run agentfactory drafts delete latest --yes
-```
-
-或者删除指定 draft：
-
-```bash
-uv run agentfactory drafts delete <draft-id> --yes
+sed -n '1,180p' docs/refactor_progress.md
 ```
