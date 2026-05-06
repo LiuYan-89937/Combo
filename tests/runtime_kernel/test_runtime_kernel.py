@@ -8,6 +8,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from agent_factory.assembly import AgentAssemblyCompiler, AgentAssemblyLoader, AgentAssemblyRunner, AgentAssemblySpec
 from agent_factory.runtime_kernel import (
     BindingSet,
     NodeWrapper,
@@ -820,6 +821,193 @@ class RuntimeKernelTests(unittest.TestCase):
         self.assertIsNotNone(result.error)
         self.assertEqual(result.error["location"], "answer.before.test.fail_before")
         self.assertIn("wrapper exploded", result.error["message"])
+
+    def test_agent_assembly_compiles_graph_overrides_and_runs(self) -> None:
+        spec = AgentAssemblySpec.model_validate(
+            {
+                "agent": {"id": "assembly_test_agent"},
+                "runtime": {
+                    "pattern_id": "react_agent",
+                    "user_config": {"tone": "precise", "preferences": "likes citations"},
+                },
+                "graph_overrides": {
+                    "node_wrappers": [
+                        {
+                            "node_id": "answer",
+                            "wrappers": [
+                                {
+                                    "id": "context.prepare_model_context",
+                                    "phase": "before",
+                                    "order": 10,
+                                    "config": {"include_user_config": True, "include_user_profile": True},
+                                }
+                            ],
+                        },
+                        {
+                            "node_id": "commit",
+                            "wrappers": [
+                                {
+                                    "id": "memory.profile_merge",
+                                    "phase": "after",
+                                    "order": 10,
+                                    "config": {"field": "preferences"},
+                                }
+                            ],
+                        },
+                    ]
+                },
+                "output": {"citations_required": True, "format": "markdown"},
+            }
+        )
+        services = RuntimeServices(
+            model_service=ScriptedModelService(
+                responses=[ModelInvocationResult(assistant_draft="draft", final_answer="final", requests_tool=False)]
+            ),
+            tool_registry=InMemoryToolRegistry(),
+            policy_engine=SequencedPolicyEngine([PolicyDecision(status="allowed")]),
+            memory_engine=InMemoryMemoryEngine(),
+            knowledge_engine=KnowledgeEngine(),
+            context_engine=ContextEngine(),
+            checkpoint_manager=FilesystemCheckpointManager(self.tmpdir / "checkpoints"),
+            observability_manager=self.facade.instance.services.observability_manager,
+        )
+        compiler = AgentAssemblyCompiler(facade=self.facade)
+        compiled = compiler.compile(spec, services=services)
+        result = compiler.run(compiled, user_input="hello")
+
+        self.assertEqual(compiled.pattern_spec.pattern_id, "assembly_test_agent__react_agent")
+        self.assertEqual(result.execution.finish_status, "completed")
+        self.assertEqual(result.context.model_context["user_config"]["tone"], "precise")
+        self.assertEqual(result.memory.user_profile["preferences"], ["likes citations"])
+
+    def test_agent_assembly_loader_loads_example(self) -> None:
+        spec = AgentAssemblyLoader().load_path(
+            "agent_factory/assembly/examples/investment_research_agent.yaml"
+        )
+
+        self.assertEqual(spec.agent.id, "investment_research_agent")
+        self.assertEqual(spec.runtime.pattern_id, "react_agent")
+        self.assertEqual(spec.graph_overrides.node_wrappers[0].node_id, "answer")
+
+    def test_agent_assembly_rejects_unknown_wrapper_node(self) -> None:
+        spec = AgentAssemblySpec.model_validate(
+            {
+                "agent": {"id": "bad_assembly"},
+                "runtime": {"pattern_id": "react_agent"},
+                "graph_overrides": {
+                    "node_wrappers": [
+                        {
+                            "node_id": "missing_node",
+                            "wrappers": [
+                                {"id": "context.prepare_model_context", "phase": "before", "config": {}}
+                            ],
+                        }
+                    ]
+                },
+            }
+        )
+        compiler = AgentAssemblyCompiler(facade=self.facade)
+
+        with self.assertRaises(Exception):
+            compiler.compile(spec)
+
+    def test_agent_assembly_runner_returns_harness_repair_report(self) -> None:
+        spec = AgentAssemblySpec.model_validate(
+            {
+                "agent": {"id": "runner_agent"},
+                "runtime": {"pattern_id": "react_agent"},
+                "harness": [
+                    {
+                        "scenario_id": "passing",
+                        "input_text": "hello",
+                        "assertions": [{"type": "output_contains", "expected": "final"}],
+                    },
+                    {
+                        "scenario_id": "failing",
+                        "input_text": "hello",
+                        "assertions": [{"type": "output_contains", "expected": "missing"}],
+                    },
+                ],
+            }
+        )
+        services = RuntimeServices(
+            model_service=ScriptedModelService(
+                responses=[
+                    ModelInvocationResult(assistant_draft="draft", final_answer="final", requests_tool=False),
+                    ModelInvocationResult(assistant_draft="draft", final_answer="final", requests_tool=False),
+                ]
+            ),
+            tool_registry=InMemoryToolRegistry(),
+            policy_engine=SequencedPolicyEngine([PolicyDecision(status="allowed"), PolicyDecision(status="allowed")]),
+            memory_engine=InMemoryMemoryEngine(),
+            knowledge_engine=KnowledgeEngine(),
+            context_engine=ContextEngine(),
+            checkpoint_manager=FilesystemCheckpointManager(self.tmpdir / "checkpoints"),
+            observability_manager=self.facade.instance.services.observability_manager,
+        )
+        runner = AgentAssemblyRunner(compiler=AgentAssemblyCompiler(facade=self.facade))
+
+        report = runner.run_spec(spec, services=services)
+
+        self.assertEqual(report.status, "failed")
+        self.assertEqual(report.agent_id, "runner_agent")
+        self.assertEqual(len(report.scenario_results), 2)
+        self.assertEqual(report.errors[0]["location"], "harness.assertions")
+        self.assertIn("output_contains", report.errors[0]["message"])
+
+    def test_agent_assembly_runner_runs_example_path(self) -> None:
+        services = RuntimeServices(
+            model_service=ScriptedModelService(
+                responses=[ModelInvocationResult(assistant_draft="draft", final_answer="final", requests_tool=False)]
+            ),
+            tool_registry=InMemoryToolRegistry(),
+            policy_engine=SequencedPolicyEngine([PolicyDecision(status="allowed")]),
+            memory_engine=InMemoryMemoryEngine(),
+            knowledge_engine=KnowledgeEngine(),
+            context_engine=ContextEngine(),
+            checkpoint_manager=FilesystemCheckpointManager(self.tmpdir / "checkpoints"),
+            observability_manager=self.facade.instance.services.observability_manager,
+        )
+        runner = AgentAssemblyRunner(compiler=AgentAssemblyCompiler(facade=self.facade))
+
+        report = runner.run_path(
+            "agent_factory/assembly/examples/investment_research_agent.yaml",
+            services=services,
+        )
+
+        self.assertEqual(report.status, "passed")
+        self.assertEqual(report.agent_id, "investment_research_agent")
+        self.assertEqual(report.scenario_results[0]["final_state_snapshot"]["execution"]["finish_status"], "completed")
+
+    def test_agent_assembly_runner_captures_runtime_invocation_failure(self) -> None:
+        spec = AgentAssemblySpec.model_validate(
+            {
+                "agent": {"id": "invocation_agent"},
+                "runtime": {"pattern_id": "react_agent"},
+            }
+        )
+        services = RuntimeServices(
+            model_service=RaisingModelService(),
+            tool_registry=InMemoryToolRegistry(),
+            policy_engine=SequencedPolicyEngine([PolicyDecision(status="allowed")]),
+            memory_engine=InMemoryMemoryEngine(),
+            knowledge_engine=KnowledgeEngine(),
+            context_engine=ContextEngine(),
+            checkpoint_manager=FilesystemCheckpointManager(self.tmpdir / "checkpoints"),
+            observability_manager=self.facade.instance.services.observability_manager,
+        )
+        runner = AgentAssemblyRunner(compiler=AgentAssemblyCompiler(facade=self.facade))
+        compiled = runner.compiler.compile(spec, services=services)
+
+        report = runner.run_invocation(compiled, user_input="hello")
+
+        self.assertEqual(report.status, "failed")
+        self.assertEqual(report.errors[0]["location"], "answer")
+        self.assertIn("model exploded", report.errors[0]["message"])
+        result = report.scenario_results[0]
+        self.assertEqual(result["scenario_id"], "runtime_invocation")
+        self.assertEqual(result["final_state_snapshot"]["execution"]["finish_status"], "failed")
+        self.assertTrue(any(item["event_type"] == "node_failed" for item in result["event_log"]))
 
     def test_observability_summary_tracks_pattern_and_node_latency(self) -> None:
         services = RuntimeServices(

@@ -1,0 +1,44 @@
+schema_version: "0.1"
+agent:
+  id: investment_research_agent
+  description: Investment research assistant.
+runtime:
+  pattern_id: react_agent
+  user_config:
+    locale: zh-CN
+    tone: concise
+graph_overrides:
+  node_wrappers:
+    - node_id: answer
+      wrappers:
+        - id: context.prepare_model_context
+          phase: before
+          order: 10
+          config:
+            include_user_config: true
+            include_user_profile: true
+    - node_id: commit
+      wrappers:
+        - id: memory.profile_merge
+          phase: after
+          order: 10
+          config:
+            field: preferences
+tools:
+  - id: sec_filing_search
+  - id: price_chart
+output:
+  citations_required: true
+  format: markdown
+harness:
+  - scenario_id: basic_answer
+    input_text: summarize apple filing
+    user_config:
+      preferences: likes citations
+    assertions:
+      - type: path_ordered
+        expected_node_ids:
+          - ingress
+          - answer
+      - type: output_contains
+        expected: final

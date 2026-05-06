@@ -36,5 +36,9 @@ class PatternRegistry:
             raise RuntimeKernelError(f"Unknown pattern: {pattern_id}")
         return self._patterns[pattern_id]
 
+    def register(self, pattern: GraphPatternSpec) -> None:
+        known_ids = {*self._patterns, pattern.pattern_id}
+        self._patterns[pattern.pattern_id] = self.validator.validate(pattern, known_patterns=known_ids)
+
     def list_pattern_ids(self) -> list[str]:
         return sorted(self._patterns)
