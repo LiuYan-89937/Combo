@@ -1,0 +1,79 @@
+pattern_id: clarify_then_act
+kind: main
+embeddable: false
+version: 1
+name: Clarify Then Act
+description: Ask for missing information before entering the main action flow.
+entry_node: ingress
+nodes:
+  - id: ingress
+    type: reserved
+    impl: ingress
+  - id: clarify_loop
+    type: sub_graph
+    impl: pattern_ref
+    pattern_ref: clarification_loop_v1
+  - id: precheck
+    type: governance
+    impl: governance.precheck
+  - id: answer
+    type: cognitive
+    impl: cognitive.answer
+  - id: tool_exec
+    type: operational
+    impl: operational.tool_call
+  - id: finalize
+    type: reserved
+    impl: finalize
+edges:
+  - from: ingress
+    to: clarify_loop
+    when: always
+  - from: clarify_loop
+    to: precheck
+    when: subgraph.done
+  - from: clarify_loop
+    to: finalize
+    when: subgraph.need_more_input
+  - from: clarify_loop
+    to: finalize
+    when: subgraph.blocked
+  - from: precheck
+    to: finalize
+    when: policy.blocked
+  - from: precheck
+    to: answer
+    when: always
+  - from: answer
+    to: tool_exec
+    when: model.requests_tool
+  - from: answer
+    to: finalize
+    when: model.ready_to_answer
+  - from: tool_exec
+    to: answer
+    when: tool.completed
+interrupt_points:
+  - precheck
+  - tool_exec
+termination:
+  success_nodes:
+    - finalize
+  failure_nodes: []
+constraints:
+  allowed_node_types:
+    - reserved
+    - cognitive
+    - operational
+    - governance
+    - terminal
+    - sub_graph
+  required_capabilities: []
+input_contract:
+  readable_sections: []
+  writable_sections: []
+output_contract:
+  readable_sections: []
+  writable_sections: []
+exit_routes: []
+state_mode: shared

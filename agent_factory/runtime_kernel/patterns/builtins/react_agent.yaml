@@ -1,0 +1,93 @@
+pattern_id: react_agent
+kind: main
+embeddable: false
+version: 1
+name: ReAct Agent
+description: Standard conversational tool-using agent.
+entry_node: ingress
+nodes:
+  - id: ingress
+    type: reserved
+    impl: ingress
+  - id: memory_recall
+    type: operational
+    impl: operational.memory_retrieve
+  - id: knowledge_retrieve
+    type: operational
+    impl: operational.knowledge_retrieve
+  - id: precheck
+    type: governance
+    impl: governance.precheck
+  - id: answer
+    type: cognitive
+    impl: cognitive.answer
+  - id: tool_exec
+    type: operational
+    impl: operational.tool_call
+  - id: postcheck
+    type: governance
+    impl: governance.postcheck
+  - id: commit
+    type: terminal
+    impl: terminal.commit
+  - id: finalize
+    type: reserved
+    impl: finalize
+edges:
+  - from: ingress
+    to: memory_recall
+    when: always
+  - from: memory_recall
+    to: knowledge_retrieve
+    when: always
+  - from: knowledge_retrieve
+    to: precheck
+    when: always
+  - from: precheck
+    to: finalize
+    when: policy.blocked
+  - from: precheck
+    to: answer
+    when: always
+  - from: answer
+    to: tool_exec
+    when: model.requests_tool
+  - from: answer
+    to: postcheck
+    when: model.ready_to_answer
+  - from: tool_exec
+    to: answer
+    when: tool.completed
+  - from: postcheck
+    to: finalize
+    when: policy.blocked
+  - from: postcheck
+    to: commit
+    when: always
+  - from: commit
+    to: finalize
+    when: always
+interrupt_points:
+  - precheck
+  - tool_exec
+termination:
+  success_nodes:
+    - finalize
+  failure_nodes: []
+constraints:
+  allowed_node_types:
+    - reserved
+    - cognitive
+    - operational
+    - governance
+    - terminal
+    - sub_graph
+  required_capabilities: []
+input_contract:
+  readable_sections: []
+  writable_sections: []
+output_contract:
+  readable_sections: []
+  writable_sections: []
+exit_routes: []
+state_mode: shared
