@@ -1,9 +1,0 @@
-schema_version: "0.1"
-kind: "ReadinessReport"
-metadata:
-  name: "sample-agent-readiness"
-  version: "1.0.0"
-  description: "资料整理 Agent readiness example"
-status: "ready"
-issues: []
-options: []

@@ -30,16 +30,16 @@ class FactoryWorkspace(BaseModel):
         self.workspace_path.mkdir(parents=True, exist_ok=True)
         config_path = self.config_path
         if config_path.exists():
-            config = FactoryConfig.load(config_path)
+            try:
+                config = FactoryConfig.load(config_path)
+            except Exception:
+                config = FactoryConfig.default(workspace_name=workspace_name or self.project_root.name)
+                config.save(config_path)
         else:
             config = FactoryConfig.default(workspace_name=workspace_name or self.project_root.name)
             config.save(config_path)
-
-        self.resolve(config.storage.drafts_dir).mkdir(parents=True, exist_ok=True)
-        self.resolve("memory").mkdir(parents=True, exist_ok=True)
         self.resolve("traces").mkdir(parents=True, exist_ok=True)
-        self.resolve(config.storage.memory_file).parent.mkdir(parents=True, exist_ok=True)
-        self.resolve(config.storage.trace_file).parent.mkdir(parents=True, exist_ok=True)
+        self.resolve(config.trace_file).parent.mkdir(parents=True, exist_ok=True)
         return config
 
     @property
