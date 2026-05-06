@@ -8,7 +8,7 @@ Last verified command:
 uv run --extra dev pytest
 ```
 
-Latest result: `126 passed, 3 skipped, 2 warnings`
+Latest result: `133 passed, 3 skipped, 2 warnings`
 
 Real model E2E command:
 
@@ -24,30 +24,33 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] 标记旧 `WorkflowRuntime` 为 legacy outcome: hard-cut, no longer exported.
 - [x] 停止继续扩展旧 Runtime.
 - [x] 引入 explicit `langchain-core` / `langgraph` runtime dependencies.
-- [x] 新建 `AgentPackageCompiler` 骨架并接入 `CompiledAgentRuntime`.
+- [x] 硬切为 `RuntimeGraphCompiler + TaskGraphCompiler`，并接入 `CompiledAgentRuntime`.
 
-验收摘要: `tests/test_agent_instance_runtime.py` 覆盖无旧 Runtime 导出、生成包 runtime.yaml 使用 `langgraph_react`、compiler 返回 LangGraph app。
+验收摘要: `tests/test_agent_instance_runtime.py` 覆盖无旧 Runtime 导出、生成包 runtime.yaml 使用 `langgraph_native` + `task_graph.yaml`、compiler 返回 LangGraph app。
 
-## Phase 2: ModelCallRunner
+## Phase 2: Model Layer / LangChain Runtime Adapter
 
-- [x] 统一模型调用入口: `agent_factory.model.runner.ModelCallRunner`.
+- [x] Factory 模型调用仍使用统一 `ModelService`；Agent Runtime 不再依赖该层.
 - [x] 实现 retry / timeout / exponential backoff.
 - [x] 实现 empty content retry.
 - [x] 实现 structured output parse/repair fallback.
-- [x] Factory 和 Runtime 经 `ModelService` 进入 runner.
+- [x] Factory 经 `ModelService` 进入 runner；AgentInstance Runtime 已迁移为 LangChain-native chat model adapter，不再依赖旧自定义消息协议.
 
 验收摘要: 现有 `tests/test_model_layer.py` 结构化输出、空内容重试、provider payload 测试通过。
 
-## Phase 3: LangGraph AgentInstance Runtime
+## Phase 3: LangGraph-native AgentInstance Runtime
 
-- [x] 编译 runtime model messages.
+- [x] 编译 LangChain `BaseMessage` / `AIMessage` / `ToolMessage` runtime messages.
 - [x] 编译 LangChain-compatible tools.
 - [x] 实现 `PolicyWrappedToolNode`.
-- [x] 实现 ReAct loop: model -> tool -> observation -> model.
-- [x] 接入 memory / trace / interrupt 基础链路.
+- [x] 由 `task_graph.yaml` 编译通用任务图，ControlGraph 注入 model/tool/observation/final 能力.
+- [x] 接入 memory / trace / LangGraph native interrupt 基础链路.
 - [x] `run-agent` 默认走新 Runtime，CLI 默认进程隔离；注入测试 runtime 时使用内联路径。
+- [x] worker IPC 将 Runtime 业务状态作为 `AgentRunResult` 返回，`interrupted` / `needs_configuration` 不再被 shell 误判为进程失败。
+- [x] Factory stream 完成后渲染自然语言 `ProductionSummary`，说明 Agent 能做什么、验证情况、剩余风险和 next steps。
+- [x] Runtime 执行链移除旧自定义 runtime DTO 和 fixed ReAct 图，模型续写遵循 LangChain `AIMessage.tool_calls` / `ToolMessage` 序列。
 
-验收摘要: `tests/test_agent_instance_runtime.py` 覆盖 tool loop；CLI/Harness/worker 全部改为 `AgentInstanceRuntime`。
+验收摘要: `tests/test_agent_instance_runtime.py` 覆盖 TaskGraph compile、tool loop、native interrupt/resume；CLI/Harness/worker 全部改为 `AgentInstanceRuntime`。
 
 ## Phase 4: Context-first Factory Pipeline
 
@@ -64,10 +67,12 @@ Latest real-model result: `2 passed, 1 skipped`。
 
 - [x] `ResourceNeedPlan` 已存在.
 - [x] 新增 `ResourceResolverRegistry`.
-- [x] 新增 local path / sqlite / python package / system command / URL documentation / credential config / human approval resolvers.
+- [x] 新增 local path / python package / system command / URL documentation / credential config / human approval resolvers；移除特化 SQLite resolver，数据库可达性与 schema 证据走环境 probe / 受控 shell。
 - [x] `probe_environment` 会把 ResourceNeed resolver 输出追加到 evidence reports.
 - [x] `ReadinessDecision` 已存在并接入生产图.
 - [x] targeted clarification 保持最多 3 个选项.
+- [x] readiness issue 存储结构化 `details`，不在环境探测层硬编码用户话术.
+- [x] readiness clarification 通过结构化展示层面向用户改写；优先 task/small model 输出 summary/problem/impact/next_action，模型不可用时本地模板兜底.
 
 验收摘要: `tests/test_refactor_architecture.py` 覆盖 credential resolver 不读取 secret，`UrlDocumentationResolver` 只读取显式 URL 且报告不保存网页正文。
 
@@ -90,13 +95,15 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] 长对话触发 context compression，并把 memory summary 回注 system prompt.
 - [x] `ToolResultEnvelope` observation 进入模型前由策略压缩/摘要化.
 - [x] secret redaction 继续覆盖 prompt/trace/memory 关键路径.
-- [x] 新增 checkpoint metadata / state hash，审批恢复路径记录 checkpoint resume event.
-- [x] Harness 覆盖 context compression / visibility / checkpoint resume 断言.
+- [x] 新增 LangGraph filesystem checkpointer，审批恢复路径记录 native resume event.
+- [x] checkpointer 保存 LangGraph 中断状态，approval resume 不再重新询问模型，而是通过 `Command(resume=...)` 回到中断节点后执行工具并回注 `ToolMessage`.
+- [x] Agent session memory 只写入 completed turn；interrupted/failed 运行状态不再作为普通 assistant 对话污染后续 prompt.
+- [x] Harness 覆盖 context compression / visibility / native resume 断言.
 
 ## Phase 8: Harness / Registry / Release
 
 - [x] Harness 通过 `AgentInstanceRuntime` 驱动.
-- [x] Harness 支持 context visibility / compression / checkpoint resume 断言.
+- [x] Harness 支持 context visibility / compression / native resume 断言.
 - [x] Registry 记录 `PackageProvenance`.
 - [x] Registry 记录并检查 `PromotionGate`.
 - [x] release available 前检查 gate.
@@ -119,10 +126,10 @@ Latest real-model result: `2 passed, 1 skipped`。
 
 ### Runtime
 
-- [x] AgentInstance 使用 LangGraph ReAct runtime.
+- [x] AgentInstance 使用 LangGraph-native ControlGraph + TaskGraph runtime.
 - [x] 支持多轮 tool loop.
 - [x] 支持链式工具调用.
-- [x] `package.runtime.max_turns` 生效于新 runtime state.
+- [x] `package.runtime.max_turns` 通过 LangGraph recursion/runtime turn guard 生效.
 - [x] high risk 工具触发 interrupt.
 - [x] `-yes` / `/run --yes` 可以恢复执行路径.
 - [x] run-agent chat 支持持续对话.
@@ -141,14 +148,14 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] shell/file 写入删除必须审查沿用 ControlledShellRunner.
 - [x] sandbox 测试不污染真实资源.
 - [x] hidden context 不进入模型 prompt 的基础路径.
-- [x] checkpoint resume metadata 不泄露 secret.
+- [x] native resume checkpoint metadata 不泄露 secret.
 
 ### Context
 
 - [x] Factory 模型调用使用 FactoryContextEnvelope.
 - [x] 工具生成节点禁止 raw webpage/raw secret 进入 prompt contract.
-- [x] AgentRuntimeState 通过 RuntimeContextCompiler 生成节点可见上下文.
+- [x] RuntimeGraphState 通过 RuntimeContextCompiler 生成节点可见上下文.
 - [x] visible_to_model / visible_to_tools / hidden 基础生效.
 - [x] 多轮历史、摘要、memory、tool observation 共同进入 prompt.
 - [x] 每个 Runtime 节点只能通过 reducer 修改允许字段.
-- [x] Harness 能断言上下文压缩、可见性和 checkpoint resume.
+- [x] Harness 能断言上下文压缩、可见性和 native resume.

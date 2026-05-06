@@ -27,6 +27,7 @@ from agent_factory.specs import (
     ResourceContractsSpec,
     RuntimeSpec,
     RunContextSpec,
+    TaskGraphSpec,
     ToolsSpec,
     ToolsetSpec,
     ValidationIssue,
@@ -56,6 +57,7 @@ REQUIRED_PRIMITIVE_FILES: dict[str, type[BaseModel]] = {
 REQUIRED_FULL_PACKAGE_FILES: dict[str, type[BaseModel]] = {
     "package.yaml": PackageManifest,
     "runtime.yaml": RuntimeSpec,
+    "task_graph.yaml": TaskGraphSpec,
     "tools.yaml": ToolsSpec,
     "mcp.yaml": MCPBindingSpec,
     "context.yaml": ContextSpec,
@@ -272,6 +274,7 @@ class PackageLoader:
         return {
             "package.yaml": "manifest",
             "runtime.yaml": "runtime",
+            "task_graph.yaml": "task_graph",
             "tools.yaml": "tools",
             "mcp.yaml": "mcp",
             "context.yaml": "context",

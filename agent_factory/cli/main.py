@@ -36,6 +36,7 @@ from agent_factory.cli.rendering import (
     render_event,
     render_init_result,
     render_not_implemented,
+    render_run_agent_result,
     render_test_agent_result,
     render_validation_report,
 )
@@ -261,14 +262,7 @@ def _drafts_action(
         if json_output:
             _json_echo(result.model_dump(mode="json"))
         else:
-            if result.result:
-                typer.echo(f"Status: {result.result.status}")
-                typer.echo(f"Session: {result.result.session_id}")
-                typer.echo(f"History: {result.result.history_turn_count}")
-                typer.echo(f"Answer: {result.result.answer}")
-                typer.echo(f"Trace: {result.result.trace_path}")
-            else:
-                typer.echo(f"Error: {result.error}")
+            render_run_agent_result(result)
         if not result.ok and not (
             result.result and result.result.status in {"interrupted", "needs_configuration", "needs_upgrade"}
         ):
@@ -444,10 +438,8 @@ def run_agent_command(
             )
             if json_output:
                 _json_echo(result.model_dump(mode="json"))
-            elif result.result:
-                typer.echo(result.result.answer)
             else:
-                typer.echo(f"Error: {result.error}")
+                render_run_agent_result(result, compact=True)
         return
     if not user_input:
         if json_output:
@@ -469,16 +461,7 @@ def run_agent_command(
     if json_output:
         _json_echo(result.model_dump(mode="json"))
     else:
-        if result.result:
-            typer.echo(f"Status: {result.result.status}")
-            typer.echo(f"Session: {result.result.session_id}")
-            typer.echo(f"History: {result.result.history_turn_count}")
-            typer.echo(f"Answer: {result.result.answer}")
-            typer.echo(f"Trace: {result.result.trace_path}")
-        else:
-            typer.echo(f"Error: {result.error}")
-        if result.repair_result:
-            _render_repair_summary(result.repair_result)
+        render_run_agent_result(result)
     repair_ok = bool(result.repair_result and result.repair_result.get("status") == "repaired")
     if not result.ok and not repair_ok and not (
         result.result and result.result.status in {"interrupted", "needs_configuration", "needs_upgrade"}

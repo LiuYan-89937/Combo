@@ -12,6 +12,7 @@ from agent_factory.application import CreateAgentRequest, CreateAgentService
 from agent_factory.context import ContextBundle
 from agent_factory.harness import AgentHarnessRunner, HarnessLoader, HarnessSpec
 from agent_factory.runtime import AgentInstanceRuntime, AgentRunResult, RuntimeEvent
+from agent_factory.runtime.langchain_chat import ScriptedRuntimeChatModel
 
 
 class HarnessRunnerTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class HarnessRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             package_path = _generated_package(Path(tmpdir))
             runner = AgentHarnessRunner(
-                runtime=AgentInstanceRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
+                runtime=AgentInstanceRuntime(chat_model=ScriptedRuntimeChatModel(responses=["AF-TEST-USER"]))
             )
 
             result = runner.run(package_path)
@@ -72,7 +73,7 @@ class HarnessRunnerTests(unittest.TestCase):
             with harness_path.open("w", encoding="utf-8") as file:
                 yaml.dump(data, file)
             runner = AgentHarnessRunner(
-                runtime=AgentInstanceRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
+                runtime=AgentInstanceRuntime(chat_model=ScriptedRuntimeChatModel(responses=["AF-TEST-USER"]))
             )
 
             result = runner.run(package_path)
@@ -89,7 +90,7 @@ class HarnessRunnerTests(unittest.TestCase):
             report_text = result.report_path.read_text(encoding="utf-8")
             self.assertNotIn("secret-value", report_text)
 
-    def test_runner_can_assert_checkpoint_resume_event(self) -> None:
+    def test_runner_can_assert_native_resume_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             package_path = _generated_package(Path(tmpdir))
             harness_path = package_path / "harness.yaml"
@@ -97,12 +98,12 @@ class HarnessRunnerTests(unittest.TestCase):
             data = yaml.load(harness_path.read_text(encoding="utf-8"))
             data["scenarios"] = [
                 {
-                    "id": "checkpoint_resume_001",
-                    "name": "Checkpoint resume assertion",
+                    "id": "native_resume_001",
+                    "name": "Native resume assertion",
                     "turns": [{"user": "resume"}],
                     "expected": {
                         "context_visibility": {
-                            "checkpoint_resume": True,
+                            "native_resume": True,
                             "checkpoint_exists": True,
                         }
                     },
@@ -111,7 +112,7 @@ class HarnessRunnerTests(unittest.TestCase):
             ]
             with harness_path.open("w", encoding="utf-8") as file:
                 yaml.dump(data, file)
-            runner = AgentHarnessRunner(runtime=_CheckpointResumeRuntime())
+            runner = AgentHarnessRunner(runtime=_NativeResumeRuntime())
 
             result = runner.run(package_path)
 
@@ -120,7 +121,7 @@ class HarnessRunnerTests(unittest.TestCase):
                 assertion.id: assertion.status
                 for assertion in result.scenario_results[0].assertion_results
             }
-            self.assertEqual(assertion_statuses["checkpoint_resume"], "passed")
+            self.assertEqual(assertion_statuses["native_resume"], "passed")
             self.assertEqual(assertion_statuses["checkpoint_exists"], "passed")
 
 
@@ -133,7 +134,7 @@ def _generated_package(start_path: Path) -> Path:
     return result.output_path
 
 
-class _CheckpointResumeRuntime:
+class _NativeResumeRuntime:
     def run(self, request) -> AgentRunResult:
         checkpoint_path = request.package_path / "checkpoints" / "resume-test.json"
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,7 +150,7 @@ class _CheckpointResumeRuntime:
             events=[
                 RuntimeEvent(
                     run_id="checkpoint-resume-test",
-                    stage="checkpoint_resume",
+                    stage="resume",
                     status="completed",
                 )
             ],

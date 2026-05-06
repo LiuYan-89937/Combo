@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from rich.console import Console
 from typer.testing import CliRunner
@@ -15,12 +16,14 @@ from agent_factory.application import (
     CreateAgentResult,
     CreateAgentService,
     RunAgentService,
+    RunAgentServiceRequest,
     RunAgentServiceResult,
 )
 from agent_factory.cli.completion import ContextualSlashCompleter
 from agent_factory.cli.main import app
 from agent_factory.cli.rendering import FactoryStreamRenderer, render_banner
 from agent_factory.cli.rendering import render_create_result, render_event
+from agent_factory.cli.rendering import render_factory_stream_result
 from agent_factory.cli.session import ShellSession
 from agent_factory.cli.shell import (
     _collect_requirement_lines,
@@ -31,10 +34,14 @@ from agent_factory.cli.shell import (
     _should_auto_create_from_text,
     _should_show_thinking,
     _should_stream_create_agent,
+    render_slash_result,
 )
-from agent_factory.cli.slash import SlashCommandDispatcher
+from agent_factory.cli.slash import SlashCommandDispatcher, SlashCommandResult
 from agent_factory.core import EventStatus, FactoryEvent
-from agent_factory.runtime import AgentRunResult
+from agent_factory.isolation import AgentIPCResponse
+from agent_factory.runtime import AgentInstanceRuntime, AgentRunResult
+from agent_factory.runtime.langchain_chat import ScriptedRuntimeChatModel
+from agent_factory.tools import ToolResultEnvelope
 from tests.test_factory_agent import service_with_responses, valid_primitives_payload
 
 
@@ -45,6 +52,10 @@ def _generated_package(start_path: Path) -> Path:
     )
     assert result.output_path is not None
     return result.output_path
+
+
+def _scripted_runtime() -> AgentInstanceRuntime:
+    return AgentInstanceRuntime(chat_model=ScriptedRuntimeChatModel(responses=["ok"]))
 
 
 class RecordingCreateAgentService:
@@ -429,6 +440,41 @@ class CliTests(unittest.TestCase):
             self.assertIn("Fill these configuration templates", rendered)
             self.assertIn("external_config.yaml", rendered)
 
+    def test_stream_completion_renders_agent_summary_footer(self) -> None:
+        event = FactoryEvent(
+            run_id="run-1",
+            stage="complete",
+            status=EventStatus.COMPLETED,
+            title="Factory production completed",
+            artifact_path="/tmp/orders-agent",
+            payload={
+                "verification_status": "passed",
+                "tool_test_status": "passed",
+                "production_summary": {
+                    "status": "completed",
+                    "narrative": "订单查询 Agent 已经创建完成，可以通过本地 SQLite 工具查询订单列表和详情。",
+                    "capability_summary": "它提供订单列表、详情和搜索能力。",
+                    "readiness_summary": "本地验证和工具测试均已通过。",
+                    "generated": ["AgentPackage draft created", "3 generated tools"],
+                    "satisfied_conditions": ["SQLite schema verified"],
+                    "warnings": [],
+                    "next_steps": ["/drafts use latest", "/run --input \"列出订单\""],
+                },
+            },
+        )
+        output = StringIO()
+        console = Console(file=output, width=120, force_terminal=False)
+
+        render_factory_stream_result([event], console)
+
+        rendered = output.getvalue()
+        self.assertIn("Created AgentPackage", rendered)
+        self.assertIn("订单查询 Agent 已经创建完成", rendered)
+        self.assertIn("它提供订单列表、详情和搜索能力", rendered)
+        self.assertIn("Generated", rendered)
+        self.assertIn("SQLite schema verified", rendered)
+        self.assertIn("/run --input", rendered)
+
     def test_stream_renderer_shows_multi_tool_progress(self) -> None:
         renderer = FactoryStreamRenderer()
         first = FactoryEvent(
@@ -708,7 +754,7 @@ class SlashShellTests(unittest.TestCase):
                 session = ShellSession()
                 dispatcher = SlashCommandDispatcher(
                     session=session,
-                    run_service=RunAgentService(model_service=service_with_responses([""])),
+                    run_service=RunAgentService(runtime=_scripted_runtime()),
                 )
 
                 use_result = dispatcher.dispatch("/drafts use latest")
@@ -729,7 +775,7 @@ class SlashShellTests(unittest.TestCase):
             os.chdir(root)
             try:
                 dispatcher = SlashCommandDispatcher(
-                    run_service=RunAgentService(model_service=service_with_responses([""])),
+                    run_service=RunAgentService(runtime=_scripted_runtime()),
                 )
 
                 result = dispatcher.dispatch('/run --input "你好"')
@@ -748,7 +794,7 @@ class SlashShellTests(unittest.TestCase):
             os.chdir(root)
             try:
                 dispatcher = SlashCommandDispatcher(
-                    run_service=RunAgentService(model_service=service_with_responses([""])),
+                    run_service=RunAgentService(runtime=_scripted_runtime()),
                 )
 
                 result = dispatcher.dispatch("/run")
@@ -768,7 +814,7 @@ class SlashShellTests(unittest.TestCase):
             os.chdir(root)
             try:
                 dispatcher = SlashCommandDispatcher(
-                    run_service=RunAgentService(model_service=service_with_responses([""])),
+                    run_service=RunAgentService(runtime=_scripted_runtime()),
                 )
 
                 result = dispatcher.dispatch('/run --input "你好"')
@@ -779,6 +825,61 @@ class SlashShellTests(unittest.TestCase):
                 self.assertEqual(dispatcher.session.active_agent_path, package_path)
             finally:
                 os.chdir(cwd)
+
+    def test_process_interrupted_result_is_not_rendered_as_process_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            package_path = _generated_package(root)
+            runtime_result = AgentRunResult(
+                run_id="run-interrupted",
+                package_path=package_path,
+                status="interrupted",
+                answer="该操作需要人工确认后才能执行：list_orders。",
+                session_id="default",
+                tool_results=[
+                    ToolResultEnvelope(
+                        invocation_id="invocation-1",
+                        tool_call_id="call-1",
+                        tool_id="list_orders",
+                        status="interrupted",
+                        observation_summary="Draft generated tool requires approval before execution.",
+                        approval_required=True,
+                    )
+                ],
+            )
+
+            class InterruptedProcessManager:
+                def run(self, request):
+                    return AgentIPCResponse(
+                        ok=False,
+                        payload=runtime_result.model_dump(mode="json"),
+                    )
+
+            with patch(
+                "agent_factory.application.run_agent_service.AgentProcessManager",
+                return_value=InterruptedProcessManager(),
+            ):
+                result = RunAgentService().run_agent(
+                    RunAgentServiceRequest(
+                        target=str(package_path),
+                        user_input="列出订单列表",
+                    )
+                )
+
+            self.assertIsNotNone(result.result)
+            self.assertEqual(result.result.status, "interrupted")
+            self.assertIsNone(result.error)
+
+            output = StringIO()
+            console = Console(file=output, width=120, force_terminal=False)
+            render_slash_result(
+                SlashCommandResult(kind="run_agent", run_result=result),
+                console,
+            )
+            rendered = output.getvalue()
+            self.assertIn("Approval required", rendered)
+            self.assertIn("/run --yes", rendered)
+            self.assertNotIn("Agent process failed", rendered)
 
     def test_slash_drafts_delete_requires_yes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -800,6 +901,14 @@ class SlashShellTests(unittest.TestCase):
                 self.assertFalse(package_path.exists())
             finally:
                 os.chdir(cwd)
+
+    def test_slash_drafts_use_suggests_latest_for_common_typo(self) -> None:
+        dispatcher = SlashCommandDispatcher()
+
+        result = dispatcher.dispatch("/drafts use lastest")
+
+        self.assertEqual(result.kind, "error")
+        self.assertIn("Did you mean latest", result.message or "")
 
     def test_contextual_completion_after_drafts_does_not_show_top_level_commands(self) -> None:
         from prompt_toolkit.document import Document
@@ -877,6 +986,25 @@ class SlashShellTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(len(service.requests), 1)
         self.assertEqual(service.requests[0].user_input, "江西婺源天气")
+        self.assertEqual(service.requests[0].approved_tool_call_id, "weather_query")
+        self.assertIsNone(session.pending_tool_approval)
+
+    def test_agent_chat_run_dash_yes_approves_pending_tool(self) -> None:
+        service = RecordingRunAgentService()
+        session = ShellSession()
+        session.enter_agent_chat(target="/tmp/example-agent", session_id="default")
+        session.capture_tool_approval(
+            user_input="江西婺源天气",
+            tool_call_id="old-call-id",
+            tool_id="weather_query",
+        )
+        dispatcher = SlashCommandDispatcher(session=session, run_service=service)
+        console = Console(file=StringIO(), force_terminal=False)
+
+        handled = _handle_agent_chat_line("/run -yes", console, dispatcher)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(service.requests), 1)
         self.assertEqual(service.requests[0].approved_tool_call_id, "weather_query")
         self.assertIsNone(session.pending_tool_approval)
 

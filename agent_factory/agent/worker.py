@@ -21,7 +21,7 @@ def main() -> None:
                 approved_tool_call_id=ipc_request.approved_tool_call_id,
             )
         )
-        response = AgentIPCResponse(ok=result.ok, payload=result.model_dump(mode="json"))
+        response = AgentIPCResponse(ok=True, payload=result.model_dump(mode="json"))
     except Exception as error:
         response = AgentIPCResponse(ok=False, error=str(error))
     print(json.dumps(response.model_dump(mode="json"), ensure_ascii=False), flush=True)

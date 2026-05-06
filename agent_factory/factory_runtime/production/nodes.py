@@ -46,8 +46,15 @@ from agent_factory.factory.resource_binding import (
     bind_requirement_resources,
     discover_resource_candidates,
 )
+from agent_factory.factory.production_summary_presenter import ProductionSummaryPresenter
 from agent_factory.factory.resource_resolvers import ResourceResolverRegistry
 from agent_factory.factory.requirement_analyzer import RequirementAnalyzer
+from agent_factory.factory.readiness_presenter import (
+    ReadinessPresentationResult,
+    ReadinessPresenter,
+    UserFacingReadinessPresentation,
+    apply_readiness_presentation,
+)
 from agent_factory.factory.tool_preconditions import (
     analyze_capability_preconditions,
     analyze_tool_preconditions,
@@ -840,7 +847,7 @@ class FactoryProductionNodes:
             else "skipped"
         )
         current.implementation_plan = ImplementationPlan(
-            runtime_type="langgraph_react",
+            runtime_type="langgraph_native",
             tool_contract_refs=_tool_contract_refs(current),
             resource_contract_refs=_resource_contract_refs(current),
             harness_focus=[
@@ -890,6 +897,16 @@ class FactoryProductionNodes:
             readiness,
             research_completeness_report=current.research_completeness_report,
         )
+        presentation_result: ReadinessPresentationResult | None = None
+        if readiness is not None and decision.status in {"blocked", "needs_user_input"}:
+            presentation_result = ReadinessPresenter(self._optional_model_service()).present_sync(
+                readiness,
+                decision,
+            )
+            decision = apply_readiness_presentation(
+                decision,
+                presentation_result.presentation,
+            )
         current.readiness_decision = decision
         if decision.status == "ready_with_deferred":
             status = "ready"
@@ -911,7 +928,11 @@ class FactoryProductionNodes:
             stage="resolve_readiness",
             status=EventStatus.COMPLETED if status == "ready" else EventStatus.WARNING,
             title="Readiness resolved",
-            message=_readiness_event_message(status, readiness),
+            message=_readiness_event_message(
+                status,
+                readiness,
+                presentation_result.presentation if presentation_result else None,
+            ),
             payload={
                 "status": status,
                 "issues": len(readiness.issues) if readiness else 0,
@@ -924,6 +945,14 @@ class FactoryProductionNodes:
                 if readiness
                 else [],
                 "readiness_decision": decision.model_dump(mode="json"),
+                "readiness_presentation": (
+                    presentation_result.presentation.model_dump(mode="json")
+                    if presentation_result
+                    else None
+                ),
+                "readiness_presentation_source": (
+                    presentation_result.source if presentation_result else None
+                ),
             },
         )
         return self._with_event(current, node="resolve_readiness", event=event)
@@ -1471,6 +1500,23 @@ class FactoryProductionNodes:
             warnings=_completion_warning_messages(current, pending_config_files),
             next_steps=_production_next_steps(current, pending_config_files, pending_config_keys),
         )
+        summary_presentation = ProductionSummaryPresenter(self._optional_model_service()).present_sync(
+            agent_name=_agent_name_from_state(current),
+            agent_goal=_agent_goal_from_state(current),
+            package_path=str(current.package_path) if current.package_path else None,
+            summary=current.production_summary.model_dump(mode="json"),
+            tool_ids=_tool_ids_from_state(current),
+            verification_status=current.verification_report.status if current.verification_report else None,
+            tool_test_status=current.tool_test_report.status if current.tool_test_report else None,
+        )
+        current.production_summary = current.production_summary.model_copy(
+            update={
+                "narrative": summary_presentation.presentation.narrative,
+                "capability_summary": summary_presentation.presentation.capability_summary,
+                "readiness_summary": summary_presentation.presentation.readiness_summary,
+                "presentation_source": summary_presentation.source,
+            }
+        )
         self._append_decision(
             current,
             stage="complete",
@@ -1505,6 +1551,9 @@ class FactoryProductionNodes:
                 "verification_status": (
                     current.verification_report.status if current.verification_report else None
                 ),
+                "production_summary": current.production_summary.model_dump(mode="json"),
+                "production_summary_presentation": summary_presentation.presentation.model_dump(mode="json"),
+                "production_summary_source": summary_presentation.source,
             },
         )
         return self._with_event(current, node="complete", event=event)
@@ -2160,6 +2209,7 @@ def _readiness_decision_from_report(
     warnings: list[ReadinessItem] = []
     for issue in readiness.issues:
         item = ReadinessItem(
+            condition_id=issue.code,
             level="warning",
             message=issue.message,
             resolution_hint=_resolution_hint_for_issue(issue.code),
@@ -2244,13 +2294,7 @@ def _only_external_config_blockers(items: list[ReadinessItem]) -> bool:
 
 
 def _resolution_hint_for_issue(code: str) -> str:
-    if code in {"resource_exists", "resource_readable", "sqlite_openable", "sqlite_schema_available"}:
-        return "提供一个存在且可访问的本地资源路径，或确认创建示例资源。"
-    if code in {"research_completeness", "web_research", "external_service"}:
-        return "补充包含 endpoint、鉴权、参数或示例响应的官方文档 URL。"
-    if code in {"credential"}:
-        return "提供运行期配置键名，密钥只写入 .env，不写入包。"
-    return "补充该条件所需的证据或选择只生成不可运行草稿。"
+    return "补充这项校验需要的真实资源、配置或证据；也可以选择创建示例资源或只生成草稿。"
 
 
 def _resolution_questions_for_items(items: list[ReadinessItem]) -> list[ResolutionQuestion]:
@@ -2258,13 +2302,14 @@ def _resolution_questions_for_items(items: list[ReadinessItem]) -> list[Resoluti
         return []
     first = items[0]
     message = first.message
-    if any(marker in message for marker in ["URL", "endpoint", "auth", "文档", "外部", "官方"]):
+    condition_code = (first.condition_id or "").lower()
+    if any(marker in f"{condition_code} {message}" for marker in ["url", "endpoint", "auth", "api", "web", "文档", "外部", "官方"]):
         options = [
             {"id": "provide_external_url", "label": "补充官方文档 URL", "description": "提供包含缺失接口事实的同域官方页面。"},
             {"id": "provide_manual_facts", "label": "手动输入接口信息", "description": "直接给出 endpoint、method、auth、params 或示例响应。"},
             {"id": "generate_draft_only", "label": "只生成草稿", "description": "生成不可直接运行的草稿，并在 summary 标明缺口。"},
         ]
-    elif any(marker in message for marker in ["Resource", "SQLite", "path", "资源", "路径", "数据库"]):
+    elif any(marker in f"{condition_code} {message}" for marker in ["resource", "sqlite", "database", "schema", "path", "资源", "路径", "数据库"]):
         options = [
             {"id": "replace_resource_path", "label": "提供资源路径", "description": "提供已存在且可访问的本地文件或目录。"},
             {"id": "create_sample_resource", "label": "创建示例资源", "description": "确认后创建示例数据库或文件继续生产。"},
@@ -2287,9 +2332,9 @@ def _resolution_questions_for_items(items: list[ReadinessItem]) -> list[Resoluti
 
 
 def _targeted_question_prompt(items: list[ReadinessItem]) -> str:
-    lines = ["当前还缺以下真实条件："]
+    lines = ["当前还不能继续，因为以下资源/环境校验未通过："]
     lines.extend(f"- {item.message}" for item in items[:3])
-    lines.append("你希望怎么补齐？")
+    lines.append("你希望怎么处理？")
     return "\n".join(lines)
 
 
@@ -2419,7 +2464,11 @@ def _web_research_queries(report: dict[str, Any] | None) -> list[str]:
     return queries
 
 
-def _readiness_event_message(status: str, readiness: ReadinessReport | None) -> str:
+def _readiness_event_message(
+    status: str,
+    readiness: ReadinessReport | None,
+    presentation: UserFacingReadinessPresentation | None = None,
+) -> str:
     if readiness is None:
         return f"status={status}"
     warnings = [issue for issue in readiness.issues if issue.severity == "warning"]
@@ -2427,8 +2476,8 @@ def _readiness_event_message(status: str, readiness: ReadinessReport | None) -> 
     if status == "ready" and warnings:
         return f"status=ready, warnings={len(warnings)}"
     if errors:
-        first = errors[0].message
-        return f"status={status}, missing={len(errors)}; {first}"
+        summary = presentation.summary if presentation is not None else errors[0].message
+        return f"status={status}, failed_checks={len(errors)}; {summary}"
     return f"status={status}"
 
 
@@ -2445,7 +2494,7 @@ def _readiness_clarification_question(
     ][:5]
     if not blocking:
         return "前置条件还不完整。你希望 AgentFactory 怎么处理？"
-    lines = ["前置条件还不完整，当前缺少："]
+    lines = ["前置条件还不完整，以下校验未通过："]
     lines.extend(f"- {message}" for message in blocking)
     lines.append("你希望 AgentFactory 怎么处理？")
     return "\n".join(lines)
@@ -2515,6 +2564,31 @@ def _generated_summary_items(state: FactoryProductionState) -> list[str]:
     if state.harness_scenario_count:
         items.append(f"{state.harness_scenario_count} harness scenarios")
     return items
+
+
+def _agent_name_from_state(state: FactoryProductionState) -> str | None:
+    if state.primitives is not None:
+        return state.primitives.instructions.metadata.name
+    if state.requirement_understanding is not None:
+        return state.requirement_understanding.agent_name
+    return None
+
+
+def _agent_goal_from_state(state: FactoryProductionState) -> str | None:
+    if state.primitives is not None:
+        return state.primitives.instructions.goal
+    if state.requirement_understanding is not None:
+        return state.requirement_understanding.goal
+    return None
+
+
+def _tool_ids_from_state(state: FactoryProductionState) -> list[str]:
+    if state.primitives is None:
+        return []
+    tool_ids: list[str] = []
+    for toolset in state.primitives.toolsets.toolsets:
+        tool_ids.extend(toolset.exposed_tools)
+    return sorted(dict.fromkeys(tool_ids))
 
 
 def _satisfied_condition_messages(state: FactoryProductionState) -> list[str]:

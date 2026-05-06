@@ -14,8 +14,8 @@ from agent_factory.harness.result import (
     ScenarioRunResult,
 )
 from agent_factory.harness.scenario import HarnessScenario, HarnessSpec
-from agent_factory.model import FakeModelAdapter, ModelConfig, ModelService
 from agent_factory.runtime import AgentInstanceRuntime, AgentRunRequest
+from agent_factory.runtime.langchain_chat import ScriptedRuntimeChatModel
 
 
 class AgentHarnessRunner:
@@ -28,10 +28,7 @@ class AgentHarnessRunner:
     ) -> None:
         self.loader = loader or HarnessLoader()
         self.runtime = runtime or AgentInstanceRuntime(
-            model_service=ModelService.with_adapter(
-                ModelConfig(provider="fake"),
-                FakeModelAdapter(["AF-TEST-USER"]),
-            )
+            chat_model=ScriptedRuntimeChatModel(responses=["AF-TEST-USER"])
         )
         self._yaml = YAML(typ="safe")
 
@@ -82,7 +79,7 @@ class AgentHarnessRunner:
         context_bundle = runtime_result.context_bundle
         selected_tool = scenario.expected.selected_tool_id
         observed_tool = (
-            runtime_result.tool_proposals[0].name
+            runtime_result.tool_proposals[0].get("name")
             if runtime_result.tool_proposals
             else selected_tool
         )
@@ -119,8 +116,8 @@ class AgentHarnessRunner:
             checkpoint_path_exists=bool(
                 runtime_result.checkpoint_path and runtime_result.checkpoint_path.exists()
             ),
-            checkpoint_resume_observed=any(
-                event.stage == "checkpoint_resume" for event in runtime_result.events
+            native_resume_observed=any(
+                event.stage == "resume" for event in runtime_result.events
             ),
         )
         assertions = _assert_scenario(scenario, harness, observations)
@@ -386,17 +383,17 @@ def _assert_context_visibility(
                 actual=observations.context_compression_triggered,
             )
         )
-    if "checkpoint_resume" in visibility:
-        expected = bool(visibility["checkpoint_resume"])
+    if "native_resume" in visibility:
+        expected = bool(visibility["native_resume"])
         assertions.append(
             AssertionResult(
-                id="checkpoint_resume",
+                id="native_resume",
                 status="passed"
-                if observations.checkpoint_resume_observed == expected
+                if observations.native_resume_observed == expected
                 else "failed",
-                message="Runtime checkpoint resume event matches expectation.",
+                message="Runtime native resume event matches expectation.",
                 expected=expected,
-                actual=observations.checkpoint_resume_observed,
+                actual=observations.native_resume_observed,
             )
         )
     if visibility.get("checkpoint_exists") is not None:

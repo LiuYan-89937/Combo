@@ -13,10 +13,11 @@ from agent_factory.cli.rendering import (
     render_create_result,
     render_draft_detail,
     render_drafts_list,
-    render_event,
+    render_factory_stream_result,
     render_help,
     render_not_implemented,
     render_requirement_captured,
+    render_run_agent_result,
     render_test_agent_result,
     render_validation_report,
 )
@@ -60,11 +61,7 @@ def run_shell() -> None:
                 render_slash_result(error, console)
                 continue
             assert events is not None
-            stream_renderer = FactoryStreamRenderer(console)
-            for event in events:
-                stream_renderer.render(event)
-                _record_streamed_create_event(dispatcher, event)
-            stream_renderer.close()
+            _render_factory_event_stream(console, dispatcher, events)
             _prompt_and_continue_clarification(console, prompt_session, dispatcher)
             continue
 
@@ -74,11 +71,12 @@ def run_shell() -> None:
                 render_slash_result(error, console)
                 continue
             assert events is not None
-            stream_renderer = FactoryStreamRenderer(console, show_thinking=_should_show_thinking(line))
-            for event in events:
-                stream_renderer.render(event)
-                _record_streamed_create_event(dispatcher, event)
-            stream_renderer.close()
+            _render_factory_event_stream(
+                console,
+                dispatcher,
+                events,
+                show_thinking=_should_show_thinking(line),
+            )
             _prompt_and_continue_clarification(console, prompt_session, dispatcher)
             continue
 
@@ -121,19 +119,7 @@ def render_slash_result(result: SlashCommandResult, console: Console | None = No
             render_draft_detail(result.draft_detail, console)
         return
     if result.kind == "run_agent" and result.run_result:
-        console.print("")
-        if result.run_result.result:
-            console.print(f"  Status: {result.run_result.result.status}")
-            console.print(f"  Session: {result.run_result.result.session_id}")
-            console.print(f"  History: {result.run_result.result.history_turn_count}")
-            console.print(f"  Answer: {result.run_result.result.answer}")
-            console.print(f"  Trace: {result.run_result.result.trace_path}")
-        else:
-            console.print(f"  ! {result.run_result.error}")
-        if result.run_result.repair_result:
-            _render_repair_payload(result.run_result.repair_result, console)
-        if result.message:
-            console.print(Text(f"  {result.message}", style=STYLE_MUTED))
+        render_run_agent_result(result.run_result, console, message=result.message)
         return
     if result.kind == "agent_chat":
         console.print("")
@@ -164,15 +150,6 @@ def render_slash_result(result: SlashCommandResult, console: Console | None = No
         console.print(f"  ! {result.message}")
 
 
-def _render_repair_payload(payload: dict, console: Console) -> None:
-    console.print("  Repair:")
-    console.print(f"    Status: {payload.get('status')}")
-    if payload.get("reason"):
-        console.print(f"    Reason: {payload.get('reason')}")
-    if payload.get("candidate_path"):
-        console.print(f"    Candidate: {payload.get('candidate_path')}")
-
-
 def _record_streamed_create_event(dispatcher: SlashCommandDispatcher, event) -> None:
     if event.stage == "needs_clarification":
         raw_questions = event.payload.get("questions") or event.payload.get("clarification_questions") or []
@@ -190,6 +167,24 @@ def _record_streamed_create_event(dispatcher: SlashCommandDispatcher, event) -> 
         return
     if event.stage == "not_agent_request":
         dispatcher.session.clear_pending_requirement()
+
+
+def _render_factory_event_stream(
+    console: Console,
+    dispatcher: SlashCommandDispatcher,
+    events,
+    *,
+    show_thinking: bool = False,
+) -> list:
+    stream_renderer = FactoryStreamRenderer(console, show_thinking=show_thinking)
+    captured = []
+    for event in events:
+        captured.append(event)
+        stream_renderer.render(event)
+        _record_streamed_create_event(dispatcher, event)
+    stream_renderer.close()
+    render_factory_stream_result(captured, console)
+    return captured
 
 
 def _prompt_and_continue_clarification(
@@ -212,11 +207,7 @@ def _prompt_and_continue_clarification(
         render_slash_result(error, console)
         return
     assert events is not None
-    stream_renderer = FactoryStreamRenderer(console)
-    for event in events:
-        stream_renderer.render(event)
-        _record_streamed_create_event(dispatcher, event)
-    stream_renderer.close()
+    _render_factory_event_stream(console, dispatcher, events)
 
 
 def _prompt_for_clarification(
@@ -361,7 +352,7 @@ def _handle_agent_chat_line(
     if stripped == "/clear":
         _clear_active_agent_session(console, dispatcher)
         return True
-    if stripped.startswith("/run") and {"--yes", "-y"}.intersection(stripped.split()):
+    if stripped.startswith("/run") and {"--yes", "-yes", "-y"}.intersection(stripped.split()):
         render_slash_result(dispatcher.dispatch(stripped), console)
         return True
     if _looks_like_tool_confirmation(stripped):
@@ -393,13 +384,7 @@ def _handle_agent_chat_line(
         )
     )
     _record_chat_tool_approval(dispatcher, result, stripped)
-    console.print("")
-    if result.result:
-        console.print(result.result.answer or f"[{result.result.status}]")
-        if result.result.status in {"interrupted", "needs_upgrade"}:
-            console.print(Text(f"  Status: {result.result.status}", style=STYLE_WARNING))
-    else:
-        console.print(Text(f"  ! {result.error}", style=STYLE_WARNING))
+    render_run_agent_result(result, console, compact=True)
     return True
 
 
@@ -441,13 +426,7 @@ def _confirm_pending_tool(console: Console, dispatcher: SlashCommandDispatcher) 
         )
     )
     _record_chat_tool_approval(dispatcher, result, user_input)
-    console.print("")
-    if result.result:
-        console.print(result.result.answer or f"[{result.result.status}]")
-        if result.result.status in {"interrupted", "needs_upgrade"}:
-            console.print(Text(f"  Status: {result.result.status}", style=STYLE_WARNING))
-    else:
-        console.print(Text(f"  ! {result.error}", style=STYLE_WARNING))
+    render_run_agent_result(result, console, compact=True)
     return True
 
 

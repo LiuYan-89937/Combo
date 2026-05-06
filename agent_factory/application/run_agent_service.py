@@ -58,7 +58,7 @@ class RunAgentService:
                 target=request.target,
                 error=f"AgentPackage or registry record not found: {request.target}",
             )
-        use_process = request.process and self.runtime is None and self.model_service is None
+        use_process = request.process and self.runtime is None
         if use_process:
             ipc = AgentProcessManager().run(
                 AgentIPCRequest(
@@ -68,6 +68,13 @@ class RunAgentService:
                     approved_tool_call_id=request.approved_tool_call_id,
                 )
             )
+            if ipc.payload:
+                service_result = RunAgentServiceResult(
+                    target=request.target,
+                    package_path=package_path,
+                    result=AgentRunResult.model_validate(ipc.payload),
+                )
+                return self._maybe_repair(request, service_result)
             if not ipc.ok:
                 service_result = RunAgentServiceResult(
                     target=request.target,
@@ -78,11 +85,10 @@ class RunAgentService:
             return RunAgentServiceResult(
                 target=request.target,
                 package_path=package_path,
-                result=AgentRunResult.model_validate(ipc.payload),
+                error=ipc.error or "Agent worker returned no AgentRunResult payload.",
             )
 
         runtime = self.runtime or AgentInstanceRuntime(
-            model_service=self.model_service,
             env_file=_factory_env_file(package_path),
         )
         result = runtime.run(

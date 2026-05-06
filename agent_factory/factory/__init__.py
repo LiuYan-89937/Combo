@@ -28,7 +28,6 @@ from agent_factory.factory.resource_resolvers import (
     LocalPathResolver,
     PythonPackageResolver,
     ResourceResolverRegistry,
-    SQLiteResolver,
     SystemCommandResolver,
     UrlDocumentationResolver,
 )
@@ -95,7 +94,6 @@ __all__ = [
     "LocalPathResolver",
     "PythonPackageResolver",
     "ResourceResolverRegistry",
-    "SQLiteResolver",
     "SystemCommandResolver",
     "UrlDocumentationResolver",
     "IntentClarificationQuestion",

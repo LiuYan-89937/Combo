@@ -4,10 +4,10 @@ import json
 import re
 from typing import Any, Literal
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.context import ContextBundle
-from agent_factory.model.types import LLMMessage
 from agent_factory.tools.router import ToolResultEnvelope
 
 
@@ -52,8 +52,8 @@ class ContextPriority(BaseModel):
 class MessageWindowResult(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    recent_messages: list[LLMMessage] = Field(default_factory=list)
-    historical_messages: list[LLMMessage] = Field(default_factory=list)
+    recent_messages: list[BaseMessage] = Field(default_factory=list)
+    historical_messages: list[BaseMessage] = Field(default_factory=list)
     compression_triggered: bool = False
 
 
@@ -62,7 +62,7 @@ class MessageWindowPolicy(BaseModel):
 
     max_recent_turns: int = Field(default=8, gt=0)
 
-    def apply(self, messages: list[LLMMessage]) -> MessageWindowResult:
+    def apply(self, messages: list[BaseMessage]) -> MessageWindowResult:
         window = self.max_recent_turns * 2
         if len(messages) <= window:
             return MessageWindowResult(recent_messages=list(messages))
@@ -82,25 +82,26 @@ class SummaryPolicy(BaseModel):
 
     def summarize(
         self,
-        messages: list[LLMMessage],
+        messages: list[BaseMessage],
         *,
         existing_summary: str | None = None,
     ) -> str | None:
         if not self.enabled:
             return existing_summary
-        user_turns = sum(1 for message in messages if message.role == "user")
+        user_turns = sum(1 for message in messages if _message_role(message) == "user")
         if user_turns < self.trigger_turns and not existing_summary:
             return None
         lines: list[str] = []
         if existing_summary:
             lines.append(existing_summary)
         for message in messages:
-            if message.role not in {"user", "assistant", "tool"}:
+            role = _message_role(message)
+            if role not in {"user", "assistant", "tool"}:
                 continue
-            content = _redact_text(message.content)
+            content = _redact_text(_message_content(message))
             if len(content) > 240:
                 content = content[:240] + "...[truncated]"
-            lines.append(f"{message.role}: {content}")
+            lines.append(f"{role}: {content}")
         summary = "\n".join(lines)
         if len(summary) > self.max_chars:
             summary = summary[-self.max_chars :]
@@ -180,8 +181,8 @@ class NodeStateReducer(BaseModel):
             "model_node": {
                 "messages",
                 "tool_calls",
-                "pending_tool_calls",
-                "runtime_status",
+                "active_calls",
+                "run_phase",
                 "answer",
                 "error",
                 "usage",
@@ -192,9 +193,9 @@ class NodeStateReducer(BaseModel):
                 "messages",
                 "tool_results",
                 "interrupt",
-                "runtime_status",
+                "run_phase",
                 "answer",
-                "pending_tool_calls",
+                "active_calls",
                 "turn_count",
                 "error",
             },
@@ -231,3 +232,22 @@ def _redact_text(value: str, *, fields: list[str] | None = None) -> str:
             redacted,
         )
     return redacted
+
+
+def _message_role(message: BaseMessage) -> str:
+    if isinstance(message, HumanMessage):
+        return "user"
+    if isinstance(message, AIMessage):
+        return "assistant"
+    if isinstance(message, ToolMessage):
+        return "tool"
+    if isinstance(message, SystemMessage):
+        return "system"
+    return getattr(message, "type", "message")
+
+
+def _message_content(message: BaseMessage) -> str:
+    content = message.content
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, ensure_ascii=False, default=str)

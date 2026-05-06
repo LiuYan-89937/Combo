@@ -477,9 +477,10 @@ def _readiness_from_contracts(
     issues = [
         ReadinessIssue(
             code=item.type,
-            message=item.description,
+            message="Readiness precondition failed.",
             severity="error",
             resource_id=item.resource_ref,
+            details=_readiness_issue_details(item),
         )
         for item in failed_required
     ]
@@ -519,19 +520,16 @@ def _readiness_from_contracts(
             issues=[
                 ReadinessIssue(
                     code="external_config_template_required",
-                    message=(
-                        "External service details were not fully configured. "
-                        "Factory will write external_config.yaml with placeholders; "
-                        "fill it before real runtime."
-                    ),
+                    message="External configuration template is required.",
                     severity="warning",
                 ),
                 *[
                     ReadinessIssue(
                         code=item.type,
-                        message=f"Deferred to external_config.yaml: {item.description}",
+                        message="Readiness precondition deferred to external_config.yaml.",
                         severity="warning",
                         resource_id=item.resource_ref,
+                        details=_readiness_issue_details(item),
                     )
                     for item in failed_required
                 ],
@@ -560,6 +558,24 @@ def _readiness_from_contracts(
         issues=issues,
         options=options,
     )
+
+
+def _readiness_issue_details(precondition: PreconditionSpec) -> dict[str, Any]:
+    return {
+        "precondition_id": precondition.id,
+        "precondition_type": precondition.type,
+        "target": _target_from_precondition_description(precondition.description),
+        "source_description": precondition.description,
+        "probe_status": precondition.status,
+        "resource_ref": precondition.resource_ref,
+        "probe_details": precondition.details,
+    }
+
+
+def _target_from_precondition_description(description: str) -> str:
+    if ":" not in description:
+        return description
+    return description.split(":", 1)[1].strip() or description
 
 
 def _resource_contract_id(tool_id: str, condition: RequiredCondition) -> str:

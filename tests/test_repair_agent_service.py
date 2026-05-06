@@ -12,6 +12,8 @@ from agent_factory.application import (
     RunAgentService,
     RunAgentServiceRequest,
 )
+from agent_factory.runtime import AgentInstanceRuntime
+from agent_factory.runtime.langchain_chat import ScriptedRuntimeChatModel
 from tests.test_factory_agent import service_with_responses, valid_primitives_payload
 
 
@@ -25,7 +27,9 @@ class RepairAgentServiceTests(unittest.TestCase):
             _append_binary_context_source(package_path, binary_path)
 
             result = RunAgentService(
-                model_service=service_with_responses(["现在可以读取工具资源描述。"])
+                runtime=AgentInstanceRuntime(
+                    chat_model=ScriptedRuntimeChatModel(responses=["现在可以读取工具资源描述。"])
+                )
             ).run_agent(
                 RunAgentServiceRequest(
                     target=str(package_path),

@@ -11,6 +11,11 @@ from agent_factory.factory.package_verification import (
     ToolStaticCheckReport,
     ToolTestRunReport,
 )
+from agent_factory.factory.environment import _readiness_from_contracts
+from agent_factory.factory.readiness_presenter import (
+    ReadinessPresenter,
+    render_readiness_clarification_prompt,
+)
 from agent_factory.factory.resource_resolvers import (
     ResourceResolverRegistry,
     UrlDocumentationResolver,
@@ -18,9 +23,15 @@ from agent_factory.factory.resource_resolvers import (
 from agent_factory.factory.tool_build_pipeline import ToolBuildPipeline, ToolStateMachine
 from agent_factory.factory_runtime.production import FactoryProductionState
 from agent_factory.factory_runtime.production.policies import FactoryNodeAccessPolicy
-from agent_factory.factory_context import ResourceNeed
+from agent_factory.factory_context import ReadinessDecision, ReadinessItem, ResourceNeed
 from agent_factory.registry import FilesystemRegistry
-from agent_factory.specs import AgentPackagePrimitives
+from agent_factory.specs import (
+    AgentPackagePrimitives,
+    Metadata,
+    PreconditionSpec,
+    ReadinessIssue,
+    ReadinessReport,
+)
 from tests.test_agent_instance_runtime import _write_tool_package
 from tests.test_factory_agent import service_with_responses, tool_primitives_payload, valid_primitives_payload
 
@@ -71,6 +82,14 @@ class RefactorArchitectureTests(unittest.TestCase):
         self.assertIn("QWEATHER_API_KEY", report.details["configuration_keys"])
         self.assertNotIn("secret", str(report.model_dump(mode="json")).lower())
 
+    def test_resource_resolver_registry_has_no_sqlite_specific_resolver(self) -> None:
+        registry = ResourceResolverRegistry()
+
+        self.assertNotIn(
+            "sqlite_schema",
+            {resolver.resolver_id for resolver in registry.resolvers},
+        )
+
     def test_url_documentation_resolver_fetches_only_declared_url_summary(self) -> None:
         resolver = UrlDocumentationResolver(
             fetcher=lambda url: "<html><title>API Docs</title><body>secret=hidden</body></html>"
@@ -89,6 +108,82 @@ class RefactorArchitectureTests(unittest.TestCase):
         self.assertEqual(report.details["title"], "API Docs")
         self.assertEqual(report.details["url"], "https://docs.example.test/weather")
         self.assertNotIn("secret=hidden", str(report.model_dump(mode="json")))
+
+    def test_readiness_failures_store_structured_issue_details(self) -> None:
+        report = _readiness_from_contracts(
+            Metadata(name="orders-agent"),
+            [],
+            [
+                PreconditionSpec(
+                    id="orders_exists",
+                    type="resource_exists",
+                    description="Resource exists: /tmp/orders.sqlite",
+                    status="failed",
+                )
+            ],
+        )
+
+        self.assertEqual(report.status, "needs_user_input")
+        self.assertEqual(report.issues[0].message, "Readiness precondition failed.")
+        self.assertEqual(report.issues[0].details["precondition_type"], "resource_exists")
+        self.assertEqual(report.issues[0].details["target"], "/tmp/orders.sqlite")
+        self.assertNotIn("Resource exists:", report.issues[0].message)
+        self.assertNotIn("文件或目录不存在", report.issues[0].message)
+
+    def test_readiness_presenter_uses_task_model_for_structured_user_copy(self) -> None:
+        model_copy = {
+            "summary": "订单数据库还没有通过校验，暂时不能继续生成。",
+            "items": [
+                {
+                    "code": "resource_exists",
+                    "category": "database",
+                    "subject": "订单数据库文件",
+                    "problem": "路径 /tmp/orders.sqlite 不存在，或当前进程无法访问。",
+                    "impact": "无法读取订单表结构，也无法生成可验证的查询工具。",
+                    "next_action": "提供真实 SQLite 路径，或选择创建示例数据库。",
+                }
+            ],
+            "closing_question": "你希望我用哪种方式继续？",
+        }
+        readiness = ReadinessReport(
+            schema_version="0.1",
+            metadata=Metadata(name="orders-agent"),
+            status="needs_user_input",
+            issues=[
+                ReadinessIssue(
+                    code="resource_exists",
+                    message="Readiness precondition failed.",
+                    severity="error",
+                    details={
+                        "precondition_type": "resource_exists",
+                        "target": "/tmp/orders.sqlite",
+                    },
+                )
+            ],
+        )
+        decision = ReadinessDecision(
+            status="needs_user_input",
+            blocking=[
+                ReadinessItem(
+                    condition_id="resource_exists",
+                    level="blocking",
+                    message="Readiness precondition failed.",
+                    resolution_hint="补充这项校验需要的真实资源、配置或证据；也可以选择创建示例资源或只生成草稿。",
+                )
+            ],
+        )
+
+        result = ReadinessPresenter(service_with_responses([model_copy])).present_sync(
+            readiness,
+            decision,
+        )
+        prompt = render_readiness_clarification_prompt(result.presentation)
+
+        self.assertEqual(result.source, "llm")
+        self.assertIn("问题：路径 /tmp/orders.sqlite 不存在", prompt)
+        self.assertIn("影响：无法读取订单表结构", prompt)
+        self.assertIn("建议：提供真实 SQLite 路径", prompt)
+        self.assertNotIn("Resource exists:", prompt)
 
     def test_tool_state_machine_guards_invalid_transitions(self) -> None:
         machine = ToolStateMachine()

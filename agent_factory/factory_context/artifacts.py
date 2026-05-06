@@ -163,7 +163,7 @@ class ResourceContractSet(BaseModel):
 class ImplementationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    runtime_type: Literal["langgraph_react"] = "langgraph_react"
+    runtime_type: Literal["langgraph_native"] = "langgraph_native"
     tool_contract_refs: list[str] = Field(default_factory=list)
     resource_contract_refs: list[str] = Field(default_factory=list)
     harness_focus: list[str] = Field(default_factory=list)
@@ -174,8 +174,12 @@ class ProductionSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     status: str
+    narrative: str | None = None
+    capability_summary: str | None = None
+    readiness_summary: str | None = None
     generated: list[str] = Field(default_factory=list)
     satisfied_conditions: list[str] = Field(default_factory=list)
     pending_configuration_keys: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)
+    presentation_source: Literal["llm", "fallback"] | None = None

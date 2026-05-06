@@ -14,6 +14,7 @@ from agent_factory.application import (
 )
 from agent_factory.harness import AgentHarnessRunner
 from agent_factory.runtime import AgentInstanceRuntime
+from agent_factory.runtime.langchain_chat import ScriptedRuntimeChatModel
 
 
 class TestAgentServiceTests(unittest.TestCase):
@@ -21,7 +22,7 @@ class TestAgentServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             package_path = _generated_package(Path(tmpdir))
             runner = AgentHarnessRunner(
-                runtime=AgentInstanceRuntime(model_service=service_with_responses(["AF-TEST-USER"]))
+                runtime=AgentInstanceRuntime(chat_model=ScriptedRuntimeChatModel(responses=["AF-TEST-USER"]))
             )
 
             result = TestAgentService(runner=runner).test_agent(TestAgentRequest(path=package_path))

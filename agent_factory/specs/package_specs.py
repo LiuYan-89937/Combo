@@ -9,8 +9,8 @@ from agent_factory.specs.building_primitives import AgentPackagePrimitives
 
 
 ReleaseStatus = Literal["draft", "candidate", "available", "deprecated", "failed"]
-RuntimeKind = Literal["langgraph_react"]
-RuntimeCompileMode = Literal["custom_state_graph"]
+RuntimeKind = Literal["langgraph_native"]
+RuntimeCompileMode = Literal["task_graph"]
 
 
 class PackageManifest(BaseSpec):
@@ -48,21 +48,70 @@ class RuntimeStep(BaseModel):
 class RuntimeSpec(BaseSpec):
     kind: Literal["RuntimeSpec"] = "RuntimeSpec"
 
-    runtime_type: RuntimeKind = "langgraph_react"
-    compile_mode: RuntimeCompileMode = "custom_state_graph"
-    workflow_steps: list[RuntimeStep] = Field(
-        default_factory=lambda: [
-            RuntimeStep(id="load_context", type="load_context"),
-            RuntimeStep(id="load_memory", type="load_memory"),
-            RuntimeStep(id="model_turn", type="model_turn"),
-            RuntimeStep(id="route_tools", type="route_tools"),
-            RuntimeStep(id="write_memory", type="write_memory"),
-            RuntimeStep(id="write_trace", type="write_trace"),
-        ]
-    )
-    graph: dict[str, Any] = Field(default_factory=dict)
+    runtime_type: RuntimeKind = "langgraph_native"
+    compile_mode: RuntimeCompileMode = "task_graph"
+    checkpointer: dict[str, Any] = Field(default_factory=lambda: {"type": "filesystem"})
+    interrupt: dict[str, Any] = Field(default_factory=lambda: {"mode": "langgraph_native"})
+    task_graph_file: str = "task_graph.yaml"
     max_turns: int = Field(default=6, gt=0)
     timeout_seconds: int = Field(default=60, gt=0)
+
+
+TaskGraphNodeType = Literal["model", "router", "capability", "interrupt", "finalizer"]
+TaskGraphEdgeEndpoint = Literal["START", "END"] | str
+
+
+class TaskGraphRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    when: str
+    to: TaskGraphEdgeEndpoint
+
+
+class TaskGraphNodeSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    type: TaskGraphNodeType
+    purpose: str | None = None
+    capability_ref: str | None = None
+    interrupt_type: str | None = None
+    routes: list[TaskGraphRoute] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskGraphEdgeSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, populate_by_name=True)
+
+    from_: TaskGraphEdgeEndpoint = Field(alias="from")
+    to: TaskGraphEdgeEndpoint
+
+
+class TaskGraphSpec(BaseSpec):
+    kind: Literal["TaskGraphSpec"] = "TaskGraphSpec"
+
+    graph_type: Literal["langgraph_state_graph"] = "langgraph_state_graph"
+    state_schema: Literal["agent_runtime_state.v1"] = "agent_runtime_state.v1"
+    nodes: dict[str, TaskGraphNodeSpec]
+    edges: list[TaskGraphEdgeSpec]
+
+    @model_validator(mode="after")
+    def _validate_graph(self) -> "TaskGraphSpec":
+        if not self.nodes:
+            raise ValueError("task graph requires at least one node")
+        for node_id in self.nodes:
+            if node_id in {"START", "END"}:
+                raise ValueError("START and END are reserved task graph endpoint names")
+        valid = set(self.nodes) | {"START", "END"}
+        for edge in self.edges:
+            if edge.from_ not in valid:
+                raise ValueError(f"unknown task graph edge source: {edge.from_}")
+            if edge.to not in valid:
+                raise ValueError(f"unknown task graph edge target: {edge.to}")
+        for node_id, node in self.nodes.items():
+            for route in node.routes:
+                if route.to not in valid:
+                    raise ValueError(f"unknown task graph route target: {node_id}.{route.to}")
+        return self
 
 
 class ToolImplementationSpec(BaseModel):
@@ -385,6 +434,7 @@ class ReadinessIssue(BaseModel):
     message: str
     severity: Literal["info", "warning", "error", "fatal"] = "warning"
     resource_id: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReadinessOption(BaseModel):
@@ -445,6 +495,7 @@ class FullAgentPackage(BaseModel):
     primitives: AgentPackagePrimitives
     manifest: PackageManifest
     runtime: RuntimeSpec
+    task_graph: TaskGraphSpec
     tools: ToolsSpec
     mcp: MCPBindingSpec
     context: ContextSpec

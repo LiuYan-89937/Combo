@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import re
 import shutil
-import sqlite3
 from pathlib import Path
 from typing import Callable, Protocol
 from urllib.parse import urlparse
@@ -28,7 +27,6 @@ class ResourceResolver(Protocol):
 class ResourceResolverRegistry:
     def __init__(self, resolvers: list[ResourceResolver] | None = None) -> None:
         self.resolvers = resolvers or [
-            SQLiteResolver(),
             LocalPathResolver(),
             PythonPackageResolver(),
             SystemCommandResolver(),
@@ -72,48 +70,6 @@ class LocalPathResolver:
                 "is_file": path.is_file(),
                 "is_dir": path.is_dir(),
             },
-        )
-
-
-class SQLiteResolver:
-    resolver_id = "sqlite_schema"
-
-    def supports(self, resource: ResourceNeed) -> bool:
-        return resource.kind == "sqlite" and bool(resource.location)
-
-    def resolve(self, resource: ResourceNeed) -> EvidenceReport:
-        path = Path(str(resource.location)).expanduser()
-        if not path.exists():
-            return EvidenceReport(
-                evidence_id=f"{resource.resource_id}.sqlite_schema",
-                resource_id=resource.resource_id,
-                source="sqlite_schema",
-                status="failed",
-                summary=f"SQLite file missing: {path}",
-            )
-        try:
-            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
-                tables = [
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-                    ).fetchall()
-                ]
-        except sqlite3.Error as error:
-            return EvidenceReport(
-                evidence_id=f"{resource.resource_id}.sqlite_schema",
-                resource_id=resource.resource_id,
-                source="sqlite_schema",
-                status="failed",
-                summary=f"SQLite schema probe failed: {error}",
-            )
-        return EvidenceReport(
-            evidence_id=f"{resource.resource_id}.sqlite_schema",
-            resource_id=resource.resource_id,
-            source="sqlite_schema",
-            status="passed",
-            summary=f"SQLite schema available with {len(tables)} table(s).",
-            details={"tables": tables},
         )
 
 

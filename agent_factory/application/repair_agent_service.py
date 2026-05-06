@@ -225,7 +225,6 @@ class RepairAgentService:
 
     def _run_package(self, package_path: Path, user_input: str, session_id: str) -> AgentRunResult:
         runtime = AgentInstanceRuntime(
-            model_service=self.model_service,
             env_file=_factory_env_file(package_path),
         )
         return runtime.run(

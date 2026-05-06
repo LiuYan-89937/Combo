@@ -211,7 +211,7 @@ class SlashCommandDispatcher:
         )
 
     def _run(self, args: list[str]) -> SlashCommandResult:
-        if "--yes" in args or "-y" in args:
+        if "--yes" in args or "-yes" in args or "-y" in args:
             return self._approve_pending_run(args)
         path = self._first_positional(args)
         if not path:
@@ -397,14 +397,14 @@ class SlashCommandDispatcher:
             identifier = args[1] if len(args) > 1 else "latest"
             detail = self.drafts_service.show_draft(identifier)
             if detail is None:
-                return SlashCommandResult(kind="error", command="/drafts", message=f"Draft not found: {identifier}")
+                return SlashCommandResult(kind="error", command="/drafts", message=_draft_not_found_message(identifier))
             return SlashCommandResult(kind="drafts", command="/drafts", draft_detail=detail)
 
         if action == "use":
             identifier = args[1] if len(args) > 1 else "latest"
             detail = self.drafts_service.show_draft(identifier)
             if detail is None:
-                return SlashCommandResult(kind="error", command="/drafts", message=f"Draft not found: {identifier}")
+                return SlashCommandResult(kind="error", command="/drafts", message=_draft_not_found_message(identifier))
             self.session.selected_agent_path = detail.summary.path
             return SlashCommandResult(
                 kind="drafts",
@@ -425,11 +425,18 @@ class SlashCommandDispatcher:
                 )
             path = self.drafts_service.resolve_draft(identifier)
             if path is None:
-                return SlashCommandResult(kind="error", command="/drafts", message=f"Draft not found: {identifier}")
+                return SlashCommandResult(kind="error", command="/drafts", message=_draft_not_found_message(identifier))
+            self.session.enter_agent_chat(target=str(path), path=path, session_id=session_id)
             result = self.run_service.run_agent(
                 RunAgentServiceRequest(target=str(path), user_input=user_input, session_id=session_id)
             )
-            return SlashCommandResult(kind="run_agent", command="/drafts", run_result=result)
+            self._record_pending_tool_approval(result, user_input)
+            return SlashCommandResult(
+                kind="run_agent",
+                command="/drafts",
+                run_result=result,
+                message=_agent_chat_message(session_id, result),
+            )
 
         if action in {"delete", "rm", "remove"}:
             identifier = args[1] if len(args) > 1 and not args[1].startswith("-") else "latest"
@@ -438,7 +445,7 @@ class SlashCommandDispatcher:
             except ValueError as error:
                 return SlashCommandResult(kind="error", command="/drafts", message=str(error))
             if result is None:
-                return SlashCommandResult(kind="error", command="/drafts", message=f"Draft not found: {identifier}")
+                return SlashCommandResult(kind="error", command="/drafts", message=_draft_not_found_message(identifier))
             if self.session.selected_agent_path and self.session.selected_agent_path.resolve() == result.path.resolve():
                 self.session.selected_agent_path = None
             return SlashCommandResult(
@@ -453,7 +460,7 @@ class SlashCommandDispatcher:
 
         detail = self.drafts_service.show_draft(action)
         if detail is None:
-            return SlashCommandResult(kind="error", command="/drafts", message=f"Draft not found: {action}")
+            return SlashCommandResult(kind="error", command="/drafts", message=_draft_not_found_message(action))
         return SlashCommandResult(kind="drafts", command="/drafts", draft_detail=detail)
 
     def stream_create_agent_events(
@@ -695,3 +702,9 @@ def _agent_chat_message(session_id: str, result: RunAgentServiceResult) -> str:
     if result.result and result.result.status == "interrupted":
         return f"{base} Use /run --yes to approve the pending tool call."
     return base
+
+
+def _draft_not_found_message(identifier: str) -> str:
+    if identifier.strip().lower() == "lastest":
+        return "Draft not found: lastest. Did you mean latest?"
+    return f"Draft not found: {identifier}"

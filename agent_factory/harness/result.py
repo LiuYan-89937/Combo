@@ -41,7 +41,7 @@ class ScenarioObservation(JsonDumpMixin):
     hidden_context_keys: list[str] = Field(default_factory=list)
     context_compression_triggered: bool = False
     checkpoint_path_exists: bool = False
-    checkpoint_resume_observed: bool = False
+    native_resume_observed: bool = False
 
 
 class ScenarioRunResult(JsonDumpMixin):

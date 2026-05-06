@@ -5,8 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from langchain_core.messages import AIMessage
+
 from agent_factory.agent import PrimitiveAgent, PrimitiveAgentError
-from agent_factory.model import FakeModelAdapter, ModelConfig, ModelService
+from agent_factory.runtime.langchain_chat import ScriptedRuntimeChatModel
 from tests.test_building_primitives import valid_primitives, write_package
 
 
@@ -16,15 +18,14 @@ class PrimitiveAgentTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
                 write_package(root, valid_primitives())
-                service = ModelService.with_adapter(
-                    ModelConfig(provider="fake"),
-                    FakeModelAdapter([{"intent": "refund", "answer": "请提供订单号。"}]),
+                chat_model = ScriptedRuntimeChatModel(
+                    responses=['{"intent": "refund", "answer": "请提供订单号。"}']
                 )
-                agent = PrimitiveAgent.from_package(root, model_service=service)
+                agent = PrimitiveAgent.from_package(root, chat_model=chat_model)
 
                 result = await agent.run(
                     "我要退款",
-                    history=[("assistant", "你好，我是客服。")],
+                    history=[AIMessage(content="你好，我是客服。")],
                     context_items=["退款规则：用户需要提供订单号。"],
                     metadata={"test": "primitive-agent"},
                 )
@@ -32,7 +33,7 @@ class PrimitiveAgentTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertEqual(result.structured_data, {"intent": "refund", "answer": "请提供订单号。"})
             self.assertEqual(result.request.response_format, "json_object")
-            self.assertEqual([message.role for message in result.request.messages], ["system", "assistant", "system", "user"])
+            self.assertEqual([message.type for message in result.request.messages], ["system", "ai", "system", "human"])
             self.assertIn("Persona: 温和、专业的客服 Agent", result.request.messages[0].content)
             self.assertIn("Output contract: return valid json_object", result.request.messages[0].content)
             self.assertEqual(result.request.metadata["agent_name"], "customer-service-agent")
@@ -45,12 +46,11 @@ class PrimitiveAgentTests(unittest.TestCase):
             data = valid_primitives()
             data.pop("guardrails.yaml")
             write_package(root, data)
-            service = ModelService.with_adapter(ModelConfig(provider="fake"), FakeModelAdapter(["ok"]))
+            chat_model = ScriptedRuntimeChatModel(responses=["ok"])
 
             with self.assertRaises(PrimitiveAgentError):
-                PrimitiveAgent.from_package(root, model_service=service)
+                PrimitiveAgent.from_package(root, chat_model=chat_model)
 
 
 if __name__ == "__main__":
     unittest.main()
-

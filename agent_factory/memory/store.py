@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import ConfigDict, Field
 
 from agent_factory.core.types import JsonDumpMixin
 from agent_factory.factory_runtime.redaction import redact_secrets
-from agent_factory.model import AssistantMessage, LLMMessage, UserMessage
 from agent_factory.package import PackageLoader
 
 
@@ -88,18 +88,23 @@ class AgentMemoryStore:
         *,
         session_id: str,
         limit_turns: int,
-    ) -> list[LLMMessage]:
-        messages: list[LLMMessage] = []
+    ) -> list[BaseMessage]:
+        messages: list[BaseMessage] = []
         for item in self.list_recent(limit=limit_turns, session_id=session_id):
             if item.get("type") != "agent_turn":
                 continue
             payload = item.get("payload") or {}
             if not isinstance(payload, dict):
                 continue
+            if payload.get("status") != "completed":
+                continue
+            tool_results = payload.get("tool_results") or []
+            if any(isinstance(result, dict) and result.get("status") == "interrupted" for result in tool_results):
+                continue
             user_input = payload.get("user_input")
             answer = payload.get("answer")
             if isinstance(user_input, str) and user_input.strip():
-                messages.append(UserMessage(content=user_input))
+                messages.append(HumanMessage(content=user_input))
             if isinstance(answer, str) and answer.strip():
-                messages.append(AssistantMessage(content=answer))
+                messages.append(AIMessage(content=answer))
         return messages

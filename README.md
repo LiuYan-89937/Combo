@@ -6,10 +6,13 @@ FastAgentFactory 是一个 **CLI-first、文档驱动的 Agent 工厂**。你可
 
 ## 当前状态
 
-- Runtime 已切换为 `langgraph_react`，旧 `WorkflowRuntime` / `GraphRuntime` 不再对外导出。
-- `AgentPackageCompiler` 会把完整 AgentPackage 编译为 LangGraph ReAct app、LangChain-compatible tools、RuntimeContext、PolicyWrappedToolNode、trace/memory 适配器。
+- Runtime 已硬切为 `langgraph_native`，旧 `WorkflowRuntime` / `GraphRuntime` 不再对外导出。
+- `RuntimeGraphCompiler + TaskGraphCompiler` 会把完整 AgentPackage 的 `task_graph.yaml` 编译为 LangGraph-native app，并注入 ControlGraph 能力：模型调用、工具、审批、native interrupt/resume、trace、memory、context。
+- AgentInstance Runtime 的执行基层已迁移到 LangChain/LangGraph-native：runtime message 使用 `BaseMessage` / `AIMessage` / `ToolMessage`，审批恢复使用 LangGraph checkpointer + `Command(resume=...)`。
 - Factory 生产图按 14 阶段传递 typed artifacts，并通过 `FactoryNodeAccessPolicy` 限制节点只能读取和修改 allow-list 字段。
-- Resource Setup 使用 resolver registry：local path、SQLite、Python package、system command、URL documentation、credential config、human approval。
+- Resource Setup 使用 resolver registry：local path、Python package、system command、URL documentation、credential config、human approval；数据库文件/schema 探测走环境 probe 和受控 shell，不在 resolver 层特化 SQLite。
+- Readiness issue 只保存结构化事实，不在环境探测层硬编码用户话术；clarification 由 task/small model 输出 summary、problem、impact、next_action，模型不可用时使用泛化模板兜底。
+- Shell/CLI 展示已对接 Runtime 状态，`interrupted` 会显示审批提示与 `/run --yes`，Factory stream 完成后会展示自然语言 AgentPackage summary 和下一步操作。
 - ToolBuildPipeline 已拆出 contract-first 生成、状态机、静态检查、测试、sandbox、repair loop。
 - Harness 真实驱动 `AgentInstanceRuntime`，支持工具调用、上下文可见性、context compression、checkpoint resume 等断言。
 - Registry/Release 记录 PackageProvenance、PromotionGate、UpgradeRequest、PatchPlan、ApprovalRecord、PackageDiff 生命周期信息。
@@ -18,7 +21,7 @@ FastAgentFactory 是一个 **CLI-first、文档驱动的 Agent 工厂**。你可
 
 ```bash
 uv run --extra dev pytest
-# 126 passed, 3 skipped, 2 warnings
+# 133 passed, 3 skipped, 2 warnings
 ```
 
 真实模型端到端验收为 opt-in：
@@ -62,6 +65,7 @@ guardrails.yaml
 handoffs.yaml
 observability.yaml
 runtime.yaml
+task_graph.yaml
 tools.yaml
 mcp.yaml
 context.yaml
@@ -125,6 +129,17 @@ AGENTFACTORY_TASK_THINKING=disabled
 ```
 
 `.env` 已被 `.gitignore` 忽略。Factory 和 Runtime 会对 prompt、trace、memory、harness report 中的 secret 做 redaction；真实 secret 应通过 external config 或运行时上下文传入，不进入模型 prompt。
+
+## Agent Memory 策略
+
+生成出来的 Agent 默认使用 `memory.yaml` 中的 filesystem backend：
+
+- session 级对话写入 `memory/session_memory.jsonl`，按 `session_id` 隔离。
+- prompt 只回放最近 `conversation.yaml.history_window` 轮，默认 12 轮。
+- 长对话超过窗口后触发 rolling summary，摘要由 `RuntimeContextCompiler` 注入 system prompt。
+- 只有 `completed` turn 会写入 session memory；`interrupted`、`failed`、审批提示等运行状态不会作为普通 assistant 对话污染后续 prompt。
+- 写入 memory 前会做 secret redaction。
+- `summary_memory_file` 当前作为包规格声明保留，运行时摘要暂在 prompt 编译阶段滚动生成。
 
 ## 快速开始
 
@@ -260,7 +275,7 @@ ticket_id, customer_name, channel, title, description, status, priority, assigne
 模型不能直接执行工具。运行链路是：
 
 ```text
-Model 提出 ToolCallProposal
+Model 返回 `AIMessage.tool_calls`
   -> AgentInstanceRuntime
   -> PolicyWrappedToolNode
   -> ToolRouter
@@ -283,7 +298,7 @@ completed | failed | interrupted | needs_configuration | blocked
 - `visible_to_tools`：数据库路径、文件路径、external config refs 等工具运行资源。
 - `hidden`：API key、secret、authorization、tool_auth_token 等敏感信息。
 
-长对话会触发 context compression；工具 observation 会被压缩和 redaction 后再回注模型；checkpoint/resume metadata 只保存 hash/ref，不保存原始 secret。
+长对话会触发 context compression；工具 observation 会被压缩和 redaction 后再回注模型；LangGraph checkpointer 只落 package-local runtime checkpoint，不把 secret 写进 prompt、trace、memory 或 harness report。
 
 ## 本地工作区
 

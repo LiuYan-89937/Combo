@@ -16,6 +16,7 @@ from agent_factory.application import (
     DraftAgentDetail,
     DraftsListResult,
     InitFactoryResult,
+    RunAgentServiceResult,
     TestAgentResult,
 )
 from agent_factory.cli.theme import (
@@ -323,17 +324,143 @@ def render_create_result(result: CreateAgentResult, console: Console | None = No
                     if isinstance(item, dict) and item.get("message"):
                         console.print(f"  - {item['message']}", style=STYLE_MUTED)
     if result.production_summary:
-        render_section("Summary", console)
-        for item in result.production_summary.get("generated") or []:
-            console.print(f"  + {item}", style=STYLE_SUCCESS)
-        for warning in result.production_summary.get("warnings") or []:
-            console.print(f"  ! {warning}", style=STYLE_WARNING)
+        render_production_summary(result.production_summary, console)
     if result.error:
         render_kv("Error", result.error.code, console, style=STYLE_ERROR)
     if result.next_steps:
         render_section(NEXT_LABEL, console)
         for step in result.next_steps:
             console.print(f"  {step}", style=STYLE_MUTED)
+
+
+def render_factory_stream_result(
+    events: list[FactoryEvent],
+    console: Console | None = None,
+) -> None:
+    console = console or Console()
+    final = _last_terminal_factory_event(events)
+    if final is None:
+        return
+    if final.stage == "complete":
+        render_factory_completion(final, console)
+    elif final.stage == "failed":
+        render_section("Factory failed", console)
+        if final.message:
+            console.print(f"  {SYMBOL_FAILED} {final.message}", style=STYLE_ERROR)
+    elif final.stage == "not_agent_request" and final.message:
+        render_section("AgentFactory", console)
+        console.print(f"  {final.message}", style=STYLE_WARNING)
+
+
+def render_factory_completion(event: FactoryEvent, console: Console | None = None) -> None:
+    console = console or Console()
+    payload = event.payload
+    summary = payload.get("production_summary")
+    render_section("Created AgentPackage", console)
+    status = summary.get("status") if isinstance(summary, dict) else None
+    render_kv("Status", status or ("completed_with_warnings" if event.status == EventStatus.WARNING else "completed"), console)
+    if event.artifact_path:
+        render_kv("Draft", event.artifact_path, console, style=STYLE_SUCCESS)
+    if payload.get("verification_status"):
+        render_kv("Verification", payload.get("verification_status"), console)
+    if payload.get("tool_test_status"):
+        render_kv("Tool tests", payload.get("tool_test_status"), console)
+    pending_keys = payload.get("pending_configuration_keys") or []
+    if pending_keys:
+        render_kv("Pending config", ", ".join(str(item) for item in pending_keys[:8]), console, style=STYLE_WARNING)
+    if isinstance(summary, dict):
+        render_production_summary(summary, console)
+
+
+def render_production_summary(summary: dict[str, Any], console: Console | None = None) -> None:
+    console = console or Console()
+    narrative = str(summary.get("narrative") or "").strip()
+    capability_summary = str(summary.get("capability_summary") or "").strip()
+    readiness_summary = str(summary.get("readiness_summary") or "").strip()
+    generated = [str(item) for item in summary.get("generated") or [] if str(item).strip()]
+    satisfied = [str(item) for item in summary.get("satisfied_conditions") or [] if str(item).strip()]
+    warnings = [str(item) for item in summary.get("warnings") or [] if str(item).strip()]
+    next_steps = [str(item) for item in summary.get("next_steps") or [] if str(item).strip()]
+    if narrative:
+        render_section("Summary", console)
+        console.print(f"  {narrative}", style=STYLE_MUTED)
+        if capability_summary:
+            console.print(f"  {capability_summary}", style=STYLE_MUTED)
+        if readiness_summary:
+            console.print(f"  {readiness_summary}", style=STYLE_MUTED)
+    elif generated:
+        render_section("Summary", console)
+        for item in generated[:8]:
+            console.print(f"  {SYMBOL_ADD} {item}", style=STYLE_SUCCESS)
+    if narrative and generated:
+        render_section("Generated", console)
+        for item in generated[:6]:
+            console.print(f"  {SYMBOL_ADD} {item}", style=STYLE_SUCCESS)
+    if satisfied:
+        render_section("Checks", console)
+        for item in satisfied[:5]:
+            console.print(f"  {SYMBOL_ADD} {item}", style=STYLE_MUTED)
+    if warnings:
+        render_section("Warnings", console)
+        for warning in warnings[:6]:
+            console.print(f"  {SYMBOL_WARNING} {warning}", style=STYLE_WARNING)
+    if next_steps:
+        render_section(NEXT_LABEL, console)
+        for step in next_steps[:6]:
+            console.print(f"  {step}", style=STYLE_MUTED)
+
+
+def render_run_agent_result(
+    result: RunAgentServiceResult,
+    console: Console | None = None,
+    *,
+    message: str | None = None,
+    compact: bool = False,
+) -> None:
+    console = console or Console()
+    run = result.result
+    if run is None:
+        console.print("")
+        console.print(Text("  ! Agent worker failed", style=STYLE_WARNING))
+        if result.error:
+            console.print(Text(f"    {result.error}", style=STYLE_MUTED))
+        if message:
+            console.print(Text(f"  {message}", style=STYLE_MUTED))
+        return
+
+    if compact and run.status == "completed":
+        console.print("")
+        console.print(run.answer or "[completed]")
+        return
+
+    symbol, style, title = _run_status_heading(run.status)
+    console.print("")
+    console.print(Text(f"  {symbol} {title}", style=style))
+    if run.answer:
+        console.print(Text(f"    {run.answer}", style=STYLE_MUTED))
+    render_kv("Status", run.status, console, style=style)
+    render_kv("Session", run.session_id, console)
+    render_kv("History", run.history_turn_count, console)
+    if run.trace_path:
+        render_kv("Trace", run.trace_path, console)
+    if run.status == "interrupted":
+        _render_run_interrupt(run, console)
+    elif run.status == "needs_configuration":
+        _render_run_configuration(run, console)
+    elif run.status == "needs_upgrade":
+        if run.upgrade_request_path:
+            render_kv("Upgrade", run.upgrade_request_path, console, style=STYLE_WARNING)
+    elif run.status == "failed":
+        _render_run_failure(run, console)
+    if result.repair_result:
+        render_section("Repair", console)
+        render_kv("Status", result.repair_result.get("status"), console)
+        if result.repair_result.get("reason"):
+            render_kv("Reason", result.repair_result.get("reason"), console)
+        if result.repair_result.get("candidate_path"):
+            render_kv("Candidate", result.repair_result.get("candidate_path"), console)
+    if message:
+        console.print(Text(f"  {message}", style=STYLE_MUTED))
 
 
 def render_init_result(result: InitFactoryResult, console: Console | None = None) -> None:
@@ -572,6 +699,91 @@ def _status_symbol_and_style(status: EventStatus) -> tuple[str, str]:
     if status == EventStatus.PROGRESS:
         return SYMBOL_CHANGE, STYLE_ACCENT
     return SYMBOL_PROGRESS, STYLE_ACCENT
+
+
+def _last_terminal_factory_event(events: list[FactoryEvent]) -> FactoryEvent | None:
+    for event in reversed(events):
+        if event.stage in {"complete", "failed", "needs_clarification", "not_agent_request"}:
+            return event
+    return None
+
+
+def _run_status_heading(status: str) -> tuple[str, str, str]:
+    if status == "completed":
+        return SYMBOL_ADD, STYLE_SUCCESS, "Agent completed"
+    if status == "interrupted":
+        return SYMBOL_WARNING, STYLE_WARNING, "Approval required"
+    if status == "needs_configuration":
+        return SYMBOL_WARNING, STYLE_WARNING, "Configuration required"
+    if status == "needs_upgrade":
+        return SYMBOL_WARNING, STYLE_WARNING, "Upgrade required"
+    return SYMBOL_FAILED, STYLE_ERROR, "Agent failed"
+
+
+def _render_run_interrupt(run: Any, console: Console) -> None:
+    item = _first_tool_result(run, {"interrupted"})
+    render_section("Approval", console)
+    if item is not None:
+        render_kv("Tool", getattr(item, "tool_id", None), console, style=STYLE_WARNING)
+        call_id = getattr(item, "tool_call_id", None) or getattr(item, "invocation_id", None)
+        if call_id:
+            render_kv("Call", call_id, console)
+        reason = getattr(item, "observation_summary", None) or getattr(item, "error", None)
+        if reason:
+            render_kv("Reason", reason, console)
+    if run.checkpoint_path:
+        render_kv("Checkpoint", run.checkpoint_path, console)
+    render_section(NEXT_LABEL, console)
+    console.print("  /run --yes", style=STYLE_MUTED)
+    console.print("  或在 Agent chat 里直接输入：确认执行", style=STYLE_MUTED)
+
+
+def _render_run_configuration(run: Any, console: Console) -> None:
+    item = _first_tool_result(run, {"needs_configuration"})
+    render_section("Configuration", console)
+    if item is not None:
+        render_kv("Tool", getattr(item, "tool_id", None), console, style=STYLE_WARNING)
+        output = getattr(item, "output", None) or {}
+        missing = _missing_config_fields(output)
+        if missing:
+            render_kv("Missing", ", ".join(missing), console)
+        config_file = output.get("configuration_file") if isinstance(output, dict) else None
+        if config_file:
+            render_kv("File", config_file, console)
+        reason = getattr(item, "observation_summary", None) or getattr(item, "error", None)
+        if reason:
+            render_kv("Reason", reason, console)
+    render_section(NEXT_LABEL, console)
+    console.print("  补齐 external_config.yaml / .env 后重新运行同一条输入。", style=STYLE_MUTED)
+
+
+def _render_run_failure(run: Any, console: Console) -> None:
+    render_section("Failure", console)
+    if run.error:
+        render_kv("Error", run.error.message, console, style=STYLE_ERROR)
+    item = _first_tool_result(run, {"failed", "blocked"})
+    if item is not None:
+        render_kv("Tool", getattr(item, "tool_id", None), console)
+        reason = getattr(item, "error", None) or getattr(item, "observation_summary", None)
+        if reason:
+            render_kv("Reason", reason, console, style=STYLE_ERROR)
+
+
+def _first_tool_result(run: Any, statuses: set[str]) -> Any | None:
+    for item in getattr(run, "tool_results", []) or []:
+        if getattr(item, "status", None) in statuses:
+            return item
+    return None
+
+
+def _missing_config_fields(output: Any) -> list[str]:
+    if not isinstance(output, dict):
+        return []
+    for key in ("missing_fields", "missing_config", "missing_keys", "required_keys"):
+        value = output.get(key)
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+    return []
 
 
 def _event_questions(event: FactoryEvent) -> list[str]:
