@@ -252,7 +252,6 @@ class ContextSourceSpec(BaseModel):
         "mcp",
         "file",
         "directory",
-        "sqlite",
         "url",
         "vector_store",
     ]
@@ -302,11 +301,8 @@ class PreconditionSpec(BaseModel):
         "resource_exists",
         "resource_readable",
         "resource_writable",
-        "sqlite_openable",
-        "sqlite_schema_available",
         "python_module_available",
         "cli_available",
-        "sandbox_copyable",
         "external_api_provider",
         "external_api_auth",
         "network_allowed",
@@ -369,26 +365,6 @@ class EnvironmentProbeReport(BaseSpec):
     shell_capabilities: list[ShellCapabilitySpec] = Field(default_factory=list)
 
 
-class SQLiteColumnContract(BaseModel):
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
-
-    name: str
-    type: str | None = None
-    not_null: bool = False
-    primary_key: bool = False
-    default: str | None = None
-
-
-class SQLiteTableContract(BaseModel):
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
-
-    name: str
-    columns: list[SQLiteColumnContract] = Field(default_factory=list)
-    primary_keys: list[str] = Field(default_factory=list)
-    required_columns: list[str] = Field(default_factory=list)
-    check_constraints: list[str] = Field(default_factory=list)
-
-
 class ResourceContract(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -396,7 +372,6 @@ class ResourceContract(BaseModel):
     type: Literal[
         "file",
         "directory",
-        "sqlite",
         "mcp",
         "url",
         "vector_store",
@@ -418,7 +393,6 @@ class ResourceContract(BaseModel):
     visible_to_tools: bool = True
     sandbox_required: bool = True
     details: dict[str, Any] = Field(default_factory=dict)
-    sqlite_tables: list[SQLiteTableContract] = Field(default_factory=list)
 
 
 class ResourceContractsSpec(BaseSpec):

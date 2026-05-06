@@ -1,7 +1,7 @@
 schema_version: "0.1"
 kind: "RuntimeSpec"
 metadata:
-  name: "customer-service-agent-runtime"
+  name: "sample-agent-runtime"
   version: "1.0.0"
 runtime_type: "langgraph_native"
 compile_mode: "task_graph"

@@ -14,9 +14,6 @@ from ruamel.yaml import YAML
 from agent_factory.factory_runtime.redaction import redact_secrets
 
 
-DB_SUFFIXES = {".db", ".duckdb", ".sqlite", ".sqlite3"}
-
-
 @dataclass
 class SandboxResource:
     source_id: str
@@ -62,7 +59,7 @@ class ToolTestSandbox:
             for real_path in real_paths:
                 if not real_path or real_path not in source:
                     continue
-                if "_resolve_db_path" in source or "sqlite_databases" in source or "resources" in source:
+                if "data_resources" in source or "resources" in source:
                     continue
                 issues.append(
                     {
@@ -107,7 +104,6 @@ class SandboxResourceResolver:
         shutil.copytree(package_path, sandbox_package)
         for directory in [
             root / "resources" / "files",
-            root / "resources" / "sqlite",
             root / "resources" / "directories",
             root / "resources" / "mcp",
             root / "runtime" / "tmp",
@@ -193,7 +189,7 @@ class SandboxResourceResolver:
         context: dict[str, Any] = {
             "sandbox": {"enabled": True, "mode": "process_directory"},
             "resources": {},
-            "sqlite_databases": {},
+            "data_resources": {},
             "filesystem_root": str(root / "resources" / "files"),
             "runtime": {
                 "tmp_dir": str(root / "runtime" / "tmp"),
@@ -224,8 +220,8 @@ class SandboxResourceResolver:
                 "type": resource.resource_type,
                 "path": str(resource.sandbox_path),
             }
-            if resource.resource_type == "sqlite":
-                context["sqlite_databases"][resource.source_id] = str(resource.sandbox_path)
+            if resource.resource_type == "file":
+                context["data_resources"][resource.source_id] = str(resource.sandbox_path)
         return context
 
 
@@ -239,8 +235,6 @@ def _resolve_ref(package_path: Path, ref: str) -> Path | None:
 def _resource_type(path: Path, declared_type: str) -> str:
     if declared_type == "directory" or path.is_dir():
         return "directory"
-    if path.suffix.lower() in DB_SUFFIXES:
-        return "sqlite"
     if declared_type == "mcp":
         return "mcp"
     return "file"
@@ -259,9 +253,6 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _target_path(root: Path, source_id: str, original: Path, resource_type: str) -> Path:
-    if resource_type == "sqlite":
-        suffix = original.suffix if original.suffix else ".sqlite3"
-        return root / "resources" / "sqlite" / f"{source_id}{suffix}"
     if resource_type == "directory":
         return root / "resources" / "directories" / source_id
     if resource_type == "mcp":

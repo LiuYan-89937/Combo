@@ -1,0 +1,15 @@
+schema_version: "0.1"
+kind: "ToolsetSpec"
+metadata:
+  name: "sample-agent"
+  version: "1.0.0"
+toolsets:
+  - id: "sample_tools"
+    description: "资料整理查询和策略工具组"
+    exposed_tools:
+      - "record_query"
+      - "policy_lookup"
+    hidden_tools:
+      - "controlled_action_execute"
+    proposal_only: true
+    selection_strategy: "auto"

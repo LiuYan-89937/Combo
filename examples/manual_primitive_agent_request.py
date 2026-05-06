@@ -34,17 +34,17 @@ from agent_factory.specs import (
 )
 
 
-def build_smoke_customer_service_agent(model_service: ModelService) -> PrimitiveAgent:
-    metadata = Metadata(name="smoke-customer-service-agent", version="0.1.0")
+def build_smoke_sample_agent(model_service: ModelService) -> PrimitiveAgent:
+    metadata = Metadata(name="smoke-sample-agent", version="0.1.0")
     primitives = AgentPackagePrimitives(
         instructions=InstructionSpec(
             schema_version="0.1",
             metadata=metadata,
-            persona="温和、专业、克制的客服 Agent",
+            persona="温和、专业、克制的资料整理 Agent",
             goal="识别用户意图，并用简洁中文给出下一步。",
             style="简洁、准确、不要承诺已执行真实业务操作。",
             boundaries=[
-                "不能声称已经完成退款、工单创建或支付操作。",
+                "不能声称已经完成处理、记录创建或支付操作。",
                 "如果需要真实业务操作，只能说明需要后续确认或工具执行。",
             ],
         ),
@@ -105,12 +105,12 @@ def build_smoke_customer_service_agent(model_service: ModelService) -> Primitive
 
 async def main() -> None:
     model_service = ModelService.from_env()
-    agent = build_smoke_customer_service_agent(model_service)
+    agent = build_smoke_sample_agent(model_service)
     result = await agent.run(
-        "我想退款，但是不知道要准备什么材料。",
+        "我想处理，但是不知道要准备什么材料。",
         context_items=[
-            "退款咨询只能提供流程说明，不能承诺已经退款。",
-            "如果用户没有订单号，先提示准备订单号和退款原因。",
+            "处理咨询只能提供流程说明，不能承诺已经处理。",
+            "如果用户没有记录号，先提示准备记录号和处理原因。",
         ],
         metadata={"example": "bottom_layer_smoke"},
     )

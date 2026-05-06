@@ -1,7 +1,7 @@
 schema_version: "0.1"
 kind: "TaskGraphSpec"
 metadata:
-  name: "customer-service-agent-task-graph"
+  name: "sample-agent-task-graph"
   version: "1.0.0"
 graph_type: "langgraph_state_graph"
 state_schema: "agent_runtime_state.v1"

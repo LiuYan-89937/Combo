@@ -29,11 +29,7 @@ class RequirementAnalysis(JsonDumpMixin):
     needed_memory: list[str] = Field(default_factory=list)
     safety_profile: Literal[
         "general",
-        "customer_service",
-        "companion_agent",
-        "education",
-        "productivity",
-        "creative",
+        "sensitive",
         "high_risk",
     ] = "general"
     missing_required_fields: list[str] = Field(default_factory=list)
@@ -138,9 +134,8 @@ class RequirementAnalyzer:
             "Do not create the AgentPackage yet. Decide whether the requirement is clear enough.\n\n"
             "A requirement is clear enough when it provides at least an agent role/type and a basic goal "
             "or persona. Do not require implementation details, tool APIs, database schemas, or UI details "
-            "during this step. For personal companion, roleplay, coaching, customer-service, education, "
-            "creative, productivity, and other domains, infer reasonable first-draft goals if the user gave "
-            "a clear role/name.\n\n"
+            "during this step. For any domain, infer reasonable first-draft goals if the user gave a clear "
+            "role/name.\n\n"
             "Only ask clarification questions for genuinely missing essentials, such as no role/type, no "
             "goal, contradictory safety requirements, or requests that need prohibited/high-risk behavior.\n\n"
             f"Requirement:\n{requirement}\n\n"
@@ -183,24 +178,8 @@ def _fallback_analysis(requirement: str) -> RequirementAnalysis:
 
     inferred_name = _infer_name(stripped)
     lower = stripped.lower()
-    if any(marker in stripped for marker in ["恋爱", "女友", "男友", "陪伴", "情感"]):
-        return RequirementAnalysis(
-            is_clear_enough=True,
-            agent_name=inferred_name,
-            agent_type="virtual_companion",
-            persona=stripped,
-            target_users=["需要情感陪伴和日常聊天的用户"],
-            goals=["情感陪伴", "日常聊天", "温柔回应", "保持边界和安全"],
-            in_scope_tasks=["闲聊", "情绪安抚", "日常问候", "陪伴式互动"],
-            out_of_scope_boundaries=["不诱导依赖", "不提供医疗或法律建议", "不进行成人或高风险内容"],
-            needed_tools=[],
-            needed_memory=["用户偏好", "互动称呼", "长期关系设定"],
-            safety_profile="companion_agent",
-            confidence=0.65,
-        )
-
     if any(marker in lower for marker in ["agent", "assistant"]) or any(
-        marker in stripped for marker in ["助手", "机器人", "客服", "专家", "助理"]
+        marker in stripped for marker in ["助手", "机器人", "专家", "助理"]
     ):
         return RequirementAnalysis(
             is_clear_enough=True,

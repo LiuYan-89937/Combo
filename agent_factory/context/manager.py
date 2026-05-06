@@ -89,17 +89,15 @@ def _resolve_ref(package_path: Path, ref: str | None) -> str | None:
 
 
 def _resource_type(source_type: str, ref: str | None) -> str:
-    if source_type == "static" and ref and ref.lower().endswith((".sqlite", ".sqlite3", ".db")):
-        return "sqlite"
     return source_type
 
 
 def tool_runtime_context(bundle: ContextBundle) -> dict[str, Any]:
     resources: dict[str, Any] = {}
-    sqlite_databases: dict[str, str] = {}
+    data_resources: dict[str, str] = {}
     context: dict[str, Any] = {
         "resources": resources,
-        "sqlite_databases": sqlite_databases,
+        "data_resources": data_resources,
     }
     for source_id, value in bundle.visible_to_tools.items():
         if not isinstance(value, dict):
@@ -116,8 +114,8 @@ def tool_runtime_context(bundle: ContextBundle) -> dict[str, Any]:
             resource["content"] = value.get("content")
         resources[source_id] = resource
         context[source_id] = resource
-        if resource_type == "sqlite" and isinstance(path, str):
-            sqlite_databases[source_id] = path
+        if resource_type in {"file", "directory", "static"} and isinstance(path, str):
+            data_resources[source_id] = path
     return context
 
 

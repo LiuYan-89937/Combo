@@ -1,7 +1,7 @@
 schema_version: "0.1"
 kind: "ConversationSpec"
 metadata:
-  name: "customer-service-agent"
+  name: "sample-agent"
   version: "1.0.0"
 history_window: 12
 summarize_after: 20

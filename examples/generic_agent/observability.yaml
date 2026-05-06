@@ -1,7 +1,7 @@
 schema_version: "0.1"
 kind: "ObservabilitySpec"
 metadata:
-  name: "customer-service-agent"
+  name: "sample-agent"
   version: "1.0.0"
 trace_enabled: true
 spans:

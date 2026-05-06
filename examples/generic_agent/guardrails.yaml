@@ -1,7 +1,7 @@
 schema_version: "0.1"
 kind: "GuardrailSpec"
 metadata:
-  name: "customer-service-agent"
+  name: "sample-agent"
   version: "1.0.0"
 rules:
   - id: "high_risk_tool_confirm"
@@ -9,8 +9,8 @@ rules:
     action: "human_confirm"
     risk_level: "high"
     description: "高风险工具必须确认"
-  - id: "no_fake_refund"
+  - id: "no_fake_action"
     stage: "output"
     action: "warn"
     risk_level: "medium"
-    description: "不能声称已完成真实退款"
+    description: "不能声称已完成真实处理"

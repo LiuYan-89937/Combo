@@ -1097,7 +1097,7 @@ def _implementation_plan_from_contract(
         allowed_operations=[
             "use_explicit_runtime_resources",
             "return_structured_dict_result",
-            "use_parameterized_sql_for_sqlite" if resource_refs else "local_deterministic_logic",
+            "use_declared_resource_contract" if resource_refs else "local_deterministic_logic",
         ],
         forbidden_operations=(
             list(contract.forbidden_behaviors)
@@ -1182,7 +1182,7 @@ def run(input_data: dict[str, Any], context: dict[str, Any] | None = None) -> di
 def _resources_for_logic(context: dict[str, Any]) -> dict[str, Any]:
     return {{
         "resources": context.get("resources", {{}}),
-        "sqlite_databases": context.get("sqlite_databases", {{}}),
+        "data_resources": context.get("data_resources", {{}}),
         "filesystem_root": context.get("filesystem_root"),
         "runtime": context.get("runtime", {{}}),
         "external_config": _external_config_for_logic(context.get("external_config", {{}})),
@@ -1390,8 +1390,6 @@ def _context_source_type(source_type: str, ref: str | None) -> str:
         return "mcp"
     if source_type == "directory":
         return "directory"
-    if ref and ref.lower().endswith((".sqlite", ".sqlite3", ".db")):
-        return "sqlite"
     if source_type in {"file", "url", "vector_store"}:
         return source_type
     return "static"

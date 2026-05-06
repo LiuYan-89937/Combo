@@ -1,22 +1,16 @@
 schema_version: "0.1"
 kind: "EnvironmentProbeReport"
 metadata:
-  name: "customer-service-agent-environment"
+  name: "sample-agent-environment"
   version: "1.0.0"
-  description: "客服 Agent environment preflight example"
+  description: "资料整理 Agent environment preflight example"
 preconditions: []
-probes:
-  - id: "python.sqlite3"
-    type: "python_module_available"
-    status: "passed"
-    message: "No external resource is required for this example package."
-    details: {}
+probes: []
 shell_capabilities:
   - id: "shell.command"
     allowed_commands:
       - "python"
       - "python3"
-      - "sqlite3"
     allowed_scripts: []
     proposal_only: true
     approval_required: true

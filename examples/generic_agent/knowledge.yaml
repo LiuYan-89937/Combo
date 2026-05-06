@@ -1,18 +1,18 @@
 schema_version: "0.1"
 kind: "KnowledgeSpec"
 metadata:
-  name: "customer-service-agent"
+  name: "sample-agent"
   version: "1.0.0"
 sources:
-  - id: "customer_policy_kb"
+  - id: "sample_policy_kb"
     type: "mcp"
-    ref: "mcp.customer_kb.search_policy"
+    ref: "mcp.sample_kb.search_policy"
     visible_to_model: true
     citation_required: true
 retrievers:
   - id: "policy_retriever"
     source_refs:
-      - "customer_policy_kb"
+      - "sample_policy_kb"
     strategy: "hybrid"
     top_k: 5
 default_retriever: "policy_retriever"

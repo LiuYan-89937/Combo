@@ -218,7 +218,7 @@ def _fallback_classification(requirement: str) -> FactoryIntentClassification:
             )
         return _unclear("看起来你想创建 Agent，但还缺少角色或目标。", confidence=0.45)
 
-    if _mentions_agent_without_enough_detail(stripped):
+    if _agent_input_is_too_vague(stripped):
         return _unclear("看起来可能是 Agent 需求，但还需要补全用途。", confidence=0.4)
 
     return FactoryIntentClassification(
@@ -250,13 +250,8 @@ def _looks_like_create_agent_request(text: str) -> bool:
         "agent",
         "助手",
         "机器人",
-        "客服",
         "专家",
         "助理",
-        "女友",
-        "男友",
-        "陪伴",
-        "数据库管理",
         "管理 agent",
     ]
     return any(marker in text or marker in lowered for marker in create_markers) and any(
@@ -273,11 +268,11 @@ def _has_clear_agent_shape(text: str) -> bool:
     return False
 
 
-def _mentions_agent_without_enough_detail(text: str) -> bool:
+def _agent_input_is_too_vague(text: str) -> bool:
     lowered = text.lower()
     if lowered.strip() in {"agent", "ai agent"}:
         return True
-    return any(marker in text or marker in lowered for marker in ["agent", "助手", "机器人", "客服"])
+    return any(marker in text or marker in lowered for marker in ["agent", "助手", "机器人"])
 
 
 def _infer_agent_hint(text: str) -> str | None:
@@ -309,54 +304,28 @@ def _unclear(reason: str, *, confidence: float) -> FactoryIntentClassification:
 def _default_clarification_questions() -> list[IntentClarificationQuestion]:
     return [
         IntentClarificationQuestion(
-            id="agent_type",
-            question="你想创建哪一类 Agent？",
+            id="missing_detail",
+            question="你想先补充哪类关键信息？",
             options=[
                 ClarificationOption(
-                    id="support_or_service",
-                    label="服务类 Agent",
-                    description="处理咨询、流程引导、记录和转接。",
+                    id="role_or_persona",
+                    label="角色或人设",
+                    description="说明这个 Agent 是谁、面向谁、用什么语气工作。",
                 ),
                 ClarificationOption(
-                    id="data_manager",
-                    label="数据管理 Agent",
-                    description="查询、整理或维护本地/业务数据。",
+                    id="main_goal",
+                    label="主要目标",
+                    description="说明它最重要要帮用户完成什么。",
                 ),
                 ClarificationOption(
-                    id="companion",
-                    label="陪伴 Agent",
-                    description="用于日常聊天、情绪陪伴或角色人设互动。",
+                    id="constraints",
+                    label="边界条件",
+                    description="说明不能做什么、需要什么输入或审批。",
                 ),
                 ClarificationOption(
                     id="other",
                     label="其他",
-                    description="自己输入更具体的 Agent 类型。",
-                ),
-            ],
-        ),
-        IntentClarificationQuestion(
-            id="main_goal",
-            question="它最主要要帮用户完成什么？",
-            options=[
-                ClarificationOption(
-                    id="answer_questions",
-                    label="回答问题",
-                    description="根据规则、知识库或上下文给出回复。",
-                ),
-                ClarificationOption(
-                    id="use_tools",
-                    label="调用工具",
-                    description="必须通过工具查询、计算或执行操作。",
-                ),
-                ClarificationOption(
-                    id="workflow",
-                    label="固定流程",
-                    description="按审批、填写、查询、确认等步骤推进。",
-                ),
-                ClarificationOption(
-                    id="other",
-                    label="其他",
-                    description="自己输入更具体的目标。",
+                    description="直接输入完整补充说明。",
                 ),
             ],
         ),

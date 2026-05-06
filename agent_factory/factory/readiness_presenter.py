@@ -293,19 +293,6 @@ def _target_from_issue(issue: ReadinessIssue) -> str:
 
 
 def _category_from_issue(issue: ReadinessIssue) -> ReadinessPresentationCategory:
-    code = issue.code.lower()
-    if any(marker in code for marker in ["sqlite", "database", "schema"]):
-        return "database"
-    if any(marker in code for marker in ["resource", "path", "file", "directory", "sandbox"]):
-        return "local_resource"
-    if any(marker in code for marker in ["api", "url", "web", "endpoint", "service"]):
-        return "external_service"
-    if any(marker in code for marker in ["credential", "auth", "secret"]):
-        return "credential"
-    if any(marker in code for marker in ["python", "module", "cli", "command", "dependency"]):
-        return "dependency"
-    if "approval" in code:
-        return "approval"
     return "other"
 
 

@@ -1,0 +1,7 @@
+schema_version: "0.1"
+kind: "ResourceContractsSpec"
+metadata:
+  name: "sample-agent-resource-contracts"
+  version: "1.0.0"
+  description: "资料整理 Agent resource contracts example"
+resources: []

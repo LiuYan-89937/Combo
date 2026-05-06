@@ -54,7 +54,7 @@ class ControlledShellRunner:
         output_limit: int = 4000,
         env_allowlist: set[str] | None = None,
     ) -> None:
-        self.allowed_commands = allowed_commands or {"sqlite3", "python", "python3"}
+        self.allowed_commands = set(allowed_commands or set())
         self.timeout_seconds = timeout_seconds
         self.output_limit = output_limit
         self.env_allowlist = env_allowlist or {"PATH", "HOME", "LANG", "LC_ALL"}
@@ -177,13 +177,6 @@ def _review_for_command(command: list[str]) -> ShellCommandReview | None:
             matched_command=executable,
             matched_argument=_first_non_flag(command[1:]),
         )
-    if executable == "sqlite3" and not _sqlite3_readonly_probe(lowered_args):
-        return ShellCommandReview(
-            operation="potential_file_write",
-            reason="sqlite3 may mutate database files unless this is a read-only probe",
-            matched_command=executable,
-            matched_argument=_first_non_flag(command[1:]),
-        )
     if executable in {"curl", "wget"} and _has_output_file_flag(lowered_args):
         return ShellCommandReview(
             operation="file_write",
@@ -206,10 +199,6 @@ def _review_for_command(command: list[str]) -> ShellCommandReview | None:
             matched_argument="-i",
         )
     return None
-
-
-def _sqlite3_readonly_probe(args: list[str]) -> bool:
-    return not args or any(arg in {"--version", "-version", "-help", "--help"} for arg in args)
 
 
 def _has_output_file_flag(args: list[str]) -> bool:

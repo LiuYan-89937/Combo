@@ -38,7 +38,6 @@ ProbeStrategy = Literal[
     "local_path",
     "python_module",
     "system_command",
-    "sqlite_schema",
     "web_search",
     "user_input",
     "manual_review",
@@ -411,16 +410,14 @@ def build_tool_precondition_request(
         .system(
             "You are AgentFactory's semantic precondition planner for tool creation. "
             "Use the task model. Return exactly one JSON object matching ToolPreconditionReport. "
-            "Semantic reasoning is primary; keyword rules are only a safety fallback. "
+            "Semantic reasoning is primary; local code only supplies generic safety defaults. "
             "Do not return legacy keys such as tools, external_tool_count, capability_type, "
             "requires_api_key, or requires_web_search."
         )
         .user(
             "Analyze the hidden and explicit conditions that must exist before Factory can generate "
-            "each tool implementation. Do not lock the analysis to external HTTP/API needs. Identify "
-            "local resources, runtime dependencies, Python packages, system commands, database schemas, "
-            "external services, credentials, permissions, human approval, sandbox needs, mock fixtures, "
-            "browser access, MCP servers, storage backends, schedules, web research, and data contracts.\n\n"
+            "each tool implementation. Do not lock the analysis to a predefined domain. Use the schema "
+            "to describe only the conditions supported by the user's requirement and available evidence.\n\n"
             f"Requirement:\n{requirement}\n\n"
             f"Agent goal: {primitives.instructions.goal}\n"
             f"Agent boundaries: {json.dumps(primitives.instructions.boundaries, ensure_ascii=False)}\n"
@@ -432,19 +429,10 @@ def build_tool_precondition_request(
             "probe_strategy, user_input_needed, evidence.\n"
             "- Mark status='missing' and user_input_needed=true when user must provide a URL, "
             "credential, local path, fixture, permission, schedule, schema, provider, or approval policy.\n"
-            "- Use probe_targets for conditions Factory can check locally or via controlled tools.\n"
-            "- Add risk_controls for writes, deletes, payments, emails, shell/browser/network, "
-            "generated code, or sensitive data.\n"
-            "- Use web_research only when Factory needs current public docs or API behavior while building.\n"
-            "- Generated agents must not inherit open web_search/browser_fetch tools in the MVP; "
-            "external docs are resolved by Factory from user-provided URLs during production.\n\n"
-            "Examples:\n"
-            "- 'track competitor page changes' implies browser_access/http target URL, schedule, "
-            "storage_backend, mock_fixture, permission, and maybe web_research.\n"
-            "- 'generate daily report and send email' implies data source, email credential, send "
-            "permission, test inbox/mock fixture, schedule, human_approval.\n"
-            "- 'organize local PDFs' implies local_resource directory, python_package/runtime parser, "
-            "output permission, sandbox, data_contract; it should not be treated as an external API."
+            "- Use probe_targets only for conditions Factory can check from declared evidence or controlled tools.\n"
+            "- Add risk_controls only when the requirement, package primitives, or evidence explicitly supports them.\n"
+            "- Generated agents must not inherit open web_search/browser_fetch tools by default; external docs are "
+            "resolved by Factory from user-provided URLs during production."
         )
         .request(
             response_format="json_schema",
@@ -602,229 +590,19 @@ def _rule_plan_for_tool(
     inheritance: str,
     mock_only: bool,
 ) -> ToolPreconditionPlan:
-    lowered = text.lower()
     plan = ToolPreconditionPlan(tool_id=tool_id, mock_only_allowed=mock_only)
-    if _mentions_sqlite(lowered):
-        plan.capability_kind = "database"
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "database_schema",
-                "SQLite/database schema must be known before writing SQL tools.",
-                probe_strategy="sqlite_schema",
-                user_input_needed=False,
-                evidence={"rule": "sqlite_or_database_reference"},
-            ),
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "local_resource",
-                "Database file or connection resource must be available.",
-                probe_strategy="local_path",
-                user_input_needed=True,
-                evidence={"rule": "database_resource_reference"},
-            ),
-        )
-        _add_condition(plan, _sandbox_condition(tool_id))
-    if _mentions_local_files(lowered):
-        plan.capability_kind = "file_processing" if plan.capability_kind == "local" else "mixed"
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "local_resource",
-                "Local file or directory must exist and be readable before tool generation.",
-                probe_strategy="local_path",
-                user_input_needed=True,
-                evidence={"rule": "local_path_or_file_task"},
-            ),
-        )
-        _add_condition(plan, _sandbox_condition(tool_id))
-    if _mentions_pdf(lowered):
-        plan.capability_kind = "file_processing"
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "python_package",
-                "PDF parsing dependency must be available or explicitly selected.",
-                probe_strategy="python_module",
-                user_input_needed=True,
-                evidence={"suggested_modules": ["pypdf", "pdfplumber"]},
-            ),
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "data_contract",
-                "PDF input/output contract must be defined for reliable tests.",
-                probe_strategy="data_contract_review",
-                user_input_needed=True,
-            ),
-        )
-    if _mentions_browser_or_page(lowered):
-        plan.capability_kind = "browser"
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "browser_access",
-                "Target URL and allowed browser/HTTP access must be provided.",
-                probe_strategy="browser_check",
-                user_input_needed=True,
-                evidence={"rule": "page_tracking_or_browser_task"},
-            ),
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "storage_backend",
-                "A storage backend is needed to compare page changes over time.",
-                probe_strategy="storage_check",
-                user_input_needed=True,
-            ),
-        )
-        _add_condition(plan, _mock_fixture_condition(tool_id))
-        _add_web_research(plan, tool_id, lowered)
-    if _mentions_external_service(lowered):
-        plan.capability_kind = (
-            "external_service" if plan.capability_kind == "local" else plan.capability_kind
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "external_service",
-                "External service provider, endpoint, and allowed operations must be specified.",
-                probe_strategy="user_input",
-                user_input_needed=True,
-                evidence={"rule": "external_service_or_realtime_task"},
-            ),
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "credential",
-                "Credential or explicit no-auth provider choice is required for external service calls.",
-                probe_strategy="credential_check",
-                user_input_needed=True,
-            ),
-        )
-        _add_condition(plan, _mock_fixture_condition(tool_id))
-        _add_web_research(plan, tool_id, lowered)
-    if _mentions_email(lowered):
-        plan.capability_kind = "communication"
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "external_service",
-                "Email provider or SMTP/API endpoint must be configured.",
-                probe_strategy="user_input",
-                user_input_needed=True,
-            ),
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "credential",
-                "Email sending credentials are required.",
-                probe_strategy="credential_check",
-                user_input_needed=True,
-            ),
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "permission",
-                "Sending permission and allowed recipient/test inbox policy must be confirmed.",
-                probe_strategy="permission_check",
-                user_input_needed=True,
-            ),
-        )
-        _add_condition(plan, _mock_fixture_condition(tool_id))
-        _add_risk_control(plan, "human_approval", "Email sending must require explicit approval or dry-run tests.")
-    if _mentions_schedule(lowered):
-        plan.capability_kind = "scheduled_task" if plan.capability_kind == "local" else plan.capability_kind
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "schedule",
-                "Schedule frequency, timezone, and persistence policy must be defined.",
-                probe_strategy="schedule_check",
-                user_input_needed=True,
-            ),
-        )
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "storage_backend",
-                "Scheduled task state and run history need a storage backend.",
-                probe_strategy="storage_check",
-                user_input_needed=True,
-            ),
-        )
-    if _mentions_mcp(lowered):
-        plan.capability_kind = "mcp"
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "mcp_server",
-                "MCP server command, transport, and tool contract must be configured.",
-                probe_strategy="mcp_health",
-                user_input_needed=True,
-            ),
-        )
-    if _mentions_shell(lowered):
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "system_command",
-                "Allowed shell commands/scripts must be explicitly declared.",
-                probe_strategy="system_command",
-                user_input_needed=True,
-            ),
-        )
-        _add_risk_control(plan, "sandbox", "Shell execution must run inside a sandbox.")
-        _add_risk_control(plan, "allowlist", "Shell execution must use an allowlist.")
-    if _mentions_write_or_high_risk((operation_text or text).lower()):
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "human_approval",
-                "Write, send, delete, payment, or other side-effect operations require approval policy.",
-                probe_strategy="manual_review",
-                user_input_needed=True,
-                evidence={"rule": "side_effect_or_high_risk_operation"},
-            ),
-        )
-        _add_risk_control(plan, "human_approval", "Human confirmation is required for side effects.")
-    if not plan.required_conditions:
-        _add_condition(
-            plan,
-            _condition(
-                tool_id,
-                "sandbox",
-                "Generated tool must run inside the standard tool sandbox.",
-                required=True,
-                status="satisfied",
-                probe_strategy="none",
-                user_input_needed=False,
-            ),
-        )
+    _add_condition(
+        plan,
+        _condition(
+            tool_id,
+            "sandbox",
+            "Generated tool must run inside the standard tool sandbox.",
+            required=True,
+            status="satisfied",
+            probe_strategy="none",
+            user_input_needed=False,
+        ),
+    )
     plan.agent_should_inherit_web_search = False
     plan.missing_conditions = [
         condition.condition_id for condition in plan.required_conditions if _condition_is_missing(condition)
@@ -863,32 +641,6 @@ def _sandbox_condition(tool_id: str) -> RequiredCondition:
         status="satisfied",
         probe_strategy="none",
     )
-
-
-def _mock_fixture_condition(tool_id: str) -> RequiredCondition:
-    return _condition(
-        tool_id,
-        "mock_fixture",
-        "Deterministic test fixture or mock response is required before tests can pass safely.",
-        probe_strategy="mock_fixture",
-        user_input_needed=True,
-    )
-
-
-def _add_web_research(plan: ToolPreconditionPlan, tool_id: str, text: str) -> None:
-    _add_condition(
-        plan,
-        _condition(
-            tool_id,
-            "web_research",
-            "Factory should research current public docs/API behavior before implementation.",
-            required=False,
-            status="unknown",
-            probe_strategy="web_search",
-            user_input_needed=False,
-        ),
-    )
-    plan.research_queries = _merge_unique([*plan.research_queries, *_search_queries(tool_id, text)])[:5]
 
 
 def _add_condition(plan: ToolPreconditionPlan, condition: RequiredCondition) -> None:
@@ -961,128 +713,6 @@ def _merge_status(left: ConditionStatus, right: ConditionStatus) -> ConditionSta
     return "skipped"
 
 
-def _mentions_sqlite(text: str) -> bool:
-    return any(marker in text for marker in ["sqlite", ".sqlite", ".sqlite3", ".db", "数据库", "database", "sql"])
-
-
-def _mentions_local_files(text: str) -> bool:
-    scan_text = _remove_urls(text)
-    return bool(re.search(r"(?:/|~|\./|\../)[^\s，。；：、'\"]+", scan_text)) or any(
-        marker in text
-        for marker in ["本地文件", "本地目录", "local file", "local directory", "csv", "excel", "xlsx", "pdf"]
-    )
-
-
-def _mentions_pdf(text: str) -> bool:
-    return "pdf" in text or "文档整理" in text or "整理文档" in text
-
-
-def _mentions_browser_or_page(text: str) -> bool:
-    scan_text = _remove_urls(text)
-    return any(
-        marker in scan_text
-        for marker in [
-            "browser",
-            "网页",
-            "页面",
-            "竞品",
-            "爬取",
-            "抓取",
-            "页面变化",
-            "网页变化",
-            "网站变化",
-            "browser automation",
-            "page change",
-            "website change",
-        ]
-    )
-
-
-def _mentions_external_service(text: str) -> bool:
-    return any(
-        marker in text
-        for marker in [
-            "api",
-            "endpoint",
-            "http",
-            "https",
-            "url",
-            "webhook",
-            "service",
-            "外部服务",
-            "第三方",
-            "联网",
-            "上网",
-        ]
-    )
-
-
-def _mentions_email(text: str) -> bool:
-    return any(marker in text for marker in ["email", "mail", "smtp", "邮件", "发信", "发送日报", "日报"])
-
-
-def _mentions_schedule(text: str) -> bool:
-    scan_text = _remove_urls(text)
-    return any(
-        marker in text
-        for marker in ["每天", "每周", "定时", "周期", "监控", "盯住"]
-    ) or any(
-        marker in scan_text
-        for marker in ["schedule", "cron", "daily job", "weekly job", "scheduled task"]
-    )
-
-
-def _remove_urls(text: str) -> str:
-    return re.sub(r"https?://[^\s，。；：、'\"]+", " ", text)
-
-
-def _mentions_mcp(text: str) -> bool:
-    return "mcp" in text
-
-
-def _mentions_shell(text: str) -> bool:
-    return any(marker in text for marker in ["shell", "命令行", "脚本", "bash", "terminal", "终端"])
-
-
-def _mentions_write_or_high_risk(text: str) -> bool:
-    text = re.sub(
-        r"创建(?:一个|一名)?\s*(?:agent|助手|智能体|机器人)",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"create\s+(?:an?\s+)?(?:agent|assistant|bot)",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    return any(
-        marker in text
-        for marker in [
-            "create",
-            "update",
-            "delete",
-            "remove",
-            "send",
-            "pay",
-            "close",
-            "创建",
-            "更新",
-            "修改",
-            "删除",
-            "发送",
-            "支付",
-            "关闭",
-            "写",
-        ]
-    )
-
-
-def _agent_runtime_search_needed(text: str) -> bool:
-    return any(marker in text for marker in ["latest", "current", "上网", "联网", "搜索", "web search"])
-
-
 def _mock_only_requested(text: str) -> bool:
     return bool(
         re.search(
@@ -1091,18 +721,6 @@ def _mock_only_requested(text: str) -> bool:
             flags=re.IGNORECASE,
         )
     )
-
-
-def _search_queries(tool_id: str, text: str) -> list[str]:
-    normalized = tool_id.replace("_", " ").strip() or "external service"
-    return _merge_unique(
-        [
-            f"{normalized} 使用教程 配置 鉴权 参数 示例",
-            f"{normalized} official documentation integration guide authentication parameters",
-            f"{normalized} API reference credentials endpoint example response",
-        ]
-    )
-
 
 def _merge_unique(values: list[str]) -> list[str]:
     seen: set[str] = set()

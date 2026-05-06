@@ -143,7 +143,7 @@ def build_tool_generation_request(
             "Never use unverified raw page text as facts. Treat unresolved_fields and empty external_config "
             "values as runtime configuration gaps.\n\n"
             "execute(input_data, resources) must return a dict. On success include status='completed'. "
-            "Use resources['resources'], resources['sqlite_databases'], resources['filesystem_root'], "
+            "Use resources['resources'], resources['data_resources'], resources['filesystem_root'], "
             "resources['runtime'], resources['external_config'], or resources['external_http_client']; "
             "do not make a real user path the only data source.\n\n"
             "External configuration protocol:\n"
@@ -170,9 +170,9 @@ def build_tool_generation_request(
             "must fill. Missing external configuration is not an execution error. If configuration is present, "
             "make external HTTP requests only through resources['external_http_client'].request(...); never "
             "import requests/httpx/urllib or read os.environ directly.\n\n"
-            "If the requirement describes a local SQLite database tool, implement it with sqlite3, "
-            "parameterized SQL only, and no schema-changing statements. Resolve the database path from "
-            "resources['sqlite_databases'] or resources['resources'] first. Never fake database results."
+            "For local structured data tools, infer the safe reader from the declared resource contract and "
+            "resolve paths from resources['data_resources'] or resources['resources']. Do not fake data, and "
+            "do not perform schema-changing, destructive, or out-of-contract operations."
         )
         .request(
             response_format="text",
@@ -229,8 +229,8 @@ def build_tool_repair_request(
             "status='needs_configuration' with configuration_file='external_config.yaml' and missing_fields; "
             "do not return status='error' or fake completed realtime data. If external configuration is present, "
             "use resources['external_http_client'].request(...) for HTTP; do not import network libraries. "
-            "For SQLite tools, use sqlite3 with parameterized SQL only and resolve the database path "
-            "from resources['sqlite_databases'] or resources['resources']."
+            "For local structured data tools, resolve paths from resources['data_resources'] or "
+            "resources['resources'] and keep operations within the declared resource contract."
         )
         .request(
             response_format="text",

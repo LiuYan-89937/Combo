@@ -755,7 +755,7 @@ class FactoryProductionNodes:
             current,
             stage="probe_environment",
             title="Probing environment and resources",
-            message="Checking local resources, SQLite schemas, Python support, optional CLI tools, and sandbox readiness.",
+            message="Checking local resources, data contracts, runtime dependencies, optional CLI tools, and sandbox readiness.",
         )
         try:
             environment, contracts, readiness = EnvironmentProbeRunner().probe(
@@ -1926,7 +1926,7 @@ def _capabilities_from_requirement_understanding(
                 CapabilityItem(
                     capability_id=_safe_capability_id(description, index),
                     description=description,
-                    likely_requires_tools=_task_likely_requires_tool(description),
+                    likely_requires_tools=False,
                 )
             )
     if not capabilities:
@@ -1934,12 +1934,12 @@ def _capabilities_from_requirement_understanding(
         if not goal and state.requirement_understanding is not None:
             goal = state.requirement_understanding.goal
         capabilities.append(
-            CapabilityItem(
-                capability_id="conversation",
-                description=goal or state.requirement,
-                likely_requires_tools=_task_likely_requires_tool(goal or state.requirement),
+                CapabilityItem(
+                    capability_id="conversation",
+                    description=goal or state.requirement,
+                    likely_requires_tools=False,
+                )
             )
-        )
     return capabilities
 
 
@@ -1950,31 +1950,6 @@ def _safe_capability_id(value: str, index: int) -> str:
     if normalized[0].isdigit():
         normalized = f"capability_{normalized}"
     return normalized[:64]
-
-
-def _task_likely_requires_tool(value: str) -> bool:
-    lowered = value.lower()
-    return any(
-        marker in value or marker in lowered
-        for marker in [
-            "查询",
-            "搜索",
-            "计算",
-            "数据库",
-            "文件",
-            "api",
-            "http",
-            "url",
-            "天气",
-            "订单",
-            "创建",
-            "更新",
-            "删除",
-            "发送",
-            "sqlite",
-            "pdf",
-        ]
-    )
 
 
 def _production_context_for_primitives(state: FactoryProductionState) -> dict[str, Any]:
@@ -2141,8 +2116,12 @@ def _resource_location_from_condition(condition: object) -> str | None:
 
 
 def _resource_access_mode_for_condition(condition: object) -> str:
-    text = f"{getattr(condition, 'type', '')} {getattr(condition, 'description', '')}".lower()
-    if any(marker in text for marker in ["write", "create", "update", "delete", "写", "创建", "更新", "删除"]):
+    evidence = getattr(condition, "evidence", {}) or {}
+    if isinstance(evidence, dict) and str(evidence.get("access_mode") or "").lower() in {
+        "read_write",
+        "write",
+        "rw",
+    }:
         return "read_write"
     return "read_only"
 
@@ -2300,32 +2279,15 @@ def _resolution_hint_for_issue(code: str) -> str:
 def _resolution_questions_for_items(items: list[ReadinessItem]) -> list[ResolutionQuestion]:
     if not items:
         return []
-    first = items[0]
-    message = first.message
-    condition_code = (first.condition_id or "").lower()
-    if any(marker in f"{condition_code} {message}" for marker in ["url", "endpoint", "auth", "api", "web", "文档", "外部", "官方"]):
-        options = [
-            {"id": "provide_external_url", "label": "补充官方文档 URL", "description": "提供包含缺失接口事实的同域官方页面。"},
-            {"id": "provide_manual_facts", "label": "手动输入接口信息", "description": "直接给出 endpoint、method、auth、params 或示例响应。"},
-            {"id": "generate_draft_only", "label": "只生成草稿", "description": "生成不可直接运行的草稿，并在 summary 标明缺口。"},
-        ]
-    elif any(marker in f"{condition_code} {message}" for marker in ["resource", "sqlite", "database", "schema", "path", "资源", "路径", "数据库"]):
-        options = [
-            {"id": "replace_resource_path", "label": "提供资源路径", "description": "提供已存在且可访问的本地文件或目录。"},
-            {"id": "create_sample_resource", "label": "创建示例资源", "description": "确认后创建示例数据库或文件继续生产。"},
-            {"id": "generate_draft_only", "label": "只生成草稿", "description": "暂不运行工具测试。"},
-        ]
-    else:
-        options = [
-            {"id": "provide_missing_info", "label": "补充缺失信息", "description": "直接输入当前条件需要的事实。"},
-            {"id": "provide_test_fixture", "label": "提供测试样例", "description": "提供稳定样例输入、输出或 mock 响应。"},
-            {"id": "generate_draft_only", "label": "只生成草稿", "description": "生成不可直接运行的草稿。"},
-        ]
+    options = [
+        {"id": "provide_missing_info", "label": "补充缺失信息", "description": "直接输入当前校验需要的事实、路径、配置、权限或样例。"},
+        {"id": "generate_draft_only", "label": "只生成草稿", "description": "生成不可直接运行的草稿，并在 summary 标明缺口。"},
+    ]
     return [
         ResolutionQuestion(
             question_id="readiness_resolution",
             prompt=_targeted_question_prompt(items),
-            options=options[:3],
+            options=options,
             free_text_allowed=True,
         )
     ]

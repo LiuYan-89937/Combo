@@ -1,12 +1,12 @@
 schema_version: "0.1"
 kind: "HandoffSpec"
 metadata:
-  name: "customer-service-agent"
+  name: "sample-agent"
   version: "1.0.0"
 targets:
   - id: "human_support"
     type: "human"
-    target_ref: "queue.customer_service"
+    target_ref: "queue.sample_toolset"
     condition: "requires_human == true"
     context_policy:
       include_summary: true

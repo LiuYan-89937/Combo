@@ -280,8 +280,7 @@ def _is_probably_binary_or_non_text(path: Path) -> bool:
         return True
     except OSError:
         return False
-    suffix = path.suffix.lower()
-    return suffix in {".sqlite", ".sqlite3", ".db", ".duckdb"}
+    return False
 
 
 def _factory_env_file(package_path: Path) -> Path:

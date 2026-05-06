@@ -1,22 +1,22 @@
 schema_version: "0.1"
 kind: "MCPBindingSpec"
 metadata:
-  name: "customer-service-agent-mcp"
+  name: "sample-agent-mcp"
   version: "1.0.0"
 servers:
-  - id: "customer_policy_kb"
-    source_ref: "mcp.customer_kb.search_policy"
+  - id: "sample_policy_kb"
+    source_ref: "mcp.sample_kb.search_policy"
     transport: "stdio"
     command: "python3"
     args:
-      - "examples/mcp/customer_kb_server.py"
+      - "examples/mcp/sample_kb_server.py"
     enabled: false
     health_check:
       enabled: true
 bindings:
-  - id: "customer_policy_search"
-    source_id: "customer_policy_kb"
-    capability_ref: "mcp.customer_policy_kb.search_policy@1.0.0"
+  - id: "sample_policy_search"
+    source_id: "sample_policy_kb"
+    capability_ref: "mcp.sample_policy_kb.search_policy@1.0.0"
     risk_level: "low"
     visible_to_model: true
     proposal_only: false

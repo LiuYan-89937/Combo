@@ -10,28 +10,19 @@ FastAgentFactory 是一个 **CLI-first、文档驱动的 Agent 工厂**。你可
 - `RuntimeGraphCompiler + TaskGraphCompiler` 会把完整 AgentPackage 的 `task_graph.yaml` 编译为 LangGraph-native app，并注入 ControlGraph 能力：模型调用、工具、审批、native interrupt/resume、trace、memory、context。
 - AgentInstance Runtime 的执行基层已迁移到 LangChain/LangGraph-native：runtime message 使用 `BaseMessage` / `AIMessage` / `ToolMessage`，审批恢复使用 LangGraph checkpointer + `Command(resume=...)`。
 - Factory 生产图按 14 阶段传递 typed artifacts，并通过 `FactoryNodeAccessPolicy` 限制节点只能读取和修改 allow-list 字段。
-- Resource Setup 使用 resolver registry：local path、Python package、system command、URL documentation、credential config、human approval；数据库文件/schema 探测走环境 probe 和受控 shell，不在 resolver 层特化 SQLite。
+- Resource Setup 只做通用 evidence collection：显式本地路径、依赖、命令、URL 文档、配置键、人工审批等都以结构化事实进入 readiness；是否缺环境、能否继续、该问什么，由 task/small model 基于 evidence 归纳，不在代码里按业务方向硬分流。
 - Readiness issue 只保存结构化事实，不在环境探测层硬编码用户话术；clarification 由 task/small model 输出 summary、problem、impact、next_action，模型不可用时使用泛化模板兜底。
 - Shell/CLI 展示已对接 Runtime 状态，`interrupted` 会显示审批提示与 `/run --yes`，Factory stream 完成后会展示自然语言 AgentPackage summary 和下一步操作。
 - ToolBuildPipeline 已拆出 contract-first 生成、状态机、静态检查、测试、sandbox、repair loop。
 - Harness 真实驱动 `AgentInstanceRuntime`，支持工具调用、上下文可见性、context compression、checkpoint resume 等断言。
 - Registry/Release 记录 PackageProvenance、PromotionGate、UpgradeRequest、PatchPlan、ApprovalRecord、PackageDiff 生命周期信息。
 
-最近本地验收：
+当前仓库不保留测试文件；本地 smoke 验证使用：
 
 ```bash
-uv run --extra dev pytest
-# 133 passed, 3 skipped, 2 warnings
+uv run agentfactory --help
+uv run agentfactory validate-agent examples/generic_agent --json
 ```
-
-真实模型端到端验收为 opt-in：
-
-```bash
-AGENTFACTORY_RUN_PROVIDER_SMOKE=1 uv run --extra dev pytest tests/test_model_provider_smoke.py
-# 2 passed, 1 skipped
-```
-
-其中通过项覆盖自然语言生成 AgentPackage 和复杂 SQLite 资源型 AgentPackage；跳过项是极简 provider `ok` smoke，因为当前 provider 对该最小提示返回空 content。
 
 ## 生成流程
 
@@ -158,7 +149,7 @@ uv run agentfactory shell
 在 shell 中输入自然语言需求，例如：
 
 ```text
-创建一个客服 Agent，支持订单查询、投诉、售后问题处理和转人工。
+创建一个资料整理 Agent，能够根据我提供的本地资料回答问题；缺少资料或字段时说明缺口，不要编造。
 ```
 
 然后执行：
@@ -174,7 +165,7 @@ uv run agentfactory shell
 
 ```bash
 uv run agentfactory create-agent \
-  --prompt "创建一个客服 Agent，支持订单查询、投诉、售后问题处理和转人工。" \
+  --prompt "创建一个资料整理 Agent，能够根据我提供的本地资料回答问题；缺少资料或字段时说明缺口，不要编造。" \
   --draft \
   --stream
 ```
@@ -226,48 +217,48 @@ uv run agentfactory patch approve <change-id> --actor user --patch-plan <plan-pa
 uv run agentfactory patch apply <package-path> --output <candidate-path>
 ```
 
-## SQLite Agent 示例
+## 通用本地资源示例
 
-你可以用下面这个需求测试本地 SQLite 工具型 Agent：
+你可以先准备一个普通本地资料文件：
+
+```bash
+mkdir -p .agentfactory/local_data
+printf '[{"id":"A-001","status":"active","note":"demo record"}]\n' > .agentfactory/local_data/records.json
+```
+
+然后用下面这个需求测试本地资源型 Agent：
 
 ```text
-创建一个本地 SQLite 工单管理 Agent，名字叫 LocalTicketAgent。
+创建一个本地资料查询 Agent，名字叫 LocalDataAgent。
 
-它面向非技术人员，用自然语言管理这个本地 SQLite 数据库：
-/Users/liuyan/Desktop/FastAgentFactory/.agentfactory/local_db/customer_ops.sqlite3
+它只能基于这个本地资源回答问题：
+/Users/liuyan/Desktop/FastAgentFactory/.agentfactory/local_data/records.json
 
-第一版只管理 customer_tickets 表，字段包括：
-ticket_id, customer_name, channel, title, description, status, priority, assignee, created_at, updated_at。
+如果资源不存在、不可读、字段不明确，先清楚说明缺口，不要继续假装已读取。
 
-必须通过工具访问数据库，模型不能假装已经查询或修改数据库。
+必须通过工具访问资源，模型不能假装已经查询或修改资源。
 
-需要生成这些工具：
-1. list_customer_tickets：分页列出工单。
-2. get_customer_ticket：按 ticket_id 查询单个工单。
-3. search_customer_tickets：按客户名、状态、优先级、标题关键词搜索。
-4. create_customer_ticket：创建新工单。
-5. update_customer_ticket_status：更新工单状态，只允许 open、pending、resolved、closed。
-6. close_customer_ticket：关闭工单。
+第一版只需要：
+1. 列出记录。
+2. 按 id 查询记录。
+3. 按关键词搜索记录。
 
 安全要求：
-- 所有 SQL 必须使用参数化查询。
-- 禁止 DROP、ALTER、ATTACH、DETACH、PRAGMA、VACUUM。
-- 禁止删除数据库文件。
-- 禁止访问数据库路径之外的文件。
-- 读操作是 low risk，可以直接执行。
-- 写操作是 medium risk，需要审批或明确确认。
+- 禁止删除或覆盖本地资源。
+- 禁止访问资源路径之外的文件。
+- 写操作必须审批或明确确认。
 - 不允许读取 .env、API key、secret、authorization、tool_auth_token。
 
 输出风格：
-简洁、明确，告诉用户查到了什么、改了什么、下一步可以做什么。
+简洁、明确，告诉用户查到了什么、还缺什么、下一步可以做什么。
 ```
 
 生成后测试：
 
 ```text
 /drafts use latest
-/run --input "现在有哪些工单？"
-/run --input "查一下 T-1001"
+/run --input "列出记录"
+/run --input "查一下 A-001"
 ```
 
 ## Runtime 安全模型
@@ -318,26 +309,12 @@ completed | failed | interrupted | needs_configuration | blocked
 
 这些目录保存本地运行状态、草稿、trace、memory、审批记录和 registry 索引，默认不提交到 Git。
 
-## 测试
-
-默认测试：
+## 手动验证
 
 ```bash
-uv run --extra dev pytest
-```
-
-Focused tests：
-
-```bash
-uv run --extra dev pytest tests/test_agent_instance_runtime.py
-uv run --extra dev pytest tests/test_refactor_architecture.py
-uv run --extra dev pytest tests/test_harness_runner.py
-```
-
-真实模型端到端测试默认关闭，需要显式打开：
-
-```bash
-AGENTFACTORY_RUN_PROVIDER_SMOKE=1 uv run --extra dev pytest tests/test_model_provider_smoke.py
+uv run agentfactory --help
+uv run agentfactory validate-agent examples/generic_agent --json
+uv run agentfactory shell
 ```
 
 ## 常见问题

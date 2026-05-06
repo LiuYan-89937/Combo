@@ -1,0 +1,16 @@
+schema_version: "0.1"
+kind: "PackageManifest"
+metadata:
+  name: "sample-agent-package"
+  version: "1.0.0"
+  description: "资料整理 Agent full package example"
+agent_id: "sample_agent"
+agent_name: "sample-agent"
+version: "1.0.0"
+status: "draft"
+description: "资料整理 Agent full package example"
+entrypoint: "agent_factory.agent.worker"
+package_format: "agentpackage.v1"
+tags:
+  - "example"
+  - "sample-service"

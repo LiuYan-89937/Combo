@@ -34,7 +34,7 @@ STAGE_TOOL_POLICIES: dict[str, NodeToolPolicy] = {
     "collect_evidence": NodeToolPolicy(
         policy_id="evidence.readonly",
         stage="collect_evidence",
-        allowed_tools=["file.stat", "sqlite.schema.readonly", "command.which", "url.fetch.same_domain"],
+        allowed_tools=["file.stat", "data.schema.readonly", "command.which", "url.fetch.same_domain"],
         forbidden_tools=["file.write", "file.delete", "shell.write"],
     ),
     "generate_tools": NodeToolPolicy(
@@ -70,4 +70,3 @@ def tool_policy_for_stage(stage: str) -> NodeToolPolicy:
     if stage in {"complete", "record_factory_memory"}:
         return STAGE_TOOL_POLICIES["summary"]
     return NodeToolPolicy(policy_id=f"{stage}.default", stage=stage)
-

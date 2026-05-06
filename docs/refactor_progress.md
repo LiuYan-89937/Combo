@@ -2,22 +2,16 @@
 
 Source document: `agentfactory_refactor_architecture.md`
 
-Last verified command:
+Last smoke verification:
 
 ```bash
-uv run --extra dev pytest
+uv run agentfactory --help
+uv run agentfactory validate-agent examples/generic_agent --json
 ```
 
-Latest result: `133 passed, 3 skipped, 2 warnings`
+Latest result: CLI help passed; `examples/generic_agent` validation returned no issues.
 
-Real model E2E command:
-
-```bash
-AGENTFACTORY_RUN_PROVIDER_SMOKE=1 uv run --extra dev pytest tests/test_model_provider_smoke.py
-```
-
-Latest real-model result: `2 passed, 1 skipped`。
-通过项为自然语言端到端生成 AgentPackage、复杂 SQLite 资源型 AgentPackage；跳过项为极简 provider `ok` smoke，因为当前 provider 对该最小提示返回空 content。
+Note: 当前仓库按用户要求不保留任何测试文件；验收记录改为手动 smoke 命令和功能状态说明。
 
 ## Phase 1: 清理旧 Runtime 方向
 
@@ -26,7 +20,7 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] 引入 explicit `langchain-core` / `langgraph` runtime dependencies.
 - [x] 硬切为 `RuntimeGraphCompiler + TaskGraphCompiler`，并接入 `CompiledAgentRuntime`.
 
-验收摘要: `tests/test_agent_instance_runtime.py` 覆盖无旧 Runtime 导出、生成包 runtime.yaml 使用 `langgraph_native` + `task_graph.yaml`、compiler 返回 LangGraph app。
+验收摘要: runtime.yaml 使用 `langgraph_native` + `task_graph.yaml`，compiler 返回 LangGraph app；当前以手动 smoke 和代码自查记录状态。
 
 ## Phase 2: Model Layer / LangChain Runtime Adapter
 
@@ -36,7 +30,7 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] 实现 structured output parse/repair fallback.
 - [x] Factory 经 `ModelService` 进入 runner；AgentInstance Runtime 已迁移为 LangChain-native chat model adapter，不再依赖旧自定义消息协议.
 
-验收摘要: 现有 `tests/test_model_layer.py` 结构化输出、空内容重试、provider payload 测试通过。
+验收摘要: Factory 模型层仍集中在 `ModelService`；Agent Runtime 执行链不再依赖旧自定义消息协议。
 
 ## Phase 3: LangGraph-native AgentInstance Runtime
 
@@ -50,7 +44,7 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] Factory stream 完成后渲染自然语言 `ProductionSummary`，说明 Agent 能做什么、验证情况、剩余风险和 next steps。
 - [x] Runtime 执行链移除旧自定义 runtime DTO 和 fixed ReAct 图，模型续写遵循 LangChain `AIMessage.tool_calls` / `ToolMessage` 序列。
 
-验收摘要: `tests/test_agent_instance_runtime.py` 覆盖 TaskGraph compile、tool loop、native interrupt/resume；CLI/Harness/worker 全部改为 `AgentInstanceRuntime`。
+验收摘要: TaskGraph compile、tool loop、native interrupt/resume 已接入；CLI/Harness/worker 全部改为 `AgentInstanceRuntime`。
 
 ## Phase 4: Context-first Factory Pipeline
 
@@ -61,20 +55,20 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] 工厂节点通过 `FactoryNodeAccessPolicy` 获取投影 state，只能读取 node allow-list 中的 typed artifact/envelope 字段.
 - [x] 工厂节点返回值通过 access policy merge，只能修改 node allow-list 中的字段.
 
-验收摘要: `tests/test_factory_context.py` 覆盖 envelope 隔离；`tests/test_refactor_architecture.py` 覆盖 14 阶段进度名称和 tool-generation 节点无法读取 raw requirement/raw_model_data。
+验收摘要: envelope 隔离、14 阶段进度名称和 tool-generation 节点无法读取 raw requirement/raw_model_data 的实现仍保留。
 
 ## Phase 5: Resource Setup 子流程
 
 - [x] `ResourceNeedPlan` 已存在.
 - [x] 新增 `ResourceResolverRegistry`.
-- [x] 新增 local path / python package / system command / URL documentation / credential config / human approval resolvers；移除特化 SQLite resolver，数据库可达性与 schema 证据走环境 probe / 受控 shell。
+- [x] 新增 local path / python package / system command / URL documentation / credential config / human approval resolvers；移除特化 resolver，Resource Setup 只收集结构化 evidence，不按业务方向硬编码判断。
 - [x] `probe_environment` 会把 ResourceNeed resolver 输出追加到 evidence reports.
 - [x] `ReadinessDecision` 已存在并接入生产图.
 - [x] targeted clarification 保持最多 3 个选项.
 - [x] readiness issue 存储结构化 `details`，不在环境探测层硬编码用户话术.
-- [x] readiness clarification 通过结构化展示层面向用户改写；优先 task/small model 输出 summary/problem/impact/next_action，模型不可用时本地模板兜底.
+- [x] readiness clarification 通过结构化展示层面向用户改写；优先 task/small model 基于 evidence 输出 summary/problem/impact/next_action，模型不可用时本地模板兜底.
 
-验收摘要: `tests/test_refactor_architecture.py` 覆盖 credential resolver 不读取 secret，`UrlDocumentationResolver` 只读取显式 URL 且报告不保存网页正文。
+验收摘要: credential resolver 不读取 secret；`UrlDocumentationResolver` 只读取显式 URL 且报告不保存网页正文。
 
 ## Phase 6: ToolBuildPipeline
 
@@ -84,8 +78,9 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] 代码生成、静态检查、测试生成、sandbox test 接入聚合流程.
 - [x] 生产图仍保留逐节点 CLI 进度.
 - [x] evidence repair loop 接入聚合流程，生成工具测试失败后最多 3 次 repair + rerun.
+- [x] Tool precondition rule fallback 不再用关键词把需求硬分流到具体业务/资源方向；只保留通用 sandbox 安全默认，真实缺口由模型基于 evidence/typed artifacts 判断.
 
-验收摘要: `tests/test_refactor_architecture.py` 覆盖 repair 两次后通过、状态推进到 `available`。
+验收摘要: ToolBuildPipeline repair loop 和状态推进实现仍保留。
 
 ## Phase 7: Context Engineering
 
@@ -109,14 +104,14 @@ Latest real-model result: `2 passed, 1 skipped`。
 - [x] release available 前检查 gate.
 - [x] UpgradeRequest / PatchPlan / ApprovalRecord / PackageDiff 生命周期接入 package lifecycle report 与 Registry provenance.
 
-验收摘要: `tests/test_refactor_architecture.py` 覆盖高风险 PatchPlan 必须 approval、apply 后写入 upgrade lifecycle、Registry provenance 记录 upgrade_request/patch_plan/approval ids。
+验收摘要: 高风险 PatchPlan 必须 approval，apply 后写入 upgrade lifecycle，Registry provenance 记录 upgrade_request/patch_plan/approval ids。
 
 ## Section 17 Acceptance
 
 ### Factory
 
 - [x] 用户自然语言可以生成完整 AgentPackage: 真实模型 opt-in E2E 已通过.
-- [x] 复杂资源型 Agent 会识别条件和资源: 真实模型 SQLite 资源型 E2E 已通过.
+- [x] 复杂资源型 Agent 会识别条件和资源: 真实模型本地资源型 E2E 已通过.
 - [x] blocking / deferred / warning 分类清晰.
 - [x] 澄清问题最多 3 个，并且只针对真实缺口.
 - [x] external_config 是 env-like 极简结构.

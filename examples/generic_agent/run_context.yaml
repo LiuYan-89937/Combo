@@ -1,12 +1,12 @@
 schema_version: "0.1"
 kind: "RunContextSpec"
 metadata:
-  name: "customer-service-agent"
+  name: "sample-agent"
   version: "1.0.0"
 namespace_template: "agent:{agent_name}:version:{version}:instance:{instance_id}"
 dependency_refs:
   - "model.default"
-  - "toolset.customer_service"
+  - "toolset.sample_toolset"
 access_policy:
   model: true
   tools: true

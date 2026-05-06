@@ -1789,17 +1789,13 @@ def _related_link_score(url: str, title: str, plan: ResearchPlan) -> float:
         "error": 4.0,
         "错误码": 6.0,
         "状态码": 6.0,
-        "weather": 3.0,
-        "forecast": 3.0,
-        "天气": 3.0,
-        "预报": 3.0,
         "params": 4.0,
         "参数": 4.0,
     }
     for marker, weight in related_markers.items():
         if marker in text:
             score += weight
-    noisy_markers = ["price", "pricing", "blog", "contact", "github", "terms", "privacy", "download", "icons", "价格", "博客", "联系", "隐私", "服务条款"]
+    noisy_markers = ["price", "pricing", "blog", "contact", "terms", "privacy", "download", "icons", "价格", "博客", "联系", "隐私", "服务条款"]
     if any(marker in text for marker in noisy_markers):
         score -= 8.0
     return score
@@ -1833,16 +1829,15 @@ def _document_score(url: str, text: str, plan: ResearchPlan, trust: ResearchSour
 def _source_trust(url: str, *, title: str = "", snippet: str = "") -> ResearchSourceTrust:
     parsed = urlparse(url)
     domain = parsed.netloc.lower()
-    text = f"{domain} {title} {snippet} {url}".lower()
+    path = parsed.path.lower()
+    text = f"{domain} {path} {title} {snippet}".lower()
     if any(host in domain for host in ["docs.", "developer.", "dev.", "api.", "open."]):
         return "official"
-    if any(host in domain for host in ["github.com", "slack.dev", "qweather.com", "tavily.com", "mojicb.com", "stripe.com"]):
+    if any(segment in path for segment in ["/docs", "/documentation", "/developers", "/reference", "/api"]):
         return "official"
-    if any(host in domain for host in ["market.aliyun.com", "cloudmarket", "oss-"]):
+    if any(marker in text for marker in ["marketplace", "app marketplace", "cloud market", "extension marketplace", "插件市场", "云市场"]):
         return "marketplace"
-    if any(host in domain for host in ["developer.aliyun.com", "help.aliyun.com"]):
-        return "vendor_article"
-    if any(marker in text for marker in ["官方", "official", "developer", "docs"]):
+    if any(marker in text for marker in ["官方", "official", "developer", "developers", "docs", "documentation", "api reference"]):
         return "vendor_article"
     return "unknown"
 
@@ -1932,13 +1927,17 @@ def _looks_like_endpoint(value: str) -> bool:
         path = parsed.path.lower()
         if host.startswith(("localhost", "127.0.0.1", "0.0.0.0")):
             return False
-        if host in {"github.com", "www.github.com", "gitlab.com", "bitbucket.org"}:
-            return False
         if host.startswith(("docs.", "developer.", "developers.")):
             return False
         target = f"{host}{path}"
-        return any(marker in target for marker in ["api", "/v1", "/v2", "/v3", "/v7", "graphql", "json", "whapi", "weather", "forecast", "chat.", "payment", "issues", "search", "completions"])
-    return value.startswith("/") and any(marker in lowered for marker in ["/api", "/v1", "/v2", "/v3", "/v7", "json", "{", "graphql", "/search", "/segment", "/chat/completions"])
+        return bool(re.search(r"/v\d+(?:/|$)", path)) or any(
+            marker in target
+            for marker in ["api", "graphql", "json", "openapi", "rest", "endpoint", "webhook"]
+        )
+    return value.startswith("/") and (
+        bool(re.search(r"/v\d+(?:/|$)", lowered))
+        or any(marker in lowered for marker in ["/api", "json", "{", "graphql", "openapi", "webhook"])
+    )
 
 
 def _method_candidates(text: str) -> list[str]:
@@ -1974,7 +1973,7 @@ def _endpoint_quality_score(endpoint: str) -> int:
     score = len(path)
     if path and path != "/":
         score += 20
-    if any(marker in endpoint.lower() for marker in ["chat/completions", "forecast", "weather", "json", "api"]):
+    if any(marker in endpoint.lower() for marker in ["json", "api", "graphql", "openapi", "webhook"]):
         score += 15
     return score
 
@@ -2376,11 +2375,6 @@ def _plan_tokens(plan: ResearchPlan) -> list[str]:
 
 
 def _safe_id(value: str) -> str:
-    lowered = value.lower()
-    if "墨迹" in value or "moji" in lowered:
-        return "moji_weather"
-    if "和风" in value or "qweather" in lowered:
-        return "qweather"
     key = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")
     if key:
         return key

@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import importlib.util
 import re
-import shutil
-import sqlite3
-import tempfile
-from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +16,6 @@ from agent_factory.specs import (
     ResourceContract,
     ResourceContractsSpec,
     ShellCapabilitySpec,
-    SQLiteColumnContract,
-    SQLiteTableContract,
 )
 from agent_factory.tools.shell import ControlledShellRunner
 from agent_factory.factory.tool_preconditions import RequiredCondition, ToolPreconditionReport
@@ -37,10 +30,7 @@ class EnvironmentProbeRunner:
     """Build resource-level readiness facts before tool code is generated."""
 
     def __init__(self, *, shell_runner: ControlledShellRunner | None = None) -> None:
-        self.shell_runner = shell_runner or ControlledShellRunner(
-            allowed_commands={"sqlite3", "python", "python3"},
-            timeout_seconds=5,
-        )
+        self.shell_runner = shell_runner or ControlledShellRunner(timeout_seconds=5)
 
     def probe(
         self,
@@ -78,35 +68,7 @@ class EnvironmentProbeRunner:
                 contracts=contracts,
             )
         )
-        probes = [
-            EnvironmentProbe(
-                id="python.sqlite3",
-                type="python_module_available",
-                status="passed" if importlib.util.find_spec("sqlite3") is not None else "failed",
-                message="Python sqlite3 module availability.",
-            )
-        ]
-        sqlite3_path = shutil.which("sqlite3")
-        probes.append(
-            EnvironmentProbe(
-                id="cli.sqlite3",
-                type="cli_available",
-                status="passed" if sqlite3_path else "skipped",
-                message="sqlite3 CLI is optional; Python sqlite3 is the primary probe/runtime.",
-                details={"path": sqlite3_path} if sqlite3_path else {},
-            )
-        )
-        if sqlite3_path:
-            result = self.shell_runner.run([sqlite3_path, "--version"])
-            probes.append(
-                EnvironmentProbe(
-                    id="cli.sqlite3.version",
-                    type="cli_version",
-                    status="passed" if result.ok else "failed",
-                    message=result.stdout.strip() or result.stderr.strip() or result.error,
-                    details={"return_code": result.return_code},
-                )
-            )
+        probes: list[EnvironmentProbe] = []
         resource_contracts = ResourceContractsSpec(
             schema_version="0.1",
             metadata=resource_metadata,
@@ -129,7 +91,7 @@ class EnvironmentProbeRunner:
             shell_capabilities=[
                 ShellCapabilitySpec(
                     id="shell.command",
-                    allowed_commands=["sqlite3", "python", "python3"],
+                    allowed_commands=sorted(self.shell_runner.allowed_commands),
                     proposal_only=True,
                     approval_required=True,
                     sandbox_required=True,
@@ -170,8 +132,6 @@ class EnvironmentProbeRunner:
                     "writable": _can_write(path),
                 },
             )
-        if resource_type == "sqlite":
-            return self._probe_sqlite(source_id, path, access_mode)
         return ResourceContract(
             id=source_id,
             type=resource_type,
@@ -185,62 +145,6 @@ class EnvironmentProbeRunner:
                 "size_bytes": path.stat().st_size if path.exists() else None,
             },
         )
-
-    def _probe_sqlite(self, source_id: str, path: Path, access_mode: str) -> ResourceContract:
-        details: dict[str, Any] = {
-            "readable": _can_read(path),
-            "writable": _can_write(path.parent),
-            "sandbox_copyable": _can_copy_to_sandbox(path),
-        }
-        tables: list[SQLiteTableContract] = []
-        status = "ready"
-        try:
-            with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
-                rows = conn.execute(
-                    "SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name"
-                ).fetchall()
-                details["tables"] = [row[0] for row in rows]
-                for table_name, create_sql in rows:
-                    columns = conn.execute(f"PRAGMA table_info({ _quote_identifier(table_name) })").fetchall()
-                    column_contracts = [
-                        SQLiteColumnContract(
-                            name=str(column[1]),
-                            type=str(column[2] or ""),
-                            not_null=bool(column[3]),
-                            default=None if column[4] is None else str(column[4]),
-                            primary_key=bool(column[5]),
-                        )
-                        for column in columns
-                    ]
-                    primary_keys = [column.name for column in column_contracts if column.primary_key]
-                    required_columns = [
-                        column.name
-                        for column in column_contracts
-                        if column.not_null and not column.primary_key and column.default is None
-                    ]
-                    tables.append(
-                        SQLiteTableContract(
-                            name=str(table_name),
-                            columns=column_contracts,
-                            primary_keys=primary_keys,
-                            required_columns=required_columns,
-                            check_constraints=_extract_check_constraints(str(create_sql or "")),
-                        )
-                    )
-        except sqlite3.Error as error:
-            status = "error"
-            details["error"] = str(error)
-        return ResourceContract(
-            id=source_id,
-            type="sqlite",
-            ref=str(path),
-            exists=True,
-            status=status,  # type: ignore[arg-type]
-            access_mode=_access_mode(access_mode),
-            details=details,
-            sqlite_tables=tables,
-        )
-
 
 def _resource_inputs(
     primitives: AgentPackagePrimitives | None,
@@ -270,7 +174,7 @@ def _resource_inputs(
         if not _looks_like_resource_reference(path):
             continue
         seen.add(key)
-        values.append((_resource_id(path), str(path), _access_mode_from_requirement(requirement)))
+        values.append((_resource_id(path), str(path), "read_only"))
     return values
 
 
@@ -281,7 +185,7 @@ def _remove_urls(text: str) -> str:
 def _preconditions_from_contracts(contracts: list[ResourceContract]) -> list[PreconditionSpec]:
     preconditions: list[PreconditionSpec] = []
     for resource in contracts:
-        if resource.type not in {"file", "directory", "sqlite"}:
+        if resource.type not in {"file", "directory"}:
             continue
         preconditions.append(
             PreconditionSpec(
@@ -301,35 +205,6 @@ def _preconditions_from_contracts(contracts: list[ResourceContract]) -> list[Pre
                     status="passed" if resource.status in {"ready", "unsupported"} else "failed",
                     resource_ref=resource.id,
                     details=resource.details,
-                )
-            )
-        if resource.type == "sqlite":
-            preconditions.append(
-                PreconditionSpec(
-                    id=f"{resource.id}.sqlite_openable",
-                    type="sqlite_openable",
-                    description=f"SQLite database can be opened: {resource.ref}",
-                    status="passed" if resource.status == "ready" else "failed",
-                    resource_ref=resource.id,
-                    details=resource.details,
-                )
-            )
-            preconditions.append(
-                PreconditionSpec(
-                    id=f"{resource.id}.sqlite_schema",
-                    type="sqlite_schema_available",
-                    description=f"SQLite schema is available: {resource.ref}",
-                    status="passed" if resource.sqlite_tables else "failed",
-                    resource_ref=resource.id,
-                )
-            )
-            preconditions.append(
-                PreconditionSpec(
-                    id=f"{resource.id}.sandbox_copyable",
-                    type="sandbox_copyable",
-                    description=f"SQLite database can be copied into tool-test sandbox: {resource.ref}",
-                    status="passed" if resource.details.get("sandbox_copyable") else "failed",
-                    resource_ref=resource.id,
                 )
             )
     return preconditions
@@ -536,21 +411,7 @@ def _readiness_from_contracts(
                 *([completeness_issue] if completeness_issue is not None else []),
             ],
         )
-    has_missing = any(
-        resource.status == "missing" and resource.type in {"file", "directory", "sqlite"}
-        for resource in contracts
-    )
     options = _readiness_options_for_failed_preconditions(failed_required)
-    if has_missing:
-        options.insert(
-            0,
-            ReadinessOption(
-                id="create_sample_resource",
-                label="创建示例资源",
-                description="由用户确认后创建示例数据库或文件，再继续生产。",
-                action="create_sample_resource",
-            ),
-        )
     return ReadinessReport(
         schema_version="0.1",
         metadata=metadata,
@@ -686,11 +547,6 @@ def _condition_satisfied_by_contract(
 ) -> bool:
     if condition.type == "local_resource":
         return any(resource.status == "ready" for resource in contracts)
-    if condition.type == "database_schema":
-        return any(
-            resource.type == "sqlite" and resource.status == "ready" and resource.sqlite_tables
-            for resource in contracts
-        )
     return False
 
 
@@ -707,10 +563,8 @@ def _condition_ref(condition: RequiredCondition, probe_target: object | None) ->
 
 
 def _access_mode_from_condition(condition: RequiredCondition) -> str:
-    description = condition.description.lower()
-    if any(marker in description for marker in ("write", "create", "update", "delete", "写", "创建", "更新", "删除")):
-        return "read_write"
-    if condition.type in {"storage_backend", "database_schema"} and "read_write" in str(condition.evidence):
+    evidence_mode = str((condition.evidence or {}).get("access_mode") or "").strip().lower()
+    if evidence_mode in {"read_write", "write", "rw"}:
         return "read_write"
     return "read_only"
 
@@ -718,149 +572,22 @@ def _access_mode_from_condition(condition: RequiredCondition) -> str:
 def _readiness_options_for_failed_preconditions(
     failed_required: list[PreconditionSpec],
 ) -> list[ReadinessOption]:
-    options: list[ReadinessOption] = []
-
-    def add(option: ReadinessOption) -> None:
-        if any(existing.id == option.id for existing in options):
-            return
-        options.append(option)
-
-    failed_types = {item.type for item in failed_required}
-    if failed_types.intersection({"external_service", "credential"}):
-        add(
-            ReadinessOption(
-                id="provide_external_url",
-                label="提供官方文档 URL",
-                description="粘贴外部服务的官方文档、API Reference、OpenAPI 或购买页 URL。",
-                action="provide_api_docs",
-            )
-        )
-        add(
-            ReadinessOption(
-                id="provide_external_config_values",
-                label="提供配置项名称",
-                description="像 .env 一样给出需要的键名，例如 MOJI_APP_CODE、WEATHER_DOC_URL。",
-                action="ask_user",
-            )
-        )
-    if "web_research" in failed_types:
-        add(
-            ReadinessOption(
-                id="provide_external_url",
-                label="提供官方文档 URL",
-                description="Factory 不自动搜索；请提供要提取的单个官方页面 URL。",
-                action="provide_api_docs",
-            )
-        )
-    if failed_types.intersection(
-        {
-            "local_resource",
-            "database_schema",
-            "resource_exists",
-            "resource_readable",
-            "resource_writable",
-            "sqlite_openable",
-            "sqlite_schema_available",
-            "sandbox_copyable",
-        }
-    ):
-        add(
-            ReadinessOption(
-                id="replace_resource_path",
-                label="提供新的资源路径",
-                description="用户提供一个已存在、可访问的本地资源路径。",
-                action="replace_resource_path",
-            )
-        )
-    if failed_types.intersection({"python_package", "runtime_dependency", "system_command"}):
-        add(
-            ReadinessOption(
-                id="install_dependency",
-                label="安装或声明依赖",
-                description="补齐 Python 包、系统命令或运行时依赖后继续。",
-                action="install_dependency",
-            )
-        )
-    if failed_types.intersection({"permission", "human_approval"}):
-        add(
-            ReadinessOption(
-                id="grant_permission",
-                label="确认权限与审批",
-                description="明确允许的动作、审批方式和禁止边界。",
-                action="grant_permission",
-            )
-        )
-    if "mock_fixture" in failed_types:
-        add(
-            ReadinessOption(
-                id="provide_test_fixture",
-                label="提供测试 fixture",
-                description="提供稳定样例输入/输出、测试收件箱或 mock 响应。",
-                action="provide_test_fixture",
-            )
-        )
-        add(
-            ReadinessOption(
-                id="use_mock_only",
-                label="只生成 mock-only 草稿",
-                description="明确接受本地模拟实现，不声称是真实实时数据。",
-                action="use_mock_only",
-            )
-        )
-    if "browser_access" in failed_types:
-        add(
-            ReadinessOption(
-                id="configure_browser",
-                label="配置浏览/网页访问",
-                description="提供目标 URL、访问频率、允许域名和测试快照。",
-                action="configure_browser",
-            )
-        )
-    if "mcp_server" in failed_types:
-        add(
-            ReadinessOption(
-                id="configure_mcp",
-                label="配置 MCP Server",
-                description="提供 MCP server 命令、transport、工具列表和测试 fixture。",
-                action="configure_mcp",
-            )
-        )
-    if "schedule" in failed_types:
-        add(
-            ReadinessOption(
-                id="configure_schedule",
-                label="配置定时策略",
-                description="明确频率、时区、触发条件和失败重试策略。",
-                action="configure_schedule",
-            )
-        )
-    if "storage_backend" in failed_types:
-        add(
-            ReadinessOption(
-                id="configure_storage",
-                label="配置存储",
-                description="提供运行状态、历史记录或比对结果的存储位置。",
-                action="configure_storage",
-            )
-        )
-    if "data_contract" in failed_types:
-        add(
-            ReadinessOption(
-                id="provide_data_contract",
-                label="补充数据契约",
-                description="明确输入字段、输出字段、边界样例和错误样例。",
-                action="ask_user",
-            )
-        )
-    add(
+    if not failed_required:
+        return []
+    return [
+        ReadinessOption(
+            id="provide_missing_information",
+            label="补充缺失信息",
+            description="根据上方校验结果补充真实路径、配置、权限、契约或测试样例。",
+            action="ask_user",
+        ),
         ReadinessOption(
             id="generate_draft_only",
             label="只生成草稿",
             description="暂不执行工具测试，生成不可直接运行的草稿包。",
             action="generate_draft_only",
-        )
-    )
-    return options
+        ),
+    ]
 
 
 def _coerce_tool_precondition_report(
@@ -984,45 +711,19 @@ def _metadata(primitives: AgentPackagePrimitives | None, suffix: str) -> Metadat
 def _resource_type(path: Path) -> str:
     if path.is_dir():
         return "directory"
-    if path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
-        return "sqlite"
-    if path.suffix:
-        return "file"
-    return "unknown"
+    return "file" if path.exists() or path.suffix else "unknown"
 
 
 def _access_mode(value: str) -> str:
     return "read_write" if value == "read_write" else "read_only"
 
 
-def _access_mode_from_requirement(value: str) -> str:
-    lowered = value.lower()
-    if any(marker in lowered for marker in ("创建", "更新", "修改", "关闭", "写", "insert", "update", "create")):
-        return "read_write"
-    return "read_only"
-
-
 def _looks_like_resource_reference(path: Path) -> bool:
-    return path.suffix.lower() in {
-        ".csv",
-        ".db",
-        ".duckdb",
-        ".json",
-        ".md",
-        ".sqlite",
-        ".sqlite3",
-        ".tsv",
-        ".txt",
-        ".yaml",
-        ".yml",
-    } or path.exists()
+    return bool(path.suffix) or path.exists()
 
 
 def _resource_id(path: Path) -> str:
     stem = path.stem or path.name or "resource"
-    suffix = path.suffix.lower().lstrip(".")
-    if suffix in {"sqlite", "sqlite3", "db", "duckdb"} and not stem.endswith("_sqlite"):
-        stem = f"{stem}_sqlite"
     normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", stem).strip("_").lower()
     if not normalized:
         normalized = "resource"
@@ -1044,20 +745,3 @@ def _can_read(path: Path) -> bool:
 
 def _can_write(path: Path) -> bool:
     return path.exists() and path.is_dir()
-
-
-def _can_copy_to_sandbox(path: Path) -> bool:
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shutil.copy2(path, Path(tmpdir) / path.name)
-        return True
-    except OSError:
-        return False
-
-
-def _quote_identifier(value: str) -> str:
-    return '"' + value.replace('"', '""') + '"'
-
-
-def _extract_check_constraints(create_sql: str) -> list[str]:
-    return [match.group(0) for match in re.finditer(r"CHECK\s*\([^)]+\)", create_sql, flags=re.IGNORECASE)]

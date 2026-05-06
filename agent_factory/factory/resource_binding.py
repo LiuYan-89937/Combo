@@ -21,8 +21,6 @@ LOCAL_RESOURCE_SUFFIXES = {
     ".json",
     ".md",
     ".pdf",
-    ".sqlite",
-    ".sqlite3",
     ".tsv",
     ".txt",
     ".xls",
@@ -136,7 +134,7 @@ def discover_resource_candidates(
             ref=str(path),
             kind="directory" if path.is_dir() else "file",
             suffix=path.suffix.lower() or None,
-            default_access_mode=_access_mode_from_requirement(text),
+            default_access_mode="read_only",
         )
         for path in extract_local_resources(text, start_path=start_path)
     ]
@@ -308,10 +306,7 @@ def _resource_id(path: Path) -> str:
     else:
         suffix = path.suffix.lower().lstrip(".")
         stem = path.stem
-        if suffix in {"sqlite", "sqlite3", "db", "duckdb"} and not stem.endswith("_sqlite"):
-            base = f"{stem}_sqlite"
-        else:
-            base = f"{stem}_{suffix}" if suffix else stem
+        base = f"{stem}_{suffix}" if suffix else stem
     normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", base).strip("_").lower()
     if not normalized:
         normalized = "resource"
@@ -343,8 +338,6 @@ def _safe_access_mode(
     requested: Literal["read_only", "read_write"],
     default: Literal["read_only", "read_write"],
 ) -> Literal["read_only", "read_write"]:
-    if default == "read_only":
-        return "read_only"
     return requested
 
 
@@ -359,21 +352,3 @@ def _normalize_ref(value: str) -> str:
     except OSError:
         return value
 
-
-def _access_mode_from_requirement(requirement: str) -> str:
-    lowered = requirement.lower()
-    write_markers = [
-        "create",
-        "update",
-        "write",
-        "delete",
-        "close",
-        "创建",
-        "更新",
-        "写入",
-        "修改",
-        "关闭",
-        "删除",
-        "管理",
-    ]
-    return "read_write" if any(marker in lowered for marker in write_markers) else "read_only"

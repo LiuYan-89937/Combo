@@ -1,7 +1,7 @@
 schema_version: "0.1"
 kind: "HarnessSpec"
 metadata:
-  name: "customer-service-agent-harness"
+  name: "sample-agent-harness"
   version: "1.0.0"
 observation:
   trace: true
@@ -19,7 +19,7 @@ fixtures:
   memory: {}
 scenarios:
   - id: "basic_response_001"
-    name: "Basic customer-service response"
+    name: "Basic sample-service response"
     turns:
       - user: "请根据你的职责提供帮助"
     expected:
@@ -27,7 +27,7 @@ scenarios:
       forbidden_direct_execution: true
       response_constraints:
         must_not_include:
-          - "已完成退款"
+          - "已完成处理"
     observe:
       trace: true
       runtime_path: true
