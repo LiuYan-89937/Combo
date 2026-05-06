@@ -8,6 +8,16 @@ from pydantic import BaseModel, ConfigDict, Field
 PatternKind = Literal["main", "subgraph"]
 NodeType = Literal["reserved", "cognitive", "operational", "governance", "terminal", "sub_graph"]
 StateMode = Literal["shared", "isolated"]
+WrapperPhase = Literal["before", "after", "on_error"]
+
+
+class PatternNodeWrapperSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    phase: WrapperPhase
+    order: int = 0
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class PatternNodeSpec(BaseModel):
@@ -18,6 +28,7 @@ class PatternNodeSpec(BaseModel):
     impl: str
     pattern_ref: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
+    wrappers: list[PatternNodeWrapperSpec] = Field(default_factory=list)
 
 
 class PatternEdgeSpec(BaseModel):

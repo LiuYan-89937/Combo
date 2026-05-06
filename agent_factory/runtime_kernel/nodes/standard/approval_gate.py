@@ -21,7 +21,11 @@ class GovernanceApprovalGateNode:
                     "interrupt_required": True,
                     "interrupt_type": state.policy.interrupt_type or "approval_required",
                 },
-                "execution": {"current_node": context.node_id},
+                "execution": {
+                    "current_node": context.node_id,
+                    "interrupted": True,
+                    "route_decision": "policy.approval_required",
+                },
             }
         return {
             "execution": {

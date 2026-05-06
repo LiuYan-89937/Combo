@@ -63,6 +63,7 @@ class MemoryState(BaseModel):
 
     short_term_snapshot: dict[str, Any] = Field(default_factory=dict)
     summary_memory: str | None = None
+    user_profile: dict[str, Any] = Field(default_factory=dict)
     recall_items: list[dict[str, Any]] = Field(default_factory=list)
     pending_write: list[dict[str, Any]] = Field(default_factory=list)
     write_applied: bool = False
@@ -97,6 +98,7 @@ class ExecutionState(BaseModel):
 
     current_node: str | None = None
     current_subgraph: str | None = None
+    subgraph_depth: int = 0
     route_decision: str | None = None
     turn_count: int = 0
     max_turns: int = 16
@@ -105,8 +107,21 @@ class ExecutionState(BaseModel):
     max_subgraph_depth: int = 4
     timeout_seconds: int = 60
     interrupted: bool = False
+    interrupt_payload: dict[str, Any] = Field(default_factory=dict)
+    resume_payload: dict[str, Any] = Field(default_factory=dict)
+    resume_token: str | None = None
     finished: bool = False
     finish_status: str | None = None
+    last_error: str | None = None
+    last_error_location: str | None = None
+
+
+class RuntimeConfigState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_config: dict[str, Any] = Field(default_factory=dict)
+    agent_config: dict[str, Any] = Field(default_factory=dict)
+    session_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class ObservabilityState(BaseModel):
@@ -124,6 +139,7 @@ class RuntimeState(BaseModel):
 
     schema_version: str = RUNTIME_STATE_SCHEMA_VERSION
     run: RunState = Field(default_factory=RunState)
+    runtime_config: RuntimeConfigState = Field(default_factory=RuntimeConfigState)
     conversation: ConversationState = Field(default_factory=ConversationState)
     context: ContextState = Field(default_factory=ContextState)
     tools: ToolState = Field(default_factory=ToolState)

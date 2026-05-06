@@ -52,3 +52,4 @@ class TraceSummary(BaseModel):
     resume_count: int = 0
     turn_count: int = 0
     total_latency_ms: int = 0
+    max_node_latency_ms: int = 0

@@ -6,6 +6,8 @@ from agent_factory.runtime_kernel.kernel import CompiledKernelApp, RuntimeKernel
 from agent_factory.runtime_kernel.patterns import GraphPatternSpec, PatternRegistry, PatternValidator
 from agent_factory.runtime_kernel.patterns.compiler import PatternCompiler
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.strategies import StrategyRegistry, StrategySpec
+from agent_factory.runtime_kernel.wrappers import NodeWrapper, NodeWrapperRegistry, wrap_node
 
 __all__ = [
     "BindingSet",
@@ -19,4 +21,9 @@ __all__ = [
     "RuntimeKernelInstance",
     "RuntimeServices",
     "RuntimeState",
+    "NodeWrapper",
+    "NodeWrapperRegistry",
+    "StrategyRegistry",
+    "StrategySpec",
+    "wrap_node",
 ]

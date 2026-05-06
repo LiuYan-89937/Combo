@@ -16,6 +16,9 @@ nodes:
   - id: precheck
     type: governance
     impl: governance.precheck
+  - id: approval_gate
+    type: governance
+    impl: governance.approval_gate
   - id: answer
     type: cognitive
     impl: cognitive.answer
@@ -42,6 +45,12 @@ edges:
     to: finalize
     when: policy.blocked
   - from: precheck
+    to: approval_gate
+    when: policy.approval_required
+  - from: precheck
+    to: answer
+    when: always
+  - from: approval_gate
     to: answer
     when: always
   - from: answer
@@ -53,6 +62,15 @@ edges:
   - from: tool_exec
     to: answer
     when: tool.completed
+  - from: tool_exec
+    to: answer
+    when: tool.failed
+  - from: tool_exec
+    to: finalize
+    when: tool.interrupted
+  - from: tool_exec
+    to: finalize
+    when: policy.blocked
 interrupt_points:
   - precheck
   - tool_exec

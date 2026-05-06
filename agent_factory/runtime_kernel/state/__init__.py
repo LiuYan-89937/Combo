@@ -14,6 +14,7 @@ from agent_factory.runtime_kernel.state.schema import (
     ObservabilityState,
     PolicyState,
     RunState,
+    RuntimeConfigState,
     RuntimeState,
     ToolState,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "ObservabilityState",
     "PolicyState",
     "RunState",
+    "RuntimeConfigState",
     "RuntimeState",
     "ToolState",
     "dump_message",

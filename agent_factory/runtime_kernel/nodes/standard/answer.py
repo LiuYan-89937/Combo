@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.runtime_kernel.adapters.model import ScriptedModelService
+from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
 
@@ -20,7 +20,9 @@ class CognitiveAnswerNode:
         context: NodeExecutionContext,
     ) -> dict[str, Any]:
         binding_payload = _first_binding_payload(context.bindings)
-        model_service = context.services.model_service or ScriptedModelService()
+        model_service = context.services.model_service
+        if model_service is None:
+            raise RuntimeKernelError("cognitive.answer requires model_service.")
         result = model_service.generate(state=state, prompt_binding=binding_payload)
         if result.clarification_question:
             return {
@@ -34,6 +36,13 @@ class CognitiveAnswerNode:
                 },
             }
         if result.requests_tool and result.tool_name:
+            context.emit_event(
+                {
+                    "event_type": "tool_proposed",
+                    "tool_id": result.tool_name,
+                    "arguments": dict(result.tool_arguments),
+                }
+            )
             return {
                 "conversation": {
                     "assistant_draft": result.assistant_draft,

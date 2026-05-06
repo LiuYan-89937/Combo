@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from agent_factory.runtime_kernel.checkpoint.schema import CheckpointRecord
 from agent_factory.runtime_kernel.state import RuntimeState
@@ -34,10 +35,16 @@ class CheckpointSerializer:
             interrupt_snapshot={
                 "interrupted": state.execution.interrupted or state.policy.interrupted,
                 "interrupt_type": state.policy.interrupt_type,
+                "interrupt_payload": state.execution.interrupt_payload,
                 "approval_required": state.policy.approval_required,
+                "resume_token": state.execution.resume_token or uuid4().hex,
             },
             observability_ref={
                 "trace_id": state.observability.trace_id,
+                "span_id": state.observability.span_stack[-1].get("span_id")
+                if state.observability.span_stack
+                else None,
+                "event_offset": len(state.observability.events),
                 "debug_refs": state.observability.debug_refs,
             },
             metadata={

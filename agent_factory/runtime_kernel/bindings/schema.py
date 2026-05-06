@@ -30,7 +30,15 @@ HookPoint = Literal[
     "on_resume",
 ]
 
-BindingType = Literal["prompt", "tool_access", "policy_profile", "retrieval_profile", "output_formatter", "custom"]
+BindingType = Literal[
+    "prompt",
+    "tool_access",
+    "policy_profile",
+    "retrieval_profile",
+    "strategy_profile",
+    "output_formatter",
+    "custom",
+]
 
 
 class ServiceBindingSpec(BaseModel):

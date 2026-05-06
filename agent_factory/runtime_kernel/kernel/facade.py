@@ -105,17 +105,34 @@ class RuntimeKernelFacade:
             services=services,
         )
 
-    def run(self, compiled: CompiledKernelApp, *, user_input: str) -> RuntimeState:
+    def run(
+        self,
+        compiled: CompiledKernelApp,
+        *,
+        user_input: str,
+        user_config: dict | None = None,
+        agent_config: dict | None = None,
+        session_config: dict | None = None,
+    ) -> RuntimeState:
         state = RuntimeState()
         state.run.pattern_id = compiled.pattern_spec.pattern_id
         state.run.pattern_version = compiled.pattern_spec.version
         state.conversation.current_user_input = user_input
+        state.runtime_config.user_config = dict(user_config or {})
+        state.runtime_config.agent_config = dict(agent_config or {})
+        state.runtime_config.session_config = dict(session_config or {})
         return self.instance.controller.run(compiled, state)
 
-    def resume(self, compiled: CompiledKernelApp, *, checkpoint_id: str) -> RuntimeState:
+    def resume(
+        self,
+        compiled: CompiledKernelApp,
+        *,
+        checkpoint_id: str,
+        resume_payload: dict | None = None,
+    ) -> RuntimeState:
         record = compiled.services.checkpoint_manager.load(checkpoint_id)
         state = self.instance.controller.checkpoint_serializer.from_record(record)
-        return self.instance.controller.resume(compiled, state)
+        return self.instance.controller.resume(compiled, state, resume_payload=resume_payload)
 
 
 def _required_services_for_pattern(pattern) -> list[str]:
@@ -131,6 +148,15 @@ def _required_services_for_pattern(pattern) -> list[str]:
             required.add("memory_engine")
         elif node.impl.startswith("operational.knowledge_retrieve"):
             required.add("knowledge_engine")
+        for wrapper in node.wrappers:
+            if wrapper.id.startswith("context."):
+                required.add("context_engine")
+            elif wrapper.id.startswith("memory."):
+                required.add("memory_engine")
+            elif wrapper.id.startswith("policy."):
+                required.add("policy_engine")
+            elif wrapper.id.startswith("tool."):
+                required.add("tool_registry")
     for capability in pattern.constraints.required_capabilities:
         if capability == "tools":
             required.add("tool_registry")

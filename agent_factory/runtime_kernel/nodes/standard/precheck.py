@@ -49,6 +49,8 @@ class GovernancePrecheckNode:
                 },
                 "execution": {
                     "current_node": context.node_id,
+                    "interrupted": True,
+                    "route_decision": "policy.approval_required",
                 },
             }
         return {

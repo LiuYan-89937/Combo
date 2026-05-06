@@ -36,6 +36,22 @@ class GovernancePostcheckNode:
                     "route_decision": "policy.blocked",
                 },
             }
+        if decision.status == "interrupted":
+            context.emit_event({"event_type": "interrupt_triggered", "phase": "postcheck", "reason": decision.reason})
+            return {
+                "policy": {
+                    "approval_required": decision.approval_required,
+                    "interrupt_required": decision.interrupt_required or decision.approval_required,
+                    "interrupted": True,
+                    "interrupt_type": decision.interrupt_type or "approval_required",
+                    "checks": [decision.model_dump(mode="json")],
+                },
+                "execution": {
+                    "current_node": context.node_id,
+                    "interrupted": True,
+                    "route_decision": "policy.approval_required",
+                },
+            }
         return {
             "policy": {"checks": [decision.model_dump(mode="json")]},
             "execution": {"current_node": context.node_id, "route_decision": "always"},

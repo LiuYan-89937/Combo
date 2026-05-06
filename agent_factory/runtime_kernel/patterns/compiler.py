@@ -1,20 +1,28 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, StateGraph
 
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
+from agent_factory.runtime_kernel.errors import RuntimeKernelError
+from agent_factory.runtime_kernel.execution.routing import resolve_route
 from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.nodes.registry import NodeRegistry
 from agent_factory.runtime_kernel.observability.schema import TraceEvent
 from agent_factory.runtime_kernel.patterns.registry import PatternRegistry
-from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec, PatternIOContractSpec, PatternNodeSpec
+from agent_factory.runtime_kernel.patterns.schema import (
+    GraphPatternSpec,
+    PatternIOContractSpec,
+    PatternNodeSpec,
+    PatternNodeWrapperSpec,
+)
 from agent_factory.runtime_kernel.patterns.validator import PatternValidator
-from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
+from agent_factory.runtime_kernel.wrappers import DEFAULT_NODE_WRAPPER_REGISTRY, NodeWrapperRegistry
 
 
 class PatternCompiler:
@@ -45,7 +53,10 @@ class PatternCompiler:
         graph = StateGraph(dict)
         for node_id, runner in node_runners.items():
             graph.add_node(node_id, runner)
-        graph.add_edge(START, pattern.entry_node)
+        graph.set_conditional_entry_point(
+            _make_entry_router(pattern),
+            {node.id: node.id for node in pattern.nodes},
+        )
         outgoing = {}
         for edge in pattern.edges:
             outgoing.setdefault(edge.from_, {})[edge.when] = edge.to
@@ -55,7 +66,7 @@ class PatternCompiler:
                 continue
             mapping = dict(outgoing.get(node.id, {}))
             mapping["__end__"] = END
-            graph.add_conditional_edges(node.id, self._route_from_state, mapping)
+            graph.add_conditional_edges(node.id, _make_route_router(mapping), mapping)
         graph_app = graph.compile()
         return CompiledKernelApp(
             pattern_spec=pattern,
@@ -80,10 +91,12 @@ class PatternCompiler:
             if item.target.node_id == node.id and item.target.impl == node.impl
         ]
         hook_bindings = [item.model_dump(mode="json") for item in bindings.hooks if item.enabled]
+        for wrapper in node.wrappers:
+            DEFAULT_NODE_WRAPPER_REGISTRY.validate_spec(wrapper)
         if node.type == "sub_graph":
             child = self.compile(pattern_id=node.pattern_ref or "", bindings=bindings, services=services)
             _validate_subgraph_exit_routes(node_id=node.id, pattern=pattern, child=child.pattern_spec)
-            return _make_subgraph_runner(
+            execute = _make_subgraph_executor(
                 node_id=node.id,
                 compiled=child,
                 services=services,
@@ -91,71 +104,432 @@ class PatternCompiler:
                 output_contract=child.pattern_spec.output_contract,
                 state_mode=child.pattern_spec.state_mode,
             )
-        impl = self.node_registry.get(node.impl)
-
-        def runner(raw_state: dict[str, Any]) -> dict[str, Any]:
-            state = RuntimeState.model_validate(raw_state)
-            started = perf_counter()
-            span = services.observability_manager.start_span(
-                trace_id=state.observability.trace_id,
-                run_id=state.run.run_id,
-                span_type="node_execution",
-                name=node.id,
-                metadata={"impl": node.impl},
-            )
-            emitted_events: list[dict[str, Any]] = []
-
-            def emit_event(payload: dict[str, Any]) -> None:
-                event = TraceEvent(
-                    trace_id=state.observability.trace_id,
-                    run_id=state.run.run_id,
-                    event_type=payload.get("event_type", "node_event"),
-                    node_id=node.id,
-                    payload=payload,
-                )
-                services.observability_manager.emit(event)
-                emitted_events.append(event.model_dump(mode="json"))
-
-            context = NodeExecutionContext(
-                node_id=node.id,
-                impl=node.impl,
+            return _make_wrapped_runner(
+                node=node,
+                pattern=pattern,
                 bindings=node_bindings,
                 hook_bindings=hook_bindings,
                 services=services,
-                emit_event=emit_event,
+                execute=execute,
+                validate_sections=False,
+                span_type="subgraph_execution",
+                node_wrappers=node.wrappers,
+                node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
             )
-            working_state, pre_patch = _run_pre_hooks(state, context)
-            patch = impl.execute(working_state, context)
-            _validate_patch_sections(node.impl, patch)
-            post_patch = _run_post_hooks(working_state, context)
-            merged = _merge_patches(pre_patch, patch)
-            if post_patch:
-                merged = _merge_patches(merged, post_patch)
-            if emitted_events:
-                merged.setdefault("observability", {})
-                merged["observability"] = {
-                    **merged["observability"],
-                    "events": [*state.observability.events, *emitted_events],
-                }
-            _apply_metrics_patch(working_state, merged, perf_counter() - started)
-            services.observability_manager.finish_span(
-                span.span_id,
+        impl = self.node_registry.get(node.impl)
+
+        def execute(state: RuntimeState, context: NodeExecutionContext) -> dict[str, Any]:
+            return impl.execute(state, context)
+
+        return _make_wrapped_runner(
+            node=node,
+            pattern=pattern,
+            bindings=node_bindings,
+            hook_bindings=hook_bindings,
+            services=services,
+            execute=execute,
+            validate_sections=True,
+            span_type="node_execution",
+            node_wrappers=node.wrappers,
+            node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
+        )
+
+
+def _make_wrapped_runner(
+    *,
+    node: PatternNodeSpec,
+    pattern: GraphPatternSpec,
+    bindings: list[dict[str, Any]],
+    hook_bindings: list[dict[str, Any]],
+    services: RuntimeServices,
+    execute,
+    validate_sections: bool,
+    span_type: str,
+    node_wrappers: list[PatternNodeWrapperSpec],
+    node_wrapper_registry: NodeWrapperRegistry,
+):
+    node_wrappers = sorted(node_wrappers, key=lambda item: int(item.order))
+
+    def runner(raw_state: dict[str, Any]) -> dict[str, Any]:
+        state = RuntimeState.model_validate(raw_state)
+        if state.execution.finished:
+            return state.model_dump(mode="json")
+        if _timed_out(state):
+            _finish_state(state, status="failed", error="Execution timed out before node execution.")
+            return state.model_dump(mode="json")
+        if state.execution.turn_count >= state.execution.max_turns:
+            _finish_state(state, status="failed", error="Execution exceeded max_turns.")
+            return state.model_dump(mode="json")
+
+        started = perf_counter()
+        span = services.observability_manager.start_span(
+            trace_id=state.observability.trace_id,
+            run_id=state.run.run_id,
+            span_type=span_type,
+            name=node.id,
+            metadata={"impl": node.impl, "node_id": node.id},
+        )
+        _push_span(state, span.span_id, span_type, node.id)
+        _emit_state_event(services, state, "node_entered", node_id=node.id, payload={"impl": node.impl})
+        emitted_events: list[dict[str, Any]] = []
+
+        def emit_event(payload: dict[str, Any]) -> None:
+            event = TraceEvent(
                 trace_id=state.observability.trace_id,
                 run_id=state.run.run_id,
-                status="completed",
-                metadata={"node_id": node.id},
+                event_type=payload.get("event_type", "node_event"),
+                node_id=node.id,
+                payload=payload,
             )
-            return merged
+            services.observability_manager.emit(event)
+            emitted_events.append(event.model_dump(mode="json"))
 
-        return runner
+        context = NodeExecutionContext(
+            node_id=node.id,
+            impl=node.impl,
+            bindings=bindings,
+            hook_bindings=hook_bindings,
+            services=services,
+            emit_event=emit_event,
+        )
+        active_state = state
+        try:
+            working_state, _pre_patch = _run_pre_hooks(active_state, context)
+            active_state = working_state
+            before_state, _before_patch = _run_node_wrappers(
+                phase="before",
+                state=working_state,
+                context=context,
+                wrapper_specs=node_wrappers,
+                wrapper_registry=node_wrapper_registry,
+                services=services,
+            )
+            active_state = before_state
+            patch = _execute_with_retries(before_state, context, execute)
+            if validate_sections:
+                _validate_patch_sections(node.impl, patch)
+            updated = merge_state_patch(before_state, patch)
+            active_state = updated
+            after_state, _after_patch = _run_node_wrappers(
+                phase="after",
+                state=updated,
+                context=context,
+                wrapper_specs=node_wrappers,
+                wrapper_registry=node_wrapper_registry,
+                services=services,
+                node_result=patch,
+            )
+            active_state = after_state
+            updated = after_state
+            post_patch = _run_post_hooks(updated, context)
+            if post_patch:
+                updated = merge_state_patch(updated, post_patch)
+            if emitted_events:
+                updated.observability.events = [*updated.observability.events, *emitted_events]
+            updated.execution.turn_count += 1
+            _apply_node_metrics(updated, perf_counter() - started)
+            _resolve_after_node(pattern=pattern, node=node, state=updated, services=services)
+            duration_ms = int((perf_counter() - started) * 1000)
+            _emit_state_event(
+                services,
+                updated,
+                "node_completed",
+                node_id=node.id,
+                payload={"impl": node.impl, "duration_ms": duration_ms},
+            )
+            services.observability_manager.finish_span(
+                span.span_id,
+                trace_id=updated.observability.trace_id,
+                run_id=updated.run.run_id,
+                status="completed",
+                metadata={"node_id": node.id, "duration_ms": duration_ms},
+            )
+            _pop_span(updated, span.span_id)
+            return updated.model_dump(mode="json")
+        except Exception as exc:
+            failed = active_state
+            try:
+                failed, on_error_patch = _run_node_wrappers(
+                    phase="on_error",
+                    state=failed,
+                    context=context,
+                    wrapper_specs=node_wrappers,
+                    wrapper_registry=node_wrapper_registry,
+                    services=services,
+                    error=exc,
+                )
+                if on_error_patch:
+                    failed = merge_state_patch(failed, on_error_patch)
+            except Exception as wrapper_exc:
+                exc = wrapper_exc
+            failed.execution.retry_count += 1
+            location = failed.execution.last_error_location or node.id
+            _finish_state(failed, status="failed", error=str(exc), location=location)
+            _emit_state_event(
+                services,
+                failed,
+                "node_failed",
+                node_id=node.id,
+                payload={"impl": node.impl, "error": str(exc)},
+            )
+            services.observability_manager.finish_span(
+                span.span_id,
+                trace_id=failed.observability.trace_id,
+                run_id=failed.run.run_id,
+                status="failed",
+                metadata={"node_id": node.id, "error": str(exc)},
+            )
+            _pop_span(failed, span.span_id)
+            return failed.model_dump(mode="json")
 
-    @staticmethod
-    def _route_from_state(raw_state: dict[str, Any]) -> str:
+    return runner
+
+
+def _make_entry_router(pattern: GraphPatternSpec):
+    node_ids = {node.id for node in pattern.nodes}
+
+    def route(raw_state: dict[str, Any]) -> str:
         state = RuntimeState.model_validate(raw_state)
-        return state.execution.route_decision or "__end__"
+        if state.execution.current_node in node_ids and not state.execution.finished:
+            return state.execution.current_node or pattern.entry_node
+        return pattern.entry_node
+
+    return route
 
 
-def _make_subgraph_runner(
+def _make_route_router(mapping: dict[str, str]):
+    allowed = set(mapping)
+
+    def route(raw_state: dict[str, Any]) -> str:
+        state = RuntimeState.model_validate(raw_state)
+        if state.execution.finished or state.execution.interrupted or state.policy.interrupted:
+            return "__end__"
+        decision = state.execution.route_decision
+        if decision in allowed:
+            return decision or "__end__"
+        return "__end__"
+
+    return route
+
+
+def _execute_with_retries(
+    state: RuntimeState,
+    context: NodeExecutionContext,
+    execute,
+) -> dict[str, Any]:
+    attempts = 0
+    while True:
+        try:
+            return execute(state, context)
+        except Exception:
+            attempts += 1
+            state.execution.retry_count += 1
+            if attempts > state.execution.max_retries:
+                raise
+
+
+def _run_node_wrappers(
+    *,
+    phase: str,
+    state: RuntimeState,
+    context: NodeExecutionContext,
+    wrapper_specs: list[PatternNodeWrapperSpec],
+    wrapper_registry: NodeWrapperRegistry,
+    services: RuntimeServices,
+    node_result: dict[str, Any] | None = None,
+    error: Exception | None = None,
+) -> tuple[RuntimeState, dict[str, Any]]:
+    working = state
+    cumulative_patch: dict[str, Any] = {}
+    for spec in [item for item in wrapper_specs if item.phase == phase]:
+        wrapper = wrapper_registry.create(spec)
+        location = f"{context.node_id}.{phase}.{spec.id}"
+        _emit_state_event(
+            services,
+            working,
+            "wrapper_started",
+            node_id=context.node_id,
+            payload={"wrapper_id": spec.id, "phase": phase, "location": location},
+        )
+        try:
+            if phase == "before":
+                patch = wrapper.before(state=working, context=context, config=dict(spec.config))
+            elif phase == "after":
+                patch = wrapper.after(
+                    state=working,
+                    context=context,
+                    config=dict(spec.config),
+                    node_result=node_result or {},
+                )
+            elif phase == "on_error":
+                patch = wrapper.on_error(
+                    state=working,
+                    context=context,
+                    config=dict(spec.config),
+                    error=error or RuntimeError("Unknown node error."),
+                )
+            else:
+                raise RuntimeKernelError(f"Unsupported node wrapper phase: {phase}")
+            patch = patch or {}
+            _validate_wrapper_patch_sections(spec.id, wrapper.writable_sections, patch)
+            if patch:
+                working = merge_state_patch(working, patch)
+                cumulative_patch = _merge_patches(cumulative_patch, patch)
+            _emit_state_event(
+                services,
+                working,
+                "wrapper_completed",
+                node_id=context.node_id,
+                payload={"wrapper_id": spec.id, "phase": phase, "location": location},
+            )
+        except Exception as exc:
+            working.execution.last_error_location = location
+            _emit_state_event(
+                services,
+                working,
+                "wrapper_failed",
+                node_id=context.node_id,
+                payload={"wrapper_id": spec.id, "phase": phase, "location": location, "error": str(exc)},
+            )
+            raise
+    return working, cumulative_patch
+
+
+def _resolve_after_node(
+    *,
+    pattern: GraphPatternSpec,
+    node: PatternNodeSpec,
+    state: RuntimeState,
+    services: RuntimeServices,
+) -> None:
+    if _timed_out(state):
+        _finish_state(state, status="failed", error="Execution timed out.")
+        return
+    if state.policy.interrupted or state.execution.interrupted:
+        state.execution.interrupted = True
+        state.execution.finished = True
+        state.execution.finish_status = "interrupted"
+        state.execution.current_node = node.id
+        state.execution.interrupt_payload = _interrupt_payload(state, node.id)
+        return
+    if state.policy.blocked:
+        state.execution.finish_status = state.execution.finish_status or "blocked"
+    if node.id in pattern.termination.success_nodes:
+        state.execution.current_node = node.id
+        state.execution.finished = True
+        state.execution.finish_status = state.execution.finish_status or "completed"
+        return
+    if node.id in pattern.termination.failure_nodes:
+        _finish_state(state, status="failed", error=state.execution.last_error)
+        state.execution.current_node = node.id
+        return
+    if state.execution.finished:
+        state.execution.current_node = node.id
+        state.execution.finish_status = state.execution.finish_status or (
+            "blocked" if state.policy.blocked else "completed"
+        )
+        return
+    if state.execution.turn_count >= state.execution.max_turns:
+        _finish_state(state, status="failed", error="Execution exceeded max_turns.")
+        return
+    route = resolve_route(pattern, current_node=node.id, state=state)
+    if route.next_node is None or route.condition is None:
+        _finish_state(state, status="failed", error=f"No next node resolved from {node.id}.")
+        state.execution.current_node = node.id
+        return
+    state.execution.route_decision = route.condition
+    state.execution.current_node = route.next_node
+    _emit_state_event(
+        services,
+        state,
+        "route_selected",
+        node_id=node.id,
+        payload={"condition": route.condition, "next_node": route.next_node},
+    )
+
+
+def _finish_state(
+    state: RuntimeState,
+    *,
+    status: str,
+    error: str | None = None,
+    location: str | None = None,
+) -> None:
+    state.execution.finished = True
+    state.execution.finish_status = status
+    state.execution.route_decision = "execution.finished"
+    if error:
+        state.execution.last_error = error
+    if location:
+        state.execution.last_error_location = location
+
+
+def _interrupt_payload(state: RuntimeState, node_id: str) -> dict[str, Any]:
+    return {
+        "node_id": node_id,
+        "interrupt_type": state.policy.interrupt_type,
+        "approval_required": state.policy.approval_required,
+        "reason": state.policy.block_reason or state.policy.refusal_reason,
+    }
+
+
+def _timed_out(state: RuntimeState) -> bool:
+    if state.execution.timeout_seconds <= 0:
+        return False
+    try:
+        started_at = datetime.fromisoformat(state.run.started_at)
+    except ValueError:
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    elapsed = datetime.now(timezone.utc) - started_at
+    return elapsed.total_seconds() > state.execution.timeout_seconds
+
+
+def _emit_state_event(
+    services: RuntimeServices,
+    state: RuntimeState,
+    event_type: str,
+    *,
+    node_id: str | None = None,
+    message: str | None = None,
+    payload: dict[str, Any] | None = None,
+    subgraph_id: str | None = None,
+) -> None:
+    event = TraceEvent(
+        trace_id=state.observability.trace_id,
+        run_id=state.run.run_id,
+        event_type=event_type,
+        node_id=node_id,
+        subgraph_id=subgraph_id,
+        message=message,
+        payload=payload or {},
+    )
+    services.observability_manager.emit(event)
+    state.observability.events.append(event.model_dump(mode="json"))
+
+
+def _push_span(state: RuntimeState, span_id: str, span_type: str, name: str) -> None:
+    state.observability.span_stack.append({"span_id": span_id, "span_type": span_type, "name": name})
+
+
+def _pop_span(state: RuntimeState, span_id: str) -> None:
+    state.observability.span_stack = [
+        item for item in state.observability.span_stack if item.get("span_id") != span_id
+    ]
+
+
+def _apply_node_metrics(state: RuntimeState, duration_seconds: float) -> None:
+    duration_ms = int(duration_seconds * 1000)
+    metrics = dict(state.observability.metrics)
+    metrics["turn_count"] = state.execution.turn_count
+    metrics["total_latency_ms"] = int(metrics.get("total_latency_ms", 0)) + duration_ms
+    metrics["max_node_latency_ms"] = max(int(metrics.get("max_node_latency_ms", 0)), duration_ms)
+    state.observability.metrics = metrics
+
+
+
+def _make_subgraph_executor(
     *,
     node_id: str,
     compiled: CompiledKernelApp,
@@ -168,8 +542,17 @@ def _make_subgraph_runner(
 
     controller = ExecutionController()
 
-    def runner(raw_state: dict[str, Any]) -> dict[str, Any]:
-        parent_state = RuntimeState.model_validate(raw_state)
+    def runner(parent_state: RuntimeState, _context: NodeExecutionContext) -> dict[str, Any]:
+        if parent_state.execution.subgraph_depth >= parent_state.execution.max_subgraph_depth:
+            return {
+                "execution": {
+                    "current_node": node_id,
+                    "finished": True,
+                    "finish_status": "failed",
+                    "route_decision": "execution.finished",
+                    "last_error": "Execution exceeded max_subgraph_depth.",
+                }
+            }
         entered = TraceEvent(
             trace_id=parent_state.observability.trace_id,
             run_id=parent_state.run.run_id,
@@ -183,7 +566,11 @@ def _make_subgraph_runner(
             input_contract=input_contract,
             state_mode=state_mode,
         )
+        child_input.execution.current_node = None
         child_input.execution.current_subgraph = compiled.pattern_spec.pattern_id
+        child_input.execution.subgraph_depth = parent_state.execution.subgraph_depth + 1
+        child_input.execution.finished = False
+        child_input.execution.finish_status = None
         child_state = controller.run(compiled, child_input)
         route = child_state.execution.route_decision or ""
         if route.startswith("subgraph."):
@@ -208,9 +595,15 @@ def _make_subgraph_runner(
                 "current_node": node_id,
                 "route_decision": f"subgraph.{exit_route}",
                 "current_subgraph": None,
+                "subgraph_depth": parent_state.execution.subgraph_depth,
             },
             "observability": {
-                "events": [*parent_state.observability.events, entered.model_dump(mode="json"), *child_state.observability.events, exited.model_dump(mode="json")],
+                "events": [
+                    *parent_state.observability.events,
+                    entered.model_dump(mode="json"),
+                    *child_state.observability.events,
+                    exited.model_dump(mode="json"),
+                ],
                 "debug_refs": [*parent_state.observability.debug_refs, *child_state.observability.debug_refs],
                 "metrics": {
                     **parent_state.observability.metrics,
@@ -277,7 +670,7 @@ def _run_post_hooks(state: RuntimeState, context: NodeExecutionContext) -> dict[
             debug_refs.append({"kind": "hook", "phase": point, "node_id": context.node_id})
         elif point == "on_interrupt" and (state.policy.interrupted or state.execution.interrupted):
             debug_refs.append({"kind": "hook", "phase": point, "node_id": context.node_id})
-        elif point == "on_resume":
+        elif point == "on_resume" and state.execution.resume_payload:
             debug_refs.append({"kind": "hook", "phase": point, "node_id": context.node_id})
     if debug_refs:
         patch["observability"] = {"debug_refs": [*state.observability.debug_refs, *debug_refs]}
@@ -346,6 +739,19 @@ def _validate_patch_sections(impl_id: str, patch: dict[str, Any]) -> None:
         raise ValueError(f"{impl_id} attempted to write disallowed sections: {', '.join(sorted(illegal))}")
 
 
+def _validate_wrapper_patch_sections(
+    wrapper_id: str,
+    writable_sections: set[str],
+    patch: dict[str, Any],
+) -> None:
+    patch_sections = set(patch)
+    illegal = patch_sections.difference(writable_sections)
+    if illegal:
+        raise ValueError(
+            f"{wrapper_id} attempted to write disallowed sections: {', '.join(sorted(illegal))}"
+        )
+
+
 def _merge_patches(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in extra.items():
@@ -354,14 +760,6 @@ def _merge_patches(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any
         else:
             merged[key] = value
     return merged
-
-
-def _apply_metrics_patch(state: RuntimeState, patch: dict[str, Any], duration_seconds: float) -> None:
-    obs = patch.setdefault("observability", {})
-    metrics = dict(obs.get("metrics") or state.observability.metrics)
-    metrics["turn_count"] = state.execution.turn_count + 1
-    metrics["total_latency_ms"] = int(metrics.get("total_latency_ms", 0)) + int(duration_seconds * 1000)
-    obs["metrics"] = metrics
 
 
 def _project_state_for_subgraph(
