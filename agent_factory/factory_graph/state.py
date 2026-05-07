@@ -19,6 +19,7 @@ class FactoryGraphState(TypedDict, total=False):
     capture_intent: dict[str, Any]
     factory_response: dict[str, Any]
     stage_log: Annotated[list[dict[str, Any]], operator.add]
+    capture_requirement: dict[str, Any]
     requirement_brief: dict[str, Any]
     requirement_understanding: dict[str, Any]
     capability_plan: dict[str, Any]

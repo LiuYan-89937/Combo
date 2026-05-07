@@ -122,7 +122,7 @@ class FactoryGraphShell:
                 config=config,
                 stream_mode=["updates", "values", "messages"],
             ):
-                resume = self._approval_resume_from_chunk(chunk)
+                resume = self._resume_from_interrupt_chunk(chunk)
                 if resume is not None:
                     stream_input = Command(resume=resume)
                     interrupted = True
@@ -138,6 +138,7 @@ class FactoryGraphShell:
         if streamed_message:
             self.console.print()
         self.console.rule("[bold green]Factory Run Completed")
+        self._print_requirement_brief(final_state)
         self._print_summary(final_state)
         if options.show_messages:
             self._print_messages(final_state.get("messages", []))
@@ -168,7 +169,7 @@ class FactoryGraphShell:
                 config=config,
                 stream_mode=["updates", "values", "messages"],
             ):
-                resume = self._approval_resume_from_chunk(chunk)
+                resume = self._resume_from_interrupt_chunk(chunk)
                 if resume is not None:
                     stream_input = Command(resume=resume)
                     interrupted = True
@@ -226,6 +227,19 @@ class FactoryGraphShell:
         table.add_row("error_count", str(len(state.get("errors", []))))
         self.console.print(table)
 
+    def _print_requirement_brief(self, state: dict[str, Any]) -> None:
+        brief = state.get("requirement_brief") or {}
+        refined_requirement = brief.get("refined_requirement")
+        if not refined_requirement:
+            return
+        self.console.print(
+            Panel(
+                str(refined_requirement),
+                title="Refined Requirement",
+                border_style="green",
+            )
+        )
+
     def _print_messages(self, messages: Iterable[BaseMessage]) -> None:
         table = Table(title="Messages", show_header=True, header_style="bold cyan")
         table.add_column("#", justify="right", no_wrap=True)
@@ -241,13 +255,53 @@ class FactoryGraphShell:
     def _print_state(self, state: dict[str, Any]) -> None:
         self.console.print(Panel(JSON.from_data(_json_safe_state(state)), title="Final State"))
 
-    def _approval_resume_from_chunk(self, chunk: Any) -> dict[str, bool] | None:
+    def _resume_from_interrupt_chunk(self, chunk: Any) -> dict[str, Any] | None:
         interrupts = _extract_interrupts(chunk)
         if not interrupts:
             return None
+        resume: dict[str, Any] | None = None
         for item in interrupts:
-            self._print_interrupt_payload(getattr(item, "value", item))
-        return {"approved": self._read_approval()}
+            payload = getattr(item, "value", item)
+            if isinstance(payload, dict) and payload.get("type") == "requirement_clarification":
+                resume = self._read_requirement_clarification(payload)
+            else:
+                self._print_interrupt_payload(payload)
+                resume = {"approved": self._read_approval()}
+        return resume
+
+    def _read_requirement_clarification(self, payload: dict[str, Any]) -> dict[str, Any]:
+        answers: list[dict[str, Any]] = []
+        questions = list(payload.get("questions") or [])
+        for index, question_payload in enumerate(questions, start=1):
+            question_id = str(question_payload.get("id") or f"question_{index}")
+            question = str(question_payload.get("question") or "")
+            options = list(question_payload.get("options") or [])
+            custom_option_id = str(question_payload.get("custom_option_id") or "custom")
+            self.console.print(
+                Panel(
+                    question,
+                    title=f"Requirement Clarification {index}/{len(questions)}",
+                    border_style="yellow",
+                )
+            )
+            selected = _select_option_with_prompt_toolkit(options)
+            if selected is None:
+                selected = _select_option_with_numbered_prompt(self.console, options)
+            custom_text = None
+            if str(selected.get("id")) == custom_option_id:
+                custom_text = self.console.input("自定义补充: ").strip()
+            answers.append(
+                {
+                    "question_id": question_id,
+                    "selected_option_id": str(selected.get("id") or ""),
+                    "selected_label": str(selected.get("label") or ""),
+                    "custom_text": custom_text,
+                }
+            )
+        return {
+            "type": "requirement_clarification_answer",
+            "answers": answers,
+        }
 
     def _print_interrupt_payload(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -325,3 +379,87 @@ def _extract_interrupts(chunk: Any) -> tuple[Any, ...]:
     if isinstance(interrupts, list):
         return tuple(interrupts)
     return (interrupts,)
+
+
+def _select_option_with_prompt_toolkit(options: list[dict[str, Any]]) -> dict[str, Any] | None:
+    try:
+        from prompt_toolkit.application import Application
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.layout import Layout
+        from prompt_toolkit.layout.containers import HSplit, Window
+        from prompt_toolkit.layout.controls import FormattedTextControl
+    except ModuleNotFoundError:
+        return None
+
+    selected_index = 0
+    result: dict[str, Any] = {}
+    bindings = KeyBindings()
+
+    def formatted_options():
+        lines = []
+        for index, option in enumerate(options):
+            marker = "> " if index == selected_index else "  "
+            label = str(option.get("label") or option.get("id") or "")
+            description = option.get("description")
+            text = f"{marker}{label}"
+            if description:
+                text = f"{text} - {description}"
+            style = "reverse" if index == selected_index else ""
+            lines.append((style, text + "\n"))
+        return lines
+
+    control = FormattedTextControl(formatted_options, focusable=True)
+
+    @bindings.add("up")
+    def _move_up(event) -> None:
+        nonlocal selected_index
+        selected_index = (selected_index - 1) % len(options)
+
+    @bindings.add("down")
+    def _move_down(event) -> None:
+        nonlocal selected_index
+        selected_index = (selected_index + 1) % len(options)
+
+    @bindings.add("enter")
+    def _confirm(event) -> None:
+        result["selected"] = options[selected_index]
+        event.app.exit()
+
+    @bindings.add("c-c")
+    def _cancel(event) -> None:
+        result["selected"] = options[selected_index]
+        event.app.exit()
+
+    app = Application(
+        layout=Layout(HSplit([Window(content=control)])),
+        key_bindings=bindings,
+        full_screen=False,
+    )
+    app.run()
+    selected = result.get("selected")
+    if selected is None:
+        return None
+    if not isinstance(selected, dict):
+        return None
+    return selected
+
+
+def _select_option_with_numbered_prompt(console: Console, options: list[dict[str, Any]]) -> dict[str, Any]:
+    table = Table(title="Options", show_header=True, header_style="bold yellow")
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("label")
+    table.add_column("description")
+    for index, option in enumerate(options, start=1):
+        table.add_row(
+            str(index),
+            str(option.get("label") or option.get("id") or ""),
+            str(option.get("description") or ""),
+        )
+    console.print(table)
+    while True:
+        raw = console.input("选择序号: ").strip()
+        if raw.isdigit():
+            index = int(raw) - 1
+            if 0 <= index < len(options):
+                return options[index]
+        console.print("请输入有效序号。")
