@@ -4,6 +4,7 @@ from agent_factory.factory_graph.tools.registry import (
     get_factory_base_tools,
     get_factory_graph_tools,
     get_factory_model_tools,
+    get_factory_protected_tool_ids,
 )
 from agent_factory.factory_graph.tools.search import SEARCH_TOOLS
 from agent_factory.factory_graph.tools.shell import SHELL_TOOLS
@@ -16,4 +17,5 @@ __all__ = [
     "get_factory_base_tools",
     "get_factory_graph_tools",
     "get_factory_model_tools",
+    "get_factory_protected_tool_ids",
 ]

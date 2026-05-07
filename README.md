@@ -102,6 +102,10 @@ Shell 命令：
 
 ```text
 /help
+/session
+/sessions
+/new-session
+/resume <session_id>
 /tools
 /stages
 /state on
@@ -175,7 +179,7 @@ uv run agentfactory test-stages --prompt "创建一个记账 Agent"
 
 - 文件系统：`file_read`、`file_write`、`file_patch`、`file_list`、`file_exists`、`file_mkdir`、`file_copy`
 - 搜索与理解：`search_files`、`search_text`、`search_inspect_text`、`search_inspect_file`
-- Shell：`shell_run`、`shell_run_text`、`shell_which`、`shell_cwd`、`shell_env`
+- Shell：`shell_run`、`shell_run_text`、`shell_which`、`shell_cwd`、`shell_env`、`shell_start`、`shell_status`、`shell_grep_process`、`shell_stop`
 
 这些工具是通用工厂工具，不针对某一个项目目录做特化。不过实际能访问什么，仍由当前进程环境和权限控制。
 
@@ -196,6 +200,8 @@ AGENTFACTORY_TASK_MODEL=
 AGENTFACTORY_TASK_TEMPERATURE=0.1
 AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS=2048
 AGENTFACTORY_TASK_THINKING=disabled
+AGENTFACTORY_SESSION_ROOT=.agentfactory/sessions
+AGENTFACTORY_CHECKPOINT_PATH=.agentfactory/checkpoints/factory.sqlite
 AGENTFACTORY_RUN_PROVIDER_SMOKE=0
 ```
 

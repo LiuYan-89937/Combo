@@ -7,10 +7,17 @@ import typer
 from langchain_core.messages import HumanMessage
 from rich.console import Console
 from rich.prompt import Prompt
+from rich.table import Table
 
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.factory_graph.constants import STAGE_IDS
 from agent_factory.factory_graph.runner import FactoryGraphRunner
+from agent_factory.factory_graph.session import (
+    FactorySessionRecord,
+    FactorySessionManager,
+    build_factory_checkpointer,
+    is_factory_checkpointer_persistent,
+)
 from agent_factory.factory_graph.shell_cli import FactoryGraphShell, FactoryRunOptions
 
 
@@ -76,12 +83,16 @@ def shell() -> None:
     """Open an interactive shell for talking to the Factory Agent graph."""
 
     load_agentfactory_dotenv()
-    ui = FactoryGraphShell(console=console)
+    session_manager = FactorySessionManager.from_env()
+    session_record = session_manager.latest() or session_manager.create()
+    checkpointer = build_factory_checkpointer()
+    use_checkpoint_memory = is_factory_checkpointer_persistent(checkpointer)
+    ui = FactoryGraphShell(console=console, checkpointer=checkpointer)
     options = FactoryRunOptions()
     prompt_reader = _make_prompt_reader()
-    mode: str | None = None
-    chat_messages = []
+    mode = session_record.current_mode
     ui.print_welcome()
+    _print_active_session(session_record.session_id, mode)
     while True:
         prompt_label = f"factory:{mode}" if mode else "factory"
         try:
@@ -101,15 +112,38 @@ def shell() -> None:
                 return
             console.print(f"exit {mode} mode")
             mode = None
+            session_record = session_manager.set_mode(session_record.session_id, None)
             continue
         if raw == "/chat":
             mode = "chat"
-            chat_messages = []
+            session_record = session_manager.set_mode(session_record.session_id, mode)
             console.print("enter chat mode")
             continue
         if raw in {"/create-agent", "/create—agent"}:
             mode = "create_agent"
+            session_record = session_manager.set_mode(session_record.session_id, mode)
             console.print("enter create_agent mode")
+            continue
+        if raw == "/session":
+            _print_session(session_record)
+            continue
+        if raw == "/sessions":
+            _print_sessions(session_manager.list_sessions())
+            continue
+        if raw == "/new-session":
+            session_record = session_manager.create()
+            mode = None
+            console.print(f"new session: {session_record.session_id}")
+            continue
+        if raw.startswith("/resume "):
+            session_id = raw.removeprefix("/resume ").strip()
+            try:
+                session_record = session_manager.load(session_id)
+            except FileNotFoundError as exc:
+                console.print(f"[red]{exc}[/red]")
+                continue
+            mode = session_record.current_mode
+            console.print(f"resumed session: {session_record.session_id}")
             continue
         if raw == "/help":
             ui.print_help()
@@ -139,13 +173,23 @@ def shell() -> None:
             continue
         requirement = raw
         if mode == "chat":
-            chat_messages = [*chat_messages, HumanMessage(content=requirement)]
+            new_message = HumanMessage(content=requirement)
+            chat_messages = [new_message]
+            if not use_checkpoint_memory:
+                chat_messages = [*session_manager.messages(session_record, "chat"), new_message]
             result = ui.run_chat_once(
                 chat_messages,
+                thread_id=session_manager.thread_id(session_record, "chat")
+                if use_checkpoint_memory
+                else None,
                 show_messages=options.show_messages,
                 show_state=options.show_state,
             )
-            chat_messages = result.get("messages", chat_messages)
+            session_record = session_manager.replace_messages(
+                session_record.session_id,
+                "chat",
+                result.get("messages", chat_messages),
+            )
             continue
         run_options = FactoryRunOptions(
             stop_after_stage=options.stop_after_stage,
@@ -153,9 +197,27 @@ def shell() -> None:
             show_messages=options.show_messages,
             force_manufacture=mode == "create_agent",
             interaction_mode=mode,
+            thread_id=session_manager.thread_id(session_record, "create_agent"),
         )
         if requirement:
-            ui.run_once(requirement, options=run_options)
+            new_message = HumanMessage(content=requirement)
+            create_messages = [new_message]
+            if not use_checkpoint_memory:
+                create_messages = [
+                    *session_manager.messages(session_record, "create_agent"),
+                    new_message,
+                ]
+            run_options.thread_id = (
+                session_manager.thread_id(session_record, "create_agent")
+                if use_checkpoint_memory
+                else None
+            )
+            result = ui.run_once(requirement, messages=create_messages, options=run_options)
+            session_record = session_manager.replace_messages(
+                session_record.session_id,
+                "create_agent",
+                result.get("messages", create_messages),
+            )
 
 
 def _validate_stage(stage_id: str | None) -> None:
@@ -179,6 +241,45 @@ def _make_prompt_reader():
 
     session: PromptSession[str] = PromptSession()
     return lambda label: session.prompt(f"{label}: ")
+
+
+def _print_active_session(session_id: str, mode: str | None) -> None:
+    console.print(f"session: {session_id}")
+    console.print(f"mode: {mode or '-'}")
+
+
+def _print_session(record: FactorySessionRecord) -> None:
+    table = Table(title="Current Factory Session", show_header=True, header_style="bold cyan")
+    table.add_column("Field", no_wrap=True)
+    table.add_column("Value")
+    table.add_row("session_id", record.session_id)
+    table.add_row("current_mode", str(record.current_mode or "-"))
+    table.add_row("chat_thread_id", record.chat_thread_id)
+    table.add_row("create_agent_thread_id", record.create_agent_thread_id)
+    table.add_row("chat_turn_count", str(record.chat_turn_count))
+    table.add_row("create_agent_turn_count", str(record.create_agent_turn_count))
+    table.add_row("updated_at", record.updated_at)
+    console.print(table)
+
+
+def _print_sessions(records: list[FactorySessionRecord]) -> None:
+    table = Table(title="Factory Sessions", show_header=True, header_style="bold cyan")
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("session_id", style="cyan")
+    table.add_column("mode")
+    table.add_column("chat_turns", justify="right")
+    table.add_column("create_turns", justify="right")
+    table.add_column("updated_at")
+    for index, record in enumerate(records, start=1):
+        table.add_row(
+            str(index),
+            record.session_id,
+            str(record.current_mode or "-"),
+            str(record.chat_turn_count),
+            str(record.create_agent_turn_count),
+            record.updated_at,
+        )
+    console.print(table)
 
 
 if __name__ == "__main__":

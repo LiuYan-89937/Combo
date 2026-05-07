@@ -27,3 +27,9 @@ def get_factory_model_tools() -> list[BaseTool]:
 
 def get_factory_base_tool_ids() -> list[str]:
     return [tool.name for tool in get_factory_base_tools()]
+
+
+def get_factory_protected_tool_ids() -> list[str]:
+    """Return tool ids that require human approval before execution."""
+
+    return [tool.name for tool in SHELL_TOOLS]
