@@ -4,6 +4,12 @@
 
 这里的工具是给工厂使用的工程工具，不是被生成 Agent 的业务工具。
 
+当前实现入口：
+
+- 工具定义：`agent_factory.factory_graph.tools`
+- 图内注入：`agent_factory.factory_graph.graph.FACTORY_TOOLS_NODE`
+- 注入方式：LangGraph 官方 `ToolNode`，由 `messages` 中的 tool call 触发执行，执行后回到发起调用的 stage。
+
 ---
 
 ## 工具分层
@@ -23,17 +29,19 @@
 
 | Tool | 用途 | 风险 |
 |---|---|---|
-| `file.read` | 读取 Assembly、GraphDSL、wrapper、schema、报告 | 低 |
-| `file.write` | 写 Assembly draft、ToolPackage、harness、summary | 中 |
-| `file.patch` | 局部修复 Assembly、ToolPackage、Harness | 中 |
-| `file.list` | 发现 patterns、wrappers、tools、examples | 低 |
-| `file.exists` | 判断路径或资源是否存在 | 低 |
-| `file.mkdir` | 创建 package、report、harness 目录 | 中 |
+| `file_read` | 读取 Assembly、GraphDSL、wrapper、schema、报告 | 低 |
+| `file_write` | 写 Assembly draft、ToolPackage、harness、summary | 中 |
+| `file_patch` | 局部修复 Assembly、ToolPackage、Harness | 中 |
+| `file_list` | 发现 patterns、wrappers、tools、examples | 低 |
+| `file_exists` | 判断路径或资源是否存在 | 低 |
+| `file_mkdir` | 创建 package、report、harness 目录 | 中 |
+| `file_copy` | 复制文件或目录 | 中 |
 
 要求：
 
 - mutation 类工具必须记录路径、来源和 diff。
 - 不允许覆盖用户文件，除非 repair plan 明确要求。
+- 工具实现不绑定项目目录，实际可访问范围由运行环境和 sandbox 决定。
 
 ---
 
@@ -41,9 +49,10 @@
 
 | Tool | 用途 | 风险 |
 |---|---|---|
-| `search.rg` | 搜索 wrapper id、tool id、schema 字段、已有实现 | 低 |
-| `search.files` | 查找 docs、examples、contracts、reports | 低 |
-| `search.symbol` | 查 Python 类、函数、`@wrap_node` 注册点 | 低 |
+| `search_files` | 按 glob 查找任意可访问根路径下的文件或目录 | 低 |
+| `search_text` | 搜索任意可访问根路径下的文本内容，优先使用 `rg` | 低 |
+| `search_inspect_text` | 理解调用方传入文本的基础结构 | 低 |
+| `search_inspect_file` | 理解任意可访问文本文件的基础结构 | 低 |
 
 要求：
 
@@ -56,14 +65,16 @@
 
 | Tool | 用途 | 风险 |
 |---|---|---|
-| `shell.which` | 检查本地命令是否存在 | 低 |
-| `shell.env` | 查看允许范围内的环境变量状态 | 中 |
-| `shell.run` | 运行测试、编译、沙箱命令 | 高 |
+| `shell_which` | 检查本地命令是否存在 | 低 |
+| `shell_env` | 查看允许范围内的环境变量状态 | 中 |
+| `shell_run` | 运行测试、编译、沙箱命令 | 高 |
+| `shell_run_text` | 运行需要 shell 语法的命令字符串 | 高 |
+| `shell_cwd` | 查看运行进程当前目录 | 低 |
 
 要求：
 
-- `shell.env` 默认只返回是否存在，不返回 secret 明文。
-- `shell.run` 必须走 sandbox / approval / allowlist。
+- `shell_env` 默认只返回是否存在，不返回 secret 明文。
+- `shell_run` 必须走 sandbox / approval / allowlist。
 - 命令输出需要进入报告，供 repair 使用。
 
 ---
@@ -207,20 +218,32 @@ suggested_stage: string
 
 ---
 
-## v0 最小工具集合
+## v0 工具集合进度
 
-第一批建议先实现：
+已实现第一批：
 
 ```text
-file.read
-file.write
-file.patch
-file.list
-file.exists
-search.rg
-search.files
-shell.which
-shell.run
+file_read
+file_write
+file_patch
+file_list
+file_exists
+file_mkdir
+file_copy
+search_files
+search_text
+search_inspect_text
+search_inspect_file
+shell_which
+shell_run
+shell_run_text
+shell_cwd
+shell_env
+```
+
+后续工具：
+
+```text
 env.has
 python.import_check
 python.compile_check

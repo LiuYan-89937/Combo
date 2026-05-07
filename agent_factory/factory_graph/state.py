@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+from langchain_core.messages import BaseMessage
+
 from typing import Annotated, Any, TypedDict
 import operator
 
 
 class FactoryGraphState(TypedDict, total=False):
     requirement: str
+    force_manufacture: bool
+    messages: Annotated[list[BaseMessage], operator.add]
     current_stage: str
     status: str
+    graph_control: dict[str, Any]
+    capture_intent: dict[str, Any]
+    factory_response: dict[str, Any]
     stage_log: Annotated[list[dict[str, Any]], operator.add]
     requirement_brief: dict[str, Any]
     requirement_understanding: dict[str, Any]
