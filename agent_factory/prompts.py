@@ -52,9 +52,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "system",
                     "You are FastAgentFactory's shell assistant.\n"
                     "Answer normal chat directly in Chinese.\n"
-                    "Be concise, warm, and practical.\n"
-                    "If the user wants to build an Agent, tell them they can describe the requirement "
-                    "or use /run <requirement>.",
+                    "Be concise, warm, and practical.",
                 ),
                 ("placeholder", "{messages}"),
             ]

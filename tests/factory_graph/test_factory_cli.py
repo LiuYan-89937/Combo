@@ -57,24 +57,33 @@ class FactoryCliTest(unittest.TestCase):
         self.assertIn("stage skeleton test completed", result.output)
         self.assertIn("stage_log_count: 14", result.output)
 
-    def test_natural_language_tool_question_does_not_run_all_stages(self) -> None:
+    def test_shell_chat_mode_does_not_run_manufacture_stages(self) -> None:
         runner = CliRunner()
         with patch.dict(os.environ, MODEL_ENV):
-            result = runner.invoke(app, ["create-agent", "--prompt", "你现在有什么工具可以使用"])
+            result = runner.invoke(app, ["shell"], input="/chat\n今天天气不错\n/exit\n/quit\n")
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("file_read", result.output)
-        self.assertIn("search_text", result.output)
-        self.assertIn("stage_log_count", result.output)
+        self.assertIn("enter chat mode", result.output)
+        self.assertIn("Factory Chat Started", result.output)
+        self.assertIn("Factory Chat Completed", result.output)
+        self.assertNotIn("Node: capture_requirement", result.output)
         self.assertNotIn("Node: understand_requirement", result.output)
 
-    def test_natural_language_chat_does_not_enter_manufacture_stages(self) -> None:
+    def test_shell_create_agent_mode_runs_manufacture_stages(self) -> None:
         runner = CliRunner()
         with patch.dict(os.environ, MODEL_ENV):
-            result = runner.invoke(app, ["create-agent", "--prompt", "今天天气不错"])
+            result = runner.invoke(app, ["shell"], input="/create-agent\n你好\n/exit\n/quit\n")
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("capture subgraph answered a chat request", result.output)
-        self.assertIn("今天天气不错", result.output)
-        self.assertNotIn("Node: understand_requirement", result.output)
+        self.assertIn("enter create_agent mode", result.output)
+        self.assertIn("capture subgraph routed input to manufacture_agent", result.output)
+        self.assertIn("Node: understand_requirement", result.output)
+
+    def test_shell_requires_mode_before_natural_language_input(self) -> None:
+        runner = CliRunner()
+        with patch.dict(os.environ, MODEL_ENV):
+            result = runner.invoke(app, ["shell"], input="你好\n/quit\n")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("先输入 /chat 或 /create-agent 进入模式。", result.output)
+        self.assertNotIn("Factory Run Started", result.output)
 
 
 if __name__ == "__main__":

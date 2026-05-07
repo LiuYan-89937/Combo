@@ -9,6 +9,7 @@ import operator
 class FactoryGraphState(TypedDict, total=False):
     requirement: str
     force_manufacture: bool
+    interaction_mode: str
     messages: Annotated[list[BaseMessage], operator.add]
     current_stage: str
     status: str

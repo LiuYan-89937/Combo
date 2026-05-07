@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 
 from agent_factory.factory_graph.state import FactoryGraphState
-from agent_factory.factory_graph.tools import get_factory_base_tool_ids, get_factory_model_tools
+from agent_factory.factory_graph.tools import get_factory_base_tool_ids
 from agent_factory.models import get_task_model, get_task_model_settings
 from agent_factory.prompts import CaptureIntentOutput, PromptId, get_prompt, output_json_schema
 
@@ -158,7 +158,6 @@ class ModelFirstIntentRouter:
 def build_capture_requirement_subgraph():
     graph = StateGraph(FactoryGraphState)
     graph.add_node("intent_classify", _classify_intent)
-    graph.add_node("chat", _handle_chat)
     graph.add_node("inspect_factory", _handle_inspect_factory)
     graph.add_node("manufacture_agent", _handle_manufacture_agent)
     graph.add_node("repair_agent", _handle_repair_agent)
@@ -168,14 +167,13 @@ def build_capture_requirement_subgraph():
         "intent_classify",
         _route_after_classification,
         {
-            "chat": "chat",
             "inspect_factory": "inspect_factory",
             "manufacture_agent": "manufacture_agent",
             "repair_agent": "repair_agent",
             "unclear": "unclear",
         },
     )
-    for node_id in ["chat", "inspect_factory", "manufacture_agent", "repair_agent", "unclear"]:
+    for node_id in ["inspect_factory", "manufacture_agent", "repair_agent", "unclear"]:
         graph.add_edge(node_id, END)
     return graph.compile()
 
@@ -193,16 +191,17 @@ def run_capture_requirement_subgraph(state: FactoryGraphState) -> dict[str, Any]
 
 def _classify_intent(state: FactoryGraphState) -> dict[str, Any]:
     user_input = state.get("requirement", "")
-    if state.get("force_manufacture"):
+    interaction_mode = state.get("interaction_mode")
+    if interaction_mode == "create_agent" or state.get("force_manufacture"):
         return {
             "capture_intent": IntentDecision(
                 intent="manufacture_agent",
                 confidence=1.0,
-                reason="explicit /run command forced manufacture_agent route",
+                reason="explicit shell create_agent mode",
                 extracted_requirement=user_input,
                 entry_stage="capture_requirement",
                 should_run_graph=True,
-                router="explicit_command",
+                router="shell_mode",
                 fallback_used=False,
             ).to_dict()
         }
@@ -250,21 +249,6 @@ def _handle_inspect_factory(state: FactoryGraphState) -> dict[str, Any]:
     )
 
 
-def _handle_chat(state: FactoryGraphState) -> dict[str, Any]:
-    user_input = state.get("requirement", "")
-    response, model_error = _generate_chat_reply(state)
-    if response is None:
-        response = AIMessage(content=_fallback_chat_reply(user_input))
-    return _terminal_response(
-        state,
-        status="answered",
-        content=response,
-        route="chat",
-        message="capture subgraph answered a chat request.",
-        error=model_error,
-    )
-
-
 def _handle_repair_agent(state: FactoryGraphState) -> dict[str, Any]:
     content = (
         "我识别到这是返厂维修意图。维修入口还没有接入，后续会基于 harness/report "
@@ -280,7 +264,7 @@ def _handle_repair_agent(state: FactoryGraphState) -> dict[str, Any]:
 
 
 def _handle_unclear(state: FactoryGraphState) -> dict[str, Any]:
-    content = "我不确定你是想了解工厂能力，还是要开始制造 Agent。可以用 /tools 或 /run <需求>。"
+    content = "我不确定当前输入应进入哪个执行路径。"
     return _terminal_response(
         state,
         status="needs_clarification",
@@ -333,9 +317,11 @@ def _terminal_response(
 
 def _route_after_classification(state: FactoryGraphState) -> str:
     intent = state.get("capture_intent", {}).get("intent", "unclear")
-    if intent in {"chat", "inspect_factory", "manufacture_agent", "repair_agent"}:
+    if intent == "chat":
+        return "unclear"
+    if intent in {"inspect_factory", "manufacture_agent", "repair_agent"}:
         return intent
-    return "chat"
+    return "unclear"
 
 
 def _delta_patch(
@@ -365,37 +351,6 @@ def _delta_patch(
 
 def _contains_any(text: str, candidates: list[str]) -> bool:
     return any(candidate in text for candidate in candidates)
-
-
-def _generate_chat_reply(state: FactoryGraphState) -> tuple[AIMessage | None, str | None]:
-    task_model = get_task_model()
-    task_settings = get_task_model_settings()
-    if task_model is None:
-        return None, "task model is not configured"
-    try:
-        prompt_value = get_prompt(PromptId.FACTORY_CHAT).invoke(
-            {"messages": state.get("messages", [])}
-        )
-        chat_model = task_model.bind_tools(get_factory_model_tools())
-        if task_settings.max_tokens is not None:
-            chat_model = chat_model.bind(max_tokens=task_settings.max_tokens)
-        response = chat_model.invoke(prompt_value)
-        if isinstance(response, AIMessage):
-            if response.content or response.tool_calls:
-                return response, None
-        content = getattr(response, "content", "")
-        if str(content).strip():
-            return AIMessage(content=str(content).strip()), None
-        return None, "task model returned an empty chat response"
-    except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-def _fallback_chat_reply(user_input: str) -> str:
-    return (
-        f"我在。你刚才说的是：{user_input}\n"
-        "如果你想制造 Agent，可以直接描述需求，或者用 /run <需求> 明确开始。"
-    )
 
 
 def _decision_from_structured_output(

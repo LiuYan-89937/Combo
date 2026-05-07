@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from langchain_core.messages import HumanMessage
 from rich.console import Console
 from rich.prompt import Prompt
 
@@ -50,6 +51,8 @@ def create_agent(
             stop_after_stage=stop_after_stage,
             show_state=show_state,
             show_messages=True,
+            force_manufacture=True,
+            interaction_mode="create_agent",
         ),
     )
 
@@ -75,14 +78,39 @@ def shell() -> None:
     load_agentfactory_dotenv()
     ui = FactoryGraphShell(console=console)
     options = FactoryRunOptions()
+    prompt_reader = _make_prompt_reader()
+    mode: str | None = None
+    chat_messages = []
     ui.print_welcome()
     while True:
-        raw = Prompt.ask("[bold cyan]factory[/bold cyan]").strip()
-        if not raw:
-            continue
-        if raw in {"/exit", "/quit"}:
+        prompt_label = f"factory:{mode}" if mode else "factory"
+        try:
+            raw = prompt_reader(prompt_label).strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
             console.print("bye")
             return
+        if not raw:
+            continue
+        if raw == "/quit":
+            console.print("bye")
+            return
+        if raw == "/exit":
+            if mode is None:
+                console.print("bye")
+                return
+            console.print(f"exit {mode} mode")
+            mode = None
+            continue
+        if raw == "/chat":
+            mode = "chat"
+            chat_messages = []
+            console.print("enter chat mode")
+            continue
+        if raw in {"/create-agent", "/create—agent"}:
+            mode = "create_agent"
+            console.print("enter create_agent mode")
+            continue
         if raw == "/help":
             ui.print_help()
             continue
@@ -106,17 +134,26 @@ def shell() -> None:
             options.show_messages = _parse_on_off(raw.removeprefix("/messages ").strip())
             console.print(f"show_messages = {options.show_messages}")
             continue
-        if raw.startswith("/run "):
-            requirement = raw.removeprefix("/run ").strip()
-            run_options = FactoryRunOptions(
-                stop_after_stage=options.stop_after_stage,
-                show_state=options.show_state,
+        if mode is None:
+            console.print("先输入 /chat 或 /create-agent 进入模式。")
+            continue
+        requirement = raw
+        if mode == "chat":
+            chat_messages = [*chat_messages, HumanMessage(content=requirement)]
+            result = ui.run_chat_once(
+                chat_messages,
                 show_messages=options.show_messages,
-                force_manufacture=True,
+                show_state=options.show_state,
             )
-        else:
-            requirement = raw
-            run_options = options
+            chat_messages = result.get("messages", chat_messages)
+            continue
+        run_options = FactoryRunOptions(
+            stop_after_stage=options.stop_after_stage,
+            show_state=options.show_state,
+            show_messages=options.show_messages,
+            force_manufacture=mode == "create_agent",
+            interaction_mode=mode,
+        )
         if requirement:
             ui.run_once(requirement, options=run_options)
 
@@ -132,6 +169,16 @@ def _parse_on_off(value: str) -> bool:
     if value == "off":
         return False
     raise typer.BadParameter("expected on or off")
+
+
+def _make_prompt_reader():
+    try:
+        from prompt_toolkit import PromptSession
+    except ModuleNotFoundError:
+        return lambda label: Prompt.ask(f"[bold cyan]{label}[/bold cyan]")
+
+    session: PromptSession[str] = PromptSession()
+    return lambda label: session.prompt(f"{label}: ")
 
 
 if __name__ == "__main__":

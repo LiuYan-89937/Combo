@@ -31,9 +31,11 @@ class ChatModelTest(unittest.TestCase):
                 "AGENTFACTORY_OPENAI_BASE_URL": "https://openai-compatible.example/v1",
                 "AGENTFACTORY_LLM_TEMPERATURE": "0.2",
                 "AGENTFACTORY_LLM_MAX_OUTPUT_TOKENS": "2048",
+                "AGENTFACTORY_LLM_THINKING": "enabled",
                 "AGENTFACTORY_TASK_MODEL": "task-model",
                 "AGENTFACTORY_TASK_TEMPERATURE": "0",
                 "AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS": "512",
+                "AGENTFACTORY_TASK_THINKING": "disabled",
                 "UNRELATED_MODEL": "ignored-model",
                 "UNRELATED_API_KEY": "ignored-key",
                 "UNRELATED_BASE_URL": "https://ignored.example/v1",
@@ -51,13 +53,17 @@ class ChatModelTest(unittest.TestCase):
         self.assertEqual(main_settings.base_url, "https://openai-compatible.example/v1")
         self.assertEqual(main_settings.temperature, 0.2)
         self.assertEqual(main_settings.max_tokens, 2048)
+        self.assertEqual(main_settings.thinking, "enabled")
         self.assertEqual(task_settings.model, "task-model")
         self.assertEqual(task_settings.api_key, "shared-key")
         self.assertEqual(task_settings.base_url, "https://openai-compatible.example/v1")
         self.assertEqual(task_settings.temperature, 0)
         self.assertEqual(task_settings.max_tokens, 512)
+        self.assertEqual(task_settings.thinking, "disabled")
         self.assertIsInstance(main_model, ChatOpenAI)
         self.assertIsInstance(task_model, ChatOpenAI)
+        self.assertEqual(main_model.extra_body, {"thinking": {"type": "enabled"}})
+        self.assertEqual(task_model.extra_body, {"thinking": {"type": "disabled"}})
 
     def test_returns_none_when_model_is_not_configured(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -106,6 +112,25 @@ class ChatModelTest(unittest.TestCase):
                     os.environ["AGENTFACTORY_OPENAI_BASE_URL"],
                     "https://env-file.example/v1",
                 )
+
+    def test_invalid_thinking_value_is_ignored(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AGENTFACTORY_OPENAI_MODEL": "main-model",
+                "AGENTFACTORY_OPENAI_API_KEY": "shared-key",
+                "AGENTFACTORY_OPENAI_BASE_URL": "https://openai-compatible.example/v1",
+                "AGENTFACTORY_LLM_THINKING": "maybe",
+            },
+            clear=True,
+        ):
+            reset_chat_models()
+            settings = get_main_model_settings()
+            model = get_main_model()
+
+        self.assertIsNone(settings.thinking)
+        self.assertIsInstance(model, ChatOpenAI)
+        self.assertIsNone(model.extra_body)
 
 
 if __name__ == "__main__":

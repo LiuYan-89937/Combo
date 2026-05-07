@@ -4,13 +4,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from rich.console import Console
 from rich.json import JSON
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from agent_factory.factory_graph.chat_graph import FACTORY_CHAT_TOOLS_NODE, build_factory_chat_graph
 from agent_factory.factory_graph.constants import STAGE_IDS
 from agent_factory.factory_graph.graph import FACTORY_TOOLS_NODE, build_factory_graph
 from agent_factory.factory_graph.tools import get_factory_base_tool_ids
@@ -22,6 +23,7 @@ class FactoryRunOptions:
     show_state: bool = False
     show_messages: bool = True
     force_manufacture: bool = False
+    interaction_mode: str | None = None
 
 
 class FactoryGraphShell:
@@ -32,7 +34,7 @@ class FactoryGraphShell:
         self.console.print(
             Panel.fit(
                 "Factory Agent Shell\n"
-                "输入需求直接运行工厂图；输入 /help 查看命令；输入 /exit 退出。",
+                "输入 /chat 或 /create-agent 进入模式；输入 /exit 退出当前模式。",
                 title="FastAgentFactory",
                 border_style="cyan",
             )
@@ -43,13 +45,14 @@ class FactoryGraphShell:
         table.add_column("Command", style="cyan", no_wrap=True)
         table.add_column("Meaning")
         table.add_row("/help", "显示帮助")
+        table.add_row("/chat", "进入聊天模式，后续输入都按 chat 处理")
+        table.add_row("/create-agent", "进入制造模式，后续输入都按 Agent 构建需求处理")
+        table.add_row("/exit", "退出当前模式；未进入模式时退出 shell")
         table.add_row("/stages", "列出 FactoryGraph 的 14 个阶段")
         table.add_row("/tools", "列出当前注入到 ToolNode 的基础工具")
-        table.add_row("/run <需求>", "运行一次工厂图")
         table.add_row("/stop <stage_id>", "设置本轮之后默认 stop_after_stage")
         table.add_row("/state on|off", "是否打印最终 state JSON")
         table.add_row("/messages on|off", "是否打印最终 messages")
-        table.add_row("/exit", "退出 shell")
         self.console.print(table)
 
     def print_stages(self) -> None:
@@ -75,6 +78,7 @@ class FactoryGraphShell:
             "messages": [HumanMessage(content=requirement)],
             "status": "running",
             "force_manufacture": options.force_manufacture,
+            "interaction_mode": options.interaction_mode,
             "stage_log": [],
             "errors": [],
         }
@@ -105,10 +109,47 @@ class FactoryGraphShell:
             self._print_state(final_state)
         return final_state
 
+    def run_chat_once(
+        self,
+        messages: list[BaseMessage],
+        *,
+        show_messages: bool = True,
+        show_state: bool = False,
+    ) -> dict[str, Any]:
+        app = build_factory_chat_graph()
+        initial_state = {
+            "messages": messages,
+            "status": "running",
+            "errors": [],
+        }
+        self.console.rule("[bold cyan]Factory Chat Started")
+
+        final_state: dict[str, Any] = initial_state
+        streamed_message = False
+        for stream_mode, chunk in app.stream(
+            initial_state,
+            stream_mode=["updates", "values", "messages"],
+        ):
+            if stream_mode == "updates":
+                self._print_update_chunk(chunk)
+            elif stream_mode == "values":
+                final_state = chunk
+            elif stream_mode == "messages":
+                streamed_message = self._print_message_stream_chunk(chunk) or streamed_message
+        if streamed_message:
+            self.console.print()
+        self.console.rule("[bold green]Factory Chat Completed")
+        self._print_summary(final_state)
+        if show_messages:
+            self._print_messages(final_state.get("messages", []))
+        if show_state:
+            self._print_state(final_state)
+        return final_state
+
     def _print_update_chunk(self, chunk: dict[str, Any]) -> None:
         for node_id, patch in chunk.items():
             title = f"Node: {node_id}"
-            if node_id == FACTORY_TOOLS_NODE:
+            if node_id in {FACTORY_TOOLS_NODE, FACTORY_CHAT_TOOLS_NODE}:
                 title = f"ToolNode: {node_id}"
             self.console.print(Panel(Text(_format_patch(patch)), title=title, border_style="blue"))
 
@@ -116,10 +157,15 @@ class FactoryGraphShell:
         message_chunk, metadata = chunk
         if "nostream" in set(metadata.get("tags", [])):
             return False
+        if metadata.get("langgraph_node") in {FACTORY_TOOLS_NODE, FACTORY_CHAT_TOOLS_NODE}:
+            return False
+        if isinstance(message_chunk, ToolMessage):
+            return False
         content = getattr(message_chunk, "content", "")
         if not content:
             return False
-        self.console.print(str(content), end="")
+        self.console.file.write(str(content))
+        self.console.file.flush()
         return True
 
     def _print_summary(self, state: dict[str, Any]) -> None:

@@ -18,6 +18,7 @@ class ChatModelSettings:
     temperature: float | None = None
     max_tokens: int | None = None
     timeout_seconds: float | None = None
+    thinking: str | None = None
 
     @property
     def available(self) -> bool:
@@ -70,6 +71,9 @@ def _create_model(settings: ChatModelSettings) -> BaseChatModel | None:
         kwargs["max_tokens"] = settings.max_tokens
     if settings.timeout_seconds is not None:
         kwargs["timeout"] = settings.timeout_seconds
+    thinking_body = _thinking_extra_body(settings.thinking)
+    if thinking_body is not None:
+        kwargs["extra_body"] = thinking_body
     return ChatOpenAI(**kwargs)
 
 
@@ -82,6 +86,7 @@ def _main_settings() -> ChatModelSettings:
         temperature=_env_float("AGENTFACTORY_LLM_TEMPERATURE"),
         max_tokens=_env_int("AGENTFACTORY_LLM_MAX_OUTPUT_TOKENS"),
         timeout_seconds=_env_float("AGENTFACTORY_LLM_TIMEOUT_SECONDS"),
+        thinking=_env_choice("AGENTFACTORY_LLM_THINKING", {"enabled", "disabled"}),
     )
 
 
@@ -94,6 +99,7 @@ def _task_settings() -> ChatModelSettings:
         temperature=_env_float("AGENTFACTORY_TASK_TEMPERATURE"),
         max_tokens=_env_int("AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS"),
         timeout_seconds=_env_float("AGENTFACTORY_LLM_TIMEOUT_SECONDS"),
+        thinking=_env_choice("AGENTFACTORY_TASK_THINKING", {"enabled", "disabled"}),
     )
 
 
@@ -115,3 +121,21 @@ def _env_int(name: str) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _env_choice(name: str, allowed: set[str]) -> str | None:
+    value = os.getenv(name)
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized in allowed:
+        return normalized
+    return None
+
+
+def _thinking_extra_body(thinking: str | None) -> dict[str, Any] | None:
+    if thinking == "disabled":
+        return {"thinking": {"type": "disabled"}}
+    if thinking == "enabled":
+        return {"thinking": {"type": "enabled"}}
+    return None
