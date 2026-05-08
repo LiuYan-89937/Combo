@@ -10,7 +10,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from agent_factory.env import load_agentfactory_dotenv
-from agent_factory.factory_graph.constants import STAGE_IDS
+from agent_factory.factory_graph.constants import DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE, STAGE_IDS
 from agent_factory.factory_graph.runner import FactoryGraphRunner
 from agent_factory.factory_graph.session import (
     FactorySessionRecord,
@@ -44,13 +44,13 @@ def create_agent(
     stop_after_stage: Annotated[
         str | None,
         typer.Option("--stop-after-stage", help="运行到指定 FactoryGraph stage 后停止。"),
-    ] = None,
+    ] = DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE,
     show_state: Annotated[bool, typer.Option("--json", help="打印最终 state JSON。")] = False,
 ) -> None:
     """Run one FactoryGraph build request."""
 
     load_agentfactory_dotenv()
-    _validate_stage(stop_after_stage)
+    stop_after_stage = _normalize_stop_after_stage(stop_after_stage)
     shell = FactoryGraphShell(console=console)
     shell.run_once(
         prompt,
@@ -79,16 +79,29 @@ def test_stages(
 
 
 @app.command()
-def shell() -> None:
+def shell(
+    resume_latest: Annotated[
+        bool,
+        typer.Option("--resume-latest", help="启动时恢复最近一次 Factory 会话。"),
+    ] = False,
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session-id", help="启动时恢复指定 Factory session_id。"),
+    ] = None,
+) -> None:
     """Open an interactive shell for talking to the Factory Agent graph."""
 
     load_agentfactory_dotenv()
     session_manager = FactorySessionManager.from_env()
-    session_record = session_manager.latest() or session_manager.create()
+    session_record = _select_initial_session(
+        session_manager,
+        session_id=session_id,
+        resume_latest=resume_latest,
+    )
     checkpointer = build_factory_checkpointer()
     use_checkpoint_memory = is_factory_checkpointer_persistent(checkpointer)
     ui = FactoryGraphShell(console=console, checkpointer=checkpointer)
-    options = FactoryRunOptions()
+    options = FactoryRunOptions(stop_after_stage=DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE)
     prompt_reader = _make_prompt_reader()
     mode = session_record.current_mode
     ui.print_welcome()
@@ -155,8 +168,7 @@ def shell() -> None:
             ui.print_tools()
             continue
         if raw.startswith("/stop "):
-            stage_id = raw.removeprefix("/stop ").strip() or None
-            _validate_stage(stage_id)
+            stage_id = _normalize_stop_after_stage(raw.removeprefix("/stop ").strip())
             options.stop_after_stage = stage_id
             console.print(f"stop_after_stage = {stage_id}")
             continue
@@ -225,6 +237,13 @@ def _validate_stage(stage_id: str | None) -> None:
         raise typer.BadParameter(f"unknown stage_id: {stage_id}")
 
 
+def _normalize_stop_after_stage(stage_id: str | None) -> str | None:
+    if stage_id in {None, "", "off", "none"}:
+        return None
+    _validate_stage(stage_id)
+    return stage_id
+
+
 def _parse_on_off(value: str) -> bool:
     if value == "on":
         return True
@@ -241,6 +260,24 @@ def _make_prompt_reader():
 
     session: PromptSession[str] = PromptSession()
     return lambda label: session.prompt(f"{label}: ")
+
+
+def _select_initial_session(
+    session_manager: FactorySessionManager,
+    *,
+    session_id: str | None,
+    resume_latest: bool,
+) -> FactorySessionRecord:
+    if session_id and resume_latest:
+        raise typer.BadParameter("--session-id 和 --resume-latest 只能选择一个")
+    if session_id:
+        try:
+            return session_manager.load(session_id)
+        except FileNotFoundError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    if resume_latest:
+        return session_manager.latest() or session_manager.create()
+    return session_manager.create()
 
 
 def _print_active_session(session_id: str, mode: str | None) -> None:

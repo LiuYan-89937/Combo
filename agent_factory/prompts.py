@@ -9,10 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PromptId(str, Enum):
-    CAPTURE_REQUIREMENT_INTENT = "factory.capture_requirement.intent"
-    CAPTURE_REQUIREMENT_CLARITY = "factory.capture_requirement.clarity"
-    CAPTURE_REQUIREMENT_QUESTION = "factory.capture_requirement.question"
-    CAPTURE_REQUIREMENT_MERGE = "factory.capture_requirement.merge"
+    REQUIREMENT_CAPTURE_INTENT = "factory.requirement_capture.intent"
+    REQUIREMENT_CAPTURE_CLARITY = "factory.requirement_capture.clarity"
+    REQUIREMENT_CAPTURE_QUESTION = "factory.requirement_capture.question"
+    REQUIREMENT_CAPTURE_MERGE = "factory.requirement_capture.merge"
+    BUSINESS_PLAN_REVIEW_DRAFT = "factory.business_plan_review.draft"
+    BUSINESS_PLAN_REVIEW_REVISE = "factory.business_plan_review.revise"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -69,7 +71,7 @@ class RequirementMergeOutput(BaseModel):
 
 
 def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
-    if prompt_id == PromptId.CAPTURE_REQUIREMENT_INTENT:
+    if prompt_id == PromptId.REQUIREMENT_CAPTURE_INTENT:
         return ChatPromptTemplate.from_messages(
             [
                 (
@@ -88,7 +90,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ("user", "Classify this user input and return JSON only:\n{user_input}"),
             ]
         )
-    if prompt_id == PromptId.CAPTURE_REQUIREMENT_CLARITY:
+    if prompt_id == PromptId.REQUIREMENT_CAPTURE_CLARITY:
         return ChatPromptTemplate.from_messages(
             [
                 (
@@ -110,7 +112,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
-    if prompt_id == PromptId.CAPTURE_REQUIREMENT_QUESTION:
+    if prompt_id == PromptId.REQUIREMENT_CAPTURE_QUESTION:
         return ChatPromptTemplate.from_messages(
             [
                 (
@@ -134,7 +136,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
-    if prompt_id == PromptId.CAPTURE_REQUIREMENT_MERGE:
+    if prompt_id == PromptId.REQUIREMENT_CAPTURE_MERGE:
         return ChatPromptTemplate.from_messages(
             [
                 (
@@ -154,6 +156,52 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "当前需求版本：\n{current_requirement}\n\n"
                     "本轮问题和用户回答：\n{answers}\n\n"
                     "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.BUSINESS_PLAN_REVIEW_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第一阶段的业务制造计划撰写器。\n"
+                    "你的任务是把第一阶段需求整理成一份条理清晰的纯文本业务制造计划。\n"
+                    "不要输出 YAML，不要输出 JSON，不要输出代码块。\n\n"
+                    "计划必须使用以下固定标题，并保持标题原样：\n"
+                    "{required_sections}\n\n"
+                    "只从业务层面描述 Agent 应该服务谁、解决什么问题、有哪些业务行为、"
+                    "如何与用户互动、业务上不负责什么、怎样算有用。\n\n"
+                    "禁止在本阶段写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
+                    "数据库方案、API 方案或具体工具定义。这些属于后续阶段。\n\n"
+                    "【后续规划提示】只能写业务层面后续要关注的事项，不能提前规划工具或资源。",
+                ),
+                (
+                    "user",
+                    "第一阶段需求如下：\n{requirement_brief}\n\n"
+                    "请输出第一阶段业务制造计划纯文本。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.BUSINESS_PLAN_REVIEW_REVISE:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第一阶段的业务制造计划修订器。\n"
+                    "根据用户本轮修改意见，重写当前业务制造计划。\n"
+                    "不要输出 YAML，不要输出 JSON，不要输出代码块。\n\n"
+                    "计划必须使用以下固定标题，并保持标题原样：\n"
+                    "{required_sections}\n\n"
+                    "只修订业务制造计划本身，不保留修订过程，不追加对话记录。\n"
+                    "禁止写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
+                    "数据库方案、API 方案或具体工具定义。",
+                ),
+                (
+                    "user",
+                    "第一阶段需求：\n{requirement_brief}\n\n"
+                    "当前业务制造计划：\n{current_plan_text}\n\n"
+                    "用户本轮修改意见：\n{revision_instruction}\n\n"
+                    "请输出修订后的第一阶段业务制造计划纯文本。",
                 ),
             ]
         )

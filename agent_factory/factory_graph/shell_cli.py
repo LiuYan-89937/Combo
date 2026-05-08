@@ -65,9 +65,9 @@ class FactoryGraphShell:
         table.add_row("/sessions", "列出已保存的 Factory 会话")
         table.add_row("/new-session", "创建并切换到新的 Factory 会话")
         table.add_row("/resume <session_id>", "切换并恢复指定 Factory 会话")
-        table.add_row("/stages", "列出 FactoryGraph 的 14 个阶段")
+        table.add_row("/stages", "列出 FactoryGraph 的 10 个阶段")
         table.add_row("/tools", "列出当前注入到 ToolNode 的基础工具")
-        table.add_row("/stop <stage_id>", "设置本轮之后默认 stop_after_stage")
+        table.add_row("/stop <stage_id|off>", "设置或关闭本轮之后默认 stop_after_stage")
         table.add_row("/state on|off", "是否打印最终 state JSON")
         table.add_row("/messages on|off", "是否打印最终 messages")
         self.console.print(table)
@@ -139,6 +139,7 @@ class FactoryGraphShell:
             self.console.print()
         self.console.rule("[bold green]Factory Run Completed")
         self._print_requirement_brief(final_state)
+        self._print_refined_plan(final_state)
         self._print_summary(final_state)
         if options.show_messages:
             self._print_messages(final_state.get("messages", []))
@@ -240,6 +241,18 @@ class FactoryGraphShell:
             )
         )
 
+    def _print_refined_plan(self, state: dict[str, Any]) -> None:
+        refined_plan_text = state.get("refined_plan_text")
+        if not refined_plan_text:
+            return
+        self.console.print(
+            Panel(
+                str(refined_plan_text),
+                title="Refined Business Plan",
+                border_style="green",
+            )
+        )
+
     def _print_messages(self, messages: Iterable[BaseMessage]) -> None:
         table = Table(title="Messages", show_header=True, header_style="bold cyan")
         table.add_column("#", justify="right", no_wrap=True)
@@ -264,6 +277,8 @@ class FactoryGraphShell:
             payload = getattr(item, "value", item)
             if isinstance(payload, dict) and payload.get("type") == "requirement_clarification":
                 resume = self._read_requirement_clarification(payload)
+            elif isinstance(payload, dict) and payload.get("type") == "plan_review":
+                resume = self._read_plan_review(payload)
             else:
                 self._print_interrupt_payload(payload)
                 resume = {"approved": self._read_approval()}
@@ -301,6 +316,35 @@ class FactoryGraphShell:
         return {
             "type": "requirement_clarification_answer",
             "answers": answers,
+        }
+
+    def _read_plan_review(self, payload: dict[str, Any]) -> dict[str, Any]:
+        plan_text = str(payload.get("plan_text") or "")
+        message = str(payload.get("message") or "请审查计划。")
+        self.console.print(Panel(plan_text, title="Refined Business Plan", border_style="yellow"))
+        self.console.print(f"[yellow]{message}[/yellow]")
+        options = [
+            {
+                "id": "continue",
+                "label": "继续",
+                "description": "使用这个计划进入下一阶段",
+            },
+            {
+                "id": "custom",
+                "label": "自定义输入",
+                "description": "输入修改意见并重新生成计划",
+            },
+        ]
+        selected = _select_option_with_prompt_toolkit(options)
+        if selected is None:
+            selected = _select_option_with_numbered_prompt(self.console, options)
+        if selected.get("id") == "continue":
+            return {"type": "plan_review_result", "decision": "continue"}
+        revision_instruction = self.console.input("自定义修改意见: ").strip()
+        return {
+            "type": "plan_review_result",
+            "decision": "revise",
+            "revision_instruction": revision_instruction,
         }
 
     def _print_interrupt_payload(self, payload: Any) -> None:

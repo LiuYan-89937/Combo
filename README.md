@@ -72,6 +72,15 @@ uv run agentfactory init
 uv run agentfactory shell
 ```
 
+默认每次启动都会创建新的 Factory 会话，不会自动继承上一次上下文。
+
+需要恢复历史会话时使用显式入口：
+
+```bash
+uv run agentfactory shell --resume-latest
+uv run agentfactory shell --session-id <session_id>
+```
+
 Shell 命令：
 
 ```text
@@ -113,6 +122,7 @@ Shell 命令：
 /messages on
 /messages off
 /stop <stage_id>
+/stop off
 ```
 
 聊天模式示例：
@@ -139,13 +149,23 @@ Shell 命令：
 uv run agentfactory create-agent --prompt "创建一个记账 Agent"
 ```
 
+默认断点在第一阶段 `requirement_capture`：该阶段会完成需求澄清并展示业务制造计划，用户确认继续后本轮停止。
+
 运行到指定工厂阶段后停止，并打印最终 state：
 
 ```bash
 uv run agentfactory create-agent \
   --prompt "创建一个记账 Agent" \
-  --stop-after-stage capture_requirement \
+  --stop-after-stage requirement_capture \
   --json
+```
+
+关闭断点并继续跑后续阶段：
+
+```bash
+uv run agentfactory create-agent \
+  --prompt "创建一个记账 Agent" \
+  --stop-after-stage off
 ```
 
 运行完整阶段骨架：
@@ -156,22 +176,18 @@ uv run agentfactory test-stages --prompt "创建一个记账 Agent"
 
 ## 工厂阶段
 
-当前生产图包含 14 个阶段：
+当前生产图包含 10 个 RuntimeKernel-native 阶段：
 
-1. `capture_requirement`
-2. `understand_requirement`
-3. `plan_capabilities`
-4. `identify_conditions`
-5. `plan_resource_needs`
-6. `collect_evidence`
-7. `build_resource_contracts`
-8. `decide_readiness`
-9. `plan_implementation`
-10. `generate_package_specs`
-11. `generate_tools`
-12. `sandbox_test_and_repair`
-13. `generate_harness`
-14. `complete_summary`
+1. `requirement_capture`
+2. `runtime_pattern_selection`
+3. `graph_behavior_planning`
+4. `node_strategy_planning`
+5. `tool_capability_planning`
+6. `resource_and_condition_planning`
+7. `assembly_spec_generation`
+8. `package_generation`
+9. `harness_generation_and_test`
+10. `repair_or_finalize`
 
 ## 基础工具
 

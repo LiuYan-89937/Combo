@@ -139,10 +139,8 @@ evidence: {}
 
 对应阶段：
 
-- `identify_conditions`
-- `plan_resource_needs`
-- `build_resource_contracts`
-- `decide_readiness`
+- `resource_and_condition_planning`
+- `tool_capability_planning`
 
 ---
 
@@ -165,12 +163,12 @@ evidence: {}
 
 | Tool | 用途 | 对应阶段 |
 |---|---|---|
-| `assembly.load` | 读取 AgentAssemblySpec | `generate_package_specs` |
-| `assembly.validate` | 调 AgentAssemblyValidator | `decide_readiness`, `sandbox_test_and_repair` |
-| `assembly.compile` | 调 AgentAssemblyCompiler | `generate_package_specs`, `sandbox_test_and_repair` |
-| `assembly.run_harness` | 调 AgentAssemblyRunner.run_spec/run_path | `sandbox_test_and_repair` |
-| `assembly.run_invocation` | 回放真实运行故障 | `sandbox_test_and_repair` |
-| `assembly.patch` | 受控修改 AssemblySpec | `generate_package_specs`, `sandbox_test_and_repair` |
+| `assembly.load` | 读取 AgentAssemblySpec | `assembly_spec_generation` |
+| `assembly.validate` | 调 AgentAssemblyValidator | `assembly_spec_generation`, `harness_generation_and_test`, `repair_or_finalize` |
+| `assembly.compile` | 调 AgentAssemblyCompiler | `assembly_spec_generation`, `harness_generation_and_test` |
+| `assembly.run_harness` | 调 AgentAssemblyRunner.run_spec/run_path | `harness_generation_and_test` |
+| `assembly.run_invocation` | 回放真实运行故障 | `harness_generation_and_test`, `repair_or_finalize` |
+| `assembly.patch` | 受控修改 AssemblySpec | `assembly_spec_generation`, `repair_or_finalize` |
 
 要求：
 
@@ -183,11 +181,11 @@ evidence: {}
 
 | Tool | 用途 | 对应阶段 |
 |---|---|---|
-| `tool_contract.create` | 从资源需求生成工具契约草案 | `build_resource_contracts` |
-| `tool_contract.validate` | 校验 id、输入、输出、风险、依赖资源 | `build_resource_contracts`, `decide_readiness` |
-| `tool_package.generate` | 根据 ToolContract 生成实现或 adapter | `generate_tools` |
-| `tool_package.test` | 运行工具沙箱测试 | `sandbox_test_and_repair` |
-| `tool_package.register` | 注册通过测试的工具 id | `generate_tools`, `sandbox_test_and_repair` |
+| `tool_contract.create` | 从资源需求生成工具契约草案 | `tool_capability_planning`, `resource_and_condition_planning` |
+| `tool_contract.validate` | 校验 id、输入、输出、风险、依赖资源 | `resource_and_condition_planning`, `assembly_spec_generation` |
+| `tool_package.generate` | 根据 ToolContract 生成实现或 adapter | `package_generation` |
+| `tool_package.test` | 运行工具沙箱测试 | `harness_generation_and_test` |
+| `tool_package.register` | 注册通过测试的工具 id | `package_generation`, `harness_generation_and_test` |
 
 工具沙箱测试至少覆盖：
 
@@ -203,9 +201,9 @@ evidence: {}
 
 | Tool | 用途 | 对应阶段 |
 |---|---|---|
-| `report.write` | 写 HarnessReport、InvocationReport、ToolTestReport | `sandbox_test_and_repair`, `complete_summary` |
-| `report.read` | 读取已有报告 | `sandbox_test_and_repair`, `complete_summary` |
-| `report.extract_repair_signals` | 提取返厂维修线索 | `sandbox_test_and_repair` |
+| `report.write` | 写 HarnessReport、InvocationReport、ToolTestReport | `harness_generation_and_test`, `repair_or_finalize` |
+| `report.read` | 读取已有报告 | `harness_generation_and_test`, `repair_or_finalize` |
+| `report.extract_repair_signals` | 提取返厂维修线索 | `repair_or_finalize` |
 
 `report.extract_repair_signals` 输出：
 

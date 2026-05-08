@@ -1,6 +1,6 @@
 # Runtime Kernel Development
 
-本文档只讨论 `RuntimeKernel` 本身的开发，不讨论工厂十四阶段的实现细节，也不讨论具体 Agent 的业务配置内容。
+本文档只讨论 `RuntimeKernel` 本身的开发，不讨论工厂 RuntimeKernel 阶段的实现细节，也不讨论具体 Agent 的业务配置内容。
 
 ---
 
@@ -44,7 +44,7 @@
 - 生成具体 Agent 的业务逻辑
 - 生成业务工具代码
 - 编写知识库内容
-- 定义工厂十四阶段的内部提示词
+- 定义工厂 RuntimeKernel 阶段的内部提示词
 - 让用户自由提交任意 LangGraph 代码直接运行
 
 ---
@@ -423,7 +423,7 @@ Kernel 对 Pattern 的支持必须包括：
 - 用户扩展 Pattern 的管理系统
 - 用户自定义节点类型的开放注册
 - 任意运行时代码生成
-- 与工厂十四阶段的字段级映射细节
+- 与工厂 RuntimeKernel 阶段的字段级映射细节
 
 这些内容在 Kernel 核心结构稳定后再继续设计。
 

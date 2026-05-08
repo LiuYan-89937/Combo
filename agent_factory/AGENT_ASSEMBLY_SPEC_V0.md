@@ -8,7 +8,7 @@
 
 - 定义一个具体 Agent 如何声明身份、运行图、能力、策略、上下文、测试场景
 - 定义这些声明如何转换成 `RuntimeKernel.compile(pattern_id, bindings, services)`
-- 明确 Agent 装配层与 RuntimeKernel、工厂十四阶段、真实外部服务之间的边界
+- 明确 Agent 装配层与 RuntimeKernel、工厂 RuntimeKernel 阶段、真实外部服务之间的边界
 
 ---
 
@@ -105,7 +105,7 @@ Agent Assembly Spec 不重复定义：
 
 ### 2.5 工厂输出与运行时解耦
 
-工厂十四阶段可以生成或修改 Agent Assembly Spec。
+工厂 RuntimeKernel 阶段可以生成或修改 Agent Assembly Spec。
 
 但 RuntimeKernel 只消费编译后的：
 
@@ -140,7 +140,7 @@ Agent Assembly Spec 必须方便工厂模型写入、修改和理解。
 
 `Agent Assembly Spec v0` 当前不负责：
 
-- 定义工厂十四阶段内部提示词
+- 定义工厂 RuntimeKernel 阶段内部提示词
 - 生成真实工具实现代码
 - 生成真实模型客户端配置
 - 管理 secret 明文
@@ -808,50 +808,38 @@ write_mode: create | patch | repair
 
 ## 14.3 阶段写入边界
 
-建议工厂十四阶段按 section 分工写入：
+建议工厂 RuntimeKernel 阶段按 section 分工写入：
 
 ```text
-capture_requirement
+requirement_capture
   -> agent.description / io_contract.input / authoring.open_questions
 
-understand_requirement
-  -> agent.tags / capabilities 初稿 / assumptions
+runtime_pattern_selection
+  -> runtime.pattern_id / runtime.session_config
 
-plan_capabilities
-  -> capabilities
+graph_behavior_planning
+  -> graph_overrides / node intent notes
 
-identify_conditions
-  -> policy / interrupts
+node_strategy_planning
+  -> graph_overrides.node_wrappers / policy / tool visibility notes
 
-plan_resource_needs
-  -> services / memory / knowledge / context
+tool_capability_planning
+  -> tools draft / approval notes
 
-collect_evidence
-  -> knowledge.source_refs / metadata.evidence_refs
+resource_and_condition_planning
+  -> services.profiles / resource contracts / environment assumptions
 
-build_resource_contracts
-  -> services.profiles / tools
+assembly_spec_generation
+  -> AgentAssemblySpec draft
 
-decide_readiness
-  -> authoring.status / validation_notes
+package_generation
+  -> metadata.package_refs / generated package artifacts
 
-plan_implementation
-  -> runtime / bindings
+harness_generation_and_test
+  -> harness.scenarios / validation_notes / repair evidence
 
-generate_package_specs
-  -> metadata.package_refs
-
-generate_tools
-  -> capabilities.tools
-
-sandbox_test_and_repair
-  -> harness.scenarios / validation_notes / repair patches
-
-generate_harness
-  -> harness.scenarios
-
-complete_summary
-  -> metadata.summary / authoring.status
+repair_or_finalize
+  -> metadata.summary / authoring.status / final AssemblySpec
 ```
 
 规则：
@@ -1047,54 +1035,42 @@ Validator v0 至少检查：
 
 ---
 
-## 18. 与工厂十四阶段的关系
+## 18. 与工厂 RuntimeKernel 阶段的关系
 
-工厂十四阶段可以作为 Agent Assembly Spec 的生成过程。
+工厂 RuntimeKernel 阶段可以作为 Agent Assembly Spec 的生成过程。
 
 建议对应关系：
 
 ```text
-capture_requirement
+requirement_capture
   -> agent.description / io_contract.input
 
-understand_requirement
-  -> capabilities / policy 初稿
+runtime_pattern_selection
+  -> runtime.pattern_id
 
-plan_capabilities
-  -> capabilities
+graph_behavior_planning
+  -> node responsibilities / routing / interrupts
 
-identify_conditions
-  -> policy / interrupts
+node_strategy_planning
+  -> wrappers / context / memory / policy / tool visibility
 
-plan_resource_needs
-  -> services / knowledge / memory
+tool_capability_planning
+  -> tool capability needs
 
-collect_evidence
-  -> knowledge.source_refs
+resource_and_condition_planning
+  -> resource and condition contracts
 
-build_resource_contracts
-  -> services.profiles / tool declarations
+assembly_spec_generation
+  -> AgentAssemblySpec draft
 
-decide_readiness
-  -> harness.scenarios
+package_generation
+  -> generated package artifacts
 
-plan_implementation
-  -> bindings / runtime
+harness_generation_and_test
+  -> harness report
 
-generate_package_specs
-  -> metadata / packaging refs
-
-generate_tools
-  -> tool capability declarations
-
-sandbox_test_and_repair
-  -> harness assertions / repair notes
-
-generate_harness
-  -> harness.scenarios
-
-complete_summary
-  -> metadata.summary
+repair_or_finalize
+  -> final AgentAssemblySpec and repair notes
 ```
 
 注意：

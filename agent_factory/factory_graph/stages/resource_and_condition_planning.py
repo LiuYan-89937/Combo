@@ -5,4 +5,4 @@ from agent_factory.factory_graph.state import FactoryGraphState
 
 
 def run(state: FactoryGraphState) -> dict:
-    return run_empty_stage(state, stage_id="generate_harness")
+    return run_empty_stage(state, stage_id="resource_and_condition_planning")

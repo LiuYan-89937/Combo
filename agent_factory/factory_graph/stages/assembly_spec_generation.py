@@ -5,4 +5,4 @@ from agent_factory.factory_graph.state import FactoryGraphState
 
 
 def run(state: FactoryGraphState) -> dict:
-    return run_empty_stage(state, stage_id="sandbox_test_and_repair")
+    return run_empty_stage(state, stage_id="assembly_spec_generation")

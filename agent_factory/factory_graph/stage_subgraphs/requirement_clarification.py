@@ -27,7 +27,7 @@ FACTORY_RUNTIME_ENVIRONMENT = """当前 Factory 生产目标与运行环境：
 """
 
 
-def build_capture_requirement_subgraph():
+def build_requirement_capture_subgraph():
     graph = StateGraph(FactoryGraphState)
     graph.add_node("initialize_requirement", _initialize_requirement)
     graph.add_node("judge_requirement_clarity", _judge_requirement_clarity)
@@ -52,19 +52,19 @@ def build_capture_requirement_subgraph():
     return graph.compile()
 
 
-def run_capture_requirement_subgraph(state: FactoryGraphState) -> dict[str, Any]:
+def run_requirement_capture_subgraph(state: FactoryGraphState) -> dict[str, Any]:
     original_stage_log_count = len(state.get("stage_log", []))
-    final_state = build_capture_requirement_subgraph().invoke(state)
+    final_state = build_requirement_capture_subgraph().invoke(state)
     return _delta_patch(final_state, original_stage_log_count=original_stage_log_count)
 
 
 def _initialize_requirement(state: FactoryGraphState) -> dict[str, Any]:
-    capture = dict(state.get("capture_requirement") or {})
+    capture = dict(state.get("requirement_capture") or {})
     original_input = capture.get("original_input") or state.get("requirement", "")
     current_requirement = capture.get("current_requirement") or original_input
     return {
-        "current_stage": "capture_requirement",
-        "capture_requirement": {
+        "current_stage": "requirement_capture",
+        "requirement_capture": {
             "original_input": original_input,
             "current_requirement": current_requirement,
             "iteration_count": int(capture.get("iteration_count") or 0),
@@ -74,9 +74,9 @@ def _initialize_requirement(state: FactoryGraphState) -> dict[str, Any]:
 
 
 def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
-    capture = dict(state.get("capture_requirement") or {})
+    capture = dict(state.get("requirement_capture") or {})
     clarity = _call_structured_model(
-        prompt_id=PromptId.CAPTURE_REQUIREMENT_CLARITY,
+        prompt_id=PromptId.REQUIREMENT_CAPTURE_CLARITY,
         output_model=RequirementClarityOutput,
         values={
             "original_input": capture.get("original_input", ""),
@@ -91,14 +91,14 @@ def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
             missing_fields=[],
         ),
     )
-    return {"capture_requirement": {**capture, "clarity": clarity.model_dump(mode="json")}}
+    return {"requirement_capture": {**capture, "clarity": clarity.model_dump(mode="json")}}
 
 
 def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
-    capture = dict(state.get("capture_requirement") or {})
+    capture = dict(state.get("requirement_capture") or {})
     clarity = capture.get("clarity") or {}
     question = _call_structured_model(
-        prompt_id=PromptId.CAPTURE_REQUIREMENT_QUESTION,
+        prompt_id=PromptId.REQUIREMENT_CAPTURE_QUESTION,
         output_model=ClarifyingQuestionSetOutput,
         values={
             "original_input": capture.get("original_input", ""),
@@ -124,7 +124,7 @@ def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
         ),
     )
     return {
-        "capture_requirement": {
+        "requirement_capture": {
             **capture,
             "clarification": question.model_dump(mode="json"),
         }
@@ -132,22 +132,22 @@ def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
 
 
 def _wait_for_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
-    capture = dict(state.get("capture_requirement") or {})
+    capture = dict(state.get("requirement_capture") or {})
     answer = interrupt(
         {
             "type": "requirement_clarification",
             **dict(capture.get("clarification") or {}),
         }
     )
-    return {"capture_requirement": {**capture, "answer": answer}}
+    return {"requirement_capture": {**capture, "answer": answer}}
 
 
 def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
-    capture = dict(state.get("capture_requirement") or {})
+    capture = dict(state.get("requirement_capture") or {})
     clarification = dict(capture.get("clarification") or {})
     answer = dict(capture.get("answer") or {})
     merged = _call_structured_model(
-        prompt_id=PromptId.CAPTURE_REQUIREMENT_MERGE,
+        prompt_id=PromptId.REQUIREMENT_CAPTURE_MERGE,
         output_model=RequirementMergeOutput,
         values={
             "original_input": capture.get("original_input", ""),
@@ -164,7 +164,7 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
     )
     iteration_count = int(capture.get("iteration_count") or 0) + 1
     return {
-        "capture_requirement": {
+        "requirement_capture": {
             "original_input": capture.get("original_input", ""),
             "current_requirement": merged.current_requirement,
             "iteration_count": iteration_count,
@@ -176,11 +176,11 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
 
 
 def _finalize_requirement(state: FactoryGraphState) -> dict[str, Any]:
-    capture = dict(state.get("capture_requirement") or {})
+    capture = dict(state.get("requirement_capture") or {})
     clarity = dict(capture.get("clarity") or {})
     status = "captured" if clarity.get("is_clear", False) else "needs_human_review"
     return {
-        "current_stage": "capture_requirement",
+        "current_stage": "requirement_capture",
         "status": "running",
         "requirement_brief": {
             "original_input": capture.get("original_input", ""),
@@ -192,16 +192,16 @@ def _finalize_requirement(state: FactoryGraphState) -> dict[str, Any]:
         },
         "stage_log": [
             {
-                "stage_id": "capture_requirement",
+                "stage_id": "requirement_capture",
                 "status": status,
-                "message": "capture_requirement completed requirement clarification.",
+                "message": "requirement_capture completed requirement clarification.",
             }
         ],
     }
 
 
 def _route_after_clarity(state: FactoryGraphState) -> str:
-    capture = state.get("capture_requirement") or {}
+    capture = state.get("requirement_capture") or {}
     clarity = capture.get("clarity") or {}
     iteration_count = int(capture.get("iteration_count") or 0)
     max_iterations = int(capture.get("max_iterations") or MAX_CAPTURE_ITERATIONS)
@@ -263,7 +263,7 @@ def _delta_patch(
     keys = [
         "current_stage",
         "status",
-        "capture_requirement",
+        "requirement_capture",
         "requirement_brief",
     ]
     patch = {key: final_state[key] for key in keys if key in final_state}
