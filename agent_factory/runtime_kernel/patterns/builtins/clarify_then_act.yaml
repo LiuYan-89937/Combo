@@ -4,6 +4,22 @@ embeddable: false
 version: 1
 name: Clarify Then Act
 description: Ask for missing information before entering the main action flow.
+metadata:
+  summary: Top-level agent pattern that prioritizes clarification before action.
+  use_when:
+    - The Agent must collect required information before using tools or producing a final answer.
+    - User requests are often incomplete and unsafe to execute without a focused clarification pass.
+    - The workflow needs a clear split between clarification and execution.
+  avoid_when:
+    - The Agent should freely alternate between reasoning, tool use, and answering throughout the run.
+    - The business process is a fixed workflow with mostly deterministic steps.
+  selection_notes:
+    - Prefer this over react_agent when missing input should be resolved before the main action loop.
+    - Prefer workflow-style patterns when the domain requires a fixed sequence of steps.
+  tags:
+    - clarification
+    - guarded-action
+    - main
 entry_node: ingress
 nodes:
   - id: ingress

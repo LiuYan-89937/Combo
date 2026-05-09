@@ -15,6 +15,8 @@ class PromptId(str, Enum):
     REQUIREMENT_CAPTURE_MERGE = "factory.requirement_capture.merge"
     BUSINESS_PLAN_REVIEW_DRAFT = "factory.business_plan_review.draft"
     BUSINESS_PLAN_REVIEW_REVISE = "factory.business_plan_review.revise"
+    RUNTIME_PATTERN_SELECTION = "factory.runtime_pattern_selection"
+    GRAPH_BEHAVIOR_PLANNING = "factory.graph_behavior_planning"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -68,6 +70,78 @@ class RequirementMergeOutput(BaseModel):
     current_requirement: str
     assumptions: list[str] = Field(default_factory=list, max_length=8)
     unresolved_questions: list[str] = Field(default_factory=list, max_length=8)
+
+
+class RuntimePatternAlternativeOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pattern_id: str
+    reason: str
+    tradeoff: str | None = None
+
+
+class RuntimePatternSelectionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selected_pattern_id: str
+    selection_reason: str
+    fit_summary: str
+    alternatives: list[RuntimePatternAlternativeOutput] = Field(default_factory=list, max_length=5)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+    open_questions: list[str] = Field(default_factory=list, max_length=8)
+
+
+class GraphBehaviorNodePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    node_type: str
+    business_behavior: str
+    input_expectation: str
+    output_expectation: str
+    user_visible: bool = False
+    notes: list[str] = Field(default_factory=list, max_length=8)
+
+
+class GraphBehaviorRoutePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    from_node: str
+    to_node: str
+    condition: str
+    business_meaning: str
+    expected_usage: str
+
+
+class GraphBehaviorInterruptPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    business_reason: str
+    user_visible_reason: str
+
+
+class GraphBehaviorTerminationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    success_nodes: list[str] = Field(default_factory=list)
+    failure_nodes: list[str] = Field(default_factory=list)
+    business_success_meaning: str
+    business_failure_meaning: str
+
+
+class GraphBehaviorPlanOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pattern_id: str
+    pattern_name: str
+    graph_intent: str
+    nodes: list[GraphBehaviorNodePlan] = Field(default_factory=list)
+    routes: list[GraphBehaviorRoutePlan] = Field(default_factory=list)
+    interrupts: list[GraphBehaviorInterruptPlan] = Field(default_factory=list)
+    termination: GraphBehaviorTerminationPlan
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+    open_questions: list[str] = Field(default_factory=list, max_length=8)
 
 
 def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
@@ -202,6 +276,58 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "当前业务制造计划：\n{current_plan_text}\n\n"
                     "用户本轮修改意见：\n{revision_instruction}\n\n"
                     "请输出修订后的第一阶段业务制造计划纯文本。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.RUNTIME_PATTERN_SELECTION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第二阶段的 RuntimeKernel pattern 选择器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你只能根据业务制造计划和 pattern catalog 摘要选择一个主运行模式。\n\n"
+                    "严格约束：\n"
+                    "- 必须从 pattern catalog 中选择一个 kind=main 且 embeddable=false 的 pattern_id。\n"
+                    "- 不允许发明 pattern_id。\n"
+                    "- 不允许引用 catalog 中没有提供的 nodes、edges、wrappers、contracts。\n"
+                    "- 不规划节点职责、路由、中断点、wrapper、上下文、记忆、工具、资源或 AssemblySpec。\n"
+                    "- 只解释为什么该 pattern 适合当前业务制造计划。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "第一阶段整理后的需求：\n{requirement_brief}\n\n"
+                    "业务制造计划：\n{refined_plan_text}\n\n"
+                    "可选 pattern catalog 摘要：\n{pattern_catalog}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.GRAPH_BEHAVIOR_PLANNING:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第三阶段的图行为规划器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把已选 RuntimeKernel pattern 的结构摘要解释成该 Agent 的业务图行为计划。\n\n"
+                    "严格约束：\n"
+                    "- 只能使用 pattern_structure_summary 中已有的 node_id、node_type、routes、interrupt_points、termination。\n"
+                    "- 不允许增删节点。\n"
+                    "- 不允许增删边。\n"
+                    "- 不允许发明 route condition。\n"
+                    "- 不允许修改 pattern_id。\n"
+                    "- 不规划 wrapper、上下文策略、记忆策略、policy、工具可见性、资源需求或 AssemblySpec。\n"
+                    "- 只说明这个 Agent 准备如何使用该 pattern 的图行为。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "业务制造计划：\n{refined_plan_text}\n\n"
+                    "第二阶段 pattern 选择结果：\n{runtime_pattern_selection}\n\n"
+                    "Pattern 结构摘要：\n{pattern_structure_summary}\n\n"
+                    "请返回 JSON。",
                 ),
             ]
         )

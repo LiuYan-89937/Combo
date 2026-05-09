@@ -28,6 +28,16 @@ Graph Pattern 不是运行时代码，而是受控 DSL。
 - 终止规则
 - 子图边界契约
 
+### 1.1.1 Pattern Catalog 与完整 Pattern 分离
+
+Pattern 有两种读取视图：
+
+- `PatternCatalogItemSpec`：只包含 `pattern_id / kind / embeddable / version / name / description / metadata`
+- `GraphPatternSpec`：包含完整 `nodes / edges / wrappers / contracts`，只给 RuntimeKernel 编译和验证使用
+
+Factory 模型做 pattern 选择时只能读取 catalog item，不应一次性接收完整 YAML 内容。
+完整 Pattern YAML 只在 `RuntimeKernel.compile(...)`、validator、harness 或明确的工程审查场景中读取。
+
 ### 1.2 主图与子图同构
 
 主图和子图都使用同一套 `GraphPatternSpec`。
@@ -84,6 +94,12 @@ embeddable: boolean
 version: integer
 name: string
 description: string
+metadata:
+  summary: string
+  use_when: []
+  avoid_when: []
+  selection_notes: []
+  tags: []
 
 entry_node: string
 nodes: []

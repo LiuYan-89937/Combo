@@ -140,6 +140,8 @@ class FactoryGraphShell:
         self.console.rule("[bold green]Factory Run Completed")
         self._print_requirement_brief(final_state)
         self._print_refined_plan(final_state)
+        self._print_runtime_pattern_selection(final_state)
+        self._print_graph_behavior_plan(final_state)
         self._print_summary(final_state)
         if options.show_messages:
             self._print_messages(final_state.get("messages", []))
@@ -252,6 +254,89 @@ class FactoryGraphShell:
                 border_style="green",
             )
         )
+
+    def _print_runtime_pattern_selection(self, state: dict[str, Any]) -> None:
+        selection = state.get("runtime_pattern_selection") or {}
+        selected_pattern_id = selection.get("selected_pattern_id")
+        if not selected_pattern_id:
+            return
+        lines = [
+            f"pattern_id: {selected_pattern_id}",
+            f"name: {selection.get('selected_pattern_name', '-')}",
+            f"reason: {selection.get('selection_reason', '-')}",
+            f"fit: {selection.get('fit_summary', '-')}",
+        ]
+        alternatives = selection.get("alternatives") or []
+        if alternatives:
+            lines.append("alternatives:")
+            for item in alternatives:
+                lines.append(
+                    f"  - {item.get('pattern_id')}: {item.get('reason', '')}"
+                )
+        assumptions = selection.get("assumptions") or []
+        if assumptions:
+            lines.append("assumptions:")
+            lines.extend(f"  - {item}" for item in assumptions)
+        self.console.print(
+            Panel(
+                "\n".join(lines),
+                title="Runtime Pattern Selection",
+                border_style="green",
+            )
+        )
+
+    def _print_graph_behavior_plan(self, state: dict[str, Any]) -> None:
+        plan = state.get("graph_behavior_plan") or {}
+        pattern_id = plan.get("pattern_id")
+        if not pattern_id:
+            return
+        self.console.print(
+            Panel(
+                str(plan.get("graph_intent") or ""),
+                title=f"Runtime Graph Behavior: {pattern_id}",
+                border_style="green",
+            )
+        )
+        self._print_graph_routes(plan)
+        self._print_node_behaviors(plan)
+
+    def _print_graph_routes(self, plan: dict[str, Any]) -> None:
+        routes = list(plan.get("routes") or [])
+        if not routes:
+            return
+        route_lines = []
+        for route in routes:
+            route_lines.append(
+                f"{route.get('from_node')} --[{route.get('condition')}]--> {route.get('to_node')}"
+            )
+            meaning = route.get("business_meaning")
+            if meaning:
+                route_lines.append(f"  {meaning}")
+        self.console.print(
+            Panel(
+                "\n".join(route_lines),
+                title="Graph Routes",
+                border_style="cyan",
+            )
+        )
+
+    def _print_node_behaviors(self, plan: dict[str, Any]) -> None:
+        nodes = list(plan.get("nodes") or [])
+        if not nodes:
+            return
+        table = Table(title="Node Behaviors", show_header=True, header_style="bold cyan")
+        table.add_column("node_id", style="cyan", no_wrap=True)
+        table.add_column("type", no_wrap=True)
+        table.add_column("business_behavior")
+        table.add_column("user_visible", no_wrap=True)
+        for node in nodes:
+            table.add_row(
+                str(node.get("node_id") or ""),
+                str(node.get("node_type") or ""),
+                str(node.get("business_behavior") or ""),
+                str(node.get("user_visible", False)),
+            )
+        self.console.print(table)
 
     def _print_messages(self, messages: Iterable[BaseMessage]) -> None:
         table = Table(title="Messages", show_header=True, header_style="bold cyan")

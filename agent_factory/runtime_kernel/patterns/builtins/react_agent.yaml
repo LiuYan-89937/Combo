@@ -4,6 +4,23 @@ embeddable: false
 version: 1
 name: ReAct Agent
 description: Standard conversational tool-using agent.
+metadata:
+  summary: Top-level conversational agent pattern for dynamic reasoning and tool use.
+  use_when:
+    - The Agent needs to reason, call tools, observe results, and continue iterating.
+    - User tasks are open-ended or may require different tool paths per request.
+    - The Agent benefits from memory, knowledge retrieval, policy checks, and postcheck before commit.
+  avoid_when:
+    - The Agent should always ask a fixed clarification sequence before any action.
+    - The work is a rigid workflow with deterministic stages and little dynamic tool choice.
+  selection_notes:
+    - This is the default choice for CLI-first agents with dynamic ReAct behavior.
+    - Prefer clarify_then_act when action should never start before missing required inputs are resolved.
+  tags:
+    - react
+    - tool-use
+    - conversational
+    - main
 entry_node: ingress
 nodes:
   - id: ingress

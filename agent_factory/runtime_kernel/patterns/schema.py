@@ -60,6 +60,65 @@ class PatternIOContractSpec(BaseModel):
     writable_sections: list[str] = Field(default_factory=list)
 
 
+class PatternMetadataSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = ""
+    use_when: list[str] = Field(default_factory=list)
+    avoid_when: list[str] = Field(default_factory=list)
+    selection_notes: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class PatternCatalogItemSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pattern_id: str
+    kind: PatternKind
+    embeddable: bool
+    version: int
+    name: str
+    description: str
+    metadata: PatternMetadataSpec = Field(default_factory=PatternMetadataSpec)
+
+
+class PatternStructureNodeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    node_type: NodeType
+    impl: str
+
+
+class PatternStructureRouteSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    from_node: str
+    to_node: str
+    condition: str
+
+
+class PatternStructureTerminationSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    success_nodes: list[str] = Field(default_factory=list)
+    failure_nodes: list[str] = Field(default_factory=list)
+
+
+class PatternStructureSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pattern_id: str
+    kind: PatternKind
+    name: str
+    description: str
+    entry_node: str
+    nodes: list[PatternStructureNodeSummary] = Field(default_factory=list)
+    routes: list[PatternStructureRouteSummary] = Field(default_factory=list)
+    interrupt_points: list[str] = Field(default_factory=list)
+    termination: PatternStructureTerminationSummary
+
+
 class GraphPatternSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -69,6 +128,7 @@ class GraphPatternSpec(BaseModel):
     version: int
     name: str
     description: str
+    metadata: PatternMetadataSpec = Field(default_factory=PatternMetadataSpec)
     entry_node: str
     nodes: list[PatternNodeSpec] = Field(default_factory=list)
     edges: list[PatternEdgeSpec] = Field(default_factory=list)

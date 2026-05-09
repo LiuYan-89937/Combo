@@ -4,6 +4,19 @@ embeddable: true
 version: 1
 name: Clarification Loop
 description: Minimal subgraph used for recursive pattern compilation.
+metadata:
+  summary: Reusable subgraph for asking clarifying questions and returning a compact route.
+  use_when:
+    - A parent pattern needs a bounded clarification loop before continuing.
+    - Missing user input should be collected without exposing the full parent graph.
+  avoid_when:
+    - The Agent should be selected as a top-level runtime pattern.
+  selection_notes:
+    - This pattern is embeddable and should normally not appear in end-user top-level pattern selection.
+  tags:
+    - clarification
+    - subgraph
+    - reusable
 entry_node: clarify
 nodes:
   - id: clarify

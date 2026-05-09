@@ -24,6 +24,8 @@ class FactoryGraphState(TypedDict, total=False):
     business_plan_review: dict[str, Any]
     refined_plan_text: str
     runtime_pattern_selection: dict[str, Any]
+    runtime_pattern_summary: str
+    pattern_structure_summary: dict[str, Any]
     graph_behavior_plan: dict[str, Any]
     node_strategy_plan: dict[str, Any]
     tool_capability_plan: dict[str, Any]

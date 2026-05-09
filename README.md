@@ -149,14 +149,14 @@ Shell 命令：
 uv run agentfactory create-agent --prompt "创建一个记账 Agent"
 ```
 
-默认断点在第一阶段 `requirement_capture`：该阶段会完成需求澄清并展示业务制造计划，用户确认继续后本轮停止。
+默认断点跟随当前已实现阶段推进。当前默认停在第三阶段 `graph_behavior_planning`：第一阶段完成需求澄清和业务制造计划确认，第二阶段选择 RuntimeKernel pattern，第三阶段生成图行为计划并停止本轮。
 
 运行到指定工厂阶段后停止，并打印最终 state：
 
 ```bash
 uv run agentfactory create-agent \
   --prompt "创建一个记账 Agent" \
-  --stop-after-stage requirement_capture \
+  --stop-after-stage graph_behavior_planning \
   --json
 ```
 
