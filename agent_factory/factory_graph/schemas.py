@@ -346,6 +346,18 @@ class ResourceValidationResult(BaseModel):
     validation_evidence: list[dict[str, object]] = Field(default_factory=list)
 
 
+class ResourceReactDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["continue_checking", "needs_user_input", "resources_ready", "blocked", "failed"]
+    requirements: list[ResourceRequirement] = Field(default_factory=list)
+    check_results_summary: list[dict[str, object]] = Field(default_factory=list)
+    missing_requirements: list[str] = Field(default_factory=list)
+    user_prompt: str = ""
+    resource_draft: dict[str, object] = Field(default_factory=dict)
+    validation_notes: list[str] = Field(default_factory=list)
+
+
 class ResourceAndConditionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

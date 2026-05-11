@@ -19,9 +19,7 @@ class PromptId(str, Enum):
     NODE_STRATEGY_PLANNING = "factory.node_strategy_planning"
     TOOL_CAPABILITY_PLANNING = "factory.tool_capability_planning"
     RESOURCE_REQUIREMENT_INFERENCE = "factory.resource_condition.requirement_inference"
-    RESOURCE_CHECK_PLAN = "factory.resource_condition.check_plan"
-    RESOURCE_READINESS_ANALYSIS = "factory.resource_condition.readiness_analysis"
-    RESOURCE_REWRITE = "factory.resource_condition.rewrite"
+    RESOURCE_REACT = "factory.resource_condition.react"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -324,87 +322,38 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
-    if prompt_id == PromptId.RESOURCE_CHECK_PLAN:
+    if prompt_id == PromptId.RESOURCE_REACT:
         return ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "你是 Agent 工厂第六阶段的资源检查计划器。\n"
-                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是为每个资源需求生成工厂可以执行的检查计划。\n\n"
+                    "你是 Agent 工厂第六阶段的 ReAct 资源检查器。\n"
+                    "你必须遵循 ReAct：需要检查环境、文件、命令或配置时，通过 tool_calls 调用工具；"
+                    "工具 Observation 返回后再继续判断。\n\n"
+                    "当不再需要工具时，必须输出一个合法 JSON 对象，不要包裹 markdown。"
+                    "JSON 必须符合 ResourceReactDecision schema。\n\n"
                     "严格约束：\n"
-                    "- 只能选择 allowed_check_tool_ids 中的工具。\n"
-                    "- 不允许选择写入工具、补丁工具、创建目录工具或异步 shell 工具。\n"
-                    "- 不调用真实业务外部 API，不安装依赖，不生成工具代码。\n"
-                    "- 如果无法可靠检查某个需求，给出 uncheckable_reason，不要编造检查动作。\n"
-                    "- shell_env 必须传 names；shell_run 必须使用 command 数组，且只用于只读检查。\n\n"
+                    "- 只能使用已绑定工具检查资源条件。\n"
+                    "- 如果还需要检查，不要输出 JSON；必须直接发起 tool_calls。\n"
+                    "- 只有在已经不需要工具时，才输出最终 ResourceReactDecision JSON。\n"
+                    "- 不安装依赖，不写文件，不生成工具代码。\n"
+                    "- 不把 Factory 自身 mainModel/taskModel/API key/base URL/thinking 配置当成生成 Agent 资源。\n"
+                    "- 缺失或不确定时 action=needs_user_input，并给出 user_prompt。\n"
+                    "- 资源可用时 action=resources_ready，并给出 resource_draft。\n"
+                    "- 用户明确阻塞或检查表明确无法继续时 action=blocked。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
                     "当前阶段边界：\n{stage_operating_context}\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "ResourceReactDecision JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
                     "资源需求：\n{resource_requirements}\n\n"
-                    "当前资源草稿：\n{resource_draft}\n\n"
-                    "允许的检查工具：\n{allowed_check_tool_ids}\n\n"
-                    "请返回 JSON。",
-                ),
-            ]
-        )
-    if prompt_id == PromptId.RESOURCE_READINESS_ANALYSIS:
-        return ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "你是 Agent 工厂第六阶段的资源满足度分析器。\n"
-                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是读取资源需求、检查结果和已有资源草稿，判断哪些资源已满足、缺失、不确定或阻塞。\n\n"
-                    "严格约束：\n"
-                    "- 只能引用 resource_requirements 中已有 requirement_id。\n"
-                    "- 不要发明资源值。\n"
-                    "- 只给出补全提示，不要要求用户选择具体技术供应商或实现方案。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n"
-                    "当前阶段边界：\n{stage_operating_context}\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
-                ),
-                (
-                    "user",
-                    "资源需求：\n{resource_requirements}\n\n"
-                    "检查结果：\n{check_results}\n\n"
-                    "当前资源草稿：\n{resource_draft}\n\n"
-                    "用户补充：\n{user_inputs}\n\n"
-                    "请返回 JSON。",
-                ),
-            ]
-        )
-    if prompt_id == PromptId.RESOURCE_REWRITE:
-        return ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "你是 Agent 工厂第六阶段的资源草稿重写器。\n"
-                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是把检查结果和用户自然语言补充重写成后续 package_generation "
-                    "和 harness 测试可以稳定读取的 resources 键值对。\n\n"
-                    "严格约束：\n"
-                    "- 只能为 resource_requirements 中已有需求输出资源。\n"
-                    "- 不允许输出 Factory 自身 mainModel/taskModel/API key/base URL/thinking 配置。\n"
-                    "- 不要发明密钥、路径、服务地址、账号或任何证据不足的值。\n"
-                    "- 用户明确说明运行时提供时，使用 ${RUNTIME_PROVIDED:<REQUIREMENT_ID>} 占位。\n"
-                    "- 无法重写成可用资源时，把 requirement_id 放入 unresolved_requirements 或 blocked_requirements。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n"
-                    "当前阶段边界：\n{stage_operating_context}\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
-                ),
-                (
-                    "user",
-                    "资源需求：\n{resource_requirements}\n\n"
-                    "检查结果：\n{check_results}\n\n"
                     "用户补充：\n{user_inputs}\n\n"
                     "当前资源草稿：\n{resource_draft}\n\n"
                     "工具能力计划：\n{tool_capability_plan}\n\n"
-                    "请返回 JSON。",
+                    "请继续 ReAct 检查，或输出最终 JSON 决策。",
                 ),
+                ("placeholder", "{messages}"),
             ]
         )
     if prompt_id == PromptId.FACTORY_CHAT:
