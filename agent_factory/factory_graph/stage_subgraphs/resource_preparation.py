@@ -11,6 +11,7 @@ from agent_factory.factory_graph.schemas import (
     RequiredResourceKey,
     RequiredResourceKeySetOutput,
     ResourceCompletionAnswer,
+    ResourceNormalizationOutput,
     ResourceProbePlanOutput,
     ResourceProbeRequest,
 )
@@ -42,6 +43,7 @@ def build_resource_preparation_subgraph():
     graph.add_node("infer_required_resource_keys", _infer_required_resource_keys)
     graph.add_node("probe_resource_values", _probe_resource_values)
     graph.add_node("collect_probe_results", _collect_probe_results)
+    graph.add_node("normalize_resource_values", _normalize_resource_values)
     graph.add_node("interrupt_for_missing_resources", _interrupt_for_missing_resources)
     graph.add_node("merge_resource_answers", _merge_resource_answers)
     graph.add_node("validate_resource_completion", _validate_resource_completion)
@@ -50,7 +52,8 @@ def build_resource_preparation_subgraph():
     graph.add_edge("initialize_resource_context", "infer_required_resource_keys")
     graph.add_edge("infer_required_resource_keys", "probe_resource_values")
     graph.add_edge("probe_resource_values", "collect_probe_results")
-    graph.add_edge("collect_probe_results", "validate_resource_completion")
+    graph.add_edge("collect_probe_results", "normalize_resource_values")
+    graph.add_edge("normalize_resource_values", "validate_resource_completion")
     graph.add_conditional_edges(
         "validate_resource_completion",
         _route_after_validation,
@@ -61,7 +64,7 @@ def build_resource_preparation_subgraph():
         },
     )
     graph.add_edge("interrupt_for_missing_resources", "merge_resource_answers")
-    graph.add_edge("merge_resource_answers", "validate_resource_completion")
+    graph.add_edge("merge_resource_answers", "normalize_resource_values")
     graph.add_edge("write_resource_file", END)
     return graph.compile()
 
@@ -164,6 +167,52 @@ def _collect_probe_results(state: FactoryGraphState) -> dict[str, Any]:
     return {"resource_condition_plan": _with_missing_keys(next_plan)}
 
 
+def _normalize_resource_values(state: FactoryGraphState) -> dict[str, Any]:
+    plan = dict(state.get("resource_condition_plan") or {})
+    required_keys = [
+        RequiredResourceKey.model_validate(item)
+        for item in plan.get("required_resource_keys", []) or []
+    ]
+    if not required_keys:
+        return {"resource_condition_plan": _with_missing_keys(plan)}
+    current_resources = dict(plan.get("resources") or {})
+    normalized = _call_structured_model(
+        prompt_id=PromptId.RESOURCE_VALUE_NORMALIZATION,
+        output_model=ResourceNormalizationOutput,
+        values={
+            "required_resource_keys": _json_text([item.model_dump(mode="json") for item in required_keys]),
+            "current_resources": _json_text(current_resources),
+            "probe_evidence": _json_text(plan.get("probe_evidence") or []),
+            "tool_capability_plan": _json_text(state.get("tool_capability_plan") or {}),
+            "output_json_schema": output_json_schema(ResourceNormalizationOutput),
+        },
+        fallback=ResourceNormalizationOutput(
+            resources=current_resources,
+            normalization_notes=["model unavailable; kept current resources unchanged"],
+        ),
+    )
+    allowed_keys = {item.key for item in required_keys}
+    merged_resources = _merge_normalized_resources(
+        current_resources=current_resources,
+        normalized_resources=normalized.resources,
+        allowed_keys=allowed_keys,
+    )
+    normalization_notes = [
+        str(item)
+        for item in [
+            *list(plan.get("normalization_notes") or []),
+            *normalized.normalization_notes,
+        ]
+        if str(item).strip()
+    ]
+    next_plan = {
+        **plan,
+        "resources": merged_resources,
+        "normalization_notes": normalization_notes,
+    }
+    return {"resource_condition_plan": _with_missing_keys(next_plan)}
+
+
 def _interrupt_for_missing_resources(state: FactoryGraphState) -> dict[str, Any]:
     plan = dict(state.get("resource_condition_plan") or {})
     missing_keys = list(plan.get("missing_keys") or [])
@@ -172,6 +221,7 @@ def _interrupt_for_missing_resources(state: FactoryGraphState) -> dict[str, Any]
             "type": "resource_completion",
             "missing_keys": missing_keys,
             "current_resources": dict(plan.get("resources") or {}),
+            "probe_evidence": list(plan.get("probe_evidence") or []),
             "resource_file_path": plan.get("resource_file_path"),
         }
     )
@@ -355,6 +405,33 @@ def _has_resource_value(resources: dict[str, Any], key: str) -> bool:
     if value is None:
         return False
     if isinstance(value, str) and not value.strip():
+        return False
+    return True
+
+
+def _merge_normalized_resources(
+    *,
+    current_resources: dict[str, Any],
+    normalized_resources: dict[str, object],
+    allowed_keys: set[str],
+) -> dict[str, object]:
+    merged: dict[str, object] = {
+        key: value
+        for key, value in current_resources.items()
+        if key in allowed_keys and _has_non_empty_value(value)
+    }
+    for key, value in normalized_resources.items():
+        if key in allowed_keys and _has_non_empty_value(value):
+            merged[key] = value
+    return merged
+
+
+def _has_non_empty_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str) and not value.strip():
+        return False
+    if isinstance(value, (list, tuple, dict, set)) and not value:
         return False
     return True
 

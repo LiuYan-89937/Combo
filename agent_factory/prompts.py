@@ -20,6 +20,7 @@ class PromptId(str, Enum):
     TOOL_CAPABILITY_PLANNING = "factory.tool_capability_planning"
     RESOURCE_KEY_INFERENCE = "factory.resource_condition.key_inference"
     RESOURCE_PROBE_PLANNING = "factory.resource_condition.probe_planning"
+    RESOURCE_VALUE_NORMALIZATION = "factory.resource_condition.value_normalization"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -51,9 +52,12 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "你是 Agent 工厂第一阶段的需求清晰度判断器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
                     "只判断需求是否足够进入下一阶段，不要向用户提问。\n\n"
-                    "判断时必须参考当前 Factory 运行环境，避免把需求扩展到运行环境之外的产品形态。\n\n"
-                    "清晰标准至少包括：Agent 目标、使用场景、目标用户、输入、输出、约束、"
-                    "可能需要的工具或外部资源。\n\n"
+                    "判断时必须参考当前 Factory 第一阶段需求访谈上下文，"
+                    "只判断业务画像是否足够清晰，不判断技术实现是否已选型。\n\n"
+                    "清晰标准至少包括：Agent 目标、目标用户、使用场景、典型输入、期望输出、"
+                    "业务流程、交互方式、成功标准、边界禁区、权限/隐私/数据来源边界和运行约束。\n"
+                    "不要把“模型、框架、SDK、数据库、API、部署方式、工具实现方案未选择”"
+                    "判定为第一阶段缺失字段；这些属于后续阶段。\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
@@ -72,11 +76,18 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "system",
                     "你是 Agent 工厂第一阶段的需求澄清提问器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "一轮可以生成多个引导性问题，最多 5 个问题。\n"
+                    "一轮优先生成 1 到 3 个最关键问题；"
+                    "只有缺失信息明显分散且必须同时确认时，才最多生成 5 个问题。\n"
                     "每个问题最多 5 个选项，并且必须包含一个自定义补充选项，"
                     "custom_option_id 必须指向该问题的自定义选项。\n\n"
-                    "问题和选项必须参考当前 Factory 运行环境。不要默认假设未声明的外部服务、"
-                    "端侧产品形态或多媒体能力已经存在；如果确实相关，应作为资源条件来澄清。\n\n"
+                    "问题和选项必须只围绕业务画像字段：目标用户、使用场景、典型输入、期望输出、"
+                    "业务流程、交互方式、成功标准、边界禁区、权限/隐私/数据来源边界和运行约束。\n"
+                    "问题和选项必须是用户能直接从业务需求角度选择的表达。\n\n"
+                    "不要询问技术实现方案。禁止要求用户在模型供应商、框架、SDK、数据库、"
+                    "向量库、部署方式、具体 API、工具实现、代码方案之间做选择。\n"
+                    "如果需求暗示需要外部资源或特殊能力，只能询问业务级约束，"
+                    "例如是否允许联网、是否必须本地运行、是否涉及敏感数据、是否允许后续接入外部资源；"
+                    "不要询问具体用哪种实现。\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
@@ -98,8 +109,11 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
                     "你只能看到原始输入、当前需求版本、本轮问题组和本轮用户回答组。\n"
                     "不要保留历史问答过程，只输出合并后的 current_requirement。\n\n"
-                    "整理结果必须保持在当前 Factory 运行环境内；如果用户选择了需要额外资源的能力，"
-                    "应把它写成资源/工具/服务条件，而不是默认视为已具备。\n\n"
+                    "整理结果必须保持在当前 Factory 第一阶段需求访谈上下文内。\n"
+                    "如果用户回答涉及实现方案，不要扩展成技术设计，只保留为业务约束、"
+                    "运行约束或后续待决条件。\n"
+                    "如果用户选择了需要额外资源的能力，应写成资源/权限/运行约束，"
+                    "不要默认视为已具备，也不要选择具体供应商或技术路线。\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
@@ -125,8 +139,9 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "只从业务层面描述 Agent 应该服务谁、解决什么问题、有哪些业务行为、"
                     "如何与用户互动、业务上不负责什么、怎样算有用。\n\n"
                     "禁止在本阶段写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
-                    "数据库方案、API 方案或具体工具定义。这些属于后续阶段。\n\n"
-                    "【后续规划提示】只能写业务层面后续要关注的事项，不能提前规划工具或资源。",
+                    "数据库方案、API 方案、模型/框架选择或具体工具定义。这些属于后续阶段。\n\n"
+                    "【后续规划提示】只能写业务层面后续要关注的事项；"
+                    "涉及技术实现的内容只写成待决约束，不提前规划工具、资源或技术路线。",
                 ),
                 (
                     "user",
@@ -147,7 +162,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "{required_sections}\n\n"
                     "只修订业务制造计划本身，不保留修订过程，不追加对话记录。\n"
                     "禁止写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
-                    "数据库方案、API 方案或具体工具定义。",
+                    "数据库方案、API 方案、模型/框架选择或具体工具定义。",
                 ),
                 (
                     "user",
@@ -323,6 +338,36 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "资源键：\n{required_resource_keys}\n\n"
                     "当前已准备资源：\n{resources}\n\n"
                     "允许的探测工具：\n{allowed_probe_tool_ids}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.RESOURCE_VALUE_NORMALIZATION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第六阶段的资源值归一化器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把已探测到或用户补充的资源值，改写成后续 package_generation "
+                    "和 harness 测试可以稳定读取的 resources 键值对。\n\n"
+                    "严格约束：\n"
+                    "- 只能输出 required_resource_keys 中已有的 key。\n"
+                    "- 不允许新增资源 key，不允许输出未要求的环境信息。\n"
+                    "- 不要发明密钥、路径、服务地址、账号或任何证据不足的值。\n"
+                    "- 不选择模型供应商、框架、数据库、部署方式或工具实现方案。\n"
+                    "- 保留 ${RUNTIME_PROVIDED:<KEY>} 形式的运行时占位。\n"
+                    "- 对用户自然语言或探测证据中的等价表达做轻度规范化，"
+                    "例如清理空白、整理列表/布尔/数字/路径/地址等明确语义；证据不足则不要输出该 key。\n"
+                    "- 如果已有显式值可用，除非可以更稳定更准确地表达，否则保持原值。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "资源键：\n{required_resource_keys}\n\n"
+                    "当前资源值：\n{current_resources}\n\n"
+                    "探测证据：\n{probe_evidence}\n\n"
+                    "工具能力计划：\n{tool_capability_plan}\n\n"
                     "请返回 JSON。",
                 ),
             ]

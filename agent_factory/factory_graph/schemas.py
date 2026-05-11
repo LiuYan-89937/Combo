@@ -282,6 +282,13 @@ class ResourceProbePlanOutput(BaseModel):
     assumptions: list[str] = Field(default_factory=list, max_length=8)
 
 
+class ResourceNormalizationOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resources: dict[str, object] = Field(default_factory=dict)
+    normalization_notes: list[str] = Field(default_factory=list, max_length=12)
+
+
 ResourceCompletionDecision = Literal["provide_value", "runtime_provided", "block"]
 
 
@@ -307,4 +314,5 @@ class ResourceAndConditionPlan(BaseModel):
     resources: dict[str, object] = Field(default_factory=dict)
     missing_keys: list[RequiredResourceKey] = Field(default_factory=list)
     probe_evidence: list[dict[str, object]] = Field(default_factory=list)
+    normalization_notes: list[str] = Field(default_factory=list)
     resource_file_path: str | None = None

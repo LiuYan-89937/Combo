@@ -448,6 +448,7 @@ class FactoryGraphShell:
                 border_style="green" if plan.get("status") == "complete" else "yellow",
             )
         )
+        self._print_resource_probe_evidence(plan.get("probe_evidence") or [])
         resources = dict(plan.get("resources") or {})
         if resources:
             table = Table(title="Prepared Resources", show_header=True, header_style="bold cyan")
@@ -456,6 +457,38 @@ class FactoryGraphShell:
             for key, value in resources.items():
                 table.add_row(str(key), str(value))
             self.console.print(table)
+        normalization_notes = list(plan.get("normalization_notes") or [])
+        if normalization_notes:
+            self.console.print(
+                Panel(
+                    "\n".join(str(item) for item in normalization_notes),
+                    title="Resource Normalization Notes",
+                    border_style="cyan",
+                )
+            )
+
+    def _print_resource_probe_evidence(self, probe_evidence: list[Any]) -> None:
+        if not probe_evidence:
+            return
+        table = Table(title="Resource Probe Tools", show_header=True, header_style="bold cyan")
+        table.add_column("#", justify="right", no_wrap=True)
+        table.add_column("key", style="cyan", no_wrap=True)
+        table.add_column("tool", style="cyan", no_wrap=True)
+        table.add_column("status", no_wrap=True)
+        table.add_column("result_summary")
+        for index, item in enumerate(probe_evidence, start=1):
+            if not isinstance(item, dict):
+                table.add_row(str(index), "-", "-", "-", _trim_text(str(item), 180))
+                continue
+            result = item.get("result")
+            table.add_row(
+                str(index),
+                str(item.get("key") or ""),
+                str(item.get("tool_name") or ""),
+                _probe_status(result),
+                _probe_summary(result),
+            )
+        self.console.print(table)
 
     def _print_messages(self, messages: Iterable[BaseMessage]) -> None:
         table = Table(title="Messages", show_header=True, header_style="bold cyan")
@@ -572,6 +605,7 @@ class FactoryGraphShell:
             for key, value in current_resources.items():
                 table.add_row(str(key), str(value))
             self.console.print(table)
+        self._print_resource_probe_evidence(list(payload.get("probe_evidence") or []))
         items: list[dict[str, Any]] = []
         for index, item in enumerate(missing_keys, start=1):
             key = str(item.get("key") or "")
@@ -707,6 +741,59 @@ def _join_ids(values: list[Any]) -> str:
     if not values:
         return "-"
     return ", ".join(str(value) for value in values)
+
+
+def _probe_status(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "-"
+    if result.get("status"):
+        return str(result.get("status"))
+    if "found" in result:
+        return "found" if result.get("found") else "missing"
+    if "exists" in result:
+        return "exists" if result.get("exists") else "missing"
+    if "variables" in result:
+        return "checked"
+    if "cwd" in result:
+        return "available"
+    if "matches" in result and isinstance(result.get("matches"), list):
+        return f"matches:{len(result.get('matches') or [])}"
+    if "results" in result and isinstance(result.get("results"), list):
+        return f"results:{len(result.get('results') or [])}"
+    if "entries" in result and isinstance(result.get("entries"), list):
+        return f"entries:{len(result.get('entries') or [])}"
+    return "completed"
+
+
+def _probe_summary(result: Any) -> str:
+    if not isinstance(result, dict):
+        return _trim_text(str(result), 180)
+    if result.get("error"):
+        return _trim_text(str(result.get("error")), 180)
+    if result.get("cwd"):
+        return f"cwd={result.get('cwd')}"
+    if result.get("path"):
+        return f"path={result.get('path')}"
+    variables = result.get("variables")
+    if isinstance(variables, dict):
+        existing = [
+            name
+            for name, item in variables.items()
+            if isinstance(item, dict) and item.get("exists")
+        ]
+        return f"existing_env={_join_ids(existing) if existing else '-'}"
+    for collection_key in ("entries", "matches", "results"):
+        collection = result.get(collection_key)
+        if isinstance(collection, list):
+            suffix = " truncated" if result.get("truncated") else ""
+            return f"{collection_key}={len(collection)}{suffix}"
+    return _trim_text(str(result), 180)
+
+
+def _trim_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}..."
 
 
 def _extract_interrupts(chunk: Any) -> tuple[Any, ...]:
