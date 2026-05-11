@@ -143,6 +143,8 @@ class FactoryGraphShell:
         self._print_runtime_pattern_selection(final_state)
         self._print_graph_behavior_plan(final_state)
         self._print_node_strategy_plan(final_state)
+        self._print_tool_capability_plan(final_state)
+        self._print_resource_condition_plan(final_state)
         self._print_summary(final_state)
         if options.show_messages:
             self._print_messages(final_state.get("messages", []))
@@ -380,6 +382,81 @@ class FactoryGraphShell:
                 )
             self.console.print(proposed_table)
 
+    def _print_tool_capability_plan(self, state: dict[str, Any]) -> None:
+        plan = state.get("tool_capability_plan") or {}
+        capabilities = list(plan.get("tool_capabilities") or [])
+        visibility = list(plan.get("node_tool_visibility") or [])
+        if not capabilities and not visibility:
+            return
+        self.console.print(
+            Panel(
+                str(plan.get("plan_intent") or ""),
+                title="Tool Capability Planning",
+                border_style="green",
+            )
+        )
+        if capabilities:
+            capability_table = Table(title="Tool Capabilities", show_header=True, header_style="bold cyan")
+            capability_table.add_column("capability_id", style="cyan", no_wrap=True)
+            capability_table.add_column("name")
+            capability_table.add_column("required_by")
+            capability_table.add_column("visible_to")
+            capability_table.add_column("approval", no_wrap=True)
+            capability_table.add_column("status", no_wrap=True)
+            for item in capabilities:
+                capability_table.add_row(
+                    str(item.get("capability_id") or ""),
+                    str(item.get("name") or ""),
+                    ", ".join(str(node_id) for node_id in item.get("required_by_node_ids") or []) or "-",
+                    ", ".join(str(node_id) for node_id in item.get("visible_to_node_ids") or []) or "-",
+                    "yes" if item.get("approval_required") else "no",
+                    str(item.get("implementation_status") or ""),
+                )
+            self.console.print(capability_table)
+        if visibility:
+            visibility_table = Table(title="Node Tool Visibility", show_header=True, header_style="bold cyan")
+            visibility_table.add_column("node_id", style="cyan", no_wrap=True)
+            visibility_table.add_column("allowed")
+            visibility_table.add_column("approval_required")
+            visibility_table.add_column("blocked")
+            visibility_table.add_column("reason")
+            for item in visibility:
+                visibility_table.add_row(
+                    str(item.get("node_id") or ""),
+                    _join_ids(item.get("allowed_tool_capability_ids") or []),
+                    _join_ids(item.get("approval_required_capability_ids") or []),
+                    _join_ids(item.get("blocked_tool_capability_ids") or []),
+                    str(item.get("reason") or ""),
+                )
+            self.console.print(visibility_table)
+
+    def _print_resource_condition_plan(self, state: dict[str, Any]) -> None:
+        plan = state.get("resource_condition_plan") or {}
+        if not plan:
+            return
+        lines = [
+            f"status: {plan.get('status', '-')}",
+            f"resource_file_path: {plan.get('resource_file_path', '-')}",
+        ]
+        missing_keys = list(plan.get("missing_keys") or [])
+        if missing_keys:
+            lines.append(f"missing_keys: {len(missing_keys)}")
+        self.console.print(
+            Panel(
+                "\n".join(lines),
+                title="Resource And Condition Planning",
+                border_style="green" if plan.get("status") == "complete" else "yellow",
+            )
+        )
+        resources = dict(plan.get("resources") or {})
+        if resources:
+            table = Table(title="Prepared Resources", show_header=True, header_style="bold cyan")
+            table.add_column("key", style="cyan", no_wrap=True)
+            table.add_column("value")
+            for key, value in resources.items():
+                table.add_row(str(key), str(value))
+            self.console.print(table)
+
     def _print_messages(self, messages: Iterable[BaseMessage]) -> None:
         table = Table(title="Messages", show_header=True, header_style="bold cyan")
         table.add_column("#", justify="right", no_wrap=True)
@@ -406,6 +483,8 @@ class FactoryGraphShell:
                 resume = self._read_requirement_clarification(payload)
             elif isinstance(payload, dict) and payload.get("type") == "plan_review":
                 resume = self._read_plan_review(payload)
+            elif isinstance(payload, dict) and payload.get("type") == "resource_completion":
+                resume = self._read_resource_completion(payload)
             else:
                 self._print_interrupt_payload(payload)
                 resume = {"approved": self._read_approval()}
@@ -473,6 +552,67 @@ class FactoryGraphShell:
             "decision": "revise",
             "revision_instruction": revision_instruction,
         }
+
+    def _read_resource_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
+        missing_keys = list(payload.get("missing_keys") or [])
+        current_resources = dict(payload.get("current_resources") or {})
+        resource_file_path = str(payload.get("resource_file_path") or "")
+        if resource_file_path:
+            self.console.print(
+                Panel(
+                    resource_file_path,
+                    title="Resource File",
+                    border_style="yellow",
+                )
+            )
+        if current_resources:
+            table = Table(title="Current Resources", show_header=True, header_style="bold yellow")
+            table.add_column("key", style="cyan", no_wrap=True)
+            table.add_column("value")
+            for key, value in current_resources.items():
+                table.add_row(str(key), str(value))
+            self.console.print(table)
+        items: list[dict[str, Any]] = []
+        for index, item in enumerate(missing_keys, start=1):
+            key = str(item.get("key") or "")
+            description = str(item.get("description") or "")
+            used_by = _join_ids(item.get("used_by_capability_ids") or [])
+            hint = str(item.get("resolution_hint") or "")
+            self.console.print(
+                Panel(
+                    f"key: {key}\nused_by: {used_by}\n\n{description}\n\n{hint}",
+                    title=f"Resource Completion {index}/{len(missing_keys)}",
+                    border_style="yellow",
+                )
+            )
+            options = [
+                {
+                    "id": "provide_value",
+                    "label": "提供值",
+                    "description": "输入一个现在可写入资源文件的值",
+                },
+                {
+                    "id": "runtime_provided",
+                    "label": "运行时提供",
+                    "description": "写入运行时占位并允许进入后续阶段",
+                },
+                {
+                    "id": "block",
+                    "label": "阻塞",
+                    "description": "资源无法准备，不进入下一阶段",
+                },
+            ]
+            selected = _select_option_with_prompt_toolkit(options)
+            if selected is None:
+                selected = _select_option_with_numbered_prompt(self.console, options)
+            decision = str(selected.get("id") or "block")
+            value = None
+            if decision == "provide_value":
+                value = self.console.input("资源值: ").strip()
+                if not value:
+                    decision = "block"
+            items.append({"key": key, "decision": decision, "value": value})
+        return {"items": items}
 
     def _print_interrupt_payload(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -561,6 +701,12 @@ def _format_strategy_refs(strategy_refs: list[dict[str, Any]]) -> str:
         suffix = f" notes:{len(notes)}" if notes else ""
         lines.append(f"{kind}:{strategy_id}@{phase} [{source}]{suffix}")
     return "\n".join(lines)
+
+
+def _join_ids(values: list[Any]) -> str:
+    if not values:
+        return "-"
+    return ", ".join(str(value) for value in values)
 
 
 def _extract_interrupts(chunk: Any) -> tuple[Any, ...]:

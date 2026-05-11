@@ -194,3 +194,117 @@ class NodeStrategyPlanningOutput(BaseModel):
     proposed_strategies: list[ProposedNodeStrategySpec] = Field(default_factory=list)
     global_assumptions: list[str] = Field(default_factory=list, max_length=8)
     open_questions: list[str] = Field(default_factory=list, max_length=8)
+
+
+ToolCapabilityImplementationStatus = Literal[
+    "available",
+    "needs_generation",
+    "needs_binding",
+    "unknown",
+]
+
+
+class ToolCapabilitySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: str
+    name: str
+    description: str
+    required_by_node_ids: list[str] = Field(default_factory=list)
+    visible_to_node_ids: list[str] = Field(default_factory=list)
+    approval_required: bool = False
+    risk_notes: list[str] = Field(default_factory=list, max_length=8)
+    input_contract: dict[str, object] = Field(default_factory=dict)
+    output_contract: dict[str, object] = Field(default_factory=dict)
+    implementation_status: ToolCapabilityImplementationStatus
+    implementation_notes: list[str] = Field(default_factory=list, max_length=8)
+
+
+class NodeToolVisibilitySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    allowed_tool_capability_ids: list[str] = Field(default_factory=list)
+    approval_required_capability_ids: list[str] = Field(default_factory=list)
+    blocked_tool_capability_ids: list[str] = Field(default_factory=list)
+    reason: str
+
+
+class ToolCapabilityPlanningOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan_intent: str
+    tool_capabilities: list[ToolCapabilitySpec] = Field(default_factory=list)
+    node_tool_visibility: list[NodeToolVisibilitySpec] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+    open_questions: list[str] = Field(default_factory=list, max_length=8)
+
+
+class RequiredResourceKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    description: str
+    required: bool = True
+    used_by_capability_ids: list[str] = Field(default_factory=list)
+    resolution_hint: str
+
+
+class RequiredResourceKeySetOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    keys: list[RequiredResourceKey] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+
+
+class ResourceProbeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    tool_name: Literal[
+        "file_read",
+        "file_list",
+        "file_exists",
+        "search_files",
+        "search_text",
+        "shell_env",
+        "shell_which",
+        "shell_cwd",
+    ]
+    arguments: dict[str, object] = Field(default_factory=dict)
+    reason: str
+
+
+class ResourceProbePlanOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    probes: list[ResourceProbeRequest] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+
+
+ResourceCompletionDecision = Literal["provide_value", "runtime_provided", "block"]
+
+
+class ResourceCompletionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    decision: ResourceCompletionDecision
+    value: str | None = None
+
+
+class ResourceCompletionAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ResourceCompletionItem] = Field(default_factory=list)
+
+
+class ResourceAndConditionPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["collecting", "complete", "blocked"]
+    required_resource_keys: list[RequiredResourceKey] = Field(default_factory=list)
+    resources: dict[str, object] = Field(default_factory=dict)
+    missing_keys: list[RequiredResourceKey] = Field(default_factory=list)
+    probe_evidence: list[dict[str, object]] = Field(default_factory=list)
+    resource_file_path: str | None = None

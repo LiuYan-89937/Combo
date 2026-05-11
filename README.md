@@ -11,18 +11,22 @@ FastAgentFactory 是一个基于 LangGraph 构建的 CLI-first Agent 工厂原�
 - FactoryGraph shell：交互式 CLI shell，明确拆分 `/chat` 和 `/create-agent` 两种模式。
 - Factory chat graph：独立的 ReAct 风格 LangGraph 聊天路径，用 task model 加工厂基础工具完成闲聊、工作区检查和轻量任务。
 - Factory production graph：用于制造 Agent 的 10 阶段 RuntimeKernel-native LangGraph 流水线。
-- Factory 前四阶段：
+- Factory 前六阶段：
   - `requirement_capture`：需求捕获、澄清和业务计划确认。
   - `runtime_pattern_selection`：只基于 Pattern metadata/description 选择 RuntimeKernel pattern。
   - `graph_behavior_planning`：基于 pattern 结构摘要规划节点行为、路由和中断点。
   - `node_strategy_planning`：为每个节点规划 wrapper、策略引用和待生成策略声明。
+  - `tool_capability_planning`：规划工具能力契约、节点可见性、审批标记和后续实现状态。
+  - `resource_and_condition_planning`：推导资源键、嗅探可用值、中断补齐缺失资源，并写入资源键值文件。
 - 节点策略目录：第四阶段已从硬编码默认策略改为 `strategy_catalog`，模型可以引用已有策略，也可以只声明后续阶段需要实现的新策略。
+- 工具能力规划：第五阶段只输出精简能力契约，不生成工具代码，不做资源嗅探，不引入固定 category。
+- 资源准备：第六阶段只产出 `.agentfactory/resources/<factory_run_id>/factory_resources.json` 键值对文件，后续工具生成和 harness 测试以该文件为资源依据。
 - 基础工具：文件系统、搜索/理解、shell 三类工具，使用 LangChain `@tool` 注册，并注入 LangGraph `ToolNode`。
 - OpenAI 兼容模型配置：通过 `.env` 读取模型配置，并支持 provider-specific thinking 模式兼容。
 
 仍在进行：
 
-- 10 个工厂生产阶段中，第 5 阶段之后仍是结构占位，内部业务逻辑还没有完整实现。
+- 10 个工厂生产阶段中，第 7 阶段之后仍是结构占位，内部业务逻辑还没有完整实现。
 - `/create-agent` 当前运行的是工厂生产图骨架，应视为生产流水线入口，不是已经完成的 Agent 生成器。
 - 当前配置不包含真实外部 WebSearch。
 - 生成 Agent package、沙箱测试、自动修复闭环仍未完成生产级实现。
@@ -157,14 +161,14 @@ Shell 命令：
 uv run agentfactory create-agent --prompt "创建一个记账 Agent"
 ```
 
-默认断点跟随当前已实现阶段推进。当前默认停在第四阶段 `node_strategy_planning`：前三阶段完成需求、pattern 和图行为计划，第四阶段生成节点策略计划并停止本轮。
+默认断点跟随当前已实现阶段推进。当前默认停在第六阶段 `resource_and_condition_planning`：前五阶段完成需求、pattern、图行为、节点策略和工具能力规划，第六阶段准备资源键值文件并停止本轮。
 
 运行到指定工厂阶段后停止，并打印最终 state：
 
 ```bash
 uv run agentfactory create-agent \
   --prompt "创建一个记账 Agent" \
-  --stop-after-stage node_strategy_planning \
+  --stop-after-stage resource_and_condition_planning \
   --json
 ```
 
@@ -197,13 +201,20 @@ uv run agentfactory test-stages --prompt "创建一个记账 Agent"
 9. `harness_generation_and_test`
 10. `repair_or_finalize`
 
-当前默认断点在第 4 阶段 `node_strategy_planning`。CLI 会展示：
+当前默认断点在第 6 阶段 `resource_and_condition_planning`。CLI 会展示：
 
 - 精炼后的需求和业务计划。
 - Runtime pattern 选择结果。
 - 图节点、节点行为、路由和中断点。
 - 每个节点的 `strategy_refs`。
 - 需要后续阶段生成 Python 实现的 `proposed_strategies`。
+- 工具能力契约 `tool_capabilities`。
+- 每个节点的工具可见性 `node_tool_visibility`。
+- 第六阶段准备出的 `resource_condition_plan`。
+- 资源文件路径 `resource_file_path`。
+- 已准备的资源键值表。
+
+第六阶段如果缺少 required 资源键，会通过 LangGraph interrupt 要求用户补齐。用户可以提供值、选择运行时提供，或阻塞本轮构建。资源未准备完整不会进入第七阶段。
 
 ## 节点策略规划
 
@@ -278,7 +289,10 @@ python -m py_compile \
   agent_factory/prompts.py \
   agent_factory/factory_graph/schemas.py \
   agent_factory/factory_graph/strategy_catalog.py \
+  agent_factory/factory_graph/stage_subgraphs/resource_preparation.py \
   agent_factory/factory_graph/stages/node_strategy_planning.py \
+  agent_factory/factory_graph/stages/tool_capability_planning.py \
+  agent_factory/factory_graph/stages/resource_and_condition_planning.py \
   agent_factory/factory_graph/shell_cli.py
 ```
 

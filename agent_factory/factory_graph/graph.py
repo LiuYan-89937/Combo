@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -117,6 +119,7 @@ def initial_factory_graph_state(
     interaction_mode: str | None = None,
 ) -> FactoryGraphState:
     return {
+        "factory_run_id": uuid.uuid4().hex,
         "requirement": requirement,
         "messages": messages,
         "status": "running",

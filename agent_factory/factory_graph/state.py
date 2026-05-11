@@ -7,6 +7,7 @@ import operator
 
 
 class FactoryGraphState(TypedDict, total=False):
+    factory_run_id: str
     requirement: str
     force_manufacture: bool
     interaction_mode: str

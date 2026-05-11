@@ -17,6 +17,9 @@ class PromptId(str, Enum):
     RUNTIME_PATTERN_SELECTION = "factory.runtime_pattern_selection"
     GRAPH_BEHAVIOR_PLANNING = "factory.graph_behavior_planning"
     NODE_STRATEGY_PLANNING = "factory.node_strategy_planning"
+    TOOL_CAPABILITY_PLANNING = "factory.tool_capability_planning"
+    RESOURCE_KEY_INFERENCE = "factory.resource_condition.key_inference"
+    RESOURCE_PROBE_PLANNING = "factory.resource_condition.probe_planning"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -239,6 +242,87 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Pattern 结构摘要：\n{pattern_structure_summary}\n\n"
                     "可用 wrapper catalog：\n{wrapper_catalog}\n\n"
                     "可用 strategy catalog：\n{strategy_catalog}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.TOOL_CAPABILITY_PLANNING:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第五阶段的工具能力规划器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把已确认的图行为和节点策略，转换为精简的工具能力契约。\n\n"
+                    "严格约束：\n"
+                    "- 只规划工具能力，不写工具 Python 实现代码。\n"
+                    "- 不做资源嗅探，不决定 API key、数据库、外部服务、Docker、依赖安装或具体供应商。\n"
+                    "- 不增加 category 字段，不对工具做固定分类。\n"
+                    "- capability_id 必须简短、稳定、可被后续 Assembly 和 package generation 引用。\n"
+                    "- required_by_node_ids 与 visible_to_node_ids 只能引用 graph_behavior_plan 中已有 node_id。\n"
+                    "- node_tool_visibility 必须为每个已有 node_id 输出一条记录。\n"
+                    "- allowed_tool_capability_ids、approval_required_capability_ids、blocked_tool_capability_ids "
+                    "只能引用本次 tool_capabilities 中已有 capability_id。\n"
+                    "- implementation_status 只能表达后续实现状态：available、needs_generation、needs_binding、unknown。\n"
+                    "- input_contract 和 output_contract 只写轻量结构，不写实现细节。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "业务制造计划：\n{refined_plan_text}\n\n"
+                    "第三阶段图行为计划：\n{graph_behavior_plan}\n\n"
+                    "第四阶段节点策略计划：\n{node_strategy_plan}\n\n"
+                    "可用工厂基础工具 ID：\n{factory_base_tool_ids}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.RESOURCE_KEY_INFERENCE:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第六阶段的资源键推导器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是根据第五阶段工具能力契约，推导后续工具生成和测试必须依赖的资源键。\n\n"
+                    "严格约束：\n"
+                    "- 只输出资源键，不输出资源值。\n"
+                    "- 不写工具 Python 实现代码，不写 Dockerfile，不写依赖安装命令。\n"
+                    "- 不预设固定资源类型；key 必须来自工具能力本身的真实需要。\n"
+                    "- required=true 表示没有值、占位或用户阻塞决策就不能进入下一阶段。\n"
+                    "- key 使用 snake_case，简短稳定，可被 resources.json 和后续 package_generation 引用。\n"
+                    "- used_by_capability_ids 只能引用 tool_capability_plan 中已有 capability_id。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "业务制造计划：\n{refined_plan_text}\n\n"
+                    "工具能力计划：\n{tool_capability_plan}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.RESOURCE_PROBE_PLANNING:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第六阶段的资源嗅探规划器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是为缺失资源键选择只读/探测工具，尝试确认可用值或证据。\n\n"
+                    "严格约束：\n"
+                    "- 只能选择 allowed_probe_tool_ids 中的工具。\n"
+                    "- 不允许选择写入工具、补丁工具、创建目录工具、异步 shell 工具或任意 shell_run。\n"
+                    "- 不调用真实业务外部 API，不安装依赖，不生成工具代码。\n"
+                    "- 如果无法可靠嗅探某个 key，就不要为该 key 编造 probe。\n"
+                    "- shell_env 只能检查环境变量是否存在；除非资源键明确要求保存原始值，否则 include_values=false。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "资源键：\n{required_resource_keys}\n\n"
+                    "当前已准备资源：\n{resources}\n\n"
+                    "允许的探测工具：\n{allowed_probe_tool_ids}\n\n"
                     "请返回 JSON。",
                 ),
             ]
