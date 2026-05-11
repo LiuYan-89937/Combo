@@ -180,27 +180,6 @@ def current_working_directory() -> dict[str, str]:
     return {"cwd": os.getcwd()}
 
 
-@tool("shell_env", parse_docstring=True)
-def read_environment(names: list[str], include_values: bool = False) -> dict[str, Any]:
-    """Check environment variables without revealing values unless explicitly requested.
-
-    Use this to verify configuration presence without leaking secrets.
-
-    Args:
-        names: Environment variable names to inspect.
-        include_values: Include raw values when explicitly needed.
-    """
-
-    values: dict[str, Any] = {}
-    for name in names:
-        exists = name in os.environ
-        item: dict[str, Any] = {"exists": exists}
-        if include_values and exists:
-            item["value"] = os.environ[name]
-        values[name] = item
-    return {"variables": values}
-
-
 @tool("shell_start", parse_docstring=True)
 def start_command(
     command: list[str],
@@ -392,7 +371,6 @@ SHELL_TOOLS = [
     run_shell_text,
     which_command,
     current_working_directory,
-    read_environment,
     start_command,
     process_status,
     grep_process_output,

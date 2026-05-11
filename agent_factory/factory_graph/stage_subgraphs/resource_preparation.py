@@ -28,7 +28,6 @@ from agent_factory.factory_graph.tools.filesystem import list_path, path_exists,
 from agent_factory.factory_graph.tools.search import search_files, search_text
 from agent_factory.factory_graph.tools.shell import (
     current_working_directory,
-    read_environment,
     run_command,
     which_command,
 )
@@ -48,7 +47,6 @@ RESOURCE_CHECK_TOOLS = [
     path_exists,
     search_files,
     search_text,
-    read_environment,
     which_command,
     current_working_directory,
     run_command,
@@ -194,7 +192,7 @@ def _resource_react_model(state: FactoryGraphState) -> dict[str, Any]:
                 },
             )
         )
-        bound_model = model.bind_tools(RESOURCE_CHECK_TOOLS).with_config(tags=["nostream"])
+        bound_model = model.bind_tools(RESOURCE_CHECK_TOOLS)
         if settings.max_tokens is not None:
             bound_model = bound_model.bind(max_tokens=settings.max_tokens)
         response = bound_model.invoke(prompt_value)
@@ -224,7 +222,7 @@ def _parse_resource_react_output(state: FactoryGraphState) -> dict[str, Any]:
             "resource_draft": decision.resource_draft,
             "status": _status_from_decision(decision),
         },
-        **({"graph_control": {"action": "end"}} if decision.action in {"blocked", "failed"} else {}),
+        **({"graph_control": {"action": "end"}} if decision.action == "blocked" else {}),
     }
 
 
@@ -415,7 +413,7 @@ def _validate_resource_draft(plan: dict[str, Any]) -> ResourceValidationResult:
     if decision.action == "blocked":
         return ResourceValidationResult(status="blocked", invalid_resources={"resource": "blocked by react decision"})
     if decision.action == "failed":
-        return ResourceValidationResult(status="failed", invalid_resources={"resource": "failed by react decision"})
+        return ResourceValidationResult(status="needs_input", invalid_resources={"resource": "failed by react decision"})
     requirements = [ResourceRequirement.model_validate(item) for item in plan.get("requirements", []) or []]
     resource_draft = dict(plan.get("resource_draft") or {})
     invalid: dict[str, str] = {}
@@ -439,6 +437,8 @@ def _status_from_decision(decision: ResourceReactDecision) -> str:
         return "needs_input"
     if decision.action == "resources_ready":
         return "resources_ready"
+    if decision.action == "failed":
+        return "needs_input"
     return decision.action
 
 

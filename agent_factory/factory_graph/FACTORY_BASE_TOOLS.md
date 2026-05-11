@@ -66,14 +66,12 @@
 | Tool | 用途 | 风险 |
 |---|---|---|
 | `shell_which` | 检查本地命令是否存在 | 低 |
-| `shell_env` | 查看允许范围内的环境变量状态 | 中 |
 | `shell_run` | 运行测试、编译、沙箱命令 | 高 |
 | `shell_run_text` | 运行需要 shell 语法的命令字符串 | 高 |
 | `shell_cwd` | 查看运行进程当前目录 | 低 |
 
 要求：
 
-- `shell_env` 默认只返回是否存在，不返回 secret 明文。
 - `shell_run` 必须走 sandbox / approval / allowlist。
 - 命令输出需要进入报告，供 repair 使用。
 
@@ -236,7 +234,6 @@ shell_which
 shell_run
 shell_run_text
 shell_cwd
-shell_env
 ```
 
 后续工具：

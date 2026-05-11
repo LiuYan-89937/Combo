@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -12,6 +13,12 @@ from agent_factory.factory_graph.schemas import (
 )
 from agent_factory.factory_graph.prompt_context import prompt_context_values, stage_operating_context
 from agent_factory.factory_graph.state import FactoryGraphState
+from agent_factory.factory_graph.model_call import (
+    emit_model_activity,
+    model_activity_completed,
+    model_activity_failed,
+    model_activity_started,
+)
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import (
     PromptId,
@@ -208,19 +215,38 @@ def _route_after_clarity(state: FactoryGraphState) -> str:
 
 
 def _call_structured_model(*, prompt_id, output_model, values: dict[str, Any], fallback):
+    span_id = uuid.uuid4().hex
     model = get_main_model()
     settings = get_main_model_settings()
     if model is None:
         return fallback
     try:
+        emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="structured_json", span_id=span_id))
         prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values(STAGE_ID), **values})
         structured_model = model.with_structured_output(output_model, method="json_mode").with_config(
             tags=["nostream"]
         )
         if settings.max_tokens is not None:
             structured_model = structured_model.bind(max_tokens=settings.max_tokens)
-        return structured_model.invoke(prompt_value)
-    except Exception:
+        result = structured_model.invoke(prompt_value)
+        emit_model_activity(
+            model_activity_completed(
+                prompt_id=prompt_id,
+                call_kind="structured_json",
+                span_id=span_id,
+                output_summary=output_model.__name__,
+            )
+        )
+        return result
+    except Exception as exc:
+        emit_model_activity(
+            model_activity_failed(
+                prompt_id=prompt_id,
+                call_kind="structured_json",
+                span_id=span_id,
+                message=f"{type(exc).__name__}: {exc}",
+            )
+        )
         return fallback
 
 

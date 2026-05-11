@@ -1,4 +1,5 @@
 import {createInterface} from 'node:readline';
+import {randomUUID} from 'node:crypto';
 import {execa, type ResultPromise} from 'execa';
 import {type FactoryCommand, type FactoryEvent, eventSchema} from '../protocol.js';
 
@@ -33,11 +34,11 @@ export class PythonBridge {
 			if (parsed.success) {
 				this.emit(parsed.data);
 			} else {
-				this.emit({type: 'error', message: parsed.error.message, payload: {}});
+				this.emit(errorEvent(parsed.error.message));
 			}
 		});
 		this.process.stderr?.on('data', chunk => {
-			this.emit({type: 'error', message: String(chunk), payload: {}});
+			this.emit(errorEvent(String(chunk)));
 		});
 	}
 
@@ -71,3 +72,22 @@ export class PythonBridge {
 	}
 }
 
+function errorEvent(message: string): FactoryEvent {
+	return {
+		event_id: randomUUID(),
+		event_type: 'error',
+		request_id: null,
+		run_id: null,
+		session_id: null,
+		mode: null,
+		graph_id: 'typescript_cli',
+		node_id: null,
+		stage_id: null,
+		span_id: null,
+		parent_span_id: null,
+		sequence: 0,
+		timestamp: new Date().toISOString(),
+		message,
+		payload: {}
+	};
+}

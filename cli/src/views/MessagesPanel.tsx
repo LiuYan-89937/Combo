@@ -1,18 +1,17 @@
 import React from 'react';
-import {Box, Text} from 'ink';
+import {Text} from 'ink';
 import {type FactoryUiState} from '../state/factoryStore.js';
+import {Section} from './ui.js';
 
 export function MessagesPanel({state}: {state: FactoryUiState}) {
 	if (!state.logs.length) {
 		return null;
 	}
 	return (
-		<Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="column">
-			<Text bold>Events</Text>
+		<Section title="Event Log" color="gray">
 			{state.logs.slice(-8).map((line, index) => (
-				<Text key={`${line}-${index}`}>{line}</Text>
+				<Text key={`${line}-${index}`} color="gray">{line}</Text>
 			))}
-		</Box>
+		</Section>
 	);
 }
-

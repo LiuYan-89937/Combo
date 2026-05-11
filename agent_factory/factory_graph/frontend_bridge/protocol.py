@@ -18,21 +18,38 @@ FactoryFrontendCommandType = Literal[
 ]
 
 FactoryFrontendEventType = Literal[
-    "ready",
-    "session_changed",
+    "runtime_ready",
+    "session_started",
+    "session_switched",
     "sessions_listed",
     "mode_changed",
     "run_started",
-    "stage_started",
-    "stage_delta",
-    "model_token",
-    "tool_call_requested",
-    "tool_result",
-    "interrupt_requested",
-    "resource_input_requested",
-    "stage_completed",
     "run_completed",
     "run_failed",
+    "stage_started",
+    "stage_completed",
+    "stage_failed",
+    "node_started",
+    "node_completed",
+    "node_failed",
+    "model_call_started",
+    "model_stream_delta",
+    "model_message_completed",
+    "model_call_completed",
+    "model_call_failed",
+    "tool_call_proposed",
+    "tool_approval_requested",
+    "tool_approval_resolved",
+    "tool_call_started",
+    "tool_call_completed",
+    "tool_call_failed",
+    "tool_observation_available",
+    "interrupt_requested",
+    "runtime_paused",
+    "runtime_resumed",
+    "resource_input_requested",
+    "trace_snapshot",
+    "debug_patch",
     "error",
 ]
 
@@ -55,12 +72,19 @@ class FactoryFrontendCommand(BaseModel):
 class FactoryFrontendEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: FactoryFrontendEventType
+    event_id: str
+    event_type: FactoryFrontendEventType
     request_id: str | None = None
+    run_id: str | None = None
     session_id: str | None = None
     mode: FactoryMode | None = None
+    graph_id: str | None = None
     node_id: str | None = None
     stage_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    sequence: int = 0
+    timestamp: str
     message: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -73,17 +97,32 @@ def event(
     mode: FactoryMode | None = None,
     node_id: str | None = None,
     stage_id: str | None = None,
+    run_id: str | None = None,
+    graph_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
+    sequence: int = 0,
+    timestamp: str | None = None,
     message: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> FactoryFrontendEvent:
+    from datetime import UTC, datetime
+    import uuid
+
     return FactoryFrontendEvent(
-        type=event_type,
+        event_id=uuid.uuid4().hex,
+        event_type=event_type,
         request_id=request_id,
+        run_id=run_id,
         session_id=session_id,
         mode=mode,
+        graph_id=graph_id,
         node_id=node_id,
         stage_id=stage_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
+        sequence=sequence,
+        timestamp=timestamp or datetime.now(UTC).isoformat(),
         message=message,
         payload=payload or {},
     )
-

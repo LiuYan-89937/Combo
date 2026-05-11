@@ -246,7 +246,6 @@ ResourceCheckToolName = Literal[
     "file_exists",
     "search_files",
     "search_text",
-    "shell_env",
     "shell_which",
     "shell_cwd",
     "shell_run",

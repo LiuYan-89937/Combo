@@ -1,20 +1,25 @@
 import React from 'react';
-import {Box, Text} from 'ink';
+import {Text} from 'ink';
 import {type FactoryUiState} from '../state/factoryStore.js';
+import {Section} from './ui.js';
 
 export function SessionPanel({state}: {state: FactoryUiState}) {
 	if (!state.sessions.length) {
 		return null;
 	}
 	return (
-		<Box borderStyle="single" borderColor="magenta" paddingX={1} flexDirection="column">
-			<Text bold>Sessions</Text>
+		<Section title="Sessions" color="magenta">
 			{state.sessions.slice(0, 8).map(session => (
 				<Text key={String(session.session_id)}>
-					{String(session.session_id)} mode={String(session.current_mode ?? '-')} updated={String(session.updated_at ?? '-')}
+					<Text color="cyan">{shortId(String(session.session_id))}</Text>
+					{' '}
+					mode={String(session.current_mode ?? '-')} chat={String(session.chat_turn_count ?? 0)} create={String(session.create_agent_turn_count ?? 0)}
 				</Text>
 			))}
-		</Box>
+		</Section>
 	);
 }
 
+function shortId(value: string): string {
+	return value.length > 12 ? `${value.slice(0, 10)}...` : value;
+}

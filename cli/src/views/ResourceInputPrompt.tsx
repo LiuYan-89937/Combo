@@ -3,7 +3,7 @@ import {Box, Text} from 'ink';
 import {type FactoryEvent} from '../protocol.js';
 
 export function ResourceInputPrompt({event}: {event: FactoryEvent | null}) {
-	if (!event || event.type !== 'resource_input_requested') {
+	if (!event || event.event_type !== 'resource_input_requested') {
 		return null;
 	}
 	const payload = event.payload ?? {};

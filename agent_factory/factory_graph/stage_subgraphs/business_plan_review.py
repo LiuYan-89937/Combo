@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from typing import Any
+import uuid
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.factory_graph.state import FactoryGraphState
+from agent_factory.factory_graph.model_call import (
+    emit_model_activity,
+    model_activity_completed,
+    model_activity_failed,
+    model_activity_started,
+)
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import PromptId, get_prompt
 
@@ -157,21 +164,41 @@ def _route_after_plan_review(state: FactoryGraphState) -> str:
 
 
 def _call_text_model(*, prompt_id: PromptId, values: dict[str, Any], fallback: str) -> str:
+    span_id = uuid.uuid4().hex
     model = get_main_model()
     settings = get_main_model_settings()
     if model is None:
         return fallback
     try:
+        emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="text", span_id=span_id))
         prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values("requirement_capture"), **values})
-        configured_model = model.with_config(tags=["nostream"])
+        configured_model = model
         if settings.max_tokens is not None:
             configured_model = configured_model.bind(max_tokens=settings.max_tokens)
         response = configured_model.invoke(prompt_value)
         content = getattr(response, "content", "")
         if isinstance(content, str):
-            return content.strip() or fallback
-        return str(content).strip() or fallback
-    except Exception:
+            text = content.strip() or fallback
+        else:
+            text = str(content).strip() or fallback
+        emit_model_activity(
+            model_activity_completed(
+                prompt_id=prompt_id,
+                call_kind="text",
+                span_id=span_id,
+                output_summary=f"{len(text)} chars",
+            )
+        )
+        return text
+    except Exception as exc:
+        emit_model_activity(
+            model_activity_failed(
+                prompt_id=prompt_id,
+                call_kind="text",
+                span_id=span_id,
+                message=f"{type(exc).__name__}: {exc}",
+            )
+        )
         return fallback
 
 

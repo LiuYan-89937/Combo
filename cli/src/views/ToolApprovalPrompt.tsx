@@ -3,10 +3,11 @@ import {Box, Text} from 'ink';
 import {type FactoryEvent} from '../protocol.js';
 
 export function ToolApprovalPrompt({event}: {event: FactoryEvent | null}) {
-	if (!event || event.payload?.type !== 'tool_approval') {
+	if (!event || event.event_type !== 'tool_approval_requested') {
 		return null;
 	}
-	const requests = (event.payload.requests as Array<Record<string, unknown>>) ?? [];
+	const payload = event.payload ?? {};
+	const requests = (payload.requests as Array<Record<string, unknown>>) ?? [];
 	return (
 		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
 			<Text bold>Tool Approval Required</Text>
@@ -19,4 +20,3 @@ export function ToolApprovalPrompt({event}: {event: FactoryEvent | null}) {
 		</Box>
 	);
 }
-

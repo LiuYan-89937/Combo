@@ -2,8 +2,15 @@ import {describe, expect, it} from 'vitest';
 import {commandSchema, eventSchema} from './protocol.js';
 
 describe('frontend bridge protocol', () => {
-	it('accepts ready events', () => {
-		expect(eventSchema.parse({type: 'ready', payload: {}}).type).toBe('ready');
+	it('accepts runtime envelope events', () => {
+		const parsed = eventSchema.parse({
+			event_id: 'event-1',
+			event_type: 'runtime_ready',
+			sequence: 1,
+			timestamp: '2026-05-11T00:00:00Z',
+			payload: {}
+		});
+		expect(parsed.event_type).toBe('runtime_ready');
 	});
 
 	it('accepts send_message commands', () => {
@@ -11,4 +18,3 @@ describe('frontend bridge protocol', () => {
 		expect(parsed.message).toBe('hello');
 	});
 });
-

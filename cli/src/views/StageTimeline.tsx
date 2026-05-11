@@ -1,29 +1,29 @@
 import React from 'react';
 import {Box, Text} from 'ink';
+import {factoryStages} from '../commands.js';
 import {type FactoryUiState} from '../state/factoryStore.js';
-
-const stages = [
-	'requirement_capture',
-	'runtime_pattern_selection',
-	'graph_behavior_planning',
-	'node_strategy_planning',
-	'tool_capability_planning',
-	'resource_and_condition_planning',
-	'assembly_spec_generation',
-	'package_generation',
-	'harness_generation_and_test',
-	'repair_or_finalize'
-];
+import {Section} from './ui.js';
 
 export function StageTimeline({state}: {state: FactoryUiState}) {
-	const latestStage = state.stageDeltas.at(-1)?.stage_id;
+	const stageEvents = state.events.filter(event => event.event_type === 'stage_started' || event.event_type === 'stage_completed');
+	const latestStage = stageEvents.at(-1)?.stage_id ?? state.debugPatches.at(-1)?.stage_id;
+	const completed = new Set(
+		state.events
+			.filter(event => event.event_type === 'stage_completed' && event.stage_id)
+			.map(event => event.stage_id as string)
+	);
 	return (
-		<Box borderStyle="single" borderColor="blue" paddingX={1} flexDirection="column">
-			<Text bold>Factory Stages</Text>
-			<Text>
-				{stages.map(stage => (stage === latestStage ? `[${stage}]` : stage)).join(' -> ')}
-			</Text>
-		</Box>
+		<Section title="Factory Stages" color="blue">
+			<Box>
+				{factoryStages.map((stage, index) => (
+					<Box key={stage} marginRight={1}>
+						<Text color={completed.has(stage) ? 'green' : stage === latestStage ? 'blue' : 'gray'} inverse={stage === latestStage}>
+							{` ${index + 1} `}
+						</Text>
+					</Box>
+				))}
+			</Box>
+			<Text color="gray">{latestStage ?? 'waiting for stage updates'}</Text>
+		</Section>
 	);
 }
-

@@ -144,7 +144,7 @@ TypeScript CLI 通过 stdio 启动 Python bridge：
 python -m agent_factory.factory_graph.frontend_bridge.stdio_server
 ```
 
-通信格式为 JSONL。TS 向 stdin 写 command，Python 向 stdout 写 event。
+通信格式为 JSONL。TS 向 stdin 写 command，Python 向 stdout 写 runtime-bound event。CLI 只负责渲染事件，不直接依赖 LangGraph 原始 patch；原始 patch 只作为 `debug_patch` 进入调试面板。
 
 核心 command：
 
@@ -163,21 +163,58 @@ shutdown
 核心 event：
 
 ```text
-ready
-session_changed
+runtime_ready
+session_started
+session_switched
 sessions_listed
 mode_changed
 run_started
-stage_delta
-model_token
-tool_call_requested
-tool_result
-interrupt_requested
-resource_input_requested
 stage_completed
 run_completed
 run_failed
+stage_started
+stage_failed
+node_started
+node_completed
+node_failed
+model_call_started
+model_stream_delta
+model_message_completed
+model_call_failed
+tool_call_proposed
+tool_approval_requested
+tool_approval_resolved
+tool_call_started
+tool_call_completed
+tool_call_failed
+tool_observation_available
+interrupt_requested
+runtime_paused
+runtime_resumed
+resource_input_requested
+trace_snapshot
+debug_patch
 error
+```
+
+每个 event 都带统一 envelope：
+
+```json
+{
+  "event_id": "...",
+  "event_type": "model_stream_delta",
+  "run_id": "...",
+  "session_id": "...",
+  "mode": "create_agent",
+  "graph_id": "factory_graph",
+  "stage_id": "...",
+  "node_id": "...",
+  "span_id": "...",
+  "parent_span_id": "...",
+  "sequence": 1,
+  "timestamp": "...",
+  "payload": {}
+}
 ```
 
 ## 工厂阶段

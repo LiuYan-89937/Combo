@@ -4,27 +4,20 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 import uuid
 
-from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.types import Command
 
 from agent_factory.env import load_agentfactory_dotenv
-from agent_factory.factory_graph.chat_graph import (
-    FACTORY_CHAT_TOOLS_NODE,
-    build_factory_chat_graph,
-    initial_factory_chat_state,
-)
+from agent_factory.factory_graph.chat_graph import build_factory_chat_graph, initial_factory_chat_state
 from agent_factory.factory_graph.constants import DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE, STAGE_IDS
+from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
 from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendCommand,
     FactoryFrontendEvent,
     FactoryMode,
     event,
 )
-from agent_factory.factory_graph.graph import (
-    FACTORY_TOOLS_NODE,
-    build_factory_graph,
-    initial_factory_graph_state,
-)
+from agent_factory.factory_graph.graph import build_factory_graph, initial_factory_graph_state
 from agent_factory.factory_graph.session import (
     FactorySessionManager,
     build_factory_checkpointer,
@@ -50,6 +43,7 @@ class PendingRun:
     app: Any
     config: dict[str, Any]
     last_state: dict[str, Any]
+    normalizer: RuntimeEventNormalizer
 
 
 @dataclass(slots=True)
@@ -106,12 +100,15 @@ class FactoryRuntimeAdapter:
     def start_session(self, command: FactoryFrontendCommand) -> None:
         if command.session_id:
             self.session_record = self.session_manager.load(command.session_id)
+            session_event_type = "session_switched"
         elif command.resume_latest:
             self.session_record = self.session_manager.latest() or self.session_manager.create()
+            session_event_type = "session_switched" if self.session_record else "session_started"
         else:
             self.session_record = self.session_manager.create()
+            session_event_type = "session_started"
         self.mode = self.session_record.current_mode
-        self._emit_session_changed(command.request_id)
+        self._emit_session_event(command.request_id, session_event_type=session_event_type)
 
     def list_sessions(self, command: FactoryFrontendCommand) -> None:
         self.emit(
@@ -131,13 +128,13 @@ class FactoryRuntimeAdapter:
         self.session_record = self.session_manager.load(command.session_id)
         self.mode = self.session_record.current_mode
         self.pending_run = None
-        self._emit_session_changed(command.request_id)
+        self._emit_session_event(command.request_id, session_event_type="session_switched")
 
     def new_session(self, command: FactoryFrontendCommand) -> None:
         self.session_record = self.session_manager.create()
         self.mode = None
         self.pending_run = None
-        self._emit_session_changed(command.request_id)
+        self._emit_session_event(command.request_id, session_event_type="session_started")
 
     def set_mode(self, command: FactoryFrontendCommand) -> None:
         self._ensure_session(command)
@@ -167,7 +164,7 @@ class FactoryRuntimeAdapter:
         )
         self.emit(
             event(
-                "stage_delta",
+                "debug_patch",
                 request_id=command.request_id,
                 session_id=self._session_id(),
                 mode=self.mode,
@@ -199,6 +196,7 @@ class FactoryRuntimeAdapter:
             return
         pending = self.pending_run
         self.pending_run = None
+        pending.normalizer.emit_runtime_resumed(command.payload)
         self._stream_run(
             request_id=command.request_id,
             mode=pending.mode,
@@ -206,6 +204,8 @@ class FactoryRuntimeAdapter:
             stream_input=Command(resume=command.payload),
             config=pending.config,
             initial_final_state=pending.last_state,
+            normalizer=pending.normalizer,
+            emit_run_started=False,
         )
 
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
@@ -258,167 +258,56 @@ class FactoryRuntimeAdapter:
         stream_input: dict[str, Any] | Command,
         config: dict[str, Any],
         initial_final_state: dict[str, Any],
+        normalizer: RuntimeEventNormalizer | None = None,
+        emit_run_started: bool = True,
     ) -> None:
-        self.emit(
-            event(
-                "run_started",
-                request_id=request_id,
-                session_id=self._session_id(),
-                mode=mode,
-                payload={"stop_after_stage": self.options.stop_after_stage},
-            )
+        normalizer = normalizer or RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=request_id,
+            session_id=self._session_id(),
+            mode=mode,
+            graph_id="factory_chat_graph" if mode == "chat" else "factory_graph",
         )
+        if emit_run_started:
+            normalizer.emit_run_started({"stop_after_stage": self.options.stop_after_stage})
         final_state = initial_final_state
         try:
             for stream_mode, chunk in app.stream(
                 stream_input,
                 config=config,
-                stream_mode=["updates", "values", "messages"],
+                stream_mode=["updates", "values", "messages", "debug", "custom"],
             ):
                 interrupt_payload = _extract_interrupt_payload(chunk)
                 if interrupt_payload is not None:
-                    self.pending_run = PendingRun(mode=mode, app=app, config=config, last_state=final_state)
-                    self._emit_interrupt(request_id, mode, interrupt_payload)
+                    self.pending_run = PendingRun(
+                        mode=mode,
+                        app=app,
+                        config=config,
+                        last_state=final_state,
+                        normalizer=normalizer,
+                    )
+                    normalizer.emit_interrupt(json_safe(interrupt_payload))
                     return
                 if stream_mode == "updates":
-                    self._emit_updates(request_id, mode, chunk)
+                    self._emit_updates(normalizer, chunk)
                 elif stream_mode == "values":
                     final_state = chunk
                 elif stream_mode == "messages":
-                    self._emit_message_chunk(request_id, mode, chunk)
+                    normalizer.emit_message_chunk(chunk)
+                elif stream_mode == "debug":
+                    normalizer.emit_debug_event(json_safe(chunk))
+                elif stream_mode == "custom":
+                    normalizer.emit_custom_event(json_safe(chunk))
             self._save_messages(mode, final_state)
-            self.emit(
-                event(
-                    "run_completed",
-                    request_id=request_id,
-                    session_id=self._session_id(),
-                    mode=mode,
-                    payload=_summary_payload(final_state, self.options),
-                )
-            )
+            normalizer.emit_run_completed(_summary_payload(final_state, self.options))
         except Exception as exc:
-            self.emit(
-                event(
-                    "run_failed",
-                    request_id=request_id,
-                    session_id=self._session_id(),
-                    mode=mode,
-                    message=f"{type(exc).__name__}: {exc}",
-                )
-            )
+            normalizer.emit_run_failed(exc)
 
-    def _emit_updates(self, request_id: str | None, mode: FactoryMode, chunk: Any) -> None:
+    def _emit_updates(self, normalizer: RuntimeEventNormalizer, chunk: Any) -> None:
         if not isinstance(chunk, dict):
             return
         for node_id, patch in chunk.items():
-            safe_patch = _json_safe(patch)
-            self.emit(
-                event(
-                    "stage_delta",
-                    request_id=request_id,
-                    session_id=self._session_id(),
-                    mode=mode,
-                    node_id=str(node_id),
-                    stage_id=_stage_id_from_patch(safe_patch),
-                    payload={"patch": safe_patch},
-                )
-            )
-            self._emit_tool_results(request_id, mode, str(node_id), safe_patch)
-            for item in safe_patch.get("stage_log", []) or []:
-                self.emit(
-                    event(
-                        "stage_completed",
-                        request_id=request_id,
-                        session_id=self._session_id(),
-                        mode=mode,
-                        node_id=str(node_id),
-                        stage_id=str(item.get("stage_id") or ""),
-                        payload=item,
-                    )
-                )
-
-    def _emit_message_chunk(self, request_id: str | None, mode: FactoryMode, chunk: Any) -> None:
-        try:
-            message_chunk, metadata = chunk
-        except Exception:
-            return
-        if "nostream" in set(metadata.get("tags", [])):
-            return
-        if metadata.get("langgraph_node") in {FACTORY_TOOLS_NODE, FACTORY_CHAT_TOOLS_NODE}:
-            return
-        if isinstance(message_chunk, ToolMessage):
-            return
-        content = getattr(message_chunk, "content", "")
-        if not content:
-            return
-        self.emit(
-            event(
-                "model_token",
-                request_id=request_id,
-                session_id=self._session_id(),
-                mode=mode,
-                node_id=str(metadata.get("langgraph_node") or ""),
-                message=str(content),
-            )
-        )
-
-    def _emit_tool_results(
-        self,
-        request_id: str | None,
-        mode: FactoryMode,
-        node_id: str,
-        patch: dict[str, Any],
-    ) -> None:
-        for message in patch.get("messages", []) or []:
-            if message.get("type") != "ToolMessage":
-                continue
-            self.emit(
-                event(
-                    "tool_result",
-                    request_id=request_id,
-                    session_id=self._session_id(),
-                    mode=mode,
-                    node_id=node_id,
-                    payload=message,
-                )
-            )
-        resource_plan = patch.get("resource_condition_plan") or {}
-        for item in resource_plan.get("check_results", []) or []:
-            self.emit(
-                event(
-                    "tool_result",
-                    request_id=request_id,
-                    session_id=self._session_id(),
-                    mode=mode,
-                    node_id=node_id,
-                    payload={"resource_check": item},
-                )
-            )
-
-    def _emit_interrupt(self, request_id: str | None, mode: FactoryMode, payload: Any) -> None:
-        safe_payload = _json_safe(payload)
-        interrupt_type = safe_payload.get("type") if isinstance(safe_payload, dict) else None
-        if interrupt_type == "tool_approval":
-            for request in safe_payload.get("requests", []) or []:
-                self.emit(
-                    event(
-                        "tool_call_requested",
-                        request_id=request_id,
-                        session_id=self._session_id(),
-                        mode=mode,
-                        payload=request,
-                    )
-                )
-        event_type = "resource_input_requested" if interrupt_type == "resource_input" else "interrupt_requested"
-        self.emit(
-            event(
-                event_type,
-                request_id=request_id,
-                session_id=self._session_id(),
-                mode=mode,
-                payload=safe_payload if isinstance(safe_payload, dict) else {"value": safe_payload},
-            )
-        )
+            normalizer.emit_update(str(node_id), json_safe(patch))
 
     def _save_messages(self, mode: FactoryMode, final_state: dict[str, Any]) -> None:
         if self.session_record is None:
@@ -430,10 +319,10 @@ class FactoryRuntimeAdapter:
             messages,
         )
 
-    def _emit_session_changed(self, request_id: str | None) -> None:
+    def _emit_session_event(self, request_id: str | None, *, session_event_type: str = "session_switched") -> None:
         self.emit(
             event(
-                "session_changed",
+                session_event_type,
                 request_id=request_id,
                 session_id=self._session_id(),
                 mode=self.mode,
@@ -485,19 +374,10 @@ def _summary_payload(final_state: dict[str, Any], options: FactoryBridgeOptions)
         "error_count": len(final_state.get("errors", [])),
     }
     if options.show_state:
-        payload["state"] = _json_safe(final_state)
+        payload["state"] = json_safe(final_state)
     if options.show_messages:
-        payload["messages"] = _json_safe(final_state.get("messages", []))
+        payload["messages"] = json_safe(final_state.get("messages", []))
     return payload
-
-
-def _stage_id_from_patch(patch: dict[str, Any]) -> str | None:
-    if patch.get("current_stage"):
-        return str(patch.get("current_stage"))
-    stage_log = patch.get("stage_log") or []
-    if stage_log:
-        return str(stage_log[-1].get("stage_id") or "")
-    return None
 
 
 def _extract_interrupt_payload(chunk: Any) -> Any | None:
@@ -508,26 +388,3 @@ def _extract_interrupt_payload(chunk: Any) -> Any | None:
         return None
     first = interrupts[0]
     return getattr(first, "value", first)
-
-
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, BaseMessage):
-        payload: dict[str, Any] = {
-            "type": value.__class__.__name__,
-            "content": getattr(value, "content", ""),
-            "name": getattr(value, "name", None),
-        }
-        tool_calls = getattr(value, "tool_calls", None)
-        if tool_calls:
-            payload["tool_calls"] = tool_calls
-        tool_call_id = getattr(value, "tool_call_id", None)
-        if tool_call_id:
-            payload["tool_call_id"] = tool_call_id
-        return payload
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
