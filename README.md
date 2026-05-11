@@ -1,56 +1,60 @@
 # FastAgentFactory
 
-FastAgentFactory 是一个基于 LangGraph 构建的 CLI-first Agent 工厂原型。当前重点不是做一个已经完整交付的产品，而是把工厂运行层、交互 shell、基础工具、RuntimeKernel 和 AgentAssembly 路径整理清楚，方便后续分阶段实现、测试和返厂维修。
+FastAgentFactory 是一个基于 LangGraph 和 RuntimeKernel 的 Agent 工厂原型。当前架构已经拆成两层：
+
+- **Python Runtime**：负责 FactoryGraph、RuntimeKernel、session/checkpoint、工具执行、interrupt/resume、harness 和后续 package generation。
+- **TypeScript CLI Frontend**：负责终端交互、流式输出、阶段展示、工具审批、资源补全和会话切换。
+
+旧 Python CLI 已移除，不再保留兼容入口。
 
 ## 当前进度
 
 已经完成：
 
 - RuntimeKernel v0 基座：图模式编译、执行控制器、checkpoint/resume、observability、harness bridge、节点 wrapper、memory/context/knowledge/policy 策略接口，以及默认策略注册。
-- AgentAssembly v0 基座：assembly schema、loader、validator、compiler、runner，以及一个示例 assembly 文件。
-- FactoryGraph shell：交互式 CLI shell，明确拆分 `/chat` 和 `/create-agent` 两种模式。
-- Factory chat graph：独立的 ReAct 风格 LangGraph 聊天路径，用 task model 加工厂基础工具完成闲聊、工作区检查和轻量任务。
+- AgentAssembly v0 基座：assembly schema、loader、validator、compiler、runner，以及示例 assembly 文件。
 - Factory production graph：用于制造 Agent 的 10 阶段 RuntimeKernel-native LangGraph 流水线。
+- Factory chat graph：独立 ReAct 聊天图，用 task model 和工厂基础工具处理闲聊、工作区检查和轻量任务。
 - Factory 前六阶段：
   - `requirement_capture`：需求捕获、澄清和业务计划确认。
   - `runtime_pattern_selection`：只基于 Pattern metadata/description 选择 RuntimeKernel pattern。
   - `graph_behavior_planning`：基于 pattern 结构摘要规划节点行为、路由和中断点。
   - `node_strategy_planning`：为每个节点规划 wrapper、策略引用和待生成策略声明。
   - `tool_capability_planning`：规划工具能力契约、节点可见性、审批标记和后续实现状态。
-  - `resource_and_condition_planning`：推导资源需求、生成检查计划、执行工厂检查工具、分析资源满足情况、中断收集用户自然输入、重写并验证资源后写入资源文件。
-- 节点策略目录：第四阶段已从硬编码默认策略改为 `strategy_catalog`，模型可以引用已有策略，也可以只声明后续阶段需要实现的新策略。
-- 工具能力规划：第五阶段只输出精简能力契约，不生成工具代码，不做资源嗅探，不引入固定 category。
-- 资源准备：第六阶段只产出验证后的 `.agentfactory/resources/<factory_run_id>/factory_resources.json` 键值对文件，后续工具生成和 harness 测试以该文件为资源依据。
+  - `resource_and_condition_planning`：必须 ReAct，资源检查工具经 `ToolNode` 执行，结果作为 Observation 回到模型，验证后写资源文件。
+- Python Runtime Bridge：`agent_factory/factory_graph/frontend_bridge/` 通过 JSONL over stdio 暴露运行层事件和命令。
+- TypeScript CLI：`cli/` 使用 Ink/React 渲染交互式 Factory shell。
 - 基础工具：文件系统、搜索/理解、shell 三类工具，使用 LangChain `@tool` 注册，并注入 LangGraph `ToolNode`。
-- OpenAI 兼容模型配置：通过 `.env` 读取模型配置，并支持 provider-specific thinking 模式兼容。
 
 仍在进行：
 
-- 10 个工厂生产阶段中，第 7 阶段之后仍是结构占位，内部业务逻辑还没有完整实现。
-- `/create-agent` 当前运行的是工厂生产图骨架，应视为生产流水线入口，不是已经完成的 Agent 生成器。
-- 当前配置不包含真实外部 WebSearch。
+- 第 7 阶段之后仍是结构占位，业务逻辑尚未完整实现。
+- `/create-agent` 当前是工厂生产图入口，不是完整 Agent 生成器。
 - 生成 Agent package、沙箱测试、自动修复闭环仍未完成生产级实现。
 
 ## 主要路径
 
+- `agent_factory/factory_graph/frontend_bridge/`：Python Runtime Bridge，唯一供 TS CLI 调用的机器协议层。
+- `cli/`：TypeScript CLI 前端。
 - `agent_factory/factory_graph/chat_graph.py`：独立 ReAct 聊天图。
 - `agent_factory/factory_graph/graph.py`：10 阶段工厂生产图。
 - `agent_factory/factory_graph/stages/`：工厂阶段节点实现。
-- `agent_factory/factory_graph/schemas.py`：FactoryGraph 结构化模型输出 schema。
-- `agent_factory/factory_graph/strategy_catalog.py`：Factory 第四阶段可引用的节点策略目录。
 - `agent_factory/factory_graph/tools/`：工厂基础工具。
-- `agent_factory/models/chat_model.py`：OpenAI 兼容 ChatModel 构建。
 - `agent_factory/runtime_kernel/`：RuntimeKernel v0 实现和规范文档。
 - `agent_factory/assembly/`：AgentAssembly schema、校验、编译和 runner。
-- `agent_factory/AGENT_ASSEMBLY_SPEC_V0.md`：AgentAssembly 规范草案。
-- `agent_factory/factory_graph/FACTORY_BASE_TOOLS.md`：基础工具清单。
 
 ## 安装
 
-安装依赖：
+安装 Python 运行层依赖：
 
 ```bash
 uv sync
+```
+
+安装 TypeScript CLI 依赖：
+
+```bash
+pnpm --dir cli install
 ```
 
 创建本地环境配置：
@@ -72,56 +76,27 @@ AGENTFACTORY_TASK_MODEL=
 
 ## CLI 使用方式
 
-检查当前工作区入口：
+启动 TypeScript CLI：
 
 ```bash
-uv run agentfactory init
+pnpm --dir cli factory
 ```
 
-启动交互 shell：
+根目录也提供转发脚本：
 
 ```bash
-uv run agentfactory shell
+pnpm factory
 ```
 
 默认每次启动都会创建新的 Factory 会话，不会自动继承上一次上下文。
-
-需要恢复历史会话时使用显式入口：
-
-```bash
-uv run agentfactory shell --resume-latest
-uv run agentfactory shell --session-id <session_id>
-```
 
 Shell 命令：
 
 ```text
 /chat
-```
-
-进入聊天模式。聊天路径已经从 14 阶段工厂图中独立出来，可以通过 ReAct 使用已注入的基础工具。
-
-```text
 /create-agent
-```
-
-进入 Agent 制造模式。该模式下的用户输入会运行 10 阶段 FactoryGraph。
-
-```text
 /exit
-```
-
-退出当前模式。如果当前不在任何模式中，则退出 shell。
-
-```text
 /quit
-```
-
-直接退出 shell。
-
-常用检查命令：
-
-```text
 /help
 /session
 /sessions
@@ -137,7 +112,7 @@ Shell 命令：
 /stop off
 ```
 
-聊天模式示例：
+聊天模式：
 
 ```text
 /chat
@@ -145,7 +120,7 @@ Shell 命令：
 /exit
 ```
 
-制造模式示例：
+制造模式：
 
 ```text
 /create-agent
@@ -153,42 +128,61 @@ Shell 命令：
 /exit
 ```
 
-## 非交互命令
+旧入口已经移除：
 
-运行一次工厂请求：
-
-```bash
-uv run agentfactory create-agent --prompt "创建一个记账 Agent"
+```text
+uv run agentfactory shell
+uv run agentfactory create-agent
+uv run agentfactory test-stages
 ```
 
-默认断点跟随当前已实现阶段推进。当前默认停在第六阶段 `resource_and_condition_planning`：前五阶段完成需求、pattern、图行为、节点策略和工具能力规划，第六阶段准备资源键值文件并停止本轮。
+## Bridge 协议
 
-运行到指定工厂阶段后停止，并打印最终 state：
+TypeScript CLI 通过 stdio 启动 Python bridge：
 
 ```bash
-uv run agentfactory create-agent \
-  --prompt "创建一个记账 Agent" \
-  --stop-after-stage resource_and_condition_planning \
-  --json
+python -m agent_factory.factory_graph.frontend_bridge.stdio_server
 ```
 
-关闭断点并继续跑后续阶段：
+通信格式为 JSONL。TS 向 stdin 写 command，Python 向 stdout 写 event。
 
-```bash
-uv run agentfactory create-agent \
-  --prompt "创建一个记账 Agent" \
-  --stop-after-stage off
+核心 command：
+
+```text
+start_session
+list_sessions
+switch_session
+new_session
+set_mode
+send_message
+resume_interrupt
+set_options
+shutdown
 ```
 
-运行完整阶段骨架：
+核心 event：
 
-```bash
-uv run agentfactory test-stages --prompt "创建一个记账 Agent"
+```text
+ready
+session_changed
+sessions_listed
+mode_changed
+run_started
+stage_delta
+model_token
+tool_call_requested
+tool_result
+interrupt_requested
+resource_input_requested
+stage_completed
+run_completed
+run_failed
+error
 ```
 
 ## 工厂阶段
 
-当前生产图包含 10 个 RuntimeKernel-native 阶段：
+当前生产图包含 10 个阶段：
 
 1. `requirement_capture`
 2. `runtime_pattern_selection`
@@ -201,60 +195,7 @@ uv run agentfactory test-stages --prompt "创建一个记账 Agent"
 9. `harness_generation_and_test`
 10. `repair_or_finalize`
 
-当前默认断点在第 6 阶段 `resource_and_condition_planning`。CLI 会展示：
-
-- 精炼后的需求和业务计划。
-- Runtime pattern 选择结果。
-- 图节点、节点行为、路由和中断点。
-- 每个节点的 `strategy_refs`。
-- 需要后续阶段生成 Python 实现的 `proposed_strategies`。
-- 工具能力契约 `tool_capabilities`。
-- 每个节点的工具可见性 `node_tool_visibility`。
-- 第六阶段准备出的 `resource_condition_plan`。
-- 资源文件路径 `resource_file_path`。
-- 已准备的资源键值表。
-
-第六阶段如果缺少 required 资源键，会通过 LangGraph interrupt 要求用户补齐。用户可以提供值、选择运行时提供，或阻塞本轮构建。资源未准备完整不会进入第七阶段。
-
-## 节点策略规划
-
-第四阶段只做装配规划，不写具体 Python 策略实现。
-
-已有策略通过 `strategy_refs` 引用：
-
-```text
-context:model 策略
-memory:session 策略
-policy:输出或审批策略
-tool_visibility:节点级工具可见性策略
-```
-
-如果当前策略目录无法表达某个节点需求，第四阶段只生成 `proposed_strategies`：
-
-```text
-strategy_id
-name
-description
-kind
-phase
-required_by_node_ids
-applies_to_node_types
-reads / writes
-config_schema
-implementation_notes
-```
-
-这些 proposed 策略的具体 Python 实现交给后续 package generation 阶段。
-
-## 基础工具
-
-当前注入的基础工具：
-
-- 文件系统：`file_read`、`file_write`、`file_patch`、`file_list`、`file_exists`、`file_mkdir`、`file_copy`
-- 搜索与理解：`search_files`、`search_text`、`search_inspect_text`、`search_inspect_file`
-- Shell：`shell_run`、`shell_run_text`、`shell_which`、`shell_cwd`、`shell_env`、`shell_start`、`shell_status`、`shell_grep_process`、`shell_stop`
-
-这些工具是通用工厂工具，不针对某一个项目目录做特化。不过实际能访问什么，仍由当前进程环境和权限控制。
+当前默认断点在第 6 阶段 `resource_and_condition_planning`。第六阶段如果缺少 required 资源键，会通过 LangGraph interrupt 交给 TS CLI 收集用户自然语言补充。资源未准备完整不会进入第七阶段。
 
 ## 环境变量
 
@@ -282,21 +223,34 @@ AGENTFACTORY_RUN_PROVIDER_SMOKE=0
 
 ## 验证
 
-当前开发阶段优先做语法和静态检查：
+Python 语法检查：
 
 ```bash
 python -m py_compile \
-  agent_factory/prompts.py \
-  agent_factory/factory_graph/schemas.py \
-  agent_factory/factory_graph/strategy_catalog.py \
-  agent_factory/factory_graph/stage_subgraphs/resource_preparation.py \
-  agent_factory/factory_graph/stages/node_strategy_planning.py \
-  agent_factory/factory_graph/stages/tool_capability_planning.py \
-  agent_factory/factory_graph/stages/resource_and_condition_planning.py \
-  agent_factory/factory_graph/shell_cli.py
+  agent_factory/factory_graph/frontend_bridge/protocol.py \
+  agent_factory/factory_graph/frontend_bridge/stdio_server.py \
+  agent_factory/factory_graph/frontend_bridge/runtime_adapter.py \
+  agent_factory/factory_graph/graph.py \
+  agent_factory/factory_graph/chat_graph.py \
+  agent_factory/factory_graph/session.py \
+  agent_factory/factory_graph/tool_approval.py
 ```
 
-检查空白问题：
+TypeScript 静态检查：
+
+```bash
+pnpm --dir cli typecheck
+pnpm --dir cli test
+pnpm --dir cli lint
+```
+
+旧 Python CLI 引用检查：
+
+```bash
+rg -n "<旧 Python CLI 标识>" agent_factory pyproject.toml README.md
+```
+
+空白检查：
 
 ```bash
 git diff --check

@@ -13,16 +13,10 @@ dependencies = [
     "langgraph>=1.0,<2",
     "langgraph-checkpoint-sqlite>=2.0,<3",
     "playwright>=1.45",
-    "prompt_toolkit>=3.0",
     "pydantic>=2.8",
     "pypdf>=4.0",
-    "rich>=13.0",
     "ruamel.yaml>=0.18",
-    "typer>=0.12",
 ]
-
-[project.scripts]
-agentfactory = "agent_factory.cli:app"
 
 [build-system]
 requires = ["hatchling"]

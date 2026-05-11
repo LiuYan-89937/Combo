@@ -10,6 +10,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+node_modules/
+cli/node_modules/
+.pnpm-store/
+pnpm-lock.yaml
 .coverage
 htmlcov/
 dist/
