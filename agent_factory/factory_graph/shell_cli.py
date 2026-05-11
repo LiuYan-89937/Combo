@@ -142,6 +142,7 @@ class FactoryGraphShell:
         self._print_refined_plan(final_state)
         self._print_runtime_pattern_selection(final_state)
         self._print_graph_behavior_plan(final_state)
+        self._print_node_strategy_plan(final_state)
         self._print_summary(final_state)
         if options.show_messages:
             self._print_messages(final_state.get("messages", []))
@@ -338,6 +339,47 @@ class FactoryGraphShell:
             )
         self.console.print(table)
 
+    def _print_node_strategy_plan(self, state: dict[str, Any]) -> None:
+        plan = state.get("node_strategy_plan") or {}
+        node_strategies = list(plan.get("node_strategies") or [])
+        if not node_strategies:
+            return
+        self.console.print(
+            Panel(
+                str(plan.get("strategy_intent") or ""),
+                title=f"Node Strategy Planning: {plan.get('pattern_id', '-')}",
+                border_style="green",
+            )
+        )
+        table = Table(title="Node Strategy Config", show_header=True, header_style="bold cyan")
+        table.add_column("node_id", style="cyan", no_wrap=True)
+        table.add_column("wrappers")
+        table.add_column("strategy_refs")
+        for item in node_strategies:
+            table.add_row(
+                str(item.get("node_id") or ""),
+                _format_wrapper_plans(item.get("wrappers") or []),
+                _format_strategy_refs(item.get("strategy_refs") or []),
+            )
+        self.console.print(table)
+        proposed_strategies = list(plan.get("proposed_strategies") or [])
+        if proposed_strategies:
+            proposed_table = Table(title="Proposed Strategy Specs", show_header=True, header_style="bold magenta")
+            proposed_table.add_column("strategy_id", style="cyan", no_wrap=True)
+            proposed_table.add_column("kind", no_wrap=True)
+            proposed_table.add_column("phase", no_wrap=True)
+            proposed_table.add_column("required_by")
+            proposed_table.add_column("description")
+            for item in proposed_strategies:
+                proposed_table.add_row(
+                    str(item.get("strategy_id") or ""),
+                    str(item.get("kind") or ""),
+                    str(item.get("phase") or ""),
+                    ", ".join(str(node_id) for node_id in item.get("required_by_node_ids") or []) or "-",
+                    str(item.get("description") or ""),
+                )
+            self.console.print(proposed_table)
+
     def _print_messages(self, messages: Iterable[BaseMessage]) -> None:
         table = Table(title="Messages", show_header=True, header_style="bold cyan")
         table.add_column("#", justify="right", no_wrap=True)
@@ -495,6 +537,30 @@ def _json_safe_state(state: dict[str, Any]) -> dict[str, Any]:
         for message in state.get("messages", [])
     ]
     return safe
+
+
+def _format_wrapper_plans(wrappers: list[dict[str, Any]]) -> str:
+    if not wrappers:
+        return "-"
+    return "\n".join(
+        f"{item.get('wrapper_id')}@{item.get('phase')}"
+        for item in wrappers
+    )
+
+
+def _format_strategy_refs(strategy_refs: list[dict[str, Any]]) -> str:
+    if not strategy_refs:
+        return "-"
+    lines: list[str] = []
+    for item in strategy_refs:
+        strategy_id = str(item.get("strategy_id") or "-")
+        kind = str(item.get("kind") or "-")
+        phase = str(item.get("phase") or "-")
+        source = str(item.get("source") or "catalog")
+        notes = item.get("config_notes") or {}
+        suffix = f" notes:{len(notes)}" if notes else ""
+        lines.append(f"{kind}:{strategy_id}@{phase} [{source}]{suffix}")
+    return "\n".join(lines)
 
 
 def _extract_interrupts(chunk: Any) -> tuple[Any, ...]:

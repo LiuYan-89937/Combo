@@ -10,13 +10,19 @@ FastAgentFactory 是一个基于 LangGraph 构建的 CLI-first Agent 工厂原�
 - AgentAssembly v0 基座：assembly schema、loader、validator、compiler、runner，以及一个示例 assembly 文件。
 - FactoryGraph shell：交互式 CLI shell，明确拆分 `/chat` 和 `/create-agent` 两种模式。
 - Factory chat graph：独立的 ReAct 风格 LangGraph 聊天路径，用 task model 加工厂基础工具完成闲聊、工作区检查和轻量任务。
-- Factory production graph：用于制造 Agent 的 14 阶段 LangGraph 骨架。
+- Factory production graph：用于制造 Agent 的 10 阶段 RuntimeKernel-native LangGraph 流水线。
+- Factory 前四阶段：
+  - `requirement_capture`：需求捕获、澄清和业务计划确认。
+  - `runtime_pattern_selection`：只基于 Pattern metadata/description 选择 RuntimeKernel pattern。
+  - `graph_behavior_planning`：基于 pattern 结构摘要规划节点行为、路由和中断点。
+  - `node_strategy_planning`：为每个节点规划 wrapper、策略引用和待生成策略声明。
+- 节点策略目录：第四阶段已从硬编码默认策略改为 `strategy_catalog`，模型可以引用已有策略，也可以只声明后续阶段需要实现的新策略。
 - 基础工具：文件系统、搜索/理解、shell 三类工具，使用 LangChain `@tool` 注册，并注入 LangGraph `ToolNode`。
 - OpenAI 兼容模型配置：通过 `.env` 读取模型配置，并支持 provider-specific thinking 模式兼容。
 
 仍在进行：
 
-- 14 个工厂生产阶段大部分仍是结构占位，内部业务逻辑还没有完整实现。
+- 10 个工厂生产阶段中，第 5 阶段之后仍是结构占位，内部业务逻辑还没有完整实现。
 - `/create-agent` 当前运行的是工厂生产图骨架，应视为生产流水线入口，不是已经完成的 Agent 生成器。
 - 当前配置不包含真实外部 WebSearch。
 - 生成 Agent package、沙箱测试、自动修复闭环仍未完成生产级实现。
@@ -24,8 +30,10 @@ FastAgentFactory 是一个基于 LangGraph 构建的 CLI-first Agent 工厂原�
 ## 主要路径
 
 - `agent_factory/factory_graph/chat_graph.py`：独立 ReAct 聊天图。
-- `agent_factory/factory_graph/graph.py`：14 阶段工厂生产图。
+- `agent_factory/factory_graph/graph.py`：10 阶段工厂生产图。
 - `agent_factory/factory_graph/stages/`：工厂阶段节点实现。
+- `agent_factory/factory_graph/schemas.py`：FactoryGraph 结构化模型输出 schema。
+- `agent_factory/factory_graph/strategy_catalog.py`：Factory 第四阶段可引用的节点策略目录。
 - `agent_factory/factory_graph/tools/`：工厂基础工具。
 - `agent_factory/models/chat_model.py`：OpenAI 兼容 ChatModel 构建。
 - `agent_factory/runtime_kernel/`：RuntimeKernel v0 实现和规范文档。
@@ -93,7 +101,7 @@ Shell 命令：
 /create-agent
 ```
 
-进入 Agent 制造模式。该模式下的用户输入会运行 14 阶段 FactoryGraph。
+进入 Agent 制造模式。该模式下的用户输入会运行 10 阶段 FactoryGraph。
 
 ```text
 /exit
@@ -149,14 +157,14 @@ Shell 命令：
 uv run agentfactory create-agent --prompt "创建一个记账 Agent"
 ```
 
-默认断点跟随当前已实现阶段推进。当前默认停在第三阶段 `graph_behavior_planning`：第一阶段完成需求澄清和业务制造计划确认，第二阶段选择 RuntimeKernel pattern，第三阶段生成图行为计划并停止本轮。
+默认断点跟随当前已实现阶段推进。当前默认停在第四阶段 `node_strategy_planning`：前三阶段完成需求、pattern 和图行为计划，第四阶段生成节点策略计划并停止本轮。
 
 运行到指定工厂阶段后停止，并打印最终 state：
 
 ```bash
 uv run agentfactory create-agent \
   --prompt "创建一个记账 Agent" \
-  --stop-after-stage graph_behavior_planning \
+  --stop-after-stage node_strategy_planning \
   --json
 ```
 
@@ -188,6 +196,44 @@ uv run agentfactory test-stages --prompt "创建一个记账 Agent"
 8. `package_generation`
 9. `harness_generation_and_test`
 10. `repair_or_finalize`
+
+当前默认断点在第 4 阶段 `node_strategy_planning`。CLI 会展示：
+
+- 精炼后的需求和业务计划。
+- Runtime pattern 选择结果。
+- 图节点、节点行为、路由和中断点。
+- 每个节点的 `strategy_refs`。
+- 需要后续阶段生成 Python 实现的 `proposed_strategies`。
+
+## 节点策略规划
+
+第四阶段只做装配规划，不写具体 Python 策略实现。
+
+已有策略通过 `strategy_refs` 引用：
+
+```text
+context:model 策略
+memory:session 策略
+policy:输出或审批策略
+tool_visibility:节点级工具可见性策略
+```
+
+如果当前策略目录无法表达某个节点需求，第四阶段只生成 `proposed_strategies`：
+
+```text
+strategy_id
+name
+description
+kind
+phase
+required_by_node_ids
+applies_to_node_types
+reads / writes
+config_schema
+implementation_notes
+```
+
+这些 proposed 策略的具体 Python 实现交给后续 package generation 阶段。
 
 ## 基础工具
 
@@ -225,10 +271,15 @@ AGENTFACTORY_RUN_PROVIDER_SMOKE=0
 
 ## 验证
 
-运行语法和单元验证：
+当前开发阶段优先做语法和静态检查：
 
 ```bash
-python -m unittest discover tests -v
+python -m py_compile \
+  agent_factory/prompts.py \
+  agent_factory/factory_graph/schemas.py \
+  agent_factory/factory_graph/strategy_catalog.py \
+  agent_factory/factory_graph/stages/node_strategy_planning.py \
+  agent_factory/factory_graph/shell_cli.py
 ```
 
 检查空白问题：

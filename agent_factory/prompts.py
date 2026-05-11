@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from enum import Enum
 import json
-from typing import Literal
 
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 
 class PromptId(str, Enum):
@@ -17,131 +16,8 @@ class PromptId(str, Enum):
     BUSINESS_PLAN_REVIEW_REVISE = "factory.business_plan_review.revise"
     RUNTIME_PATTERN_SELECTION = "factory.runtime_pattern_selection"
     GRAPH_BEHAVIOR_PLANNING = "factory.graph_behavior_planning"
+    NODE_STRATEGY_PLANNING = "factory.node_strategy_planning"
     FACTORY_CHAT = "factory.chat"
-
-
-class CaptureIntentOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    intent: Literal["chat", "inspect_factory", "manufacture_agent", "repair_agent", "unclear"]
-    confidence: float = Field(ge=0, le=1)
-    reason: str
-    extracted_requirement: str | None = None
-    reply_hint: str | None = None
-    entry_stage: str | None = None
-    should_run_graph: bool
-
-
-class RequirementClarityOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    is_clear: bool
-    confidence: float = Field(ge=0, le=1)
-    reason: str
-    missing_fields: list[str] = Field(default_factory=list, max_length=8)
-
-
-class ClarificationOption(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    label: str
-    description: str | None = None
-
-
-class ClarifyingQuestionOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    question: str
-    options: list[ClarificationOption] = Field(min_length=2, max_length=5)
-    custom_option_id: str
-
-
-class ClarifyingQuestionSetOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    questions: list[ClarifyingQuestionOutput] = Field(min_length=1, max_length=5)
-
-
-class RequirementMergeOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    current_requirement: str
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-    unresolved_questions: list[str] = Field(default_factory=list, max_length=8)
-
-
-class RuntimePatternAlternativeOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    pattern_id: str
-    reason: str
-    tradeoff: str | None = None
-
-
-class RuntimePatternSelectionOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    selected_pattern_id: str
-    selection_reason: str
-    fit_summary: str
-    alternatives: list[RuntimePatternAlternativeOutput] = Field(default_factory=list, max_length=5)
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-    open_questions: list[str] = Field(default_factory=list, max_length=8)
-
-
-class GraphBehaviorNodePlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    node_id: str
-    node_type: str
-    business_behavior: str
-    input_expectation: str
-    output_expectation: str
-    user_visible: bool = False
-    notes: list[str] = Field(default_factory=list, max_length=8)
-
-
-class GraphBehaviorRoutePlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    from_node: str
-    to_node: str
-    condition: str
-    business_meaning: str
-    expected_usage: str
-
-
-class GraphBehaviorInterruptPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    node_id: str
-    business_reason: str
-    user_visible_reason: str
-
-
-class GraphBehaviorTerminationPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    success_nodes: list[str] = Field(default_factory=list)
-    failure_nodes: list[str] = Field(default_factory=list)
-    business_success_meaning: str
-    business_failure_meaning: str
-
-
-class GraphBehaviorPlanOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    pattern_id: str
-    pattern_name: str
-    graph_intent: str
-    nodes: list[GraphBehaviorNodePlan] = Field(default_factory=list)
-    routes: list[GraphBehaviorRoutePlan] = Field(default_factory=list)
-    interrupts: list[GraphBehaviorInterruptPlan] = Field(default_factory=list)
-    termination: GraphBehaviorTerminationPlan
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-    open_questions: list[str] = Field(default_factory=list, max_length=8)
 
 
 def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
@@ -327,6 +203,42 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "业务制造计划：\n{refined_plan_text}\n\n"
                     "第二阶段 pattern 选择结果：\n{runtime_pattern_selection}\n\n"
                     "Pattern 结构摘要：\n{pattern_structure_summary}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.NODE_STRATEGY_PLANNING:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第四阶段的节点策略规划器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是基于已确认的图行为计划，给每个已有节点规划可装配的运行策略。\n\n"
+                    "严格约束：\n"
+                    "- 必须为 graph_behavior_plan 中每个已有 node_id 输出一个 node strategy。\n"
+                    "- 不允许增删节点。\n"
+                    "- 不允许修改 pattern_id。\n"
+                    "- wrapper_id 必须来自 wrapper_catalog。\n"
+                    "- wrapper phase 必须来自该 wrapper 支持的 phases。\n"
+                    "- 已存在策略只能引用 strategy_catalog 中的 strategy_id，并把 source 写为 catalog。\n"
+                    "- 如果现有目录无法表达节点需要的策略，可以在 proposed_strategies 中新增策略声明，"
+                    "并在节点 strategy_refs 中引用它且 source 写为 proposed。\n"
+                    "- proposed_strategies 只允许写 strategy_id、name、description、kind、phase、"
+                    "required_by_node_ids、applies_to_node_types、reads、writes、config_schema、implementation_notes。\n"
+                    "- 不允许写任何策略 Python 实现代码、prompt 正文、工具实现、数据库/API 方案、资源探测结论或 AssemblySpec。\n"
+                    "- 工具能力只能写引用或占位说明，不定义具体工具；具体工具规划属于第五阶段。\n"
+                    "- 已确定的配置写入 config；需要后续确认的内容写入 config_notes。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "业务制造计划：\n{refined_plan_text}\n\n"
+                    "第二阶段 pattern 选择结果：\n{runtime_pattern_selection}\n\n"
+                    "第三阶段图行为计划：\n{graph_behavior_plan}\n\n"
+                    "Pattern 结构摘要：\n{pattern_structure_summary}\n\n"
+                    "可用 wrapper catalog：\n{wrapper_catalog}\n\n"
+                    "可用 strategy catalog：\n{strategy_catalog}\n\n"
                     "请返回 JSON。",
                 ),
             ]

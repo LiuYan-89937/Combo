@@ -5,13 +5,15 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from agent_factory.factory_graph.schemas import (
+    ClarifyingQuestionSetOutput,
+    RequirementClarityOutput,
+    RequirementMergeOutput,
+)
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import (
-    ClarifyingQuestionSetOutput,
     PromptId,
-    RequirementClarityOutput,
-    RequirementMergeOutput,
     get_prompt,
     output_json_schema,
 )

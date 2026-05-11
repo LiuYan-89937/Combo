@@ -4,11 +4,13 @@ from pathlib import Path
 from typing import Any
 import json
 
+from agent_factory.factory_graph.schemas import (
+    RuntimePatternSelectionOutput,
+)
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import (
     PromptId,
-    RuntimePatternSelectionOutput,
     get_prompt,
     output_json_schema,
 )
