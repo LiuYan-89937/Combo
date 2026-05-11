@@ -438,9 +438,9 @@ class FactoryGraphShell:
             f"status: {plan.get('status', '-')}",
             f"resource_file_path: {plan.get('resource_file_path', '-')}",
         ]
-        missing_keys = list(plan.get("missing_keys") or [])
-        if missing_keys:
-            lines.append(f"missing_keys: {len(missing_keys)}")
+        requirements = list(plan.get("requirements") or [])
+        if requirements:
+            lines.append(f"requirements: {len(requirements)}")
         self.console.print(
             Panel(
                 "\n".join(lines),
@@ -448,8 +448,11 @@ class FactoryGraphShell:
                 border_style="green" if plan.get("status") == "complete" else "yellow",
             )
         )
-        self._print_resource_probe_evidence(plan.get("probe_evidence") or [])
+        self._print_resource_check_results(plan.get("check_results") or [])
         resources = dict(plan.get("resources") or {})
+        resource_draft = dict(plan.get("resource_draft") or {})
+        if resource_draft and not resources:
+            resources = resource_draft
         if resources:
             table = Table(title="Prepared Resources", show_header=True, header_style="bold cyan")
             table.add_column("key", style="cyan", no_wrap=True)
@@ -457,36 +460,26 @@ class FactoryGraphShell:
             for key, value in resources.items():
                 table.add_row(str(key), str(value))
             self.console.print(table)
-        normalization_notes = list(plan.get("normalization_notes") or [])
-        if normalization_notes:
-            self.console.print(
-                Panel(
-                    "\n".join(str(item) for item in normalization_notes),
-                    title="Resource Normalization Notes",
-                    border_style="cyan",
-                )
-            )
 
-    def _print_resource_probe_evidence(self, probe_evidence: list[Any]) -> None:
-        if not probe_evidence:
+    def _print_resource_check_results(self, check_results: list[Any]) -> None:
+        if not check_results:
             return
-        table = Table(title="Resource Probe Tools", show_header=True, header_style="bold cyan")
+        table = Table(title="Resource Check Tools", show_header=True, header_style="bold cyan")
         table.add_column("#", justify="right", no_wrap=True)
-        table.add_column("key", style="cyan", no_wrap=True)
+        table.add_column("requirement", style="cyan", no_wrap=True)
         table.add_column("tool", style="cyan", no_wrap=True)
         table.add_column("status", no_wrap=True)
         table.add_column("result_summary")
-        for index, item in enumerate(probe_evidence, start=1):
+        for index, item in enumerate(check_results, start=1):
             if not isinstance(item, dict):
                 table.add_row(str(index), "-", "-", "-", _trim_text(str(item), 180))
                 continue
-            result = item.get("result")
             table.add_row(
                 str(index),
-                str(item.get("key") or ""),
+                str(item.get("requirement_id") or ""),
                 str(item.get("tool_name") or ""),
-                _probe_status(result),
-                _probe_summary(result),
+                str(item.get("status") or ""),
+                _trim_text(str(item.get("result_summary") or ""), 180),
             )
         self.console.print(table)
 
@@ -516,8 +509,8 @@ class FactoryGraphShell:
                 resume = self._read_requirement_clarification(payload)
             elif isinstance(payload, dict) and payload.get("type") == "plan_review":
                 resume = self._read_plan_review(payload)
-            elif isinstance(payload, dict) and payload.get("type") == "resource_completion":
-                resume = self._read_resource_completion(payload)
+            elif isinstance(payload, dict) and payload.get("type") == "resource_input":
+                resume = self._read_resource_input(payload)
             else:
                 self._print_interrupt_payload(payload)
                 resume = {"approved": self._read_approval()}
@@ -586,9 +579,9 @@ class FactoryGraphShell:
             "revision_instruction": revision_instruction,
         }
 
-    def _read_resource_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
-        missing_keys = list(payload.get("missing_keys") or [])
-        current_resources = dict(payload.get("current_resources") or {})
+    def _read_resource_input(self, payload: dict[str, Any]) -> dict[str, Any]:
+        requirements = list(payload.get("requirements") or [])
+        resource_draft = dict(payload.get("resource_draft") or {})
         resource_file_path = str(payload.get("resource_file_path") or "")
         if resource_file_path:
             self.console.print(
@@ -598,55 +591,38 @@ class FactoryGraphShell:
                     border_style="yellow",
                 )
             )
-        if current_resources:
-            table = Table(title="Current Resources", show_header=True, header_style="bold yellow")
+        if resource_draft:
+            table = Table(title="Current Resource Draft", show_header=True, header_style="bold yellow")
             table.add_column("key", style="cyan", no_wrap=True)
             table.add_column("value")
-            for key, value in current_resources.items():
+            for key, value in resource_draft.items():
                 table.add_row(str(key), str(value))
             self.console.print(table)
-        self._print_resource_probe_evidence(list(payload.get("probe_evidence") or []))
-        items: list[dict[str, Any]] = []
-        for index, item in enumerate(missing_keys, start=1):
-            key = str(item.get("key") or "")
+        self._print_resource_check_results(list(payload.get("check_results") or []))
+        analysis = dict(payload.get("readiness_analysis") or {})
+        hint_lines: list[str] = []
+        for index, item in enumerate(requirements, start=1):
+            requirement_id = str(item.get("requirement_id") or "")
             description = str(item.get("description") or "")
             used_by = _join_ids(item.get("used_by_capability_ids") or [])
-            hint = str(item.get("resolution_hint") or "")
-            self.console.print(
-                Panel(
-                    f"key: {key}\nused_by: {used_by}\n\n{description}\n\n{hint}",
-                    title=f"Resource Completion {index}/{len(missing_keys)}",
-                    border_style="yellow",
-                )
+            hint = str((analysis.get("resource_value_hints") or {}).get(requirement_id) or "")
+            reason = str((analysis.get("reasons") or {}).get(requirement_id) or "")
+            hint_lines.append(
+                f"[{index}] {requirement_id}\nused_by: {used_by}\n{description}\n{reason}\n{hint}"
             )
-            options = [
-                {
-                    "id": "provide_value",
-                    "label": "提供值",
-                    "description": "输入一个现在可写入资源文件的值",
-                },
-                {
-                    "id": "runtime_provided",
-                    "label": "运行时提供",
-                    "description": "写入运行时占位并允许进入后续阶段",
-                },
-                {
-                    "id": "block",
-                    "label": "阻塞",
-                    "description": "资源无法准备，不进入下一阶段",
-                },
-            ]
-            selected = _select_option_with_prompt_toolkit(options)
-            if selected is None:
-                selected = _select_option_with_numbered_prompt(self.console, options)
-            decision = str(selected.get("id") or "block")
-            value = None
-            if decision == "provide_value":
-                value = self.console.input("资源值: ").strip()
-                if not value:
-                    decision = "block"
-            items.append({"key": key, "decision": decision, "value": value})
-        return {"items": items}
+        self.console.print(
+            Panel(
+                "\n\n".join(hint_lines) or str(payload.get("message") or ""),
+                title="Resource Input Required",
+                border_style="yellow",
+            )
+        )
+        input_text = self.console.input("资源补充: ").strip()
+        return {
+            "type": "resource_input_answer",
+            "requirement_ids": [str(item.get("requirement_id") or "") for item in requirements],
+            "input_text": input_text,
+        }
 
     def _print_interrupt_payload(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -694,6 +670,15 @@ def _format_patch(patch: dict[str, Any]) -> str:
         if len(content) > 300:
             content = f"{content[:300]}..."
         lines.append(f"message: {name} -> {content}")
+    resource_plan = patch.get("resource_condition_plan") or {}
+    for item in resource_plan.get("check_results", []) or []:
+        lines.append(
+            "resource_check: "
+            f"{item.get('requirement_id')} "
+            f"{item.get('tool_name')} "
+            f"[{item.get('status')}] "
+            f"{item.get('result_summary')}"
+        )
     if not lines:
         lines.append(str(patch))
     return "\n".join(lines)

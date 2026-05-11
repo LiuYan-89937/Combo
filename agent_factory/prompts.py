@@ -18,9 +18,10 @@ class PromptId(str, Enum):
     GRAPH_BEHAVIOR_PLANNING = "factory.graph_behavior_planning"
     NODE_STRATEGY_PLANNING = "factory.node_strategy_planning"
     TOOL_CAPABILITY_PLANNING = "factory.tool_capability_planning"
-    RESOURCE_KEY_INFERENCE = "factory.resource_condition.key_inference"
-    RESOURCE_PROBE_PLANNING = "factory.resource_condition.probe_planning"
-    RESOURCE_VALUE_NORMALIZATION = "factory.resource_condition.value_normalization"
+    RESOURCE_REQUIREMENT_INFERENCE = "factory.resource_condition.requirement_inference"
+    RESOURCE_CHECK_PLAN = "factory.resource_condition.check_plan"
+    RESOURCE_READINESS_ANALYSIS = "factory.resource_condition.readiness_analysis"
+    RESOURCE_REWRITE = "factory.resource_condition.rewrite"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -39,7 +40,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- manufacture_agent\n"
                     "- repair_agent\n"
                     "- unclear\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 ("user", "Classify this user input and return JSON only:\n{user_input}"),
             ]
@@ -58,7 +59,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "业务流程、交互方式、成功标准、边界禁区、权限/隐私/数据来源边界和运行约束。\n"
                     "不要把“模型、框架、SDK、数据库、API、部署方式、工具实现方案未选择”"
                     "判定为第一阶段缺失字段；这些属于后续阶段。\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
@@ -88,7 +89,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "如果需求暗示需要外部资源或特殊能力，只能询问业务级约束，"
                     "例如是否允许联网、是否必须本地运行、是否涉及敏感数据、是否允许后续接入外部资源；"
                     "不要询问具体用哪种实现。\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
@@ -114,7 +115,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "运行约束或后续待决条件。\n"
                     "如果用户选择了需要额外资源的能力，应写成资源/权限/运行约束，"
                     "不要默认视为已具备，也不要选择具体供应商或技术路线。\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
@@ -141,7 +142,9 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "禁止在本阶段写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
                     "数据库方案、API 方案、模型/框架选择或具体工具定义。这些属于后续阶段。\n\n"
                     "【后续规划提示】只能写业务层面后续要关注的事项；"
-                    "涉及技术实现的内容只写成待决约束，不提前规划工具、资源或技术路线。",
+                    "涉及技术实现的内容只写成待决约束，不提前规划工具、资源或技术路线。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}",
                 ),
                 (
                     "user",
@@ -162,7 +165,9 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "{required_sections}\n\n"
                     "只修订业务制造计划本身，不保留修订过程，不追加对话记录。\n"
                     "禁止写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
-                    "数据库方案、API 方案、模型/框架选择或具体工具定义。",
+                    "数据库方案、API 方案、模型/框架选择或具体工具定义。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}",
                 ),
                 (
                     "user",
@@ -187,7 +192,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- 不允许引用 catalog 中没有提供的 nodes、edges、wrappers、contracts。\n"
                     "- 不规划节点职责、路由、中断点、wrapper、上下文、记忆、工具、资源或 AssemblySpec。\n"
                     "- 只解释为什么该 pattern 适合当前业务制造计划。\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
@@ -214,7 +219,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- 不允许修改 pattern_id。\n"
                     "- 不规划 wrapper、上下文策略、记忆策略、policy、工具可见性、资源需求或 AssemblySpec。\n"
                     "- 只说明这个 Agent 准备如何使用该 pattern 的图行为。\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
@@ -247,7 +252,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- 不允许写任何策略 Python 实现代码、prompt 正文、工具实现、数据库/API 方案、资源探测结论或 AssemblySpec。\n"
                     "- 工具能力只能写引用或占位说明，不定义具体工具；具体工具规划属于第五阶段。\n"
                     "- 已确定的配置写入 config；需要后续确认的内容写入 config_notes。\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
@@ -280,7 +285,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "只能引用本次 tool_capabilities 中已有 capability_id。\n"
                     "- implementation_status 只能表达后续实现状态：available、needs_generation、needs_binding、unknown。\n"
                     "- input_contract 和 output_contract 只写轻量结构，不写实现细节。\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
+                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
@@ -292,21 +297,23 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
-    if prompt_id == PromptId.RESOURCE_KEY_INFERENCE:
+    if prompt_id == PromptId.RESOURCE_REQUIREMENT_INFERENCE:
         return ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "你是 Agent 工厂第六阶段的资源键推导器。\n"
+                    "你是 Agent 工厂第六阶段的资源需求推导器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是根据第五阶段工具能力契约，推导后续工具生成和测试必须依赖的资源键。\n\n"
+                    "你的任务是根据第五阶段工具能力契约，推导后续工具生成和测试必须依赖的资源需求。\n\n"
                     "严格约束：\n"
-                    "- 只输出资源键，不输出资源值。\n"
+                    "- 只输出资源需求，不输出资源值。\n"
                     "- 不写工具 Python 实现代码，不写 Dockerfile，不写依赖安装命令。\n"
-                    "- 不预设固定资源类型；key 必须来自工具能力本身的真实需要。\n"
-                    "- required=true 表示没有值、占位或用户阻塞决策就不能进入下一阶段。\n"
-                    "- key 使用 snake_case，简短稳定，可被 resources.json 和后续 package_generation 引用。\n"
+                    "- 不预设固定资源类型；requirement_id 必须来自工具能力本身的真实需要。\n"
+                    "- required=true 表示没有资源、占位或用户阻塞决策就不能进入下一阶段。\n"
+                    "- requirement_id 使用 snake_case，简短稳定，可被 resources.json 和后续 package_generation 引用。\n"
                     "- used_by_capability_ids 只能引用 tool_capability_plan 中已有 capability_id。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
@@ -317,56 +324,84 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
-    if prompt_id == PromptId.RESOURCE_PROBE_PLANNING:
+    if prompt_id == PromptId.RESOURCE_CHECK_PLAN:
         return ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "你是 Agent 工厂第六阶段的资源嗅探规划器。\n"
+                    "你是 Agent 工厂第六阶段的资源检查计划器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是为缺失资源键选择只读/探测工具，尝试确认可用值或证据。\n\n"
+                    "你的任务是为每个资源需求生成工厂可以执行的检查计划。\n\n"
                     "严格约束：\n"
-                    "- 只能选择 allowed_probe_tool_ids 中的工具。\n"
-                    "- 不允许选择写入工具、补丁工具、创建目录工具、异步 shell 工具或任意 shell_run。\n"
+                    "- 只能选择 allowed_check_tool_ids 中的工具。\n"
+                    "- 不允许选择写入工具、补丁工具、创建目录工具或异步 shell 工具。\n"
                     "- 不调用真实业务外部 API，不安装依赖，不生成工具代码。\n"
-                    "- 如果无法可靠嗅探某个 key，就不要为该 key 编造 probe。\n"
-                    "- shell_env 只能检查环境变量是否存在；除非资源键明确要求保存原始值，否则 include_values=false。\n\n"
+                    "- 如果无法可靠检查某个需求，给出 uncheckable_reason，不要编造检查动作。\n"
+                    "- shell_env 必须传 names；shell_run 必须使用 command 数组，且只用于只读检查。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
-                    "资源键：\n{required_resource_keys}\n\n"
-                    "当前已准备资源：\n{resources}\n\n"
-                    "允许的探测工具：\n{allowed_probe_tool_ids}\n\n"
+                    "资源需求：\n{resource_requirements}\n\n"
+                    "当前资源草稿：\n{resource_draft}\n\n"
+                    "允许的检查工具：\n{allowed_check_tool_ids}\n\n"
                     "请返回 JSON。",
                 ),
             ]
         )
-    if prompt_id == PromptId.RESOURCE_VALUE_NORMALIZATION:
+    if prompt_id == PromptId.RESOURCE_READINESS_ANALYSIS:
         return ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "你是 Agent 工厂第六阶段的资源值归一化器。\n"
+                    "你是 Agent 工厂第六阶段的资源满足度分析器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是把已探测到或用户补充的资源值，改写成后续 package_generation "
-                    "和 harness 测试可以稳定读取的 resources 键值对。\n\n"
+                    "你的任务是读取资源需求、检查结果和已有资源草稿，判断哪些资源已满足、缺失、不确定或阻塞。\n\n"
                     "严格约束：\n"
-                    "- 只能输出 required_resource_keys 中已有的 key。\n"
-                    "- 不允许新增资源 key，不允许输出未要求的环境信息。\n"
-                    "- 不要发明密钥、路径、服务地址、账号或任何证据不足的值。\n"
-                    "- 不选择模型供应商、框架、数据库、部署方式或工具实现方案。\n"
-                    "- 保留 ${RUNTIME_PROVIDED:<KEY>} 形式的运行时占位。\n"
-                    "- 对用户自然语言或探测证据中的等价表达做轻度规范化，"
-                    "例如清理空白、整理列表/布尔/数字/路径/地址等明确语义；证据不足则不要输出该 key。\n"
-                    "- 如果已有显式值可用，除非可以更稳定更准确地表达，否则保持原值。\n\n"
+                    "- 只能引用 resource_requirements 中已有 requirement_id。\n"
+                    "- 不要发明资源值。\n"
+                    "- 只给出补全提示，不要要求用户选择具体技术供应商或实现方案。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
-                    "资源键：\n{required_resource_keys}\n\n"
-                    "当前资源值：\n{current_resources}\n\n"
-                    "探测证据：\n{probe_evidence}\n\n"
+                    "资源需求：\n{resource_requirements}\n\n"
+                    "检查结果：\n{check_results}\n\n"
+                    "当前资源草稿：\n{resource_draft}\n\n"
+                    "用户补充：\n{user_inputs}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.RESOURCE_REWRITE:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第六阶段的资源草稿重写器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把检查结果和用户自然语言补充重写成后续 package_generation "
+                    "和 harness 测试可以稳定读取的 resources 键值对。\n\n"
+                    "严格约束：\n"
+                    "- 只能为 resource_requirements 中已有需求输出资源。\n"
+                    "- 不允许输出 Factory 自身 mainModel/taskModel/API key/base URL/thinking 配置。\n"
+                    "- 不要发明密钥、路径、服务地址、账号或任何证据不足的值。\n"
+                    "- 用户明确说明运行时提供时，使用 ${RUNTIME_PROVIDED:<REQUIREMENT_ID>} 占位。\n"
+                    "- 无法重写成可用资源时，把 requirement_id 放入 unresolved_requirements 或 blocked_requirements。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "资源需求：\n{resource_requirements}\n\n"
+                    "检查结果：\n{check_results}\n\n"
+                    "用户补充：\n{user_inputs}\n\n"
+                    "当前资源草稿：\n{resource_draft}\n\n"
                     "工具能力计划：\n{tool_capability_plan}\n\n"
                     "请返回 JSON。",
                 ),
@@ -379,7 +414,9 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "system",
                     "You are FastAgentFactory's shell assistant.\n"
                     "Answer normal chat directly in Chinese.\n"
-                    "Be concise, warm, and practical.",
+                    "Be concise, warm, and practical.\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}",
                 ),
                 ("placeholder", "{messages}"),
             ]

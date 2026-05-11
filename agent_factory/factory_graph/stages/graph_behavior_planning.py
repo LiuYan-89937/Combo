@@ -8,6 +8,7 @@ from agent_factory.factory_graph.schemas import (
     GraphBehaviorPlanOutput,
     GraphBehaviorTerminationPlan,
 )
+from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import (
@@ -57,6 +58,7 @@ def _plan_graph_behavior(
     try:
         prompt_value = get_prompt(PromptId.GRAPH_BEHAVIOR_PLANNING).invoke(
             {
+                **prompt_context_values("graph_behavior_planning"),
                 "refined_plan_text": state.get("refined_plan_text") or "",
                 "runtime_pattern_selection": _json_text(state.get("runtime_pattern_selection") or {}),
                 "pattern_structure_summary": _json_text(structure_summary.model_dump(mode="json")),

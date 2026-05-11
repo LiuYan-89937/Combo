@@ -7,11 +7,14 @@ import json
 from agent_factory.factory_graph.schemas import (
     RuntimePatternSelectionOutput,
 )
+from agent_factory.factory_graph.model_call import (
+    FactoryModelCallError,
+    call_structured_model,
+    model_error_patch,
+)
 from agent_factory.factory_graph.state import FactoryGraphState
-from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import (
     PromptId,
-    get_prompt,
     output_json_schema,
 )
 from agent_factory.runtime_kernel.patterns import PatternCatalogItemSpec, PatternRegistry
@@ -19,7 +22,15 @@ from agent_factory.runtime_kernel.patterns import PatternCatalogItemSpec, Patter
 
 def run(state: FactoryGraphState) -> dict:
     catalog = _load_pattern_catalog()
-    selection = _select_runtime_pattern(state, catalog)
+    try:
+        selection = _select_runtime_pattern(state, catalog)
+    except FactoryModelCallError as exc:
+        return model_error_patch("runtime_pattern_selection", str(exc))
+    if not _catalog_contains(catalog, selection.selected_pattern_id):
+        return model_error_patch(
+            "runtime_pattern_selection",
+            f"model selected unknown pattern_id: {selection.selected_pattern_id}",
+        )
     selected_item = _catalog_item_by_id(catalog, selection.selected_pattern_id)
     payload = {
         **selection.model_dump(mode="json"),
@@ -54,63 +65,16 @@ def _select_runtime_pattern(
     state: FactoryGraphState,
     catalog: list[PatternCatalogItemSpec],
 ) -> RuntimePatternSelectionOutput:
-    fallback = _default_selection(catalog)
-    model = get_main_model()
-    settings = get_main_model_settings()
-    if model is None:
-        return fallback
-    try:
-        prompt_value = get_prompt(PromptId.RUNTIME_PATTERN_SELECTION).invoke(
-            {
-                "requirement_brief": _format_requirement_brief(state.get("requirement_brief") or {}),
-                "refined_plan_text": state.get("refined_plan_text") or "",
-                "pattern_catalog": _format_pattern_catalog(catalog),
-                "output_json_schema": output_json_schema(RuntimePatternSelectionOutput),
-            }
-        )
-        structured_model = model.with_structured_output(
-            RuntimePatternSelectionOutput,
-            method="json_mode",
-        ).with_config(tags=["nostream"])
-        if settings.max_tokens is not None:
-            structured_model = structured_model.bind(max_tokens=settings.max_tokens)
-        selection = structured_model.invoke(prompt_value)
-    except Exception:
-        return fallback
-    if _catalog_contains(catalog, selection.selected_pattern_id):
-        return selection
-    return RuntimePatternSelectionOutput(
-        selected_pattern_id=fallback.selected_pattern_id,
-        selection_reason=fallback.selection_reason,
-        fit_summary=fallback.fit_summary,
-        alternatives=fallback.alternatives,
-        assumptions=[
-            *selection.assumptions,
-            "model selected a pattern_id outside catalog; selected default runtime pattern from catalog",
-        ],
-        open_questions=selection.open_questions,
-    )
-
-
-def _default_selection(catalog: list[PatternCatalogItemSpec]) -> RuntimePatternSelectionOutput:
-    selected = next((item for item in catalog if item.pattern_id == "react_agent"), None)
-    selected = selected or catalog[0]
-    alternatives = [
-        {
-            "pattern_id": item.pattern_id,
-            "reason": item.description,
-            "tradeoff": "fallback alternative from catalog",
-        }
-        for item in catalog
-        if item.pattern_id != selected.pattern_id
-    ]
-    return RuntimePatternSelectionOutput(
-        selected_pattern_id=selected.pattern_id,
-        selection_reason="model unavailable or invalid; selected default runtime pattern from catalog",
-        fit_summary=selected.metadata.summary or selected.description,
-        alternatives=alternatives,
-        assumptions=["model unavailable or invalid; selected default runtime pattern from catalog"],
-        open_questions=[],
+    return call_structured_model(
+        stage_id="runtime_pattern_selection",
+        prompt_id=PromptId.RUNTIME_PATTERN_SELECTION,
+        output_model=RuntimePatternSelectionOutput,
+        values={
+            "requirement_brief": _format_requirement_brief(state.get("requirement_brief") or {}),
+            "refined_plan_text": state.get("refined_plan_text") or "",
+            "pattern_catalog": _format_pattern_catalog(catalog),
+            "output_json_schema": output_json_schema(RuntimePatternSelectionOutput),
+        },
     )
 
 

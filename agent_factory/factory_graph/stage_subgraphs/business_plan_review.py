@@ -5,6 +5,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import PromptId, get_prompt
@@ -161,7 +162,7 @@ def _call_text_model(*, prompt_id: PromptId, values: dict[str, Any], fallback: s
     if model is None:
         return fallback
     try:
-        prompt_value = get_prompt(prompt_id).invoke(values)
+        prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values("requirement_capture"), **values})
         configured_model = model.with_config(tags=["nostream"])
         if settings.max_tokens is not None:
             configured_model = configured_model.bind(max_tokens=settings.max_tokens)

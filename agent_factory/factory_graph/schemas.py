@@ -240,79 +240,122 @@ class ToolCapabilityPlanningOutput(BaseModel):
     open_questions: list[str] = Field(default_factory=list, max_length=8)
 
 
-class RequiredResourceKey(BaseModel):
+ResourceCheckToolName = Literal[
+    "file_read",
+    "file_list",
+    "file_exists",
+    "search_files",
+    "search_text",
+    "shell_env",
+    "shell_which",
+    "shell_cwd",
+    "shell_run",
+]
+
+
+class ResourceRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    key: str
+    requirement_id: str
     description: str
     required: bool = True
     used_by_capability_ids: list[str] = Field(default_factory=list)
-    resolution_hint: str
+    expected_resource_shape: dict[str, object] = Field(default_factory=dict)
+    why_needed: str
+    not_factory_resource_reason: str
 
 
-class RequiredResourceKeySetOutput(BaseModel):
+class ResourceRequirementSetOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    keys: list[RequiredResourceKey] = Field(default_factory=list)
+    requirements: list[ResourceRequirement] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list, max_length=8)
 
 
-class ResourceProbeRequest(BaseModel):
+class ResourceCheckAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    key: str
-    tool_name: Literal[
-        "file_read",
-        "file_list",
-        "file_exists",
-        "search_files",
-        "search_text",
-        "shell_env",
-        "shell_which",
-        "shell_cwd",
-    ]
+    action_id: str
+    requirement_id: str
+    tool_name: ResourceCheckToolName
     arguments: dict[str, object] = Field(default_factory=dict)
     reason: str
+    expected_evidence: str
 
 
-class ResourceProbePlanOutput(BaseModel):
+class ResourceCheckPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    probes: list[ResourceProbeRequest] = Field(default_factory=list)
+    requirement_id: str
+    checks: list[ResourceCheckAction] = Field(default_factory=list)
+    uncheckable_reason: str | None = None
+
+
+class ResourceCheckPlanOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plans: list[ResourceCheckPlan] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list, max_length=8)
 
 
-class ResourceNormalizationOutput(BaseModel):
+class ResourceCheckResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: str
+    requirement_id: str
+    tool_name: ResourceCheckToolName
+    status: Literal["completed", "error", "skipped"]
+    result_summary: str
+    raw_result: dict[str, object] = Field(default_factory=dict)
+
+
+class ResourceReadinessAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    satisfied_requirements: list[str] = Field(default_factory=list)
+    missing_requirements: list[str] = Field(default_factory=list)
+    uncertain_requirements: list[str] = Field(default_factory=list)
+    blocked_requirements: list[str] = Field(default_factory=list)
+    resource_value_hints: dict[str, str] = Field(default_factory=dict)
+    reasons: dict[str, str] = Field(default_factory=dict)
+
+
+class ResourceUserInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requirement_id: str
+    input_text: str
+
+
+class ResourceRewriteOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resources: dict[str, object] = Field(default_factory=dict)
-    normalization_notes: list[str] = Field(default_factory=list, max_length=12)
+    unresolved_requirements: list[str] = Field(default_factory=list)
+    runtime_provided_requirements: list[str] = Field(default_factory=list)
+    blocked_requirements: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list, max_length=12)
 
 
-ResourceCompletionDecision = Literal["provide_value", "runtime_provided", "block"]
-
-
-class ResourceCompletionItem(BaseModel):
+class ResourceValidationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    key: str
-    decision: ResourceCompletionDecision
-    value: str | None = None
-
-
-class ResourceCompletionAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[ResourceCompletionItem] = Field(default_factory=list)
+    status: Literal["complete", "needs_input", "blocked", "failed"]
+    validated_resources: dict[str, object] = Field(default_factory=dict)
+    invalid_resources: dict[str, str] = Field(default_factory=dict)
+    validation_evidence: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ResourceAndConditionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["collecting", "complete", "blocked"]
-    required_resource_keys: list[RequiredResourceKey] = Field(default_factory=list)
+    status: Literal["collecting", "complete", "blocked", "failed", "needs_input"]
+    requirements: list[ResourceRequirement] = Field(default_factory=list)
+    check_plans: list[ResourceCheckPlan] = Field(default_factory=list)
+    check_results: list[ResourceCheckResult] = Field(default_factory=list)
+    readiness_analysis: ResourceReadinessAnalysis | None = None
+    user_inputs: list[ResourceUserInput] = Field(default_factory=list)
+    resource_draft: dict[str, object] = Field(default_factory=dict)
+    validation_result: ResourceValidationResult | None = None
     resources: dict[str, object] = Field(default_factory=dict)
-    missing_keys: list[RequiredResourceKey] = Field(default_factory=list)
-    probe_evidence: list[dict[str, object]] = Field(default_factory=list)
-    normalization_notes: list[str] = Field(default_factory=list)
     resource_file_path: str | None = None

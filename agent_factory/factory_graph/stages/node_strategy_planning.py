@@ -10,6 +10,7 @@ from agent_factory.factory_graph.schemas import (
     NodeWrapperPlan,
     ProposedNodeStrategySpec,
 )
+from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.factory_graph.strategy_catalog import (
     DEFAULT_FACTORY_STRATEGY_CATALOG,
@@ -66,6 +67,7 @@ def _plan_node_strategies(
     try:
         prompt_value = get_prompt(PromptId.NODE_STRATEGY_PLANNING).invoke(
             {
+                **prompt_context_values("node_strategy_planning"),
                 "refined_plan_text": state.get("refined_plan_text") or "",
                 "runtime_pattern_selection": _json_text(state.get("runtime_pattern_selection") or {}),
                 "graph_behavior_plan": _json_text(state.get("graph_behavior_plan") or {}),

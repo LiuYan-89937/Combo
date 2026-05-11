@@ -8,6 +8,7 @@ from agent_factory.factory_graph.schemas import (
     ToolCapabilityPlanningOutput,
     ToolCapabilitySpec,
 )
+from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.factory_graph.tools import get_factory_base_tool_ids
 from agent_factory.models import get_main_model, get_main_model_settings
@@ -40,6 +41,7 @@ def _plan_tool_capabilities(state: FactoryGraphState) -> ToolCapabilityPlanningO
     try:
         prompt_value = get_prompt(PromptId.TOOL_CAPABILITY_PLANNING).invoke(
             {
+                **prompt_context_values("tool_capability_planning"),
                 "refined_plan_text": state.get("refined_plan_text") or "",
                 "graph_behavior_plan": _json_text(state.get("graph_behavior_plan") or {}),
                 "node_strategy_plan": _json_text(state.get("node_strategy_plan") or {}),

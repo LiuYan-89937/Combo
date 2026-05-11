@@ -10,6 +10,7 @@ from agent_factory.factory_graph.schemas import (
     RequirementClarityOutput,
     RequirementMergeOutput,
 )
+from agent_factory.factory_graph.prompt_context import prompt_context_values, stage_operating_context
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import (
@@ -20,14 +21,7 @@ from agent_factory.prompts import (
 
 
 MAX_CAPTURE_ITERATIONS = 5
-FACTORY_RUNTIME_ENVIRONMENT = """当前 Factory 第一阶段需求访谈上下文：
-- 当前阶段只负责捕获和澄清用户想要什么 Agent，并整理业务画像。
-- 本阶段产物是 refined_requirement 和业务制造计划，不是技术方案、架构方案或资源准备方案。
-- 当前生产目标是 CLI-first Agent：以文本对话、可审计工具调用、文件/搜索/shell 等能力为主。
-- 本阶段只允许澄清目标用户、使用场景、典型输入、期望输出、业务流程、交互方式、成功标准、边界禁区、权限/隐私/数据来源边界和运行约束。
-- 不询问模型供应商、框架、SDK、数据库、向量库、部署方式、具体 API、工具代码实现或 RuntimeKernel/Assembly 内部方案。
-- 如果用户需求暗示需要外部服务、模型、数据库、媒体生成、联网或部署环境，本阶段只记录为“后续待决的资源/权限/运行约束”，不要要求用户选择具体实现方案。
-"""
+STAGE_ID = "requirement_capture"
 
 
 def build_requirement_capture_subgraph():
@@ -84,7 +78,7 @@ def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
         values={
             "original_input": capture.get("original_input", ""),
             "current_requirement": capture.get("current_requirement", ""),
-            "runtime_environment": FACTORY_RUNTIME_ENVIRONMENT,
+            "runtime_environment": stage_operating_context(STAGE_ID),
             "output_json_schema": output_json_schema(RequirementClarityOutput),
         },
         fallback=RequirementClarityOutput(
@@ -107,7 +101,7 @@ def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
             "original_input": capture.get("original_input", ""),
             "current_requirement": capture.get("current_requirement", ""),
             "missing_fields": "\n".join(clarity.get("missing_fields") or []),
-            "runtime_environment": FACTORY_RUNTIME_ENVIRONMENT,
+            "runtime_environment": stage_operating_context(STAGE_ID),
             "output_json_schema": output_json_schema(ClarifyingQuestionSetOutput),
         },
         fallback=ClarifyingQuestionSetOutput(
@@ -156,7 +150,7 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
             "original_input": capture.get("original_input", ""),
             "current_requirement": capture.get("current_requirement", ""),
             "answers": _format_answers(clarification, answer),
-            "runtime_environment": FACTORY_RUNTIME_ENVIRONMENT,
+            "runtime_environment": stage_operating_context(STAGE_ID),
             "output_json_schema": output_json_schema(RequirementMergeOutput),
         },
         fallback=RequirementMergeOutput(
@@ -219,7 +213,7 @@ def _call_structured_model(*, prompt_id, output_model, values: dict[str, Any], f
     if model is None:
         return fallback
     try:
-        prompt_value = get_prompt(prompt_id).invoke(values)
+        prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values(STAGE_ID), **values})
         structured_model = model.with_structured_output(output_model, method="json_mode").with_config(
             tags=["nostream"]
         )

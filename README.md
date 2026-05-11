@@ -17,10 +17,10 @@ FastAgentFactory 是一个基于 LangGraph 构建的 CLI-first Agent 工厂原�
   - `graph_behavior_planning`：基于 pattern 结构摘要规划节点行为、路由和中断点。
   - `node_strategy_planning`：为每个节点规划 wrapper、策略引用和待生成策略声明。
   - `tool_capability_planning`：规划工具能力契约、节点可见性、审批标记和后续实现状态。
-  - `resource_and_condition_planning`：推导资源键、嗅探可用值、中断补齐缺失资源，并写入资源键值文件。
+  - `resource_and_condition_planning`：推导资源需求、生成检查计划、执行工厂检查工具、分析资源满足情况、中断收集用户自然输入、重写并验证资源后写入资源文件。
 - 节点策略目录：第四阶段已从硬编码默认策略改为 `strategy_catalog`，模型可以引用已有策略，也可以只声明后续阶段需要实现的新策略。
 - 工具能力规划：第五阶段只输出精简能力契约，不生成工具代码，不做资源嗅探，不引入固定 category。
-- 资源准备：第六阶段只产出 `.agentfactory/resources/<factory_run_id>/factory_resources.json` 键值对文件，后续工具生成和 harness 测试以该文件为资源依据。
+- 资源准备：第六阶段只产出验证后的 `.agentfactory/resources/<factory_run_id>/factory_resources.json` 键值对文件，后续工具生成和 harness 测试以该文件为资源依据。
 - 基础工具：文件系统、搜索/理解、shell 三类工具，使用 LangChain `@tool` 注册，并注入 LangGraph `ToolNode`。
 - OpenAI 兼容模型配置：通过 `.env` 读取模型配置，并支持 provider-specific thinking 模式兼容。
 
@@ -68,7 +68,7 @@ AGENTFACTORY_OPENAI_MODEL=
 AGENTFACTORY_TASK_MODEL=
 ```
 
-主模型用于工厂生产流程。task model 用于 `/chat` 和轻量任务流程。两者都通过 LangChain 调用 OpenAI 兼容 Chat API。
+主模型用于工厂核心生产流程、资源分析/重写，并作为生成 Agent 的默认模型能力来源。task model 用于 Factory 内部轻量任务，例如 `/chat`、意图识别、简单分类和 CLI 辅助。两者都属于 Factory 自身运行配置，不会写入第六阶段生成 Agent 的 resources 文件。
 
 ## CLI 使用方式
 

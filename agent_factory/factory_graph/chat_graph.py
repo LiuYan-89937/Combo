@@ -15,6 +15,7 @@ from agent_factory.factory_graph.tool_approval import (
     approve_tool_calls,
     route_after_tool_approval,
 )
+from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.factory_graph.tools import (
     get_factory_graph_tools,
     get_factory_model_tools,
@@ -78,7 +79,7 @@ def _chat_model_node(state: FactoryChatState) -> dict[str, Any]:
         return _model_error("task model is not configured")
     try:
         prompt_value = get_prompt(PromptId.FACTORY_CHAT).invoke(
-            {"messages": state.get("messages", [])}
+            {**prompt_context_values("factory_chat"), "messages": state.get("messages", [])}
         )
         chat_model = task_model.bind_tools(get_factory_model_tools())
         if task_settings.max_tokens is not None:
