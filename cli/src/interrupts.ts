@@ -60,3 +60,28 @@ export function buildResumePayload(event: FactoryEvent, value: string): Record<s
 			return {input_text: value};
 	}
 }
+
+export type RequirementClarificationAnswer = {
+	question_id: string;
+	selected_option_id: string;
+	selected_label: string;
+	custom_text?: string;
+};
+
+export function buildRequirementClarificationResumePayload(
+	answers: RequirementClarificationAnswer[]
+): Record<string, unknown> {
+	return {type: 'requirement_clarification_answer', answers};
+}
+
+export function buildPlanReviewContinuePayload(): Record<string, unknown> {
+	return {type: 'plan_review_result', decision: 'continue'};
+}
+
+export function buildPlanReviewRevisionPayload(revisionInstruction: string): Record<string, unknown> {
+	return {type: 'plan_review_result', decision: 'revise', revision_instruction: revisionInstruction};
+}
+
+export function buildToolApprovalPayload(approved: boolean): Record<string, unknown> {
+	return {approved};
+}

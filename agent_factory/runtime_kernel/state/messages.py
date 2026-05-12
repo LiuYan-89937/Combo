@@ -16,6 +16,7 @@ class MessageRecord(BaseModel):
     tool_call_id: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     additional_kwargs: dict[str, Any] = Field(default_factory=dict)
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 def dump_message(message: BaseMessage) -> MessageRecord:
@@ -25,6 +26,7 @@ def dump_message(message: BaseMessage) -> MessageRecord:
             content=_normalize_content(message.content),
             name=message.name,
             additional_kwargs=dict(message.additional_kwargs),
+            response_metadata=dict(message.response_metadata),
         )
     if isinstance(message, HumanMessage):
         return MessageRecord(
@@ -32,6 +34,7 @@ def dump_message(message: BaseMessage) -> MessageRecord:
             content=_normalize_content(message.content),
             name=message.name,
             additional_kwargs=dict(message.additional_kwargs),
+            response_metadata=dict(message.response_metadata),
         )
     if isinstance(message, ToolMessage):
         return MessageRecord(
@@ -40,6 +43,7 @@ def dump_message(message: BaseMessage) -> MessageRecord:
             name=message.name,
             tool_call_id=message.tool_call_id,
             additional_kwargs=dict(message.additional_kwargs),
+            response_metadata=dict(message.response_metadata),
         )
     if isinstance(message, AIMessage):
         return MessageRecord(
@@ -48,6 +52,7 @@ def dump_message(message: BaseMessage) -> MessageRecord:
             name=message.name,
             tool_calls=list(getattr(message, "tool_calls", []) or []),
             additional_kwargs=dict(message.additional_kwargs),
+            response_metadata=dict(message.response_metadata),
         )
     return MessageRecord(role="user", content=_normalize_content(message.content))
 
@@ -62,12 +67,14 @@ def load_message(record: MessageRecord) -> BaseMessage:
             content=record.content,
             name=record.name,
             additional_kwargs=dict(record.additional_kwargs),
+            response_metadata=dict(record.response_metadata),
         )
     if record.role == "user":
         return HumanMessage(
             content=record.content,
             name=record.name,
             additional_kwargs=dict(record.additional_kwargs),
+            response_metadata=dict(record.response_metadata),
         )
     if record.role == "tool":
         return ToolMessage(
@@ -75,12 +82,14 @@ def load_message(record: MessageRecord) -> BaseMessage:
             name=record.name,
             tool_call_id=record.tool_call_id or "",
             additional_kwargs=dict(record.additional_kwargs),
+            response_metadata=dict(record.response_metadata),
         )
     return AIMessage(
         content=record.content,
         name=record.name,
         tool_calls=list(record.tool_calls),
         additional_kwargs=dict(record.additional_kwargs),
+        response_metadata=dict(record.response_metadata),
     )
 
 

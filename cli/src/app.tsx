@@ -11,6 +11,7 @@ import {CommandInput} from './views/CommandInput.js';
 import {CreateAgentView} from './views/CreateAgentView.js';
 import {ErrorPanel} from './views/ErrorPanel.js';
 import {HelpPanel} from './views/HelpPanel.js';
+import {InterruptChoicePanel, isChoiceInterrupt} from './views/InterruptChoicePanel.js';
 import {InterruptPrompt} from './views/InterruptPrompt.js';
 import {LiveStreamPanel} from './views/LiveStreamPanel.js';
 import {MessagesPanel} from './views/MessagesPanel.js';
@@ -25,6 +26,7 @@ export function App() {
 	const [state, dispatch] = useReducer(routeFactoryEvent, initialFactoryUiState);
 	const bridge = useMemo(() => new PythonBridge(), []);
 	const inputDisabled = state.runStatus === 'running';
+	const choiceInterrupt = isChoiceInterrupt(state.pendingInterrupt);
 
 	useEffect(() => {
 		const off = bridge.onEvent((event: FactoryEvent) => dispatch(event));
@@ -38,6 +40,10 @@ export function App() {
 
 	function send(payload: FactoryCommand): void {
 		bridge.send(payload);
+	}
+
+	function resumeInterrupt(payload: Record<string, unknown>): void {
+		send(command('resume_interrupt', {payload}));
 	}
 
 	function onSubmit(value: string): void {
@@ -119,15 +125,16 @@ export function App() {
 
 	return (
 		<ShellLayout state={state}>
-			<ErrorPanel message={state.lastError} />
+			<ErrorPanel message={state.lastError} errors={state.errors} />
 			<SessionPanel state={state} />
 			{state.helpVisible && <HelpPanel mode={state.mode} hasInterrupt={Boolean(state.pendingInterrupt)} />}
 			{state.mode === 'create_agent' && <CreateAgentView state={state} />}
 			<LiveStreamPanel state={state} />
 			<ToolEventsPanel state={state} />
-			<ToolApprovalPrompt event={state.pendingInterrupt} />
+			<InterruptChoicePanel event={state.pendingInterrupt} onSubmit={resumeInterrupt} />
+			{!choiceInterrupt && <ToolApprovalPrompt event={state.pendingInterrupt} />}
 			<ResourceInputPrompt event={state.pendingInterrupt} />
-			<InterruptPrompt event={state.pendingInterrupt} />
+			{!choiceInterrupt && <InterruptPrompt event={state.pendingInterrupt} />}
 			<MessagesPanel state={state} />
 			<Box marginTop={1}>
 				<Text color={state.ready ? 'green' : 'yellow'}>{state.ready ? 'ready' : 'starting bridge'}</Text>
@@ -136,8 +143,8 @@ export function App() {
 				prompt={`factory${state.mode ? `:${modeLabel(state.mode)}` : ''}`}
 				onSubmit={onSubmit}
 				getSuggestions={value => commandSuggestions(value, state.mode, state.pendingInterrupt?.event_type === 'tool_approval_requested')}
-				disabled={inputDisabled}
-				disabledText="runtime running; waiting for event, tool approval, or interrupt"
+				disabled={inputDisabled || choiceInterrupt}
+				disabledText={choiceInterrupt ? 'use the option panel above' : 'runtime running; waiting for event, tool approval, or interrupt'}
 			/>
 		</ShellLayout>
 	);

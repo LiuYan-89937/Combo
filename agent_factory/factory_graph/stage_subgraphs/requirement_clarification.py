@@ -28,6 +28,7 @@ from agent_factory.prompts import (
 
 
 MAX_CAPTURE_ITERATIONS = 5
+CLARITY_CONFIDENCE_THRESHOLD = 0.85
 STAGE_ID = "requirement_capture"
 
 
@@ -79,7 +80,7 @@ def _initialize_requirement(state: FactoryGraphState) -> dict[str, Any]:
 
 def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
-    clarity = _call_structured_model(
+    clarity, model_error = _call_structured_model(
         prompt_id=PromptId.REQUIREMENT_CAPTURE_CLARITY,
         output_model=RequirementClarityOutput,
         values={
@@ -89,19 +90,22 @@ def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
             "output_json_schema": output_json_schema(RequirementClarityOutput),
         },
         fallback=RequirementClarityOutput(
-            is_clear=True,
-            confidence=0.7,
-            reason="model unavailable; keep current requirement",
-            missing_fields=[],
+            is_clear=False,
+            confidence=0.0,
+            reason="model unavailable; requirement clarity cannot be confirmed",
+            missing_fields=["需要补充业务目标、使用场景、输入输出、边界与成功标准"],
         ),
     )
-    return {"requirement_capture": {**capture, "clarity": clarity.model_dump(mode="json")}}
+    return {
+        "requirement_capture": {**capture, "clarity": clarity.model_dump(mode="json")},
+        **_model_error_state(model_error),
+    }
 
 
 def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
     clarity = capture.get("clarity") or {}
-    question = _call_structured_model(
+    question, model_error = _call_structured_model(
         prompt_id=PromptId.REQUIREMENT_CAPTURE_QUESTION,
         output_model=ClarifyingQuestionSetOutput,
         values={
@@ -131,7 +135,8 @@ def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
         "requirement_capture": {
             **capture,
             "clarification": question.model_dump(mode="json"),
-        }
+        },
+        **_model_error_state(model_error),
     }
 
 
@@ -150,7 +155,7 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
     clarification = dict(capture.get("clarification") or {})
     answer = dict(capture.get("answer") or {})
-    merged = _call_structured_model(
+    merged, model_error = _call_structured_model(
         prompt_id=PromptId.REQUIREMENT_CAPTURE_MERGE,
         output_model=RequirementMergeOutput,
         values={
@@ -175,7 +180,8 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
             "max_iterations": int(capture.get("max_iterations") or MAX_CAPTURE_ITERATIONS),
             "assumptions": merged.assumptions,
             "unresolved_questions": merged.unresolved_questions,
-        }
+        },
+        **_model_error_state(model_error),
     }
 
 
@@ -186,6 +192,7 @@ def _finalize_requirement(state: FactoryGraphState) -> dict[str, Any]:
     return {
         "current_stage": "requirement_capture",
         "status": "running",
+        **({"graph_control": {"action": "end"}} if status != "captured" else {}),
         "requirement_brief": {
             "original_input": capture.get("original_input", ""),
             "refined_requirement": capture.get("current_requirement", ""),
@@ -209,7 +216,11 @@ def _route_after_clarity(state: FactoryGraphState) -> str:
     clarity = capture.get("clarity") or {}
     iteration_count = int(capture.get("iteration_count") or 0)
     max_iterations = int(capture.get("max_iterations") or MAX_CAPTURE_ITERATIONS)
-    if clarity.get("is_clear") or iteration_count >= max_iterations:
+    confidence = float(clarity.get("confidence") or 0)
+    missing_fields = clarity.get("missing_fields") or []
+    if clarity.get("is_clear") and confidence >= CLARITY_CONFIDENCE_THRESHOLD and not missing_fields:
+        return "finalize_requirement"
+    if iteration_count >= max_iterations:
         return "finalize_requirement"
     return "generate_clarifying_question"
 
@@ -219,7 +230,7 @@ def _call_structured_model(*, prompt_id, output_model, values: dict[str, Any], f
     model = get_main_model()
     settings = get_main_model_settings()
     if model is None:
-        return fallback
+        return fallback, f"{prompt_id}: main model is not configured"
     try:
         emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="structured_json", span_id=span_id))
         prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values(STAGE_ID), **values})
@@ -237,7 +248,7 @@ def _call_structured_model(*, prompt_id, output_model, values: dict[str, Any], f
                 output_summary=output_model.__name__,
             )
         )
-        return result
+        return result, None
     except Exception as exc:
         emit_model_activity(
             model_activity_failed(
@@ -247,7 +258,23 @@ def _call_structured_model(*, prompt_id, output_model, values: dict[str, Any], f
                 message=f"{type(exc).__name__}: {exc}",
             )
         )
-        return fallback
+        return fallback, f"{prompt_id}: {type(exc).__name__}: {exc}"
+
+
+def _model_error_state(message: str | None) -> dict[str, Any]:
+    if not message:
+        return {}
+    return {
+        "errors": [{"where": STAGE_ID, "message": message}],
+        "model_activity": [
+            {
+                "event_type": "model_call_failed",
+                "prompt_id": "requirement_capture",
+                "call_kind": "structured_json",
+                "message": message,
+            }
+        ],
+    }
 
 
 def _format_answers(clarification: dict[str, Any], answer: dict[str, Any]) -> str:
@@ -288,6 +315,7 @@ def _delta_patch(
         "status",
         "requirement_capture",
         "requirement_brief",
+        "model_activity",
     ]
     patch = {key: final_state[key] for key in keys if key in final_state}
     new_stage_log = final_state.get("stage_log", [])[original_stage_log_count:]

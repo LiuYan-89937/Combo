@@ -126,6 +126,7 @@ def initial_factory_graph_state(
         "force_manufacture": force_manufacture,
         "interaction_mode": interaction_mode or "",
         "protected_tool_ids": get_factory_protected_tool_ids(),
+        "model_activity": [],
         "stage_log": [],
         "errors": [],
     }

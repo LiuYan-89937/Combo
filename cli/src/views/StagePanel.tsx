@@ -38,6 +38,14 @@ function summaryLines(patch: Record<string, unknown>): string[] {
 		lines.push(`resource status: ${String(resourcePlan.status ?? '-')}`);
 		lines.push(`resource file: ${String(resourcePlan.resource_file_path ?? '-')}`);
 	}
+	const errors = (patch.errors as Array<Record<string, unknown>> | undefined) ?? [];
+	for (const item of errors.slice(-3)) {
+		lines.push(`error: ${String(item.where ?? '-')} ${String(item.message ?? '')}`);
+	}
+	const modelActivity = (patch.model_activity as Array<Record<string, unknown>> | undefined) ?? [];
+	for (const item of modelActivity.slice(-3)) {
+		lines.push(`model: ${String(item.event_type ?? '-')} ${String(item.message ?? item.output_summary ?? '')}`);
+	}
 	if (!lines.length) {
 		lines.push(JSON.stringify(patch).slice(0, 900));
 	}

@@ -6,7 +6,8 @@ import os
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_openai import ChatOpenAI
+
+from agent_factory.models.openai_compat import ThinkingCompatibleChatOpenAI
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +75,9 @@ def _create_model(settings: ChatModelSettings) -> BaseChatModel | None:
     thinking_body = _thinking_extra_body(settings.thinking)
     if thinking_body is not None:
         kwargs["extra_body"] = thinking_body
-    return ChatOpenAI(**kwargs)
+    if settings.thinking == "enabled":
+        kwargs["preserve_reasoning_content"] = True
+    return ThinkingCompatibleChatOpenAI(**kwargs)
 
 
 def _main_settings() -> ChatModelSettings:

@@ -44,6 +44,7 @@ export type FactoryUiState = {
 	showMessages: boolean;
 	stopAfterStage: string | null;
 	lastError: string | null;
+	errors: string[];
 };
 
 export const initialFactoryUiState: FactoryUiState = {
@@ -64,7 +65,8 @@ export const initialFactoryUiState: FactoryUiState = {
 	showState: false,
 	showMessages: true,
 	stopAfterStage: 'resource_and_condition_planning',
-	lastError: null
+	lastError: null,
+	errors: []
 };
 
 export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
@@ -107,7 +109,10 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 		case 'model_call_completed':
 			return {...base, logs: [...base.logs, `model completed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`]};
 		case 'model_call_failed':
-			return {...base, logs: [...base.logs, `model failed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`], lastError: String(event.payload?.message ?? event.message ?? 'model failed')};
+			return recordError(
+				{...base, logs: [...base.logs, `model failed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`]},
+				String(event.payload?.message ?? event.message ?? 'model failed')
+			);
 		case 'tool_call_proposed':
 		case 'tool_approval_resolved':
 		case 'tool_call_started':
@@ -122,7 +127,7 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 		case 'node_completed':
 			return {...base, logs: [...base.logs, `node completed: ${event.node_id ?? '-'}`]};
 		case 'node_failed':
-			return {...base, runStatus: 'failed', lastError: `node failed: ${event.node_id ?? '-'}`};
+			return recordError({...base, runStatus: 'failed'}, `node failed: ${event.node_id ?? '-'}`);
 		case 'interrupt_requested':
 			return {
 				...base,
@@ -151,12 +156,16 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 				logs: [...base.logs, `run completed: ${String(event.payload?.status ?? '-')}`]
 			};
 		case 'run_failed':
-			return {...base, runStatus: 'failed', pendingInterrupt: null, lastError: event.message ?? 'run failed'};
+			return recordError({...base, runStatus: 'failed', pendingInterrupt: null}, event.message ?? 'run failed');
 		case 'error':
-			return {...base, lastError: event.message ?? 'unknown error'};
+			return recordError(base, event.message ?? 'unknown error');
 		default:
 			return base;
 	}
+}
+
+function recordError(state: FactoryUiState, message: string): FactoryUiState {
+	return {...state, lastError: message, errors: [...state.errors.slice(-8), message]};
 }
 
 function recordEvent(state: FactoryUiState, event: FactoryEvent): FactoryUiState {

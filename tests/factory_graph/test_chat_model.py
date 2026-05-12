@@ -6,6 +6,7 @@ import tempfile
 from unittest.mock import patch
 import unittest
 
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
 from agent_factory.env import load_agentfactory_dotenv
@@ -131,6 +132,77 @@ class ChatModelTest(unittest.TestCase):
         self.assertIsNone(settings.thinking)
         self.assertIsInstance(model, ChatOpenAI)
         self.assertIsNone(model.extra_body)
+
+    def test_thinking_response_preserves_reasoning_content(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AGENTFACTORY_OPENAI_MODEL": "main-model",
+                "AGENTFACTORY_OPENAI_API_KEY": "shared-key",
+                "AGENTFACTORY_OPENAI_BASE_URL": "https://openai-compatible.example/v1",
+                "AGENTFACTORY_LLM_THINKING": "enabled",
+            },
+            clear=True,
+        ):
+            reset_chat_models()
+            model = get_main_model()
+
+        result = model._create_chat_result(
+            {
+                "model": "main-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": "internal reasoning",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "lookup", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
+
+        message = result.generations[0].message
+        self.assertEqual(message.additional_kwargs["reasoning_content"], "internal reasoning")
+
+    def test_thinking_payload_passes_reasoning_content_back(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AGENTFACTORY_OPENAI_MODEL": "main-model",
+                "AGENTFACTORY_OPENAI_API_KEY": "shared-key",
+                "AGENTFACTORY_OPENAI_BASE_URL": "https://openai-compatible.example/v1",
+                "AGENTFACTORY_LLM_THINKING": "enabled",
+            },
+            clear=True,
+        ):
+            reset_chat_models()
+            model = get_main_model()
+
+        payload = model._get_request_payload(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"id": "call_1", "name": "lookup", "args": {}, "type": "tool_call"}],
+                    additional_kwargs={"reasoning_content": "internal reasoning"},
+                ),
+                ToolMessage(content="{}", tool_call_id="call_1", name="lookup"),
+            ]
+        )
+
+        assistant_messages = [
+            message for message in payload["messages"]
+            if message.get("role") == "assistant"
+        ]
+        self.assertEqual(assistant_messages[0]["reasoning_content"], "internal reasoning")
 
 
 if __name__ == "__main__":

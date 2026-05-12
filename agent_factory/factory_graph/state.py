@@ -17,6 +17,7 @@ class FactoryGraphState(TypedDict, total=False):
     graph_control: dict[str, Any]
     protected_tool_ids: list[str]
     tool_approval: dict[str, Any]
+    model_activity: list[dict[str, Any]]
     capture_intent: dict[str, Any]
     factory_response: dict[str, Any]
     stage_log: Annotated[list[dict[str, Any]], operator.add]

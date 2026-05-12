@@ -11,6 +11,9 @@ from agent_factory.factory_graph.state import FactoryGraphState
 
 def run(state: FactoryGraphState) -> dict:
     captured = run_requirement_capture_subgraph(state)
+    requirement_brief = captured.get("requirement_brief") or {}
+    if requirement_brief.get("status") != "captured":
+        return captured
     state_after_capture = {**state, **captured}
     reviewed = run_business_plan_review_subgraph(state_after_capture)
     return _merge_stage_patches(captured, reviewed)

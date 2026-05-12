@@ -76,7 +76,7 @@ def _load_requirement_brief(state: FactoryGraphState) -> dict[str, Any]:
 def _draft_business_plan(state: FactoryGraphState) -> dict[str, Any]:
     business_plan_review = dict(state.get("business_plan_review") or {})
     requirement_brief = dict(business_plan_review.get("requirement_brief") or {})
-    plan_text = _call_text_model(
+    plan_text, model_error = _call_text_model(
         prompt_id=PromptId.BUSINESS_PLAN_REVIEW_DRAFT,
         values={
             "requirement_brief": _format_requirement_brief(requirement_brief),
@@ -88,7 +88,8 @@ def _draft_business_plan(state: FactoryGraphState) -> dict[str, Any]:
         "business_plan_review": {
             **business_plan_review,
             "current_plan_text": plan_text,
-        }
+        },
+        **_model_error_state(model_error),
     }
 
 
@@ -109,7 +110,7 @@ def _revise_business_plan(state: FactoryGraphState) -> dict[str, Any]:
     business_plan_review = dict(state.get("business_plan_review") or {})
     review = dict(business_plan_review.get("review") or {})
     requirement_brief = dict(business_plan_review.get("requirement_brief") or {})
-    plan_text = _call_text_model(
+    plan_text, model_error = _call_text_model(
         prompt_id=PromptId.BUSINESS_PLAN_REVIEW_REVISE,
         values={
             "requirement_brief": _format_requirement_brief(requirement_brief),
@@ -129,7 +130,8 @@ def _revise_business_plan(state: FactoryGraphState) -> dict[str, Any]:
             "current_plan_text": plan_text,
             "iteration_count": iteration_count,
             "review": {},
-        }
+        },
+        **_model_error_state(model_error),
     }
 
 
@@ -163,12 +165,12 @@ def _route_after_plan_review(state: FactoryGraphState) -> str:
     return "finalize_business_plan"
 
 
-def _call_text_model(*, prompt_id: PromptId, values: dict[str, Any], fallback: str) -> str:
+def _call_text_model(*, prompt_id: PromptId, values: dict[str, Any], fallback: str) -> tuple[str, str | None]:
     span_id = uuid.uuid4().hex
     model = get_main_model()
     settings = get_main_model_settings()
     if model is None:
-        return fallback
+        return fallback, f"{prompt_id}: main model is not configured"
     try:
         emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="text", span_id=span_id))
         prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values("requirement_capture"), **values})
@@ -189,7 +191,7 @@ def _call_text_model(*, prompt_id: PromptId, values: dict[str, Any], fallback: s
                 output_summary=f"{len(text)} chars",
             )
         )
-        return text
+        return text, None
     except Exception as exc:
         emit_model_activity(
             model_activity_failed(
@@ -199,7 +201,23 @@ def _call_text_model(*, prompt_id: PromptId, values: dict[str, Any], fallback: s
                 message=f"{type(exc).__name__}: {exc}",
             )
         )
-        return fallback
+        return fallback, f"{prompt_id}: {type(exc).__name__}: {exc}"
+
+
+def _model_error_state(message: str | None) -> dict[str, Any]:
+    if not message:
+        return {}
+    return {
+        "errors": [{"where": "requirement_capture", "message": message}],
+        "model_activity": [
+            {
+                "event_type": "model_call_failed",
+                "prompt_id": "business_plan_review",
+                "call_kind": "text",
+                "message": message,
+            }
+        ],
+    }
 
 
 def _format_requirement_brief(requirement_brief: dict[str, Any]) -> str:
@@ -254,6 +272,7 @@ def _delta_patch(
         "status",
         "business_plan_review",
         "refined_plan_text",
+        "model_activity",
     ]
     patch = {key: final_state[key] for key in keys if key in final_state}
     new_stage_log = final_state.get("stage_log", [])[original_stage_log_count:]
