@@ -29,6 +29,8 @@ class FactorySessionRecord(BaseModel):
     session_id: str
     created_at: str
     updated_at: str
+    first_user_input: str | None = None
+    display_title: str | None = None
     current_mode: FactorySessionMode | None = None
     chat_thread_id: str
     create_agent_thread_id: str
@@ -103,6 +105,15 @@ class FactorySessionManager:
         self.save(record)
         return record
 
+    def remember_first_user_input(self, session_id: str, value: str) -> FactorySessionRecord:
+        record = self.load(session_id)
+        if not record.first_user_input:
+            record.first_user_input = value.strip() or None
+        if not record.display_title:
+            record.display_title = _display_title(record.first_user_input)
+        self.save(record)
+        return record
+
     def thread_id(self, record: FactorySessionRecord, mode: FactorySessionMode) -> str:
         if mode == "chat":
             return record.chat_thread_id
@@ -120,6 +131,10 @@ class FactorySessionManager:
         messages: list[BaseMessage],
     ) -> FactorySessionRecord:
         record = self.load(session_id)
+        if not record.first_user_input:
+            record.first_user_input = _first_user_input(messages)
+        if not record.display_title:
+            record.display_title = _display_title(record.first_user_input)
         if mode == "chat":
             record.chat_messages = dump_messages(messages)
             record.chat_turn_count = _human_message_count(messages)
@@ -162,6 +177,26 @@ def is_factory_checkpointer_persistent(checkpointer: object | None) -> bool:
 
 def _human_message_count(messages: list[BaseMessage]) -> int:
     return sum(1 for message in messages if message.__class__.__name__ == "HumanMessage")
+
+
+def _first_user_input(messages: list[BaseMessage]) -> str | None:
+    for message in messages:
+        if message.__class__.__name__ == "HumanMessage":
+            content = message.content
+            if isinstance(content, str):
+                value = content.strip()
+                if value:
+                    return value
+    return None
+
+
+def _display_title(value: str | None, *, limit: int = 42) -> str | None:
+    if not value:
+        return None
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[:limit - 1]}…"
 
 
 def _now() -> str:

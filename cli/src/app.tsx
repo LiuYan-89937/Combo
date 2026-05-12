@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useReducer} from 'react';
+import React, {useEffect, useMemo, useReducer, useState} from 'react';
 import {Box, Text, useApp} from 'ink';
 import {randomUUID} from 'node:crypto';
 import {PythonBridge} from './bridge/PythonBridge.js';
@@ -24,8 +24,9 @@ import {ToolEventsPanel} from './views/ToolEventsPanel.js';
 export function App() {
 	const {exit} = useApp();
 	const [state, dispatch] = useReducer(routeFactoryEvent, initialFactoryUiState);
+	const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
 	const bridge = useMemo(() => new PythonBridge(), []);
-	const inputDisabled = state.runStatus === 'running';
+	const inputDisabled = state.runStatus === 'running' || sessionPickerOpen;
 	const choiceInterrupt = isChoiceInterrupt(state.pendingInterrupt);
 
 	useEffect(() => {
@@ -73,14 +74,21 @@ export function App() {
 		}
 		if (value === '/sessions') {
 			send(command('list_sessions'));
+			setSessionPickerOpen(true);
 			return;
 		}
 		if (value === '/new-session') {
+			setSessionPickerOpen(false);
 			send(command('new_session'));
 			return;
 		}
 		if (value.startsWith('/resume ')) {
+			setSessionPickerOpen(false);
 			send(command('switch_session', {session_id: value.slice('/resume '.length).trim()}));
+			return;
+		}
+		if (value.startsWith('/rerun ')) {
+			send(command('rerun_from_stage', {payload: {stage_id: value.slice('/rerun '.length).trim()}}));
 			return;
 		}
 		if (value.startsWith('/stop ')) {
@@ -135,7 +143,15 @@ export function App() {
 	return (
 		<ShellLayout state={state}>
 			<ErrorPanel message={state.lastError} errors={state.errors} />
-			<SessionPanel state={state} />
+			<SessionPanel
+				state={state}
+				active={sessionPickerOpen}
+				onClose={() => setSessionPickerOpen(false)}
+				onSelect={sessionId => {
+					setSessionPickerOpen(false);
+					send(command('switch_session', {session_id: sessionId}));
+				}}
+			/>
 			{state.helpVisible && <HelpPanel mode={state.mode} hasInterrupt={Boolean(state.pendingInterrupt)} />}
 			{state.mode === 'create_agent' && <CreateAgentView state={state} />}
 			<LiveStreamPanel state={state} />
@@ -153,7 +169,7 @@ export function App() {
 				onSubmit={onSubmit}
 				getSuggestions={value => commandSuggestions(value, state.mode, state.pendingInterrupt?.event_type === 'tool_approval_requested')}
 				disabled={inputDisabled || choiceInterrupt}
-				disabledText={choiceInterrupt ? 'use the option panel above' : 'runtime running; waiting for event, tool approval, or interrupt'}
+				disabledText={sessionPickerOpen ? 'select a session above' : choiceInterrupt ? 'use the option panel above' : 'runtime running; waiting for event, tool approval, or interrupt'}
 			/>
 		</ShellLayout>
 	);

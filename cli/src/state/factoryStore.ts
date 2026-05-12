@@ -29,6 +29,7 @@ export type FactoryUiState = {
 	ready: boolean;
 	mode: FactoryMode | null;
 	sessionId: string | null;
+	sessionTitle: string | null;
 	sessions: Array<Record<string, unknown>>;
 	logs: string[];
 	events: Array<FactoryEvent>;
@@ -52,6 +53,7 @@ export const initialFactoryUiState: FactoryUiState = {
 	ready: false,
 	mode: null,
 	sessionId: null,
+	sessionTitle: null,
 	sessions: [],
 	logs: [],
 	events: [],
@@ -82,6 +84,7 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 			return {
 				...base,
 				sessionId: String(session.session_id ?? event.session_id ?? ''),
+				sessionTitle: sessionTitle(session),
 				mode: (session.current_mode as FactoryMode | null) ?? event.mode ?? null,
 				logs: [...base.logs, `session: ${String(session.session_id ?? event.session_id ?? '-')}`]
 			};
@@ -295,6 +298,16 @@ function applyDebugPatch(state: FactoryUiState, event: FactoryEvent): FactoryUiS
 
 export function setToolGrep(state: FactoryUiState, query: string): FactoryUiState {
 	return {...state, toolGrep: query};
+}
+
+function sessionTitle(session: Record<string, unknown>): string | null {
+	const displayTitle = stringValue(session.display_title);
+	const firstUserInput = stringValue(session.first_user_input);
+	return displayTitle || firstUserInput || null;
+}
+
+function stringValue(value: unknown): string {
+	return typeof value === 'string' ? value.trim() : '';
 }
 
 function streamIdOf(event: FactoryEvent): string | null {

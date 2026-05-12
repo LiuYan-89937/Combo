@@ -19,6 +19,7 @@ def approve_tool_calls(state: dict[str, Any]) -> dict[str, Any]:
     if not requests:
         return {"tool_approval": {"required": False, "approved": True}}
 
+    pending_tool_calls = _pending_tool_calls(state.get("messages", []))
     decision = interrupt(
         {
             "type": "tool_approval",
@@ -47,10 +48,10 @@ def approve_tool_calls(state: dict[str, Any]) -> dict[str, Any]:
                         "用户没有批准执行该工具调用，并给出了重新生成工具调用的审查意见："
                         f"{guidance}"
                     ),
-                    name=request["tool_name"],
-                    tool_call_id=request["tool_call_id"],
+                    name=tool_call["tool_name"],
+                    tool_call_id=tool_call["tool_call_id"],
                 )
-                for request in requests
+                for tool_call in pending_tool_calls
             ],
         }
 
@@ -59,10 +60,10 @@ def approve_tool_calls(state: dict[str, Any]) -> dict[str, Any]:
         "messages": [
             ToolMessage(
                 content="用户拒绝执行该工具调用。",
-                name=request["tool_name"],
-                tool_call_id=request["tool_call_id"],
+                name=tool_call["tool_name"],
+                tool_call_id=tool_call["tool_call_id"],
             )
-            for request in requests
+            for tool_call in pending_tool_calls
         ],
     }
 
@@ -97,6 +98,19 @@ def _approval_requests(
             }
         )
     return requests
+
+
+def _pending_tool_calls(messages: list[BaseMessage]) -> list[dict[str, str]]:
+    if not messages:
+        return []
+    tool_calls = getattr(messages[-1], "tool_calls", None) or []
+    return [
+        {
+            "tool_call_id": str(tool_call.get("id") or ""),
+            "tool_name": str(tool_call.get("name") or ""),
+        }
+        for tool_call in tool_calls
+    ]
 
 
 def _tool_call_summary(tool_name: str, args: dict[str, Any]) -> str:

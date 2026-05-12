@@ -117,12 +117,11 @@ def build_resource_preparation_subgraph():
 
 def run_resource_preparation_subgraph(state: FactoryGraphState) -> dict[str, Any]:
     original_stage_log_count = len(state.get("stage_log", []))
-    original_message_count = len(state.get("messages", []))
-    final_state = build_resource_preparation_subgraph().invoke(state)
+    working_state: FactoryGraphState = {**state, "messages": []}
+    final_state = build_resource_preparation_subgraph().invoke(working_state)
     return _delta_patch(
         final_state,
         original_stage_log_count=original_stage_log_count,
-        original_message_count=original_message_count,
     )
 
 
@@ -388,17 +387,38 @@ def _valid_requirements(requirements: list[ResourceRequirement], state: FactoryG
 
 def _resource_react_messages(state: FactoryGraphState) -> list[Any]:
     messages = list(state.get("messages") or [])
-    tail: list[Any] = []
-    for message in reversed(messages):
-        if isinstance(message, ToolMessage):
-            tail.append(message)
+    complete_blocks: list[list[Any]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if not isinstance(message, AIMessage) or not tool_calls:
+            index += 1
             continue
-        if isinstance(message, AIMessage) and getattr(message, "tool_calls", None):
-            tail.append(message)
-            continue
-        if len(tail) >= 12:
+        wanted_ids = {str(tool_call.get("id") or "") for tool_call in tool_calls}
+        found_ids: set[str] = set()
+        block: list[Any] = [message]
+        cursor = index + 1
+        while cursor < len(messages) and found_ids != wanted_ids:
+            candidate = messages[cursor]
+            if isinstance(candidate, AIMessage) and getattr(candidate, "tool_calls", None):
+                break
+            if isinstance(candidate, ToolMessage):
+                tool_call_id = str(getattr(candidate, "tool_call_id", "") or "")
+                if tool_call_id in wanted_ids:
+                    found_ids.add(tool_call_id)
+                    block.append(candidate)
+            cursor += 1
+        if found_ids == wanted_ids:
+            complete_blocks.append(block)
+        index += 1
+
+    selected: list[Any] = []
+    for block in reversed(complete_blocks):
+        if selected and len(selected) + len(block) > 12:
             break
-    return list(reversed(tail))
+        selected = block + selected
+    return selected
 
 
 def _check_results_from_messages(messages: list[Any], decision: ResourceReactDecision) -> list[dict[str, Any]]:
@@ -526,7 +546,6 @@ def _delta_patch(
     final_state: FactoryGraphState,
     *,
     original_stage_log_count: int,
-    original_message_count: int,
 ) -> dict[str, Any]:
     patch: dict[str, Any] = {}
     for key in (
@@ -539,8 +558,5 @@ def _delta_patch(
     ):
         if key in final_state:
             patch[key] = final_state[key]
-    new_messages = list(final_state.get("messages", []))[original_message_count:]
-    if new_messages:
-        patch["messages"] = new_messages
     patch["stage_log"] = list(final_state.get("stage_log", []))[original_stage_log_count:]
     return patch

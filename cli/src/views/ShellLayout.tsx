@@ -17,6 +17,7 @@ export function ShellLayout({state, children}: {state: FactoryUiState; children:
 				</Box>
 				<Box marginTop={1}>
 					<Pill label="session" value={shortId(state.sessionId)} />
+					{state.sessionTitle && <Pill label="title" value={state.sessionTitle} color="white" />}
 					<Pill label="mode" value={state.mode ?? '-'} color={state.mode ? 'cyan' : 'gray'} />
 					<Pill label="run" value={state.runStatus} color={statusColor} />
 					<Pill label="stop" value={state.stopAfterStage ?? 'off'} color="white" />

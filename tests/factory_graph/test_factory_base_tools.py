@@ -122,6 +122,35 @@ class FactoryBaseToolsTest(unittest.TestCase):
         self.assertIn("重新生成工具调用", result["messages"][0].content)
         self.assertIn("不要删除目录", result["messages"][0].content)
 
+    def test_tool_approval_revision_completes_every_pending_tool_call(self) -> None:
+        state = {
+            "protected_tool_ids": ["shell_run"],
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "shell_run",
+                            "args": {"command": ["rm", "-rf", "tmp"]},
+                            "id": "call_shell_run",
+                        },
+                        {
+                            "name": "file_exists",
+                            "args": {"path": "tmp"},
+                            "id": "call_file_exists",
+                        },
+                    ],
+                )
+            ],
+        }
+        with patch_interrupt({"action": "revise", "revision_guidance": "改成只读检查。"}):
+            result = approve_tool_calls(state)
+
+        self.assertEqual(
+            {message.tool_call_id for message in result["messages"]},
+            {"call_shell_run", "call_file_exists"},
+        )
+
     def test_model_tools_are_native_openai_compatible_tools(self) -> None:
         model_tool_ids = {tool.name for tool in get_factory_model_tools()}
         graph_tool_ids = {tool.name for tool in get_factory_graph_tools()}

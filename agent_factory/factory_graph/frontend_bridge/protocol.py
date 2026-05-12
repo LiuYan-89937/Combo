@@ -12,6 +12,7 @@ FactoryFrontendCommandType = Literal[
     "new_session",
     "set_mode",
     "send_message",
+    "rerun_from_stage",
     "resume_interrupt",
     "set_options",
     "shutdown",

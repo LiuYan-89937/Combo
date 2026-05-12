@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 import uuid
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from agent_factory.env import load_agentfactory_dotenv
@@ -81,6 +81,8 @@ class FactoryRuntimeAdapter:
                 self.set_options(command)
             elif command.type == "send_message":
                 self.send_message(command)
+            elif command.type == "rerun_from_stage":
+                self.rerun_from_stage(command)
             elif command.type == "resume_interrupt":
                 self.resume_interrupt(command)
             else:
@@ -208,7 +210,47 @@ class FactoryRuntimeAdapter:
             emit_run_started=False,
         )
 
+    def rerun_from_stage(self, command: FactoryFrontendCommand) -> None:
+        self._ensure_session(command)
+        stage_id = str(command.payload.get("stage_id") or "").strip()
+        if self.mode != "create_agent":
+            self._emit_error(command, "rerun_from_stage is only available in create_agent mode")
+            return
+        if self.pending_run is not None:
+            self._emit_error(command, "cannot rerun while an interrupt is pending")
+            return
+        if stage_id not in STAGE_IDS:
+            self._emit_error(command, f"unknown stage_id: {stage_id}")
+            return
+        app = build_factory_graph(
+            stop_after_stage=self.options.stop_after_stage,
+            enable_interrupts=True,
+            checkpointer=self.checkpointer,
+        )
+        base_config = {"configurable": {"thread_id": self._thread_id("create_agent")}}
+        snapshot = _latest_stage_entry_snapshot(app, config=base_config, stage_id=stage_id)
+        if snapshot is None:
+            self._emit_error(command, f"no checkpoint found at stage entry: {stage_id}")
+            return
+        self.pending_run = None
+        initial_state = dict(snapshot.values or {}) if isinstance(snapshot.values, dict) else {}
+        checkpoint_config = dict(snapshot.config or base_config)
+        self._stream_run(
+            request_id=command.request_id,
+            mode="create_agent",
+            app=app,
+            stream_input=None,
+            config=checkpoint_config,
+            initial_final_state=initial_state,
+            run_started_payload={
+                "stop_after_stage": self.options.stop_after_stage,
+                "rerun_from_stage": stage_id,
+                "checkpoint": _checkpoint_payload(checkpoint_config),
+            },
+        )
+
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
+        self.session_record = self.session_manager.remember_first_user_input(self.session_record.session_id, message)
         new_message = HumanMessage(content=message)
         messages: list[BaseMessage] = [new_message]
         if not self._use_checkpoint_memory():
@@ -225,6 +267,7 @@ class FactoryRuntimeAdapter:
         )
 
     def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
+        self.session_record = self.session_manager.remember_first_user_input(self.session_record.session_id, message)
         new_message = HumanMessage(content=message)
         messages: list[BaseMessage] = [new_message]
         if not self._use_checkpoint_memory():
@@ -255,11 +298,12 @@ class FactoryRuntimeAdapter:
         request_id: str | None,
         mode: FactoryMode,
         app: Any,
-        stream_input: dict[str, Any] | Command,
+        stream_input: Any,
         config: dict[str, Any],
         initial_final_state: dict[str, Any],
         normalizer: RuntimeEventNormalizer | None = None,
         emit_run_started: bool = True,
+        run_started_payload: dict[str, Any] | None = None,
     ) -> None:
         normalizer = normalizer or RuntimeEventNormalizer(
             emit=self.emit,
@@ -269,7 +313,7 @@ class FactoryRuntimeAdapter:
             graph_id="factory_chat_graph" if mode == "chat" else "factory_graph",
         )
         if emit_run_started:
-            normalizer.emit_run_started({"stop_after_stage": self.options.stop_after_stage})
+            normalizer.emit_run_started(run_started_payload or {"stop_after_stage": self.options.stop_after_stage})
         final_state = initial_final_state
         try:
             for stream_mode, chunk in app.stream(
@@ -298,7 +342,8 @@ class FactoryRuntimeAdapter:
                     normalizer.emit_debug_event(json_safe(chunk))
                 elif stream_mode == "custom":
                     normalizer.emit_custom_event(json_safe(chunk))
-            self._save_messages(mode, final_state)
+            if _can_commit_session_messages(final_state):
+                self._save_messages(mode, final_state)
             normalizer.emit_run_completed(_summary_payload(final_state, self.options))
         except Exception as exc:
             normalizer.emit_run_failed(exc)
@@ -362,7 +407,34 @@ class FactoryRuntimeAdapter:
 def _session_payload(record: Any | None) -> dict[str, Any]:
     if record is None:
         return {}
-    return record.model_dump(mode="json")
+    payload = record.model_dump(mode="json")
+    first_user_input = payload.get("first_user_input") or _first_message_content(payload.get("create_agent_messages"))
+    first_user_input = first_user_input or _first_message_content(payload.get("chat_messages"))
+    payload["first_user_input"] = first_user_input
+    payload["display_title"] = payload.get("display_title") or _display_title(first_user_input)
+    return payload
+
+
+def _first_message_content(messages: Any) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            value = message["content"].strip()
+            if value:
+                return value
+    return None
+
+
+def _display_title(value: str | None, *, limit: int = 42) -> str | None:
+    if not value:
+        return None
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[:limit - 1]}…"
 
 
 def _summary_payload(final_state: dict[str, Any], options: FactoryBridgeOptions) -> dict[str, Any]:
@@ -378,6 +450,58 @@ def _summary_payload(final_state: dict[str, Any], options: FactoryBridgeOptions)
     if options.show_messages:
         payload["messages"] = json_safe(final_state.get("messages", []))
     return payload
+
+
+def _can_commit_session_messages(final_state: dict[str, Any]) -> bool:
+    if final_state.get("status") in {"failed", "blocked"}:
+        return False
+    if final_state.get("errors"):
+        return False
+    messages = final_state.get("messages", [])
+    if not isinstance(messages, list):
+        return False
+    return _has_complete_tool_call_history(messages)
+
+
+def _has_complete_tool_call_history(messages: list[Any]) -> bool:
+    pending_tool_call_ids: set[str] = set()
+    for message in messages:
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if isinstance(message, AIMessage) and tool_calls:
+            if pending_tool_call_ids:
+                return False
+            pending_tool_call_ids = {
+                str(tool_call.get("id") or "")
+                for tool_call in tool_calls
+                if tool_call.get("id")
+            }
+            if not pending_tool_call_ids:
+                return False
+            continue
+        if isinstance(message, ToolMessage):
+            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+            if tool_call_id in pending_tool_call_ids:
+                pending_tool_call_ids.remove(tool_call_id)
+            continue
+        if pending_tool_call_ids:
+            return False
+    return not pending_tool_call_ids
+
+
+def _latest_stage_entry_snapshot(app: Any, *, config: dict[str, Any], stage_id: str) -> Any | None:
+    for snapshot in app.get_state_history(config):
+        if stage_id in tuple(getattr(snapshot, "next", ()) or ()):
+            return snapshot
+    return None
+
+
+def _checkpoint_payload(config: dict[str, Any]) -> dict[str, Any]:
+    configurable = dict(config.get("configurable") or {})
+    return {
+        "thread_id": configurable.get("thread_id"),
+        "checkpoint_id": configurable.get("checkpoint_id"),
+        "checkpoint_ns": configurable.get("checkpoint_ns"),
+    }
 
 
 def _extract_interrupt_payload(chunk: Any) -> Any | None:

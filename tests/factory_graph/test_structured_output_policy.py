@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
+from langchain_core.exceptions import OutputParserException
 
-from agent_factory.factory_graph.model_call import FactoryModelCallError, call_structured_model
-from agent_factory.factory_graph.schemas import ResourceReactDecision
+from agent_factory.factory_graph.model_call import (
+    FactoryModelCallError,
+    STRUCTURED_OUTPUT_MAX_ATTEMPTS,
+    call_structured_model,
+)
+from agent_factory.factory_graph.schemas import RequirementClarityOutput, ResourceReactDecision
 from agent_factory.factory_graph.stage_subgraphs import resource_preparation
 from agent_factory.factory_graph.stages import (
     graph_behavior_planning,
@@ -26,6 +32,107 @@ class StructuredOutputPolicyTest(unittest.TestCase):
                 output_model=ResourceReactDecision,
                 values={},
             )
+
+    def test_structured_model_repairs_schema_failures_with_bounded_react_loop(self) -> None:
+        class FakeStructuredModel:
+            def __init__(self) -> None:
+                self.invocations: list[list[object]] = []
+
+            def with_config(self, **kwargs):
+                return self
+
+            def bind(self, **kwargs):
+                return self
+
+            def invoke(self, messages):
+                self.invocations.append(list(messages))
+                if len(self.invocations) < 3:
+                    raise OutputParserException("missing_fields has too many items")
+                return RequirementClarityOutput(
+                    is_clear=False,
+                    confidence=0.9,
+                    reason="需求仍需澄清。",
+                    missing_fields=["目标", "场景"],
+                )
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.structured = FakeStructuredModel()
+
+            def with_structured_output(self, schema, *, method):
+                self.schema = schema
+                self.method = method
+                return self.structured
+
+        fake_model = FakeModel()
+        with (
+            patch("agent_factory.factory_graph.model_call.get_main_model", return_value=fake_model),
+            patch(
+                "agent_factory.factory_graph.model_call.get_main_model_settings",
+                return_value=SimpleNamespace(max_tokens=None),
+            ),
+        ):
+            result = call_structured_model(
+                stage_id="requirement_capture",
+                prompt_id=PromptId.REQUIREMENT_CAPTURE_CLARITY,
+                output_model=RequirementClarityOutput,
+                values={
+                    "original_input": "本地 mysql 管理",
+                    "current_requirement": "本地 mysql 管理",
+                    "runtime_environment": "cli factory",
+                    "output_json_schema": "{}",
+                },
+            )
+
+        self.assertIsInstance(result, RequirementClarityOutput)
+        self.assertEqual(fake_model.method, "json_mode")
+        self.assertEqual(len(fake_model.structured.invocations), 3)
+        self.assertIn("failed schema validation", fake_model.structured.invocations[1][-1].content)
+
+    def test_structured_model_stops_after_max_repair_attempts(self) -> None:
+        class AlwaysFailStructuredModel:
+            def __init__(self) -> None:
+                self.invocation_count = 0
+
+            def with_config(self, **kwargs):
+                return self
+
+            def bind(self, **kwargs):
+                return self
+
+            def invoke(self, messages):
+                self.invocation_count += 1
+                raise OutputParserException("schema still invalid")
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.structured = AlwaysFailStructuredModel()
+
+            def with_structured_output(self, schema, *, method):
+                return self.structured
+
+        fake_model = FakeModel()
+        with (
+            patch("agent_factory.factory_graph.model_call.get_main_model", return_value=fake_model),
+            patch(
+                "agent_factory.factory_graph.model_call.get_main_model_settings",
+                return_value=SimpleNamespace(max_tokens=None),
+            ),
+            self.assertRaisesRegex(FactoryModelCallError, "schema still invalid"),
+        ):
+            call_structured_model(
+                stage_id="requirement_capture",
+                prompt_id=PromptId.REQUIREMENT_CAPTURE_CLARITY,
+                output_model=RequirementClarityOutput,
+                values={
+                    "original_input": "本地 mysql 管理",
+                    "current_requirement": "本地 mysql 管理",
+                    "runtime_environment": "cli factory",
+                    "output_json_schema": "{}",
+                },
+            )
+
+        self.assertEqual(fake_model.structured.invocation_count, STRUCTURED_OUTPUT_MAX_ATTEMPTS)
 
     def test_structured_stage_modules_do_not_hand_write_langchain_structured_calls(self) -> None:
         modules = [
@@ -84,6 +191,70 @@ class StructuredOutputPolicyTest(unittest.TestCase):
         )
         self.assertEqual(structured_call.call_args.kwargs["prompt_id"], PromptId.RESOURCE_REACT_DECISION)
         self.assertIs(structured_call.call_args.kwargs["output_model"], ResourceReactDecision)
+
+    def test_resource_react_messages_exclude_incomplete_tool_call_blocks(self) -> None:
+        complete_ai = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "shell_cwd",
+                    "args": {},
+                    "id": "call_complete",
+                }
+            ],
+        )
+        incomplete_ai = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "shell_run",
+                    "args": {"command": ["pwd"]},
+                    "id": "call_incomplete",
+                }
+            ],
+        )
+        complete_tool = resource_preparation.ToolMessage(
+            content="{}",
+            name="shell_cwd",
+            tool_call_id="call_complete",
+        )
+        messages = resource_preparation._resource_react_messages(
+            {
+                "messages": [
+                    complete_ai,
+                    complete_tool,
+                    incomplete_ai,
+                ]
+            }
+        )
+
+        self.assertEqual(messages, [complete_ai, complete_tool])
+        self.assertEqual(getattr(messages[1], "tool_call_id"), "call_complete")
+
+    def test_resource_delta_patch_does_not_commit_internal_react_messages(self) -> None:
+        patch_result = resource_preparation._delta_patch(
+            {
+                "current_stage": "resource_and_condition_planning",
+                "status": "failed",
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "shell_run",
+                                "args": {"command": ["pwd"]},
+                                "id": "call_dirty",
+                            }
+                        ],
+                    )
+                ],
+                "stage_log": [{"stage_id": "resource_and_condition_planning", "status": "failed"}],
+            },
+            original_stage_log_count=0,
+        )
+
+        self.assertNotIn("messages", patch_result)
+        self.assertEqual(patch_result["status"], "failed")
 
 
 if __name__ == "__main__":
