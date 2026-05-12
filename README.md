@@ -232,7 +232,7 @@ error
 9. `harness_generation_and_test`
 10. `repair_or_finalize`
 
-当前默认断点在第 6 阶段 `resource_and_condition_planning`。第六阶段如果缺少 required 资源键，会通过 LangGraph interrupt 交给 TS CLI 收集用户自然语言补充。资源未准备完整不会进入第七阶段。
+当前默认断点在第 7 阶段 `assembly_spec_generation`。第六阶段如果缺少 required 资源键，会通过 LangGraph interrupt 交给 TS CLI 收集用户自然语言补充；资源未准备完整不会进入第七阶段。第七阶段会生成并校验 `AgentAssemblySpec draft`，写入 `.agentfactory/assemblies/<factory_run_id>/` 后停下展示。
 
 ## 环境变量
 

@@ -38,6 +38,23 @@ function summaryLines(patch: Record<string, unknown>): string[] {
 		lines.push(`resource status: ${String(resourcePlan.status ?? '-')}`);
 		lines.push(`resource file: ${String(resourcePlan.resource_file_path ?? '-')}`);
 	}
+	const assemblyReport = patch.assembly_validation_report as Record<string, unknown> | undefined;
+	if (assemblyReport) {
+		const attempts = (assemblyReport.attempts as Array<Record<string, unknown>> | undefined) ?? [];
+		const latestAttempt = attempts.at(-1);
+		lines.push(`assembly validation: ${String(assemblyReport.status ?? '-')}`);
+		lines.push(`assembly attempts: ${String(attempts.length)}`);
+		if (latestAttempt) {
+			lines.push(`assembly latest: #${String(latestAttempt.attempt ?? '-')} ${String(latestAttempt.status ?? '-')}`);
+			const errors = (latestAttempt.errors as string[] | undefined) ?? [];
+			if (errors.length > 0) {
+				lines.push(`assembly error: ${errors[0]}`);
+			}
+		}
+	}
+	if (patch.assembly_spec_draft_path) {
+		lines.push(`assembly draft: ${String(patch.assembly_spec_draft_path)}`);
+	}
 	const errors = (patch.errors as Array<Record<string, unknown>> | undefined) ?? [];
 	for (const item of errors.slice(-3)) {
 		lines.push(`error: ${String(item.where ?? '-')} ${String(item.message ?? '')}`);

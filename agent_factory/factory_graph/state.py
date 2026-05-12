@@ -32,7 +32,14 @@ class FactoryGraphState(TypedDict, total=False):
     node_strategy_plan: dict[str, Any]
     tool_capability_plan: dict[str, Any]
     resource_condition_plan: dict[str, Any]
+    assembly_react_attempt: int
+    assembly_react_decision: dict[str, Any]
+    assembly_spec_draft_candidate: dict[str, Any]
     assembly_spec_draft: dict[str, Any]
+    assembly_spec_draft_path: str
+    assembly_validation_observation: dict[str, Any]
+    assembly_validation_report: dict[str, Any]
+    assembly_validation_report_path: str
     package_generation: dict[str, Any]
     harness_report: dict[str, Any]
     harness_scenarios: list[dict[str, Any]]

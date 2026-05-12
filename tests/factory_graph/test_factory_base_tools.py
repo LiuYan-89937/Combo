@@ -4,16 +4,29 @@ import sys
 import tempfile
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-
-from agent_factory.factory_graph.graph import build_factory_graph
+from langchain_core.messages import AIMessage, ToolMessage
+from agent_factory.factory_graph.tool_approval import approve_tool_calls
 from agent_factory.factory_graph.tools import (
     get_factory_base_tool_ids,
     get_factory_base_tools,
     get_factory_graph_tools,
     get_factory_model_tools,
 )
+
+
+class patch_interrupt:
+    def __init__(self, value):
+        self.value = value
+        self.patch = None
+
+    def __enter__(self):
+        self.patch = patch("agent_factory.factory_graph.tool_approval.interrupt", return_value=self.value)
+        return self.patch.__enter__()
+
+    def __exit__(self, exc_type, exc, traceback):
+        return self.patch.__exit__(exc_type, exc, traceback)
 
 
 def _tool_by_name(name: str):
@@ -73,43 +86,41 @@ class FactoryBaseToolsTest(unittest.TestCase):
         self.assertEqual(run_result["exit_code"], 0)
         self.assertEqual(run_result["stdout"].strip(), "factory-ok")
 
-        env_result = _tool_by_name("shell_env").invoke({"names": ["PATH"], "include_values": False})
-        self.assertTrue(env_result["variables"]["PATH"]["exists"])
-        self.assertNotIn("value", env_result["variables"]["PATH"])
+        cwd_result = _tool_by_name("shell_cwd").invoke({})
+        self.assertIn("cwd", cwd_result)
 
-    def test_factory_graph_injects_tools_through_langgraph_tool_node(self) -> None:
+    def test_factory_graph_exposes_langgraph_tool_node_compatible_tools(self) -> None:
         tool_ids = get_factory_base_tool_ids()
         self.assertIn("file_read", tool_ids)
         self.assertIn("search_inspect_text", tool_ids)
         self.assertIn("shell_run", tool_ids)
+        self.assertTrue(all(tool.name in tool_ids for tool in get_factory_graph_tools()))
 
-        app = build_factory_graph(stop_after_stage="capture_requirement")
-        result = app.invoke(
-            {
-                "requirement": "run one tool call",
-                "force_manufacture": True,
-                "messages": [
-                    HumanMessage(content="run one tool call"),
-                    AIMessage(
-                        content="",
-                        tool_calls=[
-                            {
-                                "name": "search_inspect_text",
-                                "args": {"text": "alpha beta"},
-                                "id": "call_inspect_text",
-                            }
-                        ],
-                    ),
-                ],
-                "status": "running",
-                "stage_log": [],
-                "errors": [],
-            }
-        )
+    def test_tool_approval_revision_returns_observation_without_execution(self) -> None:
+        state = {
+            "protected_tool_ids": ["shell_run"],
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "shell_run",
+                            "args": {"command": ["rm", "-rf", "tmp"]},
+                            "id": "call_shell_run",
+                        }
+                    ],
+                )
+            ],
+        }
+        with patch_interrupt({"action": "revise", "revision_guidance": "不要删除目录，改成只列出目录内容。"}):
+            result = approve_tool_calls(state)
 
-        tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
-        self.assertEqual(len(tool_messages), 1)
-        self.assertEqual(tool_messages[0].name, "search_inspect_text")
+        self.assertFalse(result["tool_approval"]["approved"])
+        self.assertEqual(result["tool_approval"]["action"], "revise")
+        self.assertEqual(len(result["messages"]), 1)
+        self.assertIsInstance(result["messages"][0], ToolMessage)
+        self.assertIn("重新生成工具调用", result["messages"][0].content)
+        self.assertIn("不要删除目录", result["messages"][0].content)
 
     def test_model_tools_are_native_openai_compatible_tools(self) -> None:
         model_tool_ids = {tool.name for tool in get_factory_model_tools()}

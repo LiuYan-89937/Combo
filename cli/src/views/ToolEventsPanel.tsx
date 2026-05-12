@@ -7,9 +7,10 @@ export function ToolEventsPanel({state}: {state: FactoryUiState}) {
 	if (!state.toolActivities.length) {
 		return null;
 	}
+	const filtered = filterToolActivities(state.toolActivities, state.toolGrep);
 	return (
-		<Section title="Tool Activity" color="yellow">
-			{state.toolActivities.slice(-10).map((event, index) => (
+		<Section title={state.toolGrep ? `Tool Activity / grep: ${state.toolGrep}` : 'Tool Activity'} color="yellow">
+			{filtered.slice(-10).map((event, index) => (
 				<Box key={`${event.eventType}-${index}`} flexDirection="column" marginBottom={1}>
 					<Text>
 						<Text color={colorFor(event.eventType)}>{labelFor(event.eventType).padEnd(11)}</Text>
@@ -23,8 +24,17 @@ export function ToolEventsPanel({state}: {state: FactoryUiState}) {
 					))}
 				</Box>
 			))}
+			{!filtered.length && <Text color="gray">No tool activity matched current grep.</Text>}
 		</Section>
 	);
+}
+
+function filterToolActivities(events: FactoryUiState['toolActivities'], query: string) {
+	const normalized = query.trim().toLowerCase();
+	if (!normalized) {
+		return events;
+	}
+	return events.filter(event => searchableText(event.payload).toLowerCase().includes(normalized));
 }
 
 function labelFor(eventType: string): string {
@@ -82,6 +92,9 @@ function detailLines(payload: Record<string, unknown>): string[] {
 	if (payload.summary) {
 		lines.push(`summary: ${String(payload.summary)}`);
 	}
+	if (payload.revision_guidance) {
+		lines.push(`revision: ${String(payload.revision_guidance)}`);
+	}
 	const resourceCheck = payload.resource_check as Record<string, unknown> | undefined;
 	if (resourceCheck) {
 		lines.push(`status: ${String(resourceCheck.status ?? '-')}`);
@@ -90,7 +103,7 @@ function detailLines(payload: Record<string, unknown>): string[] {
 	const message = payload.message as Record<string, unknown> | undefined;
 	if (message) {
 		lines.push(`tool_call_id: ${String(message.tool_call_id ?? '-')}`);
-		lines.push(`result: ${String(message.content ?? '').slice(0, 300)}`);
+		lines.push(`result: ${String(message.content ?? '').slice(0, 900)}`);
 	}
 	if (!lines.length) {
 		lines.push(compact(payload));
@@ -100,4 +113,8 @@ function detailLines(payload: Record<string, unknown>): string[] {
 
 function compact(value: unknown): string {
 	return JSON.stringify(value).replace(/\s+/g, ' ').slice(0, 320);
+}
+
+function searchableText(payload: Record<string, unknown>): string {
+	return JSON.stringify(payload);
 }

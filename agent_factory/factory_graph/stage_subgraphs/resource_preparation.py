@@ -208,9 +208,9 @@ def _parse_resource_react_output(state: FactoryGraphState) -> dict[str, Any]:
     if not messages or not isinstance(messages[-1], AIMessage):
         return _fail("resource react model did not produce an AI message")
     try:
-        decision = ResourceReactDecision.model_validate(_json_from_text(str(messages[-1].content or "")))
-    except Exception as exc:
-        return _fail(f"invalid resource react decision: {type(exc).__name__}: {exc}")
+        decision = _normalize_resource_react_decision(state, str(messages[-1].content or ""))
+    except FactoryModelCallError as exc:
+        return _fail(f"invalid resource react decision: {exc}")
     plan = dict(state.get("resource_condition_plan") or {})
     check_results = _check_results_from_messages(messages, decision)
     return {
@@ -224,6 +224,24 @@ def _parse_resource_react_output(state: FactoryGraphState) -> dict[str, Any]:
         },
         **({"graph_control": {"action": "end"}} if decision.action == "blocked" else {}),
     }
+
+
+def _normalize_resource_react_decision(state: FactoryGraphState, raw_model_output: str) -> ResourceReactDecision:
+    plan = dict(state.get("resource_condition_plan") or {})
+    return call_structured_model(
+        stage_id=STAGE_ID,
+        prompt_id=PromptId.RESOURCE_REACT_DECISION,
+        output_model=ResourceReactDecision,
+        values={
+            "resource_requirements": _json_text(plan.get("requirements") or []),
+            "user_inputs": _json_text(plan.get("user_inputs") or []),
+            "resource_draft": _json_text(plan.get("resource_draft") or {}),
+            "tool_capability_plan": _json_text(state.get("tool_capability_plan") or {}),
+            "tool_observations": _json_text(_tool_observations(state.get("messages") or [])),
+            "raw_model_output": raw_model_output,
+            "output_json_schema": output_json_schema(ResourceReactDecision),
+        },
+    )
 
 
 def _interrupt_for_resource_input(state: FactoryGraphState) -> dict[str, Any]:
@@ -408,6 +426,21 @@ def _check_results_from_messages(messages: list[Any], decision: ResourceReactDec
     return results
 
 
+def _tool_observations(messages: list[Any]) -> list[dict[str, str]]:
+    observations: list[dict[str, str]] = []
+    for message in messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        observations.append(
+            {
+                "tool_call_id": str(getattr(message, "tool_call_id", "") or ""),
+                "tool_name": str(getattr(message, "name", "") or ""),
+                "content": _trim_text(str(message.content), 1200),
+            }
+        )
+    return observations
+
+
 def _validate_resource_draft(plan: dict[str, Any]) -> ResourceValidationResult:
     decision = ResourceReactDecision.model_validate(plan.get("react_decision") or {})
     if decision.action == "blocked":
@@ -450,19 +483,6 @@ def _requirements_by_ids(plan: dict[str, Any], requirement_ids: list[str]) -> li
         item for item in plan.get("requirements", []) or []
         if str(item.get("requirement_id") or "") in wanted
     ]
-
-
-def _json_from_text(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.startswith("json"):
-            stripped = stripped[4:].strip()
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start >= 0 and end >= start:
-        stripped = stripped[start:end + 1]
-    return json.loads(stripped)
 
 
 def _fail(message: str) -> dict[str, Any]:

@@ -30,12 +30,21 @@ def call_structured_model(
     values: dict[str, Any],
 ) -> T:
     span_id = uuid.uuid4().hex
+    if "output_json_schema" not in values:
+        raise FactoryModelCallError("structured model calls must include output_json_schema")
     model = get_main_model()
     settings = get_main_model_settings()
     if model is None:
         raise FactoryModelCallError("main model is not configured")
     try:
-        emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="structured_json", span_id=span_id))
+        emit_model_activity(
+            model_activity_started(
+                prompt_id=prompt_id,
+                call_kind="structured_json",
+                span_id=span_id,
+                schema_name=output_model.__name__,
+            )
+        )
         prompt_value = get_prompt(prompt_id).invoke(prompt_values(stage_id, values))
         structured_model = model.with_structured_output(output_model, method="json_mode").with_config(
             tags=["nostream"]
@@ -117,13 +126,22 @@ def call_text_model(
         raise FactoryModelCallError(f"{type(exc).__name__}: {exc}") from exc
 
 
-def model_activity_started(*, prompt_id: PromptId | str, call_kind: str, span_id: str | None = None) -> dict[str, Any]:
-    return {
+def model_activity_started(
+    *,
+    prompt_id: PromptId | str,
+    call_kind: str,
+    span_id: str | None = None,
+    schema_name: str | None = None,
+) -> dict[str, Any]:
+    payload = {
         "event_type": "model_call_started",
         "span_id": span_id or uuid.uuid4().hex,
         "prompt_id": str(getattr(prompt_id, "value", prompt_id)),
         "call_kind": call_kind,
     }
+    if schema_name:
+        payload["schema_name"] = schema_name
+    return payload
 
 
 def model_activity_completed(

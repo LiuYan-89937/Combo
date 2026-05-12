@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-import uuid
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -14,15 +13,12 @@ from agent_factory.factory_graph.schemas import (
 from agent_factory.factory_graph.prompt_context import prompt_context_values, stage_operating_context
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.factory_graph.model_call import (
-    emit_model_activity,
-    model_activity_completed,
-    model_activity_failed,
-    model_activity_started,
+    FactoryModelCallError,
+    call_structured_model,
+    model_error_patch,
 )
-from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import (
     PromptId,
-    get_prompt,
     output_json_schema,
 )
 
@@ -48,11 +44,26 @@ def build_requirement_capture_subgraph():
         {
             "generate_clarifying_question": "generate_clarifying_question",
             "finalize_requirement": "finalize_requirement",
+            END: END,
         },
     )
-    graph.add_edge("generate_clarifying_question", "wait_for_requirement_answer")
+    graph.add_conditional_edges(
+        "generate_clarifying_question",
+        _route_after_structured_node,
+        {
+            "wait_for_requirement_answer": "wait_for_requirement_answer",
+            END: END,
+        },
+    )
     graph.add_edge("wait_for_requirement_answer", "merge_requirement_answer")
-    graph.add_edge("merge_requirement_answer", "judge_requirement_clarity")
+    graph.add_conditional_edges(
+        "merge_requirement_answer",
+        _route_after_structured_node,
+        {
+            "judge_requirement_clarity": "judge_requirement_clarity",
+            END: END,
+        },
+    )
     graph.add_edge("finalize_requirement", END)
     return graph.compile()
 
@@ -80,63 +91,48 @@ def _initialize_requirement(state: FactoryGraphState) -> dict[str, Any]:
 
 def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
-    clarity, model_error = _call_structured_model(
-        prompt_id=PromptId.REQUIREMENT_CAPTURE_CLARITY,
-        output_model=RequirementClarityOutput,
-        values={
-            "original_input": capture.get("original_input", ""),
-            "current_requirement": capture.get("current_requirement", ""),
-            "runtime_environment": stage_operating_context(STAGE_ID),
-            "output_json_schema": output_json_schema(RequirementClarityOutput),
-        },
-        fallback=RequirementClarityOutput(
-            is_clear=False,
-            confidence=0.0,
-            reason="model unavailable; requirement clarity cannot be confirmed",
-            missing_fields=["需要补充业务目标、使用场景、输入输出、边界与成功标准"],
-        ),
-    )
+    try:
+        clarity = call_structured_model(
+            stage_id=STAGE_ID,
+            prompt_id=PromptId.REQUIREMENT_CAPTURE_CLARITY,
+            output_model=RequirementClarityOutput,
+            values={
+                "original_input": capture.get("original_input", ""),
+                "current_requirement": capture.get("current_requirement", ""),
+                "runtime_environment": stage_operating_context(STAGE_ID),
+                "output_json_schema": output_json_schema(RequirementClarityOutput),
+            },
+        )
+    except FactoryModelCallError as exc:
+        return model_error_patch(STAGE_ID, str(exc))
     return {
         "requirement_capture": {**capture, "clarity": clarity.model_dump(mode="json")},
-        **_model_error_state(model_error),
     }
 
 
 def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
     clarity = capture.get("clarity") or {}
-    question, model_error = _call_structured_model(
-        prompt_id=PromptId.REQUIREMENT_CAPTURE_QUESTION,
-        output_model=ClarifyingQuestionSetOutput,
-        values={
-            "original_input": capture.get("original_input", ""),
-            "current_requirement": capture.get("current_requirement", ""),
-            "missing_fields": "\n".join(clarity.get("missing_fields") or []),
-            "runtime_environment": stage_operating_context(STAGE_ID),
-            "output_json_schema": output_json_schema(ClarifyingQuestionSetOutput),
-        },
-        fallback=ClarifyingQuestionSetOutput(
-            questions=[
-                {
-                    "id": "usage_scenario",
-                    "question": "你希望这个 Agent 主要服务于哪类场景？",
-                    "options": [
-                        {"id": "personal", "label": "个人使用", "description": "帮助单个用户完成任务"},
-                        {"id": "team", "label": "团队协作", "description": "支持多人共享或协同流程"},
-                        {"id": "business", "label": "业务流程", "description": "面向稳定可审计的业务流程"},
-                        {"id": "custom", "label": "自定义补充", "description": "自己描述场景和目标"},
-                    ],
-                    "custom_option_id": "custom",
-                }
-            ]
-        ),
-    )
+    try:
+        question = call_structured_model(
+            stage_id=STAGE_ID,
+            prompt_id=PromptId.REQUIREMENT_CAPTURE_QUESTION,
+            output_model=ClarifyingQuestionSetOutput,
+            values={
+                "original_input": capture.get("original_input", ""),
+                "current_requirement": capture.get("current_requirement", ""),
+                "missing_fields": "\n".join(clarity.get("missing_fields") or []),
+                "runtime_environment": stage_operating_context(STAGE_ID),
+                "output_json_schema": output_json_schema(ClarifyingQuestionSetOutput),
+            },
+        )
+    except FactoryModelCallError as exc:
+        return model_error_patch(STAGE_ID, str(exc))
     return {
         "requirement_capture": {
             **capture,
             "clarification": question.model_dump(mode="json"),
         },
-        **_model_error_state(model_error),
     }
 
 
@@ -155,22 +151,21 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
     clarification = dict(capture.get("clarification") or {})
     answer = dict(capture.get("answer") or {})
-    merged, model_error = _call_structured_model(
-        prompt_id=PromptId.REQUIREMENT_CAPTURE_MERGE,
-        output_model=RequirementMergeOutput,
-        values={
-            "original_input": capture.get("original_input", ""),
-            "current_requirement": capture.get("current_requirement", ""),
-            "answers": _format_answers(clarification, answer),
-            "runtime_environment": stage_operating_context(STAGE_ID),
-            "output_json_schema": output_json_schema(RequirementMergeOutput),
-        },
-        fallback=RequirementMergeOutput(
-            current_requirement=_fallback_merged_requirement(capture, answer),
-            assumptions=[],
-            unresolved_questions=[],
-        ),
-    )
+    try:
+        merged = call_structured_model(
+            stage_id=STAGE_ID,
+            prompt_id=PromptId.REQUIREMENT_CAPTURE_MERGE,
+            output_model=RequirementMergeOutput,
+            values={
+                "original_input": capture.get("original_input", ""),
+                "current_requirement": capture.get("current_requirement", ""),
+                "answers": _format_answers(clarification, answer),
+                "runtime_environment": stage_operating_context(STAGE_ID),
+                "output_json_schema": output_json_schema(RequirementMergeOutput),
+            },
+        )
+    except FactoryModelCallError as exc:
+        return model_error_patch(STAGE_ID, str(exc))
     iteration_count = int(capture.get("iteration_count") or 0) + 1
     return {
         "requirement_capture": {
@@ -181,7 +176,6 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
             "assumptions": merged.assumptions,
             "unresolved_questions": merged.unresolved_questions,
         },
-        **_model_error_state(model_error),
     }
 
 
@@ -212,6 +206,8 @@ def _finalize_requirement(state: FactoryGraphState) -> dict[str, Any]:
 
 
 def _route_after_clarity(state: FactoryGraphState) -> str:
+    if state.get("status") == "failed" or state.get("graph_control", {}).get("action") == "end":
+        return END
     capture = state.get("requirement_capture") or {}
     clarity = capture.get("clarity") or {}
     iteration_count = int(capture.get("iteration_count") or 0)
@@ -225,56 +221,12 @@ def _route_after_clarity(state: FactoryGraphState) -> str:
     return "generate_clarifying_question"
 
 
-def _call_structured_model(*, prompt_id, output_model, values: dict[str, Any], fallback):
-    span_id = uuid.uuid4().hex
-    model = get_main_model()
-    settings = get_main_model_settings()
-    if model is None:
-        return fallback, f"{prompt_id}: main model is not configured"
-    try:
-        emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="structured_json", span_id=span_id))
-        prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values(STAGE_ID), **values})
-        structured_model = model.with_structured_output(output_model, method="json_mode").with_config(
-            tags=["nostream"]
-        )
-        if settings.max_tokens is not None:
-            structured_model = structured_model.bind(max_tokens=settings.max_tokens)
-        result = structured_model.invoke(prompt_value)
-        emit_model_activity(
-            model_activity_completed(
-                prompt_id=prompt_id,
-                call_kind="structured_json",
-                span_id=span_id,
-                output_summary=output_model.__name__,
-            )
-        )
-        return result, None
-    except Exception as exc:
-        emit_model_activity(
-            model_activity_failed(
-                prompt_id=prompt_id,
-                call_kind="structured_json",
-                span_id=span_id,
-                message=f"{type(exc).__name__}: {exc}",
-            )
-        )
-        return fallback, f"{prompt_id}: {type(exc).__name__}: {exc}"
-
-
-def _model_error_state(message: str | None) -> dict[str, Any]:
-    if not message:
-        return {}
-    return {
-        "errors": [{"where": STAGE_ID, "message": message}],
-        "model_activity": [
-            {
-                "event_type": "model_call_failed",
-                "prompt_id": "requirement_capture",
-                "call_kind": "structured_json",
-                "message": message,
-            }
-        ],
-    }
+def _route_after_structured_node(state: FactoryGraphState) -> str:
+    if state.get("status") == "failed" or state.get("graph_control", {}).get("action") == "end":
+        return END
+    if dict(state.get("requirement_capture") or {}).get("clarification"):
+        return "wait_for_requirement_answer"
+    return "judge_requirement_clarity"
 
 
 def _format_answers(clarification: dict[str, Any], answer: dict[str, Any]) -> str:
@@ -294,17 +246,6 @@ def _format_answers(clarification: dict[str, Any], answer: dict[str, Any]) -> st
     return "\n".join(lines)
 
 
-def _fallback_merged_requirement(capture: dict[str, Any], answer: dict[str, Any]) -> str:
-    current = str(capture.get("current_requirement") or "")
-    formatted_answer = "\n".join(
-        str(item.get("custom_text") or item.get("selected_label") or item.get("selected_option_id") or "")
-        for item in answer.get("answers", [])
-    ).strip()
-    if not formatted_answer:
-        return current
-    return f"{current}\n\n用户补充：{formatted_answer}"
-
-
 def _delta_patch(
     final_state: FactoryGraphState,
     *,
@@ -313,6 +254,8 @@ def _delta_patch(
     keys = [
         "current_stage",
         "status",
+        "graph_control",
+        "errors",
         "requirement_capture",
         "requirement_brief",
         "model_activity",

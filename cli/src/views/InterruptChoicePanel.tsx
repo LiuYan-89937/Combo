@@ -5,6 +5,7 @@ import {
 	buildPlanReviewRevisionPayload,
 	buildRequirementClarificationResumePayload,
 	buildToolApprovalPayload,
+	buildToolApprovalRevisionPayload,
 	type RequirementClarificationAnswer
 } from '../interrupts.js';
 import {type FactoryEvent} from '../protocol.js';
@@ -247,18 +248,47 @@ function ToolApprovalTabs({
 	onSubmit: (payload: Record<string, unknown>) => void;
 }) {
 	const [selected, setSelected] = useState(0);
+	const [revisionMode, setRevisionMode] = useState(false);
+	const [revisionText, setRevisionText] = useState('');
 	const requests = (event.payload?.requests as Array<Record<string, unknown>>) ?? [];
-	useEffect(() => setSelected(0), [event.event_id]);
-	useInput((_input, key) => {
+	useEffect(() => {
+		setSelected(0);
+		setRevisionMode(false);
+		setRevisionText('');
+	}, [event.event_id]);
+	useInput((input, key) => {
+		if (revisionMode) {
+			if (key.return) {
+				onSubmit(buildToolApprovalRevisionPayload(revisionText));
+				return;
+			}
+			if (key.escape) {
+				setRevisionMode(false);
+				setRevisionText('');
+				return;
+			}
+			if (key.backspace || key.delete) {
+				setRevisionText(current => current.slice(0, -1));
+				return;
+			}
+			if (input && !key.ctrl && !key.meta) {
+				setRevisionText(current => current + input);
+			}
+			return;
+		}
 		if (key.leftArrow || key.upArrow) {
-			setSelected(0);
+			setSelected(current => Math.max(0, current - 1));
 			return;
 		}
 		if (key.rightArrow || key.downArrow) {
-			setSelected(1);
+			setSelected(current => Math.min(2, current + 1));
 			return;
 		}
 		if (key.return) {
+			if (selected === 2) {
+				setRevisionMode(true);
+				return;
+			}
 			onSubmit(buildToolApprovalPayload(selected === 0));
 		}
 	});
@@ -273,8 +303,15 @@ function ToolApprovalTabs({
 			<Box marginTop={1}>
 				<Tab label="批准" active={selected === 0} />
 				<Tab label="拒绝" active={selected === 1} />
+				<Tab label="重试导向" active={selected === 2} />
 			</Box>
-			<Text color="gray">Left/Right 选择，Enter 确认。</Text>
+			{revisionMode && (
+				<Text color="cyan">
+					审查意见：{revisionText}
+					<Text inverse>{' '}</Text>
+				</Text>
+			)}
+			<Text color="gray">Left/Right 选择，Enter 确认；重试导向会进入输入模式，提交后不执行工具而是让模型重写 tool call。</Text>
 		</Box>
 	);
 }

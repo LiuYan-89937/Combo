@@ -111,7 +111,7 @@ class RuntimeEventNormalizer:
         if stage_id:
             self._ensure_stage_started(stage_id)
         if node_id not in self.started_nodes:
-            self._emit_node_started(node_id, stage_id, {"node_id": node_id, "source": "updates_fallback"})
+            self._emit_node_started(node_id, stage_id, {"node_id": node_id, "source": "updates_default"})
         self.runtime_event(
             "debug_patch",
             node_id=node_id,
@@ -136,7 +136,7 @@ class RuntimeEventNormalizer:
                 payload=item,
             )
         if node_id not in self.completed_nodes:
-            self._emit_node_completed(node_id, stage_id, {"node_id": node_id, "source": "updates_fallback"})
+            self._emit_node_completed(node_id, stage_id, {"node_id": node_id, "source": "updates_default"})
 
     def emit_debug_event(self, chunk: Any) -> None:
         if not isinstance(chunk, dict):
@@ -277,7 +277,7 @@ class RuntimeEventNormalizer:
         )
 
     def emit_runtime_resumed(self, payload: dict[str, Any]) -> None:
-        if "approved" in payload:
+        if "approved" in payload or "action" in payload:
             self.runtime_event("tool_approval_resolved", span_id=self.run_span_id, payload=payload)
         self.runtime_event("runtime_resumed", span_id=self.run_span_id, payload=payload)
 
@@ -375,14 +375,6 @@ class RuntimeEventNormalizer:
             payload = {"message": message}
             self.runtime_event(
                 "tool_call_completed",
-                node_id=node_id,
-                stage_id=stage_id,
-                span_id=tool_span_id,
-                parent_span_id=parent_span_id,
-                payload=payload,
-            )
-            self.runtime_event(
-                "tool_observation_available",
                 node_id=node_id,
                 stage_id=stage_id,
                 span_id=tool_span_id,

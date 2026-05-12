@@ -83,5 +83,9 @@ export function buildPlanReviewRevisionPayload(revisionInstruction: string): Rec
 }
 
 export function buildToolApprovalPayload(approved: boolean): Record<string, unknown> {
-	return {approved};
+	return {action: approved ? 'approve' : 'deny', approved};
+}
+
+export function buildToolApprovalRevisionPayload(revisionGuidance: string): Record<string, unknown> {
+	return {action: 'revise', approved: false, revision_guidance: revisionGuidance};
 }

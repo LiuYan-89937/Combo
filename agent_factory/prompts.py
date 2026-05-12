@@ -6,8 +6,11 @@ import json
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
+from agent_factory.factory_graph.schemas import CaptureIntentOutput
+
 
 class PromptId(str, Enum):
+    CAPTURE_REQUIREMENT_INTENT = "factory.requirement_capture.intent"
     REQUIREMENT_CAPTURE_INTENT = "factory.requirement_capture.intent"
     REQUIREMENT_CAPTURE_CLARITY = "factory.requirement_capture.clarity"
     REQUIREMENT_CAPTURE_QUESTION = "factory.requirement_capture.question"
@@ -20,6 +23,8 @@ class PromptId(str, Enum):
     TOOL_CAPABILITY_PLANNING = "factory.tool_capability_planning"
     RESOURCE_REQUIREMENT_INFERENCE = "factory.resource_condition.requirement_inference"
     RESOURCE_REACT = "factory.resource_condition.react"
+    RESOURCE_REACT_DECISION = "factory.resource_condition.react_decision"
+    ASSEMBLY_SPEC_REACT = "factory.assembly_spec_generation.react"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -331,7 +336,9 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "你必须遵循 ReAct：需要检查环境、文件、命令或配置时，通过 tool_calls 调用工具；"
                     "工具 Observation 返回后再继续判断。\n\n"
                     "当不再需要工具时，必须输出一个合法 JSON 对象，不要包裹 markdown。"
-                    "JSON 必须符合 ResourceReactDecision schema。\n\n"
+                    "JSON 必须符合 ResourceReactDecision schema。"
+                    "禁止输出 markdown code fence，禁止在 JSON 前后追加自然语言。"
+                    "user_prompt 必须是普通 JSON string，不要包含 ``` 代码块。\n\n"
                     "严格约束：\n"
                     "- 只能使用已绑定工具检查资源条件。\n"
                     "- 如果还需要检查，不要输出 JSON；必须直接发起 tool_calls。\n"
@@ -354,6 +361,74 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "请继续 ReAct 检查，或输出最终 JSON 决策。",
                 ),
                 ("placeholder", "{messages}"),
+            ]
+        )
+    if prompt_id == PromptId.RESOURCE_REACT_DECISION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第六阶段 ReAct 最终输出的结构化决策归一化器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把 ReAct 模型最后一次非工具输出归一化为 ResourceReactDecision。\n\n"
+                    "严格约束：\n"
+                    "- 只能根据 raw_model_output、资源需求、用户补充、当前资源草稿和工具观察摘要归一化。\n"
+                    "- 不发起工具调用，不继续推理工具检查，不生成工具代码，不写文件。\n"
+                    "- 如果 raw_model_output 中包含 markdown、代码块、尾随自然语言或坏 JSON，只提取其可理解的资源决策意图。\n"
+                    "- 输出必须是单个 JSON object，禁止 markdown code fence，禁止解释性自然语言。\n"
+                    "- user_prompt 必须是普通 JSON string，不要包含 ``` 代码块；如需示例，使用普通文本换行表达。\n"
+                    "- 不把 Factory 自身 mainModel/taskModel/API key/base URL/thinking 配置当成生成 Agent 资源。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "资源需求：\n{resource_requirements}\n\n"
+                    "用户补充：\n{user_inputs}\n\n"
+                    "当前资源草稿：\n{resource_draft}\n\n"
+                    "工具能力计划：\n{tool_capability_plan}\n\n"
+                    "工具观察摘要：\n{tool_observations}\n\n"
+                    "ReAct 模型最后输出：\n{raw_model_output}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.ASSEMBLY_SPEC_REACT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第七阶段的 AssemblySpec draft 生成器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把前六阶段已确认产物转换为可校验的 AgentAssemblySpec draft。\n\n"
+                    "严格约束：\n"
+                    "- 只能生成 assembly draft，不生成工具代码、package 文件或 harness。\n"
+                    "- 不重新选择 pattern，不修改图行为、节点策略、工具能力或资源计划。\n"
+                    "- runtime.pattern_id 必须使用第二阶段已选 pattern_id。\n"
+                    "- graph_overrides.node_wrappers[].node_id 只能引用第三阶段已有 node_id。\n"
+                    "- tools[].id 只能引用第五阶段已有 capability_id。\n"
+                    "- 默认不填 bindings，不填 harness。\n"
+                    "- 如果收到 validation_observation，只能在 assembly draft 范围内修正。\n"
+                    "- 如果校验错误无法在 assembly draft 范围内修正，action=blocked 并说明原因。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "AssemblyReactDecision JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "第一阶段需求摘要：\n{requirement_brief}\n\n"
+                    "业务制造计划：\n{refined_plan_text}\n\n"
+                    "第二阶段 pattern 选择：\n{runtime_pattern_selection}\n\n"
+                    "第三阶段 pattern 结构摘要：\n{pattern_structure_summary}\n\n"
+                    "第三阶段图行为计划：\n{graph_behavior_plan}\n\n"
+                    "第四阶段节点策略计划：\n{node_strategy_plan}\n\n"
+                    "第五阶段工具能力计划：\n{tool_capability_plan}\n\n"
+                    "第六阶段资源条件计划：\n{resource_condition_plan}\n\n"
+                    "上一轮 draft：\n{previous_draft}\n\n"
+                    "validation_observation：\n{validation_observation}\n\n"
+                    "请返回 JSON。",
+                ),
             ]
         )
     if prompt_id == PromptId.FACTORY_CHAT:

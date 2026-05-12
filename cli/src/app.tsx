@@ -96,6 +96,15 @@ export function App() {
 			send(command('set_options', {options: {show_messages: value.endsWith('on')}}));
 			return;
 		}
+		if (value.startsWith('/tool-grep ')) {
+			const query = value.slice('/tool-grep '.length).trim();
+			dispatch(localEvent({
+				event_type: 'debug_patch',
+				node_id: 'tool_grep',
+				payload: {patch: {tool_grep: query}}
+			}));
+			return;
+		}
 		if (value === '/help') {
 			dispatch(localEvent({
 				event_type: 'debug_patch',

@@ -69,6 +69,12 @@ _STAGE_CONTEXTS: dict[str, StageOperatingContext] = {
         allowed_outputs=("resource_requirements", "resource_check_plans", "resource_check_results", "resources"),
         forbidden_outputs=("Factory 自身模型配置", "工具代码", "AssemblySpec", "依赖安装", "特化资源规则"),
     ),
+    "assembly_spec_generation": StageOperatingContext(
+        stage_id="assembly_spec_generation",
+        responsibility="生成并校验 AgentAssemblySpec draft。",
+        allowed_outputs=("assembly_spec_draft", "assembly_validation_report", "draft 文件路径"),
+        forbidden_outputs=("工具代码", "package 文件", "harness", "重新选择 pattern", "修改前置阶段计划"),
+    ),
     "factory_chat": StageOperatingContext(
         stage_id="factory_chat",
         responsibility="处理 Factory shell 的轻量聊天、检查和辅助任务。",

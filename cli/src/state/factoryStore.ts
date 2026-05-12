@@ -42,6 +42,7 @@ export type FactoryUiState = {
 	helpVisible: boolean;
 	showState: boolean;
 	showMessages: boolean;
+	toolGrep: string;
 	stopAfterStage: string | null;
 	lastError: string | null;
 	errors: string[];
@@ -64,7 +65,8 @@ export const initialFactoryUiState: FactoryUiState = {
 	helpVisible: true,
 	showState: false,
 	showMessages: true,
-	stopAfterStage: 'resource_and_condition_planning',
+	toolGrep: '',
+	stopAfterStage: 'assembly_spec_generation',
 	lastError: null,
 	errors: []
 };
@@ -274,6 +276,11 @@ function toolActivity(event: FactoryEvent): ToolActivity {
 }
 
 function applyDebugPatch(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+	if (event.node_id === 'tool_grep') {
+		const patch = (event.payload?.patch ?? {}) as Record<string, unknown>;
+		const query = String(patch.tool_grep ?? '').trim();
+		return setToolGrep(state, query === 'off' ? '' : query);
+	}
 	if (event.node_id !== 'bridge_options') {
 		return state;
 	}
@@ -284,6 +291,10 @@ function applyDebugPatch(state: FactoryUiState, event: FactoryEvent): FactoryUiS
 		showState: Boolean(options.show_state ?? state.showState),
 		showMessages: Boolean(options.show_messages ?? state.showMessages)
 	};
+}
+
+export function setToolGrep(state: FactoryUiState, query: string): FactoryUiState {
+	return {...state, toolGrep: query};
 }
 
 function streamIdOf(event: FactoryEvent): string | null {

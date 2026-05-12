@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 from typing import Any
-import uuid
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.factory_graph.model_call import (
-    emit_model_activity,
-    model_activity_completed,
-    model_activity_failed,
-    model_activity_started,
+    FactoryModelCallError,
+    call_text_model,
+    model_error_patch,
 )
-from agent_factory.models import get_main_model, get_main_model_settings
-from agent_factory.prompts import PromptId, get_prompt
+from agent_factory.prompts import PromptId
 
 
 DEFAULT_REFINED_PLAN_SECTIONS: tuple[str, ...] = (
@@ -38,7 +34,14 @@ def build_business_plan_review_subgraph():
     graph.add_node("finalize_business_plan", _finalize_business_plan)
     graph.add_edge(START, "load_requirement_brief")
     graph.add_edge("load_requirement_brief", "draft_business_plan")
-    graph.add_edge("draft_business_plan", "present_business_plan")
+    graph.add_conditional_edges(
+        "draft_business_plan",
+        _route_after_model_step,
+        {
+            "present_business_plan": "present_business_plan",
+            END: END,
+        },
+    )
     graph.add_conditional_edges(
         "present_business_plan",
         _route_after_plan_review,
@@ -47,7 +50,14 @@ def build_business_plan_review_subgraph():
             "finalize_business_plan": "finalize_business_plan",
         },
     )
-    graph.add_edge("revise_business_plan", "present_business_plan")
+    graph.add_conditional_edges(
+        "revise_business_plan",
+        _route_after_model_step,
+        {
+            "present_business_plan": "present_business_plan",
+            END: END,
+        },
+    )
     graph.add_edge("finalize_business_plan", END)
     return graph.compile()
 
@@ -76,20 +86,22 @@ def _load_requirement_brief(state: FactoryGraphState) -> dict[str, Any]:
 def _draft_business_plan(state: FactoryGraphState) -> dict[str, Any]:
     business_plan_review = dict(state.get("business_plan_review") or {})
     requirement_brief = dict(business_plan_review.get("requirement_brief") or {})
-    plan_text, model_error = _call_text_model(
-        prompt_id=PromptId.BUSINESS_PLAN_REVIEW_DRAFT,
-        values={
-            "requirement_brief": _format_requirement_brief(requirement_brief),
-            "required_sections": "\n".join(DEFAULT_REFINED_PLAN_SECTIONS),
-        },
-        fallback=_fallback_plan_text(requirement_brief),
-    )
+    try:
+        plan_text = call_text_model(
+            stage_id="requirement_capture",
+            prompt_id=PromptId.BUSINESS_PLAN_REVIEW_DRAFT,
+            values={
+                "requirement_brief": _format_requirement_brief(requirement_brief),
+                "required_sections": "\n".join(DEFAULT_REFINED_PLAN_SECTIONS),
+            },
+        )
+    except FactoryModelCallError as exc:
+        return model_error_patch("requirement_capture", str(exc))
     return {
         "business_plan_review": {
             **business_plan_review,
             "current_plan_text": plan_text,
-        },
-        **_model_error_state(model_error),
+        }
     }
 
 
@@ -110,19 +122,19 @@ def _revise_business_plan(state: FactoryGraphState) -> dict[str, Any]:
     business_plan_review = dict(state.get("business_plan_review") or {})
     review = dict(business_plan_review.get("review") or {})
     requirement_brief = dict(business_plan_review.get("requirement_brief") or {})
-    plan_text, model_error = _call_text_model(
-        prompt_id=PromptId.BUSINESS_PLAN_REVIEW_REVISE,
-        values={
-            "requirement_brief": _format_requirement_brief(requirement_brief),
-            "current_plan_text": business_plan_review.get("current_plan_text", ""),
-            "revision_instruction": review.get("revision_instruction", ""),
-            "required_sections": "\n".join(DEFAULT_REFINED_PLAN_SECTIONS),
-        },
-        fallback=_fallback_revised_plan_text(
-            str(business_plan_review.get("current_plan_text") or ""),
-            str(review.get("revision_instruction") or ""),
-        ),
-    )
+    try:
+        plan_text = call_text_model(
+            stage_id="requirement_capture",
+            prompt_id=PromptId.BUSINESS_PLAN_REVIEW_REVISE,
+            values={
+                "requirement_brief": _format_requirement_brief(requirement_brief),
+                "current_plan_text": business_plan_review.get("current_plan_text", ""),
+                "revision_instruction": review.get("revision_instruction", ""),
+                "required_sections": "\n".join(DEFAULT_REFINED_PLAN_SECTIONS),
+            },
+        )
+    except FactoryModelCallError as exc:
+        return model_error_patch("requirement_capture", str(exc))
     iteration_count = int(business_plan_review.get("iteration_count") or 0) + 1
     return {
         "business_plan_review": {
@@ -130,8 +142,7 @@ def _revise_business_plan(state: FactoryGraphState) -> dict[str, Any]:
             "current_plan_text": plan_text,
             "iteration_count": iteration_count,
             "review": {},
-        },
-        **_model_error_state(model_error),
+        }
     }
 
 
@@ -165,59 +176,10 @@ def _route_after_plan_review(state: FactoryGraphState) -> str:
     return "finalize_business_plan"
 
 
-def _call_text_model(*, prompt_id: PromptId, values: dict[str, Any], fallback: str) -> tuple[str, str | None]:
-    span_id = uuid.uuid4().hex
-    model = get_main_model()
-    settings = get_main_model_settings()
-    if model is None:
-        return fallback, f"{prompt_id}: main model is not configured"
-    try:
-        emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="text", span_id=span_id))
-        prompt_value = get_prompt(prompt_id).invoke({**prompt_context_values("requirement_capture"), **values})
-        configured_model = model
-        if settings.max_tokens is not None:
-            configured_model = configured_model.bind(max_tokens=settings.max_tokens)
-        response = configured_model.invoke(prompt_value)
-        content = getattr(response, "content", "")
-        if isinstance(content, str):
-            text = content.strip() or fallback
-        else:
-            text = str(content).strip() or fallback
-        emit_model_activity(
-            model_activity_completed(
-                prompt_id=prompt_id,
-                call_kind="text",
-                span_id=span_id,
-                output_summary=f"{len(text)} chars",
-            )
-        )
-        return text, None
-    except Exception as exc:
-        emit_model_activity(
-            model_activity_failed(
-                prompt_id=prompt_id,
-                call_kind="text",
-                span_id=span_id,
-                message=f"{type(exc).__name__}: {exc}",
-            )
-        )
-        return fallback, f"{prompt_id}: {type(exc).__name__}: {exc}"
-
-
-def _model_error_state(message: str | None) -> dict[str, Any]:
-    if not message:
-        return {}
-    return {
-        "errors": [{"where": "requirement_capture", "message": message}],
-        "model_activity": [
-            {
-                "event_type": "model_call_failed",
-                "prompt_id": "business_plan_review",
-                "call_kind": "text",
-                "message": message,
-            }
-        ],
-    }
+def _route_after_model_step(state: FactoryGraphState) -> str:
+    if state.get("status") == "failed" or state.get("graph_control", {}).get("action") == "end":
+        return END
+    return "present_business_plan"
 
 
 def _format_requirement_brief(requirement_brief: dict[str, Any]) -> str:
@@ -236,32 +198,6 @@ def _format_requirement_brief(requirement_brief: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _fallback_plan_text(requirement_brief: dict[str, Any]) -> str:
-    requirement = str(requirement_brief.get("refined_requirement") or "")
-    return (
-        "【制造目标】\n"
-        f"围绕用户需求制造一个 CLI-first 对话式 Agent：{requirement}\n\n"
-        "【使用场景】\n"
-        "用户通过文本对话提出任务，Agent 根据业务目标提供可执行的帮助。\n\n"
-        "【业务行为】\n"
-        "Agent 需要理解用户请求、在信息不足时追问，并给出清晰可靠的业务回应。\n\n"
-        "【交互方式】\n"
-        "以自然语言对话为主，必要时进行确认、追问和结果说明。\n\n"
-        "【业务边界】\n"
-        "本计划不展开工具方案、资源方案、技术选型或实现设计。\n\n"
-        "【成功标准】\n"
-        "用户能够通过对话完成核心业务任务，并理解 Agent 的处理结果。\n\n"
-        "【后续规划提示】\n"
-        "后续阶段需要继续从业务行为出发拆解能力、条件、资源和测试重点。"
-    )
-
-
-def _fallback_revised_plan_text(current_plan_text: str, revision_instruction: str) -> str:
-    if not revision_instruction.strip():
-        return current_plan_text
-    return f"{current_plan_text}\n\n【用户修订意见】\n{revision_instruction.strip()}"
-
-
 def _delta_patch(
     final_state: FactoryGraphState,
     *,
@@ -270,6 +206,8 @@ def _delta_patch(
     keys = [
         "current_stage",
         "status",
+        "graph_control",
+        "errors",
         "business_plan_review",
         "refined_plan_text",
         "model_activity",

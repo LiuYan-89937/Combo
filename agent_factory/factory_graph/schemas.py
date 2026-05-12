@@ -4,6 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.assembly.schema import (
+    AgentSpec,
+    GraphOverrides,
+    OutputSpec,
+    RuntimeSpec,
+    ToolSpec,
+)
+
 
 class CaptureIntentOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -370,3 +378,40 @@ class ResourceAndConditionPlan(BaseModel):
     validation_result: ResourceValidationResult | None = None
     resources: dict[str, object] = Field(default_factory=dict)
     resource_file_path: str | None = None
+
+
+class AssemblyDraftPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent: AgentSpec
+    runtime: RuntimeSpec
+    graph_overrides: GraphOverrides = Field(default_factory=GraphOverrides)
+    tools: list[ToolSpec] = Field(default_factory=list)
+    output: OutputSpec = Field(default_factory=OutputSpec)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class AssemblyReactDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["draft_ready", "blocked", "failed"]
+    draft: AssemblyDraftPayload | None = None
+    revision_notes: list[str] = Field(default_factory=list, max_length=12)
+    blocked_reason: str = ""
+
+
+class AssemblyValidationAttempt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt: int
+    status: Literal["valid", "invalid"]
+    errors: list[str] = Field(default_factory=list)
+
+
+class AssemblyValidationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["assembly_validation.v0"] = "assembly_validation.v0"
+    status: Literal["valid", "invalid", "failed"]
+    attempts: list[AssemblyValidationAttempt] = Field(default_factory=list)
+    final_error: str = ""

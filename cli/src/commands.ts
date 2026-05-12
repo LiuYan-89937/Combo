@@ -21,6 +21,7 @@ export const shellCommands: ShellCommandSpec[] = [
 	{name: '/stages', usage: '/stages', description: '显示 FactoryGraph 阶段', availableIn: ['root', 'chat', 'create_agent']},
 	{name: '/state', usage: '/state on|off', description: '切换最终 state 展示', availableIn: ['root', 'chat', 'create_agent']},
 	{name: '/messages', usage: '/messages on|off', description: '切换最终 messages 展示', availableIn: ['root', 'chat', 'create_agent']},
+	{name: '/tool-grep', usage: '/tool-grep <query|off>', description: '过滤工具执行与 Observation 展示', availableIn: ['root', 'chat', 'create_agent']},
 	{name: '/stop', usage: '/stop <stage_id|off>', description: '设置制造阶段断点', availableIn: ['root', 'chat', 'create_agent']}
 ];
 

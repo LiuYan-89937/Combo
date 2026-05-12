@@ -16,4 +16,4 @@ STAGE_IDS: tuple[str, ...] = (
 
 
 EMPTY_STAGE_MESSAGE = "stage skeleton preserved; implementation pending rewrite."
-DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE = "resource_and_condition_planning"
+DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE = "assembly_spec_generation"
