@@ -9,6 +9,7 @@ export type ModelStream = {
 };
 
 export type ToolActivity = {
+	activityKey: string;
 	eventType: FactoryEvent['event_type'];
 	timestamp: string;
 	nodeId: string | null;
@@ -124,7 +125,7 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 		case 'tool_call_completed':
 		case 'tool_call_failed':
 		case 'tool_observation_available':
-			return {...base, toolActivities: [...base.toolActivities.slice(-40), toolActivity(event)]};
+			return {...base, toolActivities: upsertToolActivity(base.toolActivities, toolActivity(event))};
 		case 'debug_patch':
 			return applyDebugPatch({...base, debugPatches: [...base.debugPatches.slice(-30), event]}, event);
 		case 'node_started':
@@ -144,7 +145,7 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 		case 'tool_approval_requested':
 			return {
 				...base,
-				toolActivities: event.event_type === 'tool_approval_requested' ? [...base.toolActivities.slice(-40), toolActivity(event)] : base.toolActivities,
+				toolActivities: event.event_type === 'tool_approval_requested' ? upsertToolActivity(base.toolActivities, toolActivity(event)) : base.toolActivities,
 				runStatus: 'interrupted',
 				pendingInterrupt: event,
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
@@ -271,11 +272,64 @@ function completeModelStream(state: FactoryUiState, event: FactoryEvent): Factor
 
 function toolActivity(event: FactoryEvent): ToolActivity {
 	return {
+		activityKey: toolActivityKey(event),
 		eventType: event.event_type,
 		timestamp: event.timestamp,
 		nodeId: event.node_id ?? null,
 		payload: event.payload ?? {}
 	};
+}
+
+function upsertToolActivity(current: ToolActivity[], incoming: ToolActivity): ToolActivity[] {
+	const existingIndex = current.findIndex(item => item.activityKey === incoming.activityKey);
+	if (existingIndex < 0) {
+		return [...current.slice(-40), incoming];
+	}
+	const existing = current[existingIndex];
+	const merged = mergeToolActivity(existing, incoming);
+	return [
+		...current.slice(0, existingIndex),
+		merged,
+		...current.slice(existingIndex + 1)
+	].slice(-40);
+}
+
+function mergeToolActivity(existing: ToolActivity, incoming: ToolActivity): ToolActivity {
+	if (existing.eventType === 'tool_call_completed' && incoming.eventType === 'tool_observation_available') {
+		return {
+			...existing,
+			timestamp: incoming.timestamp,
+			payload: {...incoming.payload, ...existing.payload, observation: incoming.payload}
+		};
+	}
+	return {
+		...incoming,
+		payload: {...existing.payload, ...incoming.payload}
+	};
+}
+
+function toolActivityKey(event: FactoryEvent): string {
+	const payload = event.payload ?? {};
+	const toolCallId = payloadToolCallId(payload);
+	const normalizedType = event.event_type === 'tool_observation_available' ? 'tool_call_completed' : event.event_type;
+	if (toolCallId) {
+		return `${event.run_id ?? '-'}:${normalizedType}:${toolCallId}`;
+	}
+	return `${event.run_id ?? '-'}:${event.event_type}:${event.span_id ?? event.event_id}`;
+}
+
+function payloadToolCallId(payload: Record<string, unknown>): string {
+	const direct = payload.tool_call_id;
+	if (typeof direct === 'string' && direct) {
+		return direct;
+	}
+	const message = payload.message as Record<string, unknown> | undefined;
+	if (typeof message?.tool_call_id === 'string' && message.tool_call_id) {
+		return message.tool_call_id;
+	}
+	const resourceCheck = payload.resource_check as Record<string, unknown> | undefined;
+	const actionId = resourceCheck?.action_id;
+	return typeof actionId === 'string' ? actionId : '';
 }
 
 function applyDebugPatch(state: FactoryUiState, event: FactoryEvent): FactoryUiState {

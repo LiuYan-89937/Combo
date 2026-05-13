@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
@@ -60,6 +61,7 @@ def build_resource_preparation_subgraph():
     graph.add_node(RESOURCE_REACT_MODEL_NODE, _resource_react_model)
     graph.add_node(RESOURCE_TOOL_APPROVAL_NODE, approve_tool_calls)
     graph.add_node(RESOURCE_TOOLS_NODE, ToolNode(RESOURCE_CHECK_TOOLS, name=RESOURCE_TOOLS_NODE))
+    graph.add_node("emit_resource_tool_events", _emit_resource_tool_events)
     graph.add_node("parse_resource_react_output", _parse_resource_react_output)
     graph.add_node("interrupt_for_resource_input", _interrupt_for_resource_input)
     graph.add_node("merge_user_resource_input", _merge_user_resource_input)
@@ -89,7 +91,8 @@ def build_resource_preparation_subgraph():
             RESOURCE_REACT_MODEL_NODE: RESOURCE_REACT_MODEL_NODE,
         },
     )
-    graph.add_edge(RESOURCE_TOOLS_NODE, RESOURCE_REACT_MODEL_NODE)
+    graph.add_edge(RESOURCE_TOOLS_NODE, "emit_resource_tool_events")
+    graph.add_edge("emit_resource_tool_events", RESOURCE_REACT_MODEL_NODE)
     graph.add_conditional_edges(
         "parse_resource_react_output",
         _route_after_react_decision,
@@ -222,6 +225,41 @@ def _parse_resource_react_output(state: FactoryGraphState) -> dict[str, Any]:
             "status": _status_from_decision(decision),
         },
         **({"graph_control": {"action": "end"}} if decision.action == "blocked" else {}),
+    }
+
+
+def _emit_resource_tool_events(state: FactoryGraphState) -> dict[str, Any]:
+    plan = dict(state.get("resource_condition_plan") or {})
+    emitted_ids = set(str(item) for item in plan.get("_emitted_tool_event_ids", []) or [])
+    new_events: list[dict[str, Any]] = []
+    for message in state.get("messages", []) or []:
+        if not isinstance(message, ToolMessage):
+            continue
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+        if not tool_call_id or tool_call_id in emitted_ids:
+            continue
+        emitted_ids.add(tool_call_id)
+        new_events.append(
+            {
+                "event_type": "tool_call_completed",
+                "tool_call_id": tool_call_id,
+                "tool_name": str(getattr(message, "name", "") or ""),
+                "message": {
+                    "type": "ToolMessage",
+                    "name": str(getattr(message, "name", "") or ""),
+                    "tool_call_id": tool_call_id,
+                    "content": str(message.content),
+                },
+                "source": "resource_react_internal",
+            }
+        )
+    if new_events:
+        _emit_tool_activity_events(new_events)
+    return {
+        "resource_condition_plan": {
+            **plan,
+            "_emitted_tool_event_ids": sorted(emitted_ids),
+        }
     }
 
 
@@ -557,6 +595,20 @@ def _delta_patch(
         "errors",
     ):
         if key in final_state:
-            patch[key] = final_state[key]
+            patch[key] = _public_resource_plan(final_state[key]) if key == "resource_condition_plan" else final_state[key]
     patch["stage_log"] = list(final_state.get("stage_log", []))[original_stage_log_count:]
     return patch
+
+
+def _emit_tool_activity_events(events: list[dict[str, Any]]) -> None:
+    try:
+        writer = get_stream_writer()
+        writer({"type": "tool_activity", "payload": {"events": events}})
+    except Exception:
+        return
+
+
+def _public_resource_plan(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return {key: item for key, item in value.items() if not str(key).startswith("_")}

@@ -170,6 +170,9 @@ class RuntimeEventNormalizer:
     def emit_custom_event(self, chunk: Any) -> None:
         if not isinstance(chunk, dict):
             return
+        if chunk.get("type") == "tool_activity":
+            self._emit_custom_tool_activity(chunk.get("payload") or {})
+            return
         if chunk.get("type") != "model_activity":
             self.runtime_event(
                 "debug_patch",
@@ -191,6 +194,33 @@ class RuntimeEventNormalizer:
             parent_span_id=self.run_span_id,
             payload={key: value for key, value in json_safe(payload).items() if key not in {"event_type", "span_id"}},
         )
+
+    def _emit_custom_tool_activity(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        events = payload.get("events") or []
+        if not isinstance(events, list):
+            return
+        for item in events:
+            if not isinstance(item, dict):
+                continue
+            event_type = str(item.get("event_type") or "")
+            if event_type not in {
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_failed",
+                "tool_observation_available",
+            }:
+                continue
+            tool_span_id = uuid.uuid4().hex
+            self.runtime_event(
+                event_type,  # type: ignore[arg-type]
+                node_id=str(item.get("node_id") or self.current_stage_id or ""),
+                stage_id=self.current_stage_id,
+                span_id=tool_span_id,
+                parent_span_id=self._stage_span_or_run(self.current_stage_id),
+                payload={key: value for key, value in json_safe(item).items() if key != "event_type"},
+            )
 
     def emit_message_chunk(self, chunk: Any) -> None:
         try:

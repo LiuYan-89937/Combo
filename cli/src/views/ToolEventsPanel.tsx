@@ -10,8 +10,8 @@ export function ToolEventsPanel({state}: {state: FactoryUiState}) {
 	const filtered = filterToolActivities(state.toolActivities, state.toolGrep);
 	return (
 		<Section title={state.toolGrep ? `Tool Activity / grep: ${state.toolGrep}` : 'Tool Activity'} color="yellow">
-			{filtered.slice(-10).map((event, index) => (
-				<Box key={`${event.eventType}-${index}`} flexDirection="column" marginBottom={1}>
+			{filtered.slice(-10).map(event => (
+				<Box key={event.activityKey} flexDirection="column" marginBottom={1}>
 					<Text>
 						<Text color={colorFor(event.eventType)}>{labelFor(event.eventType).padEnd(11)}</Text>
 						<Text color="gray"> node </Text>
