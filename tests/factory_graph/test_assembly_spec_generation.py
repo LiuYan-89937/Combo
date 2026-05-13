@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 from agent_factory.factory_graph.schemas import AssemblyReactDecision
 from agent_factory.factory_graph.stage_subgraphs.assembly_spec_generation import (
     run_assembly_spec_generation_subgraph,
@@ -30,7 +32,14 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                     {item["binding_type"] for item in result["assembly_spec"]["bindings"]["node_bindings"]},
                 )
                 self.assertTrue(Path(result["assembly_spec_draft_path"]).exists())
+                self.assertTrue(Path(result["package_materialization_plan_path"]).exists())
                 self.assertTrue(Path(result["assembly_validation_report_path"]).exists())
+                plan = result["package_materialization_plan"]
+                plan_paths = {item["path"] for item in plan["files"]}
+                self.assertIn("bindings/services.json", plan_paths)
+                self.assertIn("bindings/node_bindings.json", plan_paths)
+                self.assertIn("bindings/hooks.json", plan_paths)
+                self.assertEqual(plan["tools"][0]["manifest"]["input_contract"], {"type": "object"})
 
     def test_validation_observation_drives_revision(self) -> None:
         first = _valid_draft()
@@ -70,6 +79,38 @@ class AssemblySpecGenerationTest(unittest.TestCase):
 
                 self.assertEqual(result["status"], "failed")
                 self.assertIn("bindings.node_bindings", result["assembly_validation_report"]["final_error"])
+
+    def test_standard_binding_payload_rejects_extra_fields_at_schema_boundary(self) -> None:
+        invalid = _valid_draft()
+        invalid["bindings"]["node_bindings"][0]["payload"]["profile_id"] = "memory_recall_retrieval"
+
+        with self.assertRaises(ValidationError) as context:
+            AssemblyReactDecision(action="draft_ready", draft=invalid, revision_notes=["invalid"])
+
+        self.assertIn("profile_id", str(context.exception))
+        self.assertIn("Extra inputs are not permitted", str(context.exception))
+
+    def test_custom_binding_payload_keeps_explicit_extension_config(self) -> None:
+        draft = _valid_draft()
+        draft["bindings"]["node_bindings"].append(
+            {
+                "binding_id": "answer_vendor_extension",
+                "binding_type": "custom",
+                "target": {"node_id": "answer", "impl": "cognitive.answer"},
+                "payload": {
+                    "extension_id": "vendor.answer.trace_hint",
+                    "schema_version": "v0",
+                    "purpose": "Attach vendor-specific tracing hints without changing standard prompt semantics.",
+                    "config": {"trace_level": "summary"},
+                },
+            }
+        )
+
+        decision = AssemblyReactDecision(action="draft_ready", draft=draft, revision_notes=["valid custom"])
+
+        payload = decision.draft.bindings.node_bindings[-1].payload.model_dump(mode="json")
+        self.assertEqual(payload["extension_id"], "vendor.answer.trace_hint")
+        self.assertEqual(payload["config"]["trace_level"], "summary")
 
 
 def _run_with_decisions(decisions: list[AssemblyReactDecision]):
@@ -169,6 +210,8 @@ def _base_state() -> dict:
                     "description": "Look up ledger entries.",
                     "required_by_node_ids": ["answer"],
                     "visible_to_node_ids": ["answer"],
+                    "input_contract": {"type": "object"},
+                    "output_contract": {"type": "object"},
                     "implementation_status": "needs_generation",
                 }
             ]

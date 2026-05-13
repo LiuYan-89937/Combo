@@ -40,6 +40,10 @@ class FactoryGraphState(TypedDict, total=False):
     assembly_validation_observation: dict[str, Any]
     assembly_validation_report: dict[str, Any]
     assembly_validation_report_path: str
+    package_materialization_plan: dict[str, Any]
+    package_materialization_plan_path: str
+    package_validation_observation: dict[str, Any]
+    package_revision_attempt: int
     package_generation: dict[str, Any]
     harness_report: dict[str, Any]
     harness_scenarios: list[dict[str, Any]]

@@ -417,3 +417,127 @@ class AssemblyValidationReport(BaseModel):
     status: Literal["valid", "invalid", "failed"]
     attempts: list[AssemblyValidationAttempt] = Field(default_factory=list)
     final_error: str = ""
+
+
+PackageFileType = Literal["json", "markdown", "python", "text"]
+PackageFileSourceKind = Literal[
+    "assembly",
+    "binding",
+    "prompt",
+    "tool",
+    "policy",
+    "retrieval",
+    "strategy",
+    "formatter",
+    "manifest",
+]
+
+
+class PackageFileDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    content: str
+    file_type: PackageFileType
+    purpose: str
+    source_kind: PackageFileSourceKind
+    source_id: str | None = None
+
+
+PackageGenerationMode = Literal["system_generated", "model_generated"]
+
+
+class PackageMaterializationFileSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    file_type: PackageFileType
+    source_kind: PackageFileSourceKind
+    source_id: str | None = None
+    generation_mode: PackageGenerationMode
+    contract_source: str
+    required: bool = True
+
+
+class PackageToolManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    name: str | None = None
+    description: str
+    input_contract: dict[str, object] = Field(default_factory=dict)
+    output_contract: dict[str, object] = Field(default_factory=dict)
+    resource_keys: list[str] = Field(default_factory=list)
+    approval_required: bool = False
+    risk_notes: list[str] = Field(default_factory=list, max_length=8)
+    entrypoint: str = "tool.py:run"
+
+
+class PackageMaterializationToolSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    manifest_path: str
+    code_path: str
+    readme_path: str
+    manifest: PackageToolManifest
+
+
+class PackageMaterializationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["package_materialization.v0"] = "package_materialization.v0"
+    factory_run_id: str
+    package_root: str
+    files: list[PackageMaterializationFileSpec] = Field(default_factory=list)
+    tools: list[PackageMaterializationToolSpec] = Field(default_factory=list)
+    manifest_contract: dict[str, object] = Field(default_factory=dict)
+
+
+class PackageMaterializationValidationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["package_materialization_validation.v0"] = "package_materialization_validation.v0"
+    status: Literal["valid", "invalid", "failed"]
+    errors: list[str] = Field(default_factory=list)
+
+
+class PackageBuildDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["package_ready", "blocked", "failed"]
+    generated_files: list[PackageFileDraft] = Field(default_factory=list)
+    revision_notes: list[str] = Field(default_factory=list, max_length=12)
+    blocked_reason: str = ""
+
+
+class PackageMaterializedFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    file_type: PackageFileType
+    source_kind: PackageFileSourceKind
+    source_id: str | None = None
+    bytes: int
+
+
+class PackageValidationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["package_report.v0"] = "package_report.v0"
+    status: Literal["valid", "invalid", "failed"]
+    package_root: str = ""
+    materialized_files: list[PackageMaterializedFile] = Field(default_factory=list)
+    validation_errors: list[str] = Field(default_factory=list)
+    static_checks: list[dict[str, object]] = Field(default_factory=list)
+
+
+class PackageGenerationState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["collecting", "complete", "blocked", "failed"]
+    package_root: str
+    manifest_path: str | None = None
+    report_path: str | None = None
+    materialized_files: list[PackageMaterializedFile] = Field(default_factory=list)
+    validation_report: PackageValidationReport | None = None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 ServiceKind = Literal[
@@ -86,6 +86,13 @@ class RetrievalProfileBindingPayload(BaseModel):
     top_k: int = 5
 
 
+class StrategyProfileBindingPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_ids: list[str] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
 class OutputFormatterBindingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -94,13 +101,55 @@ class OutputFormatterBindingPayload(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class CustomBindingPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    extension_id: str
+    schema_version: str = "v0"
+    purpose: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+StandardNodeBindingPayload = (
+    PromptBindingPayload
+    | ToolAccessBindingPayload
+    | PolicyProfileBindingPayload
+    | RetrievalProfileBindingPayload
+    | StrategyProfileBindingPayload
+    | OutputFormatterBindingPayload
+    | CustomBindingPayload
+)
+
+
 class NodeBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     binding_id: str
     binding_type: BindingType
     target: NodeBindingTarget
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: StandardNodeBindingPayload
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_payload_for_binding_type(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        binding_type = data.get("binding_type")
+        payload = data.get("payload")
+        payload_model = _payload_model_for_binding_type(binding_type)
+        if payload_model is not None and isinstance(payload, dict):
+            data = dict(data)
+            data["payload"] = payload_model.model_validate(payload)
+        return data
+
+    @model_validator(mode="after")
+    def _payload_matches_binding_type(self) -> "NodeBinding":
+        payload_model = _payload_model_for_binding_type(self.binding_type)
+        if payload_model is None:
+            return self
+        if not isinstance(self.payload, payload_model):
+            raise ValueError(f"payload must match binding_type={self.binding_type}")
+        return self
 
 
 class HookBinding(BaseModel):
@@ -119,3 +168,15 @@ class BindingSet(BaseModel):
     services: list[ServiceBindingSpec] = Field(default_factory=list)
     node_bindings: list[NodeBinding] = Field(default_factory=list)
     hooks: list[HookBinding] = Field(default_factory=list)
+
+
+def _payload_model_for_binding_type(binding_type: Any) -> type[BaseModel] | None:
+    return {
+        "prompt": PromptBindingPayload,
+        "tool_access": ToolAccessBindingPayload,
+        "policy_profile": PolicyProfileBindingPayload,
+        "retrieval_profile": RetrievalProfileBindingPayload,
+        "strategy_profile": StrategyProfileBindingPayload,
+        "output_formatter": OutputFormatterBindingPayload,
+        "custom": CustomBindingPayload,
+    }.get(str(binding_type))

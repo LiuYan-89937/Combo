@@ -601,18 +601,61 @@ services:
 ```yaml
 node_bindings:
   - binding_id: string
-    binding_type: prompt | tool_access | policy_profile | retrieval_profile | output_formatter | custom
+    binding_type: prompt | tool_access | policy_profile | retrieval_profile | strategy_profile | output_formatter | custom
     target:
       node_id: string
       impl: string
-    payload: {}
+    payload: <typed payload for binding_type>
 ```
 
 规则：
 
 - `target.node_id` 必须属于 runtime pattern
 - `target.impl` 必须与该 node 的 impl 一致
-- `payload` 必须能被对应 RuntimeKernel 节点理解
+- 标准 `binding_type` 必须使用对应的强类型 payload schema，不允许额外字段
+- `custom` 是唯一开放扩展入口，允许 `config` 为 dict，但必须提供最小元信息
+
+标准 payload：
+
+```yaml
+prompt:
+  prompt_id: string
+  template: string
+  variables: []
+
+tool_access:
+  allowed_tool_ids: []
+  approval_policy: string
+
+policy_profile:
+  profile_id: string
+  rules: {}
+
+retrieval_profile:
+  query_source: string
+  top_k: integer
+
+strategy_profile:
+  strategy_ids: []
+  parameters: {}
+
+output_formatter:
+  formatter_id: string
+  mode: string
+  config: {}
+
+custom:
+  extension_id: string
+  schema_version: string
+  purpose: string
+  config: {}
+```
+
+扩展规则：
+
+- `custom.config` 可由扩展实现自行解释
+- validator 只轻校验 `custom` 的最小元信息，不深度理解扩展配置
+- `custom` 不能冒充或覆盖 RuntimeKernel 标准 binding 语义
 
 ---
 

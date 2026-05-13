@@ -25,6 +25,8 @@ class PromptId(str, Enum):
     RESOURCE_REACT = "factory.resource_condition.react"
     RESOURCE_REACT_DECISION = "factory.resource_condition.react_decision"
     ASSEMBLY_SPEC_REACT = "factory.assembly_spec_generation.react"
+    PACKAGE_REACT = "factory.package_generation.react"
+    PACKAGE_BUILD_DECISION = "factory.package_generation.build_decision"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -412,8 +414,14 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- bindings.services 必须声明该 Agent 运行需要的 Runtime 服务契约，例如 model_service、tool_registry、memory_engine、knowledge_engine、context_engine、policy_engine、observability_manager、checkpoint_manager。\n"
                     "- bindings.node_bindings 必须按节点绑定 prompt、tool_access、retrieval_profile、policy_profile、strategy_profile、output_formatter 等契约。\n"
                     "- cognitive.* 节点必须有 prompt binding；operational.tool_call 节点必须有 tool_access binding；memory/knowledge 检索节点必须有 retrieval_profile binding；governance.* 节点必须有 policy_profile binding；terminal/finalize 节点必须有 output_formatter binding。\n"
-                    "- prompt binding payload 必须包含 prompt_id、template、variables；template 是可审查的 prompt contract，可以包含第八阶段要物化的模板内容或模板骨架。\n"
-                    "- tool_access binding 只能引用第五阶段工具能力 id，并表达 allowed_tool_ids 和 approval_policy。\n"
+                    "- 标准 binding payload 必须严格遵守 AssemblyReactDecision JSON schema 中对应 payload 类型；不得给标准 payload 添加未声明字段。\n"
+                    "- prompt payload 只允许 prompt_id、template、variables；template 是可审查的 prompt contract，可以包含第八阶段要物化的模板内容或模板骨架。\n"
+                    "- tool_access payload 只允许 allowed_tool_ids 和 approval_policy；allowed_tool_ids 只能引用第五阶段工具能力 id。\n"
+                    "- retrieval_profile payload 只允许 query_source 和 top_k；不要添加 profile_id、rules、config 等字段。\n"
+                    "- policy_profile payload 只允许 profile_id 和 rules。\n"
+                    "- strategy_profile payload 只允许 strategy_ids 和 parameters。\n"
+                    "- output_formatter payload 只允许 formatter_id、mode、config。\n"
+                    "- custom payload 是唯一允许扩展 dict config 的位置，必须包含 extension_id、schema_version、purpose、config；custom 不能冒充标准 binding。\n"
                     "- 第八阶段只负责把第七阶段 bindings 中的 contract 物化为文件、工具代码和 package manifest，不允许重新决定绑定关系。\n"
                     "- harness 仍然不填，harness 属于第九阶段。\n"
                     "- 如果收到 validation_observation，只能在 assembly draft 范围内修正。\n"
@@ -434,6 +442,76 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "第六阶段资源条件计划：\n{resource_condition_plan}\n\n"
                     "上一轮 draft：\n{previous_draft}\n\n"
                     "validation_observation：\n{validation_observation}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.PACKAGE_REACT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第八阶段的 Package Generation ReAct 构建器。\n"
+                    "你必须遵循 ReAct：需要读取文件、检查目录、搜索现有结构时，通过 tool_calls 调用工具；"
+                    "工具 Observation 返回后再继续判断。\n\n"
+                    "当不再需要工具时，输出一个普通说明，概述你准备物化的 package；不要直接写文件。"
+                    "最终 PackageBuildDecision 会由结构化归一化器生成。\n\n"
+                    "严格约束：\n"
+                    "- 只物化第七阶段 assembly_spec、第六阶段 resources、第五阶段工具能力和第四阶段节点策略。\n"
+                    "- package_materialization_plan 是唯一文件清单权威，不重新决定文件结构。\n"
+                    "- 不重新选择 pattern，不修改 binding 关系，不重新规划工具可见性。\n"
+                    "- 必须为每个 assembly_spec.tools[].id 生成真实工具代码草稿，而不是 placeholder/mock/fallback。\n"
+                    "- 工具代码必须读取 resources，不硬编码用户环境，不使用 Factory main/task model 配置作为业务资源。\n"
+                    "- 只能生成 package_materialization_plan 中 generation_mode=model_generated 的文件内容。\n"
+                    "- 不要生成或改写 agent_package.json、assembly_spec.json、resources.json、bindings/*.json、tool manifest 或 policy/retrieval/formatter contract 文件。\n"
+                    "- 不生成 harness，不运行动态工具测试，不调用真实业务外部服务。\n"
+                    "- 写文件由系统节点完成；你只能提出 package 文件草案。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}",
+                ),
+                (
+                    "user",
+                    "AssemblySpec：\n{assembly_spec}\n\n"
+                    "PackageMaterializationPlan：\n{package_materialization_plan}\n\n"
+                    "资源条件计划：\n{resource_condition_plan}\n\n"
+                    "package root：\n{package_root}\n\n"
+                    "上一轮校验 observation：\n{package_validation_observation}\n\n"
+                    "请继续 ReAct 检查，或说明最终 package 构建草案。",
+                ),
+                ("placeholder", "{messages}"),
+            ]
+        )
+    if prompt_id == PromptId.PACKAGE_BUILD_DECISION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第八阶段 PackageBuildDecision 结构化归一化器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把 ReAct 观察和前置阶段契约转换为 PackageBuildDecision。\n\n"
+                    "严格约束：\n"
+                    "- 输出必须符合 PackageBuildDecision JSON schema。\n"
+                    "- 不要输出 markdown，不要解释，不要包裹代码块。\n"
+                    "- generated_files 只能包含 PackageMaterializationPlan 中 generation_mode=model_generated 的文件。\n"
+                    "- 必须为每个 tool 生成 tools/<tool_id>/tool.py 和 tools/<tool_id>/README.md，除非 plan 中没有声明。\n"
+                    "- tool.py 必须是真实 adapter draft，提供 run(arguments: dict, resources: dict) -> dict。\n"
+                    "- tool.py 不得硬编码用户资源，不得使用 Factory 模型配置作为业务资源。\n"
+                    "- 不生成或改写 system_generated contract 文件，包括 bindings、tool manifest、assembly_spec、resources、agent_package。\n"
+                    "- 不生成 harness，不生成动态测试结果，不改变 assembly_spec 的 graph/bindings/tools/runtime 语义。\n"
+                    "- 文件 path 必须是 package root 内相对路径。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "AssemblySpec：\n{assembly_spec}\n\n"
+                    "PackageMaterializationPlan：\n{package_materialization_plan}\n\n"
+                    "资源条件计划：\n{resource_condition_plan}\n\n"
+                    "package root：\n{package_root}\n\n"
+                    "上一轮校验 observation：\n{package_validation_observation}\n\n"
+                    "工具观察摘要：\n{tool_observations}\n\n"
+                    "ReAct 模型最后输出：\n{raw_model_output}\n\n"
                     "请返回 JSON。",
                 ),
             ]
