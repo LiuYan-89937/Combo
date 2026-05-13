@@ -24,6 +24,11 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertEqual(result["assembly_validation_report"]["status"], "valid")
                 self.assertEqual(result["assembly_validation_report"]["attempts"][0]["status"], "valid")
                 self.assertEqual(result["assembly_spec"]["harness"], [])
+                self.assertGreater(len(result["assembly_spec"]["bindings"]["node_bindings"]), 0)
+                self.assertIn(
+                    "prompt",
+                    {item["binding_type"] for item in result["assembly_spec"]["bindings"]["node_bindings"]},
+                )
                 self.assertTrue(Path(result["assembly_spec_draft_path"]).exists())
                 self.assertTrue(Path(result["assembly_validation_report_path"]).exists())
 
@@ -55,6 +60,16 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertEqual(len(result["assembly_validation_report"]["attempts"]), 3)
                 self.assertTrue(Path(result["assembly_validation_report_path"]).exists())
                 self.assertNotIn("assembly_spec", result)
+
+    def test_rejects_missing_industrial_bindings(self) -> None:
+        invalid = _valid_draft()
+        invalid["bindings"]["node_bindings"] = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with _chdir(temp_dir):
+                result = _run_with_decisions([_decision(invalid), _decision(invalid), _decision(invalid)])
+
+                self.assertEqual(result["status"], "failed")
+                self.assertIn("bindings.node_bindings", result["assembly_validation_report"]["final_error"])
 
 
 def _run_with_decisions(decisions: list[AssemblyReactDecision]):
@@ -98,6 +113,7 @@ def _valid_draft() -> dict:
                 }
             ]
         },
+        "bindings": _valid_bindings(),
         "tools": [
             {
                 "id": "ledger_lookup",
@@ -130,7 +146,20 @@ def _base_state() -> dict:
         "refined_plan_text": "Build a ledger assistant.",
         "runtime_pattern_selection": {"selected_pattern_id": "react_agent"},
         "pattern_structure_summary": {"pattern_id": "react_agent"},
-        "graph_behavior_plan": {"nodes": [{"node_id": "answer"}]},
+        "graph_behavior_plan": {
+            "nodes": [
+                {"node_id": "ingress", "node_type": "reserved", "impl": "ingress"},
+                {"node_id": "memory_recall", "node_type": "operational", "impl": "operational.memory_retrieve"},
+                {"node_id": "knowledge_retrieve", "node_type": "operational", "impl": "operational.knowledge_retrieve"},
+                {"node_id": "precheck", "node_type": "governance", "impl": "governance.precheck"},
+                {"node_id": "approval_gate", "node_type": "governance", "impl": "governance.approval_gate"},
+                {"node_id": "answer", "node_type": "cognitive", "impl": "cognitive.answer"},
+                {"node_id": "tool_exec", "node_type": "operational", "impl": "operational.tool_call"},
+                {"node_id": "postcheck", "node_type": "governance", "impl": "governance.postcheck"},
+                {"node_id": "commit", "node_type": "terminal", "impl": "terminal.commit"},
+                {"node_id": "finalize", "node_type": "reserved", "impl": "finalize"},
+            ]
+        },
         "node_strategy_plan": {},
         "tool_capability_plan": {
             "tool_capabilities": [
@@ -151,6 +180,82 @@ def _base_state() -> dict:
         },
         "stage_log": [],
         "errors": [],
+    }
+
+
+def _valid_bindings() -> dict:
+    return {
+        "services": [
+            {"service_id": "main_model", "kind": "model_service", "required": True, "config": {}},
+            {"service_id": "generated_tool_registry", "kind": "tool_registry", "required": True, "config": {}},
+            {"service_id": "memory_engine", "kind": "memory_engine", "required": True, "config": {}},
+            {"service_id": "knowledge_engine", "kind": "knowledge_engine", "required": True, "config": {}},
+            {"service_id": "context_engine", "kind": "context_engine", "required": True, "config": {}},
+            {"service_id": "policy_engine", "kind": "policy_engine", "required": True, "config": {}},
+            {"service_id": "observability", "kind": "observability_manager", "required": True, "config": {}},
+            {"service_id": "checkpoint", "kind": "checkpoint_manager", "required": True, "config": {}},
+        ],
+        "node_bindings": [
+            {
+                "binding_id": "memory_recall_retrieval",
+                "binding_type": "retrieval_profile",
+                "target": {"node_id": "memory_recall", "impl": "operational.memory_retrieve"},
+                "payload": {"query_source": "current_user_input", "top_k": 5},
+            },
+            {
+                "binding_id": "knowledge_retrieve_profile",
+                "binding_type": "retrieval_profile",
+                "target": {"node_id": "knowledge_retrieve", "impl": "operational.knowledge_retrieve"},
+                "payload": {"query_source": "current_user_input", "top_k": 5},
+            },
+            {
+                "binding_id": "precheck_policy",
+                "binding_type": "policy_profile",
+                "target": {"node_id": "precheck", "impl": "governance.precheck"},
+                "payload": {"profile_id": "policy.ledger.precheck", "rules": {"risk": "standard"}},
+            },
+            {
+                "binding_id": "approval_gate_policy",
+                "binding_type": "policy_profile",
+                "target": {"node_id": "approval_gate", "impl": "governance.approval_gate"},
+                "payload": {"profile_id": "policy.ledger.approval", "rules": {"approval_required": True}},
+            },
+            {
+                "binding_id": "answer_prompt",
+                "binding_type": "prompt",
+                "target": {"node_id": "answer", "impl": "cognitive.answer"},
+                "payload": {
+                    "prompt_id": "prompt.ledger.answer",
+                    "template": "You are a CLI-first ledger assistant. Use available context, tools, and policy constraints before answering.",
+                    "variables": ["conversation", "model_context", "tool_context", "resource_contract"],
+                },
+            },
+            {
+                "binding_id": "tool_exec_access",
+                "binding_type": "tool_access",
+                "target": {"node_id": "tool_exec", "impl": "operational.tool_call"},
+                "payload": {"allowed_tool_ids": ["ledger_lookup"], "approval_policy": "standard"},
+            },
+            {
+                "binding_id": "postcheck_policy",
+                "binding_type": "policy_profile",
+                "target": {"node_id": "postcheck", "impl": "governance.postcheck"},
+                "payload": {"profile_id": "policy.ledger.postcheck", "rules": {"validate_output": True}},
+            },
+            {
+                "binding_id": "commit_output",
+                "binding_type": "output_formatter",
+                "target": {"node_id": "commit", "impl": "terminal.commit"},
+                "payload": {"formatter_id": "formatter.ledger.markdown", "mode": "identity", "config": {"format": "markdown"}},
+            },
+            {
+                "binding_id": "finalize_output",
+                "binding_type": "output_formatter",
+                "target": {"node_id": "finalize", "impl": "finalize"},
+                "payload": {"formatter_id": "formatter.ledger.final", "mode": "identity", "config": {"format": "markdown"}},
+            },
+        ],
+        "hooks": [],
     }
 
 

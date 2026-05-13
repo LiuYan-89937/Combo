@@ -11,6 +11,7 @@ from agent_factory.assembly.schema import (
     RuntimeSpec,
     ToolSpec,
 )
+from agent_factory.runtime_kernel.bindings import BindingSet
 
 
 class CaptureIntentOutput(BaseModel):
@@ -386,6 +387,7 @@ class AssemblyDraftPayload(BaseModel):
     agent: AgentSpec
     runtime: RuntimeSpec
     graph_overrides: GraphOverrides = Field(default_factory=GraphOverrides)
+    bindings: BindingSet
     tools: list[ToolSpec] = Field(default_factory=list)
     output: OutputSpec = Field(default_factory=OutputSpec)
     metadata: dict[str, object] = Field(default_factory=dict)

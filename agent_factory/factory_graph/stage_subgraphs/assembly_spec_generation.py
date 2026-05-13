@@ -9,6 +9,13 @@ from langgraph.graph import END, START, StateGraph
 
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.assembly.validator import AgentAssemblyValidationError, AgentAssemblyValidator
+from agent_factory.runtime_kernel.bindings import (
+    OutputFormatterBindingPayload,
+    PolicyProfileBindingPayload,
+    PromptBindingPayload,
+    RetrievalProfileBindingPayload,
+    ToolAccessBindingPayload,
+)
 from agent_factory.factory_graph.model_call import FactoryModelCallError, call_structured_model
 from agent_factory.factory_graph.schemas import (
     AssemblyReactDecision,
@@ -200,6 +207,7 @@ def _candidate_to_spec(candidate: dict[str, Any]) -> AgentAssemblySpec:
         agent=candidate.get("agent") or {},
         runtime=candidate.get("runtime") or {},
         graph_overrides=candidate.get("graph_overrides") or {},
+        bindings=candidate.get("bindings") or {},
         tools=candidate.get("tools") or [],
         output=candidate.get("output") or {},
         metadata=candidate.get("metadata") or {},
@@ -219,6 +227,7 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
     for tool in spec.tools:
         if tool.id not in capability_ids:
             errors.append(f"tools[].id must come from tool_capability_plan: {tool.id}")
+    errors.extend(_binding_contract_errors(spec, state))
     metadata = dict(spec.metadata or {})
     required_metadata = {
         "factory_run_id": str(state.get("factory_run_id") or ""),
@@ -239,6 +248,126 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
     if spec.harness:
         errors.append("harness must be empty in stage 7")
     return errors
+
+
+def _binding_contract_errors(spec: AgentAssemblySpec, state: FactoryGraphState) -> list[str]:
+    errors: list[str] = []
+    pattern_nodes = _pattern_nodes(spec.runtime.pattern_id)
+    node_ids = set(pattern_nodes)
+    bindings = spec.bindings
+    if not bindings.node_bindings:
+        return ["bindings.node_bindings must define node-level assembly contracts"]
+    if not bindings.services:
+        errors.append("bindings.services must declare runtime service contracts")
+    for binding in bindings.node_bindings:
+        target = binding.target
+        if target.node_id not in node_ids:
+            errors.append(f"bindings.node_bindings target unknown node_id: {target.node_id}")
+            continue
+        expected_impl = pattern_nodes[target.node_id]["impl"]
+        if target.impl != expected_impl:
+            errors.append(f"bindings.node_bindings target impl mismatch for {target.node_id}: expected {expected_impl}")
+        errors.extend(_binding_payload_errors(binding.binding_type, binding.payload, binding.target.node_id))
+    required_by_node = _required_binding_types_by_node(pattern_nodes, state)
+    bindings_by_node: dict[str, set[str]] = {}
+    for binding in bindings.node_bindings:
+        bindings_by_node.setdefault(binding.target.node_id, set()).add(binding.binding_type)
+    for node_id, required_types in required_by_node.items():
+        missing = sorted(required_types - bindings_by_node.get(node_id, set()))
+        if missing:
+            errors.append(f"bindings.node_bindings missing {missing} for node_id: {node_id}")
+    tool_ids = {tool.id for tool in spec.tools}
+    tool_access_ids = set()
+    for binding in bindings.node_bindings:
+        if binding.binding_type != "tool_access":
+            continue
+        allowed = binding.payload.get("allowed_tool_ids") or []
+        if not isinstance(allowed, list):
+            continue
+        tool_access_ids.update(str(item) for item in allowed)
+    missing_tool_access = sorted(tool_ids - tool_access_ids)
+    if missing_tool_access:
+        errors.append(f"bindings.node_bindings tool_access must expose tools: {missing_tool_access}")
+    service_kinds = {service.kind for service in bindings.services}
+    for required_kind in _required_service_kinds(spec, pattern_nodes):
+        if required_kind not in service_kinds:
+            errors.append(f"bindings.services missing required service kind: {required_kind}")
+    return errors
+
+
+def _binding_payload_errors(binding_type: str, payload: dict[str, Any], node_id: str) -> list[str]:
+    payload_model_by_type = {
+        "prompt": PromptBindingPayload,
+        "tool_access": ToolAccessBindingPayload,
+        "policy_profile": PolicyProfileBindingPayload,
+        "retrieval_profile": RetrievalProfileBindingPayload,
+        "output_formatter": OutputFormatterBindingPayload,
+    }
+    payload_model = payload_model_by_type.get(binding_type)
+    if payload_model is None:
+        return []
+    try:
+        payload_model.model_validate(payload)
+    except Exception as exc:
+        return [f"bindings.node_bindings invalid {binding_type} payload for {node_id}: {type(exc).__name__}: {exc}"]
+    return []
+
+
+def _required_binding_types_by_node(pattern_nodes: dict[str, dict[str, str]], state: FactoryGraphState) -> dict[str, set[str]]:
+    required: dict[str, set[str]] = {}
+    for node_id, node in pattern_nodes.items():
+        impl = node["impl"]
+        node_type = node["type"]
+        if impl.startswith("cognitive."):
+            required.setdefault(node_id, set()).add("prompt")
+        if impl == "operational.tool_call":
+            required.setdefault(node_id, set()).add("tool_access")
+        if impl.startswith("operational.memory") or impl.startswith("operational.knowledge"):
+            required.setdefault(node_id, set()).add("retrieval_profile")
+        if impl.startswith("governance."):
+            required.setdefault(node_id, set()).add("policy_profile")
+        if node_type == "terminal" or impl == "finalize":
+            required.setdefault(node_id, set()).add("output_formatter")
+    for node_id in _nodes_with_strategy_refs(state):
+        if node_id in pattern_nodes:
+            required.setdefault(node_id, set()).add("strategy_profile")
+    return required
+
+
+def _nodes_with_strategy_refs(state: FactoryGraphState) -> set[str]:
+    plan = dict(state.get("node_strategy_plan") or {})
+    nodes: set[str] = set()
+    for item in plan.get("node_strategies", []) or []:
+        if item.get("strategy_refs"):
+            nodes.add(str(item.get("node_id") or ""))
+    return nodes
+
+
+def _required_service_kinds(spec: AgentAssemblySpec, pattern_nodes: dict[str, dict[str, str]]) -> set[str]:
+    required: set[str] = {"observability_manager", "checkpoint_manager"}
+    if any(node["impl"].startswith("cognitive.") for node in pattern_nodes.values()):
+        required.add("model_service")
+        required.add("context_engine")
+    if spec.tools or any(binding.binding_type == "tool_access" for binding in spec.bindings.node_bindings):
+        required.add("tool_registry")
+    if any(node["impl"].startswith("operational.memory") for node in pattern_nodes.values()):
+        required.add("memory_engine")
+    if any(node["impl"].startswith("operational.knowledge") for node in pattern_nodes.values()):
+        required.add("knowledge_engine")
+    if any(node["impl"].startswith("governance.") for node in pattern_nodes.values()):
+        required.add("policy_engine")
+    return required
+
+
+def _pattern_nodes(pattern_id: str) -> dict[str, dict[str, str]]:
+    pattern = _pattern_registry().get(pattern_id)
+    return {
+        node.id: {
+            "type": node.type,
+            "impl": node.impl,
+        }
+        for node in pattern.nodes
+    }
 
 
 def _updated_report(state: FactoryGraphState, attempt: AssemblyValidationAttempt) -> AssemblyValidationReport:
