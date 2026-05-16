@@ -4,6 +4,11 @@ from collections.abc import Iterable
 
 from langchain_core.tools import BaseTool
 
+from agent_factory.tooling.builtins import (
+    get_builtin_protected_tool_ids,
+    get_builtin_tool_ids,
+    get_builtin_tool_specs,
+)
 from agent_factory.tooling.spec import ModelToolView, ToolSpec, model_tool_view
 
 
@@ -38,10 +43,16 @@ def get_factory_tools() -> list[BaseTool]:
     """Return currently registered Factory tools.
 
     The old ``factory_graph.tools`` implementation has been cleared. New tools
-    must be registered through the unified ToolSpec-based system.
+    must be registered through the unified ToolSpec-based system. Built-in tool
+    specs are available as a catalog, but their entrypoints are intentionally
+    not exposed to model execution until concrete implementations are filled in.
     """
 
     return []
+
+
+def get_factory_tool_specs() -> list[ToolSpec]:
+    return get_builtin_tool_specs()
 
 
 def get_factory_model_tools() -> list[BaseTool]:
@@ -49,8 +60,8 @@ def get_factory_model_tools() -> list[BaseTool]:
 
 
 def get_factory_base_tool_ids() -> list[str]:
-    return [tool.name for tool in get_factory_tools()]
+    return get_builtin_tool_ids()
 
 
 def get_factory_protected_tool_ids() -> list[str]:
-    return []
+    return get_builtin_protected_tool_ids()

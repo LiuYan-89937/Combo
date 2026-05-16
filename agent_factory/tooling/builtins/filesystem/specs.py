@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+from agent_factory.tooling.spec import ToolSpec
+
+
+_STRING = {"type": "string"}
+_INTEGER = {"type": "integer"}
+_BOOLEAN = {"type": "boolean"}
+_FILESYSTEM_RESOURCE = {"filesystem": "filesystem"}
+
+
+FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
+    ToolSpec(
+        id="read",
+        description="读取指定文件内容，可按 offset 和 limit 限制读取范围。",
+        entrypoint="agent_factory.tooling.builtins.filesystem.read:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "要读取的文件路径。"},
+                "offset": {"type": "integer", "minimum": 0, "description": "可选读取起点。"},
+                "limit": {"type": "integer", "minimum": 1, "description": "可选最大读取字符数。"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "path": _STRING,
+                "content": _STRING,
+                "truncated": _BOOLEAN,
+                "size": _INTEGER,
+            },
+            "required": ["path", "content", "truncated", "size"],
+            "additionalProperties": False,
+        },
+        resources=_FILESYSTEM_RESOURCE,
+        approval_required=False,
+        concurrent=True,
+    ),
+    ToolSpec(
+        id="write",
+        description="创建或覆盖指定文件内容。",
+        entrypoint="agent_factory.tooling.builtins.filesystem.write:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "要写入的文件路径。"},
+                "content": {"type": "string", "description": "完整文件内容。"},
+                "create_dirs": {"type": "boolean", "default": False, "description": "是否创建缺失目录。"},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"path": _STRING, "bytes_written": _INTEGER},
+            "required": ["path", "bytes_written"],
+            "additionalProperties": False,
+        },
+        resources=_FILESYSTEM_RESOURCE,
+        approval_required=True,
+        concurrent=False,
+    ),
+    ToolSpec(
+        id="edit",
+        description="对单个文件执行一次有针对性的文本替换。",
+        entrypoint="agent_factory.tooling.builtins.filesystem.edit:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "要编辑的文件路径。"},
+                "old_text": {"type": "string", "description": "需要被替换的原文本。"},
+                "new_text": {"type": "string", "description": "替换后的文本。"},
+                "replace_all": {"type": "boolean", "default": False, "description": "是否替换全部匹配项。"},
+            },
+            "required": ["path", "old_text", "new_text"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"path": _STRING, "replacements": _INTEGER},
+            "required": ["path", "replacements"],
+            "additionalProperties": False,
+        },
+        resources=_FILESYSTEM_RESOURCE,
+        approval_required=True,
+        concurrent=False,
+    ),
+    ToolSpec(
+        id="multi_edit",
+        description="在单个文件中原子执行多次文本替换。",
+        entrypoint="agent_factory.tooling.builtins.filesystem.multi_edit:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "要编辑的文件路径。"},
+                "edits": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_text": _STRING,
+                            "new_text": _STRING,
+                            "replace_all": {"type": "boolean", "default": False},
+                        },
+                        "required": ["old_text", "new_text"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["path", "edits"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"path": _STRING, "replacements": _INTEGER},
+            "required": ["path", "replacements"],
+            "additionalProperties": False,
+        },
+        resources=_FILESYSTEM_RESOURCE,
+        approval_required=True,
+        concurrent=False,
+    ),
+    ToolSpec(
+        id="glob",
+        description="基于 glob 模式查找文件路径。",
+        entrypoint="agent_factory.tooling.builtins.filesystem.glob:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "glob 匹配模式。"},
+                "base_path": {"type": "string", "description": "可选搜索根目录。"},
+                "max_results": {"type": "integer", "minimum": 1, "description": "可选最大返回数量。"},
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"matches": {"type": "array", "items": _STRING}},
+            "required": ["matches"],
+            "additionalProperties": False,
+        },
+        resources=_FILESYSTEM_RESOURCE,
+        approval_required=False,
+        concurrent=True,
+    ),
+    ToolSpec(
+        id="grep",
+        description="在文件内容中搜索文本或正则模式。",
+        entrypoint="agent_factory.tooling.builtins.filesystem.grep:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "搜索文本或正则。"},
+                "base_path": {"type": "string", "description": "可选搜索根目录。"},
+                "include": {"type": "string", "description": "可选文件匹配模式。"},
+                "case_sensitive": {"type": "boolean", "default": True},
+                "regex": {"type": "boolean", "default": True},
+                "max_results": {"type": "integer", "minimum": 1},
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "matches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": _STRING,
+                            "line": _STRING,
+                            "line_number": _INTEGER,
+                        },
+                        "required": ["path", "line", "line_number"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["matches"],
+            "additionalProperties": False,
+        },
+        resources=_FILESYSTEM_RESOURCE,
+        approval_required=False,
+        concurrent=True,
+    ),
+    ToolSpec(
+        id="ls",
+        description="列出指定目录内容。",
+        entrypoint="agent_factory.tooling.builtins.filesystem.ls:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "要列出的目录路径。"},
+                "recursive": {"type": "boolean", "default": False},
+                "max_entries": {"type": "integer", "minimum": 1},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": _STRING,
+                            "name": _STRING,
+                            "type": {"type": "string", "enum": ["file", "directory", "other"]},
+                        },
+                        "required": ["path", "name", "type"],
+                        "additionalProperties": False,
+                    },
+                },
+                "truncated": _BOOLEAN,
+            },
+            "required": ["entries", "truncated"],
+            "additionalProperties": False,
+        },
+        resources=_FILESYSTEM_RESOURCE,
+        approval_required=False,
+        concurrent=True,
+    ),
+]
+
+
+def get_filesystem_tool_specs() -> list[ToolSpec]:
+    return [tool.model_copy(deep=True) for tool in FILESYSTEM_TOOL_SPECS]

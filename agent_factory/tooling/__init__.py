@@ -8,6 +8,7 @@ from agent_factory.tooling.registry import (
     get_factory_base_tool_ids,
     get_factory_model_tools,
     get_factory_protected_tool_ids,
+    get_factory_tool_specs,
     get_factory_tools,
 )
 from agent_factory.tooling.schema_compiler import compile_json_schema
@@ -26,5 +27,6 @@ __all__ = [
     "get_factory_base_tool_ids",
     "get_factory_model_tools",
     "get_factory_protected_tool_ids",
+    "get_factory_tool_specs",
     "get_factory_tools",
 ]
