@@ -9,7 +9,7 @@ export function InterruptPrompt({event}: {event: FactoryEvent | null}) {
 	}
 	const payload = event.payload ?? {};
 	const descriptor = describeInterrupt(event);
-	if (payload.type === 'tool_approval' || payload.type === 'resource_input') {
+	if (payload.type === 'tool_approval') {
 		return null;
 	}
 	return (

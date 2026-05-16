@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,7 +32,24 @@ class RequirementClarityOutput(BaseModel):
     is_clear: bool
     confidence: float = Field(ge=0, le=1)
     reason: str
-    missing_fields: list[str] = Field(default_factory=list, max_length=8)
+    missing_fields: list[str] = Field(default_factory=list, max_length=5)
+
+
+class RequirementFrame(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str = ""
+    primary_users: list[str] = Field(default_factory=list, max_length=5)
+    primary_scenarios: list[str] = Field(default_factory=list, max_length=5)
+    behavior_mode: str = ""
+    action_boundary: str = ""
+    resource_scope: list[str] = Field(default_factory=list, max_length=8)
+    output_expectation: str = ""
+    success_signal: str = ""
+    out_of_scope: list[str] = Field(default_factory=list, max_length=8)
+    human_approval_expectations: list[str] = Field(default_factory=list, max_length=5)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+    unknowns: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ClarificationOption(BaseModel):
@@ -48,22 +65,21 @@ class ClarifyingQuestionOutput(BaseModel):
 
     id: str
     question: str
-    options: list[ClarificationOption] = Field(min_length=2, max_length=5)
+    options: list[ClarificationOption] = Field(min_length=2, max_length=4)
     custom_option_id: str
 
 
 class ClarifyingQuestionSetOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    questions: list[ClarifyingQuestionOutput] = Field(min_length=1, max_length=5)
+    questions: list[ClarifyingQuestionOutput] = Field(min_length=1, max_length=2)
 
 
 class RequirementMergeOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     current_requirement: str
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-    unresolved_questions: list[str] = Field(default_factory=list, max_length=8)
+    requirement_frame: RequirementFrame
 
 
 class RuntimePatternAlternativeOutput(BaseModel):
@@ -249,138 +265,6 @@ class ToolCapabilityPlanningOutput(BaseModel):
     open_questions: list[str] = Field(default_factory=list, max_length=8)
 
 
-ResourceCheckToolName = Literal[
-    "file_read",
-    "file_list",
-    "file_exists",
-    "search_files",
-    "search_text",
-    "shell_which",
-    "shell_cwd",
-    "shell_run",
-]
-
-
-class ResourceRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    requirement_id: str
-    description: str
-    required: bool = True
-    used_by_capability_ids: list[str] = Field(default_factory=list)
-    expected_resource_shape: dict[str, object] = Field(default_factory=dict)
-    why_needed: str
-    not_factory_resource_reason: str
-
-
-class ResourceRequirementSetOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    requirements: list[ResourceRequirement] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-
-
-class ResourceCheckAction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    action_id: str
-    requirement_id: str
-    tool_name: ResourceCheckToolName
-    arguments: dict[str, object] = Field(default_factory=dict)
-    reason: str
-    expected_evidence: str
-
-
-class ResourceCheckPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    requirement_id: str
-    checks: list[ResourceCheckAction] = Field(default_factory=list)
-    uncheckable_reason: str | None = None
-
-
-class ResourceCheckPlanOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    plans: list[ResourceCheckPlan] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-
-
-class ResourceCheckResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    action_id: str
-    requirement_id: str
-    tool_name: ResourceCheckToolName
-    status: Literal["completed", "error", "skipped"]
-    result_summary: str
-    raw_result: dict[str, object] = Field(default_factory=dict)
-
-
-class ResourceReadinessAnalysis(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    satisfied_requirements: list[str] = Field(default_factory=list)
-    missing_requirements: list[str] = Field(default_factory=list)
-    uncertain_requirements: list[str] = Field(default_factory=list)
-    blocked_requirements: list[str] = Field(default_factory=list)
-    resource_value_hints: dict[str, str] = Field(default_factory=dict)
-    reasons: dict[str, str] = Field(default_factory=dict)
-
-
-class ResourceUserInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    requirement_id: str
-    input_text: str
-
-
-class ResourceRewriteOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resources: dict[str, object] = Field(default_factory=dict)
-    unresolved_requirements: list[str] = Field(default_factory=list)
-    runtime_provided_requirements: list[str] = Field(default_factory=list)
-    blocked_requirements: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list, max_length=12)
-
-
-class ResourceValidationResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["complete", "needs_input", "blocked", "failed"]
-    validated_resources: dict[str, object] = Field(default_factory=dict)
-    invalid_resources: dict[str, str] = Field(default_factory=dict)
-    validation_evidence: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResourceReactDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["continue_checking", "needs_user_input", "resources_ready", "blocked", "failed"]
-    requirements: list[ResourceRequirement] = Field(default_factory=list)
-    check_results_summary: list[dict[str, object]] = Field(default_factory=list)
-    missing_requirements: list[str] = Field(default_factory=list)
-    user_prompt: str = ""
-    resource_draft: dict[str, object] = Field(default_factory=dict)
-    validation_notes: list[str] = Field(default_factory=list)
-
-
-class ResourceAndConditionPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["collecting", "complete", "blocked", "failed", "needs_input"]
-    requirements: list[ResourceRequirement] = Field(default_factory=list)
-    check_plans: list[ResourceCheckPlan] = Field(default_factory=list)
-    check_results: list[ResourceCheckResult] = Field(default_factory=list)
-    readiness_analysis: ResourceReadinessAnalysis | None = None
-    user_inputs: list[ResourceUserInput] = Field(default_factory=list)
-    resource_draft: dict[str, object] = Field(default_factory=dict)
-    validation_result: ResourceValidationResult | None = None
-    resources: dict[str, object] = Field(default_factory=dict)
-    resource_file_path: str | None = None
-
-
 class AssemblyDraftPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -459,20 +343,6 @@ class PackageMaterializationFileSpec(BaseModel):
     required: bool = True
 
 
-class PackageToolManifest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    name: str | None = None
-    description: str
-    input_contract: dict[str, object] = Field(default_factory=dict)
-    output_contract: dict[str, object] = Field(default_factory=dict)
-    resource_keys: list[str] = Field(default_factory=list)
-    approval_required: bool = False
-    risk_notes: list[str] = Field(default_factory=list, max_length=8)
-    entrypoint: str = "tool.py:run"
-
-
 class PackageMaterializationToolSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -480,7 +350,7 @@ class PackageMaterializationToolSpec(BaseModel):
     manifest_path: str
     code_path: str
     readme_path: str
-    manifest: PackageToolManifest
+    manifest: ToolSpec
 
 
 class PackageMaterializationPlan(BaseModel):
@@ -541,3 +411,182 @@ class PackageGenerationState(BaseModel):
     report_path: str | None = None
     materialized_files: list[PackageMaterializedFile] = Field(default_factory=list)
     validation_report: PackageValidationReport | None = None
+
+
+SandboxBackend = Literal["docker", "local_isolated", "local_trusted"]
+SandboxMountAccess = Literal["read_only", "read_write"]
+SandboxServiceKind = Literal["host_port", "docker_service", "remote_service"]
+SandboxInstallMode = Literal["none", "sandbox_only"]
+HarnessStatus = Literal["passed", "failed", "blocked"]
+
+
+class SandboxNetworkPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["none", "declared_services"] = "none"
+    allowed_hosts: list[str] = Field(default_factory=list, max_length=32)
+
+
+class SandboxRuntimeLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
+    memory_mb: int = Field(default=1024, ge=128, le=32768)
+    cpu: float = Field(default=1, gt=0, le=16)
+
+
+class SandboxEnvPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allowed: list[str] = Field(default_factory=list, max_length=32)
+    injected: dict[str, str] = Field(default_factory=dict)
+
+
+class SandboxDependencyPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    install_mode: SandboxInstallMode = "sandbox_only"
+    allow_runtime_install: bool = False
+
+
+class RuntimeEnvironmentContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    backend: SandboxBackend = "docker"
+    image: str = "python:3.11-slim"
+    workdir: str = "/workdir"
+    network_policy: SandboxNetworkPolicy = Field(default_factory=SandboxNetworkPolicy)
+    limits: SandboxRuntimeLimits = Field(default_factory=SandboxRuntimeLimits)
+    env_policy: SandboxEnvPolicy = Field(default_factory=SandboxEnvPolicy)
+    dependency_policy: SandboxDependencyPolicy = Field(default_factory=SandboxDependencyPolicy)
+
+
+class SandboxMount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    host_path: str
+    container_path: str
+    access: SandboxMountAccess
+    purpose: str
+    authorization_source: Literal["system_required", "resources", "user_authorized"] = "resources"
+
+
+class SandboxServiceDependency(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_id: str
+    kind: SandboxServiceKind
+    endpoint: str
+    ports: list[int] = Field(default_factory=list, max_length=16)
+    health_check: dict[str, Any] = Field(default_factory=dict)
+
+
+class SandboxSecret(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    secret_id: str
+    source: Literal["runtime_secret", "resources"]
+    target_env: str | None = None
+    purpose: str
+
+
+class HostToolProxyContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proxy_id: str
+    capability: str
+    approval_required: bool = True
+    purpose: str
+
+
+class HostInteractionContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mounts: list[SandboxMount] = Field(default_factory=list)
+    volumes: list[SandboxMount] = Field(default_factory=list)
+    services: list[SandboxServiceDependency] = Field(default_factory=list)
+    secrets: list[SandboxSecret] = Field(default_factory=list)
+    host_tool_proxies: list[HostToolProxyContract] = Field(default_factory=list)
+
+
+class SandboxDependencyPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    python_requirements: list[str] = Field(default_factory=list, max_length=128)
+    system_packages: list[str] = Field(default_factory=list, max_length=64)
+    install_mode: SandboxInstallMode = "sandbox_only"
+
+
+class HarnessScenarioPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: str
+    input_text: str = ""
+    assertions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class HarnessToolTestPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    expected_status: str | None = None
+
+
+class HarnessExecutionPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenarios: list[HarnessScenarioPlan] = Field(default_factory=list)
+    tool_tests: list[HarnessToolTestPlan] = Field(default_factory=list)
+    runtime_assertions: list[dict[str, Any]] = Field(default_factory=list)
+    timeout_policy: SandboxRuntimeLimits = Field(default_factory=SandboxRuntimeLimits)
+
+
+class HarnessContractDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["contracts_ready", "blocked", "failed"]
+    runtime_environment: RuntimeEnvironmentContract | None = None
+    host_interaction: HostInteractionContract | None = None
+    dependency_plan: SandboxDependencyPlan | None = None
+    execution_plan: HarnessExecutionPlan | None = None
+    revision_notes: list[str] = Field(default_factory=list, max_length=12)
+    blocked_reason: str = ""
+
+
+class HarnessReportError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    where: str
+    why: str
+    message: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArtifactManifestEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    bytes: int
+    artifact_type: str = "file"
+
+
+class HarnessValidationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["harness_report.v0"] = "harness_report.v0"
+    status: HarnessStatus
+    factory_run_id: str = ""
+    package_root: str = ""
+    sandbox_backend: SandboxBackend = "docker"
+    contract_validation: dict[str, Any] = Field(default_factory=dict)
+    dependency_results: list[dict[str, Any]] = Field(default_factory=list)
+    scenario_results: list[dict[str, Any]] = Field(default_factory=list)
+    tool_test_results: list[dict[str, Any]] = Field(default_factory=list)
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int | None = None
+    artifact_manifest: list[ArtifactManifestEntry] = Field(default_factory=list)
+    errors: list[HarnessReportError] = Field(default_factory=list)
+    repair_hints: list[str] = Field(default_factory=list, max_length=16)

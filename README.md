@@ -33,7 +33,7 @@ FastAgentFactory 是一个 CLI-first 的 Agent 工厂工程。当前目标不是
 | 6. `resource_and_condition_planning` | 已实现 | ReAct 资源准备阶段，工具检查走 `ToolNode`，验证后写 resources 文件。 |
 | 7. `assembly_spec_generation` | 已实现 | 冻结 `AgentAssemblySpec`，并确定性生成 `PackageMaterializationPlan`。 |
 | 8. `package_generation` | 已实现 | 按第七阶段物化计划生成 AgentPackage draft 和真实工具代码草稿。 |
-| 9. `harness_generation_and_test` | 待实现 | 将负责 sandbox harness、依赖安装/检查、动态工具测试和运行报告。 |
+| 9. `harness_generation_and_test` | 已实现 | 生成并校验 sandbox/runtime/test 契约，执行 AgentPackage sandbox validation，产出 harness report。 |
 | 10. `repair_or_finalize` | 待实现 | 将根据 harness/trace/report 做修复或最终出厂。 |
 
 当前默认断点在第 8 阶段 `package_generation`。完成后会停下展示 package 产物，方便人工审查。
@@ -264,9 +264,9 @@ error
 - 工具代码必须是真实 adapter draft，不允许 placeholder/mock/fallback 业务产物。
 - 动态工具测试和 Agent 流程测试属于第九阶段。
 
-## 第九阶段 Sandbox 设计边界
+## 第九阶段 Sandbox 运行边界
 
-第九阶段尚未实现，但设计边界已经确定：
+第九阶段已经接入 `harness_generation_and_test` 子图，负责把第八阶段 AgentPackage draft 放入受控 sandbox 契约中验证：
 
 - 不把 MySQL、Postgres、Redis 等业务依赖临时安装进 AgentPackage 测试容器。
 - AgentPackage 测试容器只负责运行生成的 agent/tool 代码。
@@ -274,6 +274,8 @@ error
 - 资源入口只来自第六阶段 `resources.json`，不读取宿主机 `.env`。
 - Docker 默认禁用网络；如工具能力需要网络，必须由资源/测试契约显式声明。
 - 端口、network、volume、service dependency 必须通过 sandbox contract 声明。
+- sandbox 执行失败后，stdout/stderr/exit_code/report 会作为 observation 回到第九阶段模型；模型只能修正 runtime、host interaction、dependency、execution plan 契约后重跑，不能修改第八阶段 package/tool 代码。
+- 依赖由 `sandbox_dependency_plan.json` 声明，并在 sandbox 内安装或检查；安装结果会写入 `dependency_results`，不会污染宿主机环境。
 
 建议的 sandbox 挂载约定：
 
@@ -287,6 +289,22 @@ error
 
 如果需要访问宿主机 MySQL，资源应被规范化为容器可访问地址，例如 `host.docker.internal:<port>`。如果是同一 Docker network 内的依赖服务，则使用 service name，例如 `mysql:3306`。
 
+第九阶段落盘产物：
+
+```text
+.agentfactory/harness/<factory_run_id>/
+  runtime_environment_contract.json
+  host_interaction_contract.json
+  sandbox_dependency_plan.json
+  harness_execution_plan.json
+  harness_report.json
+  artifacts/
+```
+
+如果 Docker 未安装或不可用，阶段不会自动降级到本机运行，而是生成 `status=blocked` 的 harness report，错误位置为 `docker.runtime_detection`。
+
+第九阶段当前可修复的执行类问题包括依赖缺失、依赖安装失败、资源文件错误和测试计划错误。工具代码语法或业务逻辑错误会直接进入 harness report，交给第十阶段 `repair_or_finalize` 处理。
+
 ## 环境变量
 
 当前支持的本地变量：
@@ -299,7 +317,7 @@ AGENTFACTORY_OPENAI_MODEL=
 AGENTFACTORY_LLM_TIMEOUT_SECONDS=600
 AGENTFACTORY_LLM_TEMPERATURE=0.2
 AGENTFACTORY_LLM_MAX_OUTPUT_TOKENS=8192
-AGENTFACTORY_LLM_THINKING=enabled
+AGENTFACTORY_LLM_THINKING=disabled
 AGENTFACTORY_TASK_MODEL=
 AGENTFACTORY_TASK_TEMPERATURE=0.1
 AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS=2048

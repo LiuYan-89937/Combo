@@ -10,7 +10,7 @@ from agent_factory.factory_graph.schemas import (
 )
 from agent_factory.factory_graph.model_call import FactoryModelCallError, call_structured_model, model_error_patch
 from agent_factory.factory_graph.state import FactoryGraphState
-from agent_factory.factory_graph.tools import get_factory_base_tool_ids
+from agent_factory.tooling import get_factory_base_tool_ids
 from agent_factory.prompts import PromptId, output_json_schema
 
 

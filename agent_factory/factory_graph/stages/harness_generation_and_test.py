@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from agent_factory.factory_graph.stages.base import run_empty_stage
+from agent_factory.factory_graph.stage_subgraphs.harness_generation_and_test import (
+    run_harness_generation_and_test_subgraph,
+)
 from agent_factory.factory_graph.state import FactoryGraphState
 
 
 def run(state: FactoryGraphState) -> dict:
-    return run_empty_stage(state, stage_id="harness_generation_and_test")
+    return run_harness_generation_and_test_subgraph(state)

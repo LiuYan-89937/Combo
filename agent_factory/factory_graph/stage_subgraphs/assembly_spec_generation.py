@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 from langgraph.graph import END, START, StateGraph
 
-from agent_factory.assembly.schema import AgentAssemblySpec
+from agent_factory.assembly.schema import AgentAssemblySpec, ToolSpec
 from agent_factory.assembly.validator import AgentAssemblyValidationError, AgentAssemblyValidator
 from agent_factory.runtime_kernel.bindings import (
     CustomBindingPayload,
@@ -27,7 +27,6 @@ from agent_factory.factory_graph.schemas import (
     PackageMaterializationPlan,
     PackageMaterializationToolSpec,
     PackageMaterializationValidationReport,
-    PackageToolManifest,
 )
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.prompts import PromptId, output_json_schema
@@ -436,16 +435,15 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
             files.append(_file_spec(f"formatters/{formatter_id}.json", "json", "formatter", formatter_id, "system_generated", f"binding:{binding.binding_id}"))
     for tool in spec.tools:
         capability = tool_capabilities.get(tool.id, {})
-        manifest = PackageToolManifest(
-            tool_id=tool.id,
-            name=tool.name,
+        manifest = ToolSpec(
+            id=tool.id,
             description=tool.description or str(capability.get("description") or tool.id),
-            input_contract=dict(capability.get("input_contract") or {}),
-            output_contract=dict(capability.get("output_contract") or {}),
-            resource_keys=_resource_keys_for_tool(tool.id, state),
+            entrypoint=f"tools/{tool.id}/tool.py:run",
+            input_schema=dict(capability.get("input_contract") or tool.input_schema or {"type": "object"}),
+            output_schema=dict(capability.get("output_contract") or tool.output_schema or {"type": "object"}),
+            resources={resource_key: resource_key for resource_key in _resource_keys_for_tool(tool.id, state)},
             approval_required=bool(capability.get("approval_required") or False),
-            risk_notes=list(capability.get("risk_notes") or []),
-            entrypoint="tool.py:run",
+            concurrent=bool(capability.get("concurrent", tool.concurrent)),
         )
         tool_specs.append(
             PackageMaterializationToolSpec(
@@ -502,9 +500,9 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         if tool.tool_id not in tool_ids:
             errors.append(f"package_materialization_plan tool not in tool_capability_plan: {tool.tool_id}")
         capability = _tool_capabilities_by_id(state).get(tool.tool_id, {})
-        if tool.manifest.input_contract != dict(capability.get("input_contract") or {}):
+        if tool.manifest.input_schema != dict(capability.get("input_contract") or {}):
             errors.append(f"package_materialization_plan tool input contract mismatch: {tool.tool_id}")
-        if tool.manifest.output_contract != dict(capability.get("output_contract") or {}):
+        if tool.manifest.output_schema != dict(capability.get("output_contract") or {}):
             errors.append(f"package_materialization_plan tool output contract mismatch: {tool.tool_id}")
     forbidden = [item.path for item in plan.files if "harness" in item.path or "test_result" in item.path]
     for path in forbidden:

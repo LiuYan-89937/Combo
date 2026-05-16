@@ -24,7 +24,7 @@ from agent_factory.factory_graph.session import (
     is_factory_checkpointer_persistent,
 )
 from agent_factory.factory_graph.tool_approval import FACTORY_TOOL_APPROVAL_NODE
-from agent_factory.factory_graph.tools import get_factory_base_tool_ids
+from agent_factory.tooling import get_factory_base_tool_ids
 
 
 Emit = Callable[[FactoryFrontendEvent], None]

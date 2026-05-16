@@ -287,13 +287,6 @@ class RuntimeEventNormalizer:
                 parent_span_id=self.run_span_id,
                 payload=safe_payload,
             )
-        elif interrupt_type == "resource_input":
-            self.runtime_event(
-                "resource_input_requested",
-                span_id=interrupt_span_id,
-                parent_span_id=self.run_span_id,
-                payload=safe_payload,
-            )
         self.runtime_event(
             "interrupt_requested",
             span_id=interrupt_span_id,

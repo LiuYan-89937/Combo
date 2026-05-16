@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_factory.runtime_kernel.bindings import BindingSet
 from agent_factory.runtime_kernel.harness import HarnessScenario
 from agent_factory.runtime_kernel.patterns.schema import PatternNodeWrapperSpec
+from agent_factory.tooling.spec import ToolSpec
 
 
 OutputFormat = Literal["text", "json", "markdown"]
@@ -43,15 +44,6 @@ class GraphOverrides(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_wrappers: list[NodeWrapperOverride] = Field(default_factory=list)
-
-
-class ToolSpec(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    name: str | None = None
-    description: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OutputSpec(BaseModel):

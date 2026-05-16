@@ -10,17 +10,13 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from agent_factory.tooling import get_factory_model_tools, get_factory_protected_tool_ids, get_factory_tools
 from agent_factory.factory_graph.tool_approval import (
     FACTORY_TOOL_APPROVAL_NODE,
     approve_tool_calls,
     route_after_tool_approval,
 )
 from agent_factory.factory_graph.prompt_context import prompt_context_values
-from agent_factory.factory_graph.tools import (
-    get_factory_graph_tools,
-    get_factory_model_tools,
-    get_factory_protected_tool_ids,
-)
 from agent_factory.models import get_task_model, get_task_model_settings
 from agent_factory.prompts import PromptId, get_prompt
 
@@ -43,31 +39,30 @@ def build_factory_chat_graph(
     enable_interrupts: bool = False,
     checkpointer: BaseCheckpointSaver | None = None,
 ):
+    resolved_tools = tools if tools is not None else get_factory_tools()
+    has_tools = bool(resolved_tools)
     graph = StateGraph(FactoryChatState)
     graph.add_node(FACTORY_CHAT_MODEL_NODE, _chat_model_node)
-    graph.add_node(FACTORY_TOOL_APPROVAL_NODE, approve_tool_calls)
-    graph.add_node(
-        FACTORY_CHAT_TOOLS_NODE,
-        ToolNode(tools or get_factory_graph_tools(), name=FACTORY_CHAT_TOOLS_NODE),
-    )
+    if has_tools:
+        graph.add_node(FACTORY_TOOL_APPROVAL_NODE, approve_tool_calls)
+        graph.add_node(FACTORY_CHAT_TOOLS_NODE, ToolNode(resolved_tools, name=FACTORY_CHAT_TOOLS_NODE))
     graph.add_edge(START, FACTORY_CHAT_MODEL_NODE)
+    route_after_chat_model = _make_chat_model_router(has_tools=has_tools)
     graph.add_conditional_edges(
         FACTORY_CHAT_MODEL_NODE,
-        _route_after_chat_model,
-        {
-            FACTORY_TOOL_APPROVAL_NODE: FACTORY_TOOL_APPROVAL_NODE,
-            END: END,
-        },
+        route_after_chat_model,
+        {FACTORY_TOOL_APPROVAL_NODE: FACTORY_TOOL_APPROVAL_NODE, END: END} if has_tools else {END: END},
     )
-    graph.add_conditional_edges(
-        FACTORY_TOOL_APPROVAL_NODE,
-        _route_after_tool_approval,
-        {
-            FACTORY_CHAT_TOOLS_NODE: FACTORY_CHAT_TOOLS_NODE,
-            FACTORY_CHAT_MODEL_NODE: FACTORY_CHAT_MODEL_NODE,
-        },
-    )
-    graph.add_edge(FACTORY_CHAT_TOOLS_NODE, FACTORY_CHAT_MODEL_NODE)
+    if has_tools:
+        graph.add_conditional_edges(
+            FACTORY_TOOL_APPROVAL_NODE,
+            _route_after_tool_approval,
+            {
+                FACTORY_CHAT_TOOLS_NODE: FACTORY_CHAT_TOOLS_NODE,
+                FACTORY_CHAT_MODEL_NODE: FACTORY_CHAT_MODEL_NODE,
+            },
+        )
+        graph.add_edge(FACTORY_CHAT_TOOLS_NODE, FACTORY_CHAT_MODEL_NODE)
     resolved_checkpointer = checkpointer if checkpointer is not None else _default_checkpointer(enable_interrupts)
     return graph.compile(checkpointer=resolved_checkpointer)
 
@@ -81,7 +76,8 @@ def _chat_model_node(state: FactoryChatState) -> dict[str, Any]:
         prompt_value = get_prompt(PromptId.FACTORY_CHAT).invoke(
             {**prompt_context_values("factory_chat"), "messages": state.get("messages", [])}
         )
-        chat_model = task_model.bind_tools(get_factory_model_tools())
+        model_tools = get_factory_model_tools()
+        chat_model = task_model.bind_tools(model_tools) if model_tools else task_model
         if task_settings.max_tokens is not None:
             chat_model = chat_model.bind(max_tokens=task_settings.max_tokens)
         response = chat_model.invoke(prompt_value)
@@ -95,13 +91,16 @@ def _chat_model_node(state: FactoryChatState) -> dict[str, Any]:
         return _model_error(f"{type(exc).__name__}: {exc}")
 
 
-def _route_after_chat_model(state: FactoryChatState) -> str:
-    if state.get("status") == "failed":
+def _make_chat_model_router(*, has_tools: bool):
+    def route_after_chat_model(state: FactoryChatState) -> str:
+        if state.get("status") == "failed":
+            return END
+        messages = state.get("messages") or []
+        if has_tools and messages and getattr(messages[-1], "tool_calls", None):
+            return FACTORY_TOOL_APPROVAL_NODE
         return END
-    messages = state.get("messages") or []
-    if messages and getattr(messages[-1], "tool_calls", None):
-        return FACTORY_TOOL_APPROVAL_NODE
-    return END
+
+    return route_after_chat_model
 
 
 def _route_after_tool_approval(state: FactoryChatState) -> str:

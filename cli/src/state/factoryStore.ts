@@ -8,11 +8,52 @@ export type ModelStream = {
 	completedAt: string | null;
 };
 
+export type StageLifecycle = 'waiting' | 'running' | 'completed' | 'failed';
+
+export type StageStatus = {
+	stageId: string;
+	status: StageLifecycle;
+	nodeId: string | null;
+	startedAt: string | null;
+	completedAt: string | null;
+	failedAt: string | null;
+	lastEventType: FactoryEvent['event_type'];
+	lastMessage: string | null;
+};
+
+export type ActivityColor = 'gray' | 'blue' | 'cyan' | 'green' | 'yellow' | 'red';
+
+export type RunActivity = {
+	activityKey: string;
+	eventType: FactoryEvent['event_type'];
+	timestamp: string;
+	stageId: string | null;
+	nodeId: string | null;
+	label: string;
+	detail: string;
+	color: ActivityColor;
+};
+
+export type ToolLifecycle = 'proposed' | 'approval' | 'started' | 'completed' | 'failed' | 'observed';
+
 export type ToolActivity = {
 	activityKey: string;
 	eventType: FactoryEvent['event_type'];
 	timestamp: string;
+	createdAt: string;
+	stageId: string | null;
 	nodeId: string | null;
+	toolCallId: string | null;
+	toolName: string;
+	status: ToolLifecycle;
+	approvalState: 'pending' | 'approved' | 'rejected' | 'custom' | null;
+	argsPreview: string | null;
+	resultPreview: string | null;
+	stdoutPreview: string | null;
+	stderrPreview: string | null;
+	exitCode: number | null;
+	durationMs: number | null;
+	searchText: string;
 	payload: Record<string, unknown>;
 };
 
@@ -35,6 +76,10 @@ export type FactoryUiState = {
 	logs: string[];
 	events: Array<FactoryEvent>;
 	spans: Record<string, SpanRecord>;
+	stageStatuses: Record<string, StageStatus>;
+	currentStageId: string | null;
+	currentNodeId: string | null;
+	recentActivities: RunActivity[];
 	modelStreams: Record<string, ModelStream>;
 	toolActivities: ToolActivity[];
 	debugPatches: FactoryEvent[];
@@ -59,6 +104,10 @@ export const initialFactoryUiState: FactoryUiState = {
 	logs: [],
 	events: [],
 	spans: {},
+	stageStatuses: {},
+	currentStageId: null,
+	currentNodeId: null,
+	recentActivities: [],
 	modelStreams: {},
 	toolActivities: [],
 	debugPatches: [],
@@ -97,6 +146,10 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 		case 'run_started':
 			return {
 				...base,
+				stageStatuses: {},
+				currentStageId: null,
+				currentNodeId: null,
+				recentActivities: appendRunActivity(base.recentActivities, event),
 				modelStreams: {},
 				toolActivities: [],
 				debugPatches: [],
@@ -107,16 +160,32 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 				logs: [...base.logs, 'run started']
 			};
 		case 'model_call_started':
-			return upsertModelStream({...base, logs: [...base.logs, `model started: ${event.node_id ?? '-'}`]}, event, true);
+			return upsertModelStream(
+				{
+					...base,
+					recentActivities: appendRunActivity(base.recentActivities, event),
+					logs: [...base.logs, `model started: ${event.node_id ?? '-'}`]
+				},
+				event,
+				true
+			);
 		case 'model_stream_delta':
 			return appendModelDelta(base, event);
 		case 'model_message_completed':
-			return completeModelStream(base, event);
+			return completeModelStream({...base, recentActivities: appendRunActivity(base.recentActivities, event)}, event);
 		case 'model_call_completed':
-			return {...base, logs: [...base.logs, `model completed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`]};
+			return {
+				...base,
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				logs: [...base.logs, `model completed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`]
+			};
 		case 'model_call_failed':
 			return recordError(
-				{...base, logs: [...base.logs, `model failed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`]},
+				{
+					...base,
+					recentActivities: appendRunActivity(base.recentActivities, event),
+					logs: [...base.logs, `model failed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`]
+				},
 				String(event.payload?.message ?? event.message ?? 'model failed')
 			);
 		case 'tool_call_proposed':
@@ -125,49 +194,133 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 		case 'tool_call_completed':
 		case 'tool_call_failed':
 		case 'tool_observation_available':
-			return {...base, toolActivities: upsertToolActivity(base.toolActivities, toolActivity(event))};
+			return {
+				...base,
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				toolActivities: upsertToolActivity(base.toolActivities, toolActivity(event))
+			};
 		case 'debug_patch':
 			return applyDebugPatch({...base, debugPatches: [...base.debugPatches.slice(-30), event]}, event);
 		case 'node_started':
-			return {...base, logs: [...base.logs, `node started: ${event.node_id ?? '-'}`]};
+			return {
+				...updateCurrentNode(base, event),
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				logs: [...base.logs, `node started: ${event.node_id ?? '-'}`]
+			};
 		case 'node_completed':
-			return {...base, logs: [...base.logs, `node completed: ${event.node_id ?? '-'}`]};
+			return {
+				...base,
+				currentNodeId: event.node_id === base.currentNodeId ? null : base.currentNodeId,
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				logs: [...base.logs, `node completed: ${event.node_id ?? '-'}`]
+			};
 		case 'node_failed':
-			return recordError({...base, runStatus: 'failed'}, `node failed: ${event.node_id ?? '-'}`);
+			return recordError(
+				{...base, runStatus: 'failed', recentActivities: appendRunActivity(base.recentActivities, event)},
+				`node failed: ${event.node_id ?? '-'}`
+			);
 		case 'interrupt_requested':
 			return {
 				...base,
 				runStatus: 'interrupted',
 				pendingInterrupt: base.pendingInterrupt ?? event,
+				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
 			};
-		case 'resource_input_requested':
 		case 'tool_approval_requested':
 			return {
 				...base,
-				toolActivities: event.event_type === 'tool_approval_requested' ? upsertToolActivity(base.toolActivities, toolActivity(event)) : base.toolActivities,
+				toolActivities: upsertToolActivity(base.toolActivities, toolActivity(event)),
 				runStatus: 'interrupted',
 				pendingInterrupt: event,
+				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
 			};
 		case 'runtime_resumed':
-			return {...base, runStatus: 'running', pendingInterrupt: null, logs: [...base.logs, 'runtime resumed']};
+			return {
+				...base,
+				runStatus: 'running',
+				pendingInterrupt: null,
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				logs: [...base.logs, 'runtime resumed']
+			};
+		case 'stage_started':
+			return {
+				...updateStageStatus(base, event, 'running'),
+				currentStageId: event.stage_id ?? base.currentStageId,
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				logs: [...base.logs, `stage started: ${event.stage_id ?? '-'}`]
+			};
 		case 'stage_completed':
-			return {...base, logs: [...base.logs, `stage completed: ${event.stage_id ?? '-'}`]};
+			return {
+				...updateStageStatus(base, event, 'completed'),
+				currentStageId: event.stage_id === base.currentStageId ? null : base.currentStageId,
+				currentNodeId: event.stage_id === base.currentStageId ? null : base.currentNodeId,
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				logs: [...base.logs, `stage completed: ${event.stage_id ?? '-'}`]
+			};
+		case 'stage_failed':
+			return recordError(
+				{
+					...updateStageStatus(base, event, 'failed'),
+					runStatus: 'failed',
+					recentActivities: appendRunActivity(base.recentActivities, event)
+				},
+				`stage failed: ${event.stage_id ?? '-'}`
+			);
 		case 'run_completed':
 			return {
 				...base,
 				runStatus: 'completed',
+				currentStageId: null,
+				currentNodeId: null,
 				pendingInterrupt: null,
+				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `run completed: ${String(event.payload?.status ?? '-')}`]
 			};
 		case 'run_failed':
-			return recordError({...base, runStatus: 'failed', pendingInterrupt: null}, event.message ?? 'run failed');
+			return recordError(
+				{...base, runStatus: 'failed', pendingInterrupt: null, recentActivities: appendRunActivity(base.recentActivities, event)},
+				event.message ?? 'run failed'
+			);
 		case 'error':
 			return recordError(base, event.message ?? 'unknown error');
 		default:
 			return base;
 	}
+}
+
+function updateCurrentNode(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+	return {
+		...state,
+		currentStageId: event.stage_id ?? state.currentStageId,
+		currentNodeId: event.node_id ?? state.currentNodeId
+	};
+}
+
+function updateStageStatus(state: FactoryUiState, event: FactoryEvent, status: StageLifecycle): FactoryUiState {
+	const stageId = event.stage_id;
+	if (!stageId) {
+		return state;
+	}
+	const previous = state.stageStatuses[stageId];
+	const next: StageStatus = {
+		stageId,
+		status,
+		nodeId: event.node_id ?? previous?.nodeId ?? null,
+		startedAt: status === 'running' ? event.timestamp : previous?.startedAt ?? null,
+		completedAt: status === 'completed' ? event.timestamp : previous?.completedAt ?? null,
+		failedAt: status === 'failed' ? event.timestamp : previous?.failedAt ?? null,
+		lastEventType: event.event_type,
+		lastMessage: (event.message ?? stringValue(event.payload?.message)) || previous?.lastMessage || null
+	};
+	return {
+		...state,
+		stageStatuses: {
+			...state.stageStatuses,
+			[stageId]: next
+		}
+	};
 }
 
 function recordError(state: FactoryUiState, message: string): FactoryUiState {
@@ -271,12 +424,27 @@ function completeModelStream(state: FactoryUiState, event: FactoryEvent): Factor
 }
 
 function toolActivity(event: FactoryEvent): ToolActivity {
+	const payload = event.payload ?? {};
+	const normalizedPayload = normalizeToolPayload(payload);
 	return {
 		activityKey: toolActivityKey(event),
 		eventType: event.event_type,
 		timestamp: event.timestamp,
+		createdAt: event.timestamp,
+		stageId: event.stage_id ?? null,
 		nodeId: event.node_id ?? null,
-		payload: event.payload ?? {}
+		toolCallId: payloadToolCallId(payload) || null,
+		toolName: normalizedPayload.toolName,
+		status: lifecycleForToolEvent(event.event_type),
+		approvalState: approvalState(payload),
+		argsPreview: normalizedPayload.argsPreview,
+		resultPreview: normalizedPayload.resultPreview,
+		stdoutPreview: normalizedPayload.stdoutPreview,
+		stderrPreview: normalizedPayload.stderrPreview,
+		exitCode: normalizedPayload.exitCode,
+		durationMs: normalizedPayload.durationMs,
+		searchText: normalizedPayload.searchText,
+		payload
 	};
 }
 
@@ -295,25 +463,33 @@ function upsertToolActivity(current: ToolActivity[], incoming: ToolActivity): To
 }
 
 function mergeToolActivity(existing: ToolActivity, incoming: ToolActivity): ToolActivity {
-	if (existing.eventType === 'tool_call_completed' && incoming.eventType === 'tool_observation_available') {
-		return {
-			...existing,
-			timestamp: incoming.timestamp,
-			payload: {...incoming.payload, ...existing.payload, observation: incoming.payload}
-		};
-	}
+	const mergedPayload = {...existing.payload, ...incoming.payload};
+	const normalizedPayload = normalizeToolPayload(mergedPayload);
 	return {
 		...incoming,
-		payload: {...existing.payload, ...incoming.payload}
+		createdAt: existing.createdAt,
+		stageId: incoming.stageId ?? existing.stageId,
+		nodeId: incoming.nodeId ?? existing.nodeId,
+		toolCallId: incoming.toolCallId ?? existing.toolCallId,
+		toolName: incoming.toolName === '-' ? existing.toolName : incoming.toolName,
+		status: nextToolStatus(existing.status, incoming.status),
+		approvalState: incoming.approvalState ?? existing.approvalState,
+		argsPreview: incoming.argsPreview ?? existing.argsPreview ?? normalizedPayload.argsPreview,
+		resultPreview: incoming.resultPreview ?? existing.resultPreview ?? normalizedPayload.resultPreview,
+		stdoutPreview: incoming.stdoutPreview ?? existing.stdoutPreview ?? normalizedPayload.stdoutPreview,
+		stderrPreview: incoming.stderrPreview ?? existing.stderrPreview ?? normalizedPayload.stderrPreview,
+		exitCode: incoming.exitCode ?? existing.exitCode ?? normalizedPayload.exitCode,
+		durationMs: incoming.durationMs ?? existing.durationMs ?? normalizedPayload.durationMs,
+		searchText: [existing.searchText, incoming.searchText, normalizedPayload.searchText].filter(Boolean).join('\n'),
+		payload: incoming.eventType === 'tool_observation_available' ? {...mergedPayload, observation: incoming.payload} : mergedPayload
 	};
 }
 
 function toolActivityKey(event: FactoryEvent): string {
 	const payload = event.payload ?? {};
 	const toolCallId = payloadToolCallId(payload);
-	const normalizedType = event.event_type === 'tool_observation_available' ? 'tool_call_completed' : event.event_type;
 	if (toolCallId) {
-		return `${event.run_id ?? '-'}:${normalizedType}:${toolCallId}`;
+		return `${event.run_id ?? '-'}:tool:${toolCallId}`;
 	}
 	return `${event.run_id ?? '-'}:${event.event_type}:${event.span_id ?? event.event_id}`;
 }
@@ -330,6 +506,220 @@ function payloadToolCallId(payload: Record<string, unknown>): string {
 	const resourceCheck = payload.resource_check as Record<string, unknown> | undefined;
 	const actionId = resourceCheck?.action_id;
 	return typeof actionId === 'string' ? actionId : '';
+}
+
+function appendRunActivity(current: RunActivity[], event: FactoryEvent): RunActivity[] {
+	const activity = runActivity(event);
+	if (!activity) {
+		return current;
+	}
+	return [...current.slice(-39), activity];
+}
+
+function runActivity(event: FactoryEvent): RunActivity | null {
+	const payload = event.payload ?? {};
+	const eventType = event.event_type;
+	const toolPayload = normalizeToolPayload(payload);
+	const node = event.node_id ?? event.stage_id ?? '-';
+	if (eventType.startsWith('tool_')) {
+		return {
+			activityKey: `${event.event_id}:activity`,
+			eventType,
+			timestamp: event.timestamp,
+			stageId: event.stage_id ?? null,
+			nodeId: event.node_id ?? null,
+			label: labelForToolLifecycle(lifecycleForToolEvent(eventType)),
+			detail: `${toolPayload.toolName}${toolPayload.argsPreview ? ` ${toolPayload.argsPreview}` : ''}`,
+			color: colorForEvent(eventType)
+		};
+	}
+	if (eventType.startsWith('model_')) {
+		return {
+			activityKey: `${event.event_id}:activity`,
+			eventType,
+			timestamp: event.timestamp,
+			stageId: event.stage_id ?? null,
+			nodeId: event.node_id ?? null,
+			label: eventType === 'model_call_started' ? 'model thinking' : eventType === 'model_message_completed' ? 'model answered' : 'model update',
+			detail: String(payload.prompt_id ?? node),
+			color: colorForEvent(eventType)
+		};
+	}
+	if (eventType.startsWith('stage_') || eventType.startsWith('node_') || eventType.startsWith('run_') || eventType.includes('interrupt') || eventType.startsWith('runtime_')) {
+		return {
+			activityKey: `${event.event_id}:activity`,
+			eventType,
+			timestamp: event.timestamp,
+			stageId: event.stage_id ?? null,
+			nodeId: event.node_id ?? null,
+			label: readableEventType(eventType),
+			detail: event.message ?? String(payload.type ?? payload.status ?? node),
+			color: colorForEvent(eventType)
+		};
+	}
+	return null;
+}
+
+function lifecycleForToolEvent(eventType: FactoryEvent['event_type']): ToolLifecycle {
+	if (eventType === 'tool_call_failed') {
+		return 'failed';
+	}
+	if (eventType === 'tool_observation_available') {
+		return 'observed';
+	}
+	if (eventType === 'tool_call_completed') {
+		return 'completed';
+	}
+	if (eventType === 'tool_call_started') {
+		return 'started';
+	}
+	if (eventType === 'tool_approval_requested' || eventType === 'tool_approval_resolved') {
+		return 'approval';
+	}
+	return 'proposed';
+}
+
+function nextToolStatus(previous: ToolLifecycle, incoming: ToolLifecycle): ToolLifecycle {
+	const rank: Record<ToolLifecycle, number> = {
+		proposed: 1,
+		approval: 2,
+		started: 3,
+		completed: 4,
+		observed: 5,
+		failed: 6
+	};
+	return rank[incoming] >= rank[previous] ? incoming : previous;
+}
+
+function labelForToolLifecycle(status: ToolLifecycle): string {
+	const labels: Record<ToolLifecycle, string> = {
+		proposed: 'tool proposed',
+		approval: 'tool approval',
+		started: 'tool running',
+		completed: 'tool completed',
+		failed: 'tool failed',
+		observed: 'observation'
+	};
+	return labels[status];
+}
+
+function readableEventType(eventType: string): string {
+	return eventType.replaceAll('_', ' ');
+}
+
+function colorForEvent(eventType: string): ActivityColor {
+	if (eventType.endsWith('failed') || eventType === 'run_failed' || eventType === 'error') {
+		return 'red';
+	}
+	if (eventType.includes('interrupt') || eventType.includes('approval')) {
+		return 'yellow';
+	}
+	if (eventType.endsWith('completed')) {
+		return 'green';
+	}
+	if (eventType.includes('model')) {
+		return 'cyan';
+	}
+	if (eventType.includes('tool')) {
+		return 'yellow';
+	}
+	return 'blue';
+}
+
+function approvalState(payload: Record<string, unknown>): ToolActivity['approvalState'] {
+	const action = stringValue(payload.action);
+	const approved = payload.approved;
+	if (action === 'custom' || action === 'revise') {
+		return 'custom';
+	}
+	if (approved === true || action === 'approve') {
+		return 'approved';
+	}
+	if (approved === false || action === 'reject') {
+		return 'rejected';
+	}
+	if (payload.type === 'tool_approval' || payload.approval_request) {
+		return 'pending';
+	}
+	return null;
+}
+
+function normalizeToolPayload(payload: Record<string, unknown>): {
+	toolName: string;
+	argsPreview: string | null;
+	resultPreview: string | null;
+	stdoutPreview: string | null;
+	stderrPreview: string | null;
+	exitCode: number | null;
+	durationMs: number | null;
+	searchText: string;
+} {
+	const message = recordValue(payload.message);
+	const resourceCheck = recordValue(payload.resource_check);
+	const rawResult = payload.result ?? payload.output ?? payload.content ?? message?.content ?? resourceCheck?.raw_result ?? resourceCheck?.result_summary;
+	const result = parseJsonLike(rawResult);
+	const resultRecord = recordValue(result);
+	const args = payload.arguments ?? payload.args ?? payload.tool_args ?? resourceCheck?.arguments ?? message?.args;
+	const toolName = stringValue(payload.tool_name) || stringValue(payload.name) || stringValue(message?.name) || stringValue(resourceCheck?.tool_name) || '-';
+	const stdoutPreview = textPreview(resultRecord?.stdout ?? resultRecord?.out);
+	const stderrPreview = textPreview(resultRecord?.stderr ?? resultRecord?.err);
+	const resultPreview = textPreview(resourceCheck?.result_summary ?? resultRecord?.result_summary ?? rawResult);
+	const exitCode = numberValue(resultRecord?.exit_code ?? resultRecord?.returncode ?? payload.exit_code);
+	const durationMs = numberValue(payload.duration_ms ?? resultRecord?.duration_ms);
+	const argsPreview = args === undefined ? null : compactValue(args, 360);
+	return {
+		toolName,
+		argsPreview,
+		resultPreview,
+		stdoutPreview,
+		stderrPreview,
+		exitCode,
+		durationMs,
+		searchText: [toolName, argsPreview, resultPreview, stdoutPreview, stderrPreview, compactValue(payload, 800)].filter(Boolean).join('\n')
+	};
+}
+
+function parseJsonLike(value: unknown): unknown {
+	if (typeof value !== 'string') {
+		return value;
+	}
+	const trimmed = value.trim();
+	if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
+		return value;
+	}
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return value;
+	}
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function numberValue(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function textPreview(value: unknown, limit = 900): string | null {
+	if (value === undefined || value === null) {
+		return null;
+	}
+	const raw = typeof value === 'string' ? value : compactValue(value, limit);
+	const normalized = raw.replace(/\r/g, '').trim();
+	if (!normalized) {
+		return null;
+	}
+	return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function compactValue(value: unknown, limit = 360): string {
+	try {
+		return JSON.stringify(value).replace(/\s+/g, ' ').slice(0, limit);
+	} catch {
+		return String(value).replace(/\s+/g, ' ').slice(0, limit);
+	}
 }
 
 function applyDebugPatch(state: FactoryUiState, event: FactoryEvent): FactoryUiState {

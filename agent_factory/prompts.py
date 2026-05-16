@@ -13,6 +13,7 @@ class PromptId(str, Enum):
     CAPTURE_REQUIREMENT_INTENT = "factory.requirement_capture.intent"
     REQUIREMENT_CAPTURE_INTENT = "factory.requirement_capture.intent"
     REQUIREMENT_CAPTURE_CLARITY = "factory.requirement_capture.clarity"
+    REQUIREMENT_CAPTURE_FRAME = "factory.requirement_capture.frame"
     REQUIREMENT_CAPTURE_QUESTION = "factory.requirement_capture.question"
     REQUIREMENT_CAPTURE_MERGE = "factory.requirement_capture.merge"
     BUSINESS_PLAN_REVIEW_DRAFT = "factory.business_plan_review.draft"
@@ -21,12 +22,11 @@ class PromptId(str, Enum):
     GRAPH_BEHAVIOR_PLANNING = "factory.graph_behavior_planning"
     NODE_STRATEGY_PLANNING = "factory.node_strategy_planning"
     TOOL_CAPABILITY_PLANNING = "factory.tool_capability_planning"
-    RESOURCE_REQUIREMENT_INFERENCE = "factory.resource_condition.requirement_inference"
-    RESOURCE_REACT = "factory.resource_condition.react"
-    RESOURCE_REACT_DECISION = "factory.resource_condition.react_decision"
     ASSEMBLY_SPEC_REACT = "factory.assembly_spec_generation.react"
     PACKAGE_REACT = "factory.package_generation.react"
     PACKAGE_BUILD_DECISION = "factory.package_generation.build_decision"
+    HARNESS_REACT = "factory.harness_generation_and_test.react"
+    HARNESS_CONTRACT_DECISION = "factory.harness_generation_and_test.contract_decision"
     FACTORY_CHAT = "factory.chat"
 
 
@@ -58,19 +58,51 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "你是 Agent 工厂第一阶段的需求清晰度判断器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
                     "只判断需求是否足够进入下一阶段，不要向用户提问。\n\n"
-                    "判断时必须参考当前 Factory 第一阶段需求访谈上下文，"
-                    "只判断业务画像是否足够清晰，不判断技术实现是否已选型。\n\n"
-                    "清晰标准至少包括：Agent 目标、目标用户、使用场景、典型输入、期望输出、"
-                    "业务流程、交互方式、成功标准、边界禁区、权限/隐私/数据来源边界和运行约束。\n"
-                    "不要把“模型、框架、SDK、数据库、API、部署方式、工具实现方案未选择”"
-                    "判定为第一阶段缺失字段；这些属于后续阶段。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
+                    "第一阶段不是完整 PRD 访谈，只判断是否足够进入 Runtime pattern 选择。\n"
+                    "清晰标准只包括：业务目标、主要行为模式、是否允许执行动作、禁止或需要确认的动作、"
+                    "会接触的业务资源类型、用户期望输出。只要这些足够判断后续制造方向，即可 is_clear=true。\n\n"
+                    "不要因为缺少 Factory 默认实现或技术实现细节而判定不清晰。"
+                    "禁止把模型、框架、SDK、依赖、数据库驱动、部署方式、Docker、测试方式、资源嗅探方式、"
+                    "工具实现方案未选择列为缺失字段。\n"
+                    "missing_fields 只能列出真正阻塞业务意图判断的高层决策，最多 5 项。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
                     "原始输入：\n{original_input}\n\n"
                     "当前 Factory 运行环境：\n{runtime_environment}\n\n"
-                    "当前整理后的需求：\n{current_requirement}\n\n"
+                    "当前需求版本：\n{current_requirement}\n\n"
+                    "当前 requirement_frame：\n{requirement_frame}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.REQUIREMENT_CAPTURE_FRAME:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第一阶段的需求画像抽取器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是从用户输入和当前需求文本中抽取轻量 requirement_frame，不向用户提问。\n\n"
+                    "requirement_frame 只记录业务意图和业务边界：目标、用户、场景、行为模式、动作边界、"
+                    "业务资源范围、输出期望、成功信号、不做范围、人工确认期望、假设和未知项。\n"
+                    "不要补技术实现，不要选择模型/框架/SDK/依赖/部署方式/Docker/工具实现。\n"
+                    "Factory 已决定的默认实现不要写入 unknowns，也不要变成待用户选择的问题。\n"
+                    "无法从用户输入确定的业务信息可以留空或放入 unknowns，但不要制造琐碎字段。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "原始输入：\n{original_input}\n\n"
+                    "当前需求版本：\n{current_requirement}\n\n"
+                    "当前 requirement_frame：\n{requirement_frame}\n\n"
                     "请返回 JSON。",
                 ),
             ]
@@ -82,25 +114,29 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "system",
                     "你是 Agent 工厂第一阶段的需求澄清提问器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "一轮优先生成 1 到 3 个最关键问题；"
-                    "只有缺失信息明显分散且必须同时确认时，才最多生成 5 个问题。\n"
-                    "每个问题最多 5 个选项，并且必须包含一个自定义补充选项，"
+                    "默认只生成 1 个问题；只有两个业务决策都阻塞后续制造时，才生成 2 个问题。\n"
+                    "每个问题最多 4 个选项，并且必须包含一个自定义补充选项，"
                     "custom_option_id 必须指向该问题的自定义选项。\n\n"
-                    "问题和选项必须只围绕业务画像字段：目标用户、使用场景、典型输入、期望输出、"
-                    "业务流程、交互方式、成功标准、边界禁区、权限/隐私/数据来源边界和运行约束。\n"
-                    "问题和选项必须是用户能直接从业务需求角度选择的表达。\n\n"
-                    "不要询问技术实现方案。禁止要求用户在模型供应商、框架、SDK、数据库、"
-                    "向量库、部署方式、具体 API、工具实现、代码方案之间做选择。\n"
-                    "如果需求暗示需要外部资源或特殊能力，只能询问业务级约束，"
-                    "例如是否允许联网、是否必须本地运行、是否涉及敏感数据、是否允许后续接入外部资源；"
-                    "不要询问具体用哪种实现。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
+                    "问题必须是高信息密度的业务决策问题，优先围绕："
+                    "Agent 第一版最重要的任务、能否执行会改变数据/文件/系统状态的动作、"
+                    "哪些动作必须禁止或确认、会接触哪些业务资源、用户期望什么输出。\n"
+                    "不要把字段清单拆成琐碎问题；不要问用户已经由 Factory 默认实现决定的内容。\n\n"
+                    "禁止询问技术实现方案。禁止要求用户选择模型供应商、框架、SDK、数据库驱动、"
+                    "向量库、部署方式、Docker、具体 API、依赖包、工具实现或代码方案。\n"
+                    "如果必须问资源，只问业务资源类型和约束，例如会接触哪些文件/数据库/业务系统、"
+                    "是否允许修改、哪些操作需要确认，不问怎么实现连接。\n\n"
+                    "选项必须像人话，具体、可选择、面向业务行为，不要使用抽象 schema 字段名。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
                     "原始输入：\n{original_input}\n\n"
                     "当前 Factory 运行环境：\n{runtime_environment}\n\n"
-                    "当前整理后的需求：\n{current_requirement}\n\n"
+                    "当前需求版本：\n{current_requirement}\n\n"
+                    "当前 requirement_frame：\n{requirement_frame}\n\n"
                     "缺失信息：\n{missing_fields}\n\n"
                     "请返回 JSON。",
                 ),
@@ -113,20 +149,24 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "system",
                     "你是 Agent 工厂第一阶段的需求整理器。\n"
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你只能看到原始输入、当前需求版本、本轮问题组和本轮用户回答组。\n"
-                    "不要保留历史问答过程，只输出合并后的 current_requirement。\n\n"
-                    "整理结果必须保持在当前 Factory 第一阶段需求访谈上下文内。\n"
-                    "如果用户回答涉及实现方案，不要扩展成技术设计，只保留为业务约束、"
-                    "运行约束或后续待决条件。\n"
-                    "如果用户选择了需要额外资源的能力，应写成资源/权限/运行约束，"
-                    "不要默认视为已具备，也不要选择具体供应商或技术路线。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n当前阶段边界：\n{stage_operating_context}\n\nOutput JSON schema:\n{output_json_schema}",
+                    "你只能看到原始输入、当前需求版本、当前 requirement_frame、本轮问题组和本轮用户回答组。\n"
+                    "不要保留历史问答过程。输出合并后的 current_requirement 和完整 requirement_frame。\n\n"
+                    "requirement_frame 只记录业务意图和业务边界：目标、用户、场景、行为模式、动作边界、"
+                    "业务资源范围、输出期望、成功信号、不做范围、人工确认期望、假设和未知项。\n"
+                    "如果用户回答涉及实现方案，不要扩展成技术设计，只保留为业务约束或后续待决条件。\n"
+                    "如果用户选择了需要额外资源的能力，应写成资源/权限/动作边界，不要默认视为已具备，"
+                    "也不要选择具体供应商、驱动、依赖或技术路线。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
                 ),
                 (
                     "user",
                     "原始输入：\n{original_input}\n\n"
                     "当前 Factory 运行环境：\n{runtime_environment}\n\n"
                     "当前需求版本：\n{current_requirement}\n\n"
+                    "当前 requirement_frame：\n{requirement_frame}\n\n"
                     "本轮问题和用户回答：\n{answers}\n\n"
                     "请返回 JSON。",
                 ),
@@ -144,11 +184,14 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "{required_sections}\n\n"
                     "只从业务层面描述 Agent 应该服务谁、解决什么问题、有哪些业务行为、"
                     "如何与用户互动、业务上不负责什么、怎样算有用。\n\n"
+                    "必须接受 Factory 默认实现：生成物是 RuntimeKernel/LangGraph AgentPackage，"
+                    "由后台运行层编译运行。不要把这些默认实现写成需要用户再选择的问题。\n\n"
                     "禁止在本阶段写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
                     "数据库方案、API 方案、模型/框架选择或具体工具定义。这些属于后续阶段。\n\n"
-                    "【后续规划提示】只能写业务层面后续要关注的事项；"
+                    "【后续待决】只能写业务层面后续要关注的事项；"
                     "涉及技术实现的内容只写成待决约束，不提前规划工具、资源或技术路线。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
                     "当前阶段边界：\n{stage_operating_context}",
                 ),
                 (
@@ -172,6 +215,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "禁止写工具方案、资源方案、资源嗅探结论、技术选型、实现设计、"
                     "数据库方案、API 方案、模型/框架选择或具体工具定义。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
                     "当前阶段边界：\n{stage_operating_context}",
                 ),
                 (
@@ -201,7 +245,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
                 (
                     "user",
-                    "第一阶段整理后的需求：\n{requirement_brief}\n\n"
+                    "第一阶段需求画像：\n{requirement_brief}\n\n"
                     "业务制造计划：\n{refined_plan_text}\n\n"
                     "可选 pattern catalog 摘要：\n{pattern_catalog}\n\n"
                     "请返回 JSON。",
@@ -298,100 +342,6 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "第三阶段图行为计划：\n{graph_behavior_plan}\n\n"
                     "第四阶段节点策略计划：\n{node_strategy_plan}\n\n"
                     "可用工厂基础工具 ID：\n{factory_base_tool_ids}\n\n"
-                    "请返回 JSON。",
-                ),
-            ]
-        )
-    if prompt_id == PromptId.RESOURCE_REQUIREMENT_INFERENCE:
-        return ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "你是 Agent 工厂第六阶段的资源需求推导器。\n"
-                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是根据第五阶段工具能力契约，推导后续工具生成和测试必须依赖的资源需求。\n\n"
-                    "严格约束：\n"
-                    "- 只输出资源需求，不输出资源值。\n"
-                    "- 不写工具 Python 实现代码，不写 Dockerfile，不写依赖安装命令。\n"
-                    "- 不预设固定资源类型；requirement_id 必须来自工具能力本身的真实需要。\n"
-                    "- required=true 表示没有资源、占位或用户阻塞决策就不能进入下一阶段。\n"
-                    "- requirement_id 使用 snake_case，简短稳定，可被 resources.json 和后续 package_generation 引用。\n"
-                    "- used_by_capability_ids 只能引用 tool_capability_plan 中已有 capability_id。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n"
-                    "当前阶段边界：\n{stage_operating_context}\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
-                ),
-                (
-                    "user",
-                    "业务制造计划：\n{refined_plan_text}\n\n"
-                    "工具能力计划：\n{tool_capability_plan}\n\n"
-                    "请返回 JSON。",
-                ),
-            ]
-        )
-    if prompt_id == PromptId.RESOURCE_REACT:
-        return ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "你是 Agent 工厂第六阶段的 ReAct 资源检查器。\n"
-                    "你必须遵循 ReAct：需要检查环境、文件、命令或配置时，通过 tool_calls 调用工具；"
-                    "工具 Observation 返回后再继续判断。\n\n"
-                    "当不再需要工具时，必须输出一个合法 JSON 对象，不要包裹 markdown。"
-                    "JSON 必须符合 ResourceReactDecision schema。"
-                    "禁止输出 markdown code fence，禁止在 JSON 前后追加自然语言。"
-                    "user_prompt 必须是普通 JSON string，不要包含 ``` 代码块。\n\n"
-                    "严格约束：\n"
-                    "- 只能使用已绑定工具检查资源条件。\n"
-                    "- 如果还需要检查，不要输出 JSON；必须直接发起 tool_calls。\n"
-                    "- 只有在已经不需要工具时，才输出最终 ResourceReactDecision JSON。\n"
-                    "- 不安装依赖，不写文件，不生成工具代码。\n"
-                    "- 不把 Factory 自身 mainModel/taskModel/API key/base URL/thinking 配置当成生成 Agent 资源。\n"
-                    "- 缺失或不确定时 action=needs_user_input，并给出 user_prompt。\n"
-                    "- 资源可用时 action=resources_ready，并给出 resource_draft。\n"
-                    "- 用户明确阻塞或检查表明确无法继续时 action=blocked。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n"
-                    "当前阶段边界：\n{stage_operating_context}\n\n"
-                    "ResourceReactDecision JSON schema:\n{output_json_schema}",
-                ),
-                (
-                    "user",
-                    "资源需求：\n{resource_requirements}\n\n"
-                    "用户补充：\n{user_inputs}\n\n"
-                    "当前资源草稿：\n{resource_draft}\n\n"
-                    "工具能力计划：\n{tool_capability_plan}\n\n"
-                    "请继续 ReAct 检查，或输出最终 JSON 决策。",
-                ),
-                ("placeholder", "{messages}"),
-            ]
-        )
-    if prompt_id == PromptId.RESOURCE_REACT_DECISION:
-        return ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "你是 Agent 工厂第六阶段 ReAct 最终输出的结构化决策归一化器。\n"
-                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
-                    "你的任务是把 ReAct 模型最后一次非工具输出归一化为 ResourceReactDecision。\n\n"
-                    "严格约束：\n"
-                    "- 只能根据 raw_model_output、资源需求、用户补充、当前资源草稿和工具观察摘要归一化。\n"
-                    "- 不发起工具调用，不继续推理工具检查，不生成工具代码，不写文件。\n"
-                    "- 如果 raw_model_output 中包含 markdown、代码块、尾随自然语言或坏 JSON，只提取其可理解的资源决策意图。\n"
-                    "- 输出必须是单个 JSON object，禁止 markdown code fence，禁止解释性自然语言。\n"
-                    "- user_prompt 必须是普通 JSON string，不要包含 ``` 代码块；如需示例，使用普通文本换行表达。\n"
-                    "- 不把 Factory 自身 mainModel/taskModel/API key/base URL/thinking 配置当成生成 Agent 资源。\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n"
-                    "当前阶段边界：\n{stage_operating_context}\n\n"
-                    "Output JSON schema:\n{output_json_schema}",
-                ),
-                (
-                    "user",
-                    "资源需求：\n{resource_requirements}\n\n"
-                    "用户补充：\n{user_inputs}\n\n"
-                    "当前资源草稿：\n{resource_draft}\n\n"
-                    "工具能力计划：\n{tool_capability_plan}\n\n"
-                    "工具观察摘要：\n{tool_observations}\n\n"
-                    "ReAct 模型最后输出：\n{raw_model_output}\n\n"
                     "请返回 JSON。",
                 ),
             ]
@@ -511,6 +461,89 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "package root：\n{package_root}\n\n"
                     "上一轮校验 observation：\n{package_validation_observation}\n\n"
                     "工具观察摘要：\n{tool_observations}\n\n"
+                    "ReAct 模型最后输出：\n{raw_model_output}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.HARNESS_REACT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第九阶段的 Harness/Sandbox ReAct 构建器。\n"
+                    "你必须遵循 ReAct：需要读取 package、检查文件、检查 docker 或宿主机资源时，"
+                    "通过 tool_calls 调用工具；工具 Observation 返回后再继续判断。\n\n"
+                    "当不再需要工具时，输出普通说明，概述你准备生成的 sandbox/runtime/test 契约；"
+                    "最终 HarnessContractDecision 会由结构化归一化器生成。\n\n"
+                    "严格约束：\n"
+                    "- 只基于第八阶段 AgentPackage draft、第六阶段 resources 和当前 package report 生成测试环境契约。\n"
+                    "- 不修改 AgentPackage，不生成工具代码，不重新规划 AssemblySpec。\n"
+                    "- Docker 是默认 backend，但 Docker 不可用时只能 blocked，不能自动降级 local_trusted。\n"
+                    "- 宿主机路径、端口服务、数据卷、secret、host tool proxy 必须显式进入 HostInteractionContract。\n"
+                    "- 不默认挂载用户 home、repo 根目录、/Users 或 /。\n"
+                    "- /package 与 /resources 必须只读；/artifacts 与 /workdir 必须可写。\n"
+                    "- 默认 network 为 none；需要访问服务时必须显式声明 service dependency。\n"
+                    "- 生成 Agent 在容器内只能看到 contract path，不能依赖宿主机真实路径。\n"
+                    "- Factory main/task model 配置不得进入 generated agent runtime resources。\n\n"
+                    "执行闭环约束：\n"
+                    "- 如果 sandbox 执行 observation 显示依赖缺失、资源契约错误或测试计划错误，"
+                    "只能修正第九阶段 contract 后重跑。\n"
+                    "- 如果 observation 显示工具代码语法/业务逻辑错误，不要尝试修改 package，"
+                    "应让系统生成 harness report 交给第十阶段 repair。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}",
+                ),
+                (
+                    "user",
+                    "AssemblySpec：\n{assembly_spec}\n\n"
+                    "PackageMaterializationPlan：\n{package_materialization_plan}\n\n"
+                    "PackageGeneration：\n{package_generation}\n\n"
+                    "ResourceConditionPlan：\n{resource_condition_plan}\n\n"
+                    "Package root：\n{package_root}\n\n"
+                    "上一轮 harness 校验 observation：\n{harness_validation_observation}\n\n"
+                    "上一轮 sandbox 执行 observation：\n{sandbox_execution_observation}\n\n"
+                    "请继续 ReAct 检查，或说明最终 sandbox/test 契约草案。",
+                ),
+                ("placeholder", "{messages}"),
+            ]
+        )
+    if prompt_id == PromptId.HARNESS_CONTRACT_DECISION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第九阶段 HarnessContractDecision 结构化归一化器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把 ReAct 观察和前置阶段产物转换为运行环境、宿主机交互、依赖和测试执行契约。\n\n"
+                    "严格约束：\n"
+                    "- 输出必须符合 HarnessContractDecision JSON schema。\n"
+                    "- 不要输出 markdown，不要解释，不要包裹代码块。\n"
+                    "- backend 默认 docker；Docker 不可用或不确定时仍可生成 docker 契约，由系统检测后 blocked。\n"
+                    "- 必须包含 /package read_only、/resources read_only、/artifacts read_write、/workdir read_write 的系统挂载。\n"
+                    "- 宿主机业务资源只能来自 resources 或明确用户授权，不允许默认挂载 home、repo 根目录、/Users 或 /。\n"
+                    "- 容器内业务资源路径必须位于 /volumes/<resource_id>。\n"
+                    "- 容器访问宿主机服务时使用 host.docker.internal，不要把 localhost 当宿主机。\n"
+                    "- 默认 network_policy.mode 为 none；声明服务依赖时才允许 declared_services。\n"
+                    "- 不修改 package，不生成代码，不生成 repair 方案。\n\n"
+                    "sandbox 执行 observation 修正规则：\n"
+                    "- 依赖缺失时，补充 dependency_plan.python_requirements 或 system_packages。\n"
+                    "- 资源/挂载/网络问题时，修正 host_interaction 或 runtime_environment。\n"
+                    "- 工具代码错误属于第十阶段 repair，不要在本阶段生成代码修改。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "AssemblySpec：\n{assembly_spec}\n\n"
+                    "PackageMaterializationPlan：\n{package_materialization_plan}\n\n"
+                    "PackageGeneration：\n{package_generation}\n\n"
+                    "ResourceConditionPlan：\n{resource_condition_plan}\n\n"
+                    "Package root：\n{package_root}\n\n"
+                    "工具观察摘要：\n{tool_observations}\n\n"
+                    "上一轮 harness 校验 observation：\n{harness_validation_observation}\n\n"
+                    "上一轮 sandbox 执行 observation：\n{sandbox_execution_observation}\n\n"
                     "ReAct 模型最后输出：\n{raw_model_output}\n\n"
                     "请返回 JSON。",
                 ),

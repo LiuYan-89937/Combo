@@ -45,6 +45,9 @@ class FactoryGraphState(TypedDict, total=False):
     package_validation_observation: dict[str, Any]
     package_revision_attempt: int
     package_generation: dict[str, Any]
+    harness_generation: dict[str, Any]
+    harness_validation_observation: dict[str, Any]
+    harness_revision_attempt: int
     harness_report: dict[str, Any]
     harness_scenarios: list[dict[str, Any]]
     finalization_report: dict[str, Any]

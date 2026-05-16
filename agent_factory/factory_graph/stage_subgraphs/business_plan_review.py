@@ -16,12 +16,12 @@ from agent_factory.prompts import PromptId
 
 DEFAULT_REFINED_PLAN_SECTIONS: tuple[str, ...] = (
     "【制造目标】",
-    "【使用场景】",
-    "【业务行为】",
-    "【交互方式】",
-    "【业务边界】",
+    "【第一版核心行为】",
+    "【交互与输出】",
+    "【动作边界】",
+    "【业务资源边界】",
     "【成功标准】",
-    "【后续规划提示】",
+    "【后续待决】",
 )
 
 
@@ -70,14 +70,10 @@ def run_business_plan_review_subgraph(state: FactoryGraphState) -> dict[str, Any
 
 def _load_requirement_brief(state: FactoryGraphState) -> dict[str, Any]:
     requirement_brief = dict(state.get("requirement_brief") or {})
-    refined_requirement = requirement_brief.get("refined_requirement") or state.get("requirement", "")
     return {
         "current_stage": "requirement_capture",
         "business_plan_review": {
-            "requirement_brief": {
-                **requirement_brief,
-                "refined_requirement": refined_requirement,
-            },
+            "requirement_brief": requirement_brief,
             "iteration_count": 0,
         },
     }
@@ -184,18 +180,47 @@ def _route_after_model_step(state: FactoryGraphState) -> str:
 
 def _format_requirement_brief(requirement_brief: dict[str, Any]) -> str:
     lines = [
+        f"版本：{requirement_brief.get('version', 'requirement_brief.v1')}",
+        f"状态：{requirement_brief.get('status', '')}",
+        f"置信度：{requirement_brief.get('confidence', '')}",
         f"原始输入：{requirement_brief.get('original_input', '')}",
-        f"整理后的需求：{requirement_brief.get('refined_requirement', '')}",
     ]
-    assumptions = requirement_brief.get("assumptions") or []
-    unresolved_questions = requirement_brief.get("unresolved_questions") or []
-    if assumptions:
-        lines.append("已知假设：")
-        lines.extend(f"- {item}" for item in assumptions)
-    if unresolved_questions:
-        lines.append("未解决问题：")
-        lines.extend(f"- {item}" for item in unresolved_questions)
+    clarity = requirement_brief.get("clarity") or {}
+    if isinstance(clarity, dict):
+        reason = str(clarity.get("reason") or "").strip()
+        missing_decisions = clarity.get("missing_decisions") or []
+        if reason:
+            lines.append(f"清晰度判断：{reason}")
+        if missing_decisions:
+            lines.append("仍需明确的业务决策：")
+            lines.extend(f"- {item}" for item in missing_decisions if str(item).strip())
+    frame = requirement_brief.get("requirement_frame") or {}
+    if isinstance(frame, dict):
+        frame_sections = [
+            ("目标", frame.get("goal")),
+            ("主要用户", frame.get("primary_users")),
+            ("主要场景", frame.get("primary_scenarios")),
+            ("行为模式", frame.get("behavior_mode")),
+            ("动作边界", frame.get("action_boundary")),
+            ("业务资源范围", frame.get("resource_scope")),
+            ("输出期望", frame.get("output_expectation")),
+            ("成功信号", frame.get("success_signal")),
+            ("不做范围", frame.get("out_of_scope")),
+            ("人工确认期望", frame.get("human_approval_expectations")),
+            ("已知假设", frame.get("assumptions")),
+            ("未知/待确认", frame.get("unknowns")),
+        ]
+        lines.append("结构化需求画像：")
+        for label, value in frame_sections:
+            if value:
+                lines.append(f"- {label}：{_format_value(value)}")
     return "\n".join(lines)
+
+
+def _format_value(value: Any) -> str:
+    if isinstance(value, list):
+        return "；".join(str(item) for item in value if str(item).strip())
+    return str(value)
 
 
 def _delta_patch(

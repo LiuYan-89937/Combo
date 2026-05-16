@@ -9,7 +9,6 @@ from typing import Any
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
 from pydantic import TypeAdapter
 
 from agent_factory.assembly.schema import AgentAssemblySpec
@@ -28,8 +27,6 @@ from agent_factory.factory_graph.schemas import (
     PackageValidationReport,
 )
 from agent_factory.factory_graph.state import FactoryGraphState
-from agent_factory.factory_graph.tools.filesystem import list_path, path_exists, read_file
-from agent_factory.factory_graph.tools.search import inspect_file, inspect_text, search_files, search_text
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import PromptId, get_prompt, output_json_schema
 
@@ -41,15 +38,7 @@ AGENT_PACKAGE_VERSION = "agent_package.v0"
 PACKAGE_REACT_MODEL_NODE = "package_react_model"
 PACKAGE_TOOLS_NODE = "package_tools"
 MAX_PACKAGE_REVISION_ROUNDS = 3
-PACKAGE_READ_TOOLS = [
-    read_file,
-    path_exists,
-    list_path,
-    search_files,
-    search_text,
-    inspect_file,
-    inspect_text,
-]
+PACKAGE_READ_TOOLS = []
 REQUIRED_PACKAGE_FILES = {
     "agent_package.json",
     "assembly_spec.json",
@@ -65,7 +54,6 @@ def build_package_generation_subgraph():
     graph = StateGraph(FactoryGraphState)
     graph.add_node("initialize_package_context", _initialize_package_context)
     graph.add_node(PACKAGE_REACT_MODEL_NODE, _package_react_model)
-    graph.add_node(PACKAGE_TOOLS_NODE, ToolNode(PACKAGE_READ_TOOLS, name=PACKAGE_TOOLS_NODE))
     graph.add_node("emit_package_tool_events", _emit_package_tool_events)
     graph.add_node("finalize_package_build_decision", _finalize_package_build_decision)
     graph.add_node("validate_package_build_plan", _validate_package_build_plan)
@@ -77,14 +65,8 @@ def build_package_generation_subgraph():
     graph.add_conditional_edges(
         PACKAGE_REACT_MODEL_NODE,
         _route_after_package_model,
-        {
-            PACKAGE_TOOLS_NODE: PACKAGE_TOOLS_NODE,
-            "finalize_package_build_decision": "finalize_package_build_decision",
-            END: END,
-        },
+        {"finalize_package_build_decision": "finalize_package_build_decision", END: END},
     )
-    graph.add_edge(PACKAGE_TOOLS_NODE, "emit_package_tool_events")
-    graph.add_edge("emit_package_tool_events", PACKAGE_REACT_MODEL_NODE)
     graph.add_conditional_edges(
         "finalize_package_build_decision",
         _route_after_package_decision,
@@ -160,7 +142,7 @@ def _package_react_model(state: FactoryGraphState) -> dict[str, Any]:
                 },
             )
         )
-        bound_model = model.bind_tools(PACKAGE_READ_TOOLS)
+        bound_model = model.bind_tools(PACKAGE_READ_TOOLS) if PACKAGE_READ_TOOLS else model
         if settings.max_tokens is not None:
             bound_model = bound_model.bind(max_tokens=settings.max_tokens)
         response = bound_model.invoke(prompt_value)
@@ -347,7 +329,7 @@ def _route_after_package_model(state: FactoryGraphState) -> str:
     if state.get("status") == "failed" or state.get("graph_control", {}).get("action") == "end":
         return END
     messages = state.get("messages") or []
-    if messages and getattr(messages[-1], "tool_calls", None):
+    if PACKAGE_READ_TOOLS and messages and getattr(messages[-1], "tool_calls", None):
         return PACKAGE_TOOLS_NODE
     return "finalize_package_build_decision"
 
@@ -418,7 +400,7 @@ def _validate_decision(decision: PackageBuildDecision, state: FactoryGraphState)
     for path in missing:
         errors.append(f"missing required package file draft: {path}")
     for tool in materialization_plan.tools:
-        for key in tool.manifest.resource_keys:
+        for key in tool.manifest.resources.values():
             if key not in resource_keys:
                 errors.append(f"tool manifest resource key not prepared by stage 6: {tool.tool_id}.{key}")
     forbidden_prefixes = (".agentfactory/resources/", ".agentfactory/assemblies/")

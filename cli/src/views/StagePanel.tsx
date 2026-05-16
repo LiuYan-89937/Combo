@@ -33,11 +33,6 @@ function summaryLines(patch: Record<string, unknown>): string[] {
 	for (const item of stageLog.slice(-3)) {
 		lines.push(`${String(item.stage_id ?? '-')}: ${String(item.status ?? '-')} ${String(item.message ?? '')}`);
 	}
-	const resourcePlan = patch.resource_condition_plan as Record<string, unknown> | undefined;
-	if (resourcePlan) {
-		lines.push(`resource status: ${String(resourcePlan.status ?? '-')}`);
-		lines.push(`resource file: ${String(resourcePlan.resource_file_path ?? '-')}`);
-	}
 	const assemblyReport = patch.assembly_validation_report as Record<string, unknown> | undefined;
 	if (assemblyReport) {
 		const attempts = (assemblyReport.attempts as Array<Record<string, unknown>> | undefined) ?? [];

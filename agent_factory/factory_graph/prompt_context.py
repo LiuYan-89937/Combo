@@ -32,12 +32,20 @@ FACTORY_OPERATING_CONTEXT = """Factory 运行边界：
 - 每个阶段只做本阶段职责，不提前生成后续阶段产物。"""
 
 
+FACTORY_DEFAULT_IMPLEMENTATION_CONTEXT = """Factory 已决定的默认实现：
+- 生成出来的 Agent 默认是 RuntimeKernel 编译后的 LangGraph AgentPackage。
+- 生成 Agent 由 FastAgentFactory 后台运行层编译、运行、checkpoint、trace 和 repair。
+- 用户在第一阶段不需要选择运行框架、模型供应商、SDK、依赖、部署形态、Docker、测试方式或工程目录结构。
+- 资源嗅探在第六阶段完成，AssemblySpec 在第七阶段完成，Package 文件和工具代码在第八阶段完成。
+- 除非用户主动要求覆盖默认行为，否则不要把这些默认实现当作需求问题询问用户。"""
+
+
 _STAGE_CONTEXTS: dict[str, StageOperatingContext] = {
     "requirement_capture": StageOperatingContext(
         stage_id="requirement_capture",
-        responsibility="捕获并澄清用户想制造什么 Agent，整理业务画像和业务制造计划。",
-        allowed_outputs=("refined_requirement", "业务制造计划", "必要的业务级澄清问题"),
-        forbidden_outputs=("技术选型", "工具实现", "资源准备", "AssemblySpec", "工具代码"),
+        responsibility="用尽量少的问题捕获用户想制造什么 Agent，重点澄清业务目标、行动边界、业务资源范围和期望输出。",
+        allowed_outputs=("requirement_frame", "refined_requirement", "业务制造计划", "必要的业务级澄清问题"),
+        forbidden_outputs=("默认实现选择题", "技术选型", "运行框架选择", "部署方式选择", "工具实现", "资源准备", "AssemblySpec", "工具代码"),
     ),
     "runtime_pattern_selection": StageOperatingContext(
         stage_id="runtime_pattern_selection",
@@ -81,6 +89,12 @@ _STAGE_CONTEXTS: dict[str, StageOperatingContext] = {
         allowed_outputs=("agent_package.json", "真实工具代码草稿", "package_report", "bindings/prompts/policies/retrieval/formatters 文件"),
         forbidden_outputs=("harness", "动态工具测试结果", "重新规划 AssemblySpec", "调用真实业务外部服务", "硬编码用户资源"),
     ),
+    "harness_generation_and_test": StageOperatingContext(
+        stage_id="harness_generation_and_test",
+        responsibility="为 AgentPackage draft 生成 sandbox/runtime/test 契约，验证宿主机交互边界，并执行 harness 测试生成返厂报告。",
+        allowed_outputs=("runtime_environment_contract", "host_interaction_contract", "harness_execution_plan", "harness_report", "artifacts"),
+        forbidden_outputs=("修改 AgentPackage", "生成工具代码", "重新规划 AssemblySpec", "隐式访问宿主机资源", "Docker 不可用时自动降级本机运行"),
+    ),
     "factory_chat": StageOperatingContext(
         stage_id="factory_chat",
         responsibility="处理 Factory shell 的轻量聊天、检查和辅助任务。",
@@ -109,5 +123,6 @@ def stage_operating_context(stage_id: str) -> str:
 def prompt_context_values(stage_id: str) -> dict[str, str]:
     return {
         "factory_operating_context": factory_operating_context(),
+        "factory_default_implementation_context": FACTORY_DEFAULT_IMPLEMENTATION_CONTEXT,
         "stage_operating_context": stage_operating_context(stage_id),
     }

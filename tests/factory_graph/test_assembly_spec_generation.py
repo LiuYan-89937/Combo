@@ -39,11 +39,22 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("bindings/services.json", plan_paths)
                 self.assertIn("bindings/node_bindings.json", plan_paths)
                 self.assertIn("bindings/hooks.json", plan_paths)
-                self.assertEqual(plan["tools"][0]["manifest"]["input_contract"], {"type": "object"})
+                self.assertEqual(plan["tools"][0]["manifest"]["input_schema"], {"type": "object"})
 
     def test_validation_observation_drives_revision(self) -> None:
         first = _valid_draft()
-        first["tools"] = [{"id": "unknown_tool"}]
+        first["tools"] = [
+            {
+                "id": "unknown_tool",
+                "description": "Unknown tool.",
+                "entrypoint": "tools/unknown_tool/tool.py:run",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "resources": {},
+                "approval_required": False,
+                "concurrent": True,
+            }
+        ]
         second = _valid_draft()
         with tempfile.TemporaryDirectory() as temp_dir:
             with _chdir(temp_dir):
@@ -158,8 +169,13 @@ def _valid_draft() -> dict:
         "tools": [
             {
                 "id": "ledger_lookup",
-                "name": "Ledger lookup",
                 "description": "Look up ledger entries.",
+                "entrypoint": "tools/ledger_lookup/tool.py:run",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "resources": {},
+                "approval_required": False,
+                "concurrent": True,
             }
         ],
         "output": {"format": "markdown", "citations_required": False},

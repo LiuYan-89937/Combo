@@ -9,9 +9,12 @@ export function LiveStreamPanel({state}: {state: FactoryUiState}) {
 	if (!latest?.content) {
 		return null;
 	}
+	const activeCount = streams.filter(stream => stream.active).length;
 	return (
-		<Section title={latest.active ? 'Live Model Stream' : 'Last Model Output'} color={latest.active ? 'green' : 'gray'}>
-			<Text color="gray">node {latest.nodeId ?? '-'}</Text>
+		<Section title={latest.active ? `Live Model Stream${activeCount > 1 ? ` (${activeCount})` : ''}` : 'Last Model Output'} color={latest.active ? 'green' : 'gray'}>
+			<Text color="gray">
+				node {latest.nodeId ?? '-'}  stream {shortId(latest.streamId)}  {latest.active ? 'receiving tokens' : `completed ${latest.completedAt ?? ''}`}
+			</Text>
 			<Text>{trimStream(latest.content)}</Text>
 		</Section>
 	);
@@ -23,4 +26,8 @@ function trimStream(value: string): string {
 		return value;
 	}
 	return `...${value.slice(value.length - limit)}`;
+}
+
+function shortId(value: string): string {
+	return value.length > 12 ? `${value.slice(0, 10)}...` : value;
 }

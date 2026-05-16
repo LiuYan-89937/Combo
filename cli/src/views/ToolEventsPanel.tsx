@@ -10,17 +10,22 @@ export function ToolEventsPanel({state}: {state: FactoryUiState}) {
 	const filtered = filterToolActivities(state.toolActivities, state.toolGrep);
 	return (
 		<Section title={state.toolGrep ? `Tool Activity / grep: ${state.toolGrep}` : 'Tool Activity'} color="yellow">
-			{filtered.slice(-10).map(event => (
-				<Box key={event.activityKey} flexDirection="column" marginBottom={1}>
+			{filtered.slice(-8).map(event => (
+				<Box key={event.activityKey} flexDirection="column" marginBottom={1} borderStyle="single" borderColor={colorFor(event.status)} paddingX={1}>
 					<Text>
-						<Text color={colorFor(event.eventType)}>{labelFor(event.eventType).padEnd(11)}</Text>
+						<Text color={colorFor(event.status)} bold>{labelFor(event.status).padEnd(10)}</Text>
 						<Text color="gray"> node </Text>
 						{event.nodeId ?? '-'}
+						<Text color="gray"> stage </Text>
+						{event.stageId ?? '-'}
 						<Text color="gray"> tool </Text>
-						{toolName(event.payload)}
+						<Text bold>{event.toolName}</Text>
 					</Text>
-					{detailLines(event.payload).map(line => (
-						<Text key={line} color="gray">  {line}</Text>
+					{detailLines(event).map(line => (
+						<Text key={line.label + line.value} color={line.color ?? 'gray'}>
+							<Text color="gray">  {line.label}: </Text>
+							{line.value}
+						</Text>
 					))}
 				</Box>
 			))}
@@ -34,87 +39,73 @@ function filterToolActivities(events: FactoryUiState['toolActivities'], query: s
 	if (!normalized) {
 		return events;
 	}
-	return events.filter(event => searchableText(event.payload).toLowerCase().includes(normalized));
+	return events.filter(event => event.searchText.toLowerCase().includes(normalized));
 }
 
-function labelFor(eventType: string): string {
-	if (eventType.endsWith('proposed')) {
+function labelFor(status: string): string {
+	if (status === 'proposed') {
 		return 'proposed';
 	}
-	if (eventType.endsWith('started')) {
-		return 'started';
+	if (status === 'approval') {
+		return 'approval';
 	}
-	if (eventType.endsWith('completed')) {
-		return 'completed';
+	if (status === 'started') {
+		return 'running';
 	}
-	if (eventType.endsWith('failed')) {
+	if (status === 'completed' || status === 'observed') {
+		return 'done';
+	}
+	if (status === 'failed') {
 		return 'failed';
 	}
-	if (eventType.includes('observation')) {
-		return 'observation';
-	}
-	return eventType;
+	return status;
 }
 
-function colorFor(eventType: string): string {
-	if (eventType.endsWith('failed')) {
+function colorFor(status: string): string {
+	if (status === 'failed') {
 		return 'red';
 	}
-	if (eventType.endsWith('completed') || eventType.includes('observation')) {
+	if (status === 'completed' || status === 'observed') {
 		return 'green';
+	}
+	if (status === 'started') {
+		return 'cyan';
 	}
 	return 'yellow';
 }
 
-function toolName(payload: Record<string, unknown>): string {
-	if (payload.tool_name) {
-		return String(payload.tool_name);
+function detailLines(event: FactoryUiState['toolActivities'][number]): Array<{label: string; value: string; color?: string}> {
+	const lines: Array<{label: string; value: string; color?: string}> = [];
+	if (event.toolCallId) {
+		lines.push({label: 'call', value: event.toolCallId});
 	}
-	const resourceCheck = payload.resource_check as Record<string, unknown> | undefined;
-	if (resourceCheck) {
-		return String(resourceCheck.tool_name ?? '-');
+	if (event.approvalState) {
+		lines.push({label: 'approval', value: event.approvalState, color: event.approvalState === 'rejected' ? 'red' : 'yellow'});
 	}
-	if (payload.name) {
-		return String(payload.name);
+	if (event.argsPreview) {
+		lines.push({label: 'args', value: event.argsPreview});
 	}
-	const message = payload.message as Record<string, unknown> | undefined;
-	if (message) {
-		return String(message.name ?? '-');
+	if (event.exitCode !== null) {
+		lines.push({label: 'exit', value: String(event.exitCode), color: event.exitCode === 0 ? 'green' : 'red'});
 	}
-	return '-';
-}
-
-function detailLines(payload: Record<string, unknown>): string[] {
-	const lines: string[] = [];
-	if (payload.arguments) {
-		lines.push(`args: ${compact(payload.arguments)}`);
+	if (event.durationMs !== null) {
+		lines.push({label: 'duration', value: `${event.durationMs}ms`});
 	}
-	if (payload.summary) {
-		lines.push(`summary: ${String(payload.summary)}`);
+	if (event.stdoutPreview) {
+		lines.push({label: 'stdout', value: event.stdoutPreview, color: 'white'});
 	}
-	if (payload.revision_guidance) {
-		lines.push(`revision: ${String(payload.revision_guidance)}`);
+	if (event.stderrPreview) {
+		lines.push({label: 'stderr', value: event.stderrPreview, color: 'red'});
 	}
-	const resourceCheck = payload.resource_check as Record<string, unknown> | undefined;
-	if (resourceCheck) {
-		lines.push(`status: ${String(resourceCheck.status ?? '-')}`);
-		lines.push(`result: ${String(resourceCheck.result_summary ?? '').slice(0, 260)}`);
-	}
-	const message = payload.message as Record<string, unknown> | undefined;
-	if (message) {
-		lines.push(`tool_call_id: ${String(message.tool_call_id ?? '-')}`);
-		lines.push(`result: ${String(message.content ?? '').slice(0, 900)}`);
+	if (event.resultPreview) {
+		lines.push({label: 'result', value: event.resultPreview, color: event.status === 'failed' ? 'red' : 'gray'});
 	}
 	if (!lines.length) {
-		lines.push(compact(payload));
+		lines.push({label: 'payload', value: compact(event.payload)});
 	}
 	return lines;
 }
 
 function compact(value: unknown): string {
 	return JSON.stringify(value).replace(/\s+/g, ' ').slice(0, 320);
-}
-
-function searchableText(payload: Record<string, unknown>): string {
-	return JSON.stringify(payload);
 }

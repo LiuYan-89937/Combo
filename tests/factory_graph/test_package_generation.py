@@ -150,15 +150,14 @@ def _tool_code() -> str:
 
 def _tool_manifest() -> dict:
     return {
-        "tool_id": "ledger_lookup",
-        "name": "Ledger lookup",
+        "id": "ledger_lookup",
         "description": "Look up ledger entries.",
-        "input_contract": {"type": "object"},
-        "output_contract": {"type": "object"},
-        "resource_keys": ["ledger_file"],
+        "entrypoint": "tools/ledger_lookup/tool.py:run",
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+        "resources": {"ledger_file": "ledger_file"},
         "approval_required": False,
-        "risk_notes": [],
-        "entrypoint": "tool.py:run",
+        "concurrent": True,
     }
 
 
@@ -301,7 +300,18 @@ def _assembly_spec() -> dict:
             ],
             "hooks": [],
         },
-        "tools": [{"id": "ledger_lookup", "name": "Ledger lookup", "description": "Look up ledger entries."}],
+        "tools": [
+            {
+                "id": "ledger_lookup",
+                "description": "Look up ledger entries.",
+                "entrypoint": "tools/ledger_lookup/tool.py:run",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "resources": {"ledger_file": "ledger_file"},
+                "approval_required": False,
+                "concurrent": True,
+            }
+        ],
         "output": {"format": "markdown", "citations_required": False},
         "metadata": {"factory_run_id": "run_1", "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json"},
     }

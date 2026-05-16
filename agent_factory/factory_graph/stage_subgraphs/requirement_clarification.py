@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -8,6 +9,7 @@ from langgraph.types import interrupt
 from agent_factory.factory_graph.schemas import (
     ClarifyingQuestionSetOutput,
     RequirementClarityOutput,
+    RequirementFrame,
     RequirementMergeOutput,
 )
 from agent_factory.factory_graph.prompt_context import prompt_context_values, stage_operating_context
@@ -31,13 +33,22 @@ STAGE_ID = "requirement_capture"
 def build_requirement_capture_subgraph():
     graph = StateGraph(FactoryGraphState)
     graph.add_node("initialize_requirement", _initialize_requirement)
+    graph.add_node("extract_requirement_frame", _extract_requirement_frame)
     graph.add_node("judge_requirement_clarity", _judge_requirement_clarity)
     graph.add_node("generate_clarifying_question", _generate_clarifying_question)
     graph.add_node("wait_for_requirement_answer", _wait_for_requirement_answer)
     graph.add_node("merge_requirement_answer", _merge_requirement_answer)
     graph.add_node("finalize_requirement", _finalize_requirement)
     graph.add_edge(START, "initialize_requirement")
-    graph.add_edge("initialize_requirement", "judge_requirement_clarity")
+    graph.add_edge("initialize_requirement", "extract_requirement_frame")
+    graph.add_conditional_edges(
+        "extract_requirement_frame",
+        _route_after_structured_node,
+        {
+            "judge_requirement_clarity": "judge_requirement_clarity",
+            END: END,
+        },
+    )
     graph.add_conditional_edges(
         "judge_requirement_clarity",
         _route_after_clarity,
@@ -78,11 +89,13 @@ def _initialize_requirement(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
     original_input = capture.get("original_input") or state.get("requirement", "")
     current_requirement = capture.get("current_requirement") or original_input
+    requirement_frame = _requirement_frame(capture, fallback_goal=str(current_requirement))
     return {
         "current_stage": "requirement_capture",
         "requirement_capture": {
             "original_input": original_input,
             "current_requirement": current_requirement,
+            "requirement_frame": requirement_frame.model_dump(mode="json"),
             "iteration_count": int(capture.get("iteration_count") or 0),
             "max_iterations": int(capture.get("max_iterations") or MAX_CAPTURE_ITERATIONS),
         },
@@ -99,6 +112,7 @@ def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
             values={
                 "original_input": capture.get("original_input", ""),
                 "current_requirement": capture.get("current_requirement", ""),
+                "requirement_frame": _json_text(_requirement_frame(capture).model_dump(mode="json")),
                 "runtime_environment": stage_operating_context(STAGE_ID),
                 "output_json_schema": output_json_schema(RequirementClarityOutput),
             },
@@ -107,6 +121,31 @@ def _judge_requirement_clarity(state: FactoryGraphState) -> dict[str, Any]:
         return model_error_patch(STAGE_ID, str(exc))
     return {
         "requirement_capture": {**capture, "clarity": clarity.model_dump(mode="json")},
+    }
+
+
+def _extract_requirement_frame(state: FactoryGraphState) -> dict[str, Any]:
+    capture = dict(state.get("requirement_capture") or {})
+    try:
+        merged = call_structured_model(
+            stage_id=STAGE_ID,
+            prompt_id=PromptId.REQUIREMENT_CAPTURE_FRAME,
+            output_model=RequirementMergeOutput,
+            values={
+                "original_input": capture.get("original_input", ""),
+                "current_requirement": capture.get("current_requirement", ""),
+                "requirement_frame": _json_text(_requirement_frame(capture).model_dump(mode="json")),
+                "output_json_schema": output_json_schema(RequirementMergeOutput),
+            },
+        )
+    except FactoryModelCallError as exc:
+        return model_error_patch(STAGE_ID, str(exc))
+    return {
+        "requirement_capture": {
+            **capture,
+            "current_requirement": merged.current_requirement,
+            "requirement_frame": merged.requirement_frame.model_dump(mode="json"),
+        }
     }
 
 
@@ -121,6 +160,7 @@ def _generate_clarifying_question(state: FactoryGraphState) -> dict[str, Any]:
             values={
                 "original_input": capture.get("original_input", ""),
                 "current_requirement": capture.get("current_requirement", ""),
+                "requirement_frame": _json_text(_requirement_frame(capture).model_dump(mode="json")),
                 "missing_fields": "\n".join(clarity.get("missing_fields") or []),
                 "runtime_environment": stage_operating_context(STAGE_ID),
                 "output_json_schema": output_json_schema(ClarifyingQuestionSetOutput),
@@ -159,6 +199,7 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
             values={
                 "original_input": capture.get("original_input", ""),
                 "current_requirement": capture.get("current_requirement", ""),
+                "requirement_frame": _json_text(_requirement_frame(capture).model_dump(mode="json")),
                 "answers": _format_answers(clarification, answer),
                 "runtime_environment": stage_operating_context(STAGE_ID),
                 "output_json_schema": output_json_schema(RequirementMergeOutput),
@@ -171,10 +212,9 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
         "requirement_capture": {
             "original_input": capture.get("original_input", ""),
             "current_requirement": merged.current_requirement,
+            "requirement_frame": merged.requirement_frame.model_dump(mode="json"),
             "iteration_count": iteration_count,
             "max_iterations": int(capture.get("max_iterations") or MAX_CAPTURE_ITERATIONS),
-            "assumptions": merged.assumptions,
-            "unresolved_questions": merged.unresolved_questions,
         },
     }
 
@@ -182,18 +222,26 @@ def _merge_requirement_answer(state: FactoryGraphState) -> dict[str, Any]:
 def _finalize_requirement(state: FactoryGraphState) -> dict[str, Any]:
     capture = dict(state.get("requirement_capture") or {})
     clarity = dict(capture.get("clarity") or {})
+    frame = _requirement_frame(capture, fallback_goal=str(capture.get("current_requirement") or ""))
     status = "captured" if clarity.get("is_clear", False) else "needs_human_review"
+    missing_decisions = [
+        str(item).strip() for item in (clarity.get("missing_fields") or []) if str(item).strip()
+    ]
     return {
         "current_stage": "requirement_capture",
         "status": "running",
         **({"graph_control": {"action": "end"}} if status != "captured" else {}),
         "requirement_brief": {
-            "original_input": capture.get("original_input", ""),
-            "refined_requirement": capture.get("current_requirement", ""),
-            "assumptions": capture.get("assumptions", []),
-            "unresolved_questions": capture.get("unresolved_questions", []),
-            "confidence": clarity.get("confidence", 0.0),
+            "version": "requirement_brief.v1",
             "status": status,
+            "confidence": clarity.get("confidence", 0.0),
+            "original_input": capture.get("original_input", ""),
+            "requirement_frame": frame.model_dump(mode="json"),
+            "clarity": {
+                "is_clear": bool(clarity.get("is_clear", False)),
+                "reason": clarity.get("reason", ""),
+                "missing_decisions": missing_decisions,
+            },
         },
         "stage_log": [
             {
@@ -244,6 +292,26 @@ def _format_answers(clarification: dict[str, Any], answer: dict[str, Any]) -> st
         if custom_text:
             lines.append(f"自定义补充：{custom_text}")
     return "\n".join(lines)
+
+
+def _requirement_frame(capture: dict[str, Any], *, fallback_goal: str = "") -> RequirementFrame:
+    raw = capture.get("requirement_frame") or {}
+    if isinstance(raw, RequirementFrame):
+        return raw
+    if isinstance(raw, dict):
+        try:
+            frame = RequirementFrame.model_validate(raw)
+        except Exception:
+            frame = RequirementFrame()
+    else:
+        frame = RequirementFrame()
+    if not frame.goal and fallback_goal:
+        return frame.model_copy(update={"goal": fallback_goal})
+    return frame
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2)
 
 
 def _delta_patch(

@@ -22,6 +22,11 @@ export function ShellLayout({state, children}: {state: FactoryUiState; children:
 					<Pill label="run" value={state.runStatus} color={statusColor} />
 					<Pill label="stop" value={state.stopAfterStage ?? 'off'} color="white" />
 				</Box>
+				<Box marginTop={1}>
+					<Pill label="stage" value={state.currentStageId ?? '-'} color={state.currentStageId ? 'blue' : 'gray'} />
+					<Pill label="node" value={state.currentNodeId ?? '-'} color={state.currentNodeId ? 'cyan' : 'gray'} />
+					<Pill label="now" value={currentActivity(state)} color={statusColor} />
+				</Box>
 			</Box>
 			{children}
 		</Box>
@@ -33,4 +38,14 @@ function shortId(value: string | null): string {
 		return '-';
 	}
 	return value.length > 12 ? `${value.slice(0, 10)}...` : value;
+}
+
+function currentActivity(state: FactoryUiState): string {
+	const latest = state.recentActivities.at(-1);
+	if (!latest) {
+		return state.ready ? 'ready' : 'starting';
+	}
+	const detail = latest.detail ? ` ${latest.detail}` : '';
+	const value = `${latest.label}${detail}`;
+	return value.length > 54 ? `${value.slice(0, 54)}...` : value;
 }

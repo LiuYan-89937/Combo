@@ -60,7 +60,6 @@ export const eventSchema = z.object({
 		'interrupt_requested',
 		'runtime_paused',
 		'runtime_resumed',
-		'resource_input_requested',
 		'trace_snapshot',
 		'debug_patch',
 		'error'

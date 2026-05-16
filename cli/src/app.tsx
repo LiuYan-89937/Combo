@@ -15,7 +15,6 @@ import {InterruptChoicePanel, isChoiceInterrupt} from './views/InterruptChoicePa
 import {InterruptPrompt} from './views/InterruptPrompt.js';
 import {LiveStreamPanel} from './views/LiveStreamPanel.js';
 import {MessagesPanel} from './views/MessagesPanel.js';
-import {ResourceInputPrompt} from './views/ResourceInputPrompt.js';
 import {SessionPanel} from './views/SessionPanel.js';
 import {ShellLayout} from './views/ShellLayout.js';
 import {ToolApprovalPrompt} from './views/ToolApprovalPrompt.js';
@@ -158,7 +157,6 @@ export function App() {
 			<ToolEventsPanel state={state} />
 			<InterruptChoicePanel event={state.pendingInterrupt} onSubmit={resumeInterrupt} />
 			{!choiceInterrupt && <ToolApprovalPrompt event={state.pendingInterrupt} />}
-			<ResourceInputPrompt event={state.pendingInterrupt} />
 			{!choiceInterrupt && <InterruptPrompt event={state.pendingInterrupt} />}
 			<MessagesPanel state={state} />
 			<Box marginTop={1}>
