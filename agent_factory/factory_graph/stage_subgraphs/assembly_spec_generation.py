@@ -300,6 +300,8 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
     required_metadata = {
         "factory_run_id": str(state.get("factory_run_id") or ""),
         "resource_file_path": _resource_file_path(state),
+        "sandbox_contract_path": _sandbox_contract_path(state),
+        "resource_preparation_report_path": _resource_preparation_report_path(state),
         "source_stage_ids": [
             "requirement_capture",
             "runtime_pattern_selection",
@@ -445,6 +447,7 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         _file_spec("agent_package.json", "json", "manifest", "agent_package", "system_generated", "assembly_spec+package_materialization_plan"),
         _file_spec("assembly_spec.json", "json", "assembly", "assembly_spec", "system_generated", "assembly_spec"),
         _file_spec("resources.json", "json", "manifest", "resources", "system_generated", "resource_condition_plan.resources"),
+        _file_spec("sandbox_contract.json", "json", "manifest", "sandbox_contract", "system_generated", "resource_condition_plan.sandbox_contract"),
         _file_spec("render_manifest.json", "json", "manifest", "render_manifest", "system_generated", "assembly_spec.metadata.render_manifest"),
         _file_spec("package_report.json", "json", "manifest", "package_report", "system_generated", "package_validation_report"),
         _file_spec("bindings/services.json", "json", "binding", "services", "system_generated", "assembly_spec.bindings.services"),
@@ -504,6 +507,7 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         "runtime": spec.runtime.model_dump(mode="json"),
         "assembly_spec_path": "assembly_spec.json",
         "resources_path": "resources.json",
+        "sandbox_contract_path": "sandbox_contract.json",
         "render_manifest_path": "render_manifest.json",
         "bindings": {
             "services": "bindings/services.json",
@@ -567,7 +571,13 @@ def _validate_render_manifest_for_stage(render_manifest: RenderManifest, spec: A
 def _validate_materialization_plan(plan: PackageMaterializationPlan, state: FactoryGraphState) -> PackageMaterializationValidationReport:
     errors: list[str] = []
     paths = {item.path for item in plan.files}
-    required = {"bindings/services.json", "bindings/node_bindings.json", "bindings/hooks.json", "render_manifest.json"}
+    required = {
+        "bindings/services.json",
+        "bindings/node_bindings.json",
+        "bindings/hooks.json",
+        "render_manifest.json",
+        "sandbox_contract.json",
+    }
     for path in sorted(required - paths):
         errors.append(f"package_materialization_plan missing required binding file: {path}")
     tool_ids = _tool_capability_ids(state)
@@ -733,6 +743,16 @@ def _tool_capability_ids(state: FactoryGraphState) -> set[str]:
 def _resource_file_path(state: FactoryGraphState) -> str:
     plan = dict(state.get("resource_condition_plan") or {})
     return str(plan.get("resource_file_path") or "")
+
+
+def _sandbox_contract_path(state: FactoryGraphState) -> str:
+    plan = dict(state.get("resource_condition_plan") or {})
+    return str(plan.get("sandbox_contract_path") or state.get("sandbox_contract_path") or "")
+
+
+def _resource_preparation_report_path(state: FactoryGraphState) -> str:
+    plan = dict(state.get("resource_condition_plan") or {})
+    return str(plan.get("report_path") or state.get("resource_preparation_report_path") or "")
 
 
 def _json_text(value: Any) -> str:

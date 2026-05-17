@@ -28,8 +28,19 @@ export function buildResumePayload(event: FactoryEvent, value: string): Record<s
 	const payload = event.payload ?? {};
 	const descriptor = describeInterrupt(event);
 	switch (descriptor?.resumeKind) {
-		case 'tool_approval':
-			return {approved: value.trim().toLowerCase() === '-y'};
+		case 'tool_approval': {
+			const normalized = value.trim().toLowerCase();
+			if (['-y', 'y', 'yes', 'approve', 'approved'].includes(normalized)) {
+				return {action: 'approve', approved: true};
+			}
+			if (['-n', 'n', 'no', 'deny', 'denied', 'reject', 'rejected'].includes(normalized)) {
+				return {action: 'deny', approved: false};
+			}
+			if (['-t', 't', 'trust', 'trust_tool', 'always_allow', 'no_approval', '无需审批'].includes(normalized)) {
+				return buildToolTrustPayload();
+			}
+			return buildToolApprovalRevisionPayload(value);
+		}
 		case 'plan_review':
 			if (['继续', 'continue', 'c', 'yes', 'y'].includes(value.trim().toLowerCase())) {
 				return {type: 'plan_review_result', decision: 'continue'};
@@ -73,6 +84,10 @@ export function buildPlanReviewRevisionPayload(revisionInstruction: string): Rec
 
 export function buildToolApprovalPayload(approved: boolean): Record<string, unknown> {
 	return {action: approved ? 'approve' : 'deny', approved};
+}
+
+export function buildToolTrustPayload(): Record<string, unknown> {
+	return {action: 'trust_tool', approved: true, trust_scope: 'tool'};
 }
 
 export function buildToolApprovalRevisionPayload(revisionGuidance: string): Record<string, unknown> {

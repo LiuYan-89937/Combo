@@ -44,6 +44,7 @@ REQUIRED_PACKAGE_FILES = {
     "agent_package.json",
     "assembly_spec.json",
     "resources.json",
+    "sandbox_contract.json",
     "render_manifest.json",
     "package_report.json",
     "bindings/services.json",
@@ -534,10 +535,12 @@ def _system_generated_files(
     assembly_spec = AgentAssemblySpec.model_validate(state.get("assembly_spec") or {})
     resource_plan = dict(state.get("resource_condition_plan") or {})
     resources_payload = {"version": "factory_resources.v0", "resources": dict(resource_plan.get("resources") or {})}
+    sandbox_contract = dict(resource_plan.get("sandbox_contract") or {})
     by_path = {
         "agent_package.json": plan.manifest_contract,
         "assembly_spec.json": assembly_spec.model_dump(mode="json"),
         "resources.json": resources_payload,
+        "sandbox_contract.json": {"version": "sandbox_contract.v0", **sandbox_contract},
         "render_manifest.json": assembly_spec.metadata.get("render_manifest"),
         "package_report.json": {"version": "package_report.v0", "status": "valid"},
         "bindings/services.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.services],

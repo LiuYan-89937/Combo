@@ -15,8 +15,6 @@ class FactoryGraphState(TypedDict, total=False):
     current_stage: str
     status: str
     graph_control: dict[str, Any]
-    protected_tool_ids: list[str]
-    tool_approval: dict[str, Any]
     model_activity: list[dict[str, Any]]
     capture_intent: dict[str, Any]
     factory_response: dict[str, Any]
@@ -32,6 +30,9 @@ class FactoryGraphState(TypedDict, total=False):
     node_strategy_plan: dict[str, Any]
     tool_capability_plan: dict[str, Any]
     resource_condition_plan: dict[str, Any]
+    resource_file_path: str
+    sandbox_contract_path: str
+    resource_preparation_report_path: str
     assembly_react_attempt: int
     assembly_react_decision: dict[str, Any]
     assembly_spec_draft_candidate: dict[str, Any]

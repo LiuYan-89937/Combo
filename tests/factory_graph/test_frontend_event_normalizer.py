@@ -114,6 +114,49 @@ class FrontendEventNormalizerTest(unittest.TestCase):
         self.assertEqual(len([event for event in events if event.event_type == "node_started"]), 1)
         self.assertEqual(len([event for event in events if event.event_type == "node_completed"]), 1)
 
+    def test_tool_approval_reuses_existing_tool_call_without_duplicate_proposal(self) -> None:
+        events = []
+        normalizer = RuntimeEventNormalizer(
+            emit=events.append,
+            request_id="request-a",
+            session_id="session-a",
+            mode="create_agent",
+            graph_id="factory_graph",
+        )
+
+        normalizer.emit_custom_event(
+            {
+                "type": "tool_activity",
+                "payload": {
+                    "events": [
+                        {
+                            "event_type": "tool_call_proposed",
+                            "tool_call_id": "call-a",
+                            "tool_id": "bash",
+                            "arguments": {"command": ["pwd"]},
+                        }
+                    ]
+                },
+            }
+        )
+        normalizer.emit_interrupt(
+            {
+                "type": "tool_approval",
+                "requests": [
+                    {
+                        "tool_name": "bash",
+                        "args": {"command": ["pwd"]},
+                    }
+                ],
+            }
+        )
+
+        proposed = [event for event in events if event.event_type == "tool_call_proposed"]
+        approvals = [event for event in events if event.event_type == "tool_approval_requested"]
+        self.assertEqual(len(proposed), 1)
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0].payload["requests"][0]["tool_call_id"], "call-a")
+
 
 if __name__ == "__main__":
     unittest.main()

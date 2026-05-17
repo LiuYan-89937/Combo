@@ -47,6 +47,8 @@ class RuntimeEventNormalizer:
     completed_nodes: set[str] = field(default_factory=set)
     model_streams: dict[str, ModelStreamState] = field(default_factory=dict)
     current_stage_id: str | None = None
+    pending_tool_call_ids_by_name: dict[str, list[str]] = field(default_factory=dict)
+    proposed_tool_call_ids: set[str] = field(default_factory=set)
 
     def runtime_event(
         self,
@@ -240,11 +242,15 @@ class RuntimeEventNormalizer:
                 continue
             event_type = str(item.get("event_type") or "")
             if event_type not in {
+                "tool_call_proposed",
                 "tool_call_started",
                 "tool_call_completed",
                 "tool_call_failed",
                 "tool_observation_available",
             }:
+                continue
+            item_payload = {key: value for key, value in json_safe(item).items() if key != "event_type"}
+            if event_type == "tool_call_proposed" and not self._remember_tool_proposal(item_payload):
                 continue
             tool_span_id = uuid.uuid4().hex
             self.runtime_event(
@@ -253,7 +259,7 @@ class RuntimeEventNormalizer:
                 stage_id=self.current_stage_id,
                 span_id=tool_span_id,
                 parent_span_id=self._stage_span_or_run(self.current_stage_id),
-                payload={key: value for key, value in json_safe(item).items() if key != "event_type"},
+                payload=item_payload,
             )
 
     def emit_message_chunk(self, chunk: Any) -> None:
@@ -307,7 +313,11 @@ class RuntimeEventNormalizer:
         interrupt_span_id = uuid.uuid4().hex
         if interrupt_type == "tool_approval":
             requests = safe_payload.get("requests", []) or []
-            for request in requests:
+            normalized_requests = [self._normalize_approval_request(request) for request in requests]
+            safe_payload = {**safe_payload, "requests": normalized_requests}
+            for request in normalized_requests:
+                if not self._remember_tool_proposal(request):
+                    continue
                 tool_span_id = uuid.uuid4().hex
                 self.runtime_event(
                     "tool_call_proposed",
@@ -356,6 +366,44 @@ class RuntimeEventNormalizer:
                     "completion_inferred": True,
                 },
             )
+
+    def _normalize_approval_request(self, request: Any) -> dict[str, Any]:
+        if not isinstance(request, dict):
+            return {"summary": str(request)}
+        normalized = dict(request)
+        if normalized.get("tool_call_id"):
+            return normalized
+        tool_name = str(normalized.get("tool_name") or normalized.get("tool_id") or normalized.get("name") or "").strip()
+        tool_call_id = self._pop_pending_tool_call_id(tool_name)
+        if tool_call_id:
+            normalized["tool_call_id"] = tool_call_id
+        return normalized
+
+    def _pop_pending_tool_call_id(self, tool_name: str) -> str | None:
+        if not tool_name:
+            return None
+        pending = self.pending_tool_call_ids_by_name.get(tool_name) or []
+        if not pending:
+            return None
+        tool_call_id = pending.pop(0)
+        if pending:
+            self.pending_tool_call_ids_by_name[tool_name] = pending
+        else:
+            self.pending_tool_call_ids_by_name.pop(tool_name, None)
+        return tool_call_id
+
+    def _remember_tool_proposal(self, payload: dict[str, Any]) -> bool:
+        tool_call_id = str(payload.get("tool_call_id") or "").strip()
+        tool_name = str(payload.get("tool_name") or payload.get("tool_id") or payload.get("name") or "").strip()
+        if tool_call_id:
+            if tool_call_id in self.proposed_tool_call_ids:
+                return False
+            self.proposed_tool_call_ids.add(tool_call_id)
+        if tool_call_id and tool_name:
+            pending = self.pending_tool_call_ids_by_name.setdefault(tool_name, [])
+            if tool_call_id not in pending:
+                pending.append(tool_call_id)
+        return True
 
     def _ensure_stage_started(self, stage_id: str) -> str:
         self.current_stage_id = stage_id
@@ -491,16 +539,10 @@ class RuntimeEventNormalizer:
                     "arguments": tool_call.get("args") or {},
                     "source": "ai_tool_call",
                 }
+                if not self._remember_tool_proposal(payload):
+                    continue
                 self.runtime_event(
                     "tool_call_proposed",
-                    node_id=node_id,
-                    stage_id=stage_id,
-                    span_id=tool_span_id,
-                    parent_span_id=parent_span_id,
-                    payload=payload,
-                )
-                self.runtime_event(
-                    "tool_call_started",
                     node_id=node_id,
                     stage_id=stage_id,
                     span_id=tool_span_id,

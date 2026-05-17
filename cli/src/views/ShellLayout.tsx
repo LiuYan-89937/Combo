@@ -1,10 +1,20 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import {type FactoryUiState} from '../state/factoryStore.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 import {Pill} from './ui.js';
 
-export function ShellLayout({state, children}: {state: FactoryUiState; children: React.ReactNode}) {
-	const statusColor = state.runStatus === 'failed' ? 'red' : state.runStatus === 'running' ? 'green' : state.runStatus === 'interrupted' ? 'yellow' : 'gray';
+export function ShellLayout({children}: {children: React.ReactNode}) {
+	const ready = useStoreSelector(state => state.ready);
+	const sessionId = useStoreSelector(state => state.sessionId);
+	const sessionTitle = useStoreSelector(state => state.sessionTitle);
+	const mode = useStoreSelector(state => state.mode);
+	const runStatus = useStoreSelector(state => state.runStatus);
+	const stopAfterStage = useStoreSelector(state => state.stopAfterStage);
+	const currentStageId = useStoreSelector(state => state.currentStageId);
+	const currentNodeId = useStoreSelector(state => state.currentNodeId);
+	const currentNodeLabel = useStoreSelector(state => currentNodeLabelFromState(state.currentNodeId, state.nodeStatuses));
+	const currentActivity = useStoreSelector(state => currentActivityFromState(state.ready, state.recentActivities));
+	const statusColor = runStatus === 'failed' ? 'red' : runStatus === 'running' ? 'green' : runStatus === 'interrupted' ? 'yellow' : 'gray';
 	return (
 		<Box flexDirection="column">
 			<Box borderStyle="double" borderColor="cyan" paddingX={2} paddingY={1} flexDirection="column">
@@ -13,19 +23,19 @@ export function ShellLayout({state, children}: {state: FactoryUiState; children:
 						<Text bold color="cyan">FastAgentFactory</Text>
 						<Text color="gray"> / TypeScript Frontend</Text>
 					</Box>
-					<Text color={state.ready ? 'green' : 'yellow'}>{state.ready ? 'ONLINE' : 'STARTING'}</Text>
+					<Text color={ready ? 'green' : 'yellow'}>{ready ? 'ONLINE' : 'STARTING'}</Text>
 				</Box>
 				<Box marginTop={1}>
-					<Pill label="session" value={shortId(state.sessionId)} />
-					{state.sessionTitle && <Pill label="title" value={state.sessionTitle} color="white" />}
-					<Pill label="mode" value={state.mode ?? '-'} color={state.mode ? 'cyan' : 'gray'} />
-					<Pill label="run" value={state.runStatus} color={statusColor} />
-					<Pill label="stop" value={state.stopAfterStage ?? 'off'} color="white" />
+					<Pill label="session" value={shortId(sessionId)} />
+					{sessionTitle && <Pill label="title" value={sessionTitle} color="white" />}
+					<Pill label="mode" value={mode ?? '-'} color={mode ? 'cyan' : 'gray'} />
+					<Pill label="run" value={runStatus} color={statusColor} />
+					<Pill label="stop" value={stopAfterStage ?? 'off'} color="white" />
 				</Box>
 				<Box marginTop={1}>
-					<Pill label="stage" value={state.currentStageId ?? '-'} color={state.currentStageId ? 'blue' : 'gray'} />
-					<Pill label="node" value={currentNodeLabel(state)} color={state.currentNodeId ? 'cyan' : 'gray'} />
-					<Pill label="now" value={currentActivity(state)} color={statusColor} />
+					<Pill label="stage" value={currentStageId ?? '-'} color={currentStageId ? 'blue' : 'gray'} />
+					<Pill label="node" value={currentNodeLabel} color={currentNodeId ? 'cyan' : 'gray'} />
+					<Pill label="now" value={currentActivity} color={statusColor} />
 				</Box>
 			</Box>
 			{children}
@@ -40,18 +50,18 @@ function shortId(value: string | null): string {
 	return value.length > 12 ? `${value.slice(0, 10)}...` : value;
 }
 
-function currentNodeLabel(state: FactoryUiState): string {
-	if (!state.currentNodeId) {
+function currentNodeLabelFromState(currentNodeId: string | null, nodeStatuses: Record<string, {label: string | null}>): string {
+	if (!currentNodeId) {
 		return '-';
 	}
-	const node = state.nodeStatuses[state.currentNodeId];
-	return node?.label ?? state.currentNodeId;
+	const node = nodeStatuses[currentNodeId];
+	return node?.label ?? currentNodeId;
 }
 
-function currentActivity(state: FactoryUiState): string {
-	const latest = state.recentActivities.at(-1);
+function currentActivityFromState(ready: boolean, recentActivities: Array<{label: string; detail: string}>): string {
+	const latest = recentActivities.at(-1);
 	if (!latest) {
-		return state.ready ? 'ready' : 'starting';
+		return ready ? 'ready' : 'starting';
 	}
 	const detail = latest.detail ? ` ${latest.detail}` : '';
 	const value = `${latest.label}${detail}`;

@@ -1,0 +1,221 @@
+import {describe, expect, it, vi} from 'vitest';
+import {createRuntimeStore} from './runtimeStore.js';
+import {type FactoryEvent} from '../protocol.js';
+
+describe('RuntimeStore', () => {
+	it('batches model stream deltas before notifying subscribers', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+		let notifications = 0;
+		store.subscribe(() => {
+			notifications += 1;
+		});
+
+		store.dispatch(event('model_stream_delta', {payload: {stream_id: 's1', delta: 'hello'}}));
+		expect(notifications).toBe(0);
+		expect(store.getSnapshot().modelStreams.s1).toBeUndefined();
+
+		vi.advanceTimersByTime(32);
+		expect(notifications).toBe(0);
+
+		vi.advanceTimersByTime(1);
+		expect(notifications).toBe(1);
+		expect(store.getSnapshot().modelStreams.s1?.content).toBe('hello');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
+
+	it('flushes pending stream deltas before immediate completion events', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('model_stream_delta', {payload: {stream_id: 's1', delta: 'hello'}}));
+		store.dispatch(event('model_message_completed', {payload: {stream_id: 's1', content: 'hello'}}));
+
+		const stream = store.getSnapshot().modelStreams.s1;
+		expect(stream?.content).toBe('hello');
+		expect(stream?.active).toBe(false);
+		expect(store.getSnapshot().transcript.at(-1)?.content).toBe('hello');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
+
+	it('rebuilds transcript from session snapshot messages', () => {
+		const store = createRuntimeStore();
+		store.dispatch(event('session_started', {
+			mode: 'chat',
+			payload: {
+				session: {
+					session_id: 'session-1',
+					current_mode: 'chat',
+					snapshot: {
+						messages: [
+							{role: 'user', content: '你好'},
+							{role: 'assistant', content: '你好，我在'}
+						]
+					}
+				}
+			}
+		}));
+
+		expect(store.getSnapshot().transcript.map(item => item.content)).toEqual(['你好', '你好，我在']);
+	});
+
+	it('summarizes session tool messages instead of showing raw JSON', () => {
+		const store = createRuntimeStore();
+		store.dispatch(event('session_started', {
+			mode: 'chat',
+			payload: {
+				session: {
+					session_id: 'session-1',
+					current_mode: 'chat',
+					snapshot: {
+						messages: [
+							{
+								type: 'ToolMessage',
+								name: 'write',
+								content: JSON.stringify({
+									type: 'tool_observation',
+									status: 'completed',
+									message: 'write completed',
+									output: {path: 'draft.txt', bytes_written: 12}
+								})
+							}
+						]
+					}
+				}
+			}
+		}));
+
+		const item = store.getSnapshot().transcript[0];
+		expect(item?.title).toBe('Tool / write');
+		expect(item?.content).toContain('message: write completed');
+		expect(item?.content).not.toContain('"type":"tool_observation"');
+	});
+
+	it('merges tool approval into the proposed tool card without transcript duplication', () => {
+		const store = createRuntimeStore();
+		store.dispatch(event('tool_call_proposed', {
+			payload: {
+				tool_call_id: 'call-write-1',
+				tool_name: 'write',
+				arguments: {path: 'draft.txt', content: 'hello'}
+			}
+		}));
+		store.dispatch(event('tool_approval_requested', {
+			payload: {
+				type: 'tool_approval',
+				requests: [
+					{
+						tool_call_id: 'call-write-1',
+						tool_name: 'write',
+						args: {path: 'draft.txt', content: 'hello'},
+						summary: 'write draft.txt'
+					}
+				]
+			}
+		}));
+		store.dispatch(event('interrupt_requested', {
+			payload: {
+				type: 'tool_approval',
+				requests: [
+					{
+						tool_call_id: 'call-write-1',
+						tool_name: 'write',
+						args: {path: 'draft.txt', content: 'hello'}
+					}
+				]
+			}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.toolActivities).toHaveLength(1);
+		expect(snapshot.toolActivities[0]?.status).toBe('approval');
+		expect(snapshot.toolActivities[0]?.approvalState).toBe('pending');
+		expect(snapshot.transcript.some(item => item.title === 'Tool Approval Requested')).toBe(false);
+	});
+
+	it('resolves tool approval without creating a second raw tool activity', () => {
+		const store = createRuntimeStore();
+		store.dispatch(event('tool_call_proposed', {
+			payload: {
+				tool_call_id: 'call-write-1',
+				tool_name: 'write',
+				arguments: {path: 'draft.txt'}
+			}
+		}));
+		store.dispatch(event('tool_approval_requested', {
+			payload: {
+				type: 'tool_approval',
+				requests: [{tool_call_id: 'call-write-1', tool_name: 'write', args: {path: 'draft.txt'}}]
+			}
+		}));
+		expect(store.getSnapshot().pendingInterrupt?.event_type).toBe('tool_approval_requested');
+		store.dispatch(event('tool_approval_resolved', {
+			payload: {action: 'deny', approved: false}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.pendingInterrupt).toBeNull();
+		expect(snapshot.runStatus).toBe('running');
+		expect(snapshot.toolActivities).toHaveLength(1);
+		expect(snapshot.toolActivities[0]?.approvalState).toBe('rejected');
+		expect(snapshot.toolActivities[0]?.toolName).toBe('write');
+	});
+
+	it('marks trusted tool approval without creating a second activity', () => {
+		const store = createRuntimeStore();
+		store.dispatch(event('tool_call_proposed', {
+			payload: {
+				tool_call_id: 'call-write-1',
+				tool_name: 'write',
+				arguments: {path: 'draft.txt'}
+			}
+		}));
+		store.dispatch(event('tool_approval_requested', {
+			payload: {
+				type: 'tool_approval',
+				requests: [{tool_call_id: 'call-write-1', tool_name: 'write', args: {path: 'draft.txt'}}]
+			}
+		}));
+		store.dispatch(event('tool_approval_resolved', {
+			payload: {action: 'trust_tool', approved: true, trust_scope: 'tool'}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.toolActivities).toHaveLength(1);
+		expect(snapshot.toolActivities[0]?.approvalState).toBe('trusted');
+	});
+});
+
+function event(
+	event_type: FactoryEvent['event_type'],
+	patch: Partial<FactoryEvent> = {}
+): FactoryEvent {
+	return {
+		event_id: `${event_type}-event`,
+		event_type,
+		protocol_version: 'factory_frontend.v1',
+		producer_type: 'test',
+		request_id: null,
+		run_id: 'run-1',
+		session_id: 'session-1',
+		thread_id: null,
+		mode: 'chat',
+		graph_id: 'test',
+		node_id: 'node-1',
+		node_label: null,
+		node_kind: null,
+		stage_id: null,
+		span_id: null,
+		parent_span_id: null,
+		sequence: 1,
+		timestamp: '2026-05-17T00:00:00Z',
+		severity: null,
+		message: null,
+		payload: {},
+		...patch
+	};
+}

@@ -1,23 +1,20 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {Box, Text, useInput} from 'ink';
-import {type FactoryUiState} from '../state/factoryStore.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 import {Muted, Section} from './ui.js';
 
 const PAGE_SIZE = 8;
 
 export function SessionPanel({
-	state,
-	active = false,
 	onSelect,
 	onClose
 }: {
-	state: FactoryUiState;
-	active?: boolean;
 	onSelect?: (sessionId: string) => void;
 	onClose?: () => void;
 }) {
 	const [selectedIndex, setSelectedIndex] = useState(0);
-	const sessions = state.sessions;
+	const sessions = useStoreSelector(state => state.sessions);
+	const active = useStoreSelector(state => state.sessionPickerOpen);
 	const pageStart = Math.floor(selectedIndex / PAGE_SIZE) * PAGE_SIZE;
 	const visibleSessions = useMemo(() => sessions.slice(pageStart, pageStart + PAGE_SIZE), [sessions, pageStart]);
 	const pageCount = Math.max(1, Math.ceil(sessions.length / PAGE_SIZE));

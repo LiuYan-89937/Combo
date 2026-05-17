@@ -1,10 +1,11 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import {type FactoryUiState, type NodeStatus} from '../state/factoryStore.js';
+import {type NodeStatus} from '../state/runtimeStore.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 import {Section} from './ui.js';
 
-export function StagePanel({state}: {state: FactoryUiState}) {
-	const node = currentNode(state);
+export function StagePanel() {
+	const node = useStoreSelector(state => currentNode(state.currentNodeId, state.nodeStatuses));
 	if (!node) {
 		return null;
 	}
@@ -31,11 +32,11 @@ export function StagePanel({state}: {state: FactoryUiState}) {
 	);
 }
 
-function currentNode(state: FactoryUiState): NodeStatus | null {
-	if (state.currentNodeId && state.nodeStatuses[state.currentNodeId]) {
-		return state.nodeStatuses[state.currentNodeId];
+function currentNode(currentNodeId: string | null, nodeStatuses: Record<string, NodeStatus>): NodeStatus | null {
+	if (currentNodeId && nodeStatuses[currentNodeId]) {
+		return nodeStatuses[currentNodeId];
 	}
-	const nodes = Object.values(state.nodeStatuses);
+	const nodes = Object.values(nodeStatuses);
 	return nodes.at(-1) ?? null;
 }
 

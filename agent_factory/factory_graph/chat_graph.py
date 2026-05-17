@@ -10,12 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from agent_factory.tooling import get_factory_model_tools, get_factory_protected_tool_ids, get_factory_tools
-from agent_factory.factory_graph.tool_approval import (
-    FACTORY_TOOL_APPROVAL_NODE,
-    approve_tool_calls,
-    route_after_tool_approval,
-)
+from agent_factory.tooling import get_factory_model_tools, get_factory_tools
 from agent_factory.factory_graph.prompt_context import prompt_context_values
 from agent_factory.models import get_task_model, get_task_model_settings
 from agent_factory.prompts import PromptId, get_prompt
@@ -28,8 +23,6 @@ FACTORY_CHAT_TOOLS_NODE = "chat_tools"
 class FactoryChatState(TypedDict, total=False):
     messages: Annotated[list[BaseMessage], operator.add]
     status: str
-    protected_tool_ids: list[str]
-    tool_approval: dict[str, Any]
     errors: Annotated[list[dict[str, Any]], operator.add]
 
 
@@ -44,24 +37,15 @@ def build_factory_chat_graph(
     graph = StateGraph(FactoryChatState)
     graph.add_node(FACTORY_CHAT_MODEL_NODE, _chat_model_node)
     if has_tools:
-        graph.add_node(FACTORY_TOOL_APPROVAL_NODE, approve_tool_calls)
         graph.add_node(FACTORY_CHAT_TOOLS_NODE, ToolNode(resolved_tools, name=FACTORY_CHAT_TOOLS_NODE))
     graph.add_edge(START, FACTORY_CHAT_MODEL_NODE)
     route_after_chat_model = _make_chat_model_router(has_tools=has_tools)
     graph.add_conditional_edges(
         FACTORY_CHAT_MODEL_NODE,
         route_after_chat_model,
-        {FACTORY_TOOL_APPROVAL_NODE: FACTORY_TOOL_APPROVAL_NODE, END: END} if has_tools else {END: END},
+        {FACTORY_CHAT_TOOLS_NODE: FACTORY_CHAT_TOOLS_NODE, END: END} if has_tools else {END: END},
     )
     if has_tools:
-        graph.add_conditional_edges(
-            FACTORY_TOOL_APPROVAL_NODE,
-            _route_after_tool_approval,
-            {
-                FACTORY_CHAT_TOOLS_NODE: FACTORY_CHAT_TOOLS_NODE,
-                FACTORY_CHAT_MODEL_NODE: FACTORY_CHAT_MODEL_NODE,
-            },
-        )
         graph.add_edge(FACTORY_CHAT_TOOLS_NODE, FACTORY_CHAT_MODEL_NODE)
     resolved_checkpointer = checkpointer if checkpointer is not None else _default_checkpointer(enable_interrupts)
     return graph.compile(checkpointer=resolved_checkpointer)
@@ -97,18 +81,10 @@ def _make_chat_model_router(*, has_tools: bool):
             return END
         messages = state.get("messages") or []
         if has_tools and messages and getattr(messages[-1], "tool_calls", None):
-            return FACTORY_TOOL_APPROVAL_NODE
+            return FACTORY_CHAT_TOOLS_NODE
         return END
 
     return route_after_chat_model
-
-
-def _route_after_tool_approval(state: FactoryChatState) -> str:
-    return route_after_tool_approval(
-        state,
-        approved=FACTORY_CHAT_TOOLS_NODE,
-        denied=FACTORY_CHAT_MODEL_NODE,
-    )
 
 
 def _model_error(message: str) -> dict[str, Any]:
@@ -123,7 +99,6 @@ def initial_factory_chat_state(messages: list[BaseMessage]) -> FactoryChatState:
     return {
         "messages": messages,
         "status": "running",
-        "protected_tool_ids": get_factory_protected_tool_ids(),
         "errors": [],
     }
 

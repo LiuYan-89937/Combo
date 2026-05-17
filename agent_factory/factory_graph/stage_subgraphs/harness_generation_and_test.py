@@ -23,6 +23,7 @@ from agent_factory.factory_graph.schemas import (
     HarnessValidationReport,
     HostInteractionContract,
     RuntimeEnvironmentContract,
+    SandboxContract,
     SandboxDependencyPlan,
 )
 from agent_factory.factory_graph.state import FactoryGraphState
@@ -34,7 +35,6 @@ STAGE_ID = "harness_generation_and_test"
 HARNESS_ROOT = ".agentfactory/harness"
 HARNESS_REPORT_VERSION = "harness_report.v0"
 HARNESS_REACT_MODEL_NODE = "harness_react_model"
-HARNESS_TOOL_APPROVAL_NODE = "harness_tool_approval"
 HARNESS_TOOLS_NODE = "harness_tools"
 MAX_HARNESS_REVISION_ROUNDS = 3
 HARNESS_TOOLS = []
@@ -102,10 +102,8 @@ def _initialize_harness_context(state: FactoryGraphState) -> dict[str, Any]:
     factory_run_id = str(state.get("factory_run_id") or "default")
     harness_root = _harness_root(factory_run_id)
     package_root = _package_root(state, factory_run_id)
-    protected_ids = sorted(set(state.get("protected_tool_ids") or []) | set(get_factory_protected_tool_ids()))
     return {
         "current_stage": STAGE_ID,
-        "protected_tool_ids": protected_ids,
         "harness_generation": {
             "status": "collecting",
             "harness_root": str(harness_root),
@@ -179,6 +177,7 @@ def _finalize_harness_contracts(state: FactoryGraphState) -> dict[str, Any]:
         return _terminal_report_patch(state, "blocked", _error("harness.contract", "blocked", decision.blocked_reason or "Harness contract generation blocked."))
     if decision.action == "failed":
         return _terminal_report_patch(state, "failed", _error("harness.contract", "failed", decision.blocked_reason or "Harness contract generation failed."))
+    decision = _with_prepared_sandbox_contract(decision, state)
     return {
         "harness_generation": {
             **harness,
@@ -408,12 +407,13 @@ def _contract_errors(decision: HarnessContractDecision, state: FactoryGraphState
     services = decision.host_interaction.services
     dependency_plan = decision.dependency_plan or SandboxDependencyPlan()
     dependency_needs_network = bool(dependency_plan.python_requirements or dependency_plan.system_packages)
-    if services and decision.runtime_environment.network_policy.mode != "declared_services":
-        errors.append(_error("sandbox.network", "network_policy_invalid", "Declared services require network_policy.mode=declared_services."))
-    if not services and not dependency_needs_network and decision.runtime_environment.network_policy.mode != "none":
-        errors.append(_error("sandbox.network", "network_policy_invalid", "Network must default to none when no services or dependency installs are declared."))
-    if dependency_needs_network and decision.runtime_environment.network_policy.mode == "declared_services" and not decision.runtime_environment.network_policy.allowed_hosts:
-        errors.append(_error("sandbox.network", "network_policy_invalid", "Dependency installation with network access must declare allowed_hosts."))
+    network_mode = decision.runtime_environment.network_policy.mode
+    if services and network_mode == "none":
+        errors.append(_error("sandbox.network", "network_policy_invalid", "Declared services require network access."))
+    if dependency_needs_network and decision.runtime_environment.network_policy.mode == "none":
+        errors.append(_error("sandbox.network", "network_policy_invalid", "Dependency installation requires declared network access."))
+    if network_mode == "declared_services" and not decision.runtime_environment.network_policy.allowed_hosts:
+        errors.append(_error("sandbox.network", "network_policy_invalid", "declared_services network access must declare allowed_hosts."))
     for service in services:
         endpoint = service.endpoint.strip().lower()
         if service.kind == "host_port" and (endpoint.startswith("localhost") or endpoint.startswith("127.0.0.1")):
@@ -675,6 +675,139 @@ def _resource_values(state: FactoryGraphState) -> dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _with_prepared_sandbox_contract(decision: HarnessContractDecision, state: FactoryGraphState) -> HarnessContractDecision:
+    sandbox = _prepared_sandbox_contract(state)
+    if sandbox is None:
+        return decision
+    factory_run_id = str(state.get("factory_run_id") or "default")
+    package_root = _package_root(state, factory_run_id)
+    resources_path = _package_resources_path(package_root)
+    harness_root = _harness_root(factory_run_id)
+    system_mounts = [
+        {
+            "resource_id": "agent_package",
+            "host_path": str(package_root),
+            "container_path": "/package",
+            "access": "read_only",
+            "purpose": "Mount generated AgentPackage into sandbox.",
+            "authorization_source": "system_required",
+        },
+        {
+            "resource_id": "agent_resources",
+            "host_path": str(resources_path.parent),
+            "container_path": "/resources",
+            "access": "read_only",
+            "purpose": "Mount generated resources into sandbox.",
+            "authorization_source": "system_required",
+        },
+        {
+            "resource_id": "harness_artifacts",
+            "host_path": str(harness_root / "artifacts"),
+            "container_path": "/artifacts",
+            "access": "read_write",
+            "purpose": "Collect harness artifacts from sandbox.",
+            "authorization_source": "system_required",
+        },
+        {
+            "resource_id": "harness_workdir",
+            "host_path": str(harness_root / "workdir"),
+            "container_path": "/workdir",
+            "access": "read_write",
+            "purpose": "Provide sandbox working directory.",
+            "authorization_source": "system_required",
+        },
+    ]
+    runtime_environment = RuntimeEnvironmentContract.model_validate(
+        {
+            "backend": sandbox.backend,
+            "image": sandbox.image,
+            "workdir": sandbox.workdir,
+            "network_policy": _network_policy_from_sandbox(sandbox),
+            "env_policy": {"allowed": sorted(sandbox.env), "injected": dict(sandbox.env)},
+            "dependency_policy": {"install_mode": "sandbox_only", "allow_runtime_install": False},
+        }
+    )
+    host_interaction = HostInteractionContract.model_validate(
+        {
+            "mounts": [*system_mounts, *[_mount_from_prepared(item) for item in sandbox.mounts]],
+            "volumes": [_mount_from_prepared(item) for item in sandbox.volumes],
+            "services": [
+                {
+                    "service_id": item.service_id,
+                    "kind": item.kind,
+                    "endpoint": item.endpoint,
+                    "ports": item.ports,
+                    "health_check": {},
+                }
+                for item in sandbox.services
+            ],
+            "secrets": [
+                {
+                    "secret_id": item.secret_id,
+                    "source": "runtime_secret" if item.source == "runtime_provided" else "resources",
+                    "target_env": item.target_env,
+                    "purpose": item.purpose,
+                }
+                for item in sandbox.secrets
+            ],
+            "host_tool_proxies": [],
+        }
+    )
+    return decision.model_copy(
+        update={
+            "runtime_environment": runtime_environment,
+            "host_interaction": host_interaction,
+            "revision_notes": [
+                *decision.revision_notes,
+                "runtime_environment and host_interaction were fixed from stage 6 sandbox_contract",
+            ][:12],
+        },
+        deep=True,
+    )
+
+
+def _prepared_sandbox_contract(state: FactoryGraphState) -> SandboxContract | None:
+    plan = dict(state.get("resource_condition_plan") or {})
+    raw = plan.get("sandbox_contract")
+    if not raw:
+        package_root = _package_root(state, str(state.get("factory_run_id") or "default"))
+        sandbox_path = package_root / "sandbox_contract.json"
+        if sandbox_path.is_file():
+            try:
+                raw = json.loads(sandbox_path.read_text(encoding="utf-8"))
+            except Exception:
+                raw = None
+    if not raw:
+        return None
+    try:
+        return SandboxContract.model_validate(raw)
+    except Exception:
+        return None
+
+
+def _network_policy_from_sandbox(sandbox: SandboxContract) -> dict[str, Any]:
+    policy = sandbox.network_policy.model_dump(mode="json")
+    if "mode" not in policy:
+        policy["mode"] = "default_allow"
+    if "allowed_hosts" not in policy:
+        policy["allowed_hosts"] = [service.endpoint.split(":", 1)[0] for service in sandbox.services]
+    return policy
+
+
+def _mount_from_prepared(mount: Any) -> dict[str, Any]:
+    authorization_source = mount.authorization_source
+    if authorization_source == "tool_evidence":
+        authorization_source = "resources"
+    return {
+        "resource_id": mount.resource_id,
+        "host_path": mount.host_path,
+        "container_path": mount.container_path,
+        "access": mount.access,
+        "purpose": mount.purpose,
+        "authorization_source": authorization_source,
+    }
 
 
 def _looks_like_factory_env(key: str) -> bool:

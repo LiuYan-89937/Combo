@@ -1,11 +1,11 @@
-import React, {useEffect, useMemo, useReducer, useState} from 'react';
-import {Box, Text, useApp} from 'ink';
+import React, {useEffect, useMemo} from 'react';
+import {useApp} from 'ink';
 import {PythonBridge} from './bridge/PythonBridge.js';
-import {routeFactoryEvent} from './bridge/eventRouter.js';
 import {commandSuggestions, factoryStages, factoryToolGroups} from './commands.js';
 import {buildResumePayload} from './interrupts.js';
 import {command, type FactoryCommand, type FactoryEvent, type FactoryMode} from './protocol.js';
-import {initialFactoryUiState} from './state/factoryStore.js';
+import {createRuntimeStore} from './state/runtimeStore.js';
+import {RuntimeStoreProvider, useStoreSelector} from './state/useStoreSelector.js';
 import {CommandInput} from './views/CommandInput.js';
 import {CreateAgentView} from './views/CreateAgentView.js';
 import {ErrorPanel} from './views/ErrorPanel.js';
@@ -16,26 +16,23 @@ import {LiveStreamPanel} from './views/LiveStreamPanel.js';
 import {MessagesPanel} from './views/MessagesPanel.js';
 import {SessionPanel} from './views/SessionPanel.js';
 import {ShellLayout} from './views/ShellLayout.js';
-import {ToolApprovalPrompt} from './views/ToolApprovalPrompt.js';
 import {ToolEventsPanel} from './views/ToolEventsPanel.js';
 
 export function App() {
 	const {exit} = useApp();
-	const [state, dispatch] = useReducer(routeFactoryEvent, initialFactoryUiState);
-	const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
+	const store = useMemo(() => createRuntimeStore(), []);
 	const bridge = useMemo(() => new PythonBridge(), []);
-	const inputDisabled = state.runStatus === 'running' || sessionPickerOpen;
-	const choiceInterrupt = isChoiceInterrupt(state.pendingInterrupt);
 
 	useEffect(() => {
-		const off = bridge.onEvent((event: FactoryEvent) => dispatch(event));
+		const off = bridge.onEvent((event: FactoryEvent) => store.dispatch(event));
 		bridge.start();
 		bridge.send(command('start_session'));
 		return () => {
 			off();
 			bridge.stop();
+			store.destroy();
 		};
-	}, [bridge]);
+	}, [bridge, store]);
 
 	function send(payload: FactoryCommand): void {
 		bridge.send(payload);
@@ -46,10 +43,12 @@ export function App() {
 	}
 
 	function onSubmit(value: string): void {
+		const state = store.getSnapshot();
 		if (!value) {
 			return;
 		}
 		if (state.pendingInterrupt) {
+			store.dispatch({ui_type: 'interrupt_response_submitted', message: value});
 			send(command('resume_interrupt', {payload: buildResumePayload(state.pendingInterrupt, value)}));
 			return;
 		}
@@ -72,16 +71,16 @@ export function App() {
 		}
 		if (value === '/sessions') {
 			send(command('list_sessions'));
-			setSessionPickerOpen(true);
+			store.dispatch({ui_type: 'set_session_picker_open', open: true});
 			return;
 		}
 		if (value === '/new-session') {
-			setSessionPickerOpen(false);
+			store.dispatch({ui_type: 'set_session_picker_open', open: false});
 			send(command('new_session'));
 			return;
 		}
 		if (value.startsWith('/resume ')) {
-			setSessionPickerOpen(false);
+			store.dispatch({ui_type: 'set_session_picker_open', open: false});
 			send(command('switch_session', {session_id: value.slice('/resume '.length).trim()}));
 			return;
 		}
@@ -104,59 +103,75 @@ export function App() {
 		}
 		if (value.startsWith('/tool-grep ')) {
 			const query = value.slice('/tool-grep '.length).trim();
-			dispatch({ui_type: 'set_tool_grep', query});
+			store.dispatch({ui_type: 'set_tool_grep', query});
 			return;
 		}
 		if (value === '/help') {
-			dispatch({ui_type: 'show_help'});
+			store.dispatch({ui_type: 'show_help'});
 			return;
 		}
 		if (value === '/session') {
-			dispatch({ui_type: 'notice', message: `session ${state.sessionId ?? '-'}  mode ${state.mode ?? '-'}`});
+			store.dispatch({ui_type: 'notice', message: `session ${state.sessionId ?? '-'}  mode ${state.mode ?? '-'}`});
 			return;
 		}
 		if (value === '/tools') {
-			dispatch({ui_type: 'notice', message: `tools ${factoryToolGroups.join(' | ')}`});
+			store.dispatch({ui_type: 'notice', message: `tools ${factoryToolGroups.join(' | ')}`});
 			return;
 		}
 		if (value === '/stages') {
-			dispatch({ui_type: 'notice', message: `stages ${factoryStages.join(' -> ')}`});
+			store.dispatch({ui_type: 'notice', message: `stages ${factoryStages.join(' -> ')}`});
 			return;
 		}
+		store.dispatch({ui_type: 'local_user_message', message: value});
 		send(command('send_message', {message: value}));
 	}
 
 	return (
-		<ShellLayout state={state}>
-			<ErrorPanel message={state.lastError} errors={state.errors} />
-			<SessionPanel
-				state={state}
-				active={sessionPickerOpen}
-				onClose={() => setSessionPickerOpen(false)}
-				onSelect={sessionId => {
-					setSessionPickerOpen(false);
-					send(command('switch_session', {session_id: sessionId}));
-				}}
-			/>
-			{state.helpVisible && <HelpPanel mode={state.mode} hasInterrupt={Boolean(state.pendingInterrupt)} />}
-			{state.mode === 'create_agent' && <CreateAgentView state={state} />}
-			<LiveStreamPanel state={state} />
-			<ToolEventsPanel state={state} />
-			<InterruptChoicePanel event={state.pendingInterrupt} onSubmit={resumeInterrupt} />
-			{!choiceInterrupt && <ToolApprovalPrompt event={state.pendingInterrupt} />}
-			{!choiceInterrupt && <InterruptPrompt event={state.pendingInterrupt} />}
-			<MessagesPanel state={state} />
-			<Box marginTop={1}>
-				<Text color={state.ready ? 'green' : 'yellow'}>{state.ready ? 'ready' : 'starting bridge'}</Text>
-			</Box>
-			<CommandInput
-				prompt={`factory${state.mode ? `:${modeLabel(state.mode)}` : ''}`}
-				onSubmit={onSubmit}
-				getSuggestions={value => commandSuggestions(value, state.mode, state.pendingInterrupt?.event_type === 'tool_approval_requested')}
-				disabled={inputDisabled || choiceInterrupt}
-				disabledText={sessionPickerOpen ? 'select a session above' : choiceInterrupt ? 'use the option panel above' : 'runtime running; waiting for event, tool approval, or interrupt'}
-			/>
-		</ShellLayout>
+		<RuntimeStoreProvider store={store}>
+			<ShellLayout>
+				<ErrorPanel />
+				<SessionPanel
+					onClose={() => store.dispatch({ui_type: 'set_session_picker_open', open: false})}
+					onSelect={sessionId => {
+						store.dispatch({ui_type: 'set_session_picker_open', open: false});
+						send(command('switch_session', {session_id: sessionId}));
+					}}
+				/>
+				<ConnectedHelpPanel />
+				<CreateAgentView />
+				<LiveStreamPanel />
+				<ToolEventsPanel />
+				<MessagesPanel />
+				<InterruptChoicePanel onSubmit={resumeInterrupt} />
+				<InterruptPrompt />
+				<ConnectedCommandInput onSubmit={onSubmit} />
+			</ShellLayout>
+		</RuntimeStoreProvider>
+	);
+}
+
+function ConnectedHelpPanel() {
+	const helpVisible = useStoreSelector(state => state.helpVisible);
+	const mode = useStoreSelector(state => state.mode);
+	const hasInterrupt = useStoreSelector(state => Boolean(state.pendingInterrupt));
+	return helpVisible ? <HelpPanel mode={mode} hasInterrupt={hasInterrupt} /> : null;
+}
+
+function ConnectedCommandInput({onSubmit}: {onSubmit: (value: string) => void}) {
+	const mode = useStoreSelector(state => state.mode);
+	const pendingInterrupt = useStoreSelector(state => state.pendingInterrupt);
+	const runStatus = useStoreSelector(state => state.runStatus);
+	const sessionPickerOpen = useStoreSelector(state => state.sessionPickerOpen);
+	const choiceInterrupt = isChoiceInterrupt(pendingInterrupt);
+	const inputDisabled = runStatus === 'running' || sessionPickerOpen;
+	return (
+		<CommandInput
+			prompt={`factory${mode ? `:${modeLabel(mode)}` : ''}`}
+			onSubmit={onSubmit}
+			getSuggestions={value => commandSuggestions(value, mode, pendingInterrupt?.event_type === 'tool_approval_requested')}
+			disabled={inputDisabled || choiceInterrupt}
+			disabledText={sessionPickerOpen ? 'select a session above' : choiceInterrupt ? 'use the option panel above' : 'runtime running; waiting for event, tool approval, or interrupt'}
+		/>
 	);
 }
 

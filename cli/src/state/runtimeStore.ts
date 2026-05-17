@@ -59,7 +59,7 @@ export type ToolActivity = {
 	toolCallId: string | null;
 	toolName: string;
 	status: ToolLifecycle;
-	approvalState: 'pending' | 'approved' | 'rejected' | 'custom' | null;
+	approvalState: 'pending' | 'approved' | 'rejected' | 'custom' | 'trusted' | null;
 	argsPreview: string | null;
 	resultPreview: string | null;
 	stdoutPreview: string | null;
@@ -80,13 +80,29 @@ export type SpanRecord = {
 	payload: Record<string, unknown>;
 };
 
-export type FactoryUiState = {
+export type TranscriptRole = 'user' | 'assistant' | 'tool' | 'interrupt' | 'system';
+
+export type TranscriptItem = {
+	id: string;
+	role: TranscriptRole;
+	timestamp: string;
+	title: string;
+	content: string;
+	eventType?: FactoryEvent['event_type'];
+	streamId?: string;
+	active?: boolean;
+	metadata?: Record<string, unknown>;
+};
+
+export type RuntimeState = {
 	ready: boolean;
 	mode: FactoryMode | null;
 	sessionId: string | null;
 	sessionTitle: string | null;
 	sessions: Array<Record<string, unknown>>;
+	sessionPickerOpen: boolean;
 	logs: string[];
+	transcript: TranscriptItem[];
 	events: Array<FactoryEvent>;
 	spans: Record<string, SpanRecord>;
 	stageStatuses: Record<string, StageStatus>;
@@ -109,19 +125,27 @@ export type FactoryUiState = {
 	errors: string[];
 };
 
-export type FactoryUiAction =
+export type RuntimeAction =
 	| FactoryEvent
 	| {ui_type: 'set_tool_grep'; query: string}
+	| {ui_type: 'set_session_picker_open'; open: boolean}
+	| {ui_type: 'local_user_message'; message: string}
+	| {ui_type: 'interrupt_response_submitted'; message: string}
 	| {ui_type: 'show_help'}
 	| {ui_type: 'notice'; message: string};
 
-export const initialFactoryUiState: FactoryUiState = {
+const STREAM_FLUSH_MS = 33;
+
+export function createInitialRuntimeState(): RuntimeState {
+	return {
 	ready: false,
 	mode: null,
 	sessionId: null,
 	sessionTitle: null,
 	sessions: [],
+	sessionPickerOpen: false,
 	logs: [],
+	transcript: [],
 	events: [],
 	spans: {},
 	stageStatuses: {},
@@ -143,13 +167,106 @@ export const initialFactoryUiState: FactoryUiState = {
 	lastError: null,
 	errors: []
 };
+}
 
-export function reduceFactoryUiAction(state: FactoryUiState, action: FactoryUiAction): FactoryUiState {
+export class RuntimeStore {
+	private state: RuntimeState = createInitialRuntimeState();
+	private readonly listeners = new Set<() => void>();
+	private pendingStreamEvents: FactoryEvent[] = [];
+	private streamTimer: ReturnType<typeof setTimeout> | null = null;
+
+	getSnapshot = (): RuntimeState => this.state;
+
+	subscribe = (listener: () => void): (() => void) => {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	};
+
+	dispatch = (action: RuntimeAction): void => {
+		if ('event_type' in action && action.event_type === 'model_stream_delta') {
+			this.pendingStreamEvents.push(action);
+			this.scheduleStreamFlush();
+			return;
+		}
+		if ('event_type' in action && isImmediateEvent(action.event_type)) {
+			this.flushStreamEvents();
+		}
+		this.state = reduceRuntimeAction(this.state, action);
+		this.notify();
+	};
+
+	destroy(): void {
+		if (this.streamTimer) {
+			clearTimeout(this.streamTimer);
+			this.streamTimer = null;
+		}
+		this.pendingStreamEvents = [];
+		this.listeners.clear();
+	}
+
+	private scheduleStreamFlush(): void {
+		if (this.streamTimer) {
+			return;
+		}
+		this.streamTimer = setTimeout(() => {
+			this.streamTimer = null;
+			this.flushStreamEvents();
+		}, STREAM_FLUSH_MS);
+	}
+
+	private flushStreamEvents(): void {
+		if (!this.pendingStreamEvents.length) {
+			return;
+		}
+		let next = this.state;
+		for (const event of this.pendingStreamEvents) {
+			next = reduceRuntimeEvent(next, event);
+		}
+		this.pendingStreamEvents = [];
+		this.state = next;
+		this.notify();
+	}
+
+	private notify(): void {
+		for (const listener of this.listeners) {
+			listener();
+		}
+	}
+}
+
+export function createRuntimeStore(): RuntimeStore {
+	return new RuntimeStore();
+}
+
+export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction): RuntimeState {
 	if ('event_type' in action) {
-		return reduceFactoryEvent(state, action);
+		return reduceRuntimeEvent(state, action);
 	}
 	if (action.ui_type === 'set_tool_grep') {
 		return setToolGrep(state, action.query === 'off' ? '' : action.query);
+	}
+	if (action.ui_type === 'set_session_picker_open') {
+		return {...state, sessionPickerOpen: action.open};
+	}
+	if (action.ui_type === 'local_user_message') {
+		return appendTranscript(state, {
+			id: `local-user-${Date.now()}-${state.transcript.length}`,
+			role: 'user',
+			timestamp: new Date().toISOString(),
+			title: 'You',
+			content: action.message
+		});
+	}
+	if (action.ui_type === 'interrupt_response_submitted') {
+		return appendTranscript(state, {
+			id: `local-interrupt-${Date.now()}-${state.transcript.length}`,
+			role: 'interrupt',
+			timestamp: new Date().toISOString(),
+			title: 'Interrupt Response',
+			content: action.message
+		});
 	}
 	if (action.ui_type === 'show_help') {
 		return {...state, helpVisible: true};
@@ -160,7 +277,7 @@ export function reduceFactoryUiAction(state: FactoryUiState, action: FactoryUiAc
 	return state;
 }
 
-export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): RuntimeState {
 	const base = recordEvent(recordSpan(state, event), event);
 	switch (event.event_type) {
 		case 'runtime_ready':
@@ -168,11 +285,13 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 		case 'session_started':
 		case 'session_switched': {
 			const session = (event.payload?.session ?? {}) as Record<string, unknown>;
+			const transcript = transcriptFromSession(session, event.mode ?? null);
 			return {
 				...base,
 				sessionId: String(session.session_id ?? event.session_id ?? ''),
 				sessionTitle: sessionTitle(session),
 				mode: (session.current_mode as FactoryMode | null) ?? event.mode ?? null,
+				transcript,
 				logs: [...base.logs, `session: ${String(session.session_id ?? event.session_id ?? '-')}`]
 			};
 		}
@@ -237,15 +356,22 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 				String(event.payload?.message ?? event.message ?? 'model failed')
 			);
 		case 'tool_call_proposed':
-		case 'tool_approval_resolved':
 		case 'tool_call_started':
 		case 'tool_call_completed':
 		case 'tool_call_failed':
 		case 'tool_observation_available':
-			return {
+			return appendToolTranscript({
 				...base,
 				recentActivities: appendRunActivity(base.recentActivities, event),
-				toolActivities: upsertToolActivity(base.toolActivities, toolActivity(event))
+				toolActivities: upsertToolActivities(base.toolActivities, toolActivitiesForEvent(event))
+			}, event);
+		case 'tool_approval_resolved':
+			return {
+				...base,
+				runStatus: 'running',
+				pendingInterrupt: isToolApprovalInterrupt(base.pendingInterrupt) ? null : base.pendingInterrupt,
+				recentActivities: appendRunActivity(base.recentActivities, event),
+				toolActivities: applyToolApprovalResolution(base.toolActivities, event)
 			};
 		case 'debug_patch':
 			return {...base, debugEvents: [...base.debugEvents.slice(-30), event]};
@@ -273,22 +399,22 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 				`node failed: ${event.node_label ?? event.node_id ?? '-'}`
 			);
 		case 'interrupt_requested':
-			return {
+			return appendInterruptTranscript({
 				...base,
 				runStatus: 'interrupted',
 				pendingInterrupt: base.pendingInterrupt ?? event,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
-			};
+			}, event);
 		case 'tool_approval_requested':
-			return {
+			return appendInterruptTranscript({
 				...base,
-				toolActivities: upsertToolActivity(base.toolActivities, toolActivity(event)),
+				toolActivities: upsertToolActivities(base.toolActivities, toolActivitiesForEvent(event)),
 				runStatus: 'interrupted',
 				pendingInterrupt: event,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
-			};
+			}, event);
 		case 'runtime_resumed':
 			return {
 				...base,
@@ -343,7 +469,7 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 	}
 }
 
-function updateCurrentNode(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+function updateCurrentNode(state: RuntimeState, event: FactoryEvent): RuntimeState {
 	return {
 		...state,
 		currentStageId: event.stage_id ?? state.currentStageId,
@@ -351,7 +477,7 @@ function updateCurrentNode(state: FactoryUiState, event: FactoryEvent): FactoryU
 	};
 }
 
-function updateNodeStatus(state: FactoryUiState, event: FactoryEvent, status: StageLifecycle): FactoryUiState {
+function updateNodeStatus(state: RuntimeState, event: FactoryEvent, status: StageLifecycle): RuntimeState {
 	const nodeId = event.node_id;
 	if (!nodeId) {
 		return state;
@@ -378,7 +504,7 @@ function updateNodeStatus(state: FactoryUiState, event: FactoryEvent, status: St
 	};
 }
 
-function updateStageStatus(state: FactoryUiState, event: FactoryEvent, status: StageLifecycle): FactoryUiState {
+function updateStageStatus(state: RuntimeState, event: FactoryEvent, status: StageLifecycle): RuntimeState {
 	const stageId = event.stage_id;
 	if (!stageId) {
 		return state;
@@ -403,15 +529,19 @@ function updateStageStatus(state: FactoryUiState, event: FactoryEvent, status: S
 	};
 }
 
-function recordError(state: FactoryUiState, message: string): FactoryUiState {
+function recordError(state: RuntimeState, message: string): RuntimeState {
 	return {...state, lastError: message, errors: [...state.errors.slice(-8), message]};
 }
 
-function recordEvent(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+function isToolApprovalInterrupt(event: FactoryEvent | null): boolean {
+	return String(event?.payload?.type ?? event?.event_type ?? '') === 'tool_approval';
+}
+
+function recordEvent(state: RuntimeState, event: FactoryEvent): RuntimeState {
 	return {...state, events: [...state.events.slice(-120), event]};
 }
 
-function recordSpan(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+function recordSpan(state: RuntimeState, event: FactoryEvent): RuntimeState {
 	if (!event.span_id) {
 		return state;
 	}
@@ -432,7 +562,7 @@ function recordSpan(state: FactoryUiState, event: FactoryEvent): FactoryUiState 
 	};
 }
 
-function upsertModelStream(state: FactoryUiState, event: FactoryEvent, active: boolean): FactoryUiState {
+function upsertModelStream(state: RuntimeState, event: FactoryEvent, active: boolean): RuntimeState {
 	const streamId = streamIdOf(event);
 	if (!streamId) {
 		return state;
@@ -452,7 +582,7 @@ function upsertModelStream(state: FactoryUiState, event: FactoryEvent, active: b
 	};
 }
 
-function appendModelDelta(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+function appendModelDelta(state: RuntimeState, event: FactoryEvent): RuntimeState {
 	const streamId = streamIdOf(event);
 	if (!streamId) {
 		return state;
@@ -464,7 +594,7 @@ function appendModelDelta(state: FactoryUiState, event: FactoryEvent): FactoryUi
 		active: true,
 		completedAt: null
 	};
-	return {
+	const next = {
 		...state,
 		modelStreams: {
 			...state.modelStreams,
@@ -475,9 +605,17 @@ function appendModelDelta(state: FactoryUiState, event: FactoryEvent): FactoryUi
 			}
 		}
 	};
+	return upsertAssistantTranscript(next, {
+		streamId,
+		timestamp: event.timestamp,
+		content: next.modelStreams[streamId]?.content ?? '',
+		active: true,
+		nodeId: event.node_id ?? null,
+		eventType: event.event_type
+	});
 }
 
-function completeModelStream(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
+function completeModelStream(state: RuntimeState, event: FactoryEvent): RuntimeState {
 	const streamId = streamIdOf(event);
 	if (!streamId) {
 		return state;
@@ -489,25 +627,49 @@ function completeModelStream(state: FactoryUiState, event: FactoryEvent): Factor
 		active: false,
 		completedAt: event.timestamp
 	};
-	return {
+	const content = current.content || String(event.payload?.content ?? '');
+	const next = {
 		...state,
 		modelStreams: {
 			...state.modelStreams,
 			[streamId]: {
 				...current,
-				content: current.content || String(event.payload?.content ?? ''),
+				content,
 				active: false,
 				completedAt: event.timestamp
 			}
 		}
 	};
+	return upsertAssistantTranscript(next, {
+		streamId,
+		timestamp: event.timestamp,
+		content,
+		active: false,
+		nodeId: event.node_id ?? null,
+		eventType: event.event_type
+	});
 }
 
-function toolActivity(event: FactoryEvent): ToolActivity {
-	const payload = event.payload ?? {};
+function toolActivitiesForEvent(event: FactoryEvent): ToolActivity[] {
+	const requests = event.event_type === 'tool_approval_requested' ? event.payload?.requests : null;
+	if (Array.isArray(requests) && requests.length > 0) {
+		return requests
+			.filter((request): request is Record<string, unknown> => Boolean(request) && typeof request === 'object' && !Array.isArray(request))
+			.map(request => toolActivity(event, {
+				...event.payload,
+				...request,
+				arguments: request.args ?? request.arguments ?? {},
+				type: 'tool_approval'
+			}));
+	}
+	return [toolActivity(event)];
+}
+
+function toolActivity(event: FactoryEvent, payloadOverride?: Record<string, unknown>): ToolActivity {
+	const payload = payloadOverride ?? event.payload ?? {};
 	const normalizedPayload = normalizeToolPayload(payload);
 	return {
-		activityKey: toolActivityKey(event),
+		activityKey: toolActivityKey(event, payload),
 		eventType: event.event_type,
 		timestamp: event.timestamp,
 		createdAt: event.timestamp,
@@ -528,6 +690,10 @@ function toolActivity(event: FactoryEvent): ToolActivity {
 	};
 }
 
+function upsertToolActivities(current: ToolActivity[], incoming: ToolActivity[]): ToolActivity[] {
+	return incoming.reduce((items, item) => upsertToolActivity(items, item), current);
+}
+
 function upsertToolActivity(current: ToolActivity[], incoming: ToolActivity): ToolActivity[] {
 	const existingIndex = current.findIndex(item => item.activityKey === incoming.activityKey);
 	if (existingIndex < 0) {
@@ -540,6 +706,29 @@ function upsertToolActivity(current: ToolActivity[], incoming: ToolActivity): To
 		merged,
 		...current.slice(existingIndex + 1)
 	].slice(-40);
+}
+
+function applyToolApprovalResolution(current: ToolActivity[], event: FactoryEvent): ToolActivity[] {
+	const payload = event.payload ?? {};
+	const toolCallId = payloadToolCallId(payload);
+	if (toolCallId) {
+		return upsertToolActivities(current, [toolActivity(event)]);
+	}
+	const resolution = approvalState(payload);
+	if (!resolution) {
+		return current;
+	}
+	return current.map(item => {
+		if (item.status !== 'approval' || item.approvalState !== 'pending') {
+			return item;
+		}
+		return mergeToolActivity(item, toolActivity(event, {
+			...payload,
+			tool_call_id: item.toolCallId ?? undefined,
+			tool_name: item.toolName,
+			arguments: item.payload.arguments ?? item.payload.args ?? undefined
+		}));
+	});
 }
 
 function mergeToolActivity(existing: ToolActivity, incoming: ToolActivity): ToolActivity {
@@ -565,8 +754,7 @@ function mergeToolActivity(existing: ToolActivity, incoming: ToolActivity): Tool
 	};
 }
 
-function toolActivityKey(event: FactoryEvent): string {
-	const payload = event.payload ?? {};
+function toolActivityKey(event: FactoryEvent, payload: Record<string, unknown> = event.payload ?? {}): string {
 	const toolCallId = payloadToolCallId(payload);
 	if (toolCallId) {
 		return `${event.run_id ?? '-'}:tool:${toolCallId}`;
@@ -582,6 +770,13 @@ function payloadToolCallId(payload: Record<string, unknown>): string {
 	const message = payload.message as Record<string, unknown> | undefined;
 	if (typeof message?.tool_call_id === 'string' && message.tool_call_id) {
 		return message.tool_call_id;
+	}
+	const requests = payload.requests;
+	if (Array.isArray(requests)) {
+		const first = requests.find(item => item && typeof item === 'object' && !Array.isArray(item)) as Record<string, unknown> | undefined;
+		if (typeof first?.tool_call_id === 'string' && first.tool_call_id) {
+			return first.tool_call_id;
+		}
 	}
 	const resourceCheck = payload.resource_check as Record<string, unknown> | undefined;
 	const actionId = resourceCheck?.action_id;
@@ -712,10 +907,13 @@ function approvalState(payload: Record<string, unknown>): ToolActivity['approval
 	if (action === 'custom' || action === 'revise') {
 		return 'custom';
 	}
+	if (action === 'trust_tool' || action === 'trust' || payload.trust_tool || payload.trust_scope === 'tool') {
+		return 'trusted';
+	}
 	if (approved === true || action === 'approve') {
 		return 'approved';
 	}
-	if (approved === false || action === 'reject') {
+	if (approved === false || action === 'deny' || action === 'reject') {
 		return 'rejected';
 	}
 	if (payload.type === 'tool_approval' || payload.approval_request) {
@@ -739,13 +937,21 @@ function normalizeToolPayload(payload: Record<string, unknown>): {
 	const rawResult = payload.result ?? payload.output ?? payload.content ?? message?.content ?? resourceCheck?.raw_result ?? resourceCheck?.result_summary;
 	const result = parseJsonLike(rawResult);
 	const resultRecord = recordValue(result);
-	const args = payload.arguments ?? payload.args ?? payload.tool_args ?? resourceCheck?.arguments ?? message?.args;
-	const toolName = stringValue(payload.tool_name) || stringValue(payload.name) || stringValue(message?.name) || stringValue(resourceCheck?.tool_name) || '-';
-	const stdoutPreview = textPreview(resultRecord?.stdout ?? resultRecord?.out);
-	const stderrPreview = textPreview(resultRecord?.stderr ?? resultRecord?.err);
-	const resultPreview = textPreview(resourceCheck?.result_summary ?? resultRecord?.result_summary ?? rawResult);
-	const exitCode = numberValue(resultRecord?.exit_code ?? resultRecord?.returncode ?? payload.exit_code);
-	const durationMs = numberValue(payload.duration_ms ?? resultRecord?.duration_ms);
+	const observation = recordValue(resultRecord?.type === 'tool_observation' ? resultRecord : resultRecord?.observation);
+	const outputRecord = recordValue(observation?.output) ?? resultRecord;
+	const args = payload.arguments ?? payload.args ?? payload.tool_args ?? observation?.arguments ?? resourceCheck?.arguments ?? message?.args;
+	const toolName = stringValue(payload.tool_name) || stringValue(payload.name) || stringValue(observation?.tool_id) || stringValue(message?.name) || stringValue(resourceCheck?.tool_name) || '-';
+	const stdoutPreview = textPreview(outputRecord?.stdout ?? outputRecord?.out);
+	const stderrPreview = textPreview(outputRecord?.stderr ?? outputRecord?.err);
+	const resultPreview = textPreview(
+		resourceCheck?.result_summary
+		?? observation?.message
+		?? outputRecord?.result_summary
+		?? outputSummary(outputRecord)
+		?? rawResult
+	);
+	const exitCode = numberValue(outputRecord?.exit_code ?? outputRecord?.returncode ?? payload.exit_code);
+	const durationMs = numberValue(payload.duration_ms ?? outputRecord?.duration_ms);
 	const argsPreview = args === undefined ? null : compactValue(args, 360);
 	return {
 		toolName,
@@ -802,8 +1008,202 @@ function compactValue(value: unknown, limit = 360): string {
 	}
 }
 
-export function setToolGrep(state: FactoryUiState, query: string): FactoryUiState {
+export function setToolGrep(state: RuntimeState, query: string): RuntimeState {
 	return {...state, toolGrep: query};
+}
+
+function isImmediateEvent(eventType: FactoryEvent['event_type']): boolean {
+	return [
+		'run_failed',
+		'interrupt_requested',
+		'tool_approval_requested',
+		'model_message_completed',
+		'runtime_resumed',
+		'run_completed',
+		'error'
+	].includes(eventType);
+}
+
+function appendTranscript(state: RuntimeState, item: TranscriptItem): RuntimeState {
+	return {...state, transcript: [...state.transcript.slice(-199), item]};
+}
+
+function upsertAssistantTranscript(
+	state: RuntimeState,
+	{
+		streamId,
+		timestamp,
+		content,
+		active,
+		nodeId,
+		eventType
+	}: {
+		streamId: string;
+		timestamp: string;
+		content: string;
+		active: boolean;
+		nodeId: string | null;
+		eventType: FactoryEvent['event_type'];
+	}
+): RuntimeState {
+	if (!content) {
+		return state;
+	}
+	const item: TranscriptItem = {
+		id: `assistant-${streamId}`,
+		role: 'assistant',
+		timestamp,
+		title: nodeId ? `Assistant / ${nodeId}` : 'Assistant',
+		content,
+		eventType,
+		streamId,
+		active,
+		metadata: {node_id: nodeId}
+	};
+	const existingIndex = state.transcript.findIndex(entry => entry.id === item.id);
+	if (existingIndex < 0) {
+		return appendTranscript(state, item);
+	}
+	return {
+		...state,
+		transcript: [
+			...state.transcript.slice(0, existingIndex),
+			item,
+			...state.transcript.slice(existingIndex + 1)
+		]
+	};
+}
+
+function appendToolTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	return event.event_type === 'tool_call_failed'
+		? appendTranscript(state, {
+			id: `tool-error-${event.event_id}`,
+			role: 'tool',
+			timestamp: event.timestamp,
+			title: 'Tool Failed',
+			content: normalizeToolPayload(event.payload ?? {}).resultPreview ?? compactValue(event.payload, 1000),
+			eventType: event.event_type,
+			metadata: event.payload ?? {}
+		})
+		: state;
+}
+
+function appendInterruptTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	const payload = event.payload ?? {};
+	const interruptType = String(payload.type ?? event.event_type);
+	if (interruptType === 'tool_approval') {
+		return state;
+	}
+	const requests = (payload.requests as Array<Record<string, unknown>> | undefined) ?? [];
+	const requestLines = requests.map((item, index) => {
+		const tool = String(item.tool_name ?? '-');
+		const summary = String(item.summary ?? compactValue(item.args ?? item.arguments ?? {}, 360));
+		return `${index + 1}. ${tool} ${summary}`.trim();
+	});
+	const content = requestLines.length ? requestLines.join('\n') : compactValue(payload, 1200);
+	return appendTranscript(state, {
+		id: `interrupt-${event.event_id}`,
+		role: 'interrupt',
+		timestamp: event.timestamp,
+		title: `Interrupt / ${interruptType}`,
+		content,
+		eventType: event.event_type,
+		metadata: payload
+	});
+}
+
+function transcriptFromSession(session: Record<string, unknown>, mode: FactoryMode | null): TranscriptItem[] {
+	const snapshot = recordValue(session.snapshot);
+	const snapshotMessages = Array.isArray(snapshot?.messages) ? snapshot.messages : null;
+	const modeMessages = mode === 'create_agent' ? session.create_agent_messages : mode === 'chat' ? session.chat_messages : null;
+	const messages = snapshotMessages ?? (Array.isArray(modeMessages) ? modeMessages : []);
+	return messages
+		.map((message, index) => transcriptItemFromMessage(message, index))
+		.filter((item): item is TranscriptItem => Boolean(item));
+}
+
+function transcriptItemFromMessage(message: unknown, index: number): TranscriptItem | null {
+	const record = recordValue(message);
+	if (!record) {
+		return null;
+	}
+	const role = stringValue(record.role) || roleFromMessageType(stringValue(record.type));
+	const rawContent = contentToText(record.content);
+	const normalizedRole: TranscriptRole = role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool' : role === 'user' || role === 'human' ? 'user' : 'system';
+	const content = normalizedRole === 'tool' ? toolMessageContent(record, rawContent) : rawContent;
+	if (!content) {
+		return null;
+	}
+	return {
+		id: `session-message-${index}`,
+		role: normalizedRole,
+		timestamp: stringValue(record.created_at) || new Date(0).toISOString(),
+		title: normalizedRole === 'user' ? 'You' : normalizedRole === 'assistant' ? 'Assistant' : normalizedRole === 'tool' ? `Tool / ${stringValue(record.name) || '-'}` : 'System',
+		content,
+		metadata: record
+	};
+}
+
+function toolMessageContent(record: Record<string, unknown>, rawContent: string): string {
+	const parsed = parseJsonLike(rawContent);
+	const parsedRecord = recordValue(parsed);
+	const observation = recordValue(parsedRecord?.type === 'tool_observation' ? parsedRecord : parsedRecord?.observation);
+	const output = recordValue(observation?.output ?? parsedRecord?.output);
+	const lines = [
+		stringValue(observation?.status) ? `status: ${stringValue(observation?.status)}` : '',
+		stringValue(observation?.message) ? `message: ${stringValue(observation?.message)}` : '',
+		outputSummary(output) ? `output: ${outputSummary(output)}` : '',
+		textPreview(output?.stdout, 360) ? `stdout: ${textPreview(output?.stdout, 360)}` : '',
+		textPreview(output?.stderr, 360) ? `stderr: ${textPreview(output?.stderr, 360)}` : ''
+	].filter(Boolean);
+	if (lines.length) {
+		return lines.join('\n');
+	}
+	const toolName = stringValue(record.name);
+	if (rawContent.trim().startsWith('{') || rawContent.trim().startsWith('[')) {
+		return toolName ? `structured observation from ${toolName}` : 'structured tool observation';
+	}
+	return rawContent;
+}
+
+function roleFromMessageType(type: string): string {
+	if (type === 'HumanMessage') {
+		return 'user';
+	}
+	if (type === 'AIMessage') {
+		return 'assistant';
+	}
+	if (type === 'ToolMessage') {
+		return 'tool';
+	}
+	return type || 'system';
+}
+
+function contentToText(value: unknown): string {
+	if (typeof value === 'string') {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value.map(item => {
+			if (typeof item === 'string') {
+				return item;
+			}
+			const record = recordValue(item);
+			return stringValue(record?.text) || stringValue(record?.content);
+		}).join('');
+	}
+	return value === undefined || value === null ? '' : String(value);
+}
+
+function outputSummary(value: Record<string, unknown> | undefined): string | null {
+	if (!value) {
+		return null;
+	}
+	const keys = ['status', 'path', 'process_id', 'exit_code', 'created', 'bytes_written', 'replacements'];
+	const parts = keys
+		.filter(key => value[key] !== undefined && value[key] !== null)
+		.map(key => `${key}=${String(value[key])}`);
+	return parts.length ? parts.join(' ') : null;
 }
 
 function sessionTitle(session: Record<string, unknown>): string | null {

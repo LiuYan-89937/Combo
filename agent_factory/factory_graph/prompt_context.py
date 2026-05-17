@@ -73,9 +73,9 @@ _STAGE_CONTEXTS: dict[str, StageOperatingContext] = {
     ),
     "resource_and_condition_planning": StageOperatingContext(
         stage_id="resource_and_condition_planning",
-        responsibility="根据工具能力准备生成 Agent 所需的业务资源与运行条件。",
-        allowed_outputs=("resource_requirements", "resource_check_plans", "resource_check_results", "resources"),
-        forbidden_outputs=("Factory 自身模型配置", "工具代码", "AssemblySpec", "依赖安装", "特化资源规则"),
+        responsibility="根据工具能力准备生成 Agent 所需的业务资源访问契约与 Docker sandbox 前置运行契约，并把资源值转换为 sandbox 内视角。",
+        allowed_outputs=("resource_requirements", "resource_check_results", "factory_resources.json", "sandbox_contract.json", "resource_preparation_report.json"),
+        forbidden_outputs=("Factory 自身模型配置", "工具代码", "AssemblySpec", "AgentPackage", "harness 执行", "特化资源规则", "本机路径直接写入 Agent 资源"),
     ),
     "assembly_spec_generation": StageOperatingContext(
         stage_id="assembly_spec_generation",

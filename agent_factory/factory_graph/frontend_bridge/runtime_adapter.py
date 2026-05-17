@@ -23,7 +23,6 @@ from agent_factory.factory_graph.session import (
     build_factory_checkpointer,
     is_factory_checkpointer_persistent,
 )
-from agent_factory.factory_graph.tool_approval import FACTORY_TOOL_APPROVAL_NODE
 from agent_factory.tooling import get_factory_base_tool_ids
 
 
@@ -411,6 +410,14 @@ def _session_payload(record: Any | None) -> dict[str, Any]:
     first_user_input = first_user_input or _first_message_content(payload.get("chat_messages"))
     payload["first_user_input"] = first_user_input
     payload["display_title"] = payload.get("display_title") or _display_title(first_user_input)
+    mode = payload.get("current_mode")
+    active_messages = payload.get("chat_messages") if mode == "chat" else payload.get("create_agent_messages") if mode == "create_agent" else []
+    payload["snapshot"] = {
+        "mode": mode,
+        "messages": json_safe(active_messages or []),
+        "pending_interrupt": None,
+        "recent_tool_activities": [],
+    }
     return payload
 
 

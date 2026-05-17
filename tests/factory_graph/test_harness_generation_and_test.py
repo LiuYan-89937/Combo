@@ -97,6 +97,27 @@ class HarnessGenerationAndTestTest(unittest.TestCase):
                 self.assertEqual(result["harness_report"]["status"], "blocked")
                 self.assertEqual(result["harness_report"]["errors"][0]["why"], "docker_not_available")
 
+    def test_default_network_allows_dependency_install_contract(self) -> None:
+        decision = _valid_decision(python_requirements=["requests>=2"])
+        runtime = _FakeRuntime([HarnessExecutionResult(status="passed")])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with _chdir(temp_dir):
+                result = _run_with_decisions([decision], runtime=runtime)
+
+                self.assertEqual(result["status"], "running")
+                self.assertEqual(result["harness_report"]["status"], "passed")
+                self.assertEqual(runtime.run_count, 1)
+
+    def test_dependency_install_requires_declared_network_access(self) -> None:
+        decision = _valid_decision(python_requirements=["requests>=2"], network_mode="none")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with _chdir(temp_dir):
+                result = _run_with_decisions([decision, decision, decision], docker_path="/usr/bin/docker")
+
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["harness_report"]["status"], "failed")
+                self.assertIn("network_policy_invalid", {item["why"] for item in result["harness_report"]["errors"]})
+
     def test_dependency_failure_observation_allows_contract_revision_and_rerun(self) -> None:
         first = _valid_decision()
         second = _valid_decision(
@@ -194,7 +215,7 @@ def _run_with_decisions(
 def _valid_decision(
     *,
     python_requirements: list[str] | None = None,
-    network_mode: str = "none",
+    network_mode: str = "default_allow",
     allowed_hosts: list[str] | None = None,
 ) -> HarnessContractDecision:
     return HarnessContractDecision.model_validate(

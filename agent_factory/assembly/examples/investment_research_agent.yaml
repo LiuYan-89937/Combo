@@ -26,10 +26,140 @@ graph_overrides:
             field: preferences
 tools:
   - id: sec_filing_search
+    description: Search public filing snippets already available to the generated agent runtime.
+    entrypoint: tools/sec_filing_search/tool.py:run
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+      required:
+        - query
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            type: string
+      required:
+        - results
+      additionalProperties: false
+    resources: {}
+    approval_required: false
+    concurrent: true
   - id: price_chart
+    description: Read price chart data already available to the generated agent runtime.
+    entrypoint: tools/price_chart/tool.py:run
+    input_schema:
+      type: object
+      properties:
+        symbol:
+          type: string
+      required:
+        - symbol
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        chart:
+          type: string
+      required:
+        - chart
+      additionalProperties: false
+    resources: {}
+    approval_required: false
+    concurrent: true
 output:
   citations_required: true
   format: markdown
+metadata:
+  render_manifest:
+    version: render_manifest.v0
+    graph_id: investment_research_agent__react_agent
+    producer_type: agent
+    nodes:
+      ingress:
+        node_id: ingress
+        label: Ingress
+        kind: reserved
+        purpose: Accept the user request and initialize runtime state.
+        doing: Preparing the conversation for the research workflow.
+        expected_output: Normalized runtime input state.
+        visible_to_user: true
+      memory_recall:
+        node_id: memory_recall
+        label: Memory Recall
+        kind: operational
+        purpose: Load relevant user memory before reasoning.
+        doing: Checking reusable user context.
+        expected_output: Memory context attached to runtime state.
+        visible_to_user: true
+      knowledge_retrieve:
+        node_id: knowledge_retrieve
+        label: Knowledge Retrieve
+        kind: operational
+        purpose: Retrieve available knowledge for the request.
+        doing: Looking up relevant knowledge context.
+        expected_output: Knowledge snippets attached to runtime state.
+        visible_to_user: true
+      precheck:
+        node_id: precheck
+        label: Precheck
+        kind: governance
+        purpose: Evaluate policy before model reasoning or tool use.
+        doing: Checking whether the request can proceed.
+        expected_output: Policy decision for the request.
+        visible_to_user: true
+      approval_gate:
+        node_id: approval_gate
+        label: Approval Gate
+        kind: governance
+        purpose: Pause for required human approval.
+        doing: Waiting for approval when policy requires it.
+        expected_output: Approval decision recorded in state.
+        visible_to_user: true
+      answer:
+        node_id: answer
+        label: Answer
+        kind: cognitive
+        purpose: Generate the investment research response or decide to use tools.
+        doing: Reasoning over retrieved context and user request.
+        expected_output: Assistant draft or tool request.
+        visible_to_user: true
+      tool_exec:
+        node_id: tool_exec
+        label: Tool Exec
+        kind: operational
+        purpose: Execute approved runtime tools.
+        doing: Running requested tool actions and collecting observations.
+        expected_output: Tool observations recorded in state.
+        visible_to_user: true
+      postcheck:
+        node_id: postcheck
+        label: Postcheck
+        kind: governance
+        purpose: Validate the draft before final commit.
+        doing: Checking the response against output and policy constraints.
+        expected_output: Final policy decision for the response.
+        visible_to_user: true
+      commit:
+        node_id: commit
+        label: Commit
+        kind: terminal
+        purpose: Commit approved final response to runtime state.
+        doing: Saving the final answer.
+        expected_output: Final response available in state.
+        visible_to_user: true
+      finalize:
+        node_id: finalize
+        label: Finalize
+        kind: reserved
+        purpose: Close the runtime invocation.
+        doing: Finalizing execution status.
+        expected_output: Completed runtime state.
+        visible_to_user: true
 harness:
   - scenario_id: basic_answer
     input_text: summarize apple filing

@@ -6,9 +6,11 @@ import {
 	buildRequirementClarificationResumePayload,
 	buildToolApprovalPayload,
 	buildToolApprovalRevisionPayload,
+	buildToolTrustPayload,
 	type RequirementClarificationAnswer
 } from '../interrupts.js';
 import {type FactoryEvent} from '../protocol.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 
 type ChoiceOption = {
 	id: string;
@@ -18,12 +20,11 @@ type ChoiceOption = {
 };
 
 export function InterruptChoicePanel({
-	event,
 	onSubmit
 }: {
-	event: FactoryEvent | null;
 	onSubmit: (payload: Record<string, unknown>) => void;
 }) {
+	const event = useStoreSelector(state => state.pendingInterrupt);
 	const interruptType = String(event?.payload?.type ?? event?.event_type ?? '');
 	if (!event || !['requirement_clarification', 'plan_review', 'tool_approval'].includes(interruptType)) {
 		return null;
@@ -280,13 +281,29 @@ function ToolApprovalTabs({
 			setSelected(current => Math.max(0, current - 1));
 			return;
 		}
+		if (input === 'y') {
+			onSubmit(buildToolApprovalPayload(true));
+			return;
+		}
+		if (input === 'n') {
+			onSubmit(buildToolApprovalPayload(false));
+			return;
+		}
+		if (input === 't') {
+			onSubmit(buildToolTrustPayload());
+			return;
+		}
 		if (key.rightArrow || key.downArrow) {
-			setSelected(current => Math.min(2, current + 1));
+			setSelected(current => Math.min(3, current + 1));
 			return;
 		}
 		if (key.return) {
 			if (selected === 2) {
 				setRevisionMode(true);
+				return;
+			}
+			if (selected === 3) {
+				onSubmit(buildToolTrustPayload());
 				return;
 			}
 			onSubmit(buildToolApprovalPayload(selected === 0));
@@ -295,15 +312,29 @@ function ToolApprovalTabs({
 	return (
 		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
 			<Text bold color="yellow">Tool Approval Required</Text>
+			<Text color="gray">Review the proposed tool call before it touches the workspace.</Text>
 			{requests.map((item, index) => (
-				<Text key={String(item.tool_call_id ?? index)}>
-					{index + 1}. {String(item.tool_name ?? '-')} {String(item.summary ?? '')}
-				</Text>
+				<Box key={String(item.tool_call_id ?? index)} flexDirection="column" marginTop={1}>
+					<Text>
+						<Text color="yellow">▾ {index + 1}. </Text>
+						<Text bold>{String(item.tool_name ?? '-')}</Text>
+						<Text color="gray">  call </Text>
+						{shortId(String(item.tool_call_id ?? '-'))}
+					</Text>
+					<Text color="gray">summary: {String(item.summary ?? 'awaiting review')}</Text>
+					{approvalArgumentLines(item.args ?? item.arguments ?? {}).map(line => (
+						<Text key={`${item.tool_call_id ?? index}:${line.label}`} color="white">
+							<Text color="gray">{line.label}: </Text>
+							{line.value}
+						</Text>
+					))}
+				</Box>
 			))}
 			<Box marginTop={1}>
 				<Tab label="批准" active={selected === 0} />
 				<Tab label="拒绝" active={selected === 1} />
 				<Tab label="重试导向" active={selected === 2} />
+				<Tab label="无需审批" active={selected === 3} />
 			</Box>
 			{revisionMode && (
 				<Text color="cyan">
@@ -311,7 +342,7 @@ function ToolApprovalTabs({
 					<Text inverse>{' '}</Text>
 				</Text>
 			)}
-			<Text color="gray">Left/Right 选择，Enter 确认；重试导向会进入输入模式，提交后不执行工具而是让模型重写 tool call。</Text>
+			<Text color="gray">Left/Right 选择，Enter 确认；y 批准，n 拒绝，t 信任该工具；重试导向会让模型重写 tool call。</Text>
 		</Box>
 	);
 }
@@ -322,6 +353,54 @@ function Tab({label, active}: {label: string; active: boolean}) {
 			{` ${label} `}
 		</Text>
 	);
+}
+
+function approvalArgumentLines(value: unknown): Array<{label: string; value: string}> {
+	if (value === undefined || value === null || value === '') {
+		return [{label: 'args', value: 'none'}];
+	}
+	if (typeof value !== 'object' || Array.isArray(value)) {
+		return [{label: 'args', value: formatApprovalValue(value)}];
+	}
+	const record = value as Record<string, unknown>;
+	const entries = Object.entries(record).slice(0, 8);
+	const lines = entries.map(([key, item]) => ({label: key, value: formatApprovalValue(item)}));
+	if (Object.keys(record).length > entries.length) {
+		lines.push({label: 'more', value: `${Object.keys(record).length - entries.length} fields collapsed`});
+	}
+	return lines.length ? lines : [{label: 'args', value: 'none'}];
+}
+
+function formatApprovalValue(value: unknown): string {
+	if (typeof value === 'string') {
+		return trimOneLine(value, 240);
+	}
+	if (typeof value === 'number' || typeof value === 'boolean') {
+		return String(value);
+	}
+	if (value === null) {
+		return 'null';
+	}
+	if (Array.isArray(value)) {
+		if (value.every(item => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')) {
+			return trimOneLine(value.join(', '), 240);
+		}
+		return `${value.length} items`;
+	}
+	if (value && typeof value === 'object') {
+		const keys = Object.keys(value as Record<string, unknown>);
+		return keys.length ? `{ ${keys.slice(0, 4).join(', ')}${keys.length > 4 ? ', ...' : ''} }` : '{}';
+	}
+	return trimOneLine(String(value), 240);
+}
+
+function trimOneLine(value: string, limit: number): string {
+	const normalized = value.replace(/\s+/g, ' ').trim();
+	return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function shortId(value: string): string {
+	return value.length > 16 ? `${value.slice(0, 14)}...` : value;
 }
 
 function optionsForQuestion(question: Record<string, unknown>): ChoiceOption[] {

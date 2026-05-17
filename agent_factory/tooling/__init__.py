@@ -2,7 +2,22 @@
 
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.entrypoint import ToolEntrypointLoader
+from agent_factory.tooling.factory_extensions import (
+    FACTORY_EXTENSION_ROOT_ENV,
+    FactoryExtensionLoadReport,
+    FactoryExtensionManager,
+    default_factory_extension_root,
+)
 from agent_factory.tooling.gateway import ToolExecutionGateway
+from agent_factory.tooling.mcp_runtime import MCPRuntimeClient, MCPRuntimeError, MCPRuntimeManager
+from agent_factory.tooling.providers import (
+    BuiltinToolProvider,
+    MCPToolProvider,
+    PackageToolProvider,
+    SkillProvider,
+    ToolProviderContext,
+    ToolProviderResult,
+)
 from agent_factory.tooling.registry import (
     ToolRegistry,
     get_factory_base_tool_ids,
@@ -16,14 +31,27 @@ from agent_factory.tooling.spec import ModelToolView, ToolEventPayload, ToolObse
 
 __all__ = [
     "ModelToolView",
+    "BuiltinToolProvider",
+    "FACTORY_EXTENSION_ROOT_ENV",
+    "FactoryExtensionLoadReport",
+    "FactoryExtensionManager",
+    "MCPToolProvider",
+    "MCPRuntimeClient",
+    "MCPRuntimeError",
+    "MCPRuntimeManager",
+    "PackageToolProvider",
+    "SkillProvider",
     "ToolCompiler",
     "ToolEntrypointLoader",
     "ToolEventPayload",
     "ToolExecutionGateway",
     "ToolObservation",
+    "ToolProviderContext",
+    "ToolProviderResult",
     "ToolRegistry",
     "ToolSpec",
     "compile_json_schema",
+    "default_factory_extension_root",
     "get_factory_base_tool_ids",
     "get_factory_model_tools",
     "get_factory_protected_tool_ids",

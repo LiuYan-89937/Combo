@@ -13,6 +13,7 @@ from agent_factory.tooling.spec import ToolObservation, ToolSpec
 
 ToolApprovalAction = Literal["approve", "deny", "revise"]
 ToolApprovalHandler = Callable[[ToolSpec, dict[str, Any]], "ToolApprovalDecision"]
+TRUST_TOOL_ACTIONS = {"trust", "trust_tool", "always_allow", "no_approval", "无需审批"}
 
 
 class ToolApprovalDecision(BaseModel):
@@ -20,6 +21,20 @@ class ToolApprovalDecision(BaseModel):
 
     action: ToolApprovalAction
     revision_guidance: str = ""
+
+
+class ToolApprovalTrustStore:
+    def __init__(self) -> None:
+        self._trusted_tool_ids: set[str] = set()
+
+    def trust_tool(self, tool_id: str) -> None:
+        self._trusted_tool_ids.add(tool_id)
+
+    def is_trusted(self, tool_id: str) -> bool:
+        return tool_id in self._trusted_tool_ids
+
+
+DEFAULT_TOOL_APPROVAL_TRUST_STORE = ToolApprovalTrustStore()
 
 
 @dataclass(slots=True)
@@ -166,11 +181,13 @@ def default_tool_max_revisions() -> int:
 
 
 def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any]) -> ToolApprovalDecision:
+    if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(spec.id):
+        return ToolApprovalDecision(action="approve")
     decision = interrupt(
         {
             "type": "tool_approval",
-            "message": "检测到需要人工确认的工具调用，请确认执行、拒绝，或输入审查意见让模型重写工具调用。",
-            "choices": {"approve": "-y", "deny": "-n", "revise": "custom"},
+            "message": "检测到需要人工确认的工具调用，请确认执行、拒绝、信任该工具，或输入审查意见让模型重写工具调用。",
+            "choices": {"approve": "-y", "deny": "-n", "trust_tool": "-t", "revise": "custom"},
             "requests": [
                 {
                     "tool_call_id": "",
@@ -181,6 +198,9 @@ def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any]) -> Too
             ],
         }
     )
+    if _is_trust_tool(decision):
+        DEFAULT_TOOL_APPROVAL_TRUST_STORE.trust_tool(spec.id)
+        return ToolApprovalDecision(action="approve")
     return parse_approval_decision(decision)
 
 
@@ -204,6 +224,17 @@ def _is_approved(decision: Any) -> bool:
     if isinstance(decision, dict):
         value = decision.get("approved", decision.get("approve", decision.get("choice")))
         return _is_approved(value)
+    return False
+
+
+def _is_trust_tool(decision: Any) -> bool:
+    if isinstance(decision, str):
+        return decision.strip().lower() in TRUST_TOOL_ACTIONS or decision.strip().lower() in {"-t", "t", "trust me"}
+    if isinstance(decision, dict):
+        action = str(decision.get("action") or decision.get("choice") or "").strip().lower()
+        if action in TRUST_TOOL_ACTIONS:
+            return True
+        return bool(decision.get("trust_tool") or decision.get("no_approval"))
     return False
 
 

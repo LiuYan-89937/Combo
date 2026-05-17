@@ -1,9 +1,10 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 import {describeInterrupt} from '../interrupts.js';
-import {type FactoryEvent} from '../protocol.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 
-export function InterruptPrompt({event}: {event: FactoryEvent | null}) {
+export function InterruptPrompt() {
+	const event = useStoreSelector(state => state.pendingInterrupt);
 	if (!event || event.event_type !== 'interrupt_requested') {
 		return null;
 	}

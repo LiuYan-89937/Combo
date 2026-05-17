@@ -31,7 +31,7 @@ class FactoryChatGraphTest(unittest.TestCase):
     def tearDown(self) -> None:
         reset_chat_models()
 
-    def test_chat_graph_runs_without_tools_until_new_tool_system_registers_tools(self) -> None:
+    def test_chat_graph_binds_registered_factory_tools_without_forcing_tool_execution(self) -> None:
         class FakeTaskModel:
             def __init__(self) -> None:
                 self.calls = 0
@@ -47,7 +47,7 @@ class FactoryChatGraphTest(unittest.TestCase):
 
             def invoke(self, prompt_value):
                 self.calls += 1
-                return AIMessage(content="当前没有已注册的 Factory 工具。")
+                return AIMessage(content="我可以直接回答。")
 
         fake_task_model = FakeTaskModel()
         app = build_factory_chat_graph()
@@ -72,9 +72,10 @@ class FactoryChatGraphTest(unittest.TestCase):
 
         self.assertEqual(fake_task_model.calls, 1)
         self.assertEqual(result["status"], "answered")
-        self.assertEqual(result["messages"][-1].content, "当前没有已注册的 Factory 工具。")
+        self.assertEqual(result["messages"][-1].content, "我可以直接回答。")
         self.assertFalse(any(isinstance(message, ToolMessage) for message in result["messages"]))
-        self.assertIsNone(fake_task_model.bound_tools)
+        self.assertIsNotNone(fake_task_model.bound_tools)
+        self.assertTrue(fake_task_model.bound_tools)
 
     def test_chat_graph_reports_model_configuration_error(self) -> None:
         app = build_factory_chat_graph()

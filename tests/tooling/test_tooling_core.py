@@ -45,6 +45,18 @@ class ToolSpecTest(unittest.TestCase):
                 extra=True,
             )
 
+    def test_tool_spec_accepts_protocol_entrypoints(self) -> None:
+        for entrypoint in [
+            "python:tools/sample/tool.py:run",
+            "python-import:agent_factory.tooling.builtins.filesystem.read:run",
+            "mcp:filesystem/read_file",
+        ]:
+            with self.subTest(entrypoint=entrypoint):
+                self.assertEqual(_tool_spec(entrypoint=entrypoint).entrypoint, entrypoint)
+
+        with self.assertRaises(ValidationError):
+            _tool_spec(entrypoint="mcp:filesystem")
+
 
 @unittest.skipUnless(JSONSCHEMA_AVAILABLE, "jsonschema dependency is not installed")
 class SchemaCompilerTest(unittest.TestCase):
@@ -99,6 +111,33 @@ class EntrypointLoaderTest(unittest.TestCase):
 
             with self.assertRaises(ToolEntrypointError):
                 loader.load("tools/bad/tool.py:run")
+
+    def test_protocol_package_entrypoint_and_allowed_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_tool = root / "tools" / "sample" / "tool.py"
+            package_tool.parent.mkdir(parents=True)
+            package_tool.write_text(
+                "def run(arguments: dict, resources: dict) -> dict:\n"
+                "    return {'source': 'protocol', 'arguments': arguments}\n",
+                encoding="utf-8",
+            )
+            loader = ToolEntrypointLoader(package_root=root)
+            relative = loader.load("python:tools/sample/tool.py:run")
+            absolute = ToolEntrypointLoader(allowed_python_roots=[root]).load(f"python:{package_tool}:run")
+
+        self.assertEqual(relative({"x": 1}, {})["source"], "protocol")
+        self.assertEqual(absolute({"x": 1}, {})["source"], "protocol")
+
+    def test_mcp_entrypoint_uses_configured_client(self) -> None:
+        class FakeMCPClient:
+            def call_tool(self, tool_name: str, arguments: dict) -> dict:
+                return {"tool": tool_name, "arguments": arguments}
+
+        loader = ToolEntrypointLoader(mcp_clients={"filesystem": FakeMCPClient()})
+        entrypoint = loader.load("mcp:filesystem/read_file")
+
+        self.assertEqual(entrypoint({"path": "README.md"}, {}), {"tool": "read_file", "arguments": {"path": "README.md"}})
 
 
 @unittest.skipUnless(JSONSCHEMA_AVAILABLE, "jsonschema dependency is not installed")

@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
 from agent_factory.tooling.entrypoint import ToolEntrypointLoader
+from agent_factory.tooling.entrypoints import EntrypointAdapterRegistry, MCPToolClient
 from agent_factory.tooling.gateway import (
     ToolApprovalHandler,
     ToolExecutionGateway,
@@ -29,8 +30,17 @@ class ToolCompiler:
         resources: Mapping[str, Any] | None = None,
         approval_handler: ToolApprovalHandler | None = None,
         max_revisions: int | None = None,
+        entrypoint_loader: ToolEntrypointLoader | None = None,
+        allowed_python_roots: list[str | Path] | None = None,
+        adapter_registry: EntrypointAdapterRegistry | None = None,
+        mcp_clients: Mapping[str, MCPToolClient] | None = None,
     ) -> None:
-        self.loader = ToolEntrypointLoader(package_root=package_root)
+        self.loader = entrypoint_loader or ToolEntrypointLoader(
+            package_root=package_root,
+            allowed_python_roots=allowed_python_roots,
+            adapter_registry=adapter_registry,
+            mcp_clients=mcp_clients,
+        )
         self.resources = resources or {}
         self.approval_handler = approval_handler
         self.max_revisions = max_revisions or default_tool_max_revisions()

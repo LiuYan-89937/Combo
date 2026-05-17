@@ -1,10 +1,10 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import {type FactoryUiState} from '../state/factoryStore.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 import {Section} from './ui.js';
 
-export function ActivityPanel({state}: {state: FactoryUiState}) {
-	const activities = state.recentActivities.slice(-8);
+export function ActivityPanel() {
+	const activities = useStoreSelector(state => state.recentActivities).slice(-8);
 	if (!activities.length) {
 		return null;
 	}

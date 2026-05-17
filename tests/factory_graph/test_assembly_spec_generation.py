@@ -39,6 +39,7 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("bindings/services.json", plan_paths)
                 self.assertIn("bindings/node_bindings.json", plan_paths)
                 self.assertIn("bindings/hooks.json", plan_paths)
+                self.assertIn("sandbox_contract.json", plan_paths)
                 self.assertEqual(plan["tools"][0]["manifest"]["input_schema"], {"type": "object"})
 
     def test_validation_observation_drives_revision(self) -> None:
@@ -182,6 +183,8 @@ def _valid_draft() -> dict:
         "metadata": {
             "factory_run_id": "run_1",
             "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json",
+            "sandbox_contract_path": ".agentfactory/resources/run_1/sandbox_contract.json",
+            "resource_preparation_report_path": ".agentfactory/resources/run_1/resource_preparation_report.json",
             "source_stage_ids": [
                 "requirement_capture",
                 "runtime_pattern_selection",
@@ -235,7 +238,21 @@ def _base_state() -> dict:
         "resource_condition_plan": {
             "status": "complete",
             "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json",
+            "sandbox_contract_path": ".agentfactory/resources/run_1/sandbox_contract.json",
+            "report_path": ".agentfactory/resources/run_1/resource_preparation_report.json",
             "resources": {},
+            "sandbox_contract": {
+                "version": "sandbox_contract.v0",
+                "backend": "docker",
+                "image": "python:3.12-slim",
+                "workdir": "/workdir",
+                "network_policy": {"mode": "default_allow"},
+                "mounts": [],
+                "services": [],
+                "secrets": [],
+                "env": {},
+                "volumes": [],
+            },
         },
         "stage_log": [],
         "errors": [],

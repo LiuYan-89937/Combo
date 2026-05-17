@@ -8,18 +8,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langchain_core.tools import BaseTool
 
-from agent_factory.tooling import get_factory_protected_tool_ids, get_factory_tools
+from agent_factory.tooling import get_factory_tools
 from agent_factory.factory_graph.constants import STAGE_IDS
 from agent_factory.factory_graph.render_manifest import get_factory_node_render_spec, validate_factory_render_manifest
 from agent_factory.factory_graph.render_wrapper import wrap_factory_node
 from agent_factory.factory_graph.stages import STAGE_RUNNERS
 from agent_factory.factory_graph.state import FactoryGraphState
-from agent_factory.factory_graph.tool_approval import (
-    FACTORY_TOOL_APPROVAL_NODE,
-    approve_tool_calls,
-    route_after_tool_approval,
-)
-
 
 FACTORY_TOOLS_NODE = "factory_tools"
 
@@ -39,7 +33,6 @@ def build_factory_graph(
     validate_factory_render_manifest()
     graph = StateGraph(FactoryGraphState)
     if has_tools:
-        graph.add_node(FACTORY_TOOL_APPROVAL_NODE, approve_tool_calls)
         graph.add_node(FACTORY_TOOLS_NODE, ToolNode(resolved_tools, name=FACTORY_TOOLS_NODE))
     for stage_id in STAGE_IDS:
         graph.add_node(
@@ -66,15 +59,6 @@ def build_factory_graph(
         )
     if has_tools:
         graph.add_conditional_edges(
-            FACTORY_TOOL_APPROVAL_NODE,
-            _route_after_tool_approval,
-            {
-                FACTORY_TOOLS_NODE: FACTORY_TOOLS_NODE,
-                **{stage_id: stage_id for stage_id in STAGE_IDS},
-                END: END,
-            },
-        )
-        graph.add_conditional_edges(
             FACTORY_TOOLS_NODE,
             _route_after_tools,
             {stage_id: stage_id for stage_id in STAGE_IDS} | {END: END},
@@ -86,7 +70,7 @@ def build_factory_graph(
 def _make_stage_router(*, next_stage: str, has_tools: bool):
     def route_after_stage(state: FactoryGraphState) -> str:
         if has_tools and _last_message_has_tool_calls(state):
-            return FACTORY_TOOL_APPROVAL_NODE
+            return FACTORY_TOOLS_NODE
         graph_control = state.get("graph_control") or {}
         if graph_control.get("action") == "end":
             return END
@@ -98,7 +82,6 @@ def _make_stage_router(*, next_stage: str, has_tools: bool):
 def _stage_route_map(*, next_stage: str, has_tools: bool) -> dict[str, str]:
     route_map = {next_stage: next_stage, END: END}
     if has_tools:
-        route_map[FACTORY_TOOL_APPROVAL_NODE] = FACTORY_TOOL_APPROVAL_NODE
         route_map[FACTORY_TOOLS_NODE] = FACTORY_TOOLS_NODE
     return route_map
 
@@ -108,15 +91,6 @@ def _route_after_tools(state: FactoryGraphState) -> str:
     if current_stage not in STAGE_IDS:
         return END
     return current_stage
-
-
-def _route_after_tool_approval(state: FactoryGraphState) -> str:
-    current_stage = state.get("current_stage")
-    return route_after_tool_approval(
-        state,
-        approved=FACTORY_TOOLS_NODE,
-        denied=current_stage if current_stage in STAGE_IDS else END,
-    )
 
 
 def _last_message_has_tool_calls(state: FactoryGraphState) -> bool:
@@ -140,7 +114,6 @@ def initial_factory_graph_state(
         "status": "running",
         "force_manufacture": force_manufacture,
         "interaction_mode": interaction_mode or "",
-        "protected_tool_ids": get_factory_protected_tool_ids(),
         "model_activity": [],
         "stage_log": [],
         "errors": [],

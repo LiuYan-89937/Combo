@@ -36,6 +36,7 @@ from agent_factory.runtime_kernel.patterns.loader import PatternLoader
 from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.state import dump_messages, load_messages
 from agent_factory.runtime_kernel.types import ModelInvocationResult, PolicyDecision, ToolExecutionResult
+from agent_factory.runtime_render import default_node_render_spec
 
 
 class SequencedPolicyEngine:
@@ -857,6 +858,7 @@ class RuntimeKernelTests(unittest.TestCase):
                     ]
                 },
                 "output": {"citations_required": True, "format": "markdown"},
+                "metadata": {"render_manifest": self._render_manifest("assembly_test_agent")},
             }
         )
         services = RuntimeServices(
@@ -904,6 +906,7 @@ class RuntimeKernelTests(unittest.TestCase):
                         }
                     ]
                 },
+                "metadata": {"render_manifest": self._render_manifest("bad_assembly")},
             }
         )
         compiler = AgentAssemblyCompiler(facade=self.facade)
@@ -916,6 +919,7 @@ class RuntimeKernelTests(unittest.TestCase):
             {
                 "agent": {"id": "runner_agent"},
                 "runtime": {"pattern_id": "react_agent"},
+                "metadata": {"render_manifest": self._render_manifest("runner_agent")},
                 "harness": [
                     {
                         "scenario_id": "passing",
@@ -984,6 +988,7 @@ class RuntimeKernelTests(unittest.TestCase):
             {
                 "agent": {"id": "invocation_agent"},
                 "runtime": {"pattern_id": "react_agent"},
+                "metadata": {"render_manifest": self._render_manifest("invocation_agent")},
             }
         )
         services = RuntimeServices(
@@ -1103,6 +1108,22 @@ state_mode: shared
             encoding="utf-8",
         )
         return pattern_dir
+
+    def _render_manifest(self, agent_id: str, pattern_id: str = "react_agent") -> dict:
+        pattern = self.facade.instance.pattern_registry.get(pattern_id)
+        return {
+            "version": "render_manifest.v0",
+            "graph_id": f"{agent_id}__{pattern_id}",
+            "producer_type": "agent",
+            "nodes": {
+                node.id: default_node_render_spec(
+                    node_id=node.id,
+                    node_type=node.type,
+                    impl=node.impl,
+                ).model_dump(mode="json")
+                for node in pattern.nodes
+            },
+        }
 
 
 if __name__ == "__main__":

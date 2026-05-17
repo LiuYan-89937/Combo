@@ -22,6 +22,8 @@ class PromptId(str, Enum):
     GRAPH_BEHAVIOR_PLANNING = "factory.graph_behavior_planning"
     NODE_STRATEGY_PLANNING = "factory.node_strategy_planning"
     TOOL_CAPABILITY_PLANNING = "factory.tool_capability_planning"
+    RESOURCE_REACT = "factory.resource_and_condition_planning.react"
+    RESOURCE_PREPARATION_DECISION = "factory.resource_and_condition_planning.preparation_decision"
     ASSEMBLY_SPEC_REACT = "factory.assembly_spec_generation.react"
     PACKAGE_REACT = "factory.package_generation.react"
     PACKAGE_BUILD_DECISION = "factory.package_generation.build_decision"
@@ -346,6 +348,80 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
+    if prompt_id == PromptId.RESOURCE_REACT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第六阶段 Resource + Sandbox Preparation ReAct 执行器。\n"
+                    "你必须遵循 ReAct：需要读取文件、搜索项目、检查 Docker、检查宿主机路径或只读命令时，"
+                    "通过 tool_calls 调用允许的 Factory 工具；工具 Observation 返回后再继续判断。\n\n"
+                    "阶段目标：根据第五阶段 tool_capability_plan 推导生成 Agent 需要的业务资源，"
+                    "并准备 Docker sandbox 运行前置契约。最终 resources 必须是 Agent 在 sandbox 内看到的视角。\n\n"
+                    "严格约束：\n"
+                    "- 不生成工具代码、不生成 AssemblySpec、不生成 package、不执行 harness。\n"
+                    "- 不为数据库、API、Docker 镜像或任何具体业务资源写特化方案；只描述通用资源需求和访问契约。\n"
+                    "- Factory mainModel/taskModel/API key/base URL/thinking 参数不是生成 Agent 业务资源。\n"
+                    "- 宿主机路径不能直接写入 resources；需要通过 sandbox mount 转换为 /volumes/<resource_id>/...。\n"
+                    "- 宿主机 localhost/127.0.0.1 服务不能直接写入 resources；需要转换为 sandbox 可访问 endpoint。\n"
+                    "- Docker 是默认 backend；Docker 不可用时必须 blocked，不要建议自动降级到本机执行。\n"
+                    "- 只使用允许工具，不调用写文件工具；资源文件由系统节点写入。\n\n"
+                    "允许工具：\n{allowed_tools}\n\n"
+                    "当不再需要工具时，输出普通说明，概述资源需求、sandbox 访问方式、缺失项或可验证草案。"
+                    "最终 ResourcePreparationDecision 会由结构化归一化器生成。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}",
+                ),
+                (
+                    "user",
+                    "需求摘要：\n{requirement_brief}\n\n"
+                    "业务制造计划：\n{refined_plan_text}\n\n"
+                    "图行为计划：\n{graph_behavior_plan}\n\n"
+                    "节点策略计划：\n{node_strategy_plan}\n\n"
+                    "工具能力计划：\n{tool_capability_plan}\n\n"
+                    "当前资源准备状态：\n{resource_condition_plan}\n\n"
+                    "上一轮 validation observation：\n{resource_validation_observation}\n\n"
+                    "用户补充输入：\n{resource_user_inputs}\n\n"
+                    "请继续 ReAct 检查，或说明最终资源与 sandbox 契约草案。",
+                ),
+                ("placeholder", "{messages}"),
+            ]
+        )
+    if prompt_id == PromptId.RESOURCE_PREPARATION_DECISION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 Agent 工厂第六阶段 ResourcePreparationDecision 结构化归一化器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n"
+                    "你的任务是把 ReAct 观察、前置阶段契约、用户补充和模型最后说明转换为资源与 sandbox 准备决策。\n\n"
+                    "严格约束：\n"
+                    "- 输出必须符合 ResourcePreparationDecision JSON schema。\n"
+                    "- 不要输出 markdown，不要解释，不要包裹代码块。\n"
+                    "- resource_draft 必须是 sandbox 内视角，不得包含未转换的宿主机绝对路径。\n"
+                    "- sandbox_contract_draft.backend 必须为 docker。\n"
+                    "- 宿主机路径必须通过 mounts/volumes 授权，并在 resources 中使用 container_path。\n"
+                    "- 宿主机 localhost/127.0.0.1 服务必须转换为 sandbox 可访问 endpoint。\n"
+                    "- Docker 不可用或资源关键字段缺失时，不得伪造 complete。\n"
+                    "- 如果需要用户提供路径、端口、凭据、授权或运行时 secret，action=needs_user_input 并写清 user_prompt。\n"
+                    "- Factory main/task model 配置不得进入 requirements、resource_draft 或 sandbox_contract_draft。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "当前阶段边界：\n{stage_operating_context}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "需求摘要：\n{requirement_brief}\n\n"
+                    "工具能力计划：\n{tool_capability_plan}\n\n"
+                    "当前资源准备状态：\n{resource_condition_plan}\n\n"
+                    "工具观察摘要：\n{tool_observations}\n\n"
+                    "上一轮 validation observation：\n{resource_validation_observation}\n\n"
+                    "用户补充输入：\n{resource_user_inputs}\n\n"
+                    "ReAct 模型最后输出：\n{model_output}\n\n"
+                    "请返回 JSON。",
+                ),
+            ]
+        )
     if prompt_id == PromptId.ASSEMBLY_SPEC_REACT:
         return ChatPromptTemplate.from_messages(
             [
@@ -372,6 +448,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- strategy_profile payload 只允许 strategy_ids 和 parameters。\n"
                     "- output_formatter payload 只允许 formatter_id、mode、config。\n"
                     "- custom payload 是唯一允许扩展 dict config 的位置，必须包含 extension_id、schema_version、purpose、config；custom 不能冒充标准 binding。\n"
+                    "- metadata 必须包含 factory_run_id、resource_file_path、sandbox_contract_path、resource_preparation_report_path、source_stage_ids、tool_capability_ids。\n"
                     "- 第八阶段只负责把第七阶段 bindings 中的 contract 物化为文件、工具代码和 package manifest，不允许重新决定绑定关系。\n"
                     "- harness 仍然不填，harness 属于第九阶段。\n"
                     "- 如果收到 validation_observation，只能在 assembly draft 范围内修正。\n"
@@ -483,7 +560,9 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- 宿主机路径、端口服务、数据卷、secret、host tool proxy 必须显式进入 HostInteractionContract。\n"
                     "- 不默认挂载用户 home、repo 根目录、/Users 或 /。\n"
                     "- /package 与 /resources 必须只读；/artifacts 与 /workdir 必须可写。\n"
-                    "- 默认 network 为 none；需要访问服务时必须显式声明 service dependency。\n"
+                    "- 默认允许联网；只有用户明确要求禁网时才使用 network_policy.mode=none。\n"
+                    "- 需要访问宿主机或外部服务时仍必须显式声明 service dependency。\n"
+                    "- 第六阶段已经冻结 sandbox_contract；不要重新发明 sandbox，围绕 package 内 sandbox_contract 生成依赖与测试计划。\n"
                     "- 生成 Agent 在容器内只能看到 contract path，不能依赖宿主机真实路径。\n"
                     "- Factory main/task model 配置不得进入 generated agent runtime resources。\n\n"
                     "执行闭环约束：\n"
@@ -520,11 +599,13 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- 输出必须符合 HarnessContractDecision JSON schema。\n"
                     "- 不要输出 markdown，不要解释，不要包裹代码块。\n"
                     "- backend 默认 docker；Docker 不可用或不确定时仍可生成 docker 契约，由系统检测后 blocked。\n"
+                    "- runtime_environment 与 host_interaction 以第六阶段 sandbox_contract 为权威；如有差异，系统会用已准备契约覆盖。\n"
                     "- 必须包含 /package read_only、/resources read_only、/artifacts read_write、/workdir read_write 的系统挂载。\n"
                     "- 宿主机业务资源只能来自 resources 或明确用户授权，不允许默认挂载 home、repo 根目录、/Users 或 /。\n"
                     "- 容器内业务资源路径必须位于 /volumes/<resource_id>。\n"
                     "- 容器访问宿主机服务时使用 host.docker.internal，不要把 localhost 当宿主机。\n"
-                    "- 默认 network_policy.mode 为 none；声明服务依赖时才允许 declared_services。\n"
+                    "- 默认 network_policy.mode 为 default_allow；只有用户明确要求禁网时才使用 none。\n"
+                    "- declared_services 表示限制到声明服务或 allowlist，使用时必须声明 allowed_hosts。\n"
                     "- 不修改 package，不生成代码，不生成 repair 方案。\n\n"
                     "sandbox 执行 observation 修正规则：\n"
                     "- 依赖缺失时，补充 dependency_plan.python_requirements 或 system_packages。\n"

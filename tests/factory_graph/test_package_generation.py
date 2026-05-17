@@ -169,6 +169,8 @@ def _agent_package_manifest() -> dict:
         "runtime": {"pattern_id": "react_agent"},
         "assembly_spec_path": "assembly_spec.json",
         "resources_path": "resources.json",
+        "sandbox_contract_path": "sandbox_contract.json",
+        "render_manifest_path": "render_manifest.json",
         "bindings": {
             "services": "bindings/services.json",
             "node_bindings": "bindings/node_bindings.json",
@@ -207,7 +209,10 @@ def _base_state() -> dict:
         "resource_condition_plan": {
             "status": "complete",
             "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json",
+            "sandbox_contract_path": ".agentfactory/resources/run_1/sandbox_contract.json",
+            "report_path": ".agentfactory/resources/run_1/resource_preparation_report.json",
             "resources": {"ledger_file": "/tmp/ledger.json"},
+            "sandbox_contract": _sandbox_contract(),
         },
         "stage_log": [],
         "errors": [],
@@ -223,6 +228,8 @@ def _materialization_plan() -> dict:
             {"path": "agent_package.json", "file_type": "json", "source_kind": "manifest", "source_id": "agent_package", "generation_mode": "system_generated", "contract_source": "manifest_contract", "required": True},
             {"path": "assembly_spec.json", "file_type": "json", "source_kind": "assembly", "source_id": "assembly_spec", "generation_mode": "system_generated", "contract_source": "assembly_spec", "required": True},
             {"path": "resources.json", "file_type": "json", "source_kind": "manifest", "source_id": "resources", "generation_mode": "system_generated", "contract_source": "resource_condition_plan.resources", "required": True},
+            {"path": "sandbox_contract.json", "file_type": "json", "source_kind": "manifest", "source_id": "sandbox_contract", "generation_mode": "system_generated", "contract_source": "resource_condition_plan.sandbox_contract", "required": True},
+            {"path": "render_manifest.json", "file_type": "json", "source_kind": "manifest", "source_id": "render_manifest", "generation_mode": "system_generated", "contract_source": "assembly_spec.metadata.render_manifest", "required": True},
             {"path": "package_report.json", "file_type": "json", "source_kind": "manifest", "source_id": "package_report", "generation_mode": "system_generated", "contract_source": "package_validation_report", "required": True},
             {"path": "bindings/services.json", "file_type": "json", "source_kind": "binding", "source_id": "services", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.services", "required": True},
             {"path": "bindings/node_bindings.json", "file_type": "json", "source_kind": "binding", "source_id": "node_bindings", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.node_bindings", "required": True},
@@ -313,7 +320,48 @@ def _assembly_spec() -> dict:
             }
         ],
         "output": {"format": "markdown", "citations_required": False},
-        "metadata": {"factory_run_id": "run_1", "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json"},
+        "metadata": {
+            "factory_run_id": "run_1",
+            "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json",
+            "sandbox_contract_path": ".agentfactory/resources/run_1/sandbox_contract.json",
+            "resource_preparation_report_path": ".agentfactory/resources/run_1/resource_preparation_report.json",
+            "render_manifest": _render_manifest(),
+            "render_node_ids": ["answer"],
+        },
+    }
+
+
+def _sandbox_contract() -> dict:
+    return {
+        "version": "sandbox_contract.v0",
+        "backend": "docker",
+        "image": "python:3.12-slim",
+        "workdir": "/workdir",
+        "network_policy": {"mode": "default_allow"},
+        "mounts": [],
+        "services": [],
+        "secrets": [],
+        "env": {},
+        "volumes": [],
+    }
+
+
+def _render_manifest() -> dict:
+    return {
+        "version": "render_manifest.v0",
+        "graph_id": "ledger_agent__react_agent",
+        "producer_type": "agent",
+        "nodes": {
+            "answer": {
+                "node_id": "answer",
+                "label": "Answer",
+                "kind": "cognitive",
+                "purpose": "Answer ledger questions.",
+                "doing": "Preparing an answer.",
+                "expected_output": "Final answer state.",
+                "visible_to_user": True,
+            }
+        },
     }
 
 

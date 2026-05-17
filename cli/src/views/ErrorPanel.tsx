@@ -1,7 +1,10 @@
 import React from 'react';
 import {Box, Text} from 'ink';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 
-export function ErrorPanel({message, errors = []}: {message: string | null; errors?: string[]}) {
+export function ErrorPanel() {
+	const message = useStoreSelector(state => state.lastError);
+	const errors = useStoreSelector(state => state.errors);
 	if (!message && !errors.length) {
 		return null;
 	}

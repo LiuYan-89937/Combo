@@ -1,10 +1,11 @@
 import React from 'react';
 import {Text} from 'ink';
-import {type FactoryUiState} from '../state/factoryStore.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 import {Section} from './ui.js';
 
-export function LiveStreamPanel({state}: {state: FactoryUiState}) {
-	const streams = Object.values(state.modelStreams);
+export function LiveStreamPanel() {
+	const modelStreams = useStoreSelector(state => state.modelStreams);
+	const streams = Object.values(modelStreams);
 	const latest = streams.at(-1);
 	if (!latest?.content) {
 		return null;

@@ -52,6 +52,14 @@ class ToolSpec(BaseModel):
     def validate_entrypoint(cls, value: str) -> str:
         if ":" not in value:
             raise ValueError("entrypoint must use '<path_or_module>:<function>'")
+        if value.startswith("mcp:"):
+            target = value.removeprefix("mcp:")
+            if "/" not in target:
+                raise ValueError("MCP entrypoint must use 'mcp:<server_id>/<tool_name>'")
+            server_id, tool_name = target.split("/", 1)
+            if not server_id.strip() or not tool_name.strip():
+                raise ValueError("MCP server_id and tool_name must be non-empty")
+            return value
         target, function = value.rsplit(":", 1)
         if not target.strip() or not function.strip():
             raise ValueError("entrypoint target and function must be non-empty")

@@ -1,17 +1,20 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 import {factoryStages} from '../commands.js';
-import {type FactoryUiState} from '../state/factoryStore.js';
+import {type RuntimeState} from '../state/runtimeStore.js';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 import {Section} from './ui.js';
 
-export function StageTimeline({state}: {state: FactoryUiState}) {
-	const latestStage = state.currentStageId;
+export function StageTimeline() {
+	const stageStatuses = useStoreSelector(state => state.stageStatuses);
+	const latestStage = useStoreSelector(state => state.currentStageId);
+	const currentNodeId = useStoreSelector(state => state.currentNodeId);
 	return (
 		<Section title="Factory Stages" color="blue">
 			<Box>
 				{factoryStages.map((stage, index) => (
 					<Box key={stage} marginRight={1}>
-						<Text color={stageColor(state.stageStatuses[stage]?.status, stage === latestStage)} inverse={stage === latestStage}>
+						<Text color={stageColor(stageStatuses[stage]?.status, stage === latestStage)} inverse={stage === latestStage}>
 							{` ${index + 1} `}
 						</Text>
 					</Box>
@@ -23,7 +26,7 @@ export function StageTimeline({state}: {state: FactoryUiState}) {
 				</Text>
 				{latestStage && (
 					<Text color="gray">
-						{stageDetail(state, latestStage)}
+						{stageDetail(stageStatuses, currentNodeId, latestStage)}
 					</Text>
 				)}
 			</Box>
@@ -44,9 +47,9 @@ function stageColor(status: string | undefined, active: boolean): string {
 	return 'gray';
 }
 
-function stageDetail(state: FactoryUiState, stageId: string): string {
-	const status = state.stageStatuses[stageId];
-	const node = state.currentNodeId ?? status?.nodeId;
+function stageDetail(stageStatuses: RuntimeState['stageStatuses'], currentNodeId: string | null, stageId: string): string {
+	const status = stageStatuses[stageId];
+	const node = currentNodeId ?? status?.nodeId;
 	const message = status?.lastMessage;
 	return [`status=${status?.status ?? 'running'}`, node ? `node=${node}` : null, message ? `note=${message}` : null]
 		.filter(Boolean)

@@ -265,6 +265,95 @@ class ToolCapabilityPlanningOutput(BaseModel):
     open_questions: list[str] = Field(default_factory=list, max_length=8)
 
 
+class ResourceRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requirement_id: str
+    description: str
+    required: bool = True
+    used_by_capability_ids: list[str] = Field(default_factory=list)
+    expected_resource_shape: dict[str, Any] = Field(default_factory=dict)
+    why_needed: str
+    sandbox_access_expectation: str
+
+
+class SandboxContractMount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    host_path: str
+    container_path: str
+    access: Literal["read_only", "read_write"]
+    purpose: str
+    authorization_source: Literal["user_authorized", "tool_evidence", "system_required"] = "user_authorized"
+
+
+class SandboxContractService(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_id: str
+    kind: Literal["host_port", "docker_service", "remote_service"]
+    endpoint: str
+    ports: list[int] = Field(default_factory=list, max_length=16)
+    purpose: str
+
+
+class SandboxContractSecret(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    secret_id: str
+    target_env: str | None = None
+    source: Literal["runtime_provided", "user_provided"] = "runtime_provided"
+    purpose: str
+
+
+SandboxNetworkMode = Literal["none", "default_allow", "declared_services"]
+
+
+class SandboxNetworkPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: SandboxNetworkMode = "default_allow"
+    allowed_hosts: list[str] = Field(default_factory=list, max_length=32)
+
+
+class SandboxContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["sandbox_contract.v0"] = "sandbox_contract.v0"
+    backend: Literal["docker"] = "docker"
+    image: str = "python:3.12-slim"
+    workdir: str = "/workdir"
+    network_policy: SandboxNetworkPolicy = Field(default_factory=SandboxNetworkPolicy)
+    mounts: list[SandboxContractMount] = Field(default_factory=list)
+    services: list[SandboxContractService] = Field(default_factory=list)
+    secrets: list[SandboxContractSecret] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    volumes: list[SandboxContractMount] = Field(default_factory=list)
+
+
+class ResourcePreparationDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["continue_checking", "needs_user_input", "ready_for_validation", "blocked", "failed"]
+    requirements: list[ResourceRequirement] = Field(default_factory=list)
+    resource_draft: dict[str, Any] = Field(default_factory=dict)
+    sandbox_contract_draft: SandboxContract = Field(default_factory=SandboxContract)
+    missing_requirements: list[str] = Field(default_factory=list, max_length=16)
+    user_prompt: str = ""
+    check_summary: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ResourcePreparationValidationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["complete", "needs_input", "blocked", "failed"]
+    validated_resources: dict[str, Any] = Field(default_factory=dict)
+    validated_sandbox_contract: SandboxContract | None = None
+    errors: list[str] = Field(default_factory=list)
+    repair_hints: list[str] = Field(default_factory=list, max_length=16)
+
+
 class AssemblyDraftPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -418,13 +507,6 @@ SandboxMountAccess = Literal["read_only", "read_write"]
 SandboxServiceKind = Literal["host_port", "docker_service", "remote_service"]
 SandboxInstallMode = Literal["none", "sandbox_only"]
 HarnessStatus = Literal["passed", "failed", "blocked"]
-
-
-class SandboxNetworkPolicy(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["none", "declared_services"] = "none"
-    allowed_hosts: list[str] = Field(default_factory=list, max_length=32)
 
 
 class SandboxRuntimeLimits(BaseModel):

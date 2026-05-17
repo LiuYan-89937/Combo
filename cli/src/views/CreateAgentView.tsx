@@ -1,16 +1,20 @@
 import React from 'react';
-import {Box, Text} from 'ink';
-import {type FactoryUiState} from '../state/factoryStore.js';
+import {Box} from 'ink';
+import {useStoreSelector} from '../state/useStoreSelector.js';
 import {StageTimeline} from './StageTimeline.js';
 import {StagePanel} from './StagePanel.js';
 import {ActivityPanel} from './ActivityPanel.js';
 
-export function CreateAgentView({state}: {state: FactoryUiState}) {
+export function CreateAgentView() {
+	const mode = useStoreSelector(state => state.mode);
+	if (mode !== 'create_agent') {
+		return null;
+	}
 	return (
 		<Box flexDirection="column">
-			<StageTimeline state={state} />
-			<ActivityPanel state={state} />
-			<StagePanel state={state} />
+			<StageTimeline />
+			<ActivityPanel />
+			<StagePanel />
 		</Box>
 	);
 }
