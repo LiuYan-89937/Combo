@@ -9,19 +9,10 @@ from agent_factory.tooling.entrypoint import ToolEntrypointLoader
 
 EXPECTED_TOOL_IDS = [
     "read",
-    "write",
-    "edit",
-    "multi_edit",
-    "glob",
-    "grep",
     "ls",
-    "bash",
-    "powershell",
-    "web_fetch",
-    "web_search",
 ]
 
-PROTECTED_TOOL_IDS = ["write", "edit", "multi_edit", "bash", "powershell"]
+PROTECTED_TOOL_IDS: list[str] = []
 
 
 class BuiltinToolSpecTest(unittest.TestCase):
@@ -38,23 +29,18 @@ class BuiltinToolSpecTest(unittest.TestCase):
                 compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_input")
                 compile_json_schema(schema=spec.output_schema, model_name=f"{spec.id}_output")
 
-    def test_builtin_tool_entrypoints_are_loadable_but_not_implemented(self) -> None:
+    def test_registered_builtin_tool_entrypoints_are_loadable(self) -> None:
         loader = ToolEntrypointLoader()
         for spec in get_builtin_tool_specs():
             with self.subTest(tool_id=spec.id):
                 entrypoint = loader.load(spec.entrypoint)
-                with self.assertRaises(NotImplementedError):
-                    entrypoint({}, {})
+                self.assertTrue(callable(entrypoint))
 
     def test_builtin_tool_resources_follow_group_boundaries(self) -> None:
         resources = {spec.id: spec.resources for spec in get_builtin_tool_specs()}
 
-        for tool_id in ["read", "write", "edit", "multi_edit", "glob", "grep", "ls"]:
+        for tool_id in ["read", "ls"]:
             self.assertEqual(resources[tool_id], {"filesystem": "filesystem"})
-        for tool_id in ["bash", "powershell"]:
-            self.assertEqual(resources[tool_id], {"process_runtime": "process_runtime"})
-        for tool_id in ["web_fetch", "web_search"]:
-            self.assertEqual(resources[tool_id], {"network": "network"})
 
 
 if __name__ == "__main__":

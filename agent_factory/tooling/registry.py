@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
+from pathlib import Path
 
 from langchain_core.tools import BaseTool
 
+from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.builtins import (
     get_builtin_protected_tool_ids,
     get_builtin_tool_ids,
@@ -40,15 +43,15 @@ class ToolRegistry:
 
 
 def get_factory_tools() -> list[BaseTool]:
-    """Return currently registered Factory tools.
-
-    The old ``factory_graph.tools`` implementation has been cleared. New tools
-    must be registered through the unified ToolSpec-based system. Built-in tool
-    specs are available as a catalog, but their entrypoints are intentionally
-    not exposed to model execution until concrete implementations are filled in.
-    """
-
-    return []
+    compiler = ToolCompiler(
+        resources={
+            "filesystem": {
+                "root": str(_default_filesystem_root()),
+                "allow_external": False,
+            }
+        }
+    )
+    return compiler.compile_many(get_builtin_tool_specs())
 
 
 def get_factory_tool_specs() -> list[ToolSpec]:
@@ -65,3 +68,11 @@ def get_factory_base_tool_ids() -> list[str]:
 
 def get_factory_protected_tool_ids() -> list[str]:
     return get_builtin_protected_tool_ids()
+
+
+def _default_filesystem_root() -> Path:
+    current = Path(os.getcwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "pyproject.toml").is_file() and (candidate / "agent_factory").is_dir():
+            return candidate
+    return current

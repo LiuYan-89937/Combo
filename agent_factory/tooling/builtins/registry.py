@@ -6,12 +6,16 @@ from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.spec import ToolSpec
 
 
+IMPLEMENTED_BUILTIN_TOOL_IDS = {"read", "ls"}
+
+
 def get_builtin_tool_specs() -> list[ToolSpec]:
-    return [
+    catalog = [
         *get_filesystem_tool_specs(),
         *get_process_tool_specs(),
         *get_network_tool_specs(),
     ]
+    return [tool for tool in catalog if tool.id in IMPLEMENTED_BUILTIN_TOOL_IDS]
 
 
 def get_builtin_tool_ids() -> list[str]:

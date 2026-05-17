@@ -12,14 +12,14 @@ _FILESYSTEM_RESOURCE = {"filesystem": "filesystem"}
 FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="read",
-        description="读取指定文件内容，可按 offset 和 limit 限制读取范围。",
+        description="读取指定文本文件内容，按行号返回可控范围。",
         entrypoint="agent_factory.tooling.builtins.filesystem.read:run",
         input_schema={
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "要读取的文件路径。"},
-                "offset": {"type": "integer", "minimum": 0, "description": "可选读取起点。"},
-                "limit": {"type": "integer", "minimum": 1, "description": "可选最大读取字符数。"},
+                "start_line": {"type": "integer", "minimum": 1, "default": 1, "description": "起始行号，从 1 开始。"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "最多读取多少行。"},
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -29,10 +29,13 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "properties": {
                 "path": _STRING,
                 "content": _STRING,
+                "start_line": _INTEGER,
+                "end_line": _INTEGER,
+                "total_lines": _INTEGER,
                 "truncated": _BOOLEAN,
-                "size": _INTEGER,
+                "content_hash": _STRING,
             },
-            "required": ["path", "content", "truncated", "size"],
+            "required": ["path", "content", "start_line", "end_line", "total_lines", "truncated", "content_hash"],
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
@@ -198,7 +201,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "properties": {
                 "path": {"type": "string", "description": "要列出的目录路径。"},
                 "recursive": {"type": "boolean", "default": False},
-                "max_entries": {"type": "integer", "minimum": 1},
+                "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 200},
             },
             "required": ["path"],
             "additionalProperties": False,
