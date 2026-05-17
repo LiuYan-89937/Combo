@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from langchain_core.tools import BaseTool, StructuredTool
+from pydantic import BaseModel
 
 from agent_factory.tooling.entrypoint import ToolEntrypointLoader
 from agent_factory.tooling.gateway import (
@@ -52,7 +53,7 @@ class ToolCompiler:
         )
 
         def invoke_tool(**kwargs: Any) -> dict[str, Any]:
-            return gateway.execute(dict(kwargs))
+            return gateway.execute(_normalize_tool_arguments(dict(kwargs)))
 
         return StructuredTool.from_function(
             func=invoke_tool,
@@ -75,3 +76,15 @@ class ToolCompiler:
 
     def compile_many(self, specs: Iterable[ToolSpec]) -> list[BaseTool]:
         return [self.compile(spec) for spec in specs]
+
+
+def _normalize_tool_arguments(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _normalize_tool_arguments(value.model_dump(mode="json"))
+    if isinstance(value, dict):
+        return {key: _normalize_tool_arguments(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_tool_arguments(item) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_tool_arguments(item) for item in value]
+    return value

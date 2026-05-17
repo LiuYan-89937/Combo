@@ -6,7 +6,18 @@ from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.spec import ToolSpec
 
 
-IMPLEMENTED_BUILTIN_TOOL_IDS = {"read", "ls"}
+IMPLEMENTED_BUILTIN_TOOL_IDS = {
+    "read",
+    "write",
+    "edit",
+    "multi_edit",
+    "glob",
+    "grep",
+    "ls",
+    "bash",
+    "bash_status",
+    "bash_stop",
+}
 
 
 def get_builtin_tool_specs() -> list[ToolSpec]:

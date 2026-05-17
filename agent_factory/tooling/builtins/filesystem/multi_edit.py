@@ -1,7 +1,70 @@
 from __future__ import annotations
 
+from hashlib import sha256
+from tempfile import NamedTemporaryFile
 from typing import Any
+
+from agent_factory.tooling.builtins.filesystem.common import filesystem_boundary, required_string, resolve_path
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    raise NotImplementedError("multi_edit tool framework is registered but not implemented yet.")
+    path = required_string(arguments, "path")
+    edits = arguments.get("edits")
+    if not isinstance(edits, list) or not edits:
+        raise ValueError("edits must be a non-empty list")
+    root, allow_external = filesystem_boundary(resources)
+    target = resolve_path(path=path, root=root, allow_external=allow_external)
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    if not target.is_file():
+        raise IsADirectoryError(str(target))
+    raw = target.read_bytes()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid utf-8 text: {target}") from exc
+    updated = content
+    results: list[dict[str, int]] = []
+    total_replacements = 0
+    for index, edit in enumerate(edits):
+        old_text, new_text, replace_all = _edit_values(edit, index)
+        count = updated.count(old_text)
+        if count == 0:
+            raise ValueError(f"edits[{index}].old_text was not found")
+        if not replace_all and count != 1:
+            raise ValueError(
+                f"edits[{index}].old_text matched {count} times; "
+                "set replace_all=true or provide a more specific old_text"
+            )
+        replacements = count if replace_all else 1
+        updated = updated.replace(old_text, new_text) if replace_all else updated.replace(old_text, new_text, 1)
+        results.append({"index": index, "replacements": replacements})
+        total_replacements += replacements
+    updated_bytes = updated.encode("utf-8")
+    _atomic_write(target, updated_bytes)
+    return {
+        "path": str(target),
+        "replacements": total_replacements,
+        "edit_results": results,
+        "before_hash": sha256(raw).hexdigest(),
+        "after_hash": sha256(updated_bytes).hexdigest(),
+    }
+
+
+def _edit_values(edit: Any, index: int) -> tuple[str, str, bool]:
+    if not isinstance(edit, dict):
+        raise ValueError(f"edits[{index}] must be an object")
+    old_text = edit.get("old_text")
+    if not isinstance(old_text, str) or not old_text:
+        raise ValueError(f"edits[{index}].old_text must be a non-empty string")
+    new_text = edit.get("new_text")
+    if not isinstance(new_text, str):
+        raise ValueError(f"edits[{index}].new_text must be a string")
+    return old_text, new_text, bool(edit.get("replace_all", False))
+
+
+def _atomic_write(target, content: bytes) -> None:
+    with NamedTemporaryFile("wb", delete=False, dir=str(target.parent)) as handle:
+        temp_path = target.parent / handle.name
+        handle.write(content)
+    temp_path.replace(target)

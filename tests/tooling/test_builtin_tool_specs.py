@@ -9,10 +9,18 @@ from agent_factory.tooling.entrypoint import ToolEntrypointLoader
 
 EXPECTED_TOOL_IDS = [
     "read",
+    "write",
+    "edit",
+    "multi_edit",
+    "glob",
+    "grep",
     "ls",
+    "bash",
+    "bash_status",
+    "bash_stop",
 ]
 
-PROTECTED_TOOL_IDS: list[str] = []
+PROTECTED_TOOL_IDS = ["write", "edit", "multi_edit", "bash", "bash_stop"]
 
 
 class BuiltinToolSpecTest(unittest.TestCase):
@@ -39,8 +47,11 @@ class BuiltinToolSpecTest(unittest.TestCase):
     def test_builtin_tool_resources_follow_group_boundaries(self) -> None:
         resources = {spec.id: spec.resources for spec in get_builtin_tool_specs()}
 
-        for tool_id in ["read", "ls"]:
+        for tool_id in ["read", "write", "edit", "multi_edit", "glob", "grep", "ls"]:
             self.assertEqual(resources[tool_id], {"filesystem": "filesystem"})
+
+        for tool_id in ["bash", "bash_status", "bash_stop"]:
+            self.assertEqual(resources[tool_id], {"process_runtime": "process_runtime"})
 
 
 if __name__ == "__main__":

@@ -8,31 +8,33 @@ _INTEGER = {"type": "integer"}
 _BOOLEAN = {"type": "boolean"}
 _PROCESS_RESOURCE = {"process_runtime": "process_runtime"}
 
-_COMMAND_INPUT_SCHEMA = {
+_PROCESS_STATUS_VALUES = ["running", "completed", "failed", "stopped"]
+_PROCESS_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "command": {
-            "type": "array",
-            "items": {"type": "string"},
-            "minItems": 1,
-            "description": "命令与参数数组。",
-        },
-        "cwd": {"type": "string", "description": "可选工作目录。"},
-        "timeout_seconds": {"type": "integer", "minimum": 1, "description": "可选超时时间。"},
-    },
-    "required": ["command"],
-    "additionalProperties": False,
-}
-
-_COMMAND_OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "exit_code": _INTEGER,
+        "process_id": _STRING,
+        "status": {"type": "string", "enum": _PROCESS_STATUS_VALUES},
+        "command": _STRING,
+        "cwd": _STRING,
+        "exit_code": {"type": ["integer", "null"]},
         "stdout": _STRING,
         "stderr": _STRING,
-        "timed_out": _BOOLEAN,
+        "stdout_truncated": _BOOLEAN,
+        "stderr_truncated": _BOOLEAN,
+        "duration_ms": _INTEGER,
     },
-    "required": ["exit_code", "stdout", "stderr", "timed_out"],
+    "required": [
+        "process_id",
+        "status",
+        "command",
+        "cwd",
+        "exit_code",
+        "stdout",
+        "stderr",
+        "stdout_truncated",
+        "stderr_truncated",
+        "duration_ms",
+    ],
     "additionalProperties": False,
 }
 
@@ -40,20 +42,93 @@ _COMMAND_OUTPUT_SCHEMA = {
 PROCESS_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="bash",
-        description="在本地环境执行 Bash shell 命令。",
+        description="在本地环境启动 Bash 命令，支持前台等待或后台运行；wait 超时只返回状态，不自动终止进程。",
         entrypoint="agent_factory.tooling.builtins.process.bash:run",
-        input_schema=_COMMAND_INPUT_SCHEMA,
-        output_schema=_COMMAND_OUTPUT_SCHEMA,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "要执行的 Bash 命令文本。"},
+                "cwd": {"type": "string", "default": ".", "description": "可选工作目录。"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["foreground", "background"],
+                    "default": "foreground",
+                    "description": "foreground 会等待 wait_seconds；background 会立即返回进程状态。",
+                },
+                "wait_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 86400,
+                    "default": 30,
+                    "description": "foreground 模式最多等待多少秒返回；超时不杀进程。",
+                },
+                "max_output_chars": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200000,
+                    "default": 12000,
+                    "description": "本次返回的 stdout/stderr 尾部最大字符数。",
+                },
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+        output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
         approval_required=True,
         concurrent=False,
     ),
     ToolSpec(
-        id="powershell",
-        description="在本地环境执行 PowerShell 命令。",
-        entrypoint="agent_factory.tooling.builtins.process.powershell:run",
-        input_schema=_COMMAND_INPUT_SCHEMA,
-        output_schema=_COMMAND_OUTPUT_SCHEMA,
+        id="bash_status",
+        description="查看由 bash 工具启动的进程状态和已收集输出。",
+        entrypoint="agent_factory.tooling.builtins.process.bash_status:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "process_id": {"type": "string", "description": "bash 返回的 process_id。"},
+                "max_output_chars": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200000,
+                    "default": 12000,
+                    "description": "本次返回的 stdout/stderr 尾部最大字符数。",
+                },
+            },
+            "required": ["process_id"],
+            "additionalProperties": False,
+        },
+        output_schema=_PROCESS_OUTPUT_SCHEMA,
+        resources=_PROCESS_RESOURCE,
+        approval_required=False,
+        concurrent=True,
+    ),
+    ToolSpec(
+        id="bash_stop",
+        description="终止由 bash 工具启动的进程，并返回最终状态和输出。",
+        entrypoint="agent_factory.tooling.builtins.process.bash_stop:run",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "process_id": {"type": "string", "description": "bash 返回的 process_id。"},
+                "grace_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 300,
+                    "default": 2,
+                    "description": "SIGTERM 后等待多少秒再强制终止。",
+                },
+                "max_output_chars": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200000,
+                    "default": 12000,
+                    "description": "本次返回的 stdout/stderr 尾部最大字符数。",
+                },
+            },
+            "required": ["process_id"],
+            "additionalProperties": False,
+        },
+        output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
         approval_required=True,
         concurrent=False,

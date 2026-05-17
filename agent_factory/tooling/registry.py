@@ -48,7 +48,11 @@ def get_factory_tools() -> list[BaseTool]:
             "filesystem": {
                 "root": str(_default_filesystem_root()),
                 "allow_external": False,
-            }
+            },
+            "process_runtime": {
+                "root": str(_default_filesystem_root()),
+                "allow_external": False,
+            },
         }
     )
     return compiler.compile_many(get_builtin_tool_specs())

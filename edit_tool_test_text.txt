@@ -1,0 +1,71 @@
+FastAgentFactory Edit Tool Test Document
+=======================================
+
+This file is intentionally long enough to test read, grep, and edit behavior.
+It is plain UTF-8 text and is safe to modify during local tool testing.
+
+Section 1: Stable Context
+-------------------------
+
+The edit tool should be able to replace an exact text fragment, provided that the old text is unique.
+By default, if the same old text appears multiple times, the edit should fail because ambiguous editing is
+dangerous in an Agent runtime environment.
+
+Unique replacement target:
+
+EDIT_TARGET_UNIQUE: Please replace this sentence exactly once.
+
+The line above can be used for simple approval flow testing. The model can read this file, propose an edit
+for that sentence, get approval, and then confirm the content hash has changed.
+
+Section 2: Repeated Context
+---------------------------
+
+The following marker appears several times on purpose. It should cause the
+edit tool to fail when replace_all is false, unless the old_text includes more
+surrounding context.
+
+EDIT_TARGET_REPEAT: alpha
+EDIT_TARGET_REPEAT: beta
+EDIT_TARGET_REPEAT: gamma
+
+These repeated markers are useful for testing whether the model can recover
+from an observation like "old_text matched 3 times" by either narrowing the
+old_text or explicitly setting replace_all to true.
+
+Section 3: Longer Body
+----------------------
+
+The Agent factory requires cautious tool behavior, because a tiny file edit can have huge runtime consequences.
+Tools should not silently guess which match to change. When proposed parameters are invalid or ambiguous,
+a structured observation should be returned. That observation should be passed back to the model so it can
+generate a better tool call.
+
+The same principle applies to generated Agents. RuntimeKernel tools should be compiled from ToolSpec,
+validated before execution, executed through a gateway, and reported via a standard event stream. The frontend
+should render tool calls, approval status, execution results, and observations without parsing private runtime patches.
+
+This paragraph is intended to make the file a bit longer. It provides enough content for the read tool to
+demonstrate line-based pagination. The caller can start reading from line 1 (with a small limit), then change
+start_line to read later sections. This helps test whether the tool output includes start_line, end_line,
+total_lines, truncated, and content_hash.
+
+There is another paragraph below. The factory should avoid hardcoded special cases. Instead, each tool should
+declare its schema, resources, approval requirements, and concurrency semantics. The gateway should provide a
+fixed execution contract, while each tool only performs its own specific operation.
+
+第 4 节：搜索目标
+-----------------
+
+搜索标记一：FACTORY_TOOL_SEARCH_ALPHA。
+搜索标记二：FACTORY_TOOL_SEARCH_BETA。
+搜索标记三：FACTORY_TOOL_SEARCH_GAMMA。
+
+这些标记用于 grep 测试。它们可以让你无需先阅读整个文档就能轻松定位到该文件。
+
+Section 5: Closing
+------------------
+
+The file can be reset manually if needed. It is not part of the runtime product
+and exists only as a local workspace test artifact for the built-in filesystem
+tools.

@@ -1,7 +1,48 @@
 from __future__ import annotations
 
+from hashlib import sha256
+from tempfile import NamedTemporaryFile
 from typing import Any
+
+from agent_factory.tooling.builtins.filesystem.common import filesystem_boundary, required_string, resolve_path
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    raise NotImplementedError("edit tool framework is registered but not implemented yet.")
+    path = required_string(arguments, "path")
+    old_text = required_string(arguments, "old_text")
+    new_text = arguments.get("new_text")
+    if not isinstance(new_text, str):
+        raise ValueError("new_text must be a string")
+    replace_all = bool(arguments.get("replace_all", False))
+    root, allow_external = filesystem_boundary(resources)
+    target = resolve_path(path=path, root=root, allow_external=allow_external)
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    if not target.is_file():
+        raise IsADirectoryError(str(target))
+    raw = target.read_bytes()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid utf-8 text: {target}") from exc
+    count = content.count(old_text)
+    if count == 0:
+        raise ValueError("old_text was not found")
+    if not replace_all and count != 1:
+        raise ValueError(f"old_text matched {count} times; set replace_all=true or provide a more specific old_text")
+    updated = content.replace(old_text, new_text) if replace_all else content.replace(old_text, new_text, 1)
+    updated_bytes = updated.encode("utf-8")
+    _atomic_write(target, updated_bytes)
+    return {
+        "path": str(target),
+        "replacements": count if replace_all else 1,
+        "before_hash": sha256(raw).hexdigest(),
+        "after_hash": sha256(updated_bytes).hexdigest(),
+    }
+
+
+def _atomic_write(target, content: bytes) -> None:
+    with NamedTemporaryFile("wb", delete=False, dir=str(target.parent)) as handle:
+        temp_path = target.parent / handle.name
+        handle.write(content)
+    temp_path.replace(target)
