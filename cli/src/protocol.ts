@@ -24,7 +24,7 @@ export const commandSchema = z.object({
 	message: z.string().nullable().optional(),
 	payload: z.record(z.unknown()).optional(),
 	options: z.record(z.unknown()).optional()
-});
+}).strict();
 
 export type FactoryCommand = z.infer<typeof commandSchema>;
 
@@ -32,6 +32,7 @@ export const eventSchema = z.object({
 	event_id: z.string(),
 	event_type: z.enum([
 		'runtime_ready',
+		'runtime_options_changed',
 		'session_started',
 		'session_switched',
 		'sessions_listed',
@@ -43,6 +44,7 @@ export const eventSchema = z.object({
 		'stage_completed',
 		'stage_failed',
 		'node_started',
+		'node_progress',
 		'node_completed',
 		'node_failed',
 		'model_call_started',
@@ -64,20 +66,26 @@ export const eventSchema = z.object({
 		'debug_patch',
 		'error'
 	]),
-	request_id: z.string().nullable().optional(),
-	run_id: z.string().nullable().optional(),
-	session_id: z.string().nullable().optional(),
-	mode: factoryModeSchema.nullable().optional(),
-	graph_id: z.string().nullable().optional(),
-	node_id: z.string().nullable().optional(),
-	stage_id: z.string().nullable().optional(),
-	span_id: z.string().nullable().optional(),
-	parent_span_id: z.string().nullable().optional(),
+	protocol_version: z.string(),
+	producer_type: z.string(),
+	request_id: z.string().nullable(),
+	run_id: z.string().nullable(),
+	session_id: z.string().nullable(),
+	thread_id: z.string().nullable(),
+	mode: factoryModeSchema.nullable(),
+	graph_id: z.string().nullable(),
+	node_id: z.string().nullable(),
+	node_label: z.string().nullable(),
+	node_kind: z.string().nullable(),
+	stage_id: z.string().nullable(),
+	span_id: z.string().nullable(),
+	parent_span_id: z.string().nullable(),
 	sequence: z.number(),
 	timestamp: z.string(),
-	message: z.string().nullable().optional(),
-	payload: z.record(z.unknown()).optional()
-});
+	severity: z.string().nullable(),
+	message: z.string().nullable(),
+	payload: z.record(z.unknown())
+}).strict();
 
 export type FactoryEvent = z.infer<typeof eventSchema>;
 

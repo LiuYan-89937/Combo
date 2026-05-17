@@ -5,7 +5,7 @@ import {type FactoryUiState} from '../state/factoryStore.js';
 import {Section} from './ui.js';
 
 export function StageTimeline({state}: {state: FactoryUiState}) {
-	const latestStage = state.currentStageId ?? state.debugPatches.at(-1)?.stage_id ?? null;
+	const latestStage = state.currentStageId;
 	return (
 		<Section title="Factory Stages" color="blue">
 			<Box>

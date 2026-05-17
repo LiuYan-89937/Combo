@@ -79,14 +79,14 @@ _STAGE_CONTEXTS: dict[str, StageOperatingContext] = {
     ),
     "assembly_spec_generation": StageOperatingContext(
         stage_id="assembly_spec_generation",
-        responsibility="生成并校验 AgentAssemblySpec draft。",
-        allowed_outputs=("assembly_spec_draft", "assembly_validation_report", "draft 文件路径"),
+        responsibility="生成并校验冻结的 AgentAssemblySpec，并确定性冻结 package 物化计划和节点渲染说明。",
+        allowed_outputs=("assembly_spec", "package_materialization_plan", "render_manifest", "assembly_validation_report", "产物文件路径"),
         forbidden_outputs=("工具代码", "package 文件", "harness", "重新选择 pattern", "修改前置阶段计划"),
     ),
     "package_generation": StageOperatingContext(
         stage_id="package_generation",
         responsibility="把已验证的 AssemblySpec、resources、工具能力和节点策略物化为 AgentPackage draft。",
-        allowed_outputs=("agent_package.json", "真实工具代码草稿", "package_report", "bindings/prompts/policies/retrieval/formatters 文件"),
+        allowed_outputs=("agent_package.json", "render_manifest.json", "真实工具代码草稿", "package_report", "bindings/prompts/policies/retrieval/formatters 文件"),
         forbidden_outputs=("harness", "动态工具测试结果", "重新规划 AssemblySpec", "调用真实业务外部服务", "硬编码用户资源"),
     ),
     "harness_generation_and_test": StageOperatingContext(

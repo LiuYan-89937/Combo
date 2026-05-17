@@ -13,7 +13,14 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter import FactoryR
 def main() -> None:
     writer = _JsonLineWriter()
     adapter = FactoryRuntimeAdapter(emit=writer.write)
-    writer.write(event("runtime_ready", message="factory runtime bridge ready", graph_id="factory_bridge"))
+    writer.write(
+        event(
+            "runtime_ready",
+            producer_type="factory_bridge",
+            message="factory runtime bridge ready",
+            graph_id="factory_bridge",
+        )
+    )
     for line in sys.stdin:
         raw = line.strip()
         if not raw:

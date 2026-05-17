@@ -1,9 +1,8 @@
 import React, {useEffect, useMemo, useReducer, useState} from 'react';
 import {Box, Text, useApp} from 'ink';
-import {randomUUID} from 'node:crypto';
 import {PythonBridge} from './bridge/PythonBridge.js';
 import {routeFactoryEvent} from './bridge/eventRouter.js';
-import {commandSuggestions, factoryStages, factoryToolGroups, shellCommands} from './commands.js';
+import {commandSuggestions, factoryStages, factoryToolGroups} from './commands.js';
 import {buildResumePayload} from './interrupts.js';
 import {command, type FactoryCommand, type FactoryEvent, type FactoryMode} from './protocol.js';
 import {initialFactoryUiState} from './state/factoryStore.js';
@@ -105,35 +104,23 @@ export function App() {
 		}
 		if (value.startsWith('/tool-grep ')) {
 			const query = value.slice('/tool-grep '.length).trim();
-			dispatch(localEvent({
-				event_type: 'debug_patch',
-				node_id: 'tool_grep',
-				payload: {patch: {tool_grep: query}}
-			}));
+			dispatch({ui_type: 'set_tool_grep', query});
 			return;
 		}
 		if (value === '/help') {
-			dispatch(localEvent({
-				event_type: 'debug_patch',
-				node_id: 'help',
-				payload: {
-					patch: {
-						commands: shellCommands.map(item => `${item.usage} - ${item.description}`)
-					}
-				}
-			}));
+			dispatch({ui_type: 'show_help'});
 			return;
 		}
 		if (value === '/session') {
-			dispatch(localEvent({event_type: 'debug_patch', node_id: 'session', payload: {patch: {session_id: state.sessionId, mode: state.mode}}}));
+			dispatch({ui_type: 'notice', message: `session ${state.sessionId ?? '-'}  mode ${state.mode ?? '-'}`});
 			return;
 		}
 		if (value === '/tools') {
-			dispatch(localEvent({event_type: 'debug_patch', node_id: 'tools', payload: {patch: {tools: factoryToolGroups}}}));
+			dispatch({ui_type: 'notice', message: `tools ${factoryToolGroups.join(' | ')}`});
 			return;
 		}
 		if (value === '/stages') {
-			dispatch(localEvent({event_type: 'debug_patch', node_id: 'stages', payload: {patch: {stages: factoryStages}}}));
+			dispatch({ui_type: 'notice', message: `stages ${factoryStages.join(' -> ')}`});
 			return;
 		}
 		send(command('send_message', {message: value}));
@@ -175,24 +162,4 @@ export function App() {
 
 function modeLabel(mode: FactoryMode): string {
 	return mode === 'create_agent' ? 'create-agent' : mode;
-}
-
-function localEvent(patch: Partial<FactoryEvent> & Pick<FactoryEvent, 'event_type'>): FactoryEvent {
-	return {
-		event_id: randomUUID(),
-		event_type: patch.event_type,
-		request_id: null,
-		run_id: patch.run_id ?? null,
-		session_id: patch.session_id ?? null,
-		mode: patch.mode ?? null,
-		graph_id: patch.graph_id ?? 'typescript_cli',
-		node_id: patch.node_id ?? null,
-		stage_id: patch.stage_id ?? null,
-		span_id: patch.span_id ?? randomUUID(),
-		parent_span_id: patch.parent_span_id ?? null,
-		sequence: patch.sequence ?? 0,
-		timestamp: patch.timestamp ?? new Date().toISOString(),
-		message: patch.message ?? null,
-		payload: patch.payload ?? {}
-	};
 }

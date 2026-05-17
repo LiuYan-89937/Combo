@@ -30,6 +30,7 @@ from agent_factory.factory_graph.schemas import (
 )
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.prompts import PromptId, output_json_schema
+from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, validate_render_manifest
 from agent_factory.runtime_kernel.patterns import PatternRegistry
 
 
@@ -153,8 +154,41 @@ def _validate_assembly_draft(state: FactoryGraphState) -> dict[str, Any]:
 def _publish_assembly_spec_draft(state: FactoryGraphState) -> dict[str, Any]:
     spec = dict(state.get("assembly_spec_draft") or {})
     report = dict(state.get("assembly_validation_report") or {})
+    factory_run_id = str(state.get("factory_run_id") or "")
+    paths = _assembly_paths(factory_run_id)
+    spec_model = AgentAssemblySpec.model_validate(spec)
+    render_manifest = _build_render_manifest(spec_model, state)
+    render_report_errors = _validate_render_manifest_for_stage(render_manifest, spec_model)
+    if render_report_errors:
+        failed = AssemblyValidationReport(
+            status="failed",
+            attempts=[
+                *[
+                    AssemblyValidationAttempt.model_validate(item)
+                    for item in report.get("attempts", []) or []
+                ],
+                AssemblyValidationAttempt(
+                    attempt=_attempt_count(state) + 1,
+                    status="invalid",
+                    errors=render_report_errors,
+                ),
+            ],
+            final_error="; ".join(render_report_errors),
+        )
+        return _fail_assembly_generation({**state, "assembly_validation_report": failed.model_dump(mode="json")})
+    metadata = dict(spec_model.metadata or {})
+    metadata.update(
+        {
+            "render_manifest_version": render_manifest.version,
+            "render_manifest_path": str(paths["render_manifest"]),
+            "render_node_ids": sorted(render_manifest.nodes),
+            "render_manifest": render_manifest.model_dump(mode="json"),
+        }
+    )
+    spec_model = spec_model.model_copy(update={"metadata": metadata}, deep=True)
+    spec = spec_model.model_dump(mode="json")
     materialization_plan = _build_package_materialization_plan(
-        AgentAssemblySpec.model_validate(spec),
+        spec_model,
         state,
     )
     plan_report = _validate_materialization_plan(materialization_plan, state)
@@ -175,11 +209,10 @@ def _publish_assembly_spec_draft(state: FactoryGraphState) -> dict[str, Any]:
             final_error="; ".join(plan_report.errors),
         )
         return _fail_assembly_generation({**state, "assembly_validation_report": failed.model_dump(mode="json")})
-    factory_run_id = str(state.get("factory_run_id") or "")
-    paths = _assembly_paths(factory_run_id)
     paths["draft"].parent.mkdir(parents=True, exist_ok=True)
     paths["draft"].write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
     paths["spec"].write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+    paths["render_manifest"].write_text(json.dumps(render_manifest.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
     paths["plan"].write_text(json.dumps(materialization_plan.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
     paths["report"].write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
@@ -188,6 +221,8 @@ def _publish_assembly_spec_draft(state: FactoryGraphState) -> dict[str, Any]:
         "assembly_spec_draft": spec,
         "assembly_spec": spec,
         "package_materialization_plan": materialization_plan.model_dump(mode="json"),
+        "render_manifest": render_manifest.model_dump(mode="json"),
+        "render_manifest_path": str(paths["render_manifest"]),
         "assembly_validation_report": report,
         "assembly_spec_draft_path": str(paths["draft"]),
         "package_materialization_plan_path": str(paths["plan"]),
@@ -410,6 +445,7 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         _file_spec("agent_package.json", "json", "manifest", "agent_package", "system_generated", "assembly_spec+package_materialization_plan"),
         _file_spec("assembly_spec.json", "json", "assembly", "assembly_spec", "system_generated", "assembly_spec"),
         _file_spec("resources.json", "json", "manifest", "resources", "system_generated", "resource_condition_plan.resources"),
+        _file_spec("render_manifest.json", "json", "manifest", "render_manifest", "system_generated", "assembly_spec.metadata.render_manifest"),
         _file_spec("package_report.json", "json", "manifest", "package_report", "system_generated", "package_validation_report"),
         _file_spec("bindings/services.json", "json", "binding", "services", "system_generated", "assembly_spec.bindings.services"),
         _file_spec("bindings/node_bindings.json", "json", "binding", "node_bindings", "system_generated", "assembly_spec.bindings.node_bindings"),
@@ -468,6 +504,7 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         "runtime": spec.runtime.model_dump(mode="json"),
         "assembly_spec_path": "assembly_spec.json",
         "resources_path": "resources.json",
+        "render_manifest_path": "render_manifest.json",
         "bindings": {
             "services": "bindings/services.json",
             "node_bindings": "bindings/node_bindings.json",
@@ -489,10 +526,48 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
     )
 
 
+def _build_render_manifest(spec: AgentAssemblySpec, state: FactoryGraphState) -> RenderManifest:
+    pattern_nodes = _pattern_nodes(spec.runtime.pattern_id)
+    graph_nodes = _graph_behavior_nodes_by_id(state)
+    strategy_nodes = _node_strategies_by_id(state)
+    nodes: dict[str, NodeRenderSpec] = {}
+    for node_id, pattern_node in pattern_nodes.items():
+        graph_node = graph_nodes.get(node_id, {})
+        strategy_node = strategy_nodes.get(node_id, {})
+        node_type = str(graph_node.get("node_type") or strategy_node.get("node_type") or pattern_node.get("type") or "node")
+        business_behavior = str(graph_node.get("business_behavior") or strategy_node.get("business_behavior_ref") or "")
+        input_expectation = str(graph_node.get("input_expectation") or "")
+        output_expectation = str(graph_node.get("output_expectation") or "")
+        purpose = business_behavior or f"执行 {node_id} 节点职责。"
+        doing = input_expectation or purpose
+        expected_output = output_expectation or f"{node_id} 节点完成后的状态更新。"
+        nodes[node_id] = NodeRenderSpec(
+            node_id=node_id,
+            label=_render_label(node_id),
+            kind=node_type,
+            purpose=purpose,
+            doing=doing,
+            expected_output=expected_output,
+            visible_to_user=bool(graph_node.get("user_visible", True)),
+        )
+    return RenderManifest(
+        graph_id=spec.runtime.compiled_pattern_id or f"{spec.agent.id}__{spec.runtime.pattern_id}",
+        nodes=nodes,
+    )
+
+
+def _validate_render_manifest_for_stage(render_manifest: RenderManifest, spec: AgentAssemblySpec) -> list[str]:
+    try:
+        validate_render_manifest(render_manifest, set(_pattern_nodes(spec.runtime.pattern_id)))
+    except Exception as exc:
+        return [f"render_manifest invalid: {type(exc).__name__}: {exc}"]
+    return []
+
+
 def _validate_materialization_plan(plan: PackageMaterializationPlan, state: FactoryGraphState) -> PackageMaterializationValidationReport:
     errors: list[str] = []
     paths = {item.path for item in plan.files}
-    required = {"bindings/services.json", "bindings/node_bindings.json", "bindings/hooks.json"}
+    required = {"bindings/services.json", "bindings/node_bindings.json", "bindings/hooks.json", "render_manifest.json"}
     for path in sorted(required - paths):
         errors.append(f"package_materialization_plan missing required binding file: {path}")
     tool_ids = _tool_capability_ids(state)
@@ -612,6 +687,7 @@ def _assembly_paths(factory_run_id: str) -> dict[str, Path]:
     return {
         "draft": root / "assembly_spec_draft.json",
         "spec": root / "assembly_spec.json",
+        "render_manifest": root / "render_manifest.json",
         "plan": root / "package_materialization_plan.json",
         "report": root / "assembly_validation_report.json",
     }
@@ -625,6 +701,28 @@ def _pattern_registry() -> PatternRegistry:
 def _graph_node_ids(state: FactoryGraphState) -> set[str]:
     graph_behavior = dict(state.get("graph_behavior_plan") or {})
     return {str(item.get("node_id") or "") for item in graph_behavior.get("nodes", []) or []}
+
+
+def _graph_behavior_nodes_by_id(state: FactoryGraphState) -> dict[str, dict[str, Any]]:
+    graph_behavior = dict(state.get("graph_behavior_plan") or {})
+    return {
+        str(item.get("node_id") or ""): dict(item)
+        for item in graph_behavior.get("nodes", []) or []
+        if isinstance(item, dict) and item.get("node_id")
+    }
+
+
+def _node_strategies_by_id(state: FactoryGraphState) -> dict[str, dict[str, Any]]:
+    strategy_plan = dict(state.get("node_strategy_plan") or {})
+    return {
+        str(item.get("node_id") or ""): dict(item)
+        for item in strategy_plan.get("node_strategies", []) or []
+        if isinstance(item, dict) and item.get("node_id")
+    }
+
+
+def _render_label(node_id: str) -> str:
+    return node_id.replace("_", " ").title()
 
 
 def _tool_capability_ids(state: FactoryGraphState) -> set[str]:

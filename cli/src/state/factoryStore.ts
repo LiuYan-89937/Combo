@@ -21,6 +21,19 @@ export type StageStatus = {
 	lastMessage: string | null;
 };
 
+export type NodeStatus = {
+	nodeId: string;
+	stageId: string | null;
+	status: StageLifecycle;
+	label: string | null;
+	kind: string | null;
+	startedAt: string | null;
+	completedAt: string | null;
+	failedAt: string | null;
+	message: string | null;
+	payload: Record<string, unknown>;
+};
+
 export type ActivityColor = 'gray' | 'blue' | 'cyan' | 'green' | 'yellow' | 'red';
 
 export type RunActivity = {
@@ -77,12 +90,13 @@ export type FactoryUiState = {
 	events: Array<FactoryEvent>;
 	spans: Record<string, SpanRecord>;
 	stageStatuses: Record<string, StageStatus>;
+	nodeStatuses: Record<string, NodeStatus>;
 	currentStageId: string | null;
 	currentNodeId: string | null;
 	recentActivities: RunActivity[];
 	modelStreams: Record<string, ModelStream>;
 	toolActivities: ToolActivity[];
-	debugPatches: FactoryEvent[];
+	debugEvents: FactoryEvent[];
 	pendingInterrupt: FactoryEvent | null;
 	currentRunId: string | null;
 	runStatus: 'idle' | 'running' | 'interrupted' | 'completed' | 'failed';
@@ -95,6 +109,12 @@ export type FactoryUiState = {
 	errors: string[];
 };
 
+export type FactoryUiAction =
+	| FactoryEvent
+	| {ui_type: 'set_tool_grep'; query: string}
+	| {ui_type: 'show_help'}
+	| {ui_type: 'notice'; message: string};
+
 export const initialFactoryUiState: FactoryUiState = {
 	ready: false,
 	mode: null,
@@ -105,12 +125,13 @@ export const initialFactoryUiState: FactoryUiState = {
 	events: [],
 	spans: {},
 	stageStatuses: {},
+	nodeStatuses: {},
 	currentStageId: null,
 	currentNodeId: null,
 	recentActivities: [],
 	modelStreams: {},
 	toolActivities: [],
-	debugPatches: [],
+	debugEvents: [],
 	pendingInterrupt: null,
 	currentRunId: null,
 	runStatus: 'idle',
@@ -122,6 +143,22 @@ export const initialFactoryUiState: FactoryUiState = {
 	lastError: null,
 	errors: []
 };
+
+export function reduceFactoryUiAction(state: FactoryUiState, action: FactoryUiAction): FactoryUiState {
+	if ('event_type' in action) {
+		return reduceFactoryEvent(state, action);
+	}
+	if (action.ui_type === 'set_tool_grep') {
+		return setToolGrep(state, action.query === 'off' ? '' : action.query);
+	}
+	if (action.ui_type === 'show_help') {
+		return {...state, helpVisible: true};
+	}
+	if (action.ui_type === 'notice') {
+		return {...state, logs: [...state.logs.slice(-20), action.message]};
+	}
+	return state;
+}
 
 export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
 	const base = recordEvent(recordSpan(state, event), event);
@@ -147,18 +184,29 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 			return {
 				...base,
 				stageStatuses: {},
+				nodeStatuses: {},
 				currentStageId: null,
 				currentNodeId: null,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				modelStreams: {},
 				toolActivities: [],
-				debugPatches: [],
+				debugEvents: [],
 				currentRunId: event.run_id ?? null,
 				runStatus: 'running',
 				pendingInterrupt: null,
 				helpVisible: false,
 				logs: [...base.logs, 'run started']
 			};
+		case 'runtime_options_changed': {
+			const options = (event.payload?.options ?? {}) as Record<string, unknown>;
+			return {
+				...base,
+				stopAfterStage: (options.stop_after_stage as string | null | undefined) ?? base.stopAfterStage,
+				showState: Boolean(options.show_state ?? base.showState),
+				showMessages: Boolean(options.show_messages ?? base.showMessages),
+				logs: [...base.logs, 'runtime options updated']
+			};
+		}
 		case 'model_call_started':
 			return upsertModelStream(
 				{
@@ -200,24 +248,29 @@ export function reduceFactoryEvent(state: FactoryUiState, event: FactoryEvent): 
 				toolActivities: upsertToolActivity(base.toolActivities, toolActivity(event))
 			};
 		case 'debug_patch':
-			return applyDebugPatch({...base, debugPatches: [...base.debugPatches.slice(-30), event]}, event);
+			return {...base, debugEvents: [...base.debugEvents.slice(-30), event]};
 		case 'node_started':
 			return {
-				...updateCurrentNode(base, event),
+				...updateNodeStatus(updateCurrentNode(base, event), event, 'running'),
 				recentActivities: appendRunActivity(base.recentActivities, event),
-				logs: [...base.logs, `node started: ${event.node_id ?? '-'}`]
+				logs: [...base.logs, `node started: ${event.node_label ?? event.node_id ?? '-'}`]
+			};
+		case 'node_progress':
+			return {
+				...updateNodeStatus(updateCurrentNode(base, event), event, 'running'),
+				recentActivities: appendRunActivity(base.recentActivities, event)
 			};
 		case 'node_completed':
 			return {
-				...base,
+				...updateNodeStatus(base, event, 'completed'),
 				currentNodeId: event.node_id === base.currentNodeId ? null : base.currentNodeId,
 				recentActivities: appendRunActivity(base.recentActivities, event),
-				logs: [...base.logs, `node completed: ${event.node_id ?? '-'}`]
+				logs: [...base.logs, `node completed: ${event.node_label ?? event.node_id ?? '-'}`]
 			};
 		case 'node_failed':
 			return recordError(
-				{...base, runStatus: 'failed', recentActivities: appendRunActivity(base.recentActivities, event)},
-				`node failed: ${event.node_id ?? '-'}`
+				{...updateNodeStatus(base, event, 'failed'), runStatus: 'failed', recentActivities: appendRunActivity(base.recentActivities, event)},
+				`node failed: ${event.node_label ?? event.node_id ?? '-'}`
 			);
 		case 'interrupt_requested':
 			return {
@@ -295,6 +348,33 @@ function updateCurrentNode(state: FactoryUiState, event: FactoryEvent): FactoryU
 		...state,
 		currentStageId: event.stage_id ?? state.currentStageId,
 		currentNodeId: event.node_id ?? state.currentNodeId
+	};
+}
+
+function updateNodeStatus(state: FactoryUiState, event: FactoryEvent, status: StageLifecycle): FactoryUiState {
+	const nodeId = event.node_id;
+	if (!nodeId) {
+		return state;
+	}
+	const previous = state.nodeStatuses[nodeId];
+	const next: NodeStatus = {
+		nodeId,
+		stageId: event.stage_id ?? previous?.stageId ?? null,
+		status,
+		label: event.node_label ?? previous?.label ?? null,
+		kind: event.node_kind ?? previous?.kind ?? null,
+		startedAt: status === 'running' ? event.timestamp : previous?.startedAt ?? null,
+		completedAt: status === 'completed' ? event.timestamp : previous?.completedAt ?? null,
+		failedAt: status === 'failed' ? event.timestamp : previous?.failedAt ?? null,
+		message: event.message ?? previous?.message ?? null,
+		payload: {...(previous?.payload ?? {}), ...(event.payload ?? {})}
+	};
+	return {
+		...state,
+		nodeStatuses: {
+			...state.nodeStatuses,
+			[nodeId]: next
+		}
 	};
 }
 
@@ -553,7 +633,7 @@ function runActivity(event: FactoryEvent): RunActivity | null {
 			stageId: event.stage_id ?? null,
 			nodeId: event.node_id ?? null,
 			label: readableEventType(eventType),
-			detail: event.message ?? String(payload.type ?? payload.status ?? node),
+			detail: event.message ?? String(payload.type ?? payload.status ?? event.node_label ?? node),
 			color: colorForEvent(eventType)
 		};
 	}
@@ -720,24 +800,6 @@ function compactValue(value: unknown, limit = 360): string {
 	} catch {
 		return String(value).replace(/\s+/g, ' ').slice(0, limit);
 	}
-}
-
-function applyDebugPatch(state: FactoryUiState, event: FactoryEvent): FactoryUiState {
-	if (event.node_id === 'tool_grep') {
-		const patch = (event.payload?.patch ?? {}) as Record<string, unknown>;
-		const query = String(patch.tool_grep ?? '').trim();
-		return setToolGrep(state, query === 'off' ? '' : query);
-	}
-	if (event.node_id !== 'bridge_options') {
-		return state;
-	}
-	const options = (event.payload?.options ?? {}) as Record<string, unknown>;
-	return {
-		...state,
-		stopAfterStage: (options.stop_after_stage as string | null | undefined) ?? state.stopAfterStage,
-		showState: Boolean(options.show_state ?? state.showState),
-		showMessages: Boolean(options.show_messages ?? state.showMessages)
-	};
 }
 
 export function setToolGrep(state: FactoryUiState, query: string): FactoryUiState {

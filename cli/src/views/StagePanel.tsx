@@ -1,65 +1,72 @@
 import React from 'react';
-import {Text} from 'ink';
-import {type FactoryUiState} from '../state/factoryStore.js';
+import {Box, Text} from 'ink';
+import {type FactoryUiState, type NodeStatus} from '../state/factoryStore.js';
 import {Section} from './ui.js';
 
 export function StagePanel({state}: {state: FactoryUiState}) {
-	const latest = state.debugPatches.at(-1);
-	if (!latest) {
+	const node = currentNode(state);
+	if (!node) {
 		return null;
 	}
-	const patch = (latest.payload?.patch ?? latest.payload ?? {}) as Record<string, unknown>;
 	return (
-		<Section title="Latest Runtime Patch" color="cyan">
-			<Text>
-				<Text color="gray">node </Text>
-				{latest.node_id ?? '-'}
-				<Text color="gray">  stage </Text>
-				{latest.stage_id ?? '-'}
-			</Text>
-			{summaryLines(patch).map(line => (
-				<Text key={line}>{line}</Text>
-			))}
+		<Section title="Current Node" color="cyan">
+			<Box flexDirection="column">
+				<Text>
+					<Text color="gray">node </Text>
+					<Text bold>{node.label ?? node.nodeId}</Text>
+					<Text color="gray">  kind </Text>
+					{node.kind ?? '-'}
+					<Text color="gray">  status </Text>
+					<Text color={statusColor(node.status)}>{node.status}</Text>
+				</Text>
+				<Text color="gray">
+					stage {node.stageId ?? '-'}  started {node.startedAt ?? '-'}
+				</Text>
+				{node.message && <Text>{node.message}</Text>}
+				{summaryLines(node).map(line => (
+					<Text key={line} color="gray">{line}</Text>
+				))}
+			</Box>
 		</Section>
 	);
 }
 
-function summaryLines(patch: Record<string, unknown>): string[] {
+function currentNode(state: FactoryUiState): NodeStatus | null {
+	if (state.currentNodeId && state.nodeStatuses[state.currentNodeId]) {
+		return state.nodeStatuses[state.currentNodeId];
+	}
+	const nodes = Object.values(state.nodeStatuses);
+	return nodes.at(-1) ?? null;
+}
+
+function summaryLines(node: NodeStatus): string[] {
 	const lines: string[] = [];
-	if (patch.current_stage) {
-		lines.push(`current_stage: ${String(patch.current_stage)}`);
+	const outputSummary = stringValue(node.payload.output_summary);
+	if (outputSummary) {
+		lines.push(`output: ${trim(outputSummary, 240)}`);
 	}
-	const stageLog = (patch.stage_log as Array<Record<string, unknown>> | undefined) ?? [];
-	for (const item of stageLog.slice(-3)) {
-		lines.push(`${String(item.stage_id ?? '-')}: ${String(item.status ?? '-')} ${String(item.message ?? '')}`);
-	}
-	const assemblyReport = patch.assembly_validation_report as Record<string, unknown> | undefined;
-	if (assemblyReport) {
-		const attempts = (assemblyReport.attempts as Array<Record<string, unknown>> | undefined) ?? [];
-		const latestAttempt = attempts.at(-1);
-		lines.push(`assembly validation: ${String(assemblyReport.status ?? '-')}`);
-		lines.push(`assembly attempts: ${String(attempts.length)}`);
-		if (latestAttempt) {
-			lines.push(`assembly latest: #${String(latestAttempt.attempt ?? '-')} ${String(latestAttempt.status ?? '-')}`);
-			const errors = (latestAttempt.errors as string[] | undefined) ?? [];
-			if (errors.length > 0) {
-				lines.push(`assembly error: ${errors[0]}`);
-			}
-		}
-	}
-	if (patch.assembly_spec_draft_path) {
-		lines.push(`assembly draft: ${String(patch.assembly_spec_draft_path)}`);
-	}
-	const errors = (patch.errors as Array<Record<string, unknown>> | undefined) ?? [];
-	for (const item of errors.slice(-3)) {
-		lines.push(`error: ${String(item.where ?? '-')} ${String(item.message ?? '')}`);
-	}
-	const modelActivity = (patch.model_activity as Array<Record<string, unknown>> | undefined) ?? [];
-	for (const item of modelActivity.slice(-3)) {
-		lines.push(`model: ${String(item.event_type ?? '-')} ${String(item.message ?? item.output_summary ?? '')}`);
-	}
-	if (!lines.length) {
-		lines.push(JSON.stringify(patch).slice(0, 900));
+	const error = stringValue(node.payload.error) || stringValue(node.payload.message);
+	if (node.status === 'failed' && error) {
+		lines.push(`error: ${trim(error, 240)}`);
 	}
 	return lines;
+}
+
+function statusColor(status: string): string {
+	if (status === 'failed') {
+		return 'red';
+	}
+	if (status === 'completed') {
+		return 'green';
+	}
+	return 'cyan';
+}
+
+function stringValue(value: unknown): string {
+	return typeof value === 'string' ? value.trim() : '';
+}
+
+function trim(value: string, limit: number): string {
+	const normalized = value.replace(/\s+/g, ' ').trim();
+	return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }

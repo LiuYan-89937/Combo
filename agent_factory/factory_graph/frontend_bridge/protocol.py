@@ -5,6 +5,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+FACTORY_FRONTEND_EVENT_PROTOCOL_VERSION = "factory_frontend.v1"
+
+
 FactoryFrontendCommandType = Literal[
     "start_session",
     "list_sessions",
@@ -20,6 +23,7 @@ FactoryFrontendCommandType = Literal[
 
 FactoryFrontendEventType = Literal[
     "runtime_ready",
+    "runtime_options_changed",
     "session_started",
     "session_switched",
     "sessions_listed",
@@ -31,6 +35,7 @@ FactoryFrontendEventType = Literal[
     "stage_completed",
     "stage_failed",
     "node_started",
+    "node_progress",
     "node_completed",
     "node_failed",
     "model_call_started",
@@ -73,18 +78,24 @@ class FactoryFrontendEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: str
+    protocol_version: str = FACTORY_FRONTEND_EVENT_PROTOCOL_VERSION
     event_type: FactoryFrontendEventType
+    producer_type: str = "factory_runtime"
     request_id: str | None = None
     run_id: str | None = None
     session_id: str | None = None
+    thread_id: str | None = None
     mode: FactoryMode | None = None
     graph_id: str | None = None
     node_id: str | None = None
+    node_label: str | None = None
+    node_kind: str | None = None
     stage_id: str | None = None
     span_id: str | None = None
     parent_span_id: str | None = None
     sequence: int = 0
     timestamp: str
+    severity: str | None = None
     message: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -93,9 +104,14 @@ def event(
     event_type: FactoryFrontendEventType,
     *,
     request_id: str | None = None,
+    protocol_version: str | None = None,
+    producer_type: str | None = None,
     session_id: str | None = None,
+    thread_id: str | None = None,
     mode: FactoryMode | None = None,
     node_id: str | None = None,
+    node_label: str | None = None,
+    node_kind: str | None = None,
     stage_id: str | None = None,
     run_id: str | None = None,
     graph_id: str | None = None,
@@ -103,6 +119,7 @@ def event(
     parent_span_id: str | None = None,
     sequence: int = 0,
     timestamp: str | None = None,
+    severity: str | None = None,
     message: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> FactoryFrontendEvent:
@@ -111,18 +128,24 @@ def event(
 
     return FactoryFrontendEvent(
         event_id=uuid.uuid4().hex,
+        protocol_version=protocol_version or FACTORY_FRONTEND_EVENT_PROTOCOL_VERSION,
         event_type=event_type,
+        producer_type=producer_type or "factory_runtime",
         request_id=request_id,
         run_id=run_id,
         session_id=session_id,
+        thread_id=thread_id,
         mode=mode,
         graph_id=graph_id,
         node_id=node_id,
+        node_label=node_label,
+        node_kind=node_kind,
         stage_id=stage_id,
         span_id=span_id,
         parent_span_id=parent_span_id,
         sequence=sequence,
         timestamp=timestamp or datetime.now(UTC).isoformat(),
+        severity=severity,
         message=message,
         payload=payload or {},
     )

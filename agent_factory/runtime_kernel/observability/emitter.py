@@ -36,7 +36,7 @@ class ObservabilityManager:
             self._run_started_at[event.run_id] = perf_counter()
             summary.agent_id = str(event.payload.get("agent_id") or summary.agent_id)
             summary.pattern_id = str(event.payload.get("pattern_id") or summary.pattern_id)
-        elif event.event_type == "node_completed":
+        elif event.event_type == "node_completed" and "runtime_render" not in event.payload:
             summary.node_count += 1
             duration = int(event.payload.get("duration_ms") or 0)
             if duration > summary.max_node_latency_ms:

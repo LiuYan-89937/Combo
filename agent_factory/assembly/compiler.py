@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.assembly.validator import AgentAssemblyValidator
 from agent_factory.runtime_kernel.bindings import RuntimeServices
+from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.kernel import CompiledKernelApp, RuntimeKernelFacade
 from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
+from agent_factory.runtime_render import RenderManifest, validate_render_manifest
 
 
 @dataclass(slots=True)
@@ -37,11 +39,13 @@ class AgentAssemblyCompiler:
     ) -> CompiledAgentAssembly:
         self.validator.validate(spec)
         assembled_pattern = self._assemble_pattern(spec)
+        render_manifest = self._render_manifest_for_spec(spec, assembled_pattern)
         self.facade.instance.pattern_registry.register(assembled_pattern)
         compiled_app = self.facade.compile(
             pattern_id=assembled_pattern.pattern_id,
             bindings=spec.bindings,
             services=services,
+            render_manifest=render_manifest,
         )
         return CompiledAgentAssembly(
             spec=spec,
@@ -77,3 +81,10 @@ class AgentAssemblyCompiler:
             else:
                 node.wrappers = [*node.wrappers, *override.wrappers]
         return assembled
+
+    def _render_manifest_for_spec(self, spec: AgentAssemblySpec, pattern: GraphPatternSpec) -> RenderManifest:
+        raw_manifest = spec.metadata.get("render_manifest")
+        if not raw_manifest:
+            raise RuntimeKernelError("AgentAssemblySpec.metadata.render_manifest is required for generated agent compilation.")
+        manifest = RenderManifest.model_validate(raw_manifest)
+        return validate_render_manifest(manifest, {node.id for node in pattern.nodes})

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.runtime_kernel.bindings.services import RuntimeServices
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_render import NodeRenderSpec
 
 
 class NodeExecutionContext(BaseModel):
@@ -18,6 +19,7 @@ class NodeExecutionContext(BaseModel):
     hook_bindings: list[dict[str, Any]] = Field(default_factory=list)
     services: RuntimeServices
     emit_event: Callable[[dict[str, Any]], None]
+    render_spec: NodeRenderSpec | None = None
 
 
 class NodeImplementation(Protocol):

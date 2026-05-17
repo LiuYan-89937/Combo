@@ -39,6 +39,7 @@ from agent_factory.runtime_kernel.patterns.registry import PatternRegistry
 from agent_factory.runtime_kernel.patterns.validator import PatternValidator
 from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_render import RenderManifest, default_node_render_spec, validate_render_manifest
 
 
 class RuntimeKernelFacade:
@@ -94,15 +95,18 @@ class RuntimeKernelFacade:
         pattern_id: str,
         bindings: BindingSet | None = None,
         services: RuntimeServices | None = None,
+        render_manifest: RenderManifest | dict | None = None,
     ) -> CompiledKernelApp:
         services = services or self.instance.services
         bindings = bindings or BindingSet()
         pattern = self.instance.pattern_registry.get(pattern_id)
+        resolved_render_manifest = _resolve_render_manifest(pattern, render_manifest)
         services.validate_required(_required_services_for_pattern(pattern))
         return self.instance.compiler.compile(
             pattern_id=pattern_id,
             bindings=bindings,
             services=services,
+            render_manifest=resolved_render_manifest,
         )
 
     def run(
@@ -171,3 +175,19 @@ def _required_services_for_pattern(pattern) -> list[str]:
         elif capability == "harness":
             required.add("harness_bridge")
     return sorted(required)
+
+
+def _resolve_render_manifest(pattern, render_manifest: RenderManifest | dict | None) -> RenderManifest:
+    if render_manifest is None:
+        manifest = RenderManifest(
+            graph_id=pattern.pattern_id,
+            nodes={
+                node.id: default_node_render_spec(node_id=node.id, node_type=node.type, impl=node.impl)
+                for node in pattern.nodes
+            },
+        )
+    elif isinstance(render_manifest, RenderManifest):
+        manifest = render_manifest
+    else:
+        manifest = RenderManifest.model_validate(render_manifest)
+    return validate_render_manifest(manifest, {node.id for node in pattern.nodes})

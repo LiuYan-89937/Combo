@@ -29,6 +29,7 @@ from agent_factory.factory_graph.schemas import (
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import PromptId, get_prompt, output_json_schema
+from agent_factory.runtime_render import RenderManifest, validate_render_manifest
 
 
 STAGE_ID = "package_generation"
@@ -43,6 +44,7 @@ REQUIRED_PACKAGE_FILES = {
     "agent_package.json",
     "assembly_spec.json",
     "resources.json",
+    "render_manifest.json",
     "package_report.json",
     "bindings/services.json",
     "bindings/node_bindings.json",
@@ -231,7 +233,17 @@ def _materialize_package_files(state: FactoryGraphState) -> dict[str, Any]:
     package_root = Path(materialization_plan.package_root)
     materialized: list[PackageMaterializedFile] = []
     package_root.mkdir(parents=True, exist_ok=True)
-    for draft in _system_generated_files(state, materialization_plan) + list(decision.generated_files):
+    try:
+        files_to_write = _system_generated_files(state, materialization_plan) + list(decision.generated_files)
+    except Exception as exc:
+        report = PackageValidationReport(
+            status="failed",
+            package_root=str(package_root),
+            validation_errors=[f"package system file generation failed: {type(exc).__name__}: {exc}"],
+            static_checks=[{"check": "system_generated_files", "status": "failed"}],
+        )
+        return _package_failed(report, "package materialization failed")
+    for draft in files_to_write:
         relative_path = _safe_relative_path(draft.path)
         target = package_root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -277,11 +289,21 @@ def _validate_package_structure(state: FactoryGraphState) -> dict[str, Any]:
         if check.get("status") != "ok":
             errors.append(str(check.get("message") or f"invalid file: {item.path}"))
     assembly_path = package_root / "assembly_spec.json"
+    assembly_spec: AgentAssemblySpec | None = None
     if assembly_path.is_file():
         try:
-            AgentAssemblySpec.model_validate_json(assembly_path.read_text(encoding="utf-8"))
+            assembly_spec = AgentAssemblySpec.model_validate_json(assembly_path.read_text(encoding="utf-8"))
         except Exception as exc:
             errors.append(f"assembly_spec.json invalid: {type(exc).__name__}: {exc}")
+    render_manifest_path = package_root / "render_manifest.json"
+    if render_manifest_path.is_file() and assembly_spec is not None:
+        try:
+            render_manifest = RenderManifest.model_validate_json(render_manifest_path.read_text(encoding="utf-8"))
+            manifest_nodes = set(render_manifest.nodes)
+            metadata_nodes = set(str(item) for item in assembly_spec.metadata.get("render_node_ids", []) or [])
+            validate_render_manifest(render_manifest, metadata_nodes or manifest_nodes)
+        except Exception as exc:
+            errors.append(f"render_manifest.json invalid: {type(exc).__name__}: {exc}")
     manifest_path = package_root / "agent_package.json"
     if manifest_path.is_file():
         errors.extend(_validate_agent_package_manifest(package_root, manifest_path))
@@ -416,7 +438,7 @@ def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) ->
         manifest = TypeAdapter(dict[str, Any]).validate_json(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return [f"agent_package.json invalid: {type(exc).__name__}: {exc}"]
-    for key in ("assembly_spec_path", "resources_path"):
+    for key in ("assembly_spec_path", "resources_path", "render_manifest_path"):
         value = str(manifest.get(key) or "")
         if not value:
             errors.append(f"agent_package.json missing {key}")
@@ -516,6 +538,7 @@ def _system_generated_files(
         "agent_package.json": plan.manifest_contract,
         "assembly_spec.json": assembly_spec.model_dump(mode="json"),
         "resources.json": resources_payload,
+        "render_manifest.json": assembly_spec.metadata.get("render_manifest"),
         "package_report.json": {"version": "package_report.v0", "status": "valid"},
         "bindings/services.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.services],
         "bindings/node_bindings.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.node_bindings],
@@ -544,7 +567,7 @@ def _system_generated_files(
             continue
         content = by_path.get(spec.path)
         if content is None:
-            content = [] if spec.path.endswith(".json") else ""
+            raise ValueError(f"missing system-generated content for {spec.path}")
         drafts.append(
             PackageFileDraft(
                 path=spec.path,

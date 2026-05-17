@@ -166,11 +166,10 @@ class FactoryRuntimeAdapter:
         )
         self.emit(
             event(
-                "debug_patch",
+                "runtime_options_changed",
                 request_id=command.request_id,
                 session_id=self._session_id(),
                 mode=self.mode,
-                node_id="bridge_options",
                 payload={"options": asdict(self.options)},
             )
         )

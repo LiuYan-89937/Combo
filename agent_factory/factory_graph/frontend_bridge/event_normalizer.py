@@ -53,9 +53,15 @@ class RuntimeEventNormalizer:
         event_type: FactoryFrontendEventType,
         *,
         node_id: str | None = None,
+        node_label: str | None = None,
+        node_kind: str | None = None,
         stage_id: str | None = None,
         span_id: str | None = None,
         parent_span_id: str | None = None,
+        protocol_version: str | None = None,
+        producer_type: str | None = None,
+        thread_id: str | None = None,
+        severity: str | None = None,
         message: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> FactoryFrontendEvent:
@@ -63,16 +69,22 @@ class RuntimeEventNormalizer:
         item = event(
             event_type,
             request_id=self.request_id,
+            protocol_version=protocol_version,
+            producer_type=producer_type,
             run_id=self.run_id,
             session_id=self.session_id,
+            thread_id=thread_id,
             mode=self.mode,
             graph_id=self.graph_id,
             node_id=node_id,
+            node_label=node_label,
+            node_kind=node_kind,
             stage_id=stage_id,
             span_id=span_id,
             parent_span_id=parent_span_id,
             sequence=self.sequence,
             timestamp=datetime.now(UTC).isoformat(),
+            severity=severity,
             message=message,
             payload=payload,
         )
@@ -110,8 +122,6 @@ class RuntimeEventNormalizer:
         node_span_id = self._node_span(node_id, stage_id)
         if stage_id:
             self._ensure_stage_started(stage_id)
-        if node_id not in self.started_nodes:
-            self._emit_node_started(node_id, stage_id, {"node_id": node_id, "source": "updates_default"})
         self.runtime_event(
             "debug_patch",
             node_id=node_id,
@@ -123,52 +133,21 @@ class RuntimeEventNormalizer:
         self.emit_model_activity_from_patch(node_id, stage_id, patch)
         self._emit_tool_proposals(node_id, stage_id, node_span_id, patch)
         self._emit_tool_observations(node_id, stage_id, node_span_id, patch)
-        for item in patch.get("stage_log", []) or []:
-            item_stage_id = str(item.get("stage_id") or stage_id or "")
-            if item_stage_id:
-                self._ensure_stage_started(item_stage_id)
-            self.runtime_event(
-                "stage_completed",
-                node_id=node_id,
-                stage_id=item_stage_id or None,
-                span_id=self._stage_span_or_run(item_stage_id or None),
-                parent_span_id=self.run_span_id,
-                payload=item,
-            )
-        if node_id not in self.completed_nodes:
-            self._emit_node_completed(node_id, stage_id, {"node_id": node_id, "source": "updates_default"})
 
     def emit_debug_event(self, chunk: Any) -> None:
         if not isinstance(chunk, dict):
             return
-        payload = chunk.get("payload") or {}
-        debug_type = chunk.get("type")
-        if debug_type == "task":
-            node_id = str(payload.get("name") or "")
-            if node_id:
-                stage_id = node_id if node_id in STAGE_IDS else self.current_stage_id
-                if stage_id:
-                    self._ensure_stage_started(stage_id)
-                self._emit_node_started(node_id, stage_id, {"task": json_safe(payload), "step": chunk.get("step")})
-        elif debug_type == "task_result":
-            node_id = str(payload.get("name") or "")
-            if not node_id:
-                return
-            stage_id = node_id if node_id in STAGE_IDS else self.current_stage_id
-            if payload.get("error"):
-                self.runtime_event(
-                    "node_failed",
-                    node_id=node_id,
-                    stage_id=stage_id,
-                    span_id=self._node_span(node_id, stage_id),
-                    parent_span_id=self._stage_span_or_run(stage_id),
-                    payload={"task": json_safe(payload), "step": chunk.get("step")},
-                )
-            else:
-                self._emit_node_completed(node_id, stage_id, {"task": json_safe(payload), "step": chunk.get("step")})
+        self.runtime_event(
+            "debug_patch",
+            span_id=self.run_span_id,
+            payload={"debug": json_safe(chunk)},
+        )
 
     def emit_custom_event(self, chunk: Any) -> None:
         if not isinstance(chunk, dict):
+            return
+        if chunk.get("type") == "runtime_render_event":
+            self._emit_runtime_render_event(chunk.get("payload") or {})
             return
         if chunk.get("type") == "tool_activity":
             self._emit_custom_tool_activity(chunk.get("payload") or {})
@@ -194,6 +173,61 @@ class RuntimeEventNormalizer:
             parent_span_id=self.run_span_id,
             payload={key: value for key, value in json_safe(payload).items() if key not in {"event_type", "span_id"}},
         )
+
+    def _emit_runtime_render_event(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        event_type = str(payload.get("event_type") or "")
+        if event_type not in {"node_started", "node_progress", "node_completed", "node_failed"}:
+            return
+        node_id = str(payload.get("node_id") or "")
+        if not node_id:
+            return
+        stage_id = str(payload.get("stage_id") or "") or (node_id if node_id in STAGE_IDS else self.current_stage_id)
+        span_id = self._node_span(node_id, stage_id)
+        if stage_id:
+            self._ensure_stage_started(stage_id)
+        if event_type == "node_started":
+            self.started_nodes.add(node_id)
+        if event_type in {"node_completed", "node_failed"}:
+            self.started_nodes.add(node_id)
+            self.completed_nodes.add(node_id)
+        source_protocol_version = _optional_str(payload.get("protocol_version"))
+        render_payload = dict(payload.get("payload") or {})
+        if source_protocol_version:
+            render_payload["source_protocol_version"] = source_protocol_version
+        self.runtime_event(
+            event_type,  # type: ignore[arg-type]
+            node_id=node_id,
+            node_label=_optional_str(payload.get("node_label")),
+            node_kind=_optional_str(payload.get("node_kind")),
+            stage_id=stage_id or None,
+            span_id=span_id,
+            parent_span_id=self._stage_span_or_run(stage_id or None),
+            producer_type=_optional_str(payload.get("producer_type")),
+            thread_id=_optional_str(payload.get("thread_id")),
+            severity=_optional_str(payload.get("severity")),
+            message=_optional_str(payload.get("message")),
+            payload=render_payload,
+        )
+        if stage_id and event_type == "node_completed":
+            self.runtime_event(
+                "stage_completed",
+                node_id=node_id,
+                stage_id=stage_id,
+                span_id=self._stage_span_or_run(stage_id),
+                parent_span_id=self.run_span_id,
+                payload={"stage_id": stage_id, "node_id": node_id, **render_payload},
+            )
+        elif stage_id and event_type == "node_failed":
+            self.runtime_event(
+                "stage_failed",
+                node_id=node_id,
+                stage_id=stage_id,
+                span_id=self._stage_span_or_run(stage_id),
+                parent_span_id=self.run_span_id,
+                payload={"stage_id": stage_id, "node_id": node_id, **render_payload},
+            )
 
     def _emit_custom_tool_activity(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -344,6 +378,8 @@ class RuntimeEventNormalizer:
         return self.node_spans[key]
 
     def _emit_node_started(self, node_id: str, stage_id: str | None, payload: dict[str, Any]) -> None:
+        if node_id in self.started_nodes:
+            return
         self.started_nodes.add(node_id)
         self.runtime_event(
             "node_started",
@@ -355,9 +391,25 @@ class RuntimeEventNormalizer:
         )
 
     def _emit_node_completed(self, node_id: str, stage_id: str | None, payload: dict[str, Any]) -> None:
+        if node_id in self.completed_nodes:
+            return
         self.completed_nodes.add(node_id)
         self.runtime_event(
             "node_completed",
+            node_id=node_id,
+            stage_id=stage_id,
+            span_id=self._node_span(node_id, stage_id),
+            parent_span_id=self._stage_span_or_run(stage_id),
+            payload=payload,
+        )
+
+    def _emit_node_failed(self, node_id: str, stage_id: str | None, payload: dict[str, Any]) -> None:
+        if node_id in self.completed_nodes:
+            return
+        self.started_nodes.add(node_id)
+        self.completed_nodes.add(node_id)
+        self.runtime_event(
+            "node_failed",
             node_id=node_id,
             stage_id=stage_id,
             span_id=self._node_span(node_id, stage_id),
@@ -478,6 +530,13 @@ def _content_to_text(content: Any) -> str:
                 parts.append(str(item.get("text") or ""))
         return "".join(parts)
     return str(content) if content else ""
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
 
 
 def json_safe(value: Any) -> Any:

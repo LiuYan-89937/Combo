@@ -10,6 +10,8 @@ from langchain_core.tools import BaseTool
 
 from agent_factory.tooling import get_factory_protected_tool_ids, get_factory_tools
 from agent_factory.factory_graph.constants import STAGE_IDS
+from agent_factory.factory_graph.render_manifest import get_factory_node_render_spec, validate_factory_render_manifest
+from agent_factory.factory_graph.render_wrapper import wrap_factory_node
 from agent_factory.factory_graph.stages import STAGE_RUNNERS
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.factory_graph.tool_approval import (
@@ -34,12 +36,20 @@ def build_factory_graph(
 
     resolved_tools = tools if tools is not None else get_factory_tools()
     has_tools = bool(resolved_tools)
+    validate_factory_render_manifest()
     graph = StateGraph(FactoryGraphState)
     if has_tools:
         graph.add_node(FACTORY_TOOL_APPROVAL_NODE, approve_tool_calls)
         graph.add_node(FACTORY_TOOLS_NODE, ToolNode(resolved_tools, name=FACTORY_TOOLS_NODE))
     for stage_id in STAGE_IDS:
-        graph.add_node(stage_id, STAGE_RUNNERS[stage_id])
+        graph.add_node(
+            stage_id,
+            wrap_factory_node(
+                node_id=stage_id,
+                runner=STAGE_RUNNERS[stage_id],
+                render_spec=get_factory_node_render_spec(stage_id),
+            ),
+        )
 
     graph.add_edge(START, STAGE_IDS[0])
     for index, stage_id in enumerate(STAGE_IDS):

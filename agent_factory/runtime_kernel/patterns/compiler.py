@@ -23,6 +23,8 @@ from agent_factory.runtime_kernel.patterns.schema import (
 from agent_factory.runtime_kernel.patterns.validator import PatternValidator
 from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
 from agent_factory.runtime_kernel.wrappers import DEFAULT_NODE_WRAPPER_REGISTRY, NodeWrapperRegistry
+from agent_factory.runtime_kernel.wrappers.system_render import SYSTEM_RENDER_NODE_WRAPPER
+from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, default_node_render_spec, validate_render_manifest
 
 
 class PatternCompiler:
@@ -43,11 +45,19 @@ class PatternCompiler:
         pattern_id: str,
         bindings: BindingSet,
         services: RuntimeServices,
+        render_manifest: RenderManifest,
     ) -> CompiledKernelApp:
         pattern = self.pattern_registry.get(pattern_id)
         self.validator.validate(pattern, known_patterns=set(self.pattern_registry.list_pattern_ids()))
+        validate_render_manifest(render_manifest, {node.id for node in pattern.nodes})
         node_runners = {
-            node.id: self._make_node_runner(node=node, pattern=pattern, bindings=bindings, services=services)
+            node.id: self._make_node_runner(
+                node=node,
+                pattern=pattern,
+                bindings=bindings,
+                services=services,
+                render_manifest=render_manifest,
+            )
             for node in pattern.nodes
         }
         graph = StateGraph(dict)
@@ -73,7 +83,10 @@ class PatternCompiler:
             graph_app=graph_app,
             services=services,
             bindings=bindings,
-            metadata={"compiled_pattern_id": pattern.pattern_id},
+            metadata={
+                "compiled_pattern_id": pattern.pattern_id,
+                "render_manifest": render_manifest.model_dump(mode="json"),
+            },
             node_runners=node_runners,
         )
 
@@ -84,6 +97,7 @@ class PatternCompiler:
         pattern: GraphPatternSpec,
         bindings: BindingSet,
         services: RuntimeServices,
+        render_manifest: RenderManifest,
     ):
         node_bindings = [
             item.model_dump(mode="json")
@@ -94,7 +108,13 @@ class PatternCompiler:
         for wrapper in node.wrappers:
             DEFAULT_NODE_WRAPPER_REGISTRY.validate_spec(wrapper)
         if node.type == "sub_graph":
-            child = self.compile(pattern_id=node.pattern_ref or "", bindings=bindings, services=services)
+            child_pattern = self.pattern_registry.get(node.pattern_ref or "")
+            child = self.compile(
+                pattern_id=node.pattern_ref or "",
+                bindings=bindings,
+                services=services,
+                render_manifest=_default_render_manifest_for_pattern(child_pattern),
+            )
             _validate_subgraph_exit_routes(node_id=node.id, pattern=pattern, child=child.pattern_spec)
             execute = _make_subgraph_executor(
                 node_id=node.id,
@@ -115,6 +135,7 @@ class PatternCompiler:
                 span_type="subgraph_execution",
                 node_wrappers=node.wrappers,
                 node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
+                render_spec=render_manifest.nodes.get(node.id),
             )
         impl = self.node_registry.get(node.impl)
 
@@ -132,6 +153,7 @@ class PatternCompiler:
             span_type="node_execution",
             node_wrappers=node.wrappers,
             node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
+            render_spec=render_manifest.nodes.get(node.id),
         )
 
 
@@ -147,6 +169,7 @@ def _make_wrapped_runner(
     span_type: str,
     node_wrappers: list[PatternNodeWrapperSpec],
     node_wrapper_registry: NodeWrapperRegistry,
+    render_spec: NodeRenderSpec | None,
 ):
     node_wrappers = sorted(node_wrappers, key=lambda item: int(item.order))
 
@@ -191,9 +214,11 @@ def _make_wrapped_runner(
             hook_bindings=hook_bindings,
             services=services,
             emit_event=emit_event,
+            render_spec=render_spec,
         )
         active_state = state
         try:
+            SYSTEM_RENDER_NODE_WRAPPER.before(state=active_state, context=context)
             working_state, _pre_patch = _run_pre_hooks(active_state, context)
             active_state = working_state
             before_state, _before_patch = _run_node_wrappers(
@@ -230,6 +255,12 @@ def _make_wrapped_runner(
             _apply_node_metrics(updated, perf_counter() - started)
             _resolve_after_node(pattern=pattern, node=node, state=updated, services=services)
             duration_ms = int((perf_counter() - started) * 1000)
+            SYSTEM_RENDER_NODE_WRAPPER.after(
+                state=updated,
+                context=context,
+                node_result=patch,
+                duration_ms=duration_ms,
+            )
             _emit_state_event(
                 services,
                 updated,
@@ -265,6 +296,7 @@ def _make_wrapped_runner(
             failed.execution.retry_count += 1
             location = failed.execution.last_error_location or node.id
             _finish_state(failed, status="failed", error=str(exc), location=location)
+            SYSTEM_RENDER_NODE_WRAPPER.on_error(state=failed, context=context, error=exc)
             _emit_state_event(
                 services,
                 failed,
@@ -310,6 +342,20 @@ def _make_route_router(mapping: dict[str, str]):
         return "__end__"
 
     return route
+
+
+def _default_render_manifest_for_pattern(pattern: GraphPatternSpec) -> RenderManifest:
+    return RenderManifest(
+        graph_id=pattern.pattern_id,
+        nodes={
+            node.id: default_node_render_spec(
+                node_id=node.id,
+                node_type=node.type,
+                impl=node.impl,
+            )
+            for node in pattern.nodes
+        },
+    )
 
 
 def _execute_with_retries(

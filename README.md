@@ -31,8 +31,8 @@ FastAgentFactory 是一个 CLI-first 的 Agent 工厂工程。当前目标不是
 | 4. `node_strategy_planning` | 已实现 | 为每个节点规划 wrapper、上下文策略、记忆策略、policy、tool visibility。 |
 | 5. `tool_capability_planning` | 已实现 | 规划工具能力契约、节点可见性、审批要求和实现状态。 |
 | 6. `resource_and_condition_planning` | 已实现 | ReAct 资源准备阶段，工具检查走 `ToolNode`，验证后写 resources 文件。 |
-| 7. `assembly_spec_generation` | 已实现 | 冻结 `AgentAssemblySpec`，并确定性生成 `PackageMaterializationPlan`。 |
-| 8. `package_generation` | 已实现 | 按第七阶段物化计划生成 AgentPackage draft 和真实工具代码草稿。 |
+| 7. `assembly_spec_generation` | 已实现 | 冻结 `AgentAssemblySpec`、`PackageMaterializationPlan` 和生成 Agent 的 `render_manifest`。 |
+| 8. `package_generation` | 已实现 | 按第七阶段物化计划生成 AgentPackage draft、`render_manifest.json` 和真实工具代码草稿。 |
 | 9. `harness_generation_and_test` | 已实现 | 生成并校验 sandbox/runtime/test 契约，执行 AgentPackage sandbox validation，产出 harness report。 |
 | 10. `repair_or_finalize` | 待实现 | 将根据 harness/trace/report 做修复或最终出厂。 |
 
@@ -236,6 +236,7 @@ error
 
 ```text
 .agentfactory/assemblies/<factory_run_id>/assembly_spec.json
+.agentfactory/assemblies/<factory_run_id>/render_manifest.json
 .agentfactory/assemblies/<factory_run_id>/package_materialization_plan.json
 .agentfactory/assemblies/<factory_run_id>/assembly_validation_report.json
 ```
@@ -247,6 +248,7 @@ error
   agent_package.json
   assembly_spec.json
   resources.json
+  render_manifest.json
   package_report.json
   bindings/
   prompts/

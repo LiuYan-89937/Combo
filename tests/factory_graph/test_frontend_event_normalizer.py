@@ -44,6 +44,76 @@ class FrontendEventNormalizerTest(unittest.TestCase):
         self.assertEqual(tool_events[0].payload["tool_call_id"], "call-a")
         self.assertEqual(tool_events[0].payload["tool_name"], "shell_cwd")
 
+    def test_runtime_render_event_preserves_node_render_fields(self) -> None:
+        events = []
+        normalizer = RuntimeEventNormalizer(
+            emit=events.append,
+            request_id="request-a",
+            session_id="session-a",
+            mode="create_agent",
+            graph_id="factory_graph",
+        )
+
+        normalizer.emit_custom_event(
+            {
+                "type": "runtime_render_event",
+                "payload": {
+                    "protocol_version": "runtime_render.v1",
+                    "event_type": "node_started",
+                    "producer_type": "factory",
+                    "graph_id": "factory_graph",
+                    "stage_id": "requirement_capture",
+                    "node_id": "requirement_capture",
+                    "node_label": "需求捕获",
+                    "node_kind": "llm_subgraph",
+                    "severity": "info",
+                    "payload": {"doing": "整理需求"},
+                },
+            }
+        )
+
+        node_events = [event for event in events if event.event_type == "node_started"]
+        self.assertEqual(len(node_events), 1)
+        self.assertEqual(node_events[0].protocol_version, "factory_frontend.v1")
+        self.assertEqual(node_events[0].producer_type, "factory")
+        self.assertEqual(node_events[0].node_label, "需求捕获")
+        self.assertEqual(node_events[0].node_kind, "llm_subgraph")
+        self.assertEqual(node_events[0].payload["doing"], "整理需求")
+        self.assertEqual(node_events[0].payload["source_protocol_version"], "runtime_render.v1")
+
+    def test_runtime_render_events_prevent_update_fallback_duplicates(self) -> None:
+        events = []
+        normalizer = RuntimeEventNormalizer(
+            emit=events.append,
+            request_id="request-a",
+            session_id="session-a",
+            mode="create_agent",
+            graph_id="factory_graph",
+        )
+
+        for event_type in ("node_started", "node_completed"):
+            normalizer.emit_custom_event(
+                {
+                    "type": "runtime_render_event",
+                    "payload": {
+                        "protocol_version": "runtime_render.v1",
+                        "event_type": event_type,
+                        "producer_type": "factory",
+                        "graph_id": "factory_graph",
+                        "stage_id": "requirement_capture",
+                        "node_id": "requirement_capture",
+                        "node_label": "需求捕获",
+                        "node_kind": "llm_subgraph",
+                        "severity": "info",
+                        "payload": {},
+                    },
+                }
+            )
+        normalizer.emit_update("requirement_capture", {"current_stage": "requirement_capture"})
+
+        self.assertEqual(len([event for event in events if event.event_type == "node_started"]), 1)
+        self.assertEqual(len([event for event in events if event.event_type == "node_completed"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
