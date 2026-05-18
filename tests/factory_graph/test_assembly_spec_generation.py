@@ -40,6 +40,8 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("bindings/node_bindings.json", plan_paths)
                 self.assertIn("bindings/hooks.json", plan_paths)
                 self.assertIn("sandbox_contract.json", plan_paths)
+                self.assertIn("session.json", plan_paths)
+                self.assertIn("memory/store.json", plan_paths)
                 self.assertEqual(plan["tools"][0]["manifest"]["input_schema"], {"type": "object"})
 
     def test_validation_observation_drives_revision(self) -> None:
@@ -95,12 +97,12 @@ class AssemblySpecGenerationTest(unittest.TestCase):
 
     def test_standard_binding_payload_rejects_extra_fields_at_schema_boundary(self) -> None:
         invalid = _valid_draft()
-        invalid["bindings"]["node_bindings"][0]["payload"]["profile_id"] = "memory_recall_retrieval"
+        invalid["bindings"]["node_bindings"][0]["payload"]["unexpected"] = "not allowed"
 
         with self.assertRaises(ValidationError) as context:
             AssemblyReactDecision(action="draft_ready", draft=invalid, revision_notes=["invalid"])
 
-        self.assertIn("profile_id", str(context.exception))
+        self.assertIn("unexpected", str(context.exception))
         self.assertIn("Extra inputs are not permitted", str(context.exception))
 
     def test_custom_binding_payload_keeps_explicit_extension_config(self) -> None:
@@ -211,7 +213,6 @@ def _base_state() -> dict:
         "graph_behavior_plan": {
             "nodes": [
                 {"node_id": "ingress", "node_type": "reserved", "impl": "ingress"},
-                {"node_id": "memory_recall", "node_type": "operational", "impl": "operational.memory_retrieve"},
                 {"node_id": "knowledge_retrieve", "node_type": "operational", "impl": "operational.knowledge_retrieve"},
                 {"node_id": "precheck", "node_type": "governance", "impl": "governance.precheck"},
                 {"node_id": "approval_gate", "node_type": "governance", "impl": "governance.approval_gate"},
@@ -266,26 +267,14 @@ def _valid_bindings() -> dict:
         "services": [
             {"service_id": "main_model", "kind": "model_service", "required": True, "config": {}},
             {"service_id": "generated_tool_registry", "kind": "tool_registry", "required": True, "config": {}},
-            {"service_id": "memory_engine", "kind": "memory_engine", "required": True, "config": {}},
+            {"service_id": "memory_store", "kind": "memory_store", "required": True, "config": {}},
             {"service_id": "knowledge_engine", "kind": "knowledge_engine", "required": True, "config": {}},
             {"service_id": "context_engine", "kind": "context_engine", "required": True, "config": {}},
             {"service_id": "policy_engine", "kind": "policy_engine", "required": True, "config": {}},
             {"service_id": "observability", "kind": "observability_manager", "required": True, "config": {}},
-            {"service_id": "checkpoint", "kind": "checkpoint_manager", "required": True, "config": {}},
+            {"service_id": "checkpointer", "kind": "checkpointer", "required": True, "config": {}},
         ],
         "node_bindings": [
-            {
-                "binding_id": "memory_recall_retrieval",
-                "binding_type": "retrieval_profile",
-                "target": {"node_id": "memory_recall", "impl": "operational.memory_retrieve"},
-                "payload": {"query_source": "current_user_input", "top_k": 5},
-            },
-            {
-                "binding_id": "knowledge_retrieve_profile",
-                "binding_type": "retrieval_profile",
-                "target": {"node_id": "knowledge_retrieve", "impl": "operational.knowledge_retrieve"},
-                "payload": {"query_source": "current_user_input", "top_k": 5},
-            },
             {
                 "binding_id": "precheck_policy",
                 "binding_type": "policy_profile",

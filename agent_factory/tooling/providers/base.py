@@ -61,6 +61,7 @@ class ToolProviderResult(BaseModel):
     prompt_fragments: list[PromptFragment] = Field(default_factory=list)
     resource_requirements: list[ResourceRequirementHint] = Field(default_factory=list)
     runtime_dependencies: list[RuntimeDependency] = Field(default_factory=list)
+    runtime_resources: dict[str, Any] = Field(default_factory=dict)
     diagnostics: list[ProviderDiagnostic] = Field(default_factory=list)
 
     def merge(self, other: "ToolProviderResult") -> "ToolProviderResult":
@@ -69,6 +70,7 @@ class ToolProviderResult(BaseModel):
             prompt_fragments=[*self.prompt_fragments, *other.prompt_fragments],
             resource_requirements=[*self.resource_requirements, *other.resource_requirements],
             runtime_dependencies=[*self.runtime_dependencies, *other.runtime_dependencies],
+            runtime_resources={**self.runtime_resources, **other.runtime_resources},
             diagnostics=[*self.diagnostics, *other.diagnostics],
         )
 

@@ -51,6 +51,8 @@ REQUIRED_PACKAGE_FILES = {
     "bindings/services.json",
     "bindings/node_bindings.json",
     "bindings/hooks.json",
+    "session.json",
+    "memory/store.json",
 }
 
 
@@ -440,7 +442,7 @@ def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) ->
         manifest = TypeAdapter(dict[str, Any]).validate_json(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return [f"agent_package.json invalid: {type(exc).__name__}: {exc}"]
-    for key in ("assembly_spec_path", "resources_path", "render_manifest_path"):
+    for key in ("assembly_spec_path", "resources_path", "render_manifest_path", "session_path", "memory_store_path"):
         value = str(manifest.get(key) or "")
         if not value:
             errors.append(f"agent_package.json missing {key}")
@@ -574,6 +576,8 @@ def _system_generated_files(
         "bindings/services.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.services],
         "bindings/node_bindings.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.node_bindings],
         "bindings/hooks.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.hooks],
+        "session.json": assembly_spec.runtime.session_config,
+        "memory/store.json": dict(assembly_spec.metadata.get("memory_store") or {}),
     }
     for binding in assembly_spec.bindings.node_bindings:
         payload = binding.payload.model_dump(mode="json") if hasattr(binding.payload, "model_dump") else {}
@@ -583,8 +587,6 @@ def _system_generated_files(
         elif binding.binding_type == "policy_profile":
             profile_id = str(payload.get("profile_id") or binding.binding_id)
             by_path[f"policies/{profile_id}.json"] = payload
-        elif binding.binding_type == "retrieval_profile":
-            by_path[f"retrieval/{binding.target.node_id}.json"] = payload
         elif binding.binding_type == "strategy_profile":
             by_path[f"strategies/{binding.target.node_id}.json"] = payload
         elif binding.binding_type == "output_formatter":

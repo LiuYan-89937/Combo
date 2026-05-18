@@ -275,10 +275,61 @@ Skill 接入：
 ```text
 enabled_skills.json
   -> SkillProvider
-  -> prompt fragments
-  -> optional ToolSpec
-  -> Python entrypoint
+  -> SkillRegistry
+  -> ToolSpec(id="skill")
+  -> skill.load / skill.read_resource
 ```
+
+Skill 采用递进式披露，不再在发现阶段把 Skill 内容直接塞进 prompt，也不再把每个 Skill 展开成一组工具。启动时只把所有启用 Skill 的 `name + description` 写进统一 `skill` 工具描述，由模型决定是否调用。
+
+Skill 标准目录：
+
+```text
+<skill-name>/
+  SKILL.md
+  references/
+  templates/
+  examples/
+  assets/
+  scripts/
+```
+
+`SKILL.md` 必须使用 YAML frontmatter：
+
+```yaml
+---
+name: db-readonly-query
+description: Connect to databases and run strictly read-only SQL.
+---
+```
+
+披露流程：
+
+```text
+discover  -> skill 工具 description 只展示 metadata
+load      -> skill({"action": "load", "name": "<skill>"}) 返回 SKILL.md 正文、资源清单、脚本清单
+resource  -> skill({"action": "read_resource", "name": "<skill>", "path": "references/x.md"}) 按需读取资源
+script    -> 由 bash 执行脚本；skill 工具只暴露脚本清单，不直接执行脚本
+```
+
+脚本执行必须经过统一工具系统：
+
+```text
+skill.load 返回 scripts/run_query.py
+模型调用 bash 执行脚本
+Gateway 执行 bash 风险校验与审批
+ToolNode 返回 observation
+```
+
+`skill` 工具自身的边界：
+
+- 可以列出 enabled skills。
+- 可以加载 `SKILL.md`。
+- 可以读取 `references/`、`templates/`、`examples/`、`assets/` 中已发现的资源。
+- 可以返回脚本 `script_ref`、`resolved_path`、`execution_tool=bash`。
+- 不执行脚本。
+- 不把脚本执行伪装成资源读取。
+- 不读取 Skill root 外部路径。
 
 Factory 扩展默认位置：
 
@@ -300,7 +351,8 @@ AgentInstance 扩展建议位置：
 
 - Factory 可以扫描自己的 MCP / Skill 配置并注册工具。
 - RuntimeKernel 有 `AgentInstanceExtensionManager`，能加载实例级 MCP / Skill 配置。
-- MCP / Skill 最终都转换成统一 `ToolSpec`。
+- MCP 最终转换成各自 `ToolSpec`。
+- Skill 最终转换成一个统一 `skill` ToolSpec，具体 Skill 内容按需加载。
 
 后续还需要补齐：
 
@@ -325,64 +377,108 @@ trust   -> Runtime 管理信任语义，不修改 ToolSpec
 
 ## 3. 记忆系统
 
-记忆系统当前没有形成统一规范，但项目里已经有多处实现迹象。
+记忆系统只先确定两个动作与两类记忆，不绑定当前已有实现，不预设具体存储后端。
 
-### 3.1 当前实现迹象
+### 3.1 核心抽象
 
-Factory 侧：
-
-| 位置 | 现状 |
-| --- | --- |
-| `agent_factory/factory_graph/session.py` | Factory 会话文件持久化，默认 `.agentfactory/sessions`。 |
-| `agent_factory/factory_graph/session.py` | Factory checkpoint 默认 `.agentfactory/checkpoints/factory.sqlite`，可退回 `InMemorySaver`。 |
-| `agent_factory/factory_graph/frontend_bridge/runtime_adapter.py` | 会根据 checkpoint 是否持久化决定是否提交 session messages。 |
-
-RuntimeKernel 侧：
-
-| 位置 | 现状 |
-| --- | --- |
-| `agent_factory/runtime_kernel/state/schema.py` | 有 `MemoryState`。 |
-| `agent_factory/runtime_kernel/memory/engine.py` | 有 `InMemoryMemoryEngine`。 |
-| `agent_factory/runtime_kernel/adapters/memory.py` | 有 memory adapter 协议。 |
-| `agent_factory/runtime_kernel/nodes/standard/memory_retrieve.py` | 有 `operational.memory_retrieve` 标准节点。 |
-| `agent_factory/runtime_kernel/nodes/standard/commit.py` | commit 阶段会调用 memory engine 写入。 |
-| `agent_factory/runtime_kernel/strategies/defaults.py` | 有 `memory.recall.latest`、`memory.write.turn` 等策略。 |
-| `agent_factory/runtime_kernel/wrappers/defaults.py` | 有 `memory.summary_every_n`、`memory.profile_merge` wrapper。 |
-| `agent_factory/runtime_kernel/kernel/facade.py` | 默认注入 `InMemoryMemoryEngine`。 |
-
-Factory 生产链路迹象：
-
-| 位置 | 现状 |
-| --- | --- |
-| `agent_factory/factory_graph/strategy_catalog.py` | 有 memory 相关策略 catalog。 |
-| `agent_factory/factory_graph/stage_subgraphs/assembly_spec_generation.py` | Assembly services 会要求 `memory_engine`。 |
-| `agent_factory/factory_graph/stage_subgraphs/package_generation.py` | 会物化部分 retrieval/profile 文件，但这还不是标准记忆系统。 |
-
-### 3.2 当前问题
-
-当前 memory 相关实现更像 RuntimeKernel 内部功能和 wrapper/strategy 组合，还不是正式的“记忆系统规范”。
-
-主要缺口：
-
-- 没有独立 memory system 文档。
-- 没有 AgentPackage 内的 memory 标准文件布局。
-- 没有明确区分 Factory memory 和 Agent memory 的规范文件。
-- `InMemoryMemoryEngine` 只是实现之一，不应成为规范本身。
-- memory strategy、wrapper、service binding、state section 之间还需要重新梳理边界。
-- 还没有明确持久化后端、scope、保留策略、隐私策略、压缩策略的标准表达。
-
-### 3.3 后续处理原则
-
-暂不为 memory 设计统一外壳。
-
-后续应该先做清理：
+记忆系统面对的核心问题只有两个：
 
 ```text
-现有 MemoryState / MemoryEngine / memory node / memory wrapper / memory strategy
-  -> 梳理真实职责
-  -> 决定 AgentPackage 如何表达 memory
-  -> 决定 RuntimeKernel 如何加载 memory backend
+Memory Read
+Memory Write
 ```
+
+这两个动作分别作用于两类记忆：
+
+```text
+Memory
+├── Session Memory
+│   ├── Read
+│   └── Write
+└── Cross-session Memory
+    ├── Read
+    └── Write
+```
+
+因此记忆系统的第一层标准端口固定为：
+
+```text
+SessionMemoryRead
+SessionMemoryWrite
+CrossSessionMemoryRead
+CrossSessionMemoryWrite
+```
+
+### 3.2 会话内记忆
+
+会话内记忆只服务当前 session，工程实现固定为：
+
+```text
+LangGraph messages channel
+  + LangGraph checkpointer
+  + thread_id
+```
+
+`SessionMemoryRead` 读取当前 thread 的 `messages` channel。
+
+`SessionMemoryWrite` 只允许通过节点返回 `{"messages": [...]}` 写入当前 thread 的 `messages` channel。
+
+会话内记忆不直接读写业务 state。RuntimeKernel 的业务状态统一放在 `runtime` channel 中，记忆系统不感知也不修改 `runtime` 内部字段。
+
+Factory 与生产出来的 Agent 使用同构 session 语义：
+
+```text
+session_id -> thread_id -> LangGraph checkpoint
+```
+
+CLI/WebUI 只暴露 `session_id`，不要求用户直接输入或理解 `thread_id`。
+
+会话内记忆写入不负责上下文清洗、上下文压缩、上下文摘要注入、token budget 裁剪或 prompt 组装。这些属于后续上下文系统工程，不放在记忆系统里处理。
+
+Factory 默认使用 SQLite checkpointer，可显式切换为 memory checkpointer。
+
+```text
+AGENTFACTORY_CHECKPOINTER_BACKEND=sqlite | memory
+AGENTFACTORY_CHECKPOINT_PATH=.agentfactory/checkpoints/factory.sqlite
+```
+
+`sqlite` 是默认持久化模式。`memory` 只作为显式临时模式，不保证跨进程恢复。
+
+### 3.3 跨会话记忆
+
+跨会话记忆服务长期复用，工程实现固定为 LangGraph `BaseStore`。
+
+`CrossSessionMemoryRead` 映射到 `store.get / store.search`。
+
+`CrossSessionMemoryWrite` 映射到 `store.put / store.delete`。
+
+跨会话记忆不能等同于上一段会话上下文，也不能把临时会话状态直接写入长期记忆。
+
+命名空间固定为：
+
+```text
+("memory", "factory", <project_id>)
+("memory", "agent", <agent_id>)
+("memory", "user", <user_id>)
+```
+
+默认后端：
+
+```text
+AGENTFACTORY_MEMORY_STORE_BACKEND=sqlite | memory
+AGENTFACTORY_MEMORY_STORE_PATH=.agentfactory/memory/factory.sqlite
+```
+
+Factory 与生产出来的 Agent 使用同一套 BaseStore 规范，但 session、checkpoint、store 文件和 namespace 必须隔离。
+
+### 3.4 当前约束
+
+- 会话内记忆使用 LangGraph 原生 checkpointer，不自建会话内 MemoryStore。
+- 跨会话记忆使用 LangGraph BaseStore，不复用旧的独立记忆引擎。
+- 本节只定义会话内记忆与跨会话记忆，不讨论其他记忆分类。
+- 本节不处理上下文清洗、压缩、摘要注入和 prompt 组装，这些后续归入上下文系统工程。
+- Factory 与生产出来的 Agent 都围绕这四个端口接入记忆系统。
+- 旧的独立 memory state、独立记忆引擎、记忆策略和记忆业务节点路径废弃。
 
 ---
 
@@ -409,8 +505,8 @@ Factory 生产链路迹象：
 | 位置 | 现状 |
 | --- | --- |
 | `agent_factory/factory_graph/stage_subgraphs/assembly_spec_generation.py` | Assembly services 会要求 `knowledge_engine`。 |
-| `agent_factory/factory_graph/stage_subgraphs/package_generation.py` | 会物化 `retrieval/<node_id>.json`。 |
-| `tests/factory_graph/test_assembly_spec_generation.py` | 测试中已有 `knowledge_retrieve`、`retrieval_profile` 绑定。 |
+| `agent_factory/factory_graph/stage_subgraphs/package_generation.py` | 会物化 knowledge 相关 package 文件，但具体知识系统目录仍待统一。 |
+| `tests/factory_graph/test_assembly_spec_generation.py` | 后续需要按新的知识系统契约重写。 |
 
 ### 4.2 当前问题
 
@@ -421,7 +517,7 @@ Factory 生产链路迹象：
 - 没有知识源规范。
 - 没有索引规范。
 - 没有 citation / freshness / multi-source 策略。
-- `retrieval_profile` 同时被 memory 与 knowledge 相关节点复用，边界需要清理。
+- 旧 retrieval profile 不能继续作为 memory 与 knowledge 的混用边界。
 - AgentPackage 里缺少明确的 knowledge 系统目录与索引文件约定。
 - MCP / Skill 贡献知识源的路径还没有设计。
 
@@ -521,7 +617,7 @@ agent_package/
 | 系统 | 结论 |
 | --- | --- |
 | 工具系统 | 已完成系统底座，且已接入 builtin / package / MCP / Skill。 |
-| 记忆系统 | 有 RuntimeKernel 内部实现迹象，需要后续清理成正式系统。 |
+| 记忆系统 | 已确定会话内/跨会话两类记忆，以及 read/write 四个标准端口。 |
 | 知识系统 | 有 RuntimeKernel 内部实现迹象，需要后续清理成正式系统。 |
 | 定时任务系统 | 暂无正式实现，先留空。 |
 
@@ -532,10 +628,10 @@ agent_package/
   -> 继续接入 AgentPackage 启动链路和节点可见性闭合
 
 记忆系统
-  -> 清理现有 MemoryState / MemoryEngine / wrapper / strategy / binding
+  -> 围绕 SessionMemoryRead / SessionMemoryWrite / CrossSessionMemoryRead / CrossSessionMemoryWrite 清理实现
 
 知识系统
-  -> 清理现有 KnowledgeEngine / retrieval_profile / knowledge_retrieve
+  -> 清理现有 KnowledgeEngine / knowledge_retrieve
 
 定时任务系统
   -> 暂缓，等前三类稳定后再设计

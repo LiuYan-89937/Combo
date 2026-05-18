@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import inspect
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -29,20 +28,16 @@ class PythonEntrypointAdapter:
         parsed = parse_protocol(entrypoint)
         errors: list[str] = []
         if parsed.protocol == "python":
-            function = self._load_package_relative_target(parsed.target)
-            return _validate_function(function, entrypoint)
+            return self._load_package_relative_target(parsed.target)
         if parsed.protocol == "python-import":
-            function = self._load_import_target(parsed.target)
-            return _validate_function(function, entrypoint)
+            return self._load_import_target(parsed.target)
         if self.package_root is not None:
             try:
-                function = self._load_package_relative_target(parsed.target)
-                return _validate_function(function, entrypoint)
+                return self._load_package_relative_target(parsed.target)
             except EntrypointAdapterError as exc:
                 errors.append(str(exc))
         try:
-            function = self._load_import_target(parsed.target)
-            return _validate_function(function, entrypoint)
+            return self._load_import_target(parsed.target)
         except EntrypointAdapterError as exc:
             errors.append(str(exc))
         raise EntrypointAdapterError("; ".join(errors) if errors else f"cannot load entrypoint: {entrypoint}")
@@ -113,13 +108,3 @@ def _assert_allowed_path(path: Path, allowed_roots: list[Path]) -> None:
         except ValueError:
             continue
     raise EntrypointAdapterError(f"entrypoint escapes configured roots: {path}")
-
-
-def _validate_function(function: Callable[..., Any], entrypoint: str) -> ToolEntrypointCallable:
-    if inspect.iscoroutinefunction(function):
-        raise EntrypointAdapterError(f"tool entrypoint cannot be async: {entrypoint}")
-    signature = inspect.signature(function)
-    parameters = signature.parameters
-    if "arguments" not in parameters or "resources" not in parameters:
-        raise EntrypointAdapterError("tool entrypoint must accept arguments and resources parameters")
-    return function  # type: ignore[return-value]

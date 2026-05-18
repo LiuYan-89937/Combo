@@ -7,6 +7,10 @@ runtime:
   user_config:
     locale: zh-CN
     tone: concise
+  session_config:
+    session_root: .agent_runtime/sessions
+    checkpointer_backend: sqlite
+    checkpoint_path: .agent_runtime/checkpoints/agent.sqlite
 graph_overrides:
   node_wrappers:
     - node_id: answer
@@ -16,14 +20,6 @@ graph_overrides:
           order: 10
           config:
             include_user_config: true
-            include_user_profile: true
-    - node_id: commit
-      wrappers:
-        - id: memory.profile_merge
-          phase: after
-          order: 10
-          config:
-            field: preferences
 tools:
   - id: sec_filing_search
     description: Search public filing snippets already available to the generated agent runtime.
@@ -77,6 +73,9 @@ output:
   citations_required: true
   format: markdown
 metadata:
+  memory_store:
+    backend: sqlite
+    path: .agent_runtime/memory/agent.sqlite
   render_manifest:
     version: render_manifest.v0
     graph_id: investment_research_agent__react_agent
@@ -89,14 +88,6 @@ metadata:
         purpose: Accept the user request and initialize runtime state.
         doing: Preparing the conversation for the research workflow.
         expected_output: Normalized runtime input state.
-        visible_to_user: true
-      memory_recall:
-        node_id: memory_recall
-        label: Memory Recall
-        kind: operational
-        purpose: Load relevant user memory before reasoning.
-        doing: Checking reusable user context.
-        expected_output: Memory context attached to runtime state.
         visible_to_user: true
       knowledge_retrieve:
         node_id: knowledge_retrieve

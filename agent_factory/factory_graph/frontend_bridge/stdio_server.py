@@ -19,6 +19,7 @@ def main() -> None:
             producer_type="factory_bridge",
             message="factory runtime bridge ready",
             graph_id="factory_bridge",
+            payload={"checkpointer": adapter.checkpointer_payload()},
         )
     )
     for line in sys.stdin:

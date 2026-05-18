@@ -19,9 +19,9 @@ from agent_factory.tooling.providers.package import PackageToolProvider
 from agent_factory.tooling.providers.skill import (
     EnabledSkillConfig,
     EnabledSkillsConfig,
-    SkillManifest,
     SkillProvider,
 )
+from agent_factory.tooling.skills import SkillMetadata
 
 __all__ = [
     "BuiltinToolProvider",
@@ -37,7 +37,7 @@ __all__ = [
     "ProviderDiagnostic",
     "ResourceRequirementHint",
     "RuntimeDependency",
-    "SkillManifest",
+    "SkillMetadata",
     "SkillProvider",
     "ToolProvider",
     "ToolProviderContext",

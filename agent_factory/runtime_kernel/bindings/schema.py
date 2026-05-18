@@ -8,12 +8,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ServiceKind = Literal[
     "model_service",
     "tool_registry",
-    "memory_engine",
+    "memory_store",
     "knowledge_engine",
     "context_engine",
     "policy_engine",
     "observability_manager",
-    "checkpoint_manager",
+    "checkpointer",
     "harness_bridge",
 ]
 
@@ -34,7 +34,6 @@ BindingType = Literal[
     "prompt",
     "tool_access",
     "policy_profile",
-    "retrieval_profile",
     "strategy_profile",
     "output_formatter",
     "custom",
@@ -79,13 +78,6 @@ class PolicyProfileBindingPayload(BaseModel):
     rules: dict[str, Any] = Field(default_factory=dict)
 
 
-class RetrievalProfileBindingPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    query_source: str = "current_user_input"
-    top_k: int = 5
-
-
 class StrategyProfileBindingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -114,7 +106,6 @@ StandardNodeBindingPayload = (
     PromptBindingPayload
     | ToolAccessBindingPayload
     | PolicyProfileBindingPayload
-    | RetrievalProfileBindingPayload
     | StrategyProfileBindingPayload
     | OutputFormatterBindingPayload
     | CustomBindingPayload
@@ -175,7 +166,6 @@ def _payload_model_for_binding_type(binding_type: Any) -> type[BaseModel] | None
         "prompt": PromptBindingPayload,
         "tool_access": ToolAccessBindingPayload,
         "policy_profile": PolicyProfileBindingPayload,
-        "retrieval_profile": RetrievalProfileBindingPayload,
         "strategy_profile": StrategyProfileBindingPayload,
         "output_formatter": OutputFormatterBindingPayload,
         "custom": CustomBindingPayload,

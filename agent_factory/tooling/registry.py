@@ -55,7 +55,7 @@ def get_factory_tools(
     mcp_tool_clients: Mapping[str, MCPToolClient] | None = None,
 ) -> list[BaseTool]:
     selected_ids = set(tool_ids or [])
-    specs, effective_mcp_clients = _collect_factory_tool_specs(
+    specs, effective_mcp_clients, runtime_resources = _collect_factory_tool_specs(
         selected_ids=selected_ids,
         include_extensions=include_extensions,
         extension_root=extension_root,
@@ -75,6 +75,7 @@ def get_factory_tools(
                 "root": str(_default_filesystem_root()),
                 "allow_external": False,
             },
+            **runtime_resources,
         }
     )
     return compiler.compile_many(specs)
@@ -88,7 +89,7 @@ def get_factory_tool_specs(
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
 ) -> list[ToolSpec]:
     selected_ids = set(tool_ids or [])
-    specs, _mcp_clients = _collect_factory_tool_specs(
+    specs, _mcp_clients, _runtime_resources = _collect_factory_tool_specs(
         selected_ids=selected_ids,
         include_extensions=include_extensions,
         extension_root=extension_root,
@@ -105,9 +106,10 @@ def _collect_factory_tool_specs(
     extension_root: str | Path | None,
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None,
     mcp_tool_clients: Mapping[str, MCPToolClient] | None,
-) -> tuple[list[ToolSpec], Mapping[str, MCPToolClient]]:
+) -> tuple[list[ToolSpec], Mapping[str, MCPToolClient], dict[str, object]]:
     specs = get_builtin_tool_specs()
     effective_mcp_clients: Mapping[str, MCPToolClient] = dict(mcp_tool_clients or {})
+    runtime_resources: dict[str, object] = {}
     if include_extensions:
         manager = FactoryExtensionManager(
             extension_root=extension_root,
@@ -116,13 +118,14 @@ def _collect_factory_tool_specs(
         )
         extension_result, _report = manager.discover()
         effective_mcp_clients = manager.mcp_tool_clients()
+        runtime_resources.update(extension_result.runtime_resources)
         registry = ToolRegistry(specs)
         for spec in extension_result.tool_specs:
             if selected_ids and spec.id not in selected_ids:
                 continue
             registry.register(spec)
         specs = registry.all()
-    return [tool for tool in specs if not selected_ids or tool.id in selected_ids], effective_mcp_clients
+    return [tool for tool in specs if not selected_ids or tool.id in selected_ids], effective_mcp_clients, runtime_resources
 
 
 def get_factory_model_tools() -> list[BaseTool]:

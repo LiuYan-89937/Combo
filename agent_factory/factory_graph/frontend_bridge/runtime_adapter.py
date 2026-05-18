@@ -20,7 +20,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
 from agent_factory.factory_graph.graph import build_factory_graph, initial_factory_graph_state
 from agent_factory.factory_graph.session import (
     FactorySessionManager,
-    build_factory_checkpointer,
+    build_factory_checkpointer_handle,
     is_factory_checkpointer_persistent,
 )
 from agent_factory.tooling import get_factory_base_tool_ids
@@ -50,6 +50,7 @@ class FactoryRuntimeAdapter:
     emit: Emit
     session_manager: FactorySessionManager | None = None
     checkpointer: Any = None
+    checkpointer_handle: Any = None
     options: FactoryBridgeOptions = field(default_factory=FactoryBridgeOptions)
     session_record: Any | None = None
     mode: FactoryMode | None = None
@@ -60,7 +61,8 @@ class FactoryRuntimeAdapter:
         if self.session_manager is None:
             self.session_manager = FactorySessionManager.from_env()
         if self.checkpointer is None:
-            self.checkpointer = build_factory_checkpointer()
+            self.checkpointer_handle = build_factory_checkpointer_handle()
+            self.checkpointer = self.checkpointer_handle.saver
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
         try:
@@ -400,6 +402,19 @@ class FactoryRuntimeAdapter:
 
     def _use_checkpoint_memory(self) -> bool:
         return is_factory_checkpointer_persistent(self.checkpointer)
+
+    def checkpointer_payload(self) -> dict[str, Any]:
+        if self.checkpointer_handle is not None:
+            return {
+                "backend": self.checkpointer_handle.backend,
+                "persistent": self.checkpointer_handle.persistent,
+                "path": str(self.checkpointer_handle.path) if self.checkpointer_handle.path else None,
+            }
+        return {
+            "backend": "external",
+            "persistent": self._use_checkpoint_memory(),
+            "path": None,
+        }
 
 
 def _session_payload(record: Any | None) -> dict[str, Any]:

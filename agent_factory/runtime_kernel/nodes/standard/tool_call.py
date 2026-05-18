@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import ToolMessage
+
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
 
@@ -76,6 +78,12 @@ class OperationalToolCallNode:
             failures = list(state.tools.tool_failures)
             failures.append(result.model_dump(mode="json"))
             return {
+                "messages": [
+                    ToolMessage(
+                        content=str(result.error or "tool failed"),
+                        tool_call_id=str(pending.get("tool_call_id") or tool_id),
+                    )
+                ],
                 "tools": {
                     "tool_failures": failures,
                     "pending_tool_call": None,
@@ -89,6 +97,12 @@ class OperationalToolCallNode:
         results = list(state.tools.tool_results)
         results.append(result.model_dump(mode="json"))
         return {
+            "messages": [
+                ToolMessage(
+                    content=str(result.output),
+                    tool_call_id=str(pending.get("tool_call_id") or tool_id),
+                )
+            ],
             "tools": {
                 "tool_results": results,
                 "last_tool_result": result.model_dump(mode="json"),

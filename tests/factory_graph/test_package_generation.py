@@ -145,6 +145,9 @@ def _tool_code() -> str:
         "    if not ledger_file:\n"
         "        return {'status': 'error', 'error': 'missing resource: ledger_file'}\n"
         "    return {'status': 'completed', 'ledger_file': ledger_file, 'arguments': arguments}\n"
+        "\n\n"
+        "def evaluate_risk(arguments: dict, context: dict) -> dict:\n"
+        "    return {'risk_level': 'low', 'requires_approval': False, 'reason': 'read-only lookup'}\n"
     )
 
 
@@ -172,6 +175,8 @@ def _agent_package_manifest() -> dict:
         "resources_path": "resources.json",
         "sandbox_contract_path": "sandbox_contract.json",
         "render_manifest_path": "render_manifest.json",
+        "session_path": "session.json",
+        "memory_store_path": "memory/store.json",
         "bindings": {
             "services": "bindings/services.json",
             "node_bindings": "bindings/node_bindings.json",
@@ -180,7 +185,6 @@ def _agent_package_manifest() -> dict:
         "prompts": ["prompts/prompt.ledger.answer.md"],
         "tools": ["tools/ledger_lookup/manifest.json"],
         "policies": ["policies/policy.ledger.precheck.json"],
-        "retrieval_profiles": ["retrieval/memory_recall.json"],
         "strategy_profiles": [],
         "formatters": ["formatters/formatter.ledger.final.json"],
     }
@@ -235,9 +239,10 @@ def _materialization_plan() -> dict:
             {"path": "bindings/services.json", "file_type": "json", "source_kind": "binding", "source_id": "services", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.services", "required": True},
             {"path": "bindings/node_bindings.json", "file_type": "json", "source_kind": "binding", "source_id": "node_bindings", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.node_bindings", "required": True},
             {"path": "bindings/hooks.json", "file_type": "json", "source_kind": "binding", "source_id": "hooks", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.hooks", "required": True},
+            {"path": "session.json", "file_type": "json", "source_kind": "manifest", "source_id": "session", "generation_mode": "system_generated", "contract_source": "assembly_spec.runtime.session_config", "required": True},
+            {"path": "memory/store.json", "file_type": "json", "source_kind": "manifest", "source_id": "memory_store", "generation_mode": "system_generated", "contract_source": "assembly_spec.metadata.memory_store", "required": True},
             {"path": "prompts/prompt.ledger.answer.md", "file_type": "markdown", "source_kind": "prompt", "source_id": "prompt.ledger.answer", "generation_mode": "system_generated", "contract_source": "binding:answer_prompt", "required": True},
             {"path": "policies/policy.ledger.precheck.json", "file_type": "json", "source_kind": "policy", "source_id": "policy.ledger.precheck", "generation_mode": "system_generated", "contract_source": "binding:precheck_policy", "required": True},
-            {"path": "retrieval/memory_recall.json", "file_type": "json", "source_kind": "retrieval", "source_id": "memory_recall", "generation_mode": "system_generated", "contract_source": "binding:memory_recall", "required": True},
             {"path": "formatters/formatter.ledger.final.json", "file_type": "json", "source_kind": "formatter", "source_id": "formatter.ledger.final", "generation_mode": "system_generated", "contract_source": "binding:final_output", "required": True},
             {"path": "tools/ledger_lookup/manifest.json", "file_type": "json", "source_kind": "tool", "source_id": "ledger_lookup", "generation_mode": "system_generated", "contract_source": "tool_capability:ledger_lookup", "required": True},
             {"path": "tools/ledger_lookup/tool.py", "file_type": "python", "source_kind": "tool", "source_id": "ledger_lookup", "generation_mode": "model_generated", "contract_source": "tool_capability:ledger_lookup+resources", "required": True},
@@ -258,17 +263,24 @@ def _materialization_plan() -> dict:
 def _assembly_spec() -> dict:
     return {
         "agent": {"id": "ledger_agent", "name": "Ledger Agent", "description": "A ledger assistant."},
-        "runtime": {"pattern_id": "react_agent"},
+        "runtime": {
+            "pattern_id": "react_agent",
+            "session_config": {
+                "session_root": ".agent_runtime/sessions",
+                "checkpointer_backend": "sqlite",
+                "checkpoint_path": ".agent_runtime/checkpoints/agent.sqlite",
+            },
+        },
         "bindings": {
             "services": [
                 {"service_id": "main_model", "kind": "model_service", "required": True, "config": {}},
                 {"service_id": "generated_tool_registry", "kind": "tool_registry", "required": True, "config": {}},
-                {"service_id": "memory_engine", "kind": "memory_engine", "required": True, "config": {}},
+                {"service_id": "memory_store", "kind": "memory_store", "required": True, "config": {}},
                 {"service_id": "knowledge_engine", "kind": "knowledge_engine", "required": True, "config": {}},
                 {"service_id": "context_engine", "kind": "context_engine", "required": True, "config": {}},
                 {"service_id": "policy_engine", "kind": "policy_engine", "required": True, "config": {}},
                 {"service_id": "observability", "kind": "observability_manager", "required": True, "config": {}},
-                {"service_id": "checkpoint", "kind": "checkpoint_manager", "required": True, "config": {}},
+                {"service_id": "checkpointer", "kind": "checkpointer", "required": True, "config": {}},
             ],
             "node_bindings": [
                 {
@@ -286,12 +298,6 @@ def _assembly_spec() -> dict:
                     "binding_type": "tool_access",
                     "target": {"node_id": "tool_exec", "impl": "operational.tool_call"},
                     "payload": {"allowed_tool_ids": ["ledger_lookup"], "approval_policy": "standard"},
-                },
-                {
-                    "binding_id": "memory_recall",
-                    "binding_type": "retrieval_profile",
-                    "target": {"node_id": "memory_recall", "impl": "operational.memory_retrieve"},
-                    "payload": {"query_source": "current_user_input", "top_k": 5},
                 },
                 {
                     "binding_id": "precheck_policy",
@@ -327,6 +333,7 @@ def _assembly_spec() -> dict:
             "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json",
             "sandbox_contract_path": ".agentfactory/resources/run_1/sandbox_contract.json",
             "resource_preparation_report_path": ".agentfactory/resources/run_1/resource_preparation_report.json",
+            "memory_store": {"backend": "sqlite", "path": ".agent_runtime/memory/agent.sqlite"},
             "render_manifest": _render_manifest(),
             "render_node_ids": ["answer"],
         },

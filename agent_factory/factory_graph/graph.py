@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langchain_core.tools import BaseTool
@@ -12,6 +11,7 @@ from agent_factory.tooling import get_factory_tools
 from agent_factory.factory_graph.constants import STAGE_IDS
 from agent_factory.factory_graph.render_manifest import get_factory_node_render_spec, validate_factory_render_manifest
 from agent_factory.factory_graph.render_wrapper import wrap_factory_node
+from agent_factory.factory_graph.session import build_factory_checkpointer
 from agent_factory.factory_graph.stages import STAGE_RUNNERS
 from agent_factory.factory_graph.state import FactoryGraphState
 
@@ -123,4 +123,4 @@ def initial_factory_graph_state(
 def _default_checkpointer(enable_interrupts: bool) -> BaseCheckpointSaver | None:
     if not enable_interrupts:
         return None
-    return InMemorySaver()
+    return build_factory_checkpointer()

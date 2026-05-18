@@ -65,28 +65,23 @@ class ToolProviderTest(unittest.TestCase):
         self.assertEqual(result.tool_specs[0].risk_level, "medium")
         self.assertEqual(result.runtime_dependencies[0].dependency_id, "mcp.filesystem")
 
-    def test_skill_provider_loads_prompt_and_skill_tool_specs(self) -> None:
+    def test_skill_provider_registers_progressive_skill_tool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             skill_root = root / "skills" / "db"
-            (skill_root / "tools").mkdir(parents=True)
-            (skill_root / "skill.json").write_text(
-                json.dumps(
-                    {
-                        "version": "skill.v0",
-                        "skill_id": "db",
-                        "tool_id_prefix": "db",
-                        "default_enabled_tools": ["query"],
-                        "prompt_fragments": ["instructions.md"],
-                    }
-                ),
+            (skill_root / "references").mkdir(parents=True)
+            (skill_root / "scripts").mkdir()
+            (skill_root / "SKILL.md").write_text(
+                "---\n"
+                "name: db\n"
+                "description: Use read-only SQL.\n"
+                "---\n"
+                "# DB\n"
+                "Use read-only SQL.\n",
                 encoding="utf-8",
             )
-            (skill_root / "instructions.md").write_text("Use read-only SQL.", encoding="utf-8")
-            (skill_root / "tools" / "query.json").write_text(
-                json.dumps(_tool_manifest(tool_id="query", entrypoint="scripts/query.py:run")),
-                encoding="utf-8",
-            )
+            (skill_root / "references" / "dialects.md").write_text("SQL dialect notes.", encoding="utf-8")
+            (skill_root / "scripts" / "query.py").write_text("print('readonly')\n", encoding="utf-8")
 
             result = SkillProvider(
                 config={
@@ -100,9 +95,10 @@ class ToolProviderTest(unittest.TestCase):
             ).discover(ToolProviderContext(extension_root=root))
 
         self.assertEqual(result.diagnostics, [])
-        self.assertEqual(result.prompt_fragments[0].content, "Use read-only SQL.")
-        self.assertEqual(result.tool_specs[0].id, "db_query")
-        self.assertTrue(result.tool_specs[0].entrypoint.startswith("python:"))
+        self.assertEqual(result.prompt_fragments, [])
+        self.assertEqual(result.tool_specs[0].id, "skill")
+        self.assertIn("db", result.tool_specs[0].description)
+        self.assertEqual(result.runtime_resources["skills"]["skills"][0]["metadata"]["name"], "db")
 
 
 def _tool_manifest(

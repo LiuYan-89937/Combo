@@ -9,7 +9,7 @@ metadata:
   use_when:
     - The Agent needs to reason, call tools, observe results, and continue iterating.
     - User tasks are open-ended or may require different tool paths per request.
-    - The Agent benefits from memory, knowledge retrieval, policy checks, and postcheck before commit.
+    - The Agent benefits from knowledge retrieval, policy checks, and postcheck before commit.
   avoid_when:
     - The Agent should always ask a fixed clarification sequence before any action.
     - The work is a rigid workflow with deterministic stages and little dynamic tool choice.
@@ -26,9 +26,6 @@ nodes:
   - id: ingress
     type: reserved
     impl: ingress
-  - id: memory_recall
-    type: operational
-    impl: operational.memory_retrieve
   - id: knowledge_retrieve
     type: operational
     impl: operational.knowledge_retrieve
@@ -55,9 +52,6 @@ nodes:
     impl: finalize
 edges:
   - from: ingress
-    to: memory_recall
-    when: always
-  - from: memory_recall
     to: knowledge_retrieve
     when: always
   - from: knowledge_retrieve

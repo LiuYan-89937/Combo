@@ -65,13 +65,12 @@ class PrepareModelContextConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_user_config: bool = True
-    include_user_profile: bool = True
 
 
 @wrap_node(
     "context.prepare_model_context",
     phases={"before"},
-    reads={"conversation", "context", "memory", "knowledge", "policy", "runtime_config"},
+    reads={"conversation", "context", "knowledge", "policy", "runtime_config"},
     writes={"context"},
     config_schema=PrepareModelContextConfig,
     description="Build model context before a cognitive node runs.",
@@ -91,8 +90,6 @@ class PrepareModelContextWrapper(NodeWrapper):
         )
         if config.get("include_user_config", True):
             model_context["user_config"] = dict(state.runtime_config.user_config)
-        if config.get("include_user_profile", True):
-            model_context["user_profile"] = dict(state.memory.user_profile)
         return {
             "context": {
                 "model_context": model_context,
@@ -104,7 +101,7 @@ class PrepareModelContextWrapper(NodeWrapper):
 @wrap_node(
     "context.prepare_tool_context",
     phases={"before"},
-    reads={"conversation", "context", "memory", "knowledge", "policy", "runtime_config"},
+    reads={"conversation", "context", "knowledge", "policy", "runtime_config"},
     writes={"context"},
     description="Build tool context before an operational node runs.",
 )
@@ -116,10 +113,7 @@ class PrepareToolContextWrapper(NodeWrapper):
         context: NodeExecutionContext,
         config: dict[str, Any],
     ) -> dict[str, Any]:
-        tool_binding = _first_binding_payload(context.bindings, "tool_access") or _first_binding_payload(
-            context.bindings,
-            "retrieval_profile",
-        )
+        tool_binding = _first_binding_payload(context.bindings, "tool_access")
         tool_context = context.services.context_engine.build_tool_context(
             state=state,
             binding=tool_binding,
@@ -131,74 +125,6 @@ class PrepareToolContextWrapper(NodeWrapper):
                 "assembly_log": [*state.context.assembly_log, f"wrapper:{self.wrapper_id}:{context.node_id}"],
             }
         }
-
-
-class SummaryEveryNConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    every_messages: int = 100
-    keep_recent: int = 20
-
-
-@wrap_node(
-    "memory.summary_every_n",
-    phases={"after"},
-    reads={"conversation", "memory"},
-    writes={"memory"},
-    config_schema=SummaryEveryNConfig,
-    description="Update summary memory when enough pending memory records have accumulated.",
-)
-class SummaryEveryNWrapper(NodeWrapper):
-    def after(
-        self,
-        *,
-        state: RuntimeState,
-        context: NodeExecutionContext,
-        config: dict[str, Any],
-        node_result: dict[str, Any],
-    ) -> dict[str, Any]:
-        every_messages = int(config.get("every_messages", 100))
-        if every_messages <= 0:
-            return {}
-        pending = list(state.memory.pending_write)
-        if not pending or len(pending) % every_messages != 0:
-            return {}
-        recent = pending[-int(config.get("keep_recent", 20)) :]
-        summary = f"Compressed {len(pending)} memory records; retained {len(recent)} recent records."
-        return {"memory": {"summary_memory": summary, "pending_write": recent}}
-
-
-class UserProfileMergeConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    field: str = "preferences"
-
-
-@wrap_node(
-    "memory.profile_merge",
-    phases={"after"},
-    reads={"conversation", "memory", "runtime_config"},
-    writes={"memory"},
-    config_schema=UserProfileMergeConfig,
-    description="Merge simple user profile facts after a node runs.",
-)
-class UserProfileMergeWrapper(NodeWrapper):
-    def after(
-        self,
-        *,
-        state: RuntimeState,
-        context: NodeExecutionContext,
-        config: dict[str, Any],
-        node_result: dict[str, Any],
-    ) -> dict[str, Any]:
-        field = str(config.get("field", "preferences"))
-        profile = dict(state.memory.user_profile)
-        existing = list(profile.get(field, []))
-        explicit = state.runtime_config.user_config.get(field)
-        if explicit and explicit not in existing:
-            existing.append(explicit)
-        profile[field] = existing
-        return {"memory": {"user_profile": profile}}
 
 
 def _first_binding_payload(bindings: list[dict[str, Any]], binding_type: str) -> dict[str, Any] | None:

@@ -81,10 +81,13 @@ class AgentInstanceExtensionManager:
     ) -> ToolCompiler:
         bundle = self.loader.load()
         mcp_runtime = MCPRuntimeManager(bundle.mcp_servers)
+        extension_result, _report = self.discover(
+            context=ToolProviderContext(extension_root=bundle.sources.extension_root)
+        )
         return ToolCompiler(
             package_root=package_root,
             allowed_python_roots=[bundle.sources.extension_root],
-            resources=resources,
+            resources={**dict(resources or {}), **extension_result.runtime_resources},
             approval_handler=approval_handler,
             max_revisions=max_revisions,
             mcp_clients=self._configured_mcp_tool_clients or self._effective_mcp_tool_clients or mcp_runtime.clients(),

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import AIMessage
+
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
@@ -26,6 +28,7 @@ class CognitiveAnswerNode:
         result = model_service.generate(state=state, prompt_binding=binding_payload)
         if result.clarification_question:
             return {
+                "messages": [AIMessage(content=result.clarification_question)],
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
                     "clarification_question": result.clarification_question,
@@ -44,6 +47,7 @@ class CognitiveAnswerNode:
                 }
             )
             return {
+                "messages": [AIMessage(content=result.assistant_draft or "")],
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
                 },
@@ -60,6 +64,7 @@ class CognitiveAnswerNode:
             }
         final_answer = result.final_answer or result.assistant_draft or ""
         return {
+            "messages": [AIMessage(content=final_answer)],
             "conversation": {
                 "assistant_draft": result.assistant_draft,
                 "final_answer": final_answer,

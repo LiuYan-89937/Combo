@@ -14,7 +14,6 @@ from agent_factory.runtime_kernel.bindings import (
     OutputFormatterBindingPayload,
     PolicyProfileBindingPayload,
     PromptBindingPayload,
-    RetrievalProfileBindingPayload,
     StrategyProfileBindingPayload,
     ToolAccessBindingPayload,
 )
@@ -128,7 +127,7 @@ def _validate_assembly_draft(state: FactoryGraphState) -> dict[str, Any]:
     errors: list[str] = []
     normalized_spec: dict[str, Any] | None = None
     try:
-        spec = _candidate_to_spec(candidate)
+        spec = _with_system_runtime_contract(_candidate_to_spec(candidate), state)
         errors.extend(_stage_constraint_errors(spec, state))
         if not errors:
             validator = AgentAssemblyValidator(pattern_registry=_pattern_registry())
@@ -303,6 +302,8 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
         "resource_file_path": _resource_file_path(state),
         "sandbox_contract_path": _sandbox_contract_path(state),
         "resource_preparation_report_path": _resource_preparation_report_path(state),
+        "session_config_path": "session.json",
+        "memory_store_config_path": "memory/store.json",
         "source_stage_ids": [
             "requirement_capture",
             "runtime_pattern_selection",
@@ -319,6 +320,44 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
     if spec.harness:
         errors.append("harness must be empty in stage 7")
     return errors
+
+
+def _with_system_runtime_contract(spec: AgentAssemblySpec, state: FactoryGraphState) -> AgentAssemblySpec:
+    runtime = spec.runtime.model_copy(
+        update={
+            "session_config": {
+                **_default_agent_session_config(),
+                **dict(spec.runtime.session_config or {}),
+            }
+        },
+        deep=True,
+    )
+    metadata = {
+        **dict(spec.metadata or {}),
+        "factory_run_id": str(state.get("factory_run_id") or ""),
+        "resource_file_path": _resource_file_path(state),
+        "sandbox_contract_path": _sandbox_contract_path(state),
+        "resource_preparation_report_path": _resource_preparation_report_path(state),
+        "session_config_path": "session.json",
+        "memory_store_config_path": "memory/store.json",
+        "memory_store": _default_agent_memory_store_config(),
+    }
+    return spec.model_copy(update={"runtime": runtime, "metadata": metadata}, deep=True)
+
+
+def _default_agent_session_config() -> dict[str, str]:
+    return {
+        "session_root": ".agent_runtime/sessions",
+        "checkpointer_backend": "sqlite",
+        "checkpoint_path": ".agent_runtime/checkpoints/agent.sqlite",
+    }
+
+
+def _default_agent_memory_store_config() -> dict[str, str]:
+    return {
+        "backend": "sqlite",
+        "path": ".agent_runtime/memory/agent.sqlite",
+    }
 
 
 def _binding_contract_errors(spec: AgentAssemblySpec, state: FactoryGraphState) -> list[str]:
@@ -372,7 +411,6 @@ def _binding_payload_errors(binding_type: str, payload: dict[str, Any], node_id:
         "prompt": PromptBindingPayload,
         "tool_access": ToolAccessBindingPayload,
         "policy_profile": PolicyProfileBindingPayload,
-        "retrieval_profile": RetrievalProfileBindingPayload,
         "strategy_profile": StrategyProfileBindingPayload,
         "output_formatter": OutputFormatterBindingPayload,
         "custom": CustomBindingPayload,
@@ -404,8 +442,6 @@ def _required_binding_types_by_node(pattern_nodes: dict[str, dict[str, str]], st
             required.setdefault(node_id, set()).add("prompt")
         if impl == "operational.tool_call":
             required.setdefault(node_id, set()).add("tool_access")
-        if impl.startswith("operational.memory") or impl.startswith("operational.knowledge"):
-            required.setdefault(node_id, set()).add("retrieval_profile")
         if impl.startswith("governance."):
             required.setdefault(node_id, set()).add("policy_profile")
         if node_type == "terminal" or impl == "finalize":
@@ -426,14 +462,12 @@ def _nodes_with_strategy_refs(state: FactoryGraphState) -> set[str]:
 
 
 def _required_service_kinds(spec: AgentAssemblySpec, pattern_nodes: dict[str, dict[str, str]]) -> set[str]:
-    required: set[str] = {"observability_manager", "checkpoint_manager"}
+    required: set[str] = {"observability_manager", "checkpointer", "memory_store"}
     if any(node["impl"].startswith("cognitive.") for node in pattern_nodes.values()):
         required.add("model_service")
         required.add("context_engine")
     if spec.tools or any(binding.binding_type == "tool_access" for binding in spec.bindings.node_bindings):
         required.add("tool_registry")
-    if any(node["impl"].startswith("operational.memory") for node in pattern_nodes.values()):
-        required.add("memory_engine")
     if any(node["impl"].startswith("operational.knowledge") for node in pattern_nodes.values()):
         required.add("knowledge_engine")
     if any(node["impl"].startswith("governance.") for node in pattern_nodes.values()):
@@ -454,6 +488,8 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         _file_spec("bindings/services.json", "json", "binding", "services", "system_generated", "assembly_spec.bindings.services"),
         _file_spec("bindings/node_bindings.json", "json", "binding", "node_bindings", "system_generated", "assembly_spec.bindings.node_bindings"),
         _file_spec("bindings/hooks.json", "json", "binding", "hooks", "system_generated", "assembly_spec.bindings.hooks"),
+        _file_spec("session.json", "json", "manifest", "session", "system_generated", "assembly_spec.runtime.session_config"),
+        _file_spec("memory/store.json", "json", "manifest", "memory_store", "system_generated", "assembly_spec.metadata.memory_store"),
     ]
     tool_capabilities = _tool_capabilities_by_id(state)
     tool_specs: list[PackageMaterializationToolSpec] = []
@@ -466,8 +502,6 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         elif binding.binding_type == "policy_profile":
             profile_id = str(payload.get("profile_id") or binding.binding_id)
             files.append(_file_spec(f"policies/{profile_id}.json", "json", "policy", profile_id, "system_generated", f"binding:{binding.binding_id}"))
-        elif binding.binding_type == "retrieval_profile":
-            files.append(_file_spec(f"retrieval/{binding.target.node_id}.json", "json", "retrieval", binding.target.node_id, "system_generated", f"binding:{binding.binding_id}"))
         elif binding.binding_type == "strategy_profile":
             files.append(_file_spec(f"strategies/{binding.target.node_id}.json", "json", "strategy", binding.target.node_id, "system_generated", f"binding:{binding.binding_id}"))
         elif binding.binding_type == "output_formatter":
@@ -516,10 +550,11 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
             "node_bindings": "bindings/node_bindings.json",
             "hooks": "bindings/hooks.json",
         },
+        "session_path": "session.json",
+        "memory_store_path": "memory/store.json",
         "prompts": sorted(item.path for item in files if item.source_kind == "prompt"),
         "tools": sorted(item.manifest_path for item in tool_specs),
         "policies": sorted(item.path for item in files if item.source_kind == "policy"),
-        "retrieval_profiles": sorted(item.path for item in files if item.source_kind == "retrieval"),
         "strategy_profiles": sorted(item.path for item in files if item.source_kind == "strategy"),
         "formatters": sorted(item.path for item in files if item.source_kind == "formatter"),
     }
@@ -580,11 +615,16 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
     errors: list[str] = []
     paths = {item.path for item in plan.files}
     required = {
+        "agent_package.json",
+        "assembly_spec.json",
+        "resources.json",
         "bindings/services.json",
         "bindings/node_bindings.json",
         "bindings/hooks.json",
         "render_manifest.json",
         "sandbox_contract.json",
+        "session.json",
+        "memory/store.json",
     }
     for path in sorted(required - paths):
         errors.append(f"package_materialization_plan missing required binding file: {path}")

@@ -21,7 +21,7 @@ from agent_factory.runtime_kernel.patterns.schema import (
     PatternNodeWrapperSpec,
 )
 from agent_factory.runtime_kernel.patterns.validator import PatternValidator
-from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
+from agent_factory.runtime_kernel.state import RuntimeGraphState, RuntimeState, merge_state_patch
 from agent_factory.runtime_kernel.wrappers import DEFAULT_NODE_WRAPPER_REGISTRY, NodeWrapperRegistry
 from agent_factory.runtime_kernel.wrappers.system_render import SYSTEM_RENDER_NODE_WRAPPER
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, default_node_render_spec, validate_render_manifest
@@ -60,7 +60,7 @@ class PatternCompiler:
             )
             for node in pattern.nodes
         }
-        graph = StateGraph(dict)
+        graph = StateGraph(RuntimeGraphState)
         for node_id, runner in node_runners.items():
             graph.add_node(node_id, runner)
         graph.set_conditional_entry_point(
@@ -77,7 +77,7 @@ class PatternCompiler:
             mapping = dict(outgoing.get(node.id, {}))
             mapping["__end__"] = END
             graph.add_conditional_edges(node.id, _make_route_router(mapping), mapping)
-        graph_app = graph.compile()
+        graph_app = graph.compile(checkpointer=services.checkpointer, store=services.memory_store)
         return CompiledKernelApp(
             pattern_spec=pattern,
             graph_app=graph_app,
@@ -174,15 +174,15 @@ def _make_wrapped_runner(
     node_wrappers = sorted(node_wrappers, key=lambda item: int(item.order))
 
     def runner(raw_state: dict[str, Any]) -> dict[str, Any]:
-        state = RuntimeState.model_validate(raw_state)
+        state = _runtime_state_from_graph(raw_state)
         if state.execution.finished:
-            return state.model_dump(mode="json")
+            return _runtime_graph_patch(state)
         if _timed_out(state):
             _finish_state(state, status="failed", error="Execution timed out before node execution.")
-            return state.model_dump(mode="json")
+            return _runtime_graph_patch(state)
         if state.execution.turn_count >= state.execution.max_turns:
             _finish_state(state, status="failed", error="Execution exceeded max_turns.")
-            return state.model_dump(mode="json")
+            return _runtime_graph_patch(state)
 
         started = perf_counter()
         span = services.observability_manager.start_span(
@@ -230,7 +230,8 @@ def _make_wrapped_runner(
                 services=services,
             )
             active_state = before_state
-            patch = _execute_with_retries(before_state, context, execute)
+            raw_patch = _execute_with_retries(before_state, context, execute)
+            messages_patch, patch = _split_graph_patch(raw_patch)
             if validate_sections:
                 _validate_patch_sections(node.impl, patch)
             updated = merge_state_patch(before_state, patch)
@@ -276,7 +277,7 @@ def _make_wrapped_runner(
                 metadata={"node_id": node.id, "duration_ms": duration_ms},
             )
             _pop_span(updated, span.span_id)
-            return updated.model_dump(mode="json")
+            return _runtime_graph_patch(updated, messages=messages_patch)
         except Exception as exc:
             failed = active_state
             try:
@@ -312,7 +313,7 @@ def _make_wrapped_runner(
                 metadata={"node_id": node.id, "error": str(exc)},
             )
             _pop_span(failed, span.span_id)
-            return failed.model_dump(mode="json")
+            return _runtime_graph_patch(failed)
 
     return runner
 
@@ -321,7 +322,7 @@ def _make_entry_router(pattern: GraphPatternSpec):
     node_ids = {node.id for node in pattern.nodes}
 
     def route(raw_state: dict[str, Any]) -> str:
-        state = RuntimeState.model_validate(raw_state)
+        state = _runtime_state_from_graph(raw_state)
         if state.execution.current_node in node_ids and not state.execution.finished:
             return state.execution.current_node or pattern.entry_node
         return pattern.entry_node
@@ -333,7 +334,7 @@ def _make_route_router(mapping: dict[str, str]):
     allowed = set(mapping)
 
     def route(raw_state: dict[str, Any]) -> str:
-        state = RuntimeState.model_validate(raw_state)
+        state = _runtime_state_from_graph(raw_state)
         if state.execution.finished or state.execution.interrupted or state.policy.interrupted:
             return "__end__"
         decision = state.execution.route_decision
@@ -342,6 +343,23 @@ def _make_route_router(mapping: dict[str, str]):
         return "__end__"
 
     return route
+
+
+def _runtime_state_from_graph(raw_state: dict[str, Any]) -> RuntimeState:
+    return RuntimeState.model_validate(raw_state.get("runtime") or {})
+
+
+def _runtime_graph_patch(state: RuntimeState, *, messages: list[Any] | None = None) -> dict[str, Any]:
+    patch: dict[str, Any] = {"runtime": state.model_dump(mode="json")}
+    if messages:
+        patch["messages"] = messages
+    return patch
+
+
+def _split_graph_patch(patch: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+    messages = list(patch.get("messages") or [])
+    runtime_patch = {key: value for key, value in patch.items() if key != "messages"}
+    return messages, runtime_patch
 
 
 def _default_render_manifest_for_pattern(pattern: GraphPatternSpec) -> RenderManifest:
@@ -617,7 +635,7 @@ def _make_subgraph_executor(
         child_input.execution.subgraph_depth = parent_state.execution.subgraph_depth + 1
         child_input.execution.finished = False
         child_input.execution.finish_status = None
-        child_state = controller.run(compiled, child_input)
+        child_state = controller.run(compiled, child_input, thread_id=child_input.run.session_id)
         route = child_state.execution.route_decision or ""
         if route.startswith("subgraph."):
             exit_route = route.split(".", 1)[1]
@@ -673,7 +691,7 @@ def _run_pre_hooks(state: RuntimeState, context: NodeExecutionContext) -> tuple[
         updated.context.assembly_log.append(f"auto_pre_cognitive:{context.node_id}")
         patch["context"] = updated.context.model_dump(mode="json")
     elif context.impl.startswith("operational."):
-        tool_binding = _first_binding_payload(context.bindings, "tool_access") or _first_binding_payload(context.bindings, "retrieval_profile")
+        tool_binding = _first_binding_payload(context.bindings, "tool_access")
         updated.context.tool_context = context.services.context_engine.build_tool_context(
             state=updated,
             binding=tool_binding,
@@ -691,7 +709,7 @@ def _run_pre_hooks(state: RuntimeState, context: NodeExecutionContext) -> tuple[
             updated.context.assembly_log.append(f"pre_cognitive:{context.node_id}")
             patch["context"] = updated.context.model_dump(mode="json")
         elif context.impl.startswith("operational.") and point == "pre_operational":
-            tool_binding = _first_binding_payload(context.bindings, "tool_access") or _first_binding_payload(context.bindings, "retrieval_profile")
+            tool_binding = _first_binding_payload(context.bindings, "tool_access")
             updated.context.tool_context = context.services.context_engine.build_tool_context(
                 state=updated,
                 binding=tool_binding,
@@ -749,7 +767,6 @@ def _validate_patch_sections(impl_id: str, patch: dict[str, Any]) -> None:
         GovernanceRefusalGateNode,
         IngressNode,
         OperationalKnowledgeRetrieveNode,
-        OperationalMemoryRetrieveNode,
         OperationalResourceProbeNode,
         OperationalToolCallNode,
         TerminalCloseNode,
@@ -771,7 +788,6 @@ def _validate_patch_sections(impl_id: str, patch: dict[str, Any]) -> None:
             CognitiveReviewNode(),
             OperationalToolCallNode(),
             OperationalKnowledgeRetrieveNode(),
-            OperationalMemoryRetrieveNode(),
             OperationalResourceProbeNode(),
             TerminalCommitNode(),
             TerminalCloseNode(),
@@ -823,7 +839,6 @@ def _project_state_for_subgraph(
         "conversation",
         "context",
         "tools",
-        "memory",
         "knowledge",
         "policy",
         "execution",

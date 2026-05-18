@@ -6,8 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 StrategyKind = Literal[
-    "memory.recall",
-    "memory.write",
     "context.assemble",
     "context.compress",
     "knowledge.retrieve",

@@ -60,23 +60,21 @@ class AgentInstanceExtensionTest(unittest.TestCase):
         self.assertEqual(report.tool_ids, ["search_search"])
         self.assertEqual(tool.invoke({})["output"], {"tool": "search", "arguments": {}})
 
-    def test_skill_extension_config_loads_prompt_only_skill(self) -> None:
+    def test_skill_extension_config_loads_progressive_skill_tool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             skill_root = root / "skills" / "writer"
-            skill_root.mkdir(parents=True)
-            (skill_root / "skill.json").write_text(
-                json.dumps(
-                    {
-                        "version": "skill.v0",
-                        "skill_id": "writer",
-                        "description": "Prompt-only writing skill.",
-                        "prompt_fragments": ["instructions.md"],
-                    }
-                ),
+            (skill_root / "references").mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text(
+                "---\n"
+                "name: writer\n"
+                "description: Prompt-only writing skill.\n"
+                "---\n"
+                "# Writer\n"
+                "Write concise responses.\n",
                 encoding="utf-8",
             )
-            (skill_root / "instructions.md").write_text("Write concise responses.", encoding="utf-8")
+            (skill_root / "references" / "style.md").write_text("Write concise responses.", encoding="utf-8")
             (root / "enabled_skills.json").write_text(
                 json.dumps(
                     {
@@ -85,8 +83,6 @@ class AgentInstanceExtensionTest(unittest.TestCase):
                             {
                                 "skill_id": "writer",
                                 "path": "skills/writer",
-                                "expose_tools": False,
-                                "expose_prompt_fragments": True,
                             }
                         ],
                     }
@@ -96,9 +92,10 @@ class AgentInstanceExtensionTest(unittest.TestCase):
             manager = AgentInstanceExtensionManager(extension_root=root)
             result, report = manager.discover()
 
-        self.assertEqual(result.tool_specs, [])
-        self.assertEqual(result.prompt_fragments[0].content, "Write concise responses.")
-        self.assertEqual(report.prompt_fragment_ids, ["writer:instructions.md"])
+        self.assertEqual([tool.id for tool in result.tool_specs], ["skill"])
+        self.assertEqual(result.prompt_fragments, [])
+        self.assertEqual(report.prompt_fragment_ids, [])
+        self.assertEqual(report.tool_ids, ["skill"])
 
 
 if __name__ == "__main__":

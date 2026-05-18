@@ -7,7 +7,6 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.runtime_kernel.constants import RUNTIME_KERNEL_VERSION, RUNTIME_STATE_SCHEMA_VERSION
-from agent_factory.runtime_kernel.state.messages import MessageRecord
 
 
 class RunState(BaseModel):
@@ -25,7 +24,6 @@ class RunState(BaseModel):
 class ConversationState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    messages: list[MessageRecord] = Field(default_factory=list)
     current_user_input: str | None = None
     current_user_input_id: str | None = None
     assistant_draft: str | None = None
@@ -56,17 +54,6 @@ class ToolState(BaseModel):
     tool_failures: list[dict[str, Any]] = Field(default_factory=list)
     approval_queue: list[dict[str, Any]] = Field(default_factory=list)
     last_tool_result: dict[str, Any] | None = None
-
-
-class MemoryState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    short_term_snapshot: dict[str, Any] = Field(default_factory=dict)
-    summary_memory: str | None = None
-    user_profile: dict[str, Any] = Field(default_factory=dict)
-    recall_items: list[dict[str, Any]] = Field(default_factory=list)
-    pending_write: list[dict[str, Any]] = Field(default_factory=list)
-    write_applied: bool = False
 
 
 class KnowledgeState(BaseModel):
@@ -143,7 +130,6 @@ class RuntimeState(BaseModel):
     conversation: ConversationState = Field(default_factory=ConversationState)
     context: ContextState = Field(default_factory=ContextState)
     tools: ToolState = Field(default_factory=ToolState)
-    memory: MemoryState = Field(default_factory=MemoryState)
     knowledge: KnowledgeState = Field(default_factory=KnowledgeState)
     policy: PolicyState = Field(default_factory=PolicyState)
     execution: ExecutionState = Field(default_factory=ExecutionState)

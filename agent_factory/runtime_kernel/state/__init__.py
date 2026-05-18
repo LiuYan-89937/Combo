@@ -5,12 +5,12 @@ from agent_factory.runtime_kernel.state.messages import (
     load_message,
     load_messages,
 )
+from agent_factory.runtime_kernel.state.graph import RuntimeGraphState, merge_runtime_patch
 from agent_factory.runtime_kernel.state.schema import (
     ContextState,
     ConversationState,
     ExecutionState,
     KnowledgeState,
-    MemoryState,
     ObservabilityState,
     PolicyState,
     RunState,
@@ -25,12 +25,12 @@ __all__ = [
     "ConversationState",
     "ExecutionState",
     "KnowledgeState",
-    "MemoryState",
     "MessageRecord",
     "ObservabilityState",
     "PolicyState",
     "RunState",
     "RuntimeConfigState",
+    "RuntimeGraphState",
     "RuntimeState",
     "ToolState",
     "dump_message",
@@ -38,4 +38,5 @@ __all__ = [
     "load_message",
     "load_messages",
     "merge_state_patch",
+    "merge_runtime_patch",
 ]

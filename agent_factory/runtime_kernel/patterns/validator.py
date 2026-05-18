@@ -30,7 +30,6 @@ ALLOWED_EDGE_CONDITIONS = {
 ALLOWED_REQUIRED_CAPABILITIES = {
     "prompt",
     "tools",
-    "memory",
     "knowledge",
     "context",
     "policy",

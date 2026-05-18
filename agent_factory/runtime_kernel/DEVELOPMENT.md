@@ -137,15 +137,15 @@ Kernel 提供受控标准节点目录，Graph Pattern DSL 只能引用标准节�
 
 - `ingress`
 - `context`
-- `memory_recall`
 - `knowledge_retrieve`
 - `policy_precheck`
 - `model`
 - `tool`
 - `observation`
 - `policy_postcheck`
-- `memory_write`
 - `finalize`
+
+记忆不再通过专用业务节点实现。会话内记忆统一使用 LangGraph `messages` channel + checkpointer，跨会话记忆统一使用 LangGraph `BaseStore`。
 
 ### 5.3 Graph Pattern DSL
 

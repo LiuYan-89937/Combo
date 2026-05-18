@@ -6,22 +6,26 @@ import json
 import os
 from pathlib import Path
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.runtime_kernel.persistence import (
+    LangGraphCheckpointerConfig,
+    LangGraphCheckpointerFactory,
+    LangGraphCheckpointerHandle,
+    is_checkpointer_persistent,
+)
 from agent_factory.runtime_kernel.state.messages import MessageRecord, dump_messages, load_messages
 
 
 FactorySessionMode = Literal["chat", "create_agent"]
+FactoryCheckpointerBackend = Literal["sqlite", "memory"]
 
 DEFAULT_SESSION_ROOT = ".agentfactory/sessions"
 DEFAULT_CHECKPOINT_PATH = ".agentfactory/checkpoints/factory.sqlite"
-
-_CHECKPOINTER_CONTEXTS: list[object] = []
-_PERSISTENT_CHECKPOINTER_IDS: set[int] = set()
-
+DEFAULT_CHECKPOINTER_BACKEND: FactoryCheckpointerBackend = "sqlite"
 
 class FactorySessionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -48,6 +52,32 @@ class FactorySessionConfig:
     def from_env(cls) -> "FactorySessionConfig":
         root = Path(os.getenv("AGENTFACTORY_SESSION_ROOT", DEFAULT_SESSION_ROOT)).expanduser()
         return cls(root=root)
+
+
+@dataclass(frozen=True, slots=True)
+class FactoryCheckpointerConfig:
+    backend: FactoryCheckpointerBackend
+    path: Path
+
+    @classmethod
+    def from_env(cls) -> "FactoryCheckpointerConfig":
+        raw_backend = os.getenv("AGENTFACTORY_CHECKPOINTER_BACKEND", DEFAULT_CHECKPOINTER_BACKEND).strip().lower()
+        if raw_backend not in {"sqlite", "memory"}:
+            raise ValueError(
+                "AGENTFACTORY_CHECKPOINTER_BACKEND must be one of: sqlite, memory"
+            )
+        return cls(
+            backend=raw_backend,
+            path=checkpoint_path_from_env(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FactoryCheckpointerHandle:
+    saver: Any
+    backend: FactoryCheckpointerBackend
+    persistent: bool
+    path: Path | None = None
 
 
 class FactorySessionManager:
@@ -152,27 +182,30 @@ def checkpoint_path_from_env() -> Path:
     return Path(os.getenv("AGENTFACTORY_CHECKPOINT_PATH", DEFAULT_CHECKPOINT_PATH)).expanduser()
 
 
-def build_factory_checkpointer():
-    checkpoint_path = checkpoint_path_from_env()
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-    except ModuleNotFoundError:
-        from langgraph.checkpoint.memory import InMemorySaver
+class FactoryCheckpointerFactory:
+    def build(self, config: FactoryCheckpointerConfig | None = None) -> FactoryCheckpointerHandle:
+        config = config or FactoryCheckpointerConfig.from_env()
+        handle = LangGraphCheckpointerFactory().build(
+            LangGraphCheckpointerConfig(backend=config.backend, path=config.path)
+        )
+        return FactoryCheckpointerHandle(
+            saver=handle.saver,
+            backend=handle.backend,
+            persistent=handle.persistent,
+            path=handle.path,
+        )
 
-        return InMemorySaver()
-    checkpointer = SqliteSaver.from_conn_string(str(checkpoint_path))
-    if hasattr(checkpointer, "__enter__"):
-        _CHECKPOINTER_CONTEXTS.append(checkpointer)
-        saver = checkpointer.__enter__()
-        _PERSISTENT_CHECKPOINTER_IDS.add(id(saver))
-        return saver
-    _PERSISTENT_CHECKPOINTER_IDS.add(id(checkpointer))
-    return checkpointer
+
+def build_factory_checkpointer():
+    return build_factory_checkpointer_handle().saver
+
+
+def build_factory_checkpointer_handle() -> FactoryCheckpointerHandle:
+    return FactoryCheckpointerFactory().build()
 
 
 def is_factory_checkpointer_persistent(checkpointer: object | None) -> bool:
-    return id(checkpointer) in _PERSISTENT_CHECKPOINTER_IDS
+    return is_checkpointer_persistent(checkpointer)
 
 
 def _human_message_count(messages: list[BaseMessage]) -> int:

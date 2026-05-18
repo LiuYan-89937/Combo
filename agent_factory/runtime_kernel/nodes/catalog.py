@@ -25,7 +25,6 @@ NODE_IMPLEMENTATION_IDS = {
     "cognitive.review",
     "operational.tool_call",
     "operational.knowledge_retrieve",
-    "operational.memory_retrieve",
     "operational.resource_probe",
     "terminal.commit",
     "terminal.close",
@@ -50,6 +49,5 @@ SUBGRAPH_SLOT_IMPLS = {
     "cognitive.review",
     "operational.tool_call",
     "operational.knowledge_retrieve",
-    "operational.memory_retrieve",
     "operational.resource_probe",
 }

@@ -12,12 +12,12 @@ class RuntimeServices(BaseModel):
 
     model_service: object | None = None
     tool_registry: object | None = None
-    memory_engine: object | None = None
+    memory_store: object | None = None
     knowledge_engine: object | None = None
     context_engine: object | None = None
     policy_engine: object | None = None
     observability_manager: object | None = None
-    checkpoint_manager: object | None = None
+    checkpointer: object | None = None
     harness_bridge: object | None = None
 
     def get_required(self, name: str) -> Any:

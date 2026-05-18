@@ -6,12 +6,13 @@ import operator
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from agent_factory.tooling import get_factory_model_tools, get_factory_tools
 from agent_factory.factory_graph.prompt_context import prompt_context_values
+from agent_factory.factory_graph.session import build_factory_checkpointer
 from agent_factory.models import get_task_model, get_task_model_settings
 from agent_factory.prompts import PromptId, get_prompt
 
@@ -21,7 +22,7 @@ FACTORY_CHAT_TOOLS_NODE = "chat_tools"
 
 
 class FactoryChatState(TypedDict, total=False):
-    messages: Annotated[list[BaseMessage], operator.add]
+    messages: Annotated[list[BaseMessage], add_messages]
     status: str
     errors: Annotated[list[dict[str, Any]], operator.add]
 
@@ -106,4 +107,4 @@ def initial_factory_chat_state(messages: list[BaseMessage]) -> FactoryChatState:
 def _default_checkpointer(enable_interrupts: bool) -> BaseCheckpointSaver | None:
     if not enable_interrupts:
         return None
-    return InMemorySaver()
+    return build_factory_checkpointer()

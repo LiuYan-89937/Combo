@@ -44,8 +44,9 @@ class HarnessBridge:
                 "model_service": fixture.model_service or services.model_service,
                 "tool_registry": fixture.tool_registry or services.tool_registry,
                 "policy_engine": fixture.policy_engine or services.policy_engine,
-                "memory_engine": fixture.memory_engine or services.memory_engine,
+                "memory_store": fixture.memory_store or services.memory_store,
                 "knowledge_engine": fixture.knowledge_engine or services.knowledge_engine,
+                "checkpointer": fixture.checkpointer or services.checkpointer,
             }
         )
         try:
@@ -63,19 +64,19 @@ class HarnessBridge:
         except Exception as exc:
             return _failed_result(scenario=scenario, location="run", exc=exc)
         interrupted_state = None
-        if scenario.resume_after_interrupt and result_state.observability.debug_refs:
-            checkpoint_refs = [item for item in result_state.observability.debug_refs if item.get("kind") == "checkpoint"]
-            if checkpoint_refs:
+        if scenario.resume_after_interrupt:
+            session_id = result_state.run.session_id
+            if session_id:
                 interrupted_state = result_state
-                checkpoint_id = checkpoint_refs[-1]["checkpoint_id"]
                 resume_payload = scenario.resume_payload
                 if not resume_payload and fixture.approval_responses:
                     resume_payload = fixture.approval_responses[0]
                 try:
                     result_state = self.facade.resume(
                         compiled,
-                        checkpoint_id=checkpoint_id,
+                        session_id=session_id,
                         resume_payload=resume_payload,
+                        session_config=scenario.session_config,
                     )
                 except Exception as exc:
                     return _failed_result(scenario=scenario, location="resume", exc=exc)

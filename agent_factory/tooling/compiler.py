@@ -96,7 +96,7 @@ class ToolCompiler:
     def _load_hard_risk_evaluator(self, spec: ToolSpec) -> ToolRiskEvaluator | None:
         if not spec.risk_evaluator.hard:
             return None
-        evaluator = self.loader.load(spec.risk_evaluator.hard)
+        evaluator = self.loader.load_risk_evaluator(spec.risk_evaluator.hard)
         return evaluator
 
     def _load_llm_risk_prompt(self, spec: ToolSpec) -> str | None:
