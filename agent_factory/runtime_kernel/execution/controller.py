@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+from agent_factory.memory_system.config import should_enqueue_memory_write
+from agent_factory.memory_system.segment import build_conversation_segment
 from agent_factory.memory_system.schema import MemoryWriteJob
 from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.runtime_kernel.observability.schema import TraceEvent
@@ -101,27 +103,37 @@ class ExecutionController:
         state.observability.events.append(event.model_dump(mode="json"))
 
     def _enqueue_memory_write(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> None:
-        if state.execution.finish_status in {"failed", "blocked"} or state.execution.last_error:
+        if state.execution.finish_status != "completed" or state.execution.last_error:
             return
         runtime = getattr(compiled_app.services, "memory_system", None)
         writer = getattr(runtime, "writer", None)
         if runtime is None or writer is None:
             return
-        messages_delta = _messages_delta(state)
-        if not messages_delta:
+        turn_index = int(state.conversation.turn_index or 0)
+        if not should_enqueue_memory_write(turn_index=turn_index, config=runtime.config):
+            return
+        source = {
+            "agent_id": state.run.agent_id,
+            "session_id": state.run.session_id,
+            "thread_id": thread_id,
+            "run_id": state.run.run_id,
+            "node_id": state.execution.current_node,
+        }
+        segment = build_conversation_segment(
+            scope="agent",
+            namespace=tuple(runtime.namespace),
+            source=source,
+            messages=_messages_delta(state),
+            end_turn=turn_index,
+            max_turns=runtime.config.background.write_interval_turns,
+        )
+        if segment is None:
             return
         job = MemoryWriteJob(
             scope="agent",
             namespace=tuple(runtime.namespace),
-            source={
-                "agent_id": state.run.agent_id,
-                "session_id": state.run.session_id,
-                "thread_id": thread_id,
-                "run_id": state.run.run_id,
-                "node_id": state.execution.current_node,
-            },
-            message_range={"turn_index": state.conversation.turn_index},
-            messages_delta=messages_delta,
+            source=source,
+            segment=segment,
         )
         try:
             report = writer.enqueue(job)

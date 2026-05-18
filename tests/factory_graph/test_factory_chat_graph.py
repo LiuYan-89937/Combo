@@ -54,6 +54,15 @@ class FactoryChatGraphTest(unittest.TestCase):
         with (
             patch.dict(os.environ, MODEL_ENV),
             patch(
+                "agent_factory.factory_graph.chat_graph.prompt_values",
+                side_effect=lambda stage_id, values: {
+                    "factory_operating_context": "factory",
+                    "factory_default_implementation_context": "defaults",
+                    "stage_operating_context": stage_id,
+                    **values,
+                },
+            ),
+            patch(
                 "agent_factory.factory_graph.chat_graph.get_task_model",
                 return_value=fake_task_model,
             ),
@@ -76,6 +85,44 @@ class FactoryChatGraphTest(unittest.TestCase):
         self.assertFalse(any(isinstance(message, ToolMessage) for message in result["messages"]))
         self.assertIsNotNone(fake_task_model.bound_tools)
         self.assertTrue(fake_task_model.bound_tools)
+
+    def test_chat_graph_uses_unified_prompt_values_for_memory_injection(self) -> None:
+        class FakeTaskModel:
+            def bind_tools(self, _tools):
+                return self
+
+            def invoke(self, prompt_value):
+                text = "\n".join(str(message.content) for message in prompt_value.to_messages())
+                return AIMessage(content=f"seen_memory={('cross-session note' in text)}")
+
+        app = build_factory_chat_graph(tools=[])
+        with (
+            patch.dict(os.environ, MODEL_ENV),
+            patch(
+                "agent_factory.factory_graph.chat_graph.prompt_values",
+                side_effect=lambda stage_id, values: {
+                    "factory_operating_context": "factory\ncross-session note",
+                    "factory_default_implementation_context": "defaults",
+                    "stage_operating_context": stage_id,
+                    **values,
+                },
+            ) as prompt_values_mock,
+            patch("agent_factory.factory_graph.chat_graph.get_task_model", return_value=FakeTaskModel()),
+            patch(
+                "agent_factory.factory_graph.chat_graph.get_task_model_settings",
+                return_value=SimpleNamespace(model="task-model", max_tokens=None),
+            ),
+        ):
+            result = app.invoke(
+                {
+                    "messages": [HumanMessage(content="读取长期记忆了吗？")],
+                    "status": "running",
+                    "errors": [],
+                }
+            )
+
+        self.assertTrue(prompt_values_mock.called)
+        self.assertEqual(result["messages"][-1].content, "seen_memory=True")
 
     def test_chat_graph_reports_model_configuration_error(self) -> None:
         app = build_factory_chat_graph()

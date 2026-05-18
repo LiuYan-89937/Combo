@@ -11,10 +11,12 @@ from agent_factory.memory_system.namespace import agent_memory_namespace, factor
 from agent_factory.memory_system.schema import (
     MemoryContextItem,
     MemoryContextPack,
+    MemoryConversationMessage,
+    MemoryConversationSegment,
     MemoryExtractionAction,
     MemoryExtractionDecision,
     MemoryInjectionReport,
-    MemoryIntentDecision,
+    MemoryType,
     MemoryWriteJob,
     MemoryWriteReport,
 )
@@ -22,10 +24,12 @@ from agent_factory.memory_system.schema import (
 __all__ = [
     "MemoryContextItem",
     "MemoryContextPack",
+    "MemoryConversationMessage",
+    "MemoryConversationSegment",
     "MemoryExtractionAction",
     "MemoryExtractionDecision",
     "MemoryInjectionReport",
-    "MemoryIntentDecision",
+    "MemoryType",
     "MemoryStoreRuntimeConfig",
     "MemorySystemConfig",
     "MemorySystemRuntime",

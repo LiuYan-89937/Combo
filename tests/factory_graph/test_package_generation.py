@@ -360,6 +360,7 @@ def _assembly_spec() -> dict:
                     "max_pending_jobs": 32,
                     "concurrency": 1,
                     "queue_full_policy": "reject_new_when_full",
+                    "write_interval_turns": 3,
                 },
             },
             "render_manifest": _render_manifest(),

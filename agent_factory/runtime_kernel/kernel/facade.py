@@ -13,6 +13,7 @@ from agent_factory.memory_system import (
 )
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.namespace import agent_memory_namespace
+from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.context import ContextEngine
 from agent_factory.runtime_kernel.execution import ExecutionController
@@ -103,6 +104,7 @@ class RuntimeKernelFacade:
         resolved_memory_store_config = memory_store_config or LangGraphStoreConfig(
             backend=memory_config.store.backend,
             path=Path(memory_config.store.path) if memory_config.store.backend == "sqlite" else None,
+            index=build_memory_store_index(memory_config),
         )
         memory_store = LangGraphStoreFactory().build(resolved_memory_store_config).store
         memory_runtime = default_agent_runtime(
@@ -183,6 +185,7 @@ class RuntimeKernelFacade:
         state.run.pattern_id = compiled.pattern_spec.pattern_id
         state.run.pattern_version = compiled.pattern_spec.version
         state.conversation.current_user_input = user_input
+        state.conversation.turn_index = int(session.turn_count or 0)
         state.runtime_config.user_config = dict(user_config or {})
         state.runtime_config.agent_config = agent_config
         state.runtime_config.session_config = {

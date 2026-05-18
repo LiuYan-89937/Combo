@@ -61,7 +61,7 @@ export const eventSchema = z.object({
 		'tool_observation_available',
 		'memory_write_queued',
 		'memory_write_queued_failed',
-		'memory_intent_detected',
+		'memory_segment_prepared',
 		'memory_extraction_completed',
 		'memory_write_completed',
 		'memory_write_failed',

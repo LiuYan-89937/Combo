@@ -5,21 +5,33 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent_factory.memory_system.schema import MemoryContextPack, MemoryExtractionDecision, MemoryIntentDecision
+from agent_factory.memory_system.schema import MemoryContextPack, MemoryConversationSegment, MemoryExtractionDecision
 from agent_factory.models import get_task_model, get_task_model_settings
 
 
-MEMORY_EXTRACTION_SYSTEM = """You extract durable cross-session memory actions.
-Only produce actions that are useful beyond the current session.
-Keep memories concise, stable, and scoped to facts, preferences, decisions, constraints, or artifacts.
-Do not extract transient task progress unless the user explicitly wants it remembered.
-Return JSON only matching the provided schema."""
+MEMORY_EXTRACTION_MAX_ATTEMPTS = 5
+
+
+MEMORY_EXTRACTION_SYSTEM = """You extract durable cross-session memory actions from a conversation segment.
+
+Memory extraction policy:
+- Read the whole segment before deciding. The user does not need to use explicit words like "remember".
+- Extract only information useful beyond this session: stable preferences, decisions, constraints, durable facts, reusable procedures, and important artifacts.
+- Classify every add/update action as one memory_type:
+  - semantic: durable facts, preferences, constraints, decisions, and artifact references.
+  - episodic: important events or outcomes from this session that are worth recalling later.
+  - procedural: reusable ways of working, workflows, commands, or project-specific operating procedures.
+- Use related_memories to deduplicate. Prefer update when a memory should replace or refine an existing item.
+- delete requires merge_target_id and should only be used when the segment clearly invalidates an existing memory.
+- noop if the segment contains only transient progress, greetings, raw logs, tool output, or details that should not be stored.
+- Never store secrets, credentials, API keys, raw private data, or large copied text.
+
+Return JSON only. The JSON must match the provided schema exactly."""
 
 
 def extract_memory_actions(
     *,
-    intent: MemoryIntentDecision,
-    messages_delta: list[dict[str, Any]],
+    segment: MemoryConversationSegment,
     related_memories: MemoryContextPack,
     model: object | None = None,
 ) -> MemoryExtractionDecision:
@@ -32,19 +44,37 @@ def extract_memory_actions(
     )
     if settings.max_tokens is not None:
         structured = structured.bind(max_tokens=settings.max_tokens)
-    return structured.invoke(
-        [
-            SystemMessage(content=MEMORY_EXTRACTION_SYSTEM),
-            HumanMessage(
-                content=json.dumps(
-                    {
-                        "intent": intent.model_dump(mode="json"),
-                        "messages_delta": messages_delta,
-                        "related_memories": related_memories.model_dump(mode="json"),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
+    messages = [
+        SystemMessage(content=MEMORY_EXTRACTION_SYSTEM),
+        HumanMessage(
+            content=json.dumps(
+                {
+                    "conversation_segment": segment.model_dump(mode="json"),
+                    "related_memories": related_memories.model_dump(mode="json"),
+                    "output_json_schema": MemoryExtractionDecision.model_json_schema(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        ),
+    ]
+    last_error: Exception | None = None
+    for attempt in range(1, MEMORY_EXTRACTION_MAX_ATTEMPTS + 1):
+        try:
+            return structured.invoke(messages)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= MEMORY_EXTRACTION_MAX_ATTEMPTS:
+                break
+            messages.append(
+                HumanMessage(
+                    content=(
+                        "The previous memory extraction output failed validation.\n"
+                        "Regenerate the full JSON only, obeying every schema constraint.\n"
+                        f"Validation observation from attempt {attempt}/{MEMORY_EXTRACTION_MAX_ATTEMPTS}:\n"
+                        f"{type(exc).__name__}: {exc}\n\n"
+                        f"Output JSON schema:\n{json.dumps(MemoryExtractionDecision.model_json_schema(), ensure_ascii=False)}"
+                    )
                 )
-            ),
-        ]
-    )
+            )
+    raise last_error or RuntimeError("memory extraction did not return a result")

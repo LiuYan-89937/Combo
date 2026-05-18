@@ -28,6 +28,7 @@ from agent_factory.factory_graph.schemas import (
     PackageMaterializationValidationReport,
 )
 from agent_factory.factory_graph.state import FactoryGraphState
+from agent_factory.memory_system.config import default_agent_memory_config
 from agent_factory.prompts import PromptId, output_json_schema
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, validate_render_manifest
 from agent_factory.runtime_kernel.patterns import PatternRegistry
@@ -364,31 +365,7 @@ def _default_agent_memory_store_config() -> dict[str, str]:
 
 
 def _default_agent_memory_system_config() -> dict[str, Any]:
-    return {
-        "version": "memory_system.v0",
-        "enabled": True,
-        "write_enabled": True,
-        "injection_enabled": True,
-        "store": _default_agent_memory_store_config(),
-        "ranking": {
-            "max_items_total": 8,
-            "max_tokens_total": 1200,
-            "min_score": 0.55,
-            "per_kind_limits": {
-                "constraint": 3,
-                "preference": 3,
-                "decision": 2,
-                "fact": 2,
-                "artifact": 1,
-            },
-        },
-        "background": {
-            "journal_root": ".agent_runtime/memory/jobs",
-            "max_pending_jobs": 32,
-            "concurrency": 1,
-            "queue_full_policy": "reject_new_when_full",
-        },
-    }
+    return default_agent_memory_config().model_dump(mode="json")
 
 
 def _binding_contract_errors(spec: AgentAssemblySpec, state: FactoryGraphState) -> list[str]:

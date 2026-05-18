@@ -12,9 +12,9 @@ from langgraph.store.base import BaseStore
 
 from agent_factory.memory_system.config import MemorySystemConfig
 from agent_factory.memory_system.extraction import extract_memory_actions
-from agent_factory.memory_system.intent import detect_memory_intent
 from agent_factory.memory_system.retrieval import retrieve_memory_context
-from agent_factory.memory_system.schema import MemoryWriteJob, MemoryWriteReport
+from agent_factory.memory_system.segment import segment_query_text
+from agent_factory.memory_system.schema import MemoryConversationMessage, MemoryWriteJob, MemoryWriteReport
 from agent_factory.memory_system.writer import MemoryStoreWriter
 
 
@@ -70,13 +70,11 @@ class MemoryBackgroundWorker:
         store: BaseStore,
         config: MemorySystemConfig,
         event_sink: MemoryEventSink | None = None,
-        intent_model: object | None = None,
         extraction_model: object | None = None,
     ) -> None:
         self.store = store
         self.config = config
         self.event_sink = event_sink or (lambda _event_type, _payload: None)
-        self.intent_model = intent_model
         self.extraction_model = extraction_model
         self.journal = MemoryJobJournal(config.background.journal_root)
         self.queue: Queue[MemoryWriteJob] = Queue(maxsize=config.background.max_pending_jobs)
@@ -123,7 +121,9 @@ class MemoryBackgroundWorker:
         for record in self.journal.pending_records():
             try:
                 job = MemoryWriteJob.model_validate(record.get("job") or {})
-                job.messages_delta = message_loader(record)
+                job.segment.messages = [
+                    MemoryConversationMessage.model_validate(message) for message in message_loader(record)
+                ]
                 reports.append(self.enqueue(job))
             except Exception as exc:
                 job_id = str((record.get("job") or {}).get("job_id") or "unknown")
@@ -147,17 +147,8 @@ class MemoryBackgroundWorker:
     def _process(self, job: MemoryWriteJob) -> MemoryWriteReport:
         started = perf_counter()
         try:
-            intent = detect_memory_intent(messages_delta=job.messages_delta, model=self.intent_model)
-            self.event_sink(
-                "memory_intent_detected",
-                {
-                    "job_id": job.job_id,
-                    "namespace": list(job.namespace),
-                    "intent": intent.intent,
-                    "confidence": intent.confidence,
-                },
-            )
-            if intent.intent == "none" or intent.confidence < 0.5:
+            segment = job.segment
+            if not segment.messages:
                 return MemoryWriteReport(
                     job_id=job.job_id,
                     status="noop",
@@ -165,15 +156,26 @@ class MemoryBackgroundWorker:
                     action_counts={"noop": 1},
                     duration_ms=int((perf_counter() - started) * 1000),
                 )
+            self.event_sink(
+                "memory_segment_prepared",
+                {
+                    "job_id": job.job_id,
+                    "namespace": list(job.namespace),
+                    "segment_id": segment.segment_id,
+                    "start_turn": segment.start_turn,
+                    "end_turn": segment.end_turn,
+                    "message_count": len(segment.messages),
+                },
+            )
+            query = segment_query_text(segment)
             related = retrieve_memory_context(
                 store=self.store,
                 namespace=job.namespace,
-                query=intent.target_text or _messages_text(job.messages_delta),
+                query=query,
                 config=self.config,
             )
             extraction = extract_memory_actions(
-                intent=intent,
-                messages_delta=job.messages_delta,
+                segment=segment,
                 related_memories=related,
                 model=self.extraction_model,
             )
@@ -184,6 +186,7 @@ class MemoryBackgroundWorker:
                     "namespace": list(job.namespace),
                     "status": extraction.status,
                     "action_count": len(extraction.actions),
+                    "segment_id": segment.segment_id,
                 },
             )
             if extraction.status != "complete":
@@ -207,11 +210,5 @@ class MemoryBackgroundWorker:
 
 def _safe_report(report: MemoryWriteReport) -> dict:
     return report.model_dump(mode="json")
-
-
-def _messages_text(messages_delta: list[dict]) -> str:
-    return "\n".join(str(item.get("content") or "") for item in messages_delta if item.get("content"))
-
-
 def _now() -> str:
     return datetime.now(UTC).isoformat()

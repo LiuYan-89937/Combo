@@ -188,6 +188,57 @@ describe('RuntimeStore', () => {
 		expect(snapshot.toolActivities).toHaveLength(1);
 		expect(snapshot.toolActivities[0]?.approvalState).toBe('trusted');
 	});
+
+	it('shows a transient memory write hint when cross-session memory is queued', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('memory_write_queued', {
+			payload: {
+				job_id: 'memory-job-1',
+				namespace: ['memory', 'factory', 'default']
+			}
+		}));
+
+		expect(store.getSnapshot().memoryActivity.status).toBe('writing');
+		expect(store.getSnapshot().memoryActivity.label).toContain('后台写入中');
+		expect(store.getSnapshot().memoryActivity.jobId).toBe('memory-job-1');
+
+		vi.advanceTimersByTime(7999);
+		expect(store.getSnapshot().memoryActivity.status).toBe('writing');
+
+		vi.advanceTimersByTime(1);
+		expect(store.getSnapshot().memoryActivity.status).toBe('idle');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
+
+	it('briefly shows completion when memory write finishes', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('memory_write_queued', {
+			payload: {job_id: 'memory-job-1'}
+		}));
+		store.dispatch(event('memory_write_completed', {
+			timestamp: '2026-05-17T00:00:01Z',
+			payload: {
+				job_id: 'memory-job-1',
+				status: 'completed',
+				action_counts: {add: 1}
+			}
+		}));
+
+		expect(store.getSnapshot().memoryActivity.status).toBe('completed');
+		expect(store.getSnapshot().memoryActivity.label).toContain('已更新');
+
+		vi.advanceTimersByTime(3000);
+		expect(store.getSnapshot().memoryActivity.status).toBe('idle');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
 });
 
 function event(

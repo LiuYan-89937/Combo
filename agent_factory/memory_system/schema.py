@@ -4,29 +4,43 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 MemoryScope = Literal["factory", "agent", "user"]
 MemoryKind = Literal["fact", "preference", "decision", "constraint", "artifact"]
-MemoryIntent = Literal["explicit_remember", "explicit_forget", "explicit_update", "none"]
+MemoryType = Literal["semantic", "episodic", "procedural"]
 MemoryExtractionActionType = Literal["add", "update", "delete", "noop"]
 MemoryWriteStatus = Literal["queued", "queued_failed", "completed", "failed", "noop"]
 
 
-class MemoryIntentDecision(BaseModel):
+class MemoryConversationMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    intent: MemoryIntent
-    confidence: float = Field(ge=0.0, le=1.0)
-    target_text: str = ""
-    reason: str = ""
+    role: Literal["user", "assistant"]
+    content: str
+    turn_index: int | None = None
+    message_index: int = Field(ge=0)
+
+
+class MemoryConversationSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    segment_id: str = Field(default_factory=lambda: uuid4().hex)
+    scope: MemoryScope
+    namespace: tuple[str, ...]
+    start_turn: int = Field(ge=1)
+    end_turn: int = Field(ge=1)
+    messages: list[MemoryConversationMessage] = Field(default_factory=list, max_length=64)
+    source: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class MemoryExtractionAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: MemoryExtractionActionType
+    memory_type: MemoryType | None = None
     kind: MemoryKind | None = None
     content: str = ""
     reason: str = ""
@@ -48,6 +62,7 @@ class MemoryContextItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memory_id: str
+    memory_type: MemoryType = "semantic"
     kind: MemoryKind
     content: str
     score: float = Field(ge=0.0, le=1.0)
@@ -74,13 +89,22 @@ class MemoryWriteJob(BaseModel):
     scope: MemoryScope
     namespace: tuple[str, ...]
     source: dict[str, Any] = Field(default_factory=dict)
-    message_range: dict[str, int] = Field(default_factory=dict)
-    messages_delta: list[dict[str, Any]] = Field(default_factory=list)
+    segment: MemoryConversationSegment
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    @model_validator(mode="after")
+    def _segment_matches_job(self) -> "MemoryWriteJob":
+        if self.segment.scope != self.scope:
+            raise ValueError("segment scope must match job scope")
+        if tuple(self.segment.namespace) != tuple(self.namespace):
+            raise ValueError("segment namespace must match job namespace")
+        return self
 
     def journal_payload(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
-        payload.pop("messages_delta", None)
+        segment = dict(payload.get("segment") or {})
+        segment["messages"] = []
+        payload["segment"] = segment
         return payload
 
 

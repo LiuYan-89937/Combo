@@ -65,6 +65,7 @@ class MemoryStoreWriter:
             value = dict(existing.value or {})
             value["content"] = action.content or str(value.get("content") or "")
             value["kind"] = action.kind or str(value.get("kind") or "fact")
+            value["memory_type"] = action.memory_type or str(value.get("memory_type") or _default_memory_type(value["kind"]))
             value["metadata"] = {**dict(value.get("metadata") or {}), **_metadata(action)}
             value["updated_at"] = datetime.now(UTC).isoformat()
             self.store.put(job.namespace, action.merge_target_id, value)
@@ -80,6 +81,7 @@ class MemoryStoreWriter:
                 "memory_id": memory_id,
                 "scope": job.scope,
                 "kind": action.kind,
+                "memory_type": action.memory_type or _default_memory_type(action.kind),
                 "content": action.content.strip(),
                 "metadata": _metadata(action),
                 "source": job.source,
@@ -98,3 +100,9 @@ def _metadata(action: MemoryExtractionAction) -> dict[str, Any]:
         "confidence": action.confidence,
         "reason": action.reason,
     }
+
+
+def _default_memory_type(kind: str | None) -> str:
+    if kind in {"decision", "constraint", "fact", "preference", "artifact"}:
+        return "semantic"
+    return "episodic"

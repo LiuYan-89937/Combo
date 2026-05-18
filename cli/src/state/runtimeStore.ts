@@ -70,6 +70,17 @@ export type ToolActivity = {
 	payload: Record<string, unknown>;
 };
 
+export type MemoryActivityStatus = 'idle' | 'writing' | 'completed' | 'failed';
+
+export type MemoryActivity = {
+	status: MemoryActivityStatus;
+	label: string;
+	detail: string | null;
+	jobId: string | null;
+	namespace: string | null;
+	updatedAt: string | null;
+};
+
 export type SpanRecord = {
 	spanId: string;
 	parentSpanId: string | null;
@@ -112,6 +123,7 @@ export type RuntimeState = {
 	recentActivities: RunActivity[];
 	modelStreams: Record<string, ModelStream>;
 	toolActivities: ToolActivity[];
+	memoryActivity: MemoryActivity;
 	debugEvents: FactoryEvent[];
 	pendingInterrupt: FactoryEvent | null;
 	currentRunId: string | null;
@@ -131,42 +143,46 @@ export type RuntimeAction =
 	| {ui_type: 'set_session_picker_open'; open: boolean}
 	| {ui_type: 'local_user_message'; message: string}
 	| {ui_type: 'interrupt_response_submitted'; message: string}
+	| {ui_type: 'clear_memory_activity'; updatedAt: string | null}
 	| {ui_type: 'show_help'}
 	| {ui_type: 'notice'; message: string};
 
 const STREAM_FLUSH_MS = 33;
+const ACTIVE_MEMORY_HINT_MS = 8000;
+const TERMINAL_MEMORY_HINT_MS = 3000;
 
 export function createInitialRuntimeState(): RuntimeState {
 	return {
-	ready: false,
-	mode: null,
-	sessionId: null,
-	sessionTitle: null,
-	sessions: [],
-	sessionPickerOpen: false,
-	logs: [],
-	transcript: [],
-	events: [],
-	spans: {},
-	stageStatuses: {},
-	nodeStatuses: {},
-	currentStageId: null,
-	currentNodeId: null,
-	recentActivities: [],
-	modelStreams: {},
-	toolActivities: [],
-	debugEvents: [],
-	pendingInterrupt: null,
-	currentRunId: null,
-	runStatus: 'idle',
-	helpVisible: true,
-	showState: false,
-	showMessages: true,
-	toolGrep: '',
-	stopAfterStage: 'assembly_spec_generation',
-	lastError: null,
-	errors: []
-};
+		ready: false,
+		mode: null,
+		sessionId: null,
+		sessionTitle: null,
+		sessions: [],
+		sessionPickerOpen: false,
+		logs: [],
+		transcript: [],
+		events: [],
+		spans: {},
+		stageStatuses: {},
+		nodeStatuses: {},
+		currentStageId: null,
+		currentNodeId: null,
+		recentActivities: [],
+		modelStreams: {},
+		toolActivities: [],
+		memoryActivity: idleMemoryActivity(),
+		debugEvents: [],
+		pendingInterrupt: null,
+		currentRunId: null,
+		runStatus: 'idle',
+		helpVisible: true,
+		showState: false,
+		showMessages: true,
+		toolGrep: '',
+		stopAfterStage: 'assembly_spec_generation',
+		lastError: null,
+		errors: []
+	};
 }
 
 export class RuntimeStore {
@@ -174,6 +190,7 @@ export class RuntimeStore {
 	private readonly listeners = new Set<() => void>();
 	private pendingStreamEvents: FactoryEvent[] = [];
 	private streamTimer: ReturnType<typeof setTimeout> | null = null;
+	private memoryActivityTimer: ReturnType<typeof setTimeout> | null = null;
 
 	getSnapshot = (): RuntimeState => this.state;
 
@@ -194,6 +211,12 @@ export class RuntimeStore {
 			this.flushStreamEvents();
 		}
 		this.state = reduceRuntimeAction(this.state, action);
+		if ('event_type' in action && isMemoryWriteEvent(action.event_type)) {
+			this.scheduleMemoryActivityClear(
+				this.state.memoryActivity.updatedAt,
+				isTerminalMemoryEvent(action.event_type) ? TERMINAL_MEMORY_HINT_MS : ACTIVE_MEMORY_HINT_MS
+			);
+		}
 		this.notify();
 	};
 
@@ -201,6 +224,10 @@ export class RuntimeStore {
 		if (this.streamTimer) {
 			clearTimeout(this.streamTimer);
 			this.streamTimer = null;
+		}
+		if (this.memoryActivityTimer) {
+			clearTimeout(this.memoryActivityTimer);
+			this.memoryActivityTimer = null;
 		}
 		this.pendingStreamEvents = [];
 		this.listeners.clear();
@@ -233,6 +260,16 @@ export class RuntimeStore {
 		for (const listener of this.listeners) {
 			listener();
 		}
+	}
+
+	private scheduleMemoryActivityClear(updatedAt: string | null, delayMs: number): void {
+		if (this.memoryActivityTimer) {
+			clearTimeout(this.memoryActivityTimer);
+		}
+		this.memoryActivityTimer = setTimeout(() => {
+			this.memoryActivityTimer = null;
+			this.dispatch({ui_type: 'clear_memory_activity', updatedAt});
+		}, delayMs);
 	}
 }
 
@@ -267,6 +304,9 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 			title: 'Interrupt Response',
 			content: action.message
 		});
+	}
+	if (action.ui_type === 'clear_memory_activity') {
+		return state.memoryActivity.updatedAt === action.updatedAt ? {...state, memoryActivity: idleMemoryActivity()} : state;
 	}
 	if (action.ui_type === 'show_help') {
 		return {...state, helpVisible: true};
@@ -373,6 +413,13 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				toolActivities: applyToolApprovalResolution(base.toolActivities, event)
 			};
+		case 'memory_write_queued':
+		case 'memory_write_queued_failed':
+		case 'memory_segment_prepared':
+		case 'memory_extraction_completed':
+		case 'memory_write_completed':
+		case 'memory_write_failed':
+			return {...base, memoryActivity: memoryActivityForEvent(event)};
 		case 'debug_patch':
 			return {...base, debugEvents: [...base.debugEvents.slice(-30), event]};
 		case 'node_started':
@@ -901,6 +948,112 @@ function colorForEvent(eventType: string): ActivityColor {
 	return 'blue';
 }
 
+function idleMemoryActivity(): MemoryActivity {
+	return {
+		status: 'idle',
+		label: '',
+		detail: null,
+		jobId: null,
+		namespace: null,
+		updatedAt: null
+	};
+}
+
+function memoryActivityForEvent(event: FactoryEvent): MemoryActivity {
+	const payload = event.payload ?? {};
+	const jobId = stringValue(payload.job_id) || null;
+	const namespace = memoryNamespaceLabel(payload.namespace);
+	const status = memoryActivityStatusForEvent(event.event_type);
+	const label = memoryActivityLabelForEvent(event.event_type, payload);
+	const detail = memoryActivityDetail(payload);
+	return {
+		status,
+		label,
+		detail,
+		jobId,
+		namespace,
+		updatedAt: event.timestamp
+	};
+}
+
+function memoryActivityStatusForEvent(eventType: FactoryEvent['event_type']): MemoryActivityStatus {
+	if (eventType === 'memory_write_queued_failed' || eventType === 'memory_write_failed') {
+		return 'failed';
+	}
+	if (eventType === 'memory_write_completed') {
+		return 'completed';
+	}
+	return 'writing';
+}
+
+function memoryActivityLabelForEvent(eventType: FactoryEvent['event_type'], payload: Record<string, unknown>): string {
+	if (eventType === 'memory_write_queued') {
+		return '跨会话记忆后台写入中';
+	}
+	if (eventType === 'memory_segment_prepared') {
+		return '跨会话记忆片段整理中';
+	}
+	if (eventType === 'memory_extraction_completed') {
+		return '跨会话记忆整理中';
+	}
+	if (eventType === 'memory_write_completed') {
+		const status = stringValue(payload.status);
+		return status === 'noop' ? '跨会话记忆无需更新' : '跨会话记忆已更新';
+	}
+	if (eventType === 'memory_write_queued_failed') {
+		return '跨会话记忆未入队';
+	}
+	if (eventType === 'memory_write_failed') {
+		return '跨会话记忆写入失败';
+	}
+	return '跨会话记忆处理中';
+}
+
+function memoryActivityDetail(payload: Record<string, unknown>): string | null {
+	const error = stringValue(payload.error);
+	if (error) {
+		return error;
+	}
+	const intent = stringValue(payload.intent);
+	if (intent) {
+		return `intent=${intent}`;
+	}
+	const actionCount = numberValue(payload.action_count);
+	if (actionCount !== null) {
+		return `actions=${actionCount}`;
+	}
+	const reportStatus = stringValue(payload.status);
+	if (reportStatus && reportStatus !== 'queued') {
+		return reportStatus;
+	}
+	const jobId = stringValue(payload.job_id);
+	return jobId ? shortValue(jobId, 10) : null;
+}
+
+function memoryNamespaceLabel(value: unknown): string | null {
+	if (Array.isArray(value)) {
+		const text = value.map(item => String(item)).filter(Boolean).join('/');
+		return text ? shortValue(text, 42) : null;
+	}
+	const text = stringValue(value);
+	return text ? shortValue(text, 42) : null;
+}
+
+function isMemoryWriteEvent(eventType: FactoryEvent['event_type']): boolean {
+	return [
+		'memory_write_queued',
+		'memory_write_queued_failed',
+		'memory_segment_prepared',
+		'memory_extraction_completed',
+		'memory_write_completed',
+		'memory_write_failed'
+	].includes(eventType);
+}
+
+function isTerminalMemoryEvent(eventType: FactoryEvent['event_type']): boolean {
+	return ['memory_write_queued_failed', 'memory_write_completed', 'memory_write_failed'].includes(eventType);
+}
+
 function approvalState(payload: Record<string, unknown>): ToolActivity['approvalState'] {
 	const action = stringValue(payload.action);
 	const approved = payload.approved;
@@ -1210,6 +1363,10 @@ function sessionTitle(session: Record<string, unknown>): string | null {
 	const displayTitle = stringValue(session.display_title);
 	const firstUserInput = stringValue(session.first_user_input);
 	return displayTitle || firstUserInput || null;
+}
+
+function shortValue(value: string, limit: number): string {
+	return value.length > limit ? `${value.slice(0, limit)}...` : value;
 }
 
 function stringValue(value: unknown): string {

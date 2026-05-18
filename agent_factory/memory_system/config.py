@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +31,21 @@ class MemoryRankingConfig(BaseModel):
     )
 
 
+class MemorySemanticIndexConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    fields: list[str] = Field(
+        default_factory=lambda: [
+            "content",
+            "metadata.evidence_summary",
+            "metadata.keywords",
+            "metadata.entities",
+            "metadata.embedding_text",
+        ]
+    )
+
+
 class MemoryBackgroundConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -37,6 +53,7 @@ class MemoryBackgroundConfig(BaseModel):
     max_pending_jobs: int = Field(default=32, ge=1, le=256)
     concurrency: int = Field(default=1, ge=1, le=1)
     queue_full_policy: Literal["reject_new_when_full"] = "reject_new_when_full"
+    write_interval_turns: int = Field(default=3, ge=1, le=1000)
 
 
 class MemorySystemConfig(BaseModel):
@@ -48,11 +65,21 @@ class MemorySystemConfig(BaseModel):
     injection_enabled: bool = True
     store: MemoryStoreRuntimeConfig = Field(default_factory=MemoryStoreRuntimeConfig)
     ranking: MemoryRankingConfig = Field(default_factory=MemoryRankingConfig)
+    semantic_index: MemorySemanticIndexConfig = Field(default_factory=MemorySemanticIndexConfig)
     background: MemoryBackgroundConfig = Field(default_factory=MemoryBackgroundConfig)
 
 
 def default_agent_memory_config() -> MemorySystemConfig:
-    return MemorySystemConfig()
+    config = MemorySystemConfig()
+    return config.model_copy(
+        update={
+            "background": config.background.model_copy(
+                update={"write_interval_turns": memory_write_interval_turns_from_env()}
+            ),
+            "semantic_index": memory_semantic_index_config_from_env(),
+        },
+        deep=True,
+    )
 
 
 def default_factory_memory_config(project_root: str | Path = ".") -> MemorySystemConfig:
@@ -64,5 +91,59 @@ def default_factory_memory_config(project_root: str | Path = ".") -> MemorySyste
         ),
         background=MemoryBackgroundConfig(
             journal_root=str(root / ".agentfactory/memory/jobs"),
+            write_interval_turns=memory_write_interval_turns_from_env(),
+        ),
+        semantic_index=memory_semantic_index_config_from_env(),
+    )
+
+
+def memory_write_interval_turns_from_env() -> int:
+    raw = os.getenv("AGENTFACTORY_MEMORY_WRITE_INTERVAL_TURNS", "3")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    return max(1, value)
+
+
+def should_enqueue_memory_write(*, turn_index: int, config: MemorySystemConfig) -> bool:
+    interval = max(1, int(config.background.write_interval_turns))
+    if turn_index <= 0:
+        return False
+    return turn_index % interval == 0
+
+
+def memory_semantic_index_config_from_env() -> MemorySemanticIndexConfig:
+    return MemorySemanticIndexConfig(
+        enabled=_env_bool("AGENTFACTORY_MEMORY_SEMANTIC_INDEX_ENABLED", default=False),
+        fields=_env_csv(
+            "AGENTFACTORY_MEMORY_INDEX_FIELDS",
+            default=[
+                "content",
+                "metadata.evidence_summary",
+                "metadata.keywords",
+                "metadata.entities",
+                "metadata.embedding_text",
+            ],
         ),
     )
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _env_csv(name: str, *, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return list(default)
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    return values or list(default)

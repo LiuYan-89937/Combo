@@ -11,7 +11,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from agent_factory.tooling import get_factory_model_tools, get_factory_tools
-from agent_factory.factory_graph.prompt_context import prompt_context_values
+from agent_factory.factory_graph.model_call import prompt_values
 from agent_factory.factory_graph.session import build_factory_checkpointer
 from agent_factory.models import get_task_model, get_task_model_settings
 from agent_factory.prompts import PromptId, get_prompt
@@ -59,7 +59,7 @@ def _chat_model_node(state: FactoryChatState) -> dict[str, Any]:
         return _model_error("task model is not configured")
     try:
         prompt_value = get_prompt(PromptId.FACTORY_CHAT).invoke(
-            {**prompt_context_values("factory_chat"), "messages": state.get("messages", [])}
+            prompt_values("factory_chat", {"messages": state.get("messages", [])})
         )
         model_tools = get_factory_model_tools()
         chat_model = task_model.bind_tools(model_tools) if model_tools else task_model

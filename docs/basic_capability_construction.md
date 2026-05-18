@@ -1,10 +1,10 @@
 # Basic System Construction
 
-本文档记录 FastAgentFactory 的四类基础系统建设状态与后续重构边界。
+本文档记录 FastAgentFactory 的基础能力系统与运行基础设施建设状态。
 
-这里不再引入统一的 `Capability` 总外壳，也不强行要求四类系统共享同一种 registry、compiler 或 schema 形态。四类系统数量不多，可以各自拥有适合自身语义的架构。
+这里不再引入统一的 `Capability` 总外壳，也不强行要求所有系统共享同一种 registry、compiler 或 schema 形态。系统数量不多，可以各自拥有适合自身语义的架构。
 
-当前只确认四类基础系统：
+当前确认六类基础系统，其中工具、记忆、知识、定时任务偏能力接入，Trace 与上下文管理偏运行基础设施：
 
 | 系统 | 当前状态 |
 | --- | --- |
@@ -12,11 +12,13 @@
 | 记忆系统 | 已形成 LangGraph 原生规范：会话内 messages/checkpointer，跨会话 BaseStore。 |
 | 知识系统 | 有 RuntimeKernel 实现迹象，但未形成统一规范。 |
 | 定时任务系统 | 暂未看到项目内正式实现。 |
+| Trace 系统 | 目前只有事件流、debug patch、render 事件等分散能力，尚未形成独立 trace 模块。 |
+| 上下文管理系统 | RuntimeKernel 有 ContextEngine 迹象，Factory prompt context 也已存在，但尚未形成统一上下文工程。 |
 
 本文档的作用：
 
 - 总结当前工具系统现状。
-- 列出记忆、知识、定时任务在当前项目里的实现线索。
+- 列出记忆、知识、定时任务、Trace、上下文管理在当前项目里的实现线索。
 - 为后续清理 Factory 与 RuntimeKernel 的规范边界提供索引。
 - 避免为了设计而设计，先按真实系统需要逐步成型。
 
@@ -24,7 +26,7 @@
 
 ## 1. 总原则
 
-四类系统可以有不同架构，但必须遵守几条工程边界。
+各系统可以有不同架构，但必须遵守几条工程边界。
 
 ### 1.1 Factory 与生成 Agent 共用规范，不共用运行数据
 
@@ -62,13 +64,13 @@ Factory 阶段产物
   -> AgentInstance 运行时加载
 ```
 
-四类系统怎么编译可以不同，但都必须有明确入口，而不是散落在节点代码、prompt、工具函数里。
+各系统怎么编译可以不同，但都必须有明确入口，而不是散落在节点代码、prompt、工具函数里。
 
 ### 1.4 当前文档只记录系统层级，不预设总抽象
 
 当前不定义统一的 `CapabilitySpec`。
 
-后续如果某一类系统自然长出稳定 schema，就在该系统内部定义；如果四类系统后来真的出现公共字段，再抽取公共基础类型。现在不提前抽象。
+后续如果某一类系统自然长出稳定 schema，就在该系统内部定义；如果多个系统后来真的出现公共字段，再抽取公共基础类型。现在不提前抽象。
 
 ---
 
@@ -391,7 +393,7 @@ agent_factory/memory_system/
   schema.py
   config.py
   namespace.py
-  intent.py
+  segment.py
   retrieval.py
   ranking.py
   extraction.py
@@ -464,6 +466,30 @@ AGENTFACTORY_MEMORY_STORE_PATH=.agentfactory/memory/factory.sqlite
 
 Factory 与生产出来的 Agent 使用同一套 BaseStore 规范，但 session、checkpoint、store 文件和 namespace 必须隔离。
 
+跨会话记忆召回按 LangGraph Store 思想实现。Embedding 不作为独立 vector memory API 暴露，而是作为 BaseStore 的可选 semantic index 配置：
+
+```text
+AGENTFACTORY_MEMORY_SEMANTIC_INDEX_ENABLED=true
+AGENTFACTORY_EMBEDDING_PROVIDER=openai_compatible
+AGENTFACTORY_EMBEDDING_BASE_URL=
+AGENTFACTORY_EMBEDDING_API_KEY=
+AGENTFACTORY_EMBEDDING_MODEL=
+AGENTFACTORY_EMBEDDING_DIMS=1536
+AGENTFACTORY_MEMORY_INDEX_FIELDS=content,metadata.evidence_summary,metadata.keywords,metadata.entities,metadata.embedding_text
+```
+
+读取链路使用 Hybrid Retrieval：
+
+```text
+BaseStore.search(namespace, query=...)
+  + BaseStore.search(namespace, query=None)
+  -> merge candidates
+  -> ranking / kind quota / token budget
+  -> MemoryContextPack
+```
+
+支持 semantic index 的 store 负责语义召回；不支持 semantic index 的 store 仍然走同一 `BaseStore.search` 接口，并退化为文本/后端默认检索。上层记忆系统不感知具体后端是 `InMemoryStore`、SQLite 过渡实现、PostgresStore，还是后续自定义 BaseStore。
+
 ### 3.3 跨会话写入
 
 跨会话写入是 eventual consistency，不能阻塞主对话。
@@ -480,9 +506,9 @@ after_run
 
 ```text
 MemoryBackgroundWorker
-  -> taskModel intent detection
+  -> build conversation segment
   -> retrieve related memories
-  -> taskModel extraction
+  -> taskModel extraction and classification
   -> validate add/update/delete/noop
   -> write BaseStore
   -> write job journal
@@ -490,11 +516,17 @@ MemoryBackgroundWorker
 
 原则：
 
-- `taskModel` 是唯一显式记忆意图识别入口，不保留关键词硬规则。
+- 写入触发后先生成 `MemoryConversationSegment`，不是只看最后一句用户输入。
+- `taskModel` 直接从 segment 中提取候选记忆，不再设置单独的显式意图识别闸门。
+- 提取类型分为 `semantic / episodic / procedural`：
+  - `semantic`：长期事实、偏好、约束、决策和 artifact 引用。
+  - `episodic`：值得后续召回的重要会话事件或结果。
+  - `procedural`：可复用的工作方式、流程、命令或项目操作规范。
 - 提取动作只允许 `add / update / delete / noop`。
+- `update / delete` 必须引用已召回记忆的 `merge_target_id`。
 - 写入失败不生成伪记忆。
 - queue 满时返回 `memory_write_queued_failed`，不阻塞主对话。
-- job journal 只保存任务定位和 message range，不保存完整消息正文。
+- job journal 只保存任务定位和 segment range，不保存完整消息正文。
 
 默认队列：
 
@@ -502,6 +534,26 @@ MemoryBackgroundWorker
 max_pending_jobs = 32
 concurrency = 1
 queue_full_policy = reject_new_when_full
+write_interval_turns = 3
+```
+
+写入触发间隔由环境变量控制：
+
+```text
+AGENTFACTORY_MEMORY_WRITE_INTERVAL_TURNS=3
+```
+
+语义是“每成功完成 N 轮对话才尝试入队一次长期记忆判断”。默认 3 轮。未到间隔时不入队，也不会产生 job journal。
+
+到达间隔后，后台写入使用最近 N 轮成功对话构造 segment：
+
+```text
+成功对话累计到 N 轮
+  -> 构造最近 N 轮 user/assistant conversation segment
+  -> BaseStore 检索相关旧记忆
+  -> taskModel 提取 semantic / episodic / procedural candidates
+  -> 去重 / 更新 / 删除 / noop
+  -> 写 BaseStore
 ```
 
 job journal：
@@ -523,7 +575,13 @@ SYSTEM_MEMORY_RETRIEVE_WRAPPER
   retrieve -> rank -> inject into runtime.context.model_context.cross_session_memory
 ```
 
-Factory 在模型调用前使用同一套检索、排序和注入 pipeline，把结果作为 `prompt_context.cross_session_memory` 进入提示词上下文。
+Factory 在模型调用前使用同一套检索、排序和注入 pipeline，把结果作为 `prompt_context.cross_session_memory` 进入提示词上下文。`factory_chat` 也必须走这条统一路径；后续 chat/free 模式承担测试模块对话入口时，不能绕过记忆、工具、MCP/Skill 或事件系统。
+
+注入文本必须低噪声：
+
+- 未召回到内容时不注入任何记忆提示。
+- 召回到内容时只注入可用事实列表，不注入“根据跨会话记忆”等来源标签。
+- 模型可以自然参考相关信息，但不应在回答中主动说明信息来源。
 
 注入硬限制：
 
@@ -568,7 +626,7 @@ start MemoryBackgroundWorker
 ```text
 memory_write_queued
 memory_write_queued_failed
-memory_intent_detected
+memory_segment_prepared
 memory_extraction_completed
 memory_write_completed
 memory_write_failed
@@ -684,7 +742,116 @@ Factory 生产链路迹象：
 
 ---
 
-## 6. AgentPackage 当前基础文件建议
+## 6. Trace 系统
+
+Trace 系统需要作为独立运行基础设施处理，不能附属于记忆、工具、CLI 或 render wrapper。
+
+### 6.1 当前实现迹象
+
+当前项目里已有一些分散的观测能力：
+
+| 位置 | 现状 |
+| --- | --- |
+| `agent_factory/factory_graph/frontend_bridge/event_normalizer.py` | 会把 LangGraph stream 归一成前端事件。 |
+| `agent_factory/runtime_render/` | 已有 render wrapper 相关节点生命周期事件。 |
+| `docs/runtime_render_pipeline.md` | 描述了 Factory 与生成 Agent 共用渲染管线。 |
+| `cli/src/state/runtimeStore.ts` | CLI 已按事件订阅渲染运行状态、工具状态、记忆提示。 |
+| `agent_factory/runtime_kernel/state/schema.py` | RuntimeState 中已有 observability 相关状态。 |
+
+这些能力目前更像“事件流与 UI 渲染基础”，还不是完整 Trace 系统。
+
+### 6.2 当前问题
+
+当前缺口：
+
+- 没有统一 trace span 模型。
+- 没有统一 trace 存储位置。
+- 没有 run / stage / node / model / tool / memory / context 的统一生命周期记录。
+- 没有把后台任务 trace 和主对话 trace 关联起来。
+- 没有 trace 查询接口。
+- CLI/WebUI 还不能按 trace id 追踪一次完整运行。
+- 第九、十阶段需要读取 harness / repair trace，但当前 trace 规范还不够稳定。
+
+跨会话记忆当前只发摘要事件，例如 `memory_write_queued`，但后台 worker 的完整执行过程还没有进入统一 trace。这意味着用户能看到“记忆写入已排队”的 UI 提示，但还不能完整追踪 taskModel 如何判断、提取了什么动作、写入是否成功、失败原因在哪里。
+
+### 6.3 后续处理原则
+
+Trace 系统后续应独立成模块，例如：
+
+```text
+agent_factory/trace_system/
+  schema.py
+  recorder.py
+  store.py
+  exporters.py
+  correlation.py
+```
+
+基础边界：
+
+- Factory 与生成 Agent 使用同一套 Trace 事件规范，但 trace 数据隔离。
+- Trace 不写业务 state，不影响图执行语义。
+- Trace 可以记录摘要、计数、错误、耗时、引用，不默认记录完整敏感内容。
+- 后台任务必须能关联到触发它的 `run_id / session_id / thread_id / job_id`。
+- CLI/WebUI 只消费 trace projection，不解析 LangGraph 原始 patch。
+- 第十阶段 repair 读取 trace/report，而不是从 UI 文案反推失败原因。
+
+---
+
+## 7. 上下文管理系统
+
+上下文管理系统也需要作为独立基础设施处理，不能继续散落在 prompt 拼接、记忆注入、knowledge retrieve 或节点策略里。
+
+### 7.1 当前实现迹象
+
+当前项目里已有上下文相关能力：
+
+| 位置 | 现状 |
+| --- | --- |
+| `agent_factory/factory_graph/prompt_context.py` | Factory 阶段模型调用会注入统一运行边界与阶段边界。 |
+| `agent_factory/factory_graph/model_call.py` | Factory 模型调用入口会统一处理 prompt values 与跨会话记忆注入。 |
+| `agent_factory/runtime_kernel/context/engine.py` | RuntimeKernel 有 ContextEngine。 |
+| `agent_factory/runtime_kernel/state/schema.py` | RuntimeState 有 context / model_context 相关结构。 |
+| `agent_factory/memory_system/injection.py` | 跨会话记忆当前注入到 model context，不写入 messages。 |
+
+这些能力目前还没有形成完整上下文系统，只是各模块按各自需要拼装模型输入。
+
+### 7.2 当前问题
+
+当前缺口：
+
+- 没有统一上下文源分类。
+- 没有上下文预算和裁剪的统一策略。
+- 没有明确区分 system / developer / memory / knowledge / tool observation / user message 的注入顺序。
+- 没有上下文压缩、摘要、去重和失效策略。
+- Factory 与生成 Agent 的上下文策略还没有同构编译。
+- `messages` 作为会话内记忆已经确定，但其他上下文源如何进入模型仍需统一。
+
+### 7.3 后续处理原则
+
+上下文管理系统后续应独立成模块，例如：
+
+```text
+agent_factory/context_system/
+  schema.py
+  sources.py
+  assembler.py
+  budget.py
+  compression.py
+  injection.py
+```
+
+基础边界：
+
+- 会话内记忆仍只操作 LangGraph `messages`。
+- 跨会话记忆、知识检索、资源、策略、节点说明都作为上下文源进入 assembler。
+- 上下文系统负责排序、裁剪、去重、压缩、注入位置，不负责记忆写入。
+- Factory 与生成 Agent 使用同一套上下文源分类和预算思想，但数据隔离。
+- 第四阶段可以规划上下文策略名称，第七/八阶段物化配置，RuntimeKernel 编译后执行。
+
+---
+
+## 8. AgentPackage 当前基础文件建议
 
 当前只做方向性记录，不视为最终目录规范。
 
@@ -717,7 +884,7 @@ agent_package/
 
 ---
 
-## 7. 当前结论
+## 9. 当前结论
 
 当前状态：
 
@@ -727,6 +894,8 @@ agent_package/
 | 记忆系统 | 已确定会话内/跨会话两类记忆，以及 read/write 四个标准端口。 |
 | 知识系统 | 有 RuntimeKernel 内部实现迹象，需要后续清理成正式系统。 |
 | 定时任务系统 | 暂无正式实现，先留空。 |
+| Trace 系统 | 当前只有事件流和 render/debug 线索，后续需要独立模块化。 |
+| 上下文管理系统 | 当前有 prompt context 与 Runtime ContextEngine 线索，后续需要统一上下文工程。 |
 
 下一步不应继续抽象总能力系统，而应按系统逐个成熟：
 
@@ -742,4 +911,10 @@ agent_package/
 
 定时任务系统
   -> 暂缓，等前三类稳定后再设计
+
+Trace 系统
+  -> 从现有事件流、render wrapper、debug patch 中抽出统一 trace 规范
+
+上下文管理系统
+  -> 从 prompt_context、ContextEngine、memory/knowledge injection 中抽出统一上下文装配规范
 ```

@@ -24,7 +24,10 @@ from agent_factory.factory_graph.session import (
     is_factory_checkpointer_persistent,
 )
 from agent_factory.memory_system.factory import enqueue_factory_memory_write
+from agent_factory.memory_system.config import memory_write_interval_turns_from_env
+from agent_factory.memory_system.namespace import factory_memory_namespace
 from agent_factory.memory_system.reports import memory_event_payload
+from agent_factory.memory_system.segment import build_conversation_segment
 from agent_factory.tooling import get_factory_base_tool_ids
 
 
@@ -344,9 +347,10 @@ class FactoryRuntimeAdapter:
                     normalizer.emit_debug_event(json_safe(chunk))
                 elif stream_mode == "custom":
                     normalizer.emit_custom_event(json_safe(chunk))
-            if _can_commit_session_messages(final_state):
+            can_commit_messages = _can_commit_session_messages(final_state)
+            if can_commit_messages:
                 self._save_messages(mode, final_state)
-            self._enqueue_factory_memory(normalizer, mode, config, final_state)
+                self._enqueue_factory_memory(normalizer, mode, config, final_state)
             normalizer.emit_run_completed(_summary_payload(final_state, self.options))
         except Exception as exc:
             normalizer.emit_run_failed(exc)
@@ -398,22 +402,29 @@ class FactoryRuntimeAdapter:
     ) -> None:
         if final_state.get("status") in {"failed", "blocked"} or final_state.get("errors"):
             return
-        messages_delta = _memory_messages_delta(final_state.get("messages", []))
-        if not messages_delta:
-            return
         configurable = dict(config.get("configurable") or {})
+        turn_index = _factory_turn_count(self.session_record, mode, fallback_messages=final_state.get("messages", []))
+        source = {
+            "session_id": self._session_id(),
+            "thread_id": configurable.get("thread_id"),
+            "mode": mode,
+            "run_id": final_state.get("factory_run_id") or final_state.get("run_id"),
+            "node_id": final_state.get("current_stage"),
+        }
+        segment = build_conversation_segment(
+            scope="factory",
+            namespace=factory_memory_namespace("default"),
+            source=source,
+            messages=final_state.get("messages", []),
+            end_turn=turn_index,
+            max_turns=memory_write_interval_turns_from_env(),
+        )
+        if segment is None:
+            return
         try:
-            report = enqueue_factory_memory_write(
-                source={
-                    "session_id": self._session_id(),
-                    "thread_id": configurable.get("thread_id"),
-                    "mode": mode,
-                    "run_id": final_state.get("factory_run_id") or final_state.get("run_id"),
-                    "node_id": final_state.get("current_stage"),
-                },
-                message_range={"message_count": len(final_state.get("messages", []) or [])},
-                messages_delta=messages_delta,
-            )
+            report = enqueue_factory_memory_write(segment=segment)
+            if report.status == "noop":
+                return
             event_type = "memory_write_queued" if report.status == "queued" else "memory_write_queued_failed"
             normalizer.emit_custom_event(
                 {
@@ -530,16 +541,17 @@ def _can_commit_session_messages(final_state: dict[str, Any]) -> bool:
     return _has_complete_tool_call_history(messages)
 
 
-def _memory_messages_delta(messages: Any) -> list[dict[str, Any]]:
-    if not isinstance(messages, list):
-        return []
-    delta: list[dict[str, Any]] = []
-    for message in messages[-8:]:
-        if isinstance(message, HumanMessage):
-            delta.append({"role": "user", "content": str(message.content)})
-        elif isinstance(message, AIMessage) and not getattr(message, "tool_calls", None):
-            delta.append({"role": "assistant", "content": str(message.content)})
-    return [item for item in delta if str(item.get("content") or "").strip()]
+def _factory_turn_count(record: Any | None, mode: FactoryMode, *, fallback_messages: Any) -> int:
+    if record is not None:
+        if mode == "chat":
+            count = int(getattr(record, "chat_turn_count", 0) or 0)
+        else:
+            count = int(getattr(record, "create_agent_turn_count", 0) or 0)
+        if count > 0:
+            return count
+    if isinstance(fallback_messages, list):
+        return sum(1 for message in fallback_messages if isinstance(message, HumanMessage))
+    return 0
 
 
 def _has_complete_tool_call_history(messages: list[Any]) -> bool:
