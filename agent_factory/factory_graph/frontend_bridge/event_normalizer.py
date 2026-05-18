@@ -154,6 +154,9 @@ class RuntimeEventNormalizer:
         if chunk.get("type") == "tool_activity":
             self._emit_custom_tool_activity(chunk.get("payload") or {})
             return
+        if chunk.get("type") == "memory_event":
+            self._emit_memory_event(chunk.get("payload") or {})
+            return
         if chunk.get("type") != "model_activity":
             self.runtime_event(
                 "debug_patch",
@@ -174,6 +177,29 @@ class RuntimeEventNormalizer:
             span_id=span_id,
             parent_span_id=self.run_span_id,
             payload={key: value for key, value in json_safe(payload).items() if key not in {"event_type", "span_id"}},
+        )
+
+    def _emit_memory_event(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        event_type = str(payload.get("event_type") or "")
+        if event_type not in {
+            "memory_write_queued",
+            "memory_write_queued_failed",
+            "memory_intent_detected",
+            "memory_extraction_completed",
+            "memory_write_completed",
+            "memory_write_failed",
+            "memory_retrieval_completed",
+            "memory_injection_completed",
+        }:
+            return
+        self.runtime_event(
+            event_type,  # type: ignore[arg-type]
+            stage_id=self.current_stage_id,
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self.run_span_id,
+            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
         )
 
     def _emit_runtime_render_event(self, payload: Any) -> None:

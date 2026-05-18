@@ -248,6 +248,10 @@ error
   agent_package.json
   assembly_spec.json
   resources.json
+  session.json
+  memory/
+    config.json
+    store.json
   render_manifest.json
   package_report.json
   bindings/

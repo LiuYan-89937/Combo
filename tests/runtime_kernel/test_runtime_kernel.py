@@ -22,6 +22,7 @@ from agent_factory.runtime_kernel.persistence import (
 from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.state import RuntimeGraphState
+from agent_factory.memory_system import MemorySystemConfig, MemorySystemRuntime
 
 
 class RuntimeKernelMemorySystemTest(unittest.TestCase):
@@ -114,6 +115,23 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
         self.assertEqual(factory_results[0].value["scope"], "factory")
         self.assertEqual(len(agent_results), 1)
         self.assertEqual(agent_results[0].value["scope"], "agent")
+
+    def test_enabled_cross_session_memory_requires_base_store(self) -> None:
+        facade = _runtime_facade()
+        services = RuntimeServices(
+            model_service=ScriptedModelService(),
+            tool_registry=InMemoryToolRegistry(),
+            memory_store=None,
+            memory_system=MemorySystemRuntime(config=MemorySystemConfig(), store=None),
+            knowledge_engine=KnowledgeEngine(),
+            context_engine=ContextEngine(),
+            policy_engine=PolicyEngine(),
+            observability_manager=ObservabilityManager(),
+            checkpointer=LangGraphCheckpointerFactory().build(LangGraphCheckpointerConfig(backend="memory")).saver,
+        )
+
+        with self.assertRaises(RuntimeError):
+            facade.compile(pattern_id="react_agent", bindings=BindingSet(), services=services)
 
 
 def _runtime_services() -> RuntimeServices:

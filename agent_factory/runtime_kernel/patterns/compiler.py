@@ -23,6 +23,7 @@ from agent_factory.runtime_kernel.patterns.schema import (
 from agent_factory.runtime_kernel.patterns.validator import PatternValidator
 from agent_factory.runtime_kernel.state import RuntimeGraphState, RuntimeState, merge_state_patch
 from agent_factory.runtime_kernel.wrappers import DEFAULT_NODE_WRAPPER_REGISTRY, NodeWrapperRegistry
+from agent_factory.runtime_kernel.wrappers.system_memory import SYSTEM_MEMORY_RETRIEVE_WRAPPER
 from agent_factory.runtime_kernel.wrappers.system_render import SYSTEM_RENDER_NODE_WRAPPER
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, default_node_render_spec, validate_render_manifest
 
@@ -230,11 +231,16 @@ def _make_wrapped_runner(
                 services=services,
             )
             active_state = before_state
-            raw_patch = _execute_with_retries(before_state, context, execute)
+            memory_state, _memory_patch = SYSTEM_MEMORY_RETRIEVE_WRAPPER.before(
+                state=before_state,
+                context=context,
+            )
+            active_state = memory_state
+            raw_patch = _execute_with_retries(memory_state, context, execute)
             messages_patch, patch = _split_graph_patch(raw_patch)
             if validate_sections:
                 _validate_patch_sections(node.impl, patch)
-            updated = merge_state_patch(before_state, patch)
+            updated = merge_state_patch(memory_state, patch)
             active_state = updated
             after_state, _after_patch = _run_node_wrappers(
                 phase="after",

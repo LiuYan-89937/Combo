@@ -6,6 +6,13 @@ from agent_factory.runtime_kernel.adapters import (
     InMemoryToolRegistry,
     ScriptedModelService,
 )
+from agent_factory.memory_system import (
+    MemorySystemConfig,
+    default_agent_memory_config,
+    default_agent_runtime,
+)
+from agent_factory.memory_system.background import MemoryBackgroundWorker
+from agent_factory.memory_system.namespace import agent_memory_namespace
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.context import ContextEngine
 from agent_factory.runtime_kernel.execution import ExecutionController
@@ -53,6 +60,7 @@ class RuntimeKernelFacade:
         builtins_dir: str | Path | None = None,
         checkpointer_config: LangGraphCheckpointerConfig | None = None,
         memory_store_config: LangGraphStoreConfig | None = None,
+        memory_system_config: MemorySystemConfig | dict | None = None,
         session_config: AgentSessionConfig | None = None,
     ) -> None:
         builtins_dir = builtins_dir or Path(__file__).resolve().parents[1] / "patterns" / "builtins"
@@ -87,17 +95,33 @@ class RuntimeKernelFacade:
                 path=Path(".agent_runtime/checkpoints/agent.sqlite"),
             )
         ).saver
-        memory_store = LangGraphStoreFactory().build(
-            memory_store_config
-            or LangGraphStoreConfig(
-                backend="sqlite",
-                path=Path(".agent_runtime/memory/agent.sqlite"),
-            )
-        ).store
+        memory_config = (
+            memory_system_config
+            if isinstance(memory_system_config, MemorySystemConfig)
+            else MemorySystemConfig.model_validate(memory_system_config or default_agent_memory_config().model_dump(mode="json"))
+        )
+        resolved_memory_store_config = memory_store_config or LangGraphStoreConfig(
+            backend=memory_config.store.backend,
+            path=Path(memory_config.store.path) if memory_config.store.backend == "sqlite" else None,
+        )
+        memory_store = LangGraphStoreFactory().build(resolved_memory_store_config).store
+        memory_runtime = default_agent_runtime(
+            agent_id="default-agent",
+            config=memory_config,
+            store=memory_store,
+        )
+        if memory_config.write_enabled:
+            try:
+                worker = MemoryBackgroundWorker(store=memory_store, config=memory_config)
+                worker.start()
+                memory_runtime.writer = worker
+            except Exception:
+                memory_runtime.writer = None
         services = RuntimeServices(
             model_service=ScriptedModelService(),
             tool_registry=InMemoryToolRegistry(),
             memory_store=memory_store,
+            memory_system=memory_runtime,
             knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
@@ -126,6 +150,7 @@ class RuntimeKernelFacade:
         bindings = bindings or BindingSet()
         pattern = self.instance.pattern_registry.get(pattern_id)
         resolved_render_manifest = _resolve_render_manifest(pattern, render_manifest)
+        _ensure_memory_runtime(services)
         services.validate_required(_required_services_for_pattern(pattern))
         return self.instance.compiler.compile(
             pattern_id=pattern_id,
@@ -165,6 +190,7 @@ class RuntimeKernelFacade:
             "session_id": session.session_id,
             "thread_id": session.thread_id,
         }
+        _configure_memory_runtime_for_agent(compiled.services, agent_id)
         result = self.instance.controller.run(compiled, state, thread_id=session.thread_id)
         session_manager.touch_turn(session.session_id, first_user_input=user_input)
         return result
@@ -189,6 +215,7 @@ class RuntimeKernelFacade:
             "session_id": session.session_id,
             "thread_id": session.thread_id,
         }
+        _configure_memory_runtime_for_agent(compiled.services, session.agent_id)
         return self.instance.controller.resume(
             compiled,
             state,
@@ -198,7 +225,7 @@ class RuntimeKernelFacade:
 
 
 def _required_services_for_pattern(pattern) -> list[str]:
-    required = {"observability_manager", "checkpointer", "memory_store"}
+    required = {"observability_manager", "checkpointer", "memory_store", "memory_system"}
     for node in pattern.nodes:
         if node.impl.startswith("cognitive."):
             required.update({"model_service", "context_engine"})
@@ -227,6 +254,32 @@ def _required_services_for_pattern(pattern) -> list[str]:
         elif capability == "harness":
             required.add("harness_bridge")
     return sorted(required)
+
+
+def _ensure_memory_runtime(services: RuntimeServices) -> None:
+    if services.memory_system is None:
+        if services.memory_store is None:
+            raise RuntimeError("cross-session memory is enabled but memory_store is missing")
+        services.memory_system = default_agent_runtime(
+            agent_id="default-agent",
+            config=default_agent_memory_config(),
+            store=services.memory_store,
+        )
+        return
+    runtime = services.memory_system
+    config = getattr(runtime, "config", None)
+    if config is not None and getattr(config, "enabled", False) and getattr(runtime, "store", None) is None:
+        if services.memory_store is None:
+            raise RuntimeError("cross-session memory is enabled but BaseStore is missing")
+        runtime.store = services.memory_store
+
+
+def _configure_memory_runtime_for_agent(services: RuntimeServices, agent_id: str) -> None:
+    runtime = getattr(services, "memory_system", None)
+    if runtime is None:
+        return
+    runtime.scope = "agent"
+    runtime.namespace = agent_memory_namespace(agent_id)
 
 
 def _session_manager_from_config(session_config: dict, *, default: AgentSessionManager) -> AgentSessionManager:

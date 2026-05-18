@@ -303,6 +303,7 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
         "sandbox_contract_path": _sandbox_contract_path(state),
         "resource_preparation_report_path": _resource_preparation_report_path(state),
         "session_config_path": "session.json",
+        "memory_config_path": "memory/config.json",
         "memory_store_config_path": "memory/store.json",
         "source_stage_ids": [
             "requirement_capture",
@@ -339,7 +340,9 @@ def _with_system_runtime_contract(spec: AgentAssemblySpec, state: FactoryGraphSt
         "sandbox_contract_path": _sandbox_contract_path(state),
         "resource_preparation_report_path": _resource_preparation_report_path(state),
         "session_config_path": "session.json",
+        "memory_config_path": "memory/config.json",
         "memory_store_config_path": "memory/store.json",
+        "memory_config": _default_agent_memory_system_config(),
         "memory_store": _default_agent_memory_store_config(),
     }
     return spec.model_copy(update={"runtime": runtime, "metadata": metadata}, deep=True)
@@ -357,6 +360,34 @@ def _default_agent_memory_store_config() -> dict[str, str]:
     return {
         "backend": "sqlite",
         "path": ".agent_runtime/memory/agent.sqlite",
+    }
+
+
+def _default_agent_memory_system_config() -> dict[str, Any]:
+    return {
+        "version": "memory_system.v0",
+        "enabled": True,
+        "write_enabled": True,
+        "injection_enabled": True,
+        "store": _default_agent_memory_store_config(),
+        "ranking": {
+            "max_items_total": 8,
+            "max_tokens_total": 1200,
+            "min_score": 0.55,
+            "per_kind_limits": {
+                "constraint": 3,
+                "preference": 3,
+                "decision": 2,
+                "fact": 2,
+                "artifact": 1,
+            },
+        },
+        "background": {
+            "journal_root": ".agent_runtime/memory/jobs",
+            "max_pending_jobs": 32,
+            "concurrency": 1,
+            "queue_full_policy": "reject_new_when_full",
+        },
     }
 
 
@@ -462,7 +493,7 @@ def _nodes_with_strategy_refs(state: FactoryGraphState) -> set[str]:
 
 
 def _required_service_kinds(spec: AgentAssemblySpec, pattern_nodes: dict[str, dict[str, str]]) -> set[str]:
-    required: set[str] = {"observability_manager", "checkpointer", "memory_store"}
+    required: set[str] = {"observability_manager", "checkpointer", "memory_store", "memory_system"}
     if any(node["impl"].startswith("cognitive.") for node in pattern_nodes.values()):
         required.add("model_service")
         required.add("context_engine")
@@ -489,6 +520,7 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         _file_spec("bindings/node_bindings.json", "json", "binding", "node_bindings", "system_generated", "assembly_spec.bindings.node_bindings"),
         _file_spec("bindings/hooks.json", "json", "binding", "hooks", "system_generated", "assembly_spec.bindings.hooks"),
         _file_spec("session.json", "json", "manifest", "session", "system_generated", "assembly_spec.runtime.session_config"),
+        _file_spec("memory/config.json", "json", "manifest", "memory_config", "system_generated", "assembly_spec.metadata.memory_config"),
         _file_spec("memory/store.json", "json", "manifest", "memory_store", "system_generated", "assembly_spec.metadata.memory_store"),
     ]
     tool_capabilities = _tool_capabilities_by_id(state)
@@ -551,6 +583,7 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
             "hooks": "bindings/hooks.json",
         },
         "session_path": "session.json",
+        "memory_config_path": "memory/config.json",
         "memory_store_path": "memory/store.json",
         "prompts": sorted(item.path for item in files if item.source_kind == "prompt"),
         "tools": sorted(item.manifest_path for item in tool_specs),
@@ -624,6 +657,7 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "render_manifest.json",
         "sandbox_contract.json",
         "session.json",
+        "memory/config.json",
         "memory/store.json",
     }
     for path in sorted(required - paths):

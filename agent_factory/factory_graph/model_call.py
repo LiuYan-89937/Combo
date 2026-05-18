@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from langgraph.config import get_stream_writer
 
 from agent_factory.factory_graph.prompt_context import prompt_context_values
+from agent_factory.memory_system.factory import inject_factory_prompt_memory
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import PromptId, get_prompt
 
@@ -21,7 +22,9 @@ class FactoryModelCallError(RuntimeError):
 
 
 def prompt_values(stage_id: str, values: dict[str, Any]) -> dict[str, Any]:
-    return {**prompt_context_values(stage_id), **values}
+    merged = {**prompt_context_values(stage_id), **values}
+    updated, _report = inject_factory_prompt_memory(stage_id=stage_id, values=merged)
+    return updated
 
 
 def call_structured_model(

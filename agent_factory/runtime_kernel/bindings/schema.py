@@ -9,6 +9,7 @@ ServiceKind = Literal[
     "model_service",
     "tool_registry",
     "memory_store",
+    "memory_system",
     "knowledge_engine",
     "context_engine",
     "policy_engine",

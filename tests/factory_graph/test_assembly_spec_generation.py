@@ -41,6 +41,7 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("bindings/hooks.json", plan_paths)
                 self.assertIn("sandbox_contract.json", plan_paths)
                 self.assertIn("session.json", plan_paths)
+                self.assertIn("memory/config.json", plan_paths)
                 self.assertIn("memory/store.json", plan_paths)
                 self.assertEqual(plan["tools"][0]["manifest"]["input_schema"], {"type": "object"})
 
@@ -268,6 +269,7 @@ def _valid_bindings() -> dict:
             {"service_id": "main_model", "kind": "model_service", "required": True, "config": {}},
             {"service_id": "generated_tool_registry", "kind": "tool_registry", "required": True, "config": {}},
             {"service_id": "memory_store", "kind": "memory_store", "required": True, "config": {}},
+            {"service_id": "memory_system", "kind": "memory_system", "required": True, "config": {}},
             {"service_id": "knowledge_engine", "kind": "knowledge_engine", "required": True, "config": {}},
             {"service_id": "context_engine", "kind": "context_engine", "required": True, "config": {}},
             {"service_id": "policy_engine", "kind": "policy_engine", "required": True, "config": {}},

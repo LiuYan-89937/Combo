@@ -13,6 +13,7 @@ class RuntimeServices(BaseModel):
     model_service: object | None = None
     tool_registry: object | None = None
     memory_store: object | None = None
+    memory_system: object | None = None
     knowledge_engine: object | None = None
     context_engine: object | None = None
     policy_engine: object | None = None

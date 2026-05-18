@@ -52,6 +52,7 @@ REQUIRED_PACKAGE_FILES = {
     "bindings/node_bindings.json",
     "bindings/hooks.json",
     "session.json",
+    "memory/config.json",
     "memory/store.json",
 }
 
@@ -442,7 +443,14 @@ def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) ->
         manifest = TypeAdapter(dict[str, Any]).validate_json(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return [f"agent_package.json invalid: {type(exc).__name__}: {exc}"]
-    for key in ("assembly_spec_path", "resources_path", "render_manifest_path", "session_path", "memory_store_path"):
+    for key in (
+        "assembly_spec_path",
+        "resources_path",
+        "render_manifest_path",
+        "session_path",
+        "memory_config_path",
+        "memory_store_path",
+    ):
         value = str(manifest.get(key) or "")
         if not value:
             errors.append(f"agent_package.json missing {key}")
@@ -577,6 +585,7 @@ def _system_generated_files(
         "bindings/node_bindings.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.node_bindings],
         "bindings/hooks.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.hooks],
         "session.json": assembly_spec.runtime.session_config,
+        "memory/config.json": dict(assembly_spec.metadata.get("memory_config") or {}),
         "memory/store.json": dict(assembly_spec.metadata.get("memory_store") or {}),
     }
     for binding in assembly_spec.bindings.node_bindings:

@@ -9,7 +9,7 @@
 | 系统 | 当前状态 |
 | --- | --- |
 | 工具系统 | 已系统化搭建，是当前最成熟的一类。 |
-| 记忆系统 | 有 RuntimeKernel 实现迹象，但未形成统一规范。 |
+| 记忆系统 | 已形成 LangGraph 原生规范：会话内 messages/checkpointer，跨会话 BaseStore。 |
 | 知识系统 | 有 RuntimeKernel 实现迹象，但未形成统一规范。 |
 | 定时任务系统 | 暂未看到项目内正式实现。 |
 
@@ -377,39 +377,31 @@ trust   -> Runtime 管理信任语义，不修改 ToolSpec
 
 ## 3. 记忆系统
 
-记忆系统只先确定两个动作与两类记忆，不绑定当前已有实现，不预设具体存储后端。
-
-### 3.1 核心抽象
-
-记忆系统面对的核心问题只有两个：
+记忆系统已按 LangGraph 思想收敛为两层：
 
 ```text
-Memory Read
-Memory Write
+会话内记忆 = LangGraph messages channel + checkpointer + thread_id
+跨会话记忆 = LangGraph BaseStore + namespace
 ```
 
-这两个动作分别作用于两类记忆：
+当前实现入口：
 
 ```text
-Memory
-├── Session Memory
-│   ├── Read
-│   └── Write
-└── Cross-session Memory
-    ├── Read
-    └── Write
+agent_factory/memory_system/
+  schema.py
+  config.py
+  namespace.py
+  intent.py
+  retrieval.py
+  ranking.py
+  extraction.py
+  writer.py
+  background.py
+  injection.py
+  reports.py
 ```
 
-因此记忆系统的第一层标准端口固定为：
-
-```text
-SessionMemoryRead
-SessionMemoryWrite
-CrossSessionMemoryRead
-CrossSessionMemoryWrite
-```
-
-### 3.2 会话内记忆
+### 3.1 会话内记忆
 
 会话内记忆只服务当前 session，工程实现固定为：
 
@@ -419,11 +411,15 @@ LangGraph messages channel
   + thread_id
 ```
 
-`SessionMemoryRead` 读取当前 thread 的 `messages` channel。
+RuntimeKernel 图状态使用：
 
-`SessionMemoryWrite` 只允许通过节点返回 `{"messages": [...]}` 写入当前 thread 的 `messages` channel。
+```python
+class RuntimeGraphState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    runtime: RuntimeState
+```
 
-会话内记忆不直接读写业务 state。RuntimeKernel 的业务状态统一放在 `runtime` channel 中，记忆系统不感知也不修改 `runtime` 内部字段。
+`SessionMemoryWrite` 只允许节点返回 `{"messages": [...]}`。业务状态放在 `runtime` channel 中，记忆系统不直接读写 `runtime` 内部字段。
 
 Factory 与生产出来的 Agent 使用同构 session 语义：
 
@@ -431,28 +427,25 @@ Factory 与生产出来的 Agent 使用同构 session 语义：
 session_id -> thread_id -> LangGraph checkpoint
 ```
 
-CLI/WebUI 只暴露 `session_id`，不要求用户直接输入或理解 `thread_id`。
+CLI/WebUI 只暴露 `session_id`，不要求用户理解 `thread_id`。
 
-会话内记忆写入不负责上下文清洗、上下文压缩、上下文摘要注入、token budget 裁剪或 prompt 组装。这些属于后续上下文系统工程，不放在记忆系统里处理。
+会话内记忆不负责上下文清洗、压缩、摘要注入、token budget 裁剪或 prompt 组装。这些后续归入上下文系统工程。
 
-Factory 默认使用 SQLite checkpointer，可显式切换为 memory checkpointer。
-
-```text
-AGENTFACTORY_CHECKPOINTER_BACKEND=sqlite | memory
-AGENTFACTORY_CHECKPOINT_PATH=.agentfactory/checkpoints/factory.sqlite
-```
-
-`sqlite` 是默认持久化模式。`memory` 只作为显式临时模式，不保证跨进程恢复。
-
-### 3.3 跨会话记忆
+### 3.2 跨会话记忆
 
 跨会话记忆服务长期复用，工程实现固定为 LangGraph `BaseStore`。
 
-`CrossSessionMemoryRead` 映射到 `store.get / store.search`。
+`CrossSessionMemoryRead` 映射到：
 
-`CrossSessionMemoryWrite` 映射到 `store.put / store.delete`。
+```text
+store.get / store.search
+```
 
-跨会话记忆不能等同于上一段会话上下文，也不能把临时会话状态直接写入长期记忆。
+`CrossSessionMemoryWrite` 映射到：
+
+```text
+store.put / store.delete
+```
 
 命名空间固定为：
 
@@ -471,13 +464,127 @@ AGENTFACTORY_MEMORY_STORE_PATH=.agentfactory/memory/factory.sqlite
 
 Factory 与生产出来的 Agent 使用同一套 BaseStore 规范，但 session、checkpoint、store 文件和 namespace 必须隔离。
 
-### 3.4 当前约束
+### 3.3 跨会话写入
+
+跨会话写入是 eventual consistency，不能阻塞主对话。
+
+运行结束后只入队：
+
+```text
+after_run
+  -> MemoryWriteScheduler.enqueue(job)
+  -> 主对话立即返回
+```
+
+后台 worker 执行：
+
+```text
+MemoryBackgroundWorker
+  -> taskModel intent detection
+  -> retrieve related memories
+  -> taskModel extraction
+  -> validate add/update/delete/noop
+  -> write BaseStore
+  -> write job journal
+```
+
+原则：
+
+- `taskModel` 是唯一显式记忆意图识别入口，不保留关键词硬规则。
+- 提取动作只允许 `add / update / delete / noop`。
+- 写入失败不生成伪记忆。
+- queue 满时返回 `memory_write_queued_failed`，不阻塞主对话。
+- job journal 只保存任务定位和 message range，不保存完整消息正文。
+
+默认队列：
+
+```text
+max_pending_jobs = 32
+concurrency = 1
+queue_full_policy = reject_new_when_full
+```
+
+job journal：
+
+```text
+Factory: .agentfactory/memory/jobs/
+Agent:   .agent_runtime/memory/jobs/
+```
+
+### 3.4 跨会话读取与注入
+
+记忆注入只读 BaseStore，不触发写入。
+
+RuntimeKernel 通过系统 wrapper 注入：
+
+```text
+SYSTEM_MEMORY_RETRIEVE_WRAPPER
+  before cognitive.* model call
+  retrieve -> rank -> inject into runtime.context.model_context.cross_session_memory
+```
+
+Factory 在模型调用前使用同一套检索、排序和注入 pipeline，把结果作为 `prompt_context.cross_session_memory` 进入提示词上下文。
+
+注入硬限制：
+
+```text
+max_items_total = 8
+max_tokens_total = 1200
+min_score = 0.55
+per_kind_limits = constraint 3 / preference 3 / decision 2 / fact 2 / artifact 1
+```
+
+注入不写入 `messages`。每次模型调用前重新检索、排序和裁剪，避免多轮对话后长期记忆越塞越多。
+
+### 3.5 Package 与 RuntimeKernel 编译
+
+第七阶段系统冻结：
+
+```text
+session.json
+memory/config.json
+memory/store.json
+```
+
+第八阶段系统物化这些文件，模型不能改写。
+
+RuntimeKernel 编译时：
+
+```text
+session.json -> AgentSessionManager
+memory/store.json -> BaseStore
+memory/config.json -> MemorySystemRuntime
+graph.compile(checkpointer=..., store=...)
+auto inject memory retrieve system wrapper
+start MemoryBackgroundWorker
+```
+
+如果 `cross_session_memory.enabled=true` 但没有 BaseStore，编译失败。后台 worker 启动失败不阻塞主图，只禁用写入并发出事件。
+
+### 3.6 事件
+
+记忆系统只发摘要事件，不展示完整长期记忆内容：
+
+```text
+memory_write_queued
+memory_write_queued_failed
+memory_intent_detected
+memory_extraction_completed
+memory_write_completed
+memory_write_failed
+memory_retrieval_completed
+memory_injection_completed
+```
+
+payload 只携带数量、namespace、job_id、耗时和错误摘要。
+
+### 3.7 当前约束
 
 - 会话内记忆使用 LangGraph 原生 checkpointer，不自建会话内 MemoryStore。
-- 跨会话记忆使用 LangGraph BaseStore，不复用旧的独立记忆引擎。
-- 本节只定义会话内记忆与跨会话记忆，不讨论其他记忆分类。
-- 本节不处理上下文清洗、压缩、摘要注入和 prompt 组装，这些后续归入上下文系统工程。
-- Factory 与生产出来的 Agent 都围绕这四个端口接入记忆系统。
+- 跨会话记忆使用 LangGraph BaseStore，不复用旧的独立 memory engine。
+- 跨会话记忆不是上一段会话上下文，不把临时会话状态直接写入长期记忆。
+- 本节不处理上下文清洗、压缩、摘要注入和 prompt 组装。
+- Factory 与生产出来的 Agent 都围绕同一套记忆规范接入。
 - 旧的独立 memory state、独立记忆引擎、记忆策略和记忆业务节点路径废弃。
 
 ---

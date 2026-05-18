@@ -23,6 +23,8 @@ from agent_factory.factory_graph.session import (
     build_factory_checkpointer_handle,
     is_factory_checkpointer_persistent,
 )
+from agent_factory.memory_system.factory import enqueue_factory_memory_write
+from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.tooling import get_factory_base_tool_ids
 
 
@@ -344,6 +346,7 @@ class FactoryRuntimeAdapter:
                     normalizer.emit_custom_event(json_safe(chunk))
             if _can_commit_session_messages(final_state):
                 self._save_messages(mode, final_state)
+            self._enqueue_factory_memory(normalizer, mode, config, final_state)
             normalizer.emit_run_completed(_summary_payload(final_state, self.options))
         except Exception as exc:
             normalizer.emit_run_failed(exc)
@@ -385,6 +388,49 @@ class FactoryRuntimeAdapter:
                 message=message,
             )
         )
+
+    def _enqueue_factory_memory(
+        self,
+        normalizer: RuntimeEventNormalizer,
+        mode: FactoryMode,
+        config: dict[str, Any],
+        final_state: dict[str, Any],
+    ) -> None:
+        if final_state.get("status") in {"failed", "blocked"} or final_state.get("errors"):
+            return
+        messages_delta = _memory_messages_delta(final_state.get("messages", []))
+        if not messages_delta:
+            return
+        configurable = dict(config.get("configurable") or {})
+        try:
+            report = enqueue_factory_memory_write(
+                source={
+                    "session_id": self._session_id(),
+                    "thread_id": configurable.get("thread_id"),
+                    "mode": mode,
+                    "run_id": final_state.get("factory_run_id") or final_state.get("run_id"),
+                    "node_id": final_state.get("current_stage"),
+                },
+                message_range={"message_count": len(final_state.get("messages", []) or [])},
+                messages_delta=messages_delta,
+            )
+            event_type = "memory_write_queued" if report.status == "queued" else "memory_write_queued_failed"
+            normalizer.emit_custom_event(
+                {
+                    "type": "memory_event",
+                    "payload": {"event_type": event_type, **memory_event_payload(report)},
+                }
+            )
+        except Exception as exc:
+            normalizer.emit_custom_event(
+                {
+                    "type": "memory_event",
+                    "payload": {
+                        "event_type": "memory_write_queued_failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                }
+            )
 
     def _ensure_session(self, command: FactoryFrontendCommand) -> None:
         if self.session_record is None:
@@ -482,6 +528,18 @@ def _can_commit_session_messages(final_state: dict[str, Any]) -> bool:
     if not isinstance(messages, list):
         return False
     return _has_complete_tool_call_history(messages)
+
+
+def _memory_messages_delta(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    delta: list[dict[str, Any]] = []
+    for message in messages[-8:]:
+        if isinstance(message, HumanMessage):
+            delta.append({"role": "user", "content": str(message.content)})
+        elif isinstance(message, AIMessage) and not getattr(message, "tool_calls", None):
+            delta.append({"role": "assistant", "content": str(message.content)})
+    return [item for item in delta if str(item.get("content") or "").strip()]
 
 
 def _has_complete_tool_call_history(messages: list[Any]) -> bool:
