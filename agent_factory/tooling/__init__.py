@@ -27,7 +27,14 @@ from agent_factory.tooling.registry import (
     get_factory_tools,
 )
 from agent_factory.tooling.schema_compiler import compile_json_schema
-from agent_factory.tooling.spec import ModelToolView, ToolEventPayload, ToolObservation, ToolSpec
+from agent_factory.tooling.spec import (
+    ModelToolView,
+    ToolEventPayload,
+    ToolObservation,
+    ToolRiskEvaluatorConfig,
+    ToolRiskResult,
+    ToolSpec,
+)
 
 __all__ = [
     "ModelToolView",
@@ -46,6 +53,8 @@ __all__ = [
     "ToolEventPayload",
     "ToolExecutionGateway",
     "ToolObservation",
+    "ToolRiskEvaluatorConfig",
+    "ToolRiskResult",
     "ToolProviderContext",
     "ToolProviderResult",
     "ToolRegistry",

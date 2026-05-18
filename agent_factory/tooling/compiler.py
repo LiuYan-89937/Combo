@@ -14,6 +14,7 @@ from agent_factory.tooling.gateway import (
     ToolExecutionGateway,
     default_tool_max_revisions,
 )
+from agent_factory.tooling.risk import ToolRiskEvaluator
 from agent_factory.tooling.schema_compiler import compile_json_schema
 from agent_factory.tooling.spec import ToolSpec
 
@@ -35,6 +36,7 @@ class ToolCompiler:
         adapter_registry: EntrypointAdapterRegistry | None = None,
         mcp_clients: Mapping[str, MCPToolClient] | None = None,
     ) -> None:
+        self.package_root = Path(package_root).resolve() if package_root else None
         self.loader = entrypoint_loader or ToolEntrypointLoader(
             package_root=package_root,
             allowed_python_roots=allowed_python_roots,
@@ -50,6 +52,8 @@ class ToolCompiler:
             input_schema = compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_args")
             output_schema = compile_json_schema(schema=spec.output_schema, model_name=f"{spec.id}_output")
             entrypoint = self.loader.load(spec.entrypoint)
+            hard_risk_evaluator = self._load_hard_risk_evaluator(spec)
+            llm_risk_prompt = self._load_llm_risk_prompt(spec)
         except Exception as exc:
             raise ToolCompileError(f"cannot compile tool {spec.id}: {exc}") from exc
         gateway = ToolExecutionGateway(
@@ -58,6 +62,8 @@ class ToolCompiler:
             output_schema=output_schema,
             entrypoint=entrypoint,
             global_resources=self.resources,
+            hard_risk_evaluator=hard_risk_evaluator,
+            llm_risk_prompt=llm_risk_prompt,
             approval_handler=self.approval_handler,
             max_revisions=self.max_revisions,
         )
@@ -86,6 +92,29 @@ class ToolCompiler:
 
     def compile_many(self, specs: Iterable[ToolSpec]) -> list[BaseTool]:
         return [self.compile(spec) for spec in specs]
+
+    def _load_hard_risk_evaluator(self, spec: ToolSpec) -> ToolRiskEvaluator | None:
+        if not spec.risk_evaluator.hard:
+            return None
+        evaluator = self.loader.load(spec.risk_evaluator.hard)
+        return evaluator
+
+    def _load_llm_risk_prompt(self, spec: ToolSpec) -> str | None:
+        value = spec.risk_evaluator.llm
+        if not value:
+            return None
+        if self.package_root is None:
+            return value
+        candidate = (self.package_root / value).resolve()
+        try:
+            candidate.relative_to(self.package_root)
+        except ValueError as exc:
+            raise ToolCompileError(f"llm risk prompt escapes package root: {value}") from exc
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+        if value.endswith(".md"):
+            raise ToolCompileError(f"llm risk prompt file does not exist: {value}")
+        return value
 
 
 def _normalize_tool_arguments(value: Any) -> Any:

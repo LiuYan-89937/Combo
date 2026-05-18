@@ -19,6 +19,47 @@ type ChoiceOption = {
 	custom?: boolean;
 };
 
+type ToolApprovalActionId = 'approve' | 'deny' | 'revise' | 'trust';
+
+type ToolApprovalAction = {
+	id: ToolApprovalActionId;
+	label: string;
+	key: string;
+	color: string;
+	description: string;
+};
+
+const TOOL_APPROVAL_ACTIONS: ToolApprovalAction[] = [
+	{
+		id: 'approve',
+		label: '批准执行',
+		key: 'y',
+		color: 'green',
+		description: '本次参数没有问题，继续执行工具。'
+	},
+	{
+		id: 'deny',
+		label: '拒绝执行',
+		key: 'n',
+		color: 'red',
+		description: '不执行工具，把拒绝作为 observation 返回给模型。'
+	},
+	{
+		id: 'revise',
+		label: '要求重写',
+		key: 'r',
+		color: 'cyan',
+		description: '输入审查意见，让模型基于你的意见重新生成 tool call。'
+	},
+	{
+		id: 'trust',
+		label: '信任该工具',
+		key: 't',
+		color: 'yellow',
+		description: '允许该工具后续按当前信任语义减少重复确认。'
+	}
+];
+
 export function InterruptChoicePanel({
 	onSubmit
 }: {
@@ -252,6 +293,7 @@ function ToolApprovalTabs({
 	const [revisionMode, setRevisionMode] = useState(false);
 	const [revisionText, setRevisionText] = useState('');
 	const requests = (event.payload?.requests as Array<Record<string, unknown>>) ?? [];
+	const selectedAction = TOOL_APPROVAL_ACTIONS[selected] ?? TOOL_APPROVAL_ACTIONS[0];
 	useEffect(() => {
 		setSelected(0);
 		setRevisionMode(false);
@@ -277,6 +319,11 @@ function ToolApprovalTabs({
 			}
 			return;
 		}
+		if (input === 'r') {
+			setSelected(actionIndex('revise'));
+			setRevisionMode(true);
+			return;
+		}
 		if (key.leftArrow || key.upArrow) {
 			setSelected(current => Math.max(0, current - 1));
 			return;
@@ -294,27 +341,27 @@ function ToolApprovalTabs({
 			return;
 		}
 		if (key.rightArrow || key.downArrow) {
-			setSelected(current => Math.min(3, current + 1));
+			setSelected(current => Math.min(TOOL_APPROVAL_ACTIONS.length - 1, current + 1));
 			return;
 		}
 		if (key.return) {
-			if (selected === 2) {
+			if (selectedAction.id === 'revise') {
 				setRevisionMode(true);
 				return;
 			}
-			if (selected === 3) {
+			if (selectedAction.id === 'trust') {
 				onSubmit(buildToolTrustPayload());
 				return;
 			}
-			onSubmit(buildToolApprovalPayload(selected === 0));
+			onSubmit(buildToolApprovalPayload(selectedAction.id === 'approve'));
 		}
 	});
 	return (
 		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
-			<Text bold color="yellow">Tool Approval Required</Text>
-			<Text color="gray">Review the proposed tool call before it touches the workspace.</Text>
+			<Text bold color="yellow">Tool Approval Dock</Text>
+			<Text color="gray">检查工具、参数和影响范围；选择后此面板会归档到 Tool Activity。</Text>
 			{requests.map((item, index) => (
-				<Box key={String(item.tool_call_id ?? index)} flexDirection="column" marginTop={1}>
+				<Box key={String(item.tool_call_id ?? index)} flexDirection="column" marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
 					<Text>
 						<Text color="yellow">▾ {index + 1}. </Text>
 						<Text bold>{String(item.tool_name ?? '-')}</Text>
@@ -322,6 +369,12 @@ function ToolApprovalTabs({
 						{shortId(String(item.tool_call_id ?? '-'))}
 					</Text>
 					<Text color="gray">summary: {String(item.summary ?? 'awaiting review')}</Text>
+					<Text color="yellow">risk: {String(item.risk_level ?? 'unknown')}</Text>
+					{riskReasonLines(item.risk_reasons).map((line, lineIndex) => (
+						<Text key={`${item.tool_call_id ?? index}:risk:${lineIndex}`} color="gray">
+							- {line}
+						</Text>
+					))}
 					{approvalArgumentLines(item.args ?? item.arguments ?? {}).map(line => (
 						<Text key={`${item.tool_call_id ?? index}:${line.label}`} color="white">
 							<Text color="gray">{line.label}: </Text>
@@ -330,11 +383,15 @@ function ToolApprovalTabs({
 					))}
 				</Box>
 			))}
-			<Box marginTop={1}>
-				<Tab label="批准" active={selected === 0} />
-				<Tab label="拒绝" active={selected === 1} />
-				<Tab label="重试导向" active={selected === 2} />
-				<Tab label="无需审批" active={selected === 3} />
+			<Box marginTop={1} flexDirection="column">
+				<Box>
+					{TOOL_APPROVAL_ACTIONS.map((action, index) => (
+						<ActionTab key={action.id} action={action} active={selected === index} />
+					))}
+				</Box>
+				<Text color={selectedAction.color}>
+					{selectedAction.description}
+				</Text>
 			</Box>
 			{revisionMode && (
 				<Text color="cyan">
@@ -342,8 +399,20 @@ function ToolApprovalTabs({
 					<Text inverse>{' '}</Text>
 				</Text>
 			)}
-			<Text color="gray">Left/Right 选择，Enter 确认；y 批准，n 拒绝，t 信任该工具；重试导向会让模型重写 tool call。</Text>
+			<Text color="gray">Left/Right 选择，Enter 确认；y 批准，n 拒绝，r 重写，t 信任；Esc 退出审查输入。</Text>
 		</Box>
+	);
+}
+
+function actionIndex(actionId: ToolApprovalActionId): number {
+	return Math.max(0, TOOL_APPROVAL_ACTIONS.findIndex(action => action.id === actionId));
+}
+
+function ActionTab({action, active}: {action: ToolApprovalAction; active: boolean}) {
+	return (
+		<Text color={active ? 'black' : action.color} backgroundColor={active ? action.color : undefined}>
+			{` ${action.label}(${action.key}) `}
+		</Text>
 	);
 }
 
@@ -353,6 +422,13 @@ function Tab({label, active}: {label: string; active: boolean}) {
 			{` ${label} `}
 		</Text>
 	);
+}
+
+function riskReasonLines(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	return value.map(item => trimOneLine(String(item), 180)).filter(Boolean).slice(0, 4);
 }
 
 function approvalArgumentLines(value: unknown): Array<{label: string; value: string}> {

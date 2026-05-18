@@ -6,7 +6,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from agent_factory.tooling import ToolCompiler, ToolRegistry, ToolSpec, compile_json_schema
+from agent_factory.tooling import ToolCompiler, ToolRegistry, ToolRiskEvaluatorConfig, ToolSpec, compile_json_schema
 from agent_factory.tooling.entrypoint import ToolEntrypointError, ToolEntrypointLoader
 from agent_factory.tooling.gateway import ToolApprovalDecision, ToolExecutionGateway
 
@@ -29,7 +29,7 @@ class ToolSpecTest(unittest.TestCase):
                 input_schema={"type": "object"},
                 output_schema={"type": "object"},
                 resources={},
-                approval_required=False,
+                risk_level="low",
                 concurrent=True,
             )
         with self.assertRaises(ValidationError):
@@ -40,7 +40,7 @@ class ToolSpecTest(unittest.TestCase):
                 input_schema={"type": "object"},
                 output_schema={"type": "object"},
                 resources={},
-                approval_required=False,
+                risk_level="low",
                 concurrent=True,
                 extra=True,
             )
@@ -143,7 +143,7 @@ class EntrypointLoaderTest(unittest.TestCase):
 @unittest.skipUnless(JSONSCHEMA_AVAILABLE, "jsonschema dependency is not installed")
 class GatewayAndCompilerTest(unittest.TestCase):
     def test_gateway_returns_observation_for_validation_and_approval_paths(self) -> None:
-        spec = _tool_spec(approval_required=True)
+        spec = _tool_spec(risk_level="medium")
         input_schema = compile_json_schema(schema=spec.input_schema, model_name="GatewayArgs")
         output_schema = compile_json_schema(schema=spec.output_schema, model_name="GatewayOutput")
         gateway = ToolExecutionGateway(
@@ -152,7 +152,7 @@ class GatewayAndCompilerTest(unittest.TestCase):
             output_schema=output_schema,
             entrypoint=lambda arguments, resources: {"ok": True},
             global_resources={},
-            approval_handler=lambda _spec, _args: ToolApprovalDecision(
+            approval_handler=lambda _spec, _args, _risk: ToolApprovalDecision(
                 action="revise",
                 revision_guidance="change the argument",
             ),
@@ -189,7 +189,7 @@ class GatewayAndCompilerTest(unittest.TestCase):
         self.assertEqual(result["output"]["query"], "hello")
 
 
-def _tool_spec(*, approval_required: bool = False, entrypoint: str = "tools/sample_tool/tool.py:run") -> ToolSpec:
+def _tool_spec(*, risk_level: str = "low", entrypoint: str = "tools/sample_tool/tool.py:run") -> ToolSpec:
     return ToolSpec(
         id="sample_tool",
         description="Sample tool.",
@@ -207,7 +207,8 @@ def _tool_spec(*, approval_required: bool = False, entrypoint: str = "tools/samp
             "additionalProperties": True,
         },
         resources={},
-        approval_required=approval_required,
+        risk_level=risk_level,
+        risk_evaluator=ToolRiskEvaluatorConfig(),
         concurrent=True,
     )
 

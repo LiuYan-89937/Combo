@@ -156,7 +156,8 @@ def _tool_manifest() -> dict:
         "input_schema": {"type": "object"},
         "output_schema": {"type": "object"},
         "resources": {"ledger_file": "ledger_file"},
-        "approval_required": False,
+        "risk_level": "low",
+        "risk_evaluator": {},
         "concurrent": True,
     }
 
@@ -315,7 +316,8 @@ def _assembly_spec() -> dict:
                 "input_schema": {"type": "object"},
                 "output_schema": {"type": "object"},
                 "resources": {"ledger_file": "ledger_file"},
-                "approval_required": False,
+                "risk_level": "low",
+                "risk_evaluator": {},
                 "concurrent": True,
             }
         ],

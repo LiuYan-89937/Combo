@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from agent_factory.tooling.spec import ToolSpec
+from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
 _STRING = {"type": "string"}
 _INTEGER = {"type": "integer"}
 _BOOLEAN = {"type": "boolean"}
 _FILESYSTEM_RESOURCE = {"filesystem": "filesystem"}
+_FS_MODULE = "agent_factory.tooling.builtins.filesystem"
 
 
 FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
@@ -39,7 +40,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
-        approval_required=False,
+        risk_level="low",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.read:evaluate_risk"),
         concurrent=True,
     ),
     ToolSpec(
@@ -69,7 +71,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
-        approval_required=True,
+        risk_level="medium",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.write:evaluate_risk"),
         concurrent=False,
     ),
     ToolSpec(
@@ -99,7 +102,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
-        approval_required=True,
+        risk_level="medium",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.edit:evaluate_risk"),
         concurrent=False,
     ),
     ToolSpec(
@@ -152,7 +156,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
-        approval_required=True,
+        risk_level="medium",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.multi_edit:evaluate_risk"),
         concurrent=False,
     ),
     ToolSpec(
@@ -191,7 +196,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
-        approval_required=False,
+        risk_level="low",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.glob:evaluate_risk"),
         concurrent=True,
     ),
     ToolSpec(
@@ -233,7 +239,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
-        approval_required=False,
+        risk_level="low",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.grep:evaluate_risk"),
         concurrent=True,
     ),
     ToolSpec(
@@ -272,7 +279,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
-        approval_required=False,
+        risk_level="low",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.ls:evaluate_risk"),
         concurrent=True,
     ),
 ]

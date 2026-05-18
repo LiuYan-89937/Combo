@@ -50,7 +50,7 @@ class ToolProviderTest(unittest.TestCase):
                         server_id="filesystem",
                         transport="stdio",
                         tool_id_prefix="fs",
-                        approval_default=True,
+                        risk_level_default="medium",
                     )
                 ]
             ),
@@ -62,7 +62,7 @@ class ToolProviderTest(unittest.TestCase):
         self.assertEqual(result.diagnostics, [])
         self.assertEqual(result.tool_specs[0].id, "fs_read_file")
         self.assertEqual(result.tool_specs[0].entrypoint, "mcp:filesystem/read_file")
-        self.assertTrue(result.tool_specs[0].approval_required)
+        self.assertEqual(result.tool_specs[0].risk_level, "medium")
         self.assertEqual(result.runtime_dependencies[0].dependency_id, "mcp.filesystem")
 
     def test_skill_provider_loads_prompt_and_skill_tool_specs(self) -> None:
@@ -122,7 +122,8 @@ def _tool_manifest(
         },
         "output_schema": {"type": "object", "additionalProperties": True},
         "resources": {},
-        "approval_required": False,
+        "risk_level": "low",
+        "risk_evaluator": {},
         "concurrent": True,
     }
 

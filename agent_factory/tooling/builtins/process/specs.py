@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from agent_factory.tooling.spec import ToolSpec
+from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
 _STRING = {"type": "string"}
 _INTEGER = {"type": "integer"}
 _BOOLEAN = {"type": "boolean"}
 _PROCESS_RESOURCE = {"process_runtime": "process_runtime"}
+_PROCESS_MODULE = "agent_factory.tooling.builtins.process"
 
 _PROCESS_STATUS_VALUES = ["running", "completed", "failed", "stopped"]
 _PROCESS_OUTPUT_SCHEMA = {
@@ -75,7 +76,8 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
-        approval_required=True,
+        risk_level="high",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.bash:evaluate_risk"),
         concurrent=False,
     ),
     ToolSpec(
@@ -99,7 +101,8 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
-        approval_required=False,
+        risk_level="low",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.bash_status:evaluate_risk"),
         concurrent=True,
     ),
     ToolSpec(
@@ -130,7 +133,8 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
-        approval_required=True,
+        risk_level="medium",
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.bash_stop:evaluate_risk"),
         concurrent=False,
     ),
 ]

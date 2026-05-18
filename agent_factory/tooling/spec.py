@@ -17,6 +17,10 @@ ToolObservationStatus = Literal[
     "completed",
 ]
 
+ToolRiskLevel = Literal["low", "medium", "high"]
+ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
+ToolLLMRiskMode = Literal["disabled", "on_uncertain", "always"]
+
 ToolEventType = Literal[
     "tool_call_proposed",
     "tool_approval_requested",
@@ -28,6 +32,33 @@ ToolEventType = Literal[
 ]
 
 
+class ToolRiskEvaluatorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hard: str | None = None
+    llm: str | None = None
+    llm_mode: ToolLLMRiskMode = "disabled"
+
+
+class ToolRiskContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    base_risk_level: ToolRiskLevel
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    resources: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolRiskResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: ToolRiskAction = "inherit"
+    risk_level: ToolRiskLevel | None = None
+    reasons: list[str] = Field(default_factory=list)
+    facts: dict[str, Any] = Field(default_factory=dict)
+    normalized_arguments: dict[str, Any] | None = None
+
+
 class ToolSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -37,7 +68,8 @@ class ToolSpec(BaseModel):
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     resources: dict[str, str] = Field(default_factory=dict)
-    approval_required: bool = False
+    risk_level: ToolRiskLevel = "low"
+    risk_evaluator: ToolRiskEvaluatorConfig = Field(default_factory=ToolRiskEvaluatorConfig)
     concurrent: bool = True
 
     @field_validator("id")
@@ -87,7 +119,7 @@ class ModelToolView(BaseModel):
     id: str
     description: str
     input_schema: dict[str, Any] = Field(default_factory=dict)
-    approval_required: bool = False
+    risk_level: ToolRiskLevel = "low"
 
 
 class ToolObservation(BaseModel):
@@ -124,5 +156,5 @@ def model_tool_view(spec: ToolSpec) -> ModelToolView:
         id=spec.id,
         description=spec.description,
         input_schema=spec.input_schema,
-        approval_required=spec.approval_required,
+        risk_level=spec.risk_level,
     )

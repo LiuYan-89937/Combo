@@ -14,7 +14,7 @@ class MCPRuntimeTest(unittest.TestCase):
             transport="stdio",
             command="node",
             args=["server.js"],
-            approval_default=False,
+            risk_level_default="low",
         )
         FakeStdioClient.enter_count = 0
         with patch("agent_factory.tooling.mcp_runtime._load_mcp_sdk", return_value=_fake_sdk()):

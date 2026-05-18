@@ -91,7 +91,7 @@ class FactoryExtensionTest(unittest.TestCase):
                                 "server_id": "factory_mcp",
                                 "transport": "stdio",
                                 "tool_id_prefix": "factory_mcp",
-                                "approval_default": False,
+                                "risk_level_default": "low",
                             }
                         ],
                     }
@@ -188,7 +188,8 @@ def _write_skill_extension(root: Path, *, tool_id: str = "echo", prefix: str | N
                     "additionalProperties": False,
                 },
                 "resources": {},
-                "approval_required": False,
+                "risk_level": "low",
+                "risk_evaluator": {},
                 "concurrent": True,
             }
         ),
@@ -227,7 +228,7 @@ def _write_mcp_extension(root: Path) -> None:
                         "command": "node",
                         "args": ["server.js"],
                         "tool_id_prefix": "factory_mcp",
-                        "approval_default": False,
+                        "risk_level_default": "low",
                     }
                 ],
             }

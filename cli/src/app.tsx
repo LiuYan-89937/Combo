@@ -12,7 +12,6 @@ import {ErrorPanel} from './views/ErrorPanel.js';
 import {HelpPanel} from './views/HelpPanel.js';
 import {InterruptChoicePanel, isChoiceInterrupt} from './views/InterruptChoicePanel.js';
 import {InterruptPrompt} from './views/InterruptPrompt.js';
-import {LiveStreamPanel} from './views/LiveStreamPanel.js';
 import {MessagesPanel} from './views/MessagesPanel.js';
 import {SessionPanel} from './views/SessionPanel.js';
 import {ShellLayout} from './views/ShellLayout.js';
@@ -139,7 +138,6 @@ export function App() {
 				/>
 				<ConnectedHelpPanel />
 				<CreateAgentView />
-				<LiveStreamPanel />
 				<ToolEventsPanel />
 				<MessagesPanel />
 				<InterruptChoicePanel onSubmit={resumeInterrupt} />

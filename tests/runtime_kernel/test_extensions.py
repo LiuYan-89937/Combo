@@ -40,7 +40,7 @@ class AgentInstanceExtensionTest(unittest.TestCase):
                                 "transport": "stdio",
                                 "enabled": True,
                                 "tool_id_prefix": "search",
-                                "approval_default": False,
+                                "risk_level_default": "low",
                             }
                         ],
                     }

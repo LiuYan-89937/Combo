@@ -7,6 +7,7 @@ from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_boundary,
+    path_risk_result,
     positive_int,
     required_string,
     resolve_path,
@@ -59,6 +60,16 @@ _TEXT_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+
+
+def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    return path_risk_result(
+        arguments,
+        context,
+        path_key="base_path",
+        default_action="allow",
+        sensitive_action="ask",
+    )
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import py_compile
 import tempfile
@@ -485,6 +486,13 @@ def _json_content_errors(path: str, content: str) -> list[str]:
 
 
 def _python_content_errors(path: str, content: str) -> list[str]:
+    errors: list[str] = []
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as exc:
+        return [f"{path} Python syntax invalid: SyntaxError: {exc}"]
+    if _is_tool_code_path(path):
+        errors.extend(_tool_code_contract_errors(path, tree))
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".py", encoding="utf-8", delete=False) as handle:
             handle.write(content)
@@ -494,8 +502,28 @@ def _python_content_errors(path: str, content: str) -> list[str]:
         finally:
             temp_path.unlink(missing_ok=True)
     except Exception as exc:
-        return [f"{path} Python syntax invalid: {type(exc).__name__}: {exc}"]
-    return []
+        errors.append(f"{path} Python syntax invalid: {type(exc).__name__}: {exc}")
+    return errors
+
+
+def _is_tool_code_path(path: str) -> bool:
+    parts = PurePosixPath(path).parts
+    return len(parts) == 3 and parts[0] == "tools" and parts[2] == "tool.py"
+
+
+def _tool_code_contract_errors(path: str, tree: ast.Module) -> list[str]:
+    errors: list[str] = []
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    for function_name in ("run", "evaluate_risk"):
+        function = functions.get(function_name)
+        if function is None:
+            errors.append(f"{path} missing required function: {function_name}(arguments, resources/context)")
+            continue
+        positional = [arg.arg for arg in function.args.posonlyargs + function.args.args]
+        expected_second = "context" if function_name == "evaluate_risk" else "resources"
+        if positional[:2] != ["arguments", expected_second]:
+            errors.append(f"{path} {function_name} first two parameters must be arguments, {expected_second}")
+    return errors
 
 
 def _static_checks_from_decision(decision: PackageBuildDecision, errors: list[str]) -> list[dict[str, object]]:

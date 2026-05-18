@@ -39,7 +39,7 @@ NETWORK_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_NETWORK_RESOURCE,
-        approval_required=False,
+        risk_level="medium",
         concurrent=True,
     ),
     ToolSpec(
@@ -77,7 +77,7 @@ NETWORK_TOOL_SPECS: list[ToolSpec] = [
             "additionalProperties": False,
         },
         resources=_NETWORK_RESOURCE,
-        approval_required=False,
+        risk_level="medium",
         concurrent=True,
     ),
 ]

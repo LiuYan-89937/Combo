@@ -7,12 +7,13 @@ from typing import Any, Callable, Literal, Mapping
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
-from agent_factory.tooling.spec import ToolObservation, ToolSpec
+from agent_factory.tooling.spec import ToolObservation, ToolRiskContext, ToolRiskResult, ToolSpec
 
 
 ToolApprovalAction = Literal["approve", "deny", "revise"]
-ToolApprovalHandler = Callable[[ToolSpec, dict[str, Any]], "ToolApprovalDecision"]
+ToolApprovalHandler = Callable[[ToolSpec, dict[str, Any], ToolRiskResult], "ToolApprovalDecision"]
 TRUST_TOOL_ACTIONS = {"trust", "trust_tool", "always_allow", "no_approval", "无需审批"}
 
 
@@ -44,6 +45,8 @@ class ToolExecutionGateway:
     output_schema: CompiledJsonSchema
     entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
     global_resources: Mapping[str, Any]
+    hard_risk_evaluator: ToolRiskEvaluator | None = None
+    llm_risk_prompt: str | None = None
     approval_handler: ToolApprovalHandler | None = None
     max_revisions: int = 5
 
@@ -72,11 +75,22 @@ class ToolExecutionGateway:
                 arguments=arguments,
                 errors=input_errors,
             )
-        approval = self._approval(arguments)
+        try:
+            tool_resources = self._resolve_resources()
+        except Exception as exc:
+            return self._observation(
+                "execution_failed",
+                f"Tool resource resolution failed: {type(exc).__name__}: {exc}",
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                errors=[f"{type(exc).__name__}: {exc}"],
+            )
+        arguments, risk = self._evaluate_risk(arguments, tool_resources)
+        approval = self._approval(arguments, risk)
         if approval.action == "deny":
             return self._observation(
                 "denied",
-                "Human denied this tool call.",
+                "Tool call denied by approval policy or human review.",
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 user_instruction=approval.revision_guidance or None,
@@ -90,7 +104,6 @@ class ToolExecutionGateway:
                 user_instruction=approval.revision_guidance or "Please regenerate the tool call.",
             )
         try:
-            tool_resources = self._resolve_resources()
             output = self.entrypoint(arguments=arguments, resources=tool_resources)
         except Exception as exc:
             return self._observation(
@@ -128,11 +141,75 @@ class ToolExecutionGateway:
             retryable=False,
         )
 
-    def _approval(self, arguments: dict[str, Any]) -> ToolApprovalDecision:
-        if not self.spec.approval_required:
+    def _evaluate_risk(
+        self,
+        arguments: dict[str, Any],
+        tool_resources: dict[str, Any],
+    ) -> tuple[dict[str, Any], ToolRiskResult]:
+        context = ToolRiskContext(
+            tool_id=self.spec.id,
+            base_risk_level=self.spec.risk_level,
+            arguments=arguments,
+            resources=tool_resources,
+        ).model_dump(mode="json")
+        results: list[ToolRiskResult] = []
+        if self.hard_risk_evaluator is not None:
+            try:
+                raw_result = self.hard_risk_evaluator(arguments, context)
+                hard_result = raw_result if isinstance(raw_result, ToolRiskResult) else ToolRiskResult.model_validate(raw_result)
+            except Exception as exc:
+                hard_result = ToolRiskResult(
+                    action="uncertain",
+                    risk_level=self.spec.risk_level,
+                    reasons=[f"hard risk evaluator failed: {type(exc).__name__}: {exc}"],
+                )
+            results.append(hard_result)
+            if hard_result.normalized_arguments is not None:
+                arguments = hard_result.normalized_arguments
+            if hard_result.action == "deny":
+                return arguments, hard_result
+        llm_config = self.spec.risk_evaluator
+        should_call_llm = bool(
+            self.llm_risk_prompt
+            and llm_config.llm_mode != "disabled"
+            and (
+                llm_config.llm_mode == "always"
+                or any(result.action == "uncertain" for result in results)
+                or not results
+            )
+        )
+        if should_call_llm:
+            try:
+                results.append(
+                    call_llm_risk_evaluator(
+                        tool_id=self.spec.id,
+                        base_risk_level=self.spec.risk_level,
+                        prompt=self.llm_risk_prompt or "",
+                        arguments=arguments,
+                        context=context,
+                        hard_result=results[-1] if results else None,
+                    )
+                )
+            except Exception as exc:
+                results.append(
+                    ToolRiskResult(
+                        action="uncertain",
+                        risk_level=self.spec.risk_level,
+                        reasons=[f"llm risk evaluator failed: {type(exc).__name__}: {exc}"],
+                    )
+                )
+        return arguments, merge_risk_results(results, base_risk_level=self.spec.risk_level)
+
+    def _approval(self, arguments: dict[str, Any], risk: ToolRiskResult) -> ToolApprovalDecision:
+        policy_action = _risk_policy_action(self.spec, risk)
+        if policy_action == "deny":
+            return ToolApprovalDecision(action="deny", revision_guidance=_risk_guidance(risk))
+        if policy_action == "allow":
+            return ToolApprovalDecision(action="approve")
+        if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(self.spec.id):
             return ToolApprovalDecision(action="approve")
         handler = self.approval_handler or default_interrupt_approval
-        return handler(self.spec, arguments)
+        return handler(self.spec, arguments, risk)
 
     def _resolve_resources(self) -> dict[str, Any]:
         resources: dict[str, Any] = {}
@@ -180,9 +257,25 @@ def default_tool_max_revisions() -> int:
     return max(value, 1)
 
 
-def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any]) -> ToolApprovalDecision:
-    if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(spec.id):
-        return ToolApprovalDecision(action="approve")
+def _risk_policy_action(spec: ToolSpec, risk: ToolRiskResult) -> Literal["allow", "ask", "deny"]:
+    if risk.action == "deny":
+        return "deny"
+    if spec.risk_level == "high":
+        return "ask"
+    if spec.risk_level == "medium":
+        if risk.action == "allow":
+            return "allow"
+        return "ask"
+    if risk.action in {"ask", "uncertain"}:
+        return "ask"
+    return "allow"
+
+
+def _risk_guidance(risk: ToolRiskResult) -> str:
+    return "\n".join(risk.reasons).strip()
+
+
+def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: ToolRiskResult) -> ToolApprovalDecision:
     decision = interrupt(
         {
             "type": "tool_approval",
@@ -194,6 +287,9 @@ def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any]) -> Too
                     "tool_name": spec.id,
                     "args": arguments,
                     "summary": spec.id,
+                    "risk_level": spec.risk_level,
+                    "risk_reasons": risk.reasons,
+                    "risk_facts": risk.facts,
                 }
             ],
         }

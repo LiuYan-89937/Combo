@@ -522,6 +522,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- generated_files 只能包含 PackageMaterializationPlan 中 generation_mode=model_generated 的文件。\n"
                     "- 必须为每个 tool 生成 tools/<tool_id>/tool.py 和 tools/<tool_id>/README.md，除非 plan 中没有声明。\n"
                     "- tool.py 必须是真实 adapter draft，提供 run(arguments: dict, resources: dict) -> dict。\n"
+                    "- tool.py 必须同时提供 evaluate_risk(arguments: dict, context: dict) -> dict，用于本工具自己的参数风险校验。\n"
+                    "- evaluate_risk 必须返回可被 ToolRiskResult 校验的 dict，字段只允许 action/risk_level/reasons/facts/normalized_arguments，且不得调用真实业务外部服务。\n"
                     "- tool.py 不得硬编码用户资源，不得使用 Factory 模型配置作为业务资源。\n"
                     "- 不生成或改写 system_generated contract 文件，包括 bindings、tool manifest、assembly_spec、resources、render_manifest、agent_package。\n"
                     "- 不生成 harness，不生成动态测试结果，不改变 assembly_spec 的 graph/bindings/tools/runtime 语义。\n"

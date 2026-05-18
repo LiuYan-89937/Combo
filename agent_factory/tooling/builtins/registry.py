@@ -34,4 +34,4 @@ def get_builtin_tool_ids() -> list[str]:
 
 
 def get_builtin_protected_tool_ids() -> list[str]:
-    return [tool.id for tool in get_builtin_tool_specs() if tool.approval_required]
+    return [tool.id for tool in get_builtin_tool_specs() if tool.risk_level in {"medium", "high"}]

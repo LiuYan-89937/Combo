@@ -32,6 +32,7 @@ from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.prompts import PromptId, output_json_schema
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, validate_render_manifest
 from agent_factory.runtime_kernel.patterns import PatternRegistry
+from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskLevel
 
 
 ASSEMBLY_VALIDATION_VERSION = "assembly_validation.v0"
@@ -481,7 +482,8 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
             input_schema=dict(capability.get("input_contract") or tool.input_schema or {"type": "object"}),
             output_schema=dict(capability.get("output_contract") or tool.output_schema or {"type": "object"}),
             resources={resource_key: resource_key for resource_key in _resource_keys_for_tool(tool.id, state)},
-            approval_required=bool(capability.get("approval_required") or False),
+            risk_level=_risk_level_from_capability(capability),
+            risk_evaluator=ToolRiskEvaluatorConfig(hard=f"tools/{tool.id}/tool.py:evaluate_risk"),
             concurrent=bool(capability.get("concurrent", tool.concurrent)),
         )
         tool_specs.append(
@@ -528,6 +530,12 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         tools=tool_specs,
         manifest_contract=manifest_contract,
     )
+
+
+def _risk_level_from_capability(capability: dict[str, object]) -> ToolRiskLevel:
+    if bool(capability.get("approval_required") or False):
+        return "high"
+    return "medium"
 
 
 def _build_render_manifest(spec: AgentAssemblySpec, state: FactoryGraphState) -> RenderManifest:

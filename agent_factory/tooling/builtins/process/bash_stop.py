@@ -8,6 +8,18 @@ from agent_factory.tooling.builtins.process.manager import (
     output_limit,
     required_string,
 )
+from agent_factory.tooling.spec import ToolRiskResult
+
+
+def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    _ = context
+    if not isinstance(arguments.get("process_id"), str) or not arguments.get("process_id", "").strip():
+        return ToolRiskResult(action="deny", risk_level="medium", reasons=["process_id is required"]).model_dump(mode="json")
+    return ToolRiskResult(
+        action="ask",
+        risk_level="medium",
+        reasons=["stopping a running process requires approval"],
+    ).model_dump(mode="json")
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:

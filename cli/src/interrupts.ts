@@ -13,7 +13,7 @@ export function describeInterrupt(event: FactoryEvent | null): InterruptDescript
 	const payload = event.payload ?? {};
 	const type = String(payload.type ?? event.event_type);
 	if (event.event_type === 'tool_approval_requested' || type === 'tool_approval') {
-		return {type, title: 'Tool Approval Required', resumeKind: 'tool_approval'};
+		return {type, title: 'Tool Approval Dock', resumeKind: 'tool_approval'};
 	}
 	if (type === 'plan_review') {
 		return {type, title: 'Plan Review', resumeKind: 'plan_review'};

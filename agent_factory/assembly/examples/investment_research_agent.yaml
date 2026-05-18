@@ -47,7 +47,8 @@ tools:
         - results
       additionalProperties: false
     resources: {}
-    approval_required: false
+    risk_level: low
+    risk_evaluator: {}
     concurrent: true
   - id: price_chart
     description: Read price chart data already available to the generated agent runtime.
@@ -69,7 +70,8 @@ tools:
         - chart
       additionalProperties: false
     resources: {}
-    approval_required: false
+    risk_level: low
+    risk_evaluator: {}
     concurrent: true
 output:
   citations_required: true

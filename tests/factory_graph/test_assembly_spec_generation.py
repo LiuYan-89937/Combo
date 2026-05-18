@@ -52,7 +52,8 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 "input_schema": {"type": "object"},
                 "output_schema": {"type": "object"},
                 "resources": {},
-                "approval_required": False,
+                "risk_level": "low",
+                "risk_evaluator": {},
                 "concurrent": True,
             }
         ]
@@ -175,7 +176,8 @@ def _valid_draft() -> dict:
                 "input_schema": {"type": "object"},
                 "output_schema": {"type": "object"},
                 "resources": {},
-                "approval_required": False,
+                "risk_level": "low",
+                "risk_evaluator": {},
                 "concurrent": True,
             }
         ],

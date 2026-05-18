@@ -11,7 +11,7 @@ from agent_factory.tooling.providers.base import (
     ToolProviderResult,
     diagnostic,
 )
-from agent_factory.tooling.spec import ToolSpec
+from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskLevel, ToolSpec
 
 
 SNAKE_CHARS = re.compile(r"[^a-z0-9_]+")
@@ -24,7 +24,8 @@ class MCPDiscoveredTool(BaseModel):
     description: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
-    approval_required: bool | None = None
+    risk_level: ToolRiskLevel | None = None
+    risk_evaluator: ToolRiskEvaluatorConfig | None = None
     concurrent: bool | None = None
 
 
@@ -45,7 +46,7 @@ class MCPServerConfig(BaseModel):
     enabled: bool = True
     required: bool = False
     tool_id_prefix: str | None = None
-    approval_default: bool = True
+    risk_level_default: ToolRiskLevel = "medium"
     concurrent_default: bool = False
     timeout_seconds: float = Field(default=30.0, gt=0)
 
@@ -138,7 +139,8 @@ def _tool_spec_from_mcp_tool(server: MCPServerConfig, tool: MCPDiscoveredTool) -
         input_schema=tool.input_schema or {"type": "object", "additionalProperties": True},
         output_schema=tool.output_schema or {"type": "object", "additionalProperties": True},
         resources={},
-        approval_required=server.approval_default if tool.approval_required is None else tool.approval_required,
+        risk_level=tool.risk_level or server.risk_level_default,
+        risk_evaluator=tool.risk_evaluator or ToolRiskEvaluatorConfig(llm_mode="on_uncertain"),
         concurrent=server.concurrent_default if tool.concurrent is None else tool.concurrent,
     )
 
