@@ -39,6 +39,13 @@ ASSEMBLY_VALIDATION_VERSION = "assembly_validation.v0"
 ASSEMBLY_ROOT = ".agentfactory/assemblies"
 MAX_REVISION_ROUNDS = 3
 STAGE_ID = "assembly_spec_generation"
+_MEMORY_SERVICE_KINDS = {"memory_store", "memory_system"}
+_MEMORY_METADATA_KEYS = {
+    "memory_config_path",
+    "memory_store_config_path",
+    "memory_config",
+    "memory_store",
+}
 
 
 def build_assembly_spec_generation_subgraph():
@@ -304,8 +311,6 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
         "sandbox_contract_path": _sandbox_contract_path(state),
         "resource_preparation_report_path": _resource_preparation_report_path(state),
         "session_config_path": "session.json",
-        "memory_config_path": "memory/config.json",
-        "memory_store_config_path": "memory/store.json",
         "source_stage_ids": [
             "requirement_capture",
             "runtime_pattern_selection",
@@ -319,6 +324,17 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
     for key, expected in required_metadata.items():
         if metadata.get(key) != expected:
             errors.append(f"metadata.{key} must equal {expected!r}")
+    if _assembly_memory_enabled(spec):
+        for key, expected in {
+            "memory_config_path": "memory/config.json",
+            "memory_store_config_path": "memory/store.json",
+        }.items():
+            if metadata.get(key) != expected:
+                errors.append(f"metadata.{key} must equal {expected!r}")
+        if not isinstance(metadata.get("memory_config"), dict):
+            errors.append("metadata.memory_config must be present when cross-session memory is enabled")
+        if not isinstance(metadata.get("memory_store"), dict):
+            errors.append("metadata.memory_store must be present when cross-session memory is enabled")
     if spec.harness:
         errors.append("harness must be empty in stage 7")
     return errors
@@ -335,17 +351,22 @@ def _with_system_runtime_contract(spec: AgentAssemblySpec, state: FactoryGraphSt
         deep=True,
     )
     metadata = {
-        **dict(spec.metadata or {}),
+        **_metadata_without_memory_contract(spec.metadata),
         "factory_run_id": str(state.get("factory_run_id") or ""),
         "resource_file_path": _resource_file_path(state),
         "sandbox_contract_path": _sandbox_contract_path(state),
         "resource_preparation_report_path": _resource_preparation_report_path(state),
         "session_config_path": "session.json",
-        "memory_config_path": "memory/config.json",
-        "memory_store_config_path": "memory/store.json",
-        "memory_config": _default_agent_memory_system_config(),
-        "memory_store": _default_agent_memory_store_config(),
     }
+    if _assembly_memory_enabled(spec):
+        metadata.update(
+            {
+                "memory_config_path": "memory/config.json",
+                "memory_store_config_path": "memory/store.json",
+                "memory_config": _default_agent_memory_system_config(),
+                "memory_store": _default_agent_memory_store_config(),
+            }
+        )
     return spec.model_copy(update={"runtime": runtime, "metadata": metadata}, deep=True)
 
 
@@ -366,6 +387,14 @@ def _default_agent_memory_store_config() -> dict[str, str]:
 
 def _default_agent_memory_system_config() -> dict[str, Any]:
     return default_agent_memory_config().model_dump(mode="json")
+
+
+def _assembly_memory_enabled(spec: AgentAssemblySpec) -> bool:
+    return any(service.kind in _MEMORY_SERVICE_KINDS and service.required for service in spec.bindings.services)
+
+
+def _metadata_without_memory_contract(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    return {key: value for key, value in dict(metadata or {}).items() if key not in _MEMORY_METADATA_KEYS}
 
 
 def _binding_contract_errors(spec: AgentAssemblySpec, state: FactoryGraphState) -> list[str]:
@@ -470,7 +499,9 @@ def _nodes_with_strategy_refs(state: FactoryGraphState) -> set[str]:
 
 
 def _required_service_kinds(spec: AgentAssemblySpec, pattern_nodes: dict[str, dict[str, str]]) -> set[str]:
-    required: set[str] = {"observability_manager", "checkpointer", "memory_store", "memory_system"}
+    required: set[str] = {"observability_manager", "checkpointer"}
+    if _assembly_memory_enabled(spec):
+        required.update(_MEMORY_SERVICE_KINDS)
     if any(node["impl"].startswith("cognitive.") for node in pattern_nodes.values()):
         required.add("model_service")
         required.add("context_engine")
@@ -497,9 +528,14 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         _file_spec("bindings/node_bindings.json", "json", "binding", "node_bindings", "system_generated", "assembly_spec.bindings.node_bindings"),
         _file_spec("bindings/hooks.json", "json", "binding", "hooks", "system_generated", "assembly_spec.bindings.hooks"),
         _file_spec("session.json", "json", "manifest", "session", "system_generated", "assembly_spec.runtime.session_config"),
-        _file_spec("memory/config.json", "json", "manifest", "memory_config", "system_generated", "assembly_spec.metadata.memory_config"),
-        _file_spec("memory/store.json", "json", "manifest", "memory_store", "system_generated", "assembly_spec.metadata.memory_store"),
     ]
+    if _assembly_memory_enabled(spec):
+        files.extend(
+            [
+                _file_spec("memory/config.json", "json", "manifest", "memory_config", "system_generated", "assembly_spec.metadata.memory_config"),
+                _file_spec("memory/store.json", "json", "manifest", "memory_store", "system_generated", "assembly_spec.metadata.memory_store"),
+            ]
+        )
     tool_capabilities = _tool_capabilities_by_id(state)
     tool_specs: list[PackageMaterializationToolSpec] = []
     for binding in spec.bindings.node_bindings:
@@ -560,14 +596,19 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
             "hooks": "bindings/hooks.json",
         },
         "session_path": "session.json",
-        "memory_config_path": "memory/config.json",
-        "memory_store_path": "memory/store.json",
         "prompts": sorted(item.path for item in files if item.source_kind == "prompt"),
         "tools": sorted(item.manifest_path for item in tool_specs),
         "policies": sorted(item.path for item in files if item.source_kind == "policy"),
         "strategy_profiles": sorted(item.path for item in files if item.source_kind == "strategy"),
         "formatters": sorted(item.path for item in files if item.source_kind == "formatter"),
     }
+    if _assembly_memory_enabled(spec):
+        manifest_contract.update(
+            {
+                "memory_config_path": "memory/config.json",
+                "memory_store_path": "memory/store.json",
+            }
+        )
     return PackageMaterializationPlan(
         factory_run_id=factory_run_id,
         package_root=package_root,
@@ -634,9 +675,9 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "render_manifest.json",
         "sandbox_contract.json",
         "session.json",
-        "memory/config.json",
-        "memory/store.json",
     }
+    if plan.manifest_contract.get("memory_config_path") or plan.manifest_contract.get("memory_store_path"):
+        required.update({"memory/config.json", "memory/store.json"})
     for path in sorted(required - paths):
         errors.append(f"package_materialization_plan missing required binding file: {path}")
     tool_ids = _tool_capability_ids(state)

@@ -228,7 +228,7 @@ class RuntimeKernelFacade:
 
 
 def _required_services_for_pattern(pattern) -> list[str]:
-    required = {"observability_manager", "checkpointer", "memory_store", "memory_system"}
+    required = {"observability_manager", "checkpointer"}
     for node in pattern.nodes:
         if node.impl.startswith("cognitive."):
             required.update({"model_service", "context_engine"})
@@ -261,17 +261,12 @@ def _required_services_for_pattern(pattern) -> list[str]:
 
 def _ensure_memory_runtime(services: RuntimeServices) -> None:
     if services.memory_system is None:
-        if services.memory_store is None:
-            raise RuntimeError("cross-session memory is enabled but memory_store is missing")
-        services.memory_system = default_agent_runtime(
-            agent_id="default-agent",
-            config=default_agent_memory_config(),
-            store=services.memory_store,
-        )
         return
     runtime = services.memory_system
     config = getattr(runtime, "config", None)
-    if config is not None and getattr(config, "enabled", False) and getattr(runtime, "store", None) is None:
+    if config is None or not getattr(config, "enabled", False):
+        return
+    if getattr(runtime, "store", None) is None:
         if services.memory_store is None:
             raise RuntimeError("cross-session memory is enabled but BaseStore is missing")
         runtime.store = services.memory_store

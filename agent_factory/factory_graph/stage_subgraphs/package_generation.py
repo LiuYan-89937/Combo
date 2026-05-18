@@ -52,8 +52,6 @@ REQUIRED_PACKAGE_FILES = {
     "bindings/node_bindings.json",
     "bindings/hooks.json",
     "session.json",
-    "memory/config.json",
-    "memory/store.json",
 }
 
 
@@ -279,7 +277,11 @@ def _validate_package_structure(state: FactoryGraphState) -> dict[str, Any]:
     ]
     errors: list[str] = []
     static_checks: list[dict[str, object]] = []
-    for path in REQUIRED_PACKAGE_FILES:
+    required_files = set(REQUIRED_PACKAGE_FILES)
+    materialization_plan = _materialization_plan(state)
+    if materialization_plan.manifest_contract.get("memory_config_path") or materialization_plan.manifest_contract.get("memory_store_path"):
+        required_files.update({"memory/config.json", "memory/store.json"})
+    for path in required_files:
         if not (package_root / path).is_file():
             errors.append(f"missing required package file: {path}")
     for item in materialized:
@@ -443,14 +445,15 @@ def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) ->
         manifest = TypeAdapter(dict[str, Any]).validate_json(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return [f"agent_package.json invalid: {type(exc).__name__}: {exc}"]
-    for key in (
+    required_keys = [
         "assembly_spec_path",
         "resources_path",
         "render_manifest_path",
         "session_path",
-        "memory_config_path",
-        "memory_store_path",
-    ):
+    ]
+    if manifest.get("memory_config_path") or manifest.get("memory_store_path"):
+        required_keys.extend(["memory_config_path", "memory_store_path"])
+    for key in required_keys:
         value = str(manifest.get(key) or "")
         if not value:
             errors.append(f"agent_package.json missing {key}")

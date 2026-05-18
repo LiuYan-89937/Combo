@@ -25,8 +25,8 @@ class ExecutionController:
                 "pattern_version": state.run.pattern_version,
             },
         )
-        state = self._invoke_graph(compiled_app, state, thread_id=thread_id)
-        self._enqueue_memory_write(compiled_app, state, thread_id=thread_id)
+        state, graph_messages = self._invoke_graph(compiled_app, state, thread_id=thread_id)
+        self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
         self._emit_run_completed(compiled_app, state)
         return state
 
@@ -46,13 +46,13 @@ class ExecutionController:
         state.policy.interrupt_required = False
         state.policy.approval_required = False
         self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
-        state = self._invoke_graph(compiled_app, state, thread_id=thread_id)
-        self._enqueue_memory_write(compiled_app, state, thread_id=thread_id)
+        state, graph_messages = self._invoke_graph(compiled_app, state, thread_id=thread_id)
+        self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
         self._emit(compiled_app, state, "resume_completed", message="Kernel resumed from checkpoint.")
         self._emit_run_completed(compiled_app, state)
         return state
 
-    def _invoke_graph(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> RuntimeState:
+    def _invoke_graph(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> tuple[RuntimeState, list[Any]]:
         recursion_limit = max(state.execution.max_turns + state.execution.max_subgraph_depth + 8, 25)
         raw = compiled_app.graph_app.invoke(
             {"runtime": state.model_dump(mode="python")},
@@ -65,7 +65,7 @@ class ExecutionController:
         if not result.execution.finished:
             result.execution.finished = True
             result.execution.finish_status = result.execution.finish_status or "completed"
-        return result
+        return result, list(raw.get("messages") or [])
 
     def _emit_run_completed(self, compiled_app: Any, state: RuntimeState) -> None:
         self._emit(
@@ -102,12 +102,21 @@ class ExecutionController:
         compiled_app.services.observability_manager.emit(event)
         state.observability.events.append(event.model_dump(mode="json"))
 
-    def _enqueue_memory_write(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> None:
+    def _enqueue_memory_write(
+        self,
+        compiled_app: Any,
+        state: RuntimeState,
+        *,
+        thread_id: str,
+        messages: list[Any],
+    ) -> None:
         if state.execution.finish_status != "completed" or state.execution.last_error:
             return
         runtime = getattr(compiled_app.services, "memory_system", None)
         writer = getattr(runtime, "writer", None)
         if runtime is None or writer is None:
+            return
+        if not getattr(runtime.config, "enabled", False) or not getattr(runtime.config, "write_enabled", False):
             return
         turn_index = int(state.conversation.turn_index or 0)
         if not should_enqueue_memory_write(turn_index=turn_index, config=runtime.config):
@@ -123,7 +132,7 @@ class ExecutionController:
             scope="agent",
             namespace=tuple(runtime.namespace),
             source=source,
-            messages=_messages_delta(state),
+            messages=messages or _messages_delta(state),
             end_turn=turn_index,
             max_turns=runtime.config.background.write_interval_turns,
         )

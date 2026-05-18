@@ -596,28 +596,28 @@ per_kind_limits = constraint 3 / preference 3 / decision 2 / fact 2 / artifact 1
 
 ### 3.5 Package 与 RuntimeKernel 编译
 
-第七阶段系统冻结：
+第七阶段系统冻结会话配置；跨会话记忆配置是可选能力，不是所有生成 Agent 的默认必选项：
 
 ```text
 session.json
-memory/config.json
-memory/store.json
+memory/config.json    # 仅当 AssemblySpec 声明 memory_system / memory_store 时生成
+memory/store.json     # 仅当 AssemblySpec 声明 memory_system / memory_store 时生成
 ```
 
-第八阶段系统物化这些文件，模型不能改写。
+第八阶段按第七阶段冻结的 `package_materialization_plan` 物化这些文件，模型不能改写。没有声明跨会话记忆的 AgentPackage 不生成 memory 目录，也不要求 RuntimeKernel 注入 BaseStore。
 
 RuntimeKernel 编译时：
 
 ```text
 session.json -> AgentSessionManager
-memory/store.json -> BaseStore
-memory/config.json -> MemorySystemRuntime
+memory/store.json -> BaseStore                 # 可选；启用跨会话记忆时必需
+memory/config.json -> MemorySystemRuntime      # 可选；启用跨会话记忆时必需
 graph.compile(checkpointer=..., store=...)
-auto inject memory retrieve system wrapper
-start MemoryBackgroundWorker
+auto inject memory retrieve system wrapper     # 无 memory runtime 时 no-op
+start MemoryBackgroundWorker                   # write_enabled=true 时启动，失败不阻塞主图
 ```
 
-如果 `cross_session_memory.enabled=true` 但没有 BaseStore，编译失败。后台 worker 启动失败不阻塞主图，只禁用写入并发出事件。
+如果 `cross_session_memory.enabled=true` 但没有 BaseStore，编译失败。后台 worker 启动失败不阻塞主图，只禁用写入并发出事件。启用写入时，写入 segment 必须从 LangGraph `messages` checkpoint 的完整窗口构建，和 Factory 的 conversation segment 契约对齐，而不是只截取当前轮临时字段。
 
 ### 3.6 事件
 

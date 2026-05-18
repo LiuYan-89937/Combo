@@ -23,6 +23,8 @@ from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.state import RuntimeGraphState
 from agent_factory.memory_system import MemorySystemConfig, MemorySystemRuntime
+from agent_factory.memory_system.config import MemoryBackgroundConfig
+from agent_factory.memory_system.schema import MemoryWriteReport
 
 
 class RuntimeKernelMemorySystemTest(unittest.TestCase):
@@ -133,6 +135,65 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             facade.compile(pattern_id="react_agent", bindings=BindingSet(), services=services)
 
+    def test_cross_session_memory_is_optional_for_generated_agent_runtime(self) -> None:
+        facade = _runtime_facade()
+        services = RuntimeServices(
+            model_service=ScriptedModelService(),
+            tool_registry=InMemoryToolRegistry(),
+            memory_store=None,
+            memory_system=None,
+            knowledge_engine=KnowledgeEngine(),
+            context_engine=ContextEngine(),
+            policy_engine=PolicyEngine(),
+            observability_manager=ObservabilityManager(),
+            checkpointer=LangGraphCheckpointerFactory().build(LangGraphCheckpointerConfig(backend="memory")).saver,
+        )
+
+        compiled = facade.compile(pattern_id="react_agent", bindings=BindingSet(), services=services)
+        with tempfile.TemporaryDirectory() as session_root:
+            result = facade.run(compiled, user_input="hello", session_config={"session_root": session_root})
+
+        self.assertEqual(result.execution.finish_status, "completed")
+
+    def test_agent_memory_write_uses_checkpoint_message_window(self) -> None:
+        facade = _runtime_facade()
+        writer = _CapturingMemoryWriter()
+        memory_config = MemorySystemConfig(
+            background=MemoryBackgroundConfig(write_interval_turns=2),
+            injection_enabled=False,
+        )
+        services = RuntimeServices(
+            model_service=ScriptedModelService(),
+            tool_registry=InMemoryToolRegistry(),
+            memory_store=LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store,
+            memory_system=MemorySystemRuntime(
+                config=memory_config,
+                store=LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store,
+                namespace=("memory", "agent", "agent_a"),
+                writer=writer,
+            ),
+            knowledge_engine=KnowledgeEngine(),
+            context_engine=ContextEngine(),
+            policy_engine=PolicyEngine(),
+            observability_manager=ObservabilityManager(),
+            checkpointer=LangGraphCheckpointerFactory().build(LangGraphCheckpointerConfig(backend="memory")).saver,
+        )
+        compiled = facade.compile(pattern_id="react_agent", bindings=BindingSet(), services=services)
+
+        with tempfile.TemporaryDirectory() as session_root:
+            first = facade.run(compiled, user_input="first", session_config={"session_root": session_root})
+            facade.run(
+                compiled,
+                user_input="second",
+                session_config={"session_root": session_root, "session_id": first.run.session_id},
+            )
+
+        self.assertEqual(len(writer.jobs), 1)
+        contents = [message.content for message in writer.jobs[0].segment.messages]
+        self.assertIn("first", contents)
+        self.assertTrue(any("Echo: first" in content for content in contents))
+        self.assertIn("second", contents)
+
 
 def _runtime_services() -> RuntimeServices:
     return RuntimeServices(
@@ -145,6 +206,15 @@ def _runtime_services() -> RuntimeServices:
         observability_manager=ObservabilityManager(),
         checkpointer=LangGraphCheckpointerFactory().build(LangGraphCheckpointerConfig(backend="memory")).saver,
     )
+
+
+class _CapturingMemoryWriter:
+    def __init__(self) -> None:
+        self.jobs = []
+
+    def enqueue(self, job):
+        self.jobs.append(job)
+        return MemoryWriteReport(job_id=job.job_id, status="queued", namespace=job.namespace)
 
 
 def _runtime_facade() -> RuntimeKernelFacade:
