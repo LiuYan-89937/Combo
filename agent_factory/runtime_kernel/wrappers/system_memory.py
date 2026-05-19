@@ -9,8 +9,12 @@ from agent_factory.runtime_kernel.observability.schema import TraceEvent
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
+MEMORY_RETRIEVE_SYSTEM_WRAPPER_ID = "system.cross_session_memory_inject"
+
+
 class MemoryRetrieveSystemWrapper:
-    wrapper_id = "system.cross_session_memory_inject"
+    wrapper_id = MEMORY_RETRIEVE_SYSTEM_WRAPPER_ID
+    before_stage = "pre_execute"
 
     def before(self, *, state: RuntimeState, context: NodeExecutionContext) -> tuple[RuntimeState, dict[str, Any]]:
         if not context.impl.startswith("cognitive."):

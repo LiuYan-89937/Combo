@@ -403,6 +403,7 @@ PackageFileSourceKind = Literal[
     "strategy",
     "formatter",
     "manifest",
+    "contract",
 ]
 
 
@@ -451,6 +452,7 @@ class PackageMaterializationPlan(BaseModel):
     files: list[PackageMaterializationFileSpec] = Field(default_factory=list)
     tools: list[PackageMaterializationToolSpec] = Field(default_factory=list)
     manifest_contract: dict[str, object] = Field(default_factory=dict)
+    contracts: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 
 class PackageMaterializationValidationReport(BaseModel):

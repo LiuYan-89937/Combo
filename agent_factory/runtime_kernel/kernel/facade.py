@@ -52,6 +52,7 @@ from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_render import RenderManifest, default_node_render_spec, validate_render_manifest
+from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS
 
 
 class RuntimeKernelFacade:
@@ -147,6 +148,7 @@ class RuntimeKernelFacade:
         bindings: BindingSet | None = None,
         services: RuntimeServices | None = None,
         render_manifest: RenderManifest | dict | None = None,
+        system_wrapper_ids: list[str] | tuple[str, ...] | None = None,
     ) -> CompiledKernelApp:
         services = services or self.instance.services
         bindings = bindings or BindingSet()
@@ -159,6 +161,7 @@ class RuntimeKernelFacade:
             bindings=bindings,
             services=services,
             render_manifest=resolved_render_manifest,
+            system_wrapper_ids=DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS if system_wrapper_ids is None else system_wrapper_ids,
         )
 
     def run(

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.assembly.validator import AgentAssemblyValidator
+from agent_factory.runtime_contracts.contribution import RuntimeBuildResult
 from agent_factory.runtime_kernel.bindings import RuntimeServices
-from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.kernel import CompiledKernelApp, RuntimeKernelFacade
 from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
 from agent_factory.runtime_render import RenderManifest, validate_render_manifest
@@ -16,13 +16,14 @@ class CompiledAgentAssembly:
     spec: AgentAssemblySpec
     pattern_spec: GraphPatternSpec
     compiled_app: CompiledKernelApp
+    runtime_build: RuntimeBuildResult | None = None
 
     @property
     def runtime_config(self) -> dict:
         return {
             "user_config": dict(self.spec.runtime.user_config),
             "agent_config": dict(self.spec.runtime.agent_config),
-            "session_config": dict(self.spec.runtime.session_config),
+            "session_config": dict(self.runtime_build.session_config if self.runtime_build else {}),
         }
 
 
@@ -35,22 +36,32 @@ class AgentAssemblyCompiler:
         self,
         spec: AgentAssemblySpec,
         *,
+        runtime_build: RuntimeBuildResult | None = None,
         services: RuntimeServices | None = None,
+        render_manifest: RenderManifest | None = None,
+        system_wrapper_ids: list[str] | tuple[str, ...] | None = None,
     ) -> CompiledAgentAssembly:
         self.validator.validate(spec)
         assembled_pattern = self._assemble_pattern(spec)
-        render_manifest = self._render_manifest_for_spec(spec, assembled_pattern)
+        resolved_render_manifest = self._render_manifest_for_compile(
+            assembled_pattern,
+            runtime_build=runtime_build,
+            render_manifest=render_manifest,
+        )
         self.facade.instance.pattern_registry.register(assembled_pattern)
+        resolved_services = runtime_build.services if runtime_build else services
         compiled_app = self.facade.compile(
             pattern_id=assembled_pattern.pattern_id,
             bindings=spec.bindings,
-            services=services,
-            render_manifest=render_manifest,
+            services=resolved_services,
+            render_manifest=resolved_render_manifest,
+            system_wrapper_ids=runtime_build.system_wrappers if runtime_build else system_wrapper_ids,
         )
         return CompiledAgentAssembly(
             spec=spec,
             pattern_spec=assembled_pattern,
             compiled_app=compiled_app,
+            runtime_build=runtime_build,
         )
 
     def run(
@@ -61,7 +72,12 @@ class AgentAssemblyCompiler:
         services: RuntimeServices | None = None,
     ):
         if services is not None and services is not compiled.compiled_app.services:
-            compiled = self.compile(compiled.spec, services=services)
+            compiled = self.compile(
+                compiled.spec,
+                services=services,
+                render_manifest=compiled.runtime_build.render_manifest if compiled.runtime_build else None,
+                system_wrapper_ids=compiled.runtime_build.system_wrappers if compiled.runtime_build else None,
+            )
         return self.facade.run(
             compiled.compiled_app,
             user_input=user_input,
@@ -82,9 +98,14 @@ class AgentAssemblyCompiler:
                 node.wrappers = [*node.wrappers, *override.wrappers]
         return assembled
 
-    def _render_manifest_for_spec(self, spec: AgentAssemblySpec, pattern: GraphPatternSpec) -> RenderManifest:
-        raw_manifest = spec.metadata.get("render_manifest")
-        if not raw_manifest:
-            raise RuntimeKernelError("AgentAssemblySpec.metadata.render_manifest is required for generated agent compilation.")
-        manifest = RenderManifest.model_validate(raw_manifest)
+    def _render_manifest_for_compile(
+        self,
+        pattern: GraphPatternSpec,
+        *,
+        runtime_build: RuntimeBuildResult | None,
+        render_manifest: RenderManifest | None,
+    ) -> RenderManifest:
+        manifest = runtime_build.render_manifest if runtime_build else render_manifest
+        if manifest is None:
+            raise ValueError("render_manifest is required for assembly compilation")
         return validate_render_manifest(manifest, {node.id for node in pattern.nodes})

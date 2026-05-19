@@ -30,6 +30,8 @@ from agent_factory.factory_graph.schemas import (
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import PromptId, get_prompt, output_json_schema
+from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
+from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_render import RenderManifest, validate_render_manifest
 
 
@@ -51,7 +53,11 @@ REQUIRED_PACKAGE_FILES = {
     "bindings/services.json",
     "bindings/node_bindings.json",
     "bindings/hooks.json",
-    "session.json",
+    "contracts/render.json",
+    "contracts/resources.json",
+    "contracts/sandbox.json",
+    "contracts/session.json",
+    "contracts/tools.json",
 }
 
 
@@ -279,8 +285,8 @@ def _validate_package_structure(state: FactoryGraphState) -> dict[str, Any]:
     static_checks: list[dict[str, object]] = []
     required_files = set(REQUIRED_PACKAGE_FILES)
     materialization_plan = _materialization_plan(state)
-    if materialization_plan.manifest_contract.get("memory_config_path") or materialization_plan.manifest_contract.get("memory_store_path"):
-        required_files.update({"memory/config.json", "memory/store.json"})
+    if "memory" in materialization_plan.contracts:
+        required_files.add("contracts/memory.json")
     for path in required_files:
         if not (package_root / path).is_file():
             errors.append(f"missing required package file: {path}")
@@ -307,8 +313,7 @@ def _validate_package_structure(state: FactoryGraphState) -> dict[str, Any]:
         try:
             render_manifest = RenderManifest.model_validate_json(render_manifest_path.read_text(encoding="utf-8"))
             manifest_nodes = set(render_manifest.nodes)
-            metadata_nodes = set(str(item) for item in assembly_spec.metadata.get("render_node_ids", []) or [])
-            validate_render_manifest(render_manifest, metadata_nodes or manifest_nodes)
+            validate_render_manifest(render_manifest, manifest_nodes)
         except Exception as exc:
             errors.append(f"render_manifest.json invalid: {type(exc).__name__}: {exc}")
     manifest_path = package_root / "agent_package.json"
@@ -442,19 +447,17 @@ def _validate_decision(decision: PackageBuildDecision, state: FactoryGraphState)
 def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) -> list[str]:
     errors: list[str] = []
     try:
-        manifest = TypeAdapter(dict[str, Any]).validate_json(manifest_path.read_text(encoding="utf-8"))
+        manifest = AgentPackageManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return [f"agent_package.json invalid: {type(exc).__name__}: {exc}"]
     required_keys = [
         "assembly_spec_path",
         "resources_path",
         "render_manifest_path",
-        "session_path",
+        "sandbox_contract_path",
     ]
-    if manifest.get("memory_config_path") or manifest.get("memory_store_path"):
-        required_keys.extend(["memory_config_path", "memory_store_path"])
     for key in required_keys:
-        value = str(manifest.get(key) or "")
+        value = str(getattr(manifest, key) or "")
         if not value:
             errors.append(f"agent_package.json missing {key}")
             continue
@@ -465,12 +468,28 @@ def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) ->
             continue
         if not (package_root / relative_path).is_file():
             errors.append(f"agent_package.json references missing file: {value}")
-    bindings = manifest.get("bindings") or {}
-    if isinstance(bindings, dict):
-        for key in ("services", "node_bindings", "hooks"):
-            value = str(bindings.get(key) or "")
-            if not value or not (package_root / _safe_relative_path(value)).is_file():
-                errors.append(f"agent_package.json bindings.{key} references missing file")
+    for key, value in manifest.contracts.items():
+        try:
+            relative_path = _safe_relative_path(str(value))
+        except ValueError as exc:
+            errors.append(f"agent_package.json invalid contracts.{key}: {exc}")
+            continue
+        target = package_root / relative_path
+        if not target.is_file():
+            errors.append(f"agent_package.json contracts.{key} references missing file")
+            continue
+        try:
+            default_runtime_contract_registry().parse(TypeAdapter(dict[str, object]).validate_json(target.read_text(encoding="utf-8")))
+        except Exception as exc:
+            errors.append(f"agent_package.json contracts.{key} invalid: {type(exc).__name__}: {exc}")
+    required_contracts = {"render", "resources", "sandbox", "session", "tools"}
+    missing_contracts = sorted(required_contracts - set(manifest.contracts))
+    for key in missing_contracts:
+        errors.append(f"agent_package.json missing contracts.{key}")
+    for key in ("services", "node_bindings", "hooks"):
+        value = str(manifest.bindings.get(key) or "")
+        if not value or not (package_root / _safe_relative_path(value)).is_file():
+            errors.append(f"agent_package.json bindings.{key} references missing file")
     return errors
 
 
@@ -582,15 +601,14 @@ def _system_generated_files(
         "assembly_spec.json": assembly_spec.model_dump(mode="json"),
         "resources.json": resources_payload,
         "sandbox_contract.json": {"version": "sandbox_contract.v0", **sandbox_contract},
-        "render_manifest.json": assembly_spec.metadata.get("render_manifest"),
+        "render_manifest.json": state.get("render_manifest") or {},
         "package_report.json": {"version": "package_report.v0", "status": "valid"},
         "bindings/services.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.services],
         "bindings/node_bindings.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.node_bindings],
         "bindings/hooks.json": [item.model_dump(mode="json") for item in assembly_spec.bindings.hooks],
-        "session.json": assembly_spec.runtime.session_config,
-        "memory/config.json": dict(assembly_spec.metadata.get("memory_config") or {}),
-        "memory/store.json": dict(assembly_spec.metadata.get("memory_store") or {}),
     }
+    for contract_name, contract_payload in plan.contracts.items():
+        by_path[f"contracts/{contract_name}.json"] = contract_payload
     for binding in assembly_spec.bindings.node_bindings:
         payload = binding.payload.model_dump(mode="json") if hasattr(binding.payload, "model_dump") else {}
         if binding.binding_type == "prompt":

@@ -44,6 +44,8 @@ class FactoryGraphState(TypedDict, total=False):
     assembly_validation_report_path: str
     package_materialization_plan: dict[str, Any]
     package_materialization_plan_path: str
+    render_manifest: dict[str, Any]
+    render_manifest_path: str
     package_validation_observation: dict[str, Any]
     package_revision_attempt: int
     package_generation: dict[str, Any]

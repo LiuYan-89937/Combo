@@ -72,6 +72,48 @@ Factory 阶段产物
 
 后续如果某一类系统自然长出稳定 schema，就在该系统内部定义；如果多个系统后来真的出现公共字段，再抽取公共基础类型。现在不提前抽象。
 
+### 1.5 编译层 Contract / Builder 规范
+
+组成 Agent 的 JSON 装配流程统一采用 Contract / Builder 标准，不兼容旧的 metadata 注入方式。
+
+```text
+AgentPackageManifest
+  -> AssemblySpec
+  -> RuntimeContracts
+  -> ContractRegistry
+  -> RuntimeContribution
+  -> RuntimeServices / System Wrappers / Tool Providers / Workers
+  -> RuntimeKernel compile
+```
+
+边界：
+
+- `AgentPackageManifest` 是 AgentPackage 唯一入口，只索引文件。
+- `AssemblySpec` 只描述 Agent 逻辑装配，不承载 session、memory、render、tool provider 等运行基础设施。
+- `RuntimeContract` 负责声明工具、记忆、知识、定时任务、Trace、上下文等基础能力如何接入。
+- `ContractRegistry` 只接受系统注册的 contract schema 和内置 builder。
+- `RuntimeContribution` 是 builder 唯一输出，允许贡献 `services / system_wrappers / tool_providers / context_sources / background_workers / event_publishers / session_hooks / diagnostics`。
+- `RuntimeContributionMerger` 负责确定性合并；重复 service、重复 system wrapper、重复 tool id 必须失败。
+
+强制规则：
+
+- 禁止通过 `AssemblySpec.metadata` 传递 runtime 能力。
+- 禁止在 JSON 中写自定义 builder import path。
+- 禁止在 RuntimeKernel compiler 中为单个能力写特化分支。
+- Factory 与生产出来的 Agent 必须使用同一套 Contract / Builder 规范，但运行数据隔离。
+- 新增基础能力必须同时提供 Contract schema、内置 Builder、RuntimeContribution 输出、Package 物化规则和编译校验规则。
+
+当前首批内置 contract：
+
+| Contract | 文件 | 作用 |
+| --- | --- | --- |
+| `session` | `contracts/session.json` | 创建 AgentSessionManager 所需配置，并构建 LangGraph checkpointer。 |
+| `tools` | `contracts/tools.json` | 加载 package tools 与实例级 MCP / Skill 扩展，并形成统一 tool registry。 |
+| `memory` | `contracts/memory.json` | 可选，启用跨会话记忆时构建 BaseStore、MemorySystemRuntime、后台 worker 和记忆注入系统 wrapper。 |
+| `render` | `contracts/render.json` | 加载 `render_manifest.json`，并通过 RuntimeContribution 注入 `observability.render_node` 系统 wrapper。 |
+| `resources` | `contracts/resources.json` | 声明运行时资源来源，工具系统按 sandbox 视角读取资源。 |
+| `sandbox` | `contracts/sandbox.json` | 供第九阶段 harness 使用，不在普通运行时隐式执行。 |
+
 ---
 
 ## 2. 工具系统
@@ -341,24 +383,25 @@ Factory 扩展默认位置：
   enabled_skills.json
 ```
 
-AgentInstance 扩展建议位置：
+AgentInstance 扩展默认位置：
 
 ```text
-.agentfactory/instances/<agent_instance_id>/extensions/
+.agent_runtime/extensions/
   mcp_servers.json
   enabled_skills.json
 ```
 
+`tools` contract 可以通过 `config.instance_extension_root` 指定实例扩展根。相对路径按运行进程当前目录解析，不按 AgentPackage 根目录解析；这样 package 内置工具和运行实例后续启用的 MCP / Skill 不会混在同一个物理目录。
+
 当前已具备：
 
 - Factory 可以扫描自己的 MCP / Skill 配置并注册工具。
-- RuntimeKernel 有 `AgentInstanceExtensionManager`，能加载实例级 MCP / Skill 配置。
+- RuntimeKernel 通过 `tools` contract 自动加载实例级 MCP / Skill 配置。
 - MCP 最终转换成各自 `ToolSpec`。
 - Skill 最终转换成一个统一 `skill` ToolSpec，具体 Skill 内容按需加载。
 
 后续还需要补齐：
 
-- AgentPackage 启动链路中自动加载实例扩展并合并到运行工具注册表。
 - 节点 tool visibility 与实例扩展工具的闭合校验。
 - Package 中对工具系统的标准落盘规范继续收敛。
 
@@ -570,7 +613,7 @@ Agent:   .agent_runtime/memory/jobs/
 RuntimeKernel 通过系统 wrapper 注入：
 
 ```text
-SYSTEM_MEMORY_RETRIEVE_WRAPPER
+system.cross_session_memory_inject
   before cognitive.* model call
   retrieve -> rank -> inject into runtime.context.model_context.cross_session_memory
 ```
@@ -596,22 +639,20 @@ per_kind_limits = constraint 3 / preference 3 / decision 2 / fact 2 / artifact 1
 
 ### 3.5 Package 与 RuntimeKernel 编译
 
-第七阶段系统冻结会话配置；跨会话记忆配置是可选能力，不是所有生成 Agent 的默认必选项：
+第七阶段系统冻结会话配置；跨会话记忆配置是可选能力，不是所有生成 Agent 的默认必选项。相关配置统一进入 Runtime Contract：
 
 ```text
-session.json
-memory/config.json    # 仅当 AssemblySpec 声明 memory_system / memory_store 时生成
-memory/store.json     # 仅当 AssemblySpec 声明 memory_system / memory_store 时生成
+contracts/session.json
+contracts/memory.json    # 仅当 AssemblySpec 声明 memory_system / memory_store 时生成
 ```
 
-第八阶段按第七阶段冻结的 `package_materialization_plan` 物化这些文件，模型不能改写。没有声明跨会话记忆的 AgentPackage 不生成 memory 目录，也不要求 RuntimeKernel 注入 BaseStore。
+第八阶段按第七阶段冻结的 `package_materialization_plan` 物化这些 contract 文件，模型不能改写。没有声明跨会话记忆的 AgentPackage 不生成 `contracts/memory.json`，也不要求 RuntimeKernel 注入 BaseStore。
 
 RuntimeKernel 编译时：
 
 ```text
-session.json -> AgentSessionManager
-memory/store.json -> BaseStore                 # 可选；启用跨会话记忆时必需
-memory/config.json -> MemorySystemRuntime      # 可选；启用跨会话记忆时必需
+contracts/session.json -> AgentSessionManager + checkpointer
+contracts/memory.json -> BaseStore + MemorySystemRuntime      # 可选；启用跨会话记忆时必需
 graph.compile(checkpointer=..., store=...)
 auto inject memory retrieve system wrapper     # 无 memory runtime 时 no-op
 start MemoryBackgroundWorker                   # write_enabled=true 时启动，失败不阻塞主图
@@ -863,6 +904,14 @@ agent_package/
   sandbox_contract.json
   render_manifest.json
 
+  contracts/
+    session.json
+    tools.json
+    render.json
+    resources.json
+    sandbox.json
+    memory.json        # 可选
+
   tools/
   prompts/
   policies/
@@ -880,7 +929,7 @@ agent_package/
 - `tools/` 已经有较明确方向。
 - `retrieval/`、`strategies/`、`policies/` 当前更多是 Assembly binding 的物化结果，不等于完整 memory/knowledge 系统。
 - `extensions/*.example.json` 只作为实例扩展配置示例，不表示 AgentPackage 自带用户扩展。
-- memory、knowledge、schedules 是否需要独立目录，等对应系统规范明确后再定。
+- memory、knowledge、schedules 等能力统一优先通过 `contracts/*.json` 进入编译层；是否还需要运行期数据目录，等对应系统规范明确后再定。
 
 ---
 

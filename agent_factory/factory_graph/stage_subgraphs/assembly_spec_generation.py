@@ -28,8 +28,15 @@ from agent_factory.factory_graph.schemas import (
     PackageMaterializationValidationReport,
 )
 from agent_factory.factory_graph.state import FactoryGraphState
-from agent_factory.memory_system.config import default_agent_memory_config
 from agent_factory.prompts import PromptId, output_json_schema
+from agent_factory.runtime_contracts.builtins import (
+    default_memory_contract,
+    default_render_contract,
+    default_resources_contract,
+    default_sandbox_contract,
+    default_session_contract,
+    default_tools_contract,
+)
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, validate_render_manifest
 from agent_factory.runtime_kernel.patterns import PatternRegistry
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskLevel
@@ -40,12 +47,6 @@ ASSEMBLY_ROOT = ".agentfactory/assemblies"
 MAX_REVISION_ROUNDS = 3
 STAGE_ID = "assembly_spec_generation"
 _MEMORY_SERVICE_KINDS = {"memory_store", "memory_system"}
-_MEMORY_METADATA_KEYS = {
-    "memory_config_path",
-    "memory_store_config_path",
-    "memory_config",
-    "memory_store",
-}
 
 
 def build_assembly_spec_generation_subgraph():
@@ -184,21 +185,12 @@ def _publish_assembly_spec_draft(state: FactoryGraphState) -> dict[str, Any]:
             final_error="; ".join(render_report_errors),
         )
         return _fail_assembly_generation({**state, "assembly_validation_report": failed.model_dump(mode="json")})
-    metadata = dict(spec_model.metadata or {})
-    metadata.update(
-        {
-            "render_manifest_version": render_manifest.version,
-            "render_manifest_path": str(paths["render_manifest"]),
-            "render_node_ids": sorted(render_manifest.nodes),
-            "render_manifest": render_manifest.model_dump(mode="json"),
-        }
-    )
-    spec_model = spec_model.model_copy(update={"metadata": metadata}, deep=True)
-    spec = spec_model.model_dump(mode="json")
     materialization_plan = _build_package_materialization_plan(
         spec_model,
         state,
+        render_manifest,
     )
+    spec = spec_model.model_dump(mode="json")
     plan_report = _validate_materialization_plan(materialization_plan, state)
     if plan_report.status != "valid":
         failed = AssemblyValidationReport(
@@ -310,7 +302,6 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
         "resource_file_path": _resource_file_path(state),
         "sandbox_contract_path": _sandbox_contract_path(state),
         "resource_preparation_report_path": _resource_preparation_report_path(state),
-        "session_config_path": "session.json",
         "source_stage_ids": [
             "requirement_capture",
             "runtime_pattern_selection",
@@ -324,77 +315,24 @@ def _stage_constraint_errors(spec: AgentAssemblySpec, state: FactoryGraphState) 
     for key, expected in required_metadata.items():
         if metadata.get(key) != expected:
             errors.append(f"metadata.{key} must equal {expected!r}")
-    if _assembly_memory_enabled(spec):
-        for key, expected in {
-            "memory_config_path": "memory/config.json",
-            "memory_store_config_path": "memory/store.json",
-        }.items():
-            if metadata.get(key) != expected:
-                errors.append(f"metadata.{key} must equal {expected!r}")
-        if not isinstance(metadata.get("memory_config"), dict):
-            errors.append("metadata.memory_config must be present when cross-session memory is enabled")
-        if not isinstance(metadata.get("memory_store"), dict):
-            errors.append("metadata.memory_store must be present when cross-session memory is enabled")
     if spec.harness:
         errors.append("harness must be empty in stage 7")
     return errors
 
 
 def _with_system_runtime_contract(spec: AgentAssemblySpec, state: FactoryGraphState) -> AgentAssemblySpec:
-    runtime = spec.runtime.model_copy(
-        update={
-            "session_config": {
-                **_default_agent_session_config(),
-                **dict(spec.runtime.session_config or {}),
-            }
-        },
-        deep=True,
-    )
     metadata = {
-        **_metadata_without_memory_contract(spec.metadata),
+        **dict(spec.metadata or {}),
         "factory_run_id": str(state.get("factory_run_id") or ""),
         "resource_file_path": _resource_file_path(state),
         "sandbox_contract_path": _sandbox_contract_path(state),
         "resource_preparation_report_path": _resource_preparation_report_path(state),
-        "session_config_path": "session.json",
     }
-    if _assembly_memory_enabled(spec):
-        metadata.update(
-            {
-                "memory_config_path": "memory/config.json",
-                "memory_store_config_path": "memory/store.json",
-                "memory_config": _default_agent_memory_system_config(),
-                "memory_store": _default_agent_memory_store_config(),
-            }
-        )
-    return spec.model_copy(update={"runtime": runtime, "metadata": metadata}, deep=True)
-
-
-def _default_agent_session_config() -> dict[str, str]:
-    return {
-        "session_root": ".agent_runtime/sessions",
-        "checkpointer_backend": "sqlite",
-        "checkpoint_path": ".agent_runtime/checkpoints/agent.sqlite",
-    }
-
-
-def _default_agent_memory_store_config() -> dict[str, str]:
-    return {
-        "backend": "sqlite",
-        "path": ".agent_runtime/memory/agent.sqlite",
-    }
-
-
-def _default_agent_memory_system_config() -> dict[str, Any]:
-    return default_agent_memory_config().model_dump(mode="json")
+    return spec.model_copy(update={"metadata": metadata}, deep=True)
 
 
 def _assembly_memory_enabled(spec: AgentAssemblySpec) -> bool:
     return any(service.kind in _MEMORY_SERVICE_KINDS and service.required for service in spec.bindings.services)
-
-
-def _metadata_without_memory_contract(metadata: dict[str, Any] | None) -> dict[str, Any]:
-    return {key: value for key, value in dict(metadata or {}).items() if key not in _MEMORY_METADATA_KEYS}
 
 
 def _binding_contract_errors(spec: AgentAssemblySpec, state: FactoryGraphState) -> list[str]:
@@ -514,27 +452,35 @@ def _required_service_kinds(spec: AgentAssemblySpec, pattern_nodes: dict[str, di
     return required
 
 
-def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryGraphState) -> PackageMaterializationPlan:
+def _build_package_materialization_plan(
+    spec: AgentAssemblySpec,
+    state: FactoryGraphState,
+    render_manifest: RenderManifest | None = None,
+) -> PackageMaterializationPlan:
     factory_run_id = str(state.get("factory_run_id") or "default")
     package_root = f".agentfactory/packages/{factory_run_id}"
+    contracts = _package_contracts(spec)
     files: list[PackageMaterializationFileSpec] = [
         _file_spec("agent_package.json", "json", "manifest", "agent_package", "system_generated", "assembly_spec+package_materialization_plan"),
         _file_spec("assembly_spec.json", "json", "assembly", "assembly_spec", "system_generated", "assembly_spec"),
         _file_spec("resources.json", "json", "manifest", "resources", "system_generated", "resource_condition_plan.resources"),
         _file_spec("sandbox_contract.json", "json", "manifest", "sandbox_contract", "system_generated", "resource_condition_plan.sandbox_contract"),
-        _file_spec("render_manifest.json", "json", "manifest", "render_manifest", "system_generated", "assembly_spec.metadata.render_manifest"),
+        _file_spec("render_manifest.json", "json", "manifest", "render_manifest", "system_generated", "render_manifest"),
         _file_spec("package_report.json", "json", "manifest", "package_report", "system_generated", "package_validation_report"),
         _file_spec("bindings/services.json", "json", "binding", "services", "system_generated", "assembly_spec.bindings.services"),
         _file_spec("bindings/node_bindings.json", "json", "binding", "node_bindings", "system_generated", "assembly_spec.bindings.node_bindings"),
         _file_spec("bindings/hooks.json", "json", "binding", "hooks", "system_generated", "assembly_spec.bindings.hooks"),
-        _file_spec("session.json", "json", "manifest", "session", "system_generated", "assembly_spec.runtime.session_config"),
     ]
-    if _assembly_memory_enabled(spec):
-        files.extend(
-            [
-                _file_spec("memory/config.json", "json", "manifest", "memory_config", "system_generated", "assembly_spec.metadata.memory_config"),
-                _file_spec("memory/store.json", "json", "manifest", "memory_store", "system_generated", "assembly_spec.metadata.memory_store"),
-            ]
+    for contract_name in sorted(contracts):
+        files.append(
+            _file_spec(
+                f"contracts/{contract_name}.json",
+                "json",
+                "contract",
+                contract_name,
+                "system_generated",
+                f"runtime_contract:{contract_name}",
+            )
         )
     tool_capabilities = _tool_capabilities_by_id(state)
     tool_specs: list[PackageMaterializationToolSpec] = []
@@ -590,31 +536,28 @@ def _build_package_materialization_plan(spec: AgentAssemblySpec, state: FactoryG
         "resources_path": "resources.json",
         "sandbox_contract_path": "sandbox_contract.json",
         "render_manifest_path": "render_manifest.json",
+        "contracts": {
+            contract_name: f"contracts/{contract_name}.json"
+            for contract_name in sorted(contracts)
+        },
         "bindings": {
             "services": "bindings/services.json",
             "node_bindings": "bindings/node_bindings.json",
             "hooks": "bindings/hooks.json",
         },
-        "session_path": "session.json",
         "prompts": sorted(item.path for item in files if item.source_kind == "prompt"),
         "tools": sorted(item.manifest_path for item in tool_specs),
         "policies": sorted(item.path for item in files if item.source_kind == "policy"),
         "strategy_profiles": sorted(item.path for item in files if item.source_kind == "strategy"),
         "formatters": sorted(item.path for item in files if item.source_kind == "formatter"),
     }
-    if _assembly_memory_enabled(spec):
-        manifest_contract.update(
-            {
-                "memory_config_path": "memory/config.json",
-                "memory_store_path": "memory/store.json",
-            }
-        )
     return PackageMaterializationPlan(
         factory_run_id=factory_run_id,
         package_root=package_root,
         files=_dedupe_file_specs(files),
         tools=tool_specs,
         manifest_contract=manifest_contract,
+        contracts=contracts,
     )
 
 
@@ -622,6 +565,19 @@ def _risk_level_from_capability(capability: dict[str, object]) -> ToolRiskLevel:
     if bool(capability.get("approval_required") or False):
         return "high"
     return "medium"
+
+
+def _package_contracts(spec: AgentAssemblySpec) -> dict[str, dict[str, object]]:
+    contracts = {
+        "render": default_render_contract().model_dump(mode="json"),
+        "resources": default_resources_contract().model_dump(mode="json"),
+        "sandbox": default_sandbox_contract().model_dump(mode="json"),
+        "session": default_session_contract().model_dump(mode="json"),
+        "tools": default_tools_contract().model_dump(mode="json"),
+    }
+    if _assembly_memory_enabled(spec):
+        contracts["memory"] = default_memory_contract().model_dump(mode="json")
+    return contracts
 
 
 def _build_render_manifest(spec: AgentAssemblySpec, state: FactoryGraphState) -> RenderManifest:
@@ -674,12 +630,21 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "bindings/hooks.json",
         "render_manifest.json",
         "sandbox_contract.json",
-        "session.json",
+        "contracts/render.json",
+        "contracts/resources.json",
+        "contracts/sandbox.json",
+        "contracts/session.json",
+        "contracts/tools.json",
     }
-    if plan.manifest_contract.get("memory_config_path") or plan.manifest_contract.get("memory_store_path"):
-        required.update({"memory/config.json", "memory/store.json"})
+    if "memory" in plan.contracts:
+        required.add("contracts/memory.json")
     for path in sorted(required - paths):
         errors.append(f"package_materialization_plan missing required binding file: {path}")
+    manifest_contracts = dict(plan.manifest_contract.get("contracts") or {})
+    for contract_name in plan.contracts:
+        expected_path = f"contracts/{contract_name}.json"
+        if manifest_contracts.get(contract_name) != expected_path:
+            errors.append(f"agent_package manifest contracts.{contract_name} must equal {expected_path}")
     tool_ids = _tool_capability_ids(state)
     for tool in plan.tools:
         if tool.tool_id not in tool_ids:

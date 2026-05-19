@@ -29,7 +29,6 @@ class RuntimeSpec(BaseModel):
     compiled_pattern_id: str | None = None
     user_config: dict[str, Any] = Field(default_factory=dict)
     agent_config: dict[str, Any] = Field(default_factory=dict)
-    session_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class NodeWrapperOverride(BaseModel):

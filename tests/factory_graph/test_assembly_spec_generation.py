@@ -40,9 +40,13 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("bindings/node_bindings.json", plan_paths)
                 self.assertIn("bindings/hooks.json", plan_paths)
                 self.assertIn("sandbox_contract.json", plan_paths)
-                self.assertIn("session.json", plan_paths)
-                self.assertIn("memory/config.json", plan_paths)
-                self.assertIn("memory/store.json", plan_paths)
+                self.assertIn("contracts/session.json", plan_paths)
+                self.assertIn("contracts/tools.json", plan_paths)
+                self.assertIn("contracts/render.json", plan_paths)
+                self.assertIn("contracts/resources.json", plan_paths)
+                self.assertIn("contracts/sandbox.json", plan_paths)
+                self.assertIn("contracts/memory.json", plan_paths)
+                self.assertEqual(plan["manifest_contract"]["contracts"]["memory"], "contracts/memory.json")
                 self.assertEqual(plan["tools"][0]["manifest"]["input_schema"], {"type": "object"})
 
     def test_validation_observation_drives_revision(self) -> None:

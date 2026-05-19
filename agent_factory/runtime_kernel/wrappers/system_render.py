@@ -13,6 +13,7 @@ RENDER_NODE_SYSTEM_WRAPPER_ID = "observability.render_node"
 
 class RenderNodeSystemWrapper:
     wrapper_id = RENDER_NODE_SYSTEM_WRAPPER_ID
+    before_stage = "node_start"
 
     def before(self, *, state: RuntimeState, context: NodeExecutionContext) -> None:
         self._emit(

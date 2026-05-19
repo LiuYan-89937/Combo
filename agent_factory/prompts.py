@@ -448,6 +448,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- output_formatter payload 只允许 formatter_id、mode、config。\n"
                     "- custom payload 是唯一允许扩展 dict config 的位置，必须包含 extension_id、schema_version、purpose、config；custom 不能冒充标准 binding。\n"
                     "- metadata 必须包含 factory_run_id、resource_file_path、sandbox_contract_path、resource_preparation_report_path、source_stage_ids、tool_capability_ids。\n"
+                    "- metadata 只允许来源与诊断信息，禁止写 render_manifest、memory_config、memory_store、session_config 等 Runtime 基础设施；这些由系统 Runtime Contract 生成。\n"
                     "- 第八阶段只负责把第七阶段 bindings 中的 contract 物化为文件、工具代码和 package manifest，不允许重新决定绑定关系。\n"
                     "- harness 仍然不填，harness 属于第九阶段。\n"
                     "- 如果收到 validation_observation，只能在 assembly draft 范围内修正。\n"

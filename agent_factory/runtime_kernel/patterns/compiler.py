@@ -23,8 +23,7 @@ from agent_factory.runtime_kernel.patterns.schema import (
 from agent_factory.runtime_kernel.patterns.validator import PatternValidator
 from agent_factory.runtime_kernel.state import RuntimeGraphState, RuntimeState, merge_state_patch
 from agent_factory.runtime_kernel.wrappers import DEFAULT_NODE_WRAPPER_REGISTRY, NodeWrapperRegistry
-from agent_factory.runtime_kernel.wrappers.system_memory import SYSTEM_MEMORY_RETRIEVE_WRAPPER
-from agent_factory.runtime_kernel.wrappers.system_render import SYSTEM_RENDER_NODE_WRAPPER
+from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_SYSTEM_WRAPPER_REGISTRY
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, default_node_render_spec, validate_render_manifest
 
 
@@ -47,10 +46,12 @@ class PatternCompiler:
         bindings: BindingSet,
         services: RuntimeServices,
         render_manifest: RenderManifest,
+        system_wrapper_ids: list[str] | tuple[str, ...],
     ) -> CompiledKernelApp:
         pattern = self.pattern_registry.get(pattern_id)
         self.validator.validate(pattern, known_patterns=set(self.pattern_registry.list_pattern_ids()))
         validate_render_manifest(render_manifest, {node.id for node in pattern.nodes})
+        system_wrappers = DEFAULT_SYSTEM_WRAPPER_REGISTRY.resolve_many(system_wrapper_ids)
         node_runners = {
             node.id: self._make_node_runner(
                 node=node,
@@ -58,6 +59,8 @@ class PatternCompiler:
                 bindings=bindings,
                 services=services,
                 render_manifest=render_manifest,
+                system_wrapper_ids=system_wrapper_ids,
+                system_wrappers=system_wrappers,
             )
             for node in pattern.nodes
         }
@@ -86,7 +89,6 @@ class PatternCompiler:
             bindings=bindings,
             metadata={
                 "compiled_pattern_id": pattern.pattern_id,
-                "render_manifest": render_manifest.model_dump(mode="json"),
             },
             node_runners=node_runners,
         )
@@ -99,6 +101,8 @@ class PatternCompiler:
         bindings: BindingSet,
         services: RuntimeServices,
         render_manifest: RenderManifest,
+        system_wrapper_ids: list[str] | tuple[str, ...],
+        system_wrappers: list[Any],
     ):
         node_bindings = [
             item.model_dump(mode="json")
@@ -115,6 +119,7 @@ class PatternCompiler:
                 bindings=bindings,
                 services=services,
                 render_manifest=_default_render_manifest_for_pattern(child_pattern),
+                system_wrapper_ids=system_wrapper_ids,
             )
             _validate_subgraph_exit_routes(node_id=node.id, pattern=pattern, child=child.pattern_spec)
             execute = _make_subgraph_executor(
@@ -137,6 +142,7 @@ class PatternCompiler:
                 node_wrappers=node.wrappers,
                 node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
                 render_spec=render_manifest.nodes.get(node.id),
+                system_wrappers=system_wrappers,
             )
         impl = self.node_registry.get(node.impl)
 
@@ -155,6 +161,7 @@ class PatternCompiler:
             node_wrappers=node.wrappers,
             node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
             render_spec=render_manifest.nodes.get(node.id),
+            system_wrappers=system_wrappers,
         )
 
 
@@ -171,6 +178,7 @@ def _make_wrapped_runner(
     node_wrappers: list[PatternNodeWrapperSpec],
     node_wrapper_registry: NodeWrapperRegistry,
     render_spec: NodeRenderSpec | None,
+    system_wrappers: list[Any],
 ):
     node_wrappers = sorted(node_wrappers, key=lambda item: int(item.order))
 
@@ -219,7 +227,12 @@ def _make_wrapped_runner(
         )
         active_state = state
         try:
-            SYSTEM_RENDER_NODE_WRAPPER.before(state=active_state, context=context)
+            active_state, _system_start_patch = _run_system_before(
+                stage="node_start",
+                wrappers=system_wrappers,
+                state=active_state,
+                context=context,
+            )
             working_state, _pre_patch = _run_pre_hooks(active_state, context)
             active_state = working_state
             before_state, _before_patch = _run_node_wrappers(
@@ -231,7 +244,9 @@ def _make_wrapped_runner(
                 services=services,
             )
             active_state = before_state
-            memory_state, _memory_patch = SYSTEM_MEMORY_RETRIEVE_WRAPPER.before(
+            memory_state, _memory_patch = _run_system_before(
+                stage="pre_execute",
+                wrappers=system_wrappers,
                 state=before_state,
                 context=context,
             )
@@ -262,7 +277,8 @@ def _make_wrapped_runner(
             _apply_node_metrics(updated, perf_counter() - started)
             _resolve_after_node(pattern=pattern, node=node, state=updated, services=services)
             duration_ms = int((perf_counter() - started) * 1000)
-            SYSTEM_RENDER_NODE_WRAPPER.after(
+            _run_system_after(
+                wrappers=system_wrappers,
                 state=updated,
                 context=context,
                 node_result=patch,
@@ -303,7 +319,7 @@ def _make_wrapped_runner(
             failed.execution.retry_count += 1
             location = failed.execution.last_error_location or node.id
             _finish_state(failed, status="failed", error=str(exc), location=location)
-            SYSTEM_RENDER_NODE_WRAPPER.on_error(state=failed, context=context, error=exc)
+            _run_system_on_error(wrappers=system_wrappers, state=failed, context=context, error=exc)
             _emit_state_event(
                 services,
                 failed,
@@ -396,6 +412,58 @@ def _execute_with_retries(
             state.execution.retry_count += 1
             if attempts > state.execution.max_retries:
                 raise
+
+
+def _run_system_before(
+    *,
+    stage: str,
+    wrappers: list[Any],
+    state: RuntimeState,
+    context: NodeExecutionContext,
+) -> tuple[RuntimeState, dict[str, Any]]:
+    working = state
+    cumulative_patch: dict[str, Any] = {}
+    for wrapper in wrappers:
+        if getattr(wrapper, "before_stage", None) != stage:
+            continue
+        result = wrapper.before(state=working, context=context)
+        if result is None:
+            continue
+        if not isinstance(result, tuple) or len(result) != 2:
+            raise RuntimeKernelError(f"system wrapper {wrapper.wrapper_id} returned invalid before result")
+        next_state, patch = result
+        working = next_state
+        cumulative_patch.update(patch or {})
+    return working, cumulative_patch
+
+
+def _run_system_after(
+    *,
+    wrappers: list[Any],
+    state: RuntimeState,
+    context: NodeExecutionContext,
+    node_result: dict[str, Any],
+    duration_ms: int,
+) -> None:
+    for wrapper in wrappers:
+        after = getattr(wrapper, "after", None)
+        if after is None:
+            continue
+        after(state=state, context=context, node_result=node_result, duration_ms=duration_ms)
+
+
+def _run_system_on_error(
+    *,
+    wrappers: list[Any],
+    state: RuntimeState,
+    context: NodeExecutionContext,
+    error: Exception,
+) -> None:
+    for wrapper in wrappers:
+        on_error = getattr(wrapper, "on_error", None)
+        if on_error is None:
+            continue
+        on_error(state=state, context=context, error=error)
 
 
 def _run_node_wrappers(

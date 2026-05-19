@@ -5,6 +5,9 @@ from pathlib import Path
 from agent_factory.assembly.compiler import AgentAssemblyCompiler, CompiledAgentAssembly
 from agent_factory.assembly.loader import AgentAssemblyLoader
 from agent_factory.assembly.schema import AgentAssemblySpec, AssemblyRunReport
+from agent_factory.runtime_contracts.builder import RuntimeBuildPlanner
+from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
+from agent_factory.runtime_contracts.loader import AgentPackageLoader
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.harness import FixtureBundle, HarnessBridge
 
@@ -13,6 +16,7 @@ class AgentAssemblyRunner:
     def __init__(self, *, compiler: AgentAssemblyCompiler | None = None) -> None:
         self.compiler = compiler or AgentAssemblyCompiler()
         self.loader = AgentAssemblyLoader()
+        self.package_loader = AgentPackageLoader()
 
     def run_path(
         self,
@@ -21,6 +25,14 @@ class AgentAssemblyRunner:
         services: RuntimeServices | None = None,
         fixture: FixtureBundle | None = None,
     ) -> AssemblyRunReport:
+        if Path(path).name == "agent_package.json":
+            package = self.package_loader.load_path(path)
+            runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+                package,
+                base_services=services or self.compiler.facade.instance.services,
+            )
+            compiled = self.compiler.compile(package.assembly_spec, runtime_build=runtime_build)
+            return self.run_compiled(compiled, fixture=fixture)
         return self.run_spec(
             self.loader.load_path(path),
             services=services,
@@ -82,7 +94,7 @@ class AgentAssemblyRunner:
             user_input=user_input,
             user_config={**compiled.spec.runtime.user_config, **(user_config or {})},
             agent_config={**compiled.spec.runtime.agent_config, **(agent_config or {})},
-            session_config={**compiled.spec.runtime.session_config, **(session_config or {})},
+            session_config={**compiled.runtime_config["session_config"], **(session_config or {})},
         )
         result = {
             "scenario_id": "runtime_invocation",

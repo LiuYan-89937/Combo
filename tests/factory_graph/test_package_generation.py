@@ -175,9 +175,14 @@ def _agent_package_manifest() -> dict:
         "resources_path": "resources.json",
         "sandbox_contract_path": "sandbox_contract.json",
         "render_manifest_path": "render_manifest.json",
-        "session_path": "session.json",
-        "memory_config_path": "memory/config.json",
-        "memory_store_path": "memory/store.json",
+        "contracts": {
+            "memory": "contracts/memory.json",
+            "render": "contracts/render.json",
+            "resources": "contracts/resources.json",
+            "sandbox": "contracts/sandbox.json",
+            "session": "contracts/session.json",
+            "tools": "contracts/tools.json",
+        },
         "bindings": {
             "services": "bindings/services.json",
             "node_bindings": "bindings/node_bindings.json",
@@ -196,6 +201,7 @@ def _base_state() -> dict:
         "factory_run_id": "run_1",
         "status": "running",
         "assembly_spec": _assembly_spec(),
+        "render_manifest": _render_manifest(),
         "package_materialization_plan": _materialization_plan(),
         "tool_capability_plan": {
             "tool_capabilities": [
@@ -235,14 +241,17 @@ def _materialization_plan() -> dict:
             {"path": "assembly_spec.json", "file_type": "json", "source_kind": "assembly", "source_id": "assembly_spec", "generation_mode": "system_generated", "contract_source": "assembly_spec", "required": True},
             {"path": "resources.json", "file_type": "json", "source_kind": "manifest", "source_id": "resources", "generation_mode": "system_generated", "contract_source": "resource_condition_plan.resources", "required": True},
             {"path": "sandbox_contract.json", "file_type": "json", "source_kind": "manifest", "source_id": "sandbox_contract", "generation_mode": "system_generated", "contract_source": "resource_condition_plan.sandbox_contract", "required": True},
-            {"path": "render_manifest.json", "file_type": "json", "source_kind": "manifest", "source_id": "render_manifest", "generation_mode": "system_generated", "contract_source": "assembly_spec.metadata.render_manifest", "required": True},
+            {"path": "render_manifest.json", "file_type": "json", "source_kind": "manifest", "source_id": "render_manifest", "generation_mode": "system_generated", "contract_source": "render_manifest", "required": True},
             {"path": "package_report.json", "file_type": "json", "source_kind": "manifest", "source_id": "package_report", "generation_mode": "system_generated", "contract_source": "package_validation_report", "required": True},
             {"path": "bindings/services.json", "file_type": "json", "source_kind": "binding", "source_id": "services", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.services", "required": True},
             {"path": "bindings/node_bindings.json", "file_type": "json", "source_kind": "binding", "source_id": "node_bindings", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.node_bindings", "required": True},
             {"path": "bindings/hooks.json", "file_type": "json", "source_kind": "binding", "source_id": "hooks", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.hooks", "required": True},
-            {"path": "session.json", "file_type": "json", "source_kind": "manifest", "source_id": "session", "generation_mode": "system_generated", "contract_source": "assembly_spec.runtime.session_config", "required": True},
-            {"path": "memory/config.json", "file_type": "json", "source_kind": "manifest", "source_id": "memory_config", "generation_mode": "system_generated", "contract_source": "assembly_spec.metadata.memory_config", "required": True},
-            {"path": "memory/store.json", "file_type": "json", "source_kind": "manifest", "source_id": "memory_store", "generation_mode": "system_generated", "contract_source": "assembly_spec.metadata.memory_store", "required": True},
+            {"path": "contracts/memory.json", "file_type": "json", "source_kind": "contract", "source_id": "memory", "generation_mode": "system_generated", "contract_source": "runtime_contract:memory", "required": True},
+            {"path": "contracts/render.json", "file_type": "json", "source_kind": "contract", "source_id": "render", "generation_mode": "system_generated", "contract_source": "runtime_contract:render", "required": True},
+            {"path": "contracts/resources.json", "file_type": "json", "source_kind": "contract", "source_id": "resources", "generation_mode": "system_generated", "contract_source": "runtime_contract:resources", "required": True},
+            {"path": "contracts/sandbox.json", "file_type": "json", "source_kind": "contract", "source_id": "sandbox", "generation_mode": "system_generated", "contract_source": "runtime_contract:sandbox", "required": True},
+            {"path": "contracts/session.json", "file_type": "json", "source_kind": "contract", "source_id": "session", "generation_mode": "system_generated", "contract_source": "runtime_contract:session", "required": True},
+            {"path": "contracts/tools.json", "file_type": "json", "source_kind": "contract", "source_id": "tools", "generation_mode": "system_generated", "contract_source": "runtime_contract:tools", "required": True},
             {"path": "prompts/prompt.ledger.answer.md", "file_type": "markdown", "source_kind": "prompt", "source_id": "prompt.ledger.answer", "generation_mode": "system_generated", "contract_source": "binding:answer_prompt", "required": True},
             {"path": "policies/policy.ledger.precheck.json", "file_type": "json", "source_kind": "policy", "source_id": "policy.ledger.precheck", "generation_mode": "system_generated", "contract_source": "binding:precheck_policy", "required": True},
             {"path": "formatters/formatter.ledger.final.json", "file_type": "json", "source_kind": "formatter", "source_id": "formatter.ledger.final", "generation_mode": "system_generated", "contract_source": "binding:final_output", "required": True},
@@ -259,20 +268,14 @@ def _materialization_plan() -> dict:
                 "manifest": _tool_manifest(),
             }
         ],
+        contracts=_contracts(),
     ).model_dump(mode="json")
 
 
 def _assembly_spec() -> dict:
     return {
         "agent": {"id": "ledger_agent", "name": "Ledger Agent", "description": "A ledger assistant."},
-        "runtime": {
-            "pattern_id": "react_agent",
-            "session_config": {
-                "session_root": ".agent_runtime/sessions",
-                "checkpointer_backend": "sqlite",
-                "checkpoint_path": ".agent_runtime/checkpoints/agent.sqlite",
-            },
-        },
+        "runtime": {"pattern_id": "react_agent"},
         "bindings": {
             "services": [
                 {"service_id": "main_model", "kind": "model_service", "required": True, "config": {}},
@@ -336,35 +339,61 @@ def _assembly_spec() -> dict:
             "resource_file_path": ".agentfactory/resources/run_1/factory_resources.json",
             "sandbox_contract_path": ".agentfactory/resources/run_1/sandbox_contract.json",
             "resource_preparation_report_path": ".agentfactory/resources/run_1/resource_preparation_report.json",
-            "memory_store": {"backend": "sqlite", "path": ".agent_runtime/memory/agent.sqlite"},
-            "memory_config": {
-                "version": "memory_system.v0",
-                "enabled": True,
-                "write_enabled": True,
-                "injection_enabled": True,
-                "store": {"backend": "sqlite", "path": ".agent_runtime/memory/agent.sqlite"},
-                "ranking": {
-                    "max_items_total": 8,
-                    "max_tokens_total": 1200,
-                    "min_score": 0.55,
-                    "per_kind_limits": {
-                        "constraint": 3,
-                        "preference": 3,
-                        "decision": 2,
-                        "fact": 2,
-                        "artifact": 1,
-                    },
-                },
-                "background": {
-                    "journal_root": ".agent_runtime/memory/jobs",
-                    "max_pending_jobs": 32,
-                    "concurrency": 1,
-                    "queue_full_policy": "reject_new_when_full",
-                    "write_interval_turns": 3,
-                },
+        },
+    }
+
+
+def _contracts() -> dict:
+    return {
+        "memory": {
+            "type": "memory",
+            "version": "memory_contract.v0",
+            "enabled": True,
+            "config": {"memory_system": _memory_system_config()},
+        },
+        "render": {"type": "render", "version": "render_contract.v0", "enabled": True, "config": {"manifest_path": "render_manifest.json"}},
+        "resources": {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {"resources_path": "resources.json"}},
+        "sandbox": {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {"sandbox_contract_path": "sandbox_contract.json"}},
+        "session": {
+            "type": "session",
+            "version": "session_contract.v0",
+            "enabled": True,
+            "config": {
+                "session_root": ".agent_runtime/sessions",
+                "checkpointer_backend": "sqlite",
+                "checkpoint_path": ".agent_runtime/checkpoints/agent.sqlite",
             },
-            "render_manifest": _render_manifest(),
-            "render_node_ids": ["answer"],
+        },
+        "tools": {"type": "tools", "version": "tools_contract.v0", "enabled": True, "config": {}},
+    }
+
+
+def _memory_system_config() -> dict:
+    return {
+        "version": "memory_system.v0",
+        "enabled": True,
+        "write_enabled": True,
+        "injection_enabled": True,
+        "store": {"backend": "sqlite", "path": ".agent_runtime/memory/agent.sqlite"},
+        "ranking": {
+            "max_items_total": 8,
+            "max_tokens_total": 1200,
+            "min_score": 0.55,
+            "per_kind_limits": {
+                "constraint": 3,
+                "preference": 3,
+                "decision": 2,
+                "fact": 2,
+                "artifact": 1,
+            },
+        },
+        "semantic_index": {"enabled": False, "fields": ["content"]},
+        "background": {
+            "journal_root": ".agent_runtime/memory/jobs",
+            "max_pending_jobs": 32,
+            "concurrency": 1,
+            "queue_full_policy": "reject_new_when_full",
+            "write_interval_turns": 3,
         },
     }
 
