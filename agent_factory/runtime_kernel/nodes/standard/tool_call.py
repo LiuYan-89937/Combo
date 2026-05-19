@@ -52,7 +52,11 @@ class OperationalToolCallNode:
             known_tool_ids=set(registry.list_tool_ids()) if hasattr(registry, "list_tool_ids") else set(visible_tool_ids),
             emit_event=context.emit_event,
         )
-        output = runner.invoke({"messages": context.graph_messages, "runtime": state.model_dump(mode="json")})
+        output = runner.invoke(
+            {"messages": context.graph_messages, "runtime": state.model_dump(mode="json")},
+            config=context.graph_config,
+            runtime=context.graph_runtime,
+        )
         messages = output.get("messages") or []
         results, failures, policy_patch, route_decision = tool_messages_to_runtime_patch(messages)
         patch: dict[str, Any] = {

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from langchain_core.messages import AIMessageChunk
+
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
 
 
@@ -156,6 +158,42 @@ class FrontendEventNormalizerTest(unittest.TestCase):
         self.assertEqual(len(proposed), 1)
         self.assertEqual(len(approvals), 1)
         self.assertEqual(approvals[0].payload["requests"][0]["tool_call_id"], "call-a")
+
+    def test_model_stream_completes_between_repeated_model_node_calls(self) -> None:
+        events = []
+        normalizer = RuntimeEventNormalizer(
+            emit=events.append,
+            request_id="request-a",
+            session_id="session-a",
+            mode="chat",
+            graph_id="factory_chat_graph",
+        )
+
+        normalizer.emit_message_chunk(
+            (AIMessageChunk(content="before tool"), {"langgraph_node": "chat_model", "tags": []})
+        )
+        normalizer.emit_update(
+            "chat_model",
+            {
+                "messages": [
+                    {
+                        "type": "AIMessage",
+                        "content": "before tool",
+                        "tool_calls": [
+                            {"id": "call-a", "name": "skill", "args": {"action": "load", "name": "weather"}}
+                        ],
+                    }
+                ]
+            },
+        )
+        normalizer.emit_message_chunk(
+            (AIMessageChunk(content="after tool"), {"langgraph_node": "chat_model", "tags": []})
+        )
+        normalizer.emit_update("chat_model", {"messages": [{"type": "AIMessage", "content": "after tool"}]})
+
+        completed = [event for event in events if event.event_type == "model_message_completed"]
+        self.assertEqual([event.payload["content"] for event in completed], ["before tool", "after tool"])
+        self.assertEqual(len({event.payload["stream_id"] for event in completed}), 2)
 
 
 if __name__ == "__main__":

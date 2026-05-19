@@ -22,6 +22,8 @@ class NodeExecutionContext(BaseModel):
     emit_event: Callable[[dict[str, Any]], None]
     render_spec: NodeRenderSpec | None = None
     graph_messages: list[Any] = Field(default_factory=list)
+    graph_config: Any | None = None
+    graph_runtime: Any | None = None
 
 
 class NodeImplementation(Protocol):

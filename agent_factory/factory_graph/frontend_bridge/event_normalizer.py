@@ -136,6 +136,8 @@ class RuntimeEventNormalizer:
         self.emit_model_activity_from_patch(node_id, stage_id, patch)
         self._emit_tool_proposals(node_id, stage_id, node_span_id, patch)
         self._emit_tool_observations(node_id, stage_id, node_span_id, patch)
+        if _patch_has_ai_message(patch) and node_id not in {FACTORY_TOOLS_NODE, FACTORY_CHAT_TOOLS_NODE}:
+            self._complete_model_stream_for_node(node_id or "model", reason="node_completed")
 
     def emit_debug_event(self, chunk: Any) -> None:
         if not isinstance(chunk, dict):
@@ -380,22 +382,31 @@ class RuntimeEventNormalizer:
 
     def complete_open_model_streams(self, *, reason: str) -> None:
         for stream in list(self.model_streams.values()):
-            if stream.completed:
-                continue
-            stream.completed = True
-            self.runtime_event(
-                "model_message_completed",
-                node_id=stream.node_id,
-                stage_id=self.current_stage_id,
-                span_id=stream.span_id,
-                parent_span_id=stream.parent_span_id,
-                payload={
-                    "stream_id": stream.stream_id,
-                    "content": stream.content,
-                    "completion_reason": reason,
-                    "completion_inferred": True,
-                },
-            )
+            self._complete_model_stream(stream, reason=reason)
+
+    def _complete_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
+        stream = self.model_streams.get(node_id)
+        if stream is None:
+            return
+        self._complete_model_stream(stream, reason=reason)
+
+    def _complete_model_stream(self, stream: ModelStreamState, *, reason: str) -> None:
+        if stream.completed:
+            return
+        stream.completed = True
+        self.runtime_event(
+            "model_message_completed",
+            node_id=stream.node_id,
+            stage_id=self.current_stage_id,
+            span_id=stream.span_id,
+            parent_span_id=stream.parent_span_id,
+            payload={
+                "stream_id": stream.stream_id,
+                "content": stream.content,
+                "completion_reason": reason,
+                "completion_inferred": True,
+            },
+        )
 
     def _normalize_approval_request(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):
@@ -588,6 +599,13 @@ def _stage_id_from_patch(patch: dict[str, Any]) -> str | None:
     if stage_log:
         return str(stage_log[-1].get("stage_id") or "")
     return None
+
+
+def _patch_has_ai_message(patch: dict[str, Any]) -> bool:
+    for message in patch.get("messages", []) or []:
+        if isinstance(message, dict) and message.get("type") == "AIMessage":
+            return True
+    return False
 
 
 def _content_to_text(content: Any) -> str:

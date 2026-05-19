@@ -21,12 +21,26 @@ def build_skill_tool_spec(registry: SkillRegistry) -> ToolSpec:
                 "action": {
                     "type": "string",
                     "enum": ["list", "load", "read_resource"],
-                    "description": "list returns metadata, load returns SKILL.md, read_resource reads one referenced skill resource.",
+                    "description": (
+                        "list returns metadata, load returns SKILL.md, "
+                        "read_resource reads one referenced skill resource."
+                    ),
                 },
-                "name": {"type": "string", "description": "Skill name for load/read_resource."},
-                "path": {"type": "string", "description": "Skill resource path for read_resource."},
+                "name": {
+                    "type": "string",
+                    "description": "Required for load/read_resource. Do not pass this for list.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Required only for read_resource. Do not pass this for list/load.",
+                },
             },
             "required": ["action"],
+            "oneOf": [
+                {"properties": {"action": {"const": "list"}}, "required": ["action"]},
+                {"properties": {"action": {"const": "load"}}, "required": ["action", "name"]},
+                {"properties": {"action": {"const": "read_resource"}}, "required": ["action", "name", "path"]},
+            ],
             "additionalProperties": False,
         },
         output_schema={
@@ -136,8 +150,14 @@ def _required_string(arguments: dict[str, Any], key: str) -> str:
 def _tool_description(registry: SkillRegistry) -> str:
     lines = [
         "Load an enabled skill using progressive disclosure.",
-        "Use action=list to inspect metadata, action=load to read SKILL.md, and action=read_resource to read a referenced resource.",
-        "This tool does not execute scripts. If a loaded skill exposes scripts, execute them through bash so Gateway risk approval still applies.",
+        (
+            "Use action=list to inspect metadata, action=load to read SKILL.md, "
+            "and action=read_resource to read a referenced resource."
+        ),
+        (
+            "This tool does not execute scripts. If a loaded skill exposes scripts, "
+            "execute them through bash so Gateway risk approval still applies."
+        ),
         "<available_skills>",
     ]
     for item in registry.list_metadata():

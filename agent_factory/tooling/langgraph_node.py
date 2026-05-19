@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolCallRequest
@@ -51,10 +52,20 @@ class AgentFactoryToolNode:
             wrap_tool_call=self._wrap_tool_call,
         )
 
-    def __call__(self, state: Mapping[str, Any]) -> dict[str, list[ToolMessage]]:
-        return self.invoke(state)
+    def __call__(
+        self,
+        state: Mapping[str, Any],
+        config: RunnableConfig = None,
+        runtime: Runtime = None,
+    ) -> dict[str, list[ToolMessage]]:
+        return self.invoke(state, config=config, runtime=runtime)
 
-    def invoke(self, state: Mapping[str, Any]) -> dict[str, list[ToolMessage]]:
+    def invoke(
+        self,
+        state: Mapping[str, Any],
+        config: RunnableConfig = None,
+        runtime: Runtime = None,
+    ) -> dict[str, list[ToolMessage]]:
         messages = list(state.get(self.messages_key) or [])
         ai_message, tool_calls = latest_ai_tool_calls(messages)
         if ai_message is None or not tool_calls:
@@ -63,9 +74,18 @@ class AgentFactoryToolNode:
         for batch in _tool_call_batches(tool_calls, self._concurrent_by_name):
             batch_state = dict(state)
             batch_state[self.messages_key] = _replace_latest_ai_tool_calls(messages, ai_message, batch)
-            raw_output = self._tool_node.invoke(batch_state, {"configurable": {"__pregel_runtime": Runtime()}})
+            raw_output = self._invoke_native_tool_node(batch_state, config=config, runtime=runtime)
             outputs.extend(_messages_from_tool_node_output(raw_output, self.messages_key))
         return {self.messages_key: outputs}
+
+    def _invoke_native_tool_node(
+        self,
+        state: Mapping[str, Any],
+        *,
+        config: RunnableConfig,
+        runtime: Runtime,
+    ) -> Any:
+        return self._tool_node.invoke(state, config, runtime=runtime or Runtime())
 
     def _wrap_tool_call(self, request: ToolCallRequest, execute: Callable[[ToolCallRequest], Any]) -> Any:
         tool_call = dict(request.tool_call)

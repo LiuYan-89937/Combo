@@ -8,6 +8,9 @@ from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from agent_factory.tooling import ToolCompiler, ToolRegistry, ToolRiskEvaluatorConfig, ToolSpec, compile_json_schema
+from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
+from agent_factory.tooling.builtins.network.specs import get_network_tool_specs
+from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.entrypoint import ToolEntrypointError, ToolEntrypointLoader
 from agent_factory.tooling.gateway import ToolApprovalDecision, ToolExecutionGateway
 from agent_factory.tooling.langgraph_node import build_tool_node_runner
@@ -139,7 +142,10 @@ class EntrypointLoaderTest(unittest.TestCase):
         loader = ToolEntrypointLoader(mcp_clients={"filesystem": FakeMCPClient()})
         entrypoint = loader.load("mcp:filesystem/read_file")
 
-        self.assertEqual(entrypoint({"path": "README.md"}, {}), {"tool": "read_file", "arguments": {"path": "README.md"}})
+        self.assertEqual(
+            entrypoint({"path": "README.md"}, {}),
+            {"tool": "read_file", "arguments": {"path": "README.md"}},
+        )
 
 
 @unittest.skipUnless(JSONSCHEMA_AVAILABLE, "jsonschema dependency is not installed")
@@ -225,6 +231,25 @@ class GatewayAndCompilerTest(unittest.TestCase):
         self.assertEqual(message.tool_call_id, "call_sample")
         self.assertIn('"tool_call_id": "call_sample"', message.content)
 
+    def test_builtin_tool_optional_arguments_are_not_sent_as_null(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_tool = root / "tools" / "argument_echo" / "tool.py"
+            package_tool.parent.mkdir(parents=True)
+            package_tool.write_text(
+                "def run(arguments: dict, resources: dict) -> dict:\n"
+                "    return {'arguments': arguments}\n",
+                encoding="utf-8",
+            )
+            compiler = ToolCompiler(package_root=root)
+            for spec in _builtin_catalog_specs():
+                with self.subTest(tool_id=spec.id):
+                    tool = compiler.compile(_echo_spec_for_input_schema(spec))
+                    result = tool.invoke(_minimal_arguments_for_tool(spec.id))
+
+                self.assertEqual(result["status"], "completed")
+                self.assertFalse(_contains_unexpected_none(result["output"]["arguments"], spec.input_schema))
+
 
 def _tool_spec(*, risk_level: str = "low", entrypoint: str = "tools/sample_tool/tool.py:run") -> ToolSpec:
     return ToolSpec(
@@ -248,6 +273,83 @@ def _tool_spec(*, risk_level: str = "low", entrypoint: str = "tools/sample_tool/
         risk_evaluator=ToolRiskEvaluatorConfig(),
         concurrent=True,
     )
+
+
+def _builtin_catalog_specs() -> list[ToolSpec]:
+    return [
+        *get_filesystem_tool_specs(),
+        *get_process_tool_specs(),
+        *get_network_tool_specs(),
+    ]
+
+
+def _echo_spec_for_input_schema(spec: ToolSpec) -> ToolSpec:
+    return spec.model_copy(
+        deep=True,
+        update={
+            "entrypoint": "tools/argument_echo/tool.py:run",
+            "output_schema": {
+                "type": "object",
+                "properties": {"arguments": {"type": "object", "additionalProperties": True}},
+                "required": ["arguments"],
+                "additionalProperties": False,
+            },
+            "resources": {},
+            "risk_level": "low",
+            "risk_evaluator": ToolRiskEvaluatorConfig(),
+        },
+    )
+
+
+def _minimal_arguments_for_tool(tool_id: str) -> dict:
+    values = {
+        "read": {"path": "README.md"},
+        "write": {"path": "tmp.txt", "content": "hello"},
+        "edit": {"path": "tmp.txt", "old_text": "old", "new_text": "new"},
+        "multi_edit": {"path": "tmp.txt", "edits": [{"old_text": "old", "new_text": "new"}]},
+        "glob": {"pattern": "*.py"},
+        "grep": {"pattern": "ToolSpec"},
+        "ls": {"path": "."},
+        "bash": {"command": "echo hello"},
+        "bash_status": {"process_id": "proc_1"},
+        "bash_stop": {"process_id": "proc_1"},
+        "web_fetch": {"url": "https://example.com"},
+        "web_search": {"query": "example"},
+    }
+    return values[tool_id]
+
+
+def _contains_unexpected_none(value: object, schema: dict) -> bool:
+    if not isinstance(value, dict) or not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties") or {}
+    if not isinstance(properties, dict):
+        return False
+    required = set(schema.get("required") or [])
+    for key, item in value.items():
+        field_schema = properties.get(key)
+        if not isinstance(field_schema, dict):
+            continue
+        if item is None and key not in required and not _schema_accepts_null(field_schema):
+            return True
+        if isinstance(item, dict) and _contains_unexpected_none(item, field_schema):
+            return True
+    return False
+
+
+def _schema_accepts_null(schema: dict) -> bool:
+    schema_type = schema.get("type")
+    if schema_type == "null":
+        return True
+    if isinstance(schema_type, list) and "null" in schema_type:
+        return True
+    for keyword in ("anyOf", "oneOf"):
+        options = schema.get(keyword)
+        if isinstance(options, list) and any(
+            isinstance(option, dict) and _schema_accepts_null(option) for option in options
+        ):
+            return True
+    return False
 
 
 if __name__ == "__main__":

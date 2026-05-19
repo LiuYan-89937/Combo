@@ -71,8 +71,12 @@ class ToolCompiler:
 
         def invoke_tool(**kwargs: Any) -> dict[str, Any]:
             current = current_tool_call()
-            return gateway.execute(
+            arguments = _strip_unset_none_values(
                 _normalize_tool_arguments(dict(kwargs)),
+                schema=spec.input_schema,
+            )
+            return gateway.execute(
+                arguments,
                 tool_call_id=current.tool_call_id if current is not None and current.tool_id == spec.id else None,
             )
 
@@ -133,3 +137,55 @@ def _normalize_tool_arguments(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_normalize_tool_arguments(item) for item in value]
     return value
+
+
+def _strip_unset_none_values(value: Any, *, schema: dict[str, Any]) -> Any:
+    if not isinstance(value, dict) or not isinstance(schema, dict):
+        return value
+    if _schema_type(schema) != "object":
+        return value
+    properties = schema.get("properties") or {}
+    if not isinstance(properties, dict):
+        return value
+    required = set(schema.get("required") or [])
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        field_schema = properties.get(key)
+        if not isinstance(field_schema, dict):
+            cleaned[key] = item
+            continue
+        if item is None and key not in required and not _schema_accepts_null(field_schema):
+            continue
+        cleaned[key] = _strip_nested_none_values(item, schema=field_schema)
+    return cleaned
+
+
+def _strip_nested_none_values(value: Any, *, schema: dict[str, Any]) -> Any:
+    schema_type = _schema_type(schema)
+    if schema_type == "object" and isinstance(value, dict):
+        return _strip_unset_none_values(value, schema=schema)
+    if schema_type == "array" and isinstance(value, list):
+        item_schema = schema.get("items")
+        if not isinstance(item_schema, dict):
+            return value
+        return [_strip_nested_none_values(item, schema=item_schema) for item in value]
+    return value
+
+
+def _schema_type(schema: dict[str, Any]) -> Any:
+    return schema.get("type", "object")
+
+
+def _schema_accepts_null(schema: dict[str, Any]) -> bool:
+    schema_type = schema.get("type")
+    if schema_type == "null":
+        return True
+    if isinstance(schema_type, list) and "null" in schema_type:
+        return True
+    for keyword in ("anyOf", "oneOf"):
+        options = schema.get(keyword)
+        if isinstance(options, list) and any(
+            isinstance(option, dict) and _schema_accepts_null(option) for option in options
+        ):
+            return True
+    return False

@@ -71,12 +71,13 @@ class LangChainModelServiceAdapter:
         settings = get_main_model_settings()
         if model is None:
             raise RuntimeError("main model is not configured for AgentPackage runtime")
-        bound_model = model.bind_tools(tools) if tools else model
+        bound_model = _bind_tools(model, tools or [])
         response = bound_model.invoke(
             _messages_for_state(
                 state=state,
                 prompt_binding=prompt_binding or {},
                 messages=messages or [],
+                tools=tools or [],
             )
         )
         text = _content_to_text(getattr(response, "content", response)).strip()
@@ -94,13 +95,27 @@ class LangChainModelServiceAdapter:
         )
 
 
-def _messages_for_state(*, state: Any, prompt_binding: dict[str, Any], messages: list[Any]) -> list[Any]:
+def _bind_tools(model: Any, tools: list[BaseTool]) -> Any:
+    if not tools:
+        return model
+    return model.bind_tools(tools, tool_choice="auto")
+
+
+def _messages_for_state(
+    *,
+    state: Any,
+    prompt_binding: dict[str, Any],
+    messages: list[Any],
+    tools: list[BaseTool],
+) -> list[Any]:
     system_parts = []
     template = str(prompt_binding.get("template") or "").strip()
     if template:
         system_parts.append(template)
     else:
         system_parts.append("You are the generated Agent runtime model. Answer the user directly and concisely.")
+    if tools:
+        system_parts.append(_tool_protocol_instruction(tools))
     memory_text = _cross_session_memory_text(state)
     if memory_text:
         system_parts.append(memory_text)
@@ -110,6 +125,16 @@ def _messages_for_state(*, state: Any, prompt_binding: dict[str, Any], messages:
         if user_input:
             normalized_messages = [HumanMessage(content=user_input)]
     return [SystemMessage(content="\n\n".join(system_parts)), *normalized_messages]
+
+
+def _tool_protocol_instruction(tools: list[BaseTool]) -> str:
+    tool_names = ", ".join(tool.name for tool in tools)
+    return (
+        "Tool protocol: when a tool is needed, use the chat model's native tool_call mechanism only. "
+        "Do not write tool calls as plain text, XML, JSON, markdown, or pseudo syntax. "
+        "Use exact argument names from the tool schema. After receiving a tool observation, continue from the observation. "
+        f"Available tools: {tool_names}."
+    )
 
 
 def _tool_calls_from_response(response: Any) -> list[dict[str, Any]]:

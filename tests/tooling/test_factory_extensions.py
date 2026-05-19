@@ -51,8 +51,11 @@ class FactoryExtensionTest(unittest.TestCase):
             _write_skill_extension(root)
 
             tools = get_factory_tools(tool_ids=["skill"], extension_root=root)
+            listed = tools[0].invoke({"action": "list"})
             result = tools[0].invoke({"action": "load", "name": "factory"})
 
+        self.assertEqual(listed["status"], "completed")
+        self.assertEqual(listed["output"]["skills"][0]["name"], "factory")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["output"]["skill"]["name"], "factory")
 

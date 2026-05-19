@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphInterrupt
 from langgraph.graph import END, StateGraph
+from langgraph.runtime import Runtime
 
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
@@ -188,7 +190,11 @@ def _make_wrapped_runner(
 ):
     node_wrappers = sorted(node_wrappers, key=lambda item: int(item.order))
 
-    def runner(raw_state: dict[str, Any]) -> dict[str, Any]:
+    def runner(
+        raw_state: dict[str, Any],
+        config: RunnableConfig = None,
+        runtime: Runtime = None,
+    ) -> dict[str, Any]:
         state = _runtime_state_from_graph(raw_state)
         if state.execution.finished:
             return _runtime_graph_patch(state)
@@ -233,6 +239,8 @@ def _make_wrapped_runner(
             emit_event=emit_event,
             render_spec=render_spec,
             graph_messages=list(raw_state.get("messages") or []),
+            graph_config=config,
+            graph_runtime=runtime,
         )
         active_state = state
         try:
