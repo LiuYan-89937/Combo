@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from agent_factory.runtime_contracts.contribution import RuntimeBuildResult, RuntimeContributionMerger
 from agent_factory.runtime_contracts.loader import LoadedAgentPackage
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
+from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRACTS
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 
 
@@ -29,7 +30,7 @@ class RuntimeBuildPlanner:
         *,
         base_services: RuntimeServices,
     ) -> RuntimeBuildResult:
-        missing = sorted({"render", "resources", "sandbox", "session", "tools"} - set(package.contracts))
+        missing = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - set(package.contracts))
         if missing:
             raise ValueError("agent package missing required runtime contracts: " + ", ".join(missing))
         context = RuntimeBuildContext(

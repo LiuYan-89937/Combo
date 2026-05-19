@@ -24,12 +24,11 @@ class InterruptPayload(BaseModel):
 class ModelInvocationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    ai_message: Any | None = None
     assistant_draft: str | None = None
     final_answer: str | None = None
     clarification_question: str | None = None
-    requests_tool: bool = False
-    tool_name: str | None = None
-    tool_arguments: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     route_decision: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 

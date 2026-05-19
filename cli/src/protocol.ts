@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
 
-export const factoryModeSchema = z.enum(['chat', 'create_agent']);
+export const factoryModeSchema = z.enum(['chat', 'create_agent', 'agent_package']);
 export type FactoryMode = z.infer<typeof factoryModeSchema>;
 
 export const commandSchema = z.object({
@@ -13,6 +13,11 @@ export const commandSchema = z.object({
 		'set_mode',
 		'send_message',
 		'rerun_from_stage',
+		'list_agent_packages',
+		'select_agent_package',
+		'delete_agent_package',
+		'list_agent_package_sessions',
+		'run_agent_package',
 		'resume_interrupt',
 		'set_options',
 		'shutdown'
@@ -36,6 +41,10 @@ export const eventSchema = z.object({
 		'session_started',
 		'session_switched',
 		'sessions_listed',
+		'agent_packages_listed',
+		'agent_package_selected',
+		'agent_package_deleted',
+		'agent_package_sessions_listed',
 		'mode_changed',
 		'run_started',
 		'run_completed',

@@ -12,8 +12,19 @@ export function ErrorPanel() {
 		<Box borderStyle="round" borderColor="red" paddingX={1} flexDirection="column">
 			<Text color="red" bold>Runtime Errors</Text>
 			{errors.length ? errors.slice(-5).map((item, index) => (
-				<Text key={`${item}-${index}`} color="red">{item}</Text>
-			)) : <Text color="red">{message}</Text>}
+				<ErrorItem key={`${item}-${index}`} value={item} />
+			)) : <ErrorItem value={message ?? ''} />}
+		</Box>
+	);
+}
+
+function ErrorItem({value}: {value: string}) {
+	const lines = value.split('\n').filter(line => line.trim());
+	return (
+		<Box flexDirection="column" marginTop={1}>
+			{lines.map((line, index) => (
+				<Text key={`${line}-${index}`} color="red">{line}</Text>
+			))}
 		</Box>
 	);
 }

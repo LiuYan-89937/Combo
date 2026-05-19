@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from agent_factory.runtime_contracts.builtins.builders import (
+    DependenciesContractBuilder,
     MemoryContractBuilder,
+    ModelContractBuilder,
     RenderContractBuilder,
     ResourcesContractBuilder,
     SandboxContractBuilder,
@@ -9,7 +11,9 @@ from agent_factory.runtime_contracts.builtins.builders import (
     ToolsContractBuilder,
 )
 from agent_factory.runtime_contracts.builtins.defaults import (
+    default_dependencies_contract,
     default_memory_contract,
+    default_model_contract,
     default_render_contract,
     default_resources_contract,
     default_sandbox_contract,
@@ -18,7 +22,9 @@ from agent_factory.runtime_contracts.builtins.defaults import (
 )
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
 from agent_factory.runtime_contracts.schema import (
+    DependenciesContract,
     MemoryContract,
+    ModelContract,
     RenderContract,
     ResourcesContract,
     SandboxRuntimeContract,
@@ -48,6 +54,12 @@ def default_runtime_contract_registry() -> RuntimeContractRegistry:
         builder=MemoryContractBuilder(),
     )
     registry.register(
+        contract_type="model",
+        version="model_contract.v0",
+        model=ModelContract,
+        builder=ModelContractBuilder(),
+    )
+    registry.register(
         contract_type="render",
         version="render_contract.v0",
         model=RenderContract,
@@ -65,11 +77,19 @@ def default_runtime_contract_registry() -> RuntimeContractRegistry:
         model=SandboxRuntimeContract,
         builder=SandboxContractBuilder(),
     )
+    registry.register(
+        contract_type="dependencies",
+        version="dependencies_contract.v0",
+        model=DependenciesContract,
+        builder=DependenciesContractBuilder(),
+    )
     return registry
 
 
 __all__ = [
+    "default_dependencies_contract",
     "default_memory_contract",
+    "default_model_contract",
     "default_render_contract",
     "default_resources_contract",
     "default_runtime_contract_registry",

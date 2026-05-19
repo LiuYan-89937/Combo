@@ -19,6 +19,7 @@ from agent_factory.factory_graph.model_call import (
     model_error_patch,
     prompt_values,
 )
+from agent_factory.paths import factory_artifact_path
 from agent_factory.factory_graph.schemas import (
     PackageBuildDecision,
     PackageFileDraft,
@@ -53,6 +54,8 @@ REQUIRED_PACKAGE_FILES = {
     "bindings/services.json",
     "bindings/node_bindings.json",
     "bindings/hooks.json",
+    "contracts/dependencies.json",
+    "contracts/model.json",
     "contracts/render.json",
     "contracts/resources.json",
     "contracts/sandbox.json",
@@ -482,7 +485,7 @@ def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) ->
             default_runtime_contract_registry().parse(TypeAdapter(dict[str, object]).validate_json(target.read_text(encoding="utf-8")))
         except Exception as exc:
             errors.append(f"agent_package.json contracts.{key} invalid: {type(exc).__name__}: {exc}")
-    required_contracts = {"render", "resources", "sandbox", "session", "tools"}
+    required_contracts = {"dependencies", "model", "render", "resources", "sandbox", "session", "tools"}
     missing_contracts = sorted(required_contracts - set(manifest.contracts))
     for key in missing_contracts:
         errors.append(f"agent_package.json missing contracts.{key}")
@@ -763,7 +766,7 @@ def _safe_relative_path(path: str) -> PurePosixPath:
 
 
 def _package_root(factory_run_id: str) -> Path:
-    return Path(PACKAGE_ROOT) / (factory_run_id or "default")
+    return factory_artifact_path("packages", factory_run_id or "default")
 
 
 def _json_text(value: Any) -> str:

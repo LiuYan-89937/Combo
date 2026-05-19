@@ -4,12 +4,16 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, ScriptedModelService
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.context import ContextEngine
 from agent_factory.runtime_kernel.kernel.facade import RuntimeKernelFacade
+from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
+from agent_factory.runtime_kernel.nodes.standard.answer import CognitiveAnswerNode
+from agent_factory.runtime_kernel.nodes.standard.tool_call import OperationalToolCallNode
 from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.observability import ObservabilityManager
 from agent_factory.runtime_kernel.persistence import (
@@ -22,6 +26,8 @@ from agent_factory.runtime_kernel.persistence import (
 from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.state import RuntimeGraphState
+from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.types import ModelInvocationResult, ToolExecutionResult
 from agent_factory.memory_system import MemorySystemConfig, MemorySystemRuntime
 from agent_factory.memory_system.config import MemoryBackgroundConfig
 from agent_factory.memory_system.schema import MemoryWriteReport
@@ -195,6 +201,106 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
         self.assertIn("second", contents)
 
 
+class RuntimeKernelToolPermissionTest(unittest.TestCase):
+    def test_answer_node_routes_tools_from_model_tool_calls(self) -> None:
+        state = RuntimeState()
+        context = NodeExecutionContext(
+            node_id="answer",
+            impl="cognitive.answer",
+            services=RuntimeServices(model_service=_ToolCallingModelService()),
+            emit_event=lambda _event: None,
+        )
+
+        patch = CognitiveAnswerNode().execute(state, context)
+
+        self.assertEqual(patch["execution"]["route_decision"], "model.requests_tool")
+        self.assertIsInstance(patch["messages"][0], AIMessage)
+        self.assertEqual(patch["messages"][0].tool_calls[0]["name"], "ls")
+
+    def test_tool_node_returns_tool_messages_when_registry_is_missing(self) -> None:
+        state = RuntimeState()
+        context = NodeExecutionContext(
+            node_id="tool_exec",
+            impl="operational.tool_call",
+            services=RuntimeServices(tool_registry=None),
+            emit_event=lambda _event: None,
+            graph_messages=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "ls", "args": {"path": "."}, "id": "call_ls"}],
+                )
+            ],
+        )
+
+        patch = OperationalToolCallNode().execute(state, context)
+
+        self.assertEqual(patch["execution"]["route_decision"], "tool.failed")
+        self.assertIsInstance(patch["messages"][0], ToolMessage)
+        self.assertEqual(patch["messages"][0].tool_call_id, "call_ls")
+        self.assertIn("tool_registry_missing", patch["messages"][0].content)
+
+    def test_system_tool_executes_even_when_business_tool_binding_is_restricted(self) -> None:
+        state = RuntimeState()
+        registry = _SystemToolRegistry(system_tool_ids=["ls"])
+        events: list[dict] = []
+        context = NodeExecutionContext(
+            node_id="tool_exec",
+            impl="operational.tool_call",
+            bindings=[
+                {
+                    "binding_type": "tool_access",
+                    "payload": {"allowed_tool_ids": ["business_tool"]},
+                }
+            ],
+            services=RuntimeServices(tool_registry=registry),
+            emit_event=events.append,
+            graph_messages=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "ls", "args": {"path": "."}, "id": "call_ls"}],
+                )
+            ],
+        )
+
+        patch = OperationalToolCallNode().execute(state, context)
+
+        self.assertEqual(patch["execution"]["route_decision"], "tool.completed")
+        self.assertEqual(patch["tools"]["tool_failures"], [])
+        self.assertIsInstance(patch["messages"][0], ToolMessage)
+        self.assertEqual(patch["messages"][0].tool_call_id, "call_ls")
+        self.assertEqual(registry.calls, [("ls", {"path": "."})])
+
+    def test_non_system_tool_is_blocked_by_business_tool_binding(self) -> None:
+        state = RuntimeState()
+        registry = _SystemToolRegistry(system_tool_ids=["ls"])
+        context = NodeExecutionContext(
+            node_id="tool_exec",
+            impl="operational.tool_call",
+            bindings=[
+                {
+                    "binding_type": "tool_access",
+                    "payload": {"allowed_tool_ids": ["business_tool"]},
+                }
+            ],
+            services=RuntimeServices(tool_registry=registry),
+            emit_event=lambda _event: None,
+            graph_messages=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "other_tool", "args": {}, "id": "call_other"}],
+                )
+            ],
+        )
+
+        patch = OperationalToolCallNode().execute(state, context)
+
+        self.assertEqual(patch["execution"]["route_decision"], "policy.blocked")
+        self.assertEqual(patch["policy"]["blocked"], True)
+        self.assertIsInstance(patch["messages"][0], ToolMessage)
+        self.assertEqual(patch["messages"][0].tool_call_id, "call_other")
+        self.assertEqual(registry.calls, [])
+
+
 def _runtime_services() -> RuntimeServices:
     return RuntimeServices(
         model_service=ScriptedModelService(),
@@ -215,6 +321,65 @@ class _CapturingMemoryWriter:
     def enqueue(self, job):
         self.jobs.append(job)
         return MemoryWriteReport(job_id=job.job_id, status="queued", namespace=job.namespace)
+
+
+class _SystemToolRegistry:
+    def __init__(self, *, system_tool_ids: list[str]) -> None:
+        self._system_tool_ids = list(system_tool_ids)
+        self.calls: list[tuple[str, dict]] = []
+        self._model_tools = {
+            "ls": StructuredTool.from_function(
+                func=self._ls,
+                name="ls",
+                description="List files.",
+            ),
+            "other_tool": StructuredTool.from_function(
+                func=self._other_tool,
+                name="other_tool",
+                description="Other tool.",
+            ),
+        }
+
+    def list_tool_ids(self) -> list[str]:
+        return sorted(self._model_tools)
+
+    def system_tool_ids(self) -> list[str]:
+        return list(self._system_tool_ids)
+
+    def model_tools(self, tool_ids: list[str] | set[str] | None = None):
+        if tool_ids is None:
+            return list(self._model_tools.values())
+        selected = set(tool_ids)
+        return [tool for tool_id, tool in self._model_tools.items() if tool_id in selected]
+
+    def execute(self, tool_id: str, arguments: dict, *, state) -> ToolExecutionResult:
+        self.calls.append((tool_id, dict(arguments)))
+        return ToolExecutionResult(
+            status="completed",
+            output={"tool_id": tool_id, "arguments": dict(arguments)},
+            observation_summary="ok",
+        )
+
+    def _ls(self, path: str = ".") -> dict:
+        self.calls.append(("ls", {"path": path}))
+        return {"type": "tool_observation", "status": "completed", "tool_id": "ls", "message": "ok", "output": {"path": path}}
+
+    def _other_tool(self) -> dict:
+        self.calls.append(("other_tool", {}))
+        return {"type": "tool_observation", "status": "completed", "tool_id": "other_tool", "message": "ok", "output": {}}
+
+
+class _ToolCallingModelService:
+    def generate(self, **_kwargs) -> ModelInvocationResult:
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[{"name": "ls", "args": {"path": "."}, "id": "call_ls"}],
+        )
+        return ModelInvocationResult(
+            ai_message=ai_message,
+            assistant_draft="",
+            tool_calls=[{"name": "ls", "args": {"path": "."}, "id": "call_ls"}],
+        )
 
 
 def _runtime_facade() -> RuntimeKernelFacade:

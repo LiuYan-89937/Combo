@@ -8,9 +8,9 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
 
 from agent_factory.tooling import get_factory_model_tools, get_factory_tools
+from agent_factory.tooling.langgraph_node import build_tool_node_runner
 from agent_factory.factory_graph.model_call import prompt_values
 from agent_factory.factory_graph.session import build_factory_checkpointer
 from agent_factory.models import get_task_model, get_task_model_settings
@@ -38,7 +38,15 @@ def build_factory_chat_graph(
     graph = StateGraph(FactoryChatState)
     graph.add_node(FACTORY_CHAT_MODEL_NODE, _chat_model_node)
     if has_tools:
-        graph.add_node(FACTORY_CHAT_TOOLS_NODE, ToolNode(resolved_tools, name=FACTORY_CHAT_TOOLS_NODE))
+        graph.add_node(
+            FACTORY_CHAT_TOOLS_NODE,
+            build_tool_node_runner(
+                resolved_tools,
+                node_id=FACTORY_CHAT_TOOLS_NODE,
+                name=FACTORY_CHAT_TOOLS_NODE,
+                stream_events=True,
+            ),
+        )
     graph.add_edge(START, FACTORY_CHAT_MODEL_NODE)
     route_after_chat_model = _make_chat_model_router(has_tools=has_tools)
     graph.add_conditional_edges(

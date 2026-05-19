@@ -11,7 +11,9 @@ from agent_factory.runtime_contracts.loader import AgentPackageLoader, LoadedAge
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
 from agent_factory.runtime_contracts.schema import (
     AgentPackageManifest,
+    DependenciesContract,
     MemoryContract,
+    ModelContract,
     RenderContract,
     ResourcesContract,
     RuntimeContractEnvelope,
@@ -23,8 +25,10 @@ from agent_factory.runtime_contracts.schema import (
 __all__ = [
     "AgentPackageLoader",
     "AgentPackageManifest",
+    "DependenciesContract",
     "LoadedAgentPackage",
     "MemoryContract",
+    "ModelContract",
     "RenderContract",
     "ResourcesContract",
     "RuntimeBuildContext",

@@ -4,11 +4,13 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from agent_factory.tooling import ToolCompiler, ToolRegistry, ToolRiskEvaluatorConfig, ToolSpec, compile_json_schema
 from agent_factory.tooling.entrypoint import ToolEntrypointError, ToolEntrypointLoader
 from agent_factory.tooling.gateway import ToolApprovalDecision, ToolExecutionGateway
+from agent_factory.tooling.langgraph_node import build_tool_node_runner
 
 
 try:
@@ -187,6 +189,41 @@ class GatewayAndCompilerTest(unittest.TestCase):
         result = tools[0].invoke({"query": "hello"})
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["output"]["query"], "hello")
+
+    def test_langgraph_tool_node_adapter_preserves_tool_call_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_tool = root / "tools" / "sample_tool" / "tool.py"
+            package_tool.parent.mkdir(parents=True)
+            package_tool.write_text(
+                "def run(arguments: dict, resources: dict) -> dict:\n"
+                "    return {'ok': True, 'query': arguments['query']}\n",
+                encoding="utf-8",
+            )
+            compiler = ToolCompiler(package_root=root)
+            tool = compiler.compile(_tool_spec(entrypoint="tools/sample_tool/tool.py:run"))
+
+        runner = build_tool_node_runner([tool], node_id="tools")
+        output = runner.invoke(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "sample_tool",
+                                "args": {"query": "hello"},
+                                "id": "call_sample",
+                            }
+                        ],
+                    )
+                ]
+            }
+        )
+
+        message = output["messages"][0]
+        self.assertEqual(message.tool_call_id, "call_sample")
+        self.assertIn('"tool_call_id": "call_sample"', message.content)
 
 
 def _tool_spec(*, risk_level: str = "low", entrypoint: str = "tools/sample_tool/tool.py:run") -> ToolSpec:

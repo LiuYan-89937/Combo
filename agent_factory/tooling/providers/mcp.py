@@ -114,7 +114,9 @@ class MCPToolProvider:
                 continue
             for tool in discovered:
                 try:
-                    result.tool_specs.append(_tool_spec_from_mcp_tool(server, tool))
+                    spec = _tool_spec_from_mcp_tool(server, tool)
+                    result.tool_specs.append(spec)
+                    result.system_tool_ids.append(spec.id)
                 except Exception as exc:
                     result.diagnostics.append(
                         diagnostic(
@@ -132,8 +134,9 @@ class MCPToolProvider:
 def _tool_spec_from_mcp_tool(server: MCPServerConfig, tool: MCPDiscoveredTool) -> ToolSpec:
     prefix = _snake(server.tool_id_prefix or server.server_id)
     tool_name = _snake(tool.name)
+    tool_id = tool_name if tool_name.startswith(f"{prefix}_") else f"{prefix}_{tool_name}"
     return ToolSpec(
-        id=f"{prefix}_{tool_name}",
+        id=tool_id,
         description=tool.description or f"MCP tool {tool.name} from server {server.server_id}.",
         entrypoint=f"mcp:{server.server_id}/{tool.name}",
         input_schema=tool.input_schema or {"type": "object", "additionalProperties": True},

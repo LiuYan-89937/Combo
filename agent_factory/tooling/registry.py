@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Mapping
 
 from langchain_core.tools import BaseTool
 
+from agent_factory.paths import project_root
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.entrypoints import MCPToolClient
-from agent_factory.tooling.factory_extensions import FactoryExtensionManager, default_factory_extension_root
 from agent_factory.tooling.providers import MCPToolCatalogClient
 from agent_factory.tooling.builtins import (
     get_builtin_protected_tool_ids,
@@ -54,6 +53,8 @@ def get_factory_tools(
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
     mcp_tool_clients: Mapping[str, MCPToolClient] | None = None,
 ) -> list[BaseTool]:
+    from agent_factory.tooling.factory_extensions import default_factory_extension_root
+
     selected_ids = set(tool_ids or [])
     specs, effective_mcp_clients, runtime_resources = _collect_factory_tool_specs(
         selected_ids=selected_ids,
@@ -107,6 +108,8 @@ def _collect_factory_tool_specs(
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None,
     mcp_tool_clients: Mapping[str, MCPToolClient] | None,
 ) -> tuple[list[ToolSpec], Mapping[str, MCPToolClient], dict[str, object]]:
+    from agent_factory.tooling.factory_extensions import FactoryExtensionManager
+
     specs = get_builtin_tool_specs()
     effective_mcp_clients: Mapping[str, MCPToolClient] = dict(mcp_tool_clients or {})
     runtime_resources: dict[str, object] = {}
@@ -141,8 +144,4 @@ def get_factory_protected_tool_ids() -> list[str]:
 
 
 def _default_filesystem_root() -> Path:
-    current = Path(os.getcwd()).resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / "pyproject.toml").is_file() and (candidate / "agent_factory").is_dir():
-            return candidate
-    return current
+    return project_root()

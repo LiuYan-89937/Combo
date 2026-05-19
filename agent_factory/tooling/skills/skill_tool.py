@@ -7,11 +7,12 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, 
 
 
 SKILL_RESOURCE_KEY = "skills"
+SKILL_TOOL_ID = "skill"
 
 
 def build_skill_tool_spec(registry: SkillRegistry) -> ToolSpec:
     return ToolSpec(
-        id="skill",
+        id=SKILL_TOOL_ID,
         description=_tool_description(registry),
         entrypoint="agent_factory.tooling.skills.skill_tool:run",
         input_schema={

@@ -7,6 +7,7 @@ from typing import Any, Callable, Literal, Mapping
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.tooling.execution_context import current_tool_call
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
 from agent_factory.tooling.spec import ToolObservation, ToolRiskContext, ToolRiskResult, ToolSpec
@@ -276,6 +277,7 @@ def _risk_guidance(risk: ToolRiskResult) -> str:
 
 
 def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: ToolRiskResult) -> ToolApprovalDecision:
+    current = current_tool_call()
     decision = interrupt(
         {
             "type": "tool_approval",
@@ -283,7 +285,7 @@ def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: 
             "choices": {"approve": "-y", "deny": "-n", "trust_tool": "-t", "revise": "custom"},
             "requests": [
                 {
-                    "tool_call_id": "",
+                    "tool_call_id": current.tool_call_id if current is not None and current.tool_id == spec.id else "",
                     "tool_name": spec.id,
                     "args": arguments,
                     "summary": spec.id,

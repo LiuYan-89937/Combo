@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent_factory.assembly.schema import AgentAssemblySpec, ToolSpec
 from agent_factory.assembly.validator import AgentAssemblyValidationError, AgentAssemblyValidator
+from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_kernel.bindings import (
     CustomBindingPayload,
     OutputFormatterBindingPayload,
@@ -30,7 +31,9 @@ from agent_factory.factory_graph.schemas import (
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.prompts import PromptId, output_json_schema
 from agent_factory.runtime_contracts.builtins import (
+    default_dependencies_contract,
     default_memory_contract,
+    default_model_contract,
     default_render_contract,
     default_resources_contract,
     default_sandbox_contract,
@@ -569,6 +572,8 @@ def _risk_level_from_capability(capability: dict[str, object]) -> ToolRiskLevel:
 
 def _package_contracts(spec: AgentAssemblySpec) -> dict[str, dict[str, object]]:
     contracts = {
+        "dependencies": default_dependencies_contract().model_dump(mode="json"),
+        "model": default_model_contract().model_dump(mode="json"),
         "render": default_render_contract().model_dump(mode="json"),
         "resources": default_resources_contract().model_dump(mode="json"),
         "sandbox": default_sandbox_contract().model_dump(mode="json"),
@@ -630,6 +635,8 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "bindings/hooks.json",
         "render_manifest.json",
         "sandbox_contract.json",
+        "contracts/dependencies.json",
+        "contracts/model.json",
         "contracts/render.json",
         "contracts/resources.json",
         "contracts/sandbox.json",
@@ -758,7 +765,7 @@ def _attempt_count(state: FactoryGraphState) -> int:
 
 
 def _assembly_paths(factory_run_id: str) -> dict[str, Path]:
-    root = Path(ASSEMBLY_ROOT) / factory_run_id
+    root = factory_artifact_path("assemblies", factory_run_id)
     return {
         "draft": root / "assembly_spec_draft.json",
         "spec": root / "assembly_spec.json",

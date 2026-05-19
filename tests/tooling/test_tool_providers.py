@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from agent_factory.tooling.providers import (
+    BuiltinToolProvider,
     MCPServerConfig,
     MCPServersConfig,
     MCPToolProvider,
@@ -16,6 +17,18 @@ from agent_factory.tooling.providers import (
 
 
 class ToolProviderTest(unittest.TestCase):
+    def test_builtin_provider_registers_builtin_tools_as_system_tools(self) -> None:
+        result = BuiltinToolProvider(tool_ids=["ls", "read"]).discover(ToolProviderContext())
+
+        self.assertEqual([tool.id for tool in result.tool_specs], ["read", "ls"])
+        self.assertEqual(result.system_tool_ids, ["read", "ls"])
+        self.assertEqual(result.runtime_resources["filesystem"]["root"], "/workdir")
+        self.assertEqual(result.runtime_resources["process_runtime"]["root"], "/workdir")
+
+    def test_builtin_provider_rejects_unknown_tool_id(self) -> None:
+        with self.assertRaises(ValueError):
+            BuiltinToolProvider(tool_ids=["not_a_tool"]).discover(ToolProviderContext())
+
     def test_package_provider_loads_tool_manifest_and_normalizes_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -63,6 +76,7 @@ class ToolProviderTest(unittest.TestCase):
         self.assertEqual(result.tool_specs[0].id, "fs_read_file")
         self.assertEqual(result.tool_specs[0].entrypoint, "mcp:filesystem/read_file")
         self.assertEqual(result.tool_specs[0].risk_level, "medium")
+        self.assertEqual(result.system_tool_ids, ["fs_read_file"])
         self.assertEqual(result.runtime_dependencies[0].dependency_id, "mcp.filesystem")
 
     def test_skill_provider_registers_progressive_skill_tool(self) -> None:

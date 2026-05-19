@@ -11,6 +11,7 @@ from typing import Any, Literal
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.paths import resolve_project_path
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
@@ -50,7 +51,7 @@ class FactorySessionConfig:
 
     @classmethod
     def from_env(cls) -> "FactorySessionConfig":
-        root = Path(os.getenv("AGENTFACTORY_SESSION_ROOT", DEFAULT_SESSION_ROOT)).expanduser()
+        root = resolve_project_path(os.getenv("AGENTFACTORY_SESSION_ROOT", DEFAULT_SESSION_ROOT))
         return cls(root=root)
 
 
@@ -179,7 +180,7 @@ class FactorySessionManager:
 
 
 def checkpoint_path_from_env() -> Path:
-    return Path(os.getenv("AGENTFACTORY_CHECKPOINT_PATH", DEFAULT_CHECKPOINT_PATH)).expanduser()
+    return resolve_project_path(os.getenv("AGENTFACTORY_CHECKPOINT_PATH", DEFAULT_CHECKPOINT_PATH))
 
 
 class FactoryCheckpointerFactory:

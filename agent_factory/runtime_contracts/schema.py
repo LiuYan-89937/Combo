@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
 
 
-ContractType = Literal["session", "tools", "memory", "render", "resources", "sandbox"]
+ContractType = Literal["session", "tools", "memory", "render", "resources", "sandbox", "dependencies", "model"]
 ContractVersion = Literal[
     "session_contract.v0",
     "tools_contract.v0",
@@ -16,7 +16,10 @@ ContractVersion = Literal[
     "render_contract.v0",
     "resources_contract.v0",
     "sandbox_contract.v0",
+    "dependencies_contract.v0",
+    "model_contract.v0",
 ]
+REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset({"dependencies", "model", "render", "resources", "sandbox", "session", "tools"})
 
 
 class ContractValidationError(ValueError):
@@ -44,6 +47,9 @@ class AgentPackageManifest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_referenced_paths(self) -> "AgentPackageManifest":
+        missing_contracts = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - set(self.contracts))
+        if missing_contracts:
+            raise ValueError("agent package missing required contracts: " + ", ".join(missing_contracts))
         for key in (
             "assembly_spec_path",
             "render_manifest_path",
@@ -92,9 +98,40 @@ class SessionContract(BaseModel):
 class ToolsContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    builtin_tools_enabled: bool = True
+    builtin_tool_ids: list[str] = Field(default_factory=list)
+    builtin_workspace_root: str = "/workdir"
+    builtin_allow_external_paths: bool = False
     package_tools_enabled: bool = True
     instance_extensions_enabled: bool = True
-    instance_extension_root: str = ".agent_runtime/extensions"
+    instance_extension_root: str = "/runtime/extensions"
+
+    @field_validator("builtin_tool_ids")
+    @classmethod
+    def _builtin_tool_ids_are_not_empty(cls, value: list[str]) -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            tool_id = str(item).strip()
+            if not tool_id:
+                raise ValueError("builtin_tool_ids must not contain empty ids")
+            if tool_id not in seen:
+                ids.append(tool_id)
+                seen.add(tool_id)
+        return ids
+
+    @field_validator("builtin_workspace_root")
+    @classmethod
+    def _builtin_workspace_root_is_sandbox_absolute(cls, value: str) -> str:
+        root = str(value).strip()
+        if not root:
+            raise ValueError("builtin_workspace_root must not be empty")
+        path = PurePosixPath(root)
+        if not path.is_absolute():
+            raise ValueError("builtin_workspace_root must be an absolute sandbox path")
+        if path == PurePosixPath("/"):
+            raise ValueError("builtin_workspace_root must not be the container root")
+        return root
 
     @field_validator("instance_extension_root")
     @classmethod
@@ -126,6 +163,22 @@ class MemoryContract(BaseModel):
     version: Literal["memory_contract.v0"] = "memory_contract.v0"
     enabled: bool = True
     config: MemoryContractConfig = Field(default_factory=MemoryContractConfig)
+
+
+class ModelContractConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["main"] = "main"
+    source: Literal["factory_runtime_env"] = "factory_runtime_env"
+
+
+class ModelContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["model"] = "model"
+    version: Literal["model_contract.v0"] = "model_contract.v0"
+    enabled: bool = True
+    config: ModelContractConfig = Field(default_factory=ModelContractConfig)
 
 
 class RenderContractConfig(BaseModel):
@@ -188,6 +241,24 @@ class SandboxRuntimeContract(BaseModel):
     config: SandboxRuntimeContractConfig = Field(default_factory=SandboxRuntimeContractConfig)
 
 
+class DependenciesContractConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    python_requirements: list[str] = Field(default_factory=list)
+    system_packages: list[str] = Field(default_factory=list)
+    system_binaries: list[str] = Field(default_factory=list)
+    install_mode: Literal["none", "sandbox_init"] = "sandbox_init"
+
+
+class DependenciesContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["dependencies"] = "dependencies"
+    version: Literal["dependencies_contract.v0"] = "dependencies_contract.v0"
+    enabled: bool = True
+    config: DependenciesContractConfig = Field(default_factory=DependenciesContractConfig)
+
+
 RuntimeContract = (
     SessionContract
     | ToolsContract
@@ -195,6 +266,8 @@ RuntimeContract = (
     | RenderContract
     | ResourcesContract
     | SandboxRuntimeContract
+    | DependenciesContract
+    | ModelContract
 )
 
 

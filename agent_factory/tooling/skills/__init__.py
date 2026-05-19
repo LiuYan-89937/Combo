@@ -6,7 +6,7 @@ from agent_factory.tooling.skills.schema import (
     SkillResourceRef,
     SkillScriptRef,
 )
-from agent_factory.tooling.skills.skill_tool import build_skill_tool_spec
+from agent_factory.tooling.skills.skill_tool import SKILL_TOOL_ID, build_skill_tool_spec
 
 __all__ = [
     "SkillMetadata",
@@ -14,6 +14,7 @@ __all__ = [
     "SkillRegistry",
     "SkillResourceRef",
     "SkillScriptRef",
+    "SKILL_TOOL_ID",
     "build_skill_tool_spec",
     "parse_skill_directory",
 ]

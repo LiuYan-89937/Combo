@@ -35,6 +35,7 @@ class AgentInstanceExtensionLoadReport(BaseModel):
     mcp_servers_path: str | None = None
     enabled_skills_path: str | None = None
     tool_ids: list[str] = Field(default_factory=list)
+    system_tool_ids: list[str] = Field(default_factory=list)
     prompt_fragment_ids: list[str] = Field(default_factory=list)
     runtime_dependency_ids: list[str] = Field(default_factory=list)
     diagnostics: list[ProviderDiagnostic] = Field(default_factory=list)

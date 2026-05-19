@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from agent_factory.runtime_kernel.adapters import (
-    InMemoryToolRegistry,
-    ScriptedModelService,
-)
+from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry
 from agent_factory.memory_system import (
     MemorySystemConfig,
     default_agent_memory_config,
@@ -53,6 +53,15 @@ from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessio
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_render import RenderManifest, default_node_render_spec, validate_render_manifest
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS
+
+
+@dataclass(slots=True)
+class RuntimeKernelRunContext:
+    state: RuntimeState
+    thread_id: str
+    session_manager: AgentSessionManager
+    session_id: str
+    first_user_input: str
 
 
 class RuntimeKernelFacade:
@@ -121,7 +130,7 @@ class RuntimeKernelFacade:
             except Exception:
                 memory_runtime.writer = None
         services = RuntimeServices(
-            model_service=ScriptedModelService(),
+            model_service=None,
             tool_registry=InMemoryToolRegistry(),
             memory_store=memory_store,
             memory_system=memory_runtime,
@@ -173,6 +182,50 @@ class RuntimeKernelFacade:
         agent_config: dict | None = None,
         session_config: dict | None = None,
     ) -> RuntimeState:
+        run_context = self.prepare_run_context(
+            compiled,
+            user_input=user_input,
+            user_config=user_config,
+            agent_config=agent_config,
+            session_config=session_config,
+        )
+        result = self.instance.controller.run(compiled, run_context.state, thread_id=run_context.thread_id)
+        run_context.session_manager.touch_turn(run_context.session_id, first_user_input=run_context.first_user_input)
+        return result
+
+    def stream(
+        self,
+        compiled: CompiledKernelApp,
+        *,
+        user_input: str,
+        user_config: dict | None = None,
+        agent_config: dict | None = None,
+        session_config: dict | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        run_context = self.prepare_run_context(
+            compiled,
+            user_input=user_input,
+            user_config=user_config,
+            agent_config=agent_config,
+            session_config=session_config,
+        )
+        final_seen = False
+        for item in self.instance.controller.stream(compiled, run_context.state, thread_id=run_context.thread_id):
+            if item[0] == "runtime_final":
+                final_seen = True
+            yield item
+        if final_seen:
+            run_context.session_manager.touch_turn(run_context.session_id, first_user_input=run_context.first_user_input)
+
+    def prepare_run_context(
+        self,
+        compiled: CompiledKernelApp,
+        *,
+        user_input: str,
+        user_config: dict | None = None,
+        agent_config: dict | None = None,
+        session_config: dict | None = None,
+    ) -> RuntimeKernelRunContext:
         agent_config = dict(agent_config or {})
         session_config = dict(session_config or {})
         agent_id = str(agent_config.get("agent_id") or compiled.metadata.get("agent_id") or compiled.pattern_spec.pattern_id)
@@ -197,9 +250,13 @@ class RuntimeKernelFacade:
             "thread_id": session.thread_id,
         }
         _configure_memory_runtime_for_agent(compiled.services, agent_id)
-        result = self.instance.controller.run(compiled, state, thread_id=session.thread_id)
-        session_manager.touch_turn(session.session_id, first_user_input=user_input)
-        return result
+        return RuntimeKernelRunContext(
+            state=state,
+            thread_id=session.thread_id,
+            session_manager=session_manager,
+            session_id=session.session_id,
+            first_user_input=user_input,
+        )
 
     def resume(
         self,
@@ -209,6 +266,51 @@ class RuntimeKernelFacade:
         resume_payload: dict | None = None,
         session_config: dict | None = None,
     ) -> RuntimeState:
+        run_context = self.prepare_resume_context(
+            compiled,
+            session_id=session_id,
+            session_config=session_config,
+        )
+        return self.instance.controller.resume(
+            compiled,
+            run_context.state,
+            thread_id=run_context.thread_id,
+            resume_payload=resume_payload,
+        )
+
+    def stream_resume(
+        self,
+        compiled: CompiledKernelApp,
+        *,
+        session_id: str,
+        resume_payload: dict | None = None,
+        session_config: dict | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        run_context = self.prepare_resume_context(
+            compiled,
+            session_id=session_id,
+            session_config=session_config,
+        )
+        final_seen = False
+        for item in self.instance.controller.stream_resume(
+            compiled,
+            run_context.state,
+            thread_id=run_context.thread_id,
+            resume_payload=resume_payload,
+        ):
+            if item[0] == "runtime_final":
+                final_seen = True
+            yield item
+        if final_seen:
+            run_context.session_manager.touch_turn(run_context.session_id)
+
+    def prepare_resume_context(
+        self,
+        compiled: CompiledKernelApp,
+        *,
+        session_id: str,
+        session_config: dict | None = None,
+    ) -> RuntimeKernelRunContext:
         session_manager = _session_manager_from_config(session_config or {}, default=self.session_manager)
         session = session_manager.load(session_id)
         state = RuntimeState()
@@ -222,11 +324,12 @@ class RuntimeKernelFacade:
             "thread_id": session.thread_id,
         }
         _configure_memory_runtime_for_agent(compiled.services, session.agent_id)
-        return self.instance.controller.resume(
-            compiled,
-            state,
+        return RuntimeKernelRunContext(
+            state=state,
             thread_id=session.thread_id,
-            resume_payload=resume_payload,
+            session_manager=session_manager,
+            session_id=session.session_id,
+            first_user_input=session.first_user_input or "",
         )
 
 

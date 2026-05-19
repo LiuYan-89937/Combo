@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from agent_factory.tooling.entrypoint import ToolEntrypointLoader
 from agent_factory.tooling.entrypoints import EntrypointAdapterRegistry, MCPToolClient
+from agent_factory.tooling.execution_context import current_tool_call
 from agent_factory.tooling.gateway import (
     ToolApprovalHandler,
     ToolExecutionGateway,
@@ -69,7 +70,11 @@ class ToolCompiler:
         )
 
         def invoke_tool(**kwargs: Any) -> dict[str, Any]:
-            return gateway.execute(_normalize_tool_arguments(dict(kwargs)))
+            current = current_tool_call()
+            return gateway.execute(
+                _normalize_tool_arguments(dict(kwargs)),
+                tool_call_id=current.tool_call_id if current is not None and current.tool_id == spec.id else None,
+            )
 
         return StructuredTool.from_function(
             func=invoke_tool,
@@ -77,6 +82,7 @@ class ToolCompiler:
             description=spec.description,
             args_schema=input_schema.pydantic_model,
             infer_schema=False,
+            metadata={"agent_factory": {"tool_id": spec.id, "concurrent": spec.concurrent}},
             handle_validation_error=lambda error: json.dumps(
                 {
                     "type": "tool_observation",

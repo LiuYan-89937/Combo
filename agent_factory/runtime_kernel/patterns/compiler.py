@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
+from langgraph.errors import GraphInterrupt
 from langgraph.graph import END, StateGraph
 
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
@@ -13,6 +14,7 @@ from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.nodes.registry import NodeRegistry
 from agent_factory.runtime_kernel.observability.schema import TraceEvent
+from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from agent_factory.runtime_kernel.patterns.registry import PatternRegistry
 from agent_factory.runtime_kernel.patterns.schema import (
     GraphPatternSpec,
@@ -109,6 +111,7 @@ class PatternCompiler:
             for item in bindings.node_bindings
             if item.target.node_id == node.id and item.target.impl == node.impl
         ]
+        all_node_bindings = [item.model_dump(mode="json") for item in bindings.node_bindings]
         hook_bindings = [item.model_dump(mode="json") for item in bindings.hooks if item.enabled]
         for wrapper in node.wrappers:
             DEFAULT_NODE_WRAPPER_REGISTRY.validate_spec(wrapper)
@@ -134,6 +137,7 @@ class PatternCompiler:
                 node=node,
                 pattern=pattern,
                 bindings=node_bindings,
+                all_bindings=all_node_bindings,
                 hook_bindings=hook_bindings,
                 services=services,
                 execute=execute,
@@ -153,6 +157,7 @@ class PatternCompiler:
             node=node,
             pattern=pattern,
             bindings=node_bindings,
+            all_bindings=all_node_bindings,
             hook_bindings=hook_bindings,
             services=services,
             execute=execute,
@@ -170,6 +175,7 @@ def _make_wrapped_runner(
     node: PatternNodeSpec,
     pattern: GraphPatternSpec,
     bindings: list[dict[str, Any]],
+    all_bindings: list[dict[str, Any]],
     hook_bindings: list[dict[str, Any]],
     services: RuntimeServices,
     execute,
@@ -215,15 +221,18 @@ def _make_wrapped_runner(
             )
             services.observability_manager.emit(event)
             emitted_events.append(event.model_dump(mode="json"))
+            emit_runtime_tool_activity(payload, node_id=node.id)
 
         context = NodeExecutionContext(
             node_id=node.id,
             impl=node.impl,
             bindings=bindings,
+            all_bindings=all_bindings,
             hook_bindings=hook_bindings,
             services=services,
             emit_event=emit_event,
             render_spec=render_spec,
+            graph_messages=list(raw_state.get("messages") or []),
         )
         active_state = state
         try:
@@ -300,6 +309,8 @@ def _make_wrapped_runner(
             )
             _pop_span(updated, span.span_id)
             return _runtime_graph_patch(updated, messages=messages_patch)
+        except GraphInterrupt:
+            raise
         except Exception as exc:
             failed = active_state
             try:
@@ -407,6 +418,8 @@ def _execute_with_retries(
     while True:
         try:
             return execute(state, context)
+        except GraphInterrupt:
+            raise
         except Exception:
             attempts += 1
             state.execution.retry_count += 1

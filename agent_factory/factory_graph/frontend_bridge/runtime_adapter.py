@@ -10,6 +10,7 @@ from langgraph.types import Command
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.factory_graph.chat_graph import build_factory_chat_graph, initial_factory_chat_state
 from agent_factory.factory_graph.constants import DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE, STAGE_IDS
+from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
 from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendCommand,
@@ -51,6 +52,13 @@ class PendingRun:
 
 
 @dataclass(slots=True)
+class PendingAgentPackageRun:
+    package_id: str
+    session_id: str
+    normalizer: RuntimeEventNormalizer
+
+
+@dataclass(slots=True)
 class FactoryRuntimeAdapter:
     emit: Emit
     session_manager: FactorySessionManager | None = None
@@ -60,6 +68,8 @@ class FactoryRuntimeAdapter:
     session_record: Any | None = None
     mode: FactoryMode | None = None
     pending_run: PendingRun | None = None
+    pending_agent_package_run: PendingAgentPackageRun | None = None
+    agent_package_runtime: AgentPackageRuntimeManager | None = None
 
     def __post_init__(self) -> None:
         load_agentfactory_dotenv()
@@ -68,10 +78,14 @@ class FactoryRuntimeAdapter:
         if self.checkpointer is None:
             self.checkpointer_handle = build_factory_checkpointer_handle()
             self.checkpointer = self.checkpointer_handle.saver
+        if self.agent_package_runtime is None:
+            self.agent_package_runtime = AgentPackageRuntimeManager()
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
         try:
             if command.type == "shutdown":
+                if self.agent_package_runtime is not None:
+                    self.agent_package_runtime.close_all()
                 return False
             if command.type == "start_session":
                 self.start_session(command)
@@ -89,6 +103,16 @@ class FactoryRuntimeAdapter:
                 self.send_message(command)
             elif command.type == "rerun_from_stage":
                 self.rerun_from_stage(command)
+            elif command.type == "list_agent_packages":
+                self.list_agent_packages(command)
+            elif command.type == "select_agent_package":
+                self.select_agent_package(command)
+            elif command.type == "delete_agent_package":
+                self.delete_agent_package(command)
+            elif command.type == "list_agent_package_sessions":
+                self.list_agent_package_sessions(command)
+            elif command.type == "run_agent_package":
+                self.run_agent_package(command)
             elif command.type == "resume_interrupt":
                 self.resume_interrupt(command)
             else:
@@ -146,6 +170,9 @@ class FactoryRuntimeAdapter:
 
     def set_mode(self, command: FactoryFrontendCommand) -> None:
         self._ensure_session(command)
+        if command.mode == "agent_package":
+            self._emit_error(command, "use list_agent_packages/select_agent_package to enter agent package mode")
+            return
         self.mode = command.mode
         self.session_record = self.session_manager.set_mode(self.session_record.session_id, self.mode)
         self.emit(
@@ -198,8 +225,11 @@ class FactoryRuntimeAdapter:
             self._run_create_agent(command, message)
 
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
-        if self.pending_run is None:
+        if self.pending_run is None and self.pending_agent_package_run is None:
             self._emit_error(command, "no pending interrupt to resume")
+            return
+        if self.pending_agent_package_run is not None:
+            self._resume_agent_package_interrupt(command)
             return
         pending = self.pending_run
         self.pending_run = None
@@ -252,6 +282,201 @@ class FactoryRuntimeAdapter:
                 "rerun_from_stage": stage_id,
                 "checkpoint": _checkpoint_payload(checkpoint_config),
             },
+        )
+
+    def list_agent_packages(self, command: FactoryFrontendCommand) -> None:
+        packages = self.agent_package_runtime.list_packages()
+        self.emit(
+            event(
+                "agent_packages_listed",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="agent_package",
+                payload={"packages": packages},
+            )
+        )
+
+    def select_agent_package(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        if not package_id:
+            self._emit_error(command, "select_agent_package requires package_id")
+            return
+        package_info = self.agent_package_runtime.package_summary(package_id)
+        sessions = self.agent_package_runtime.list_sessions(package_id)
+        self.mode = "agent_package"
+        self.emit(
+            event(
+                "agent_package_selected",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="agent_package",
+                payload={"package": package_info, "sessions": sessions},
+            )
+        )
+
+    def delete_agent_package(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        if not package_id:
+            self._emit_error(command, "delete_agent_package requires package_id")
+            return
+        result = self.agent_package_runtime.delete_package(package_id)
+        packages = self.agent_package_runtime.list_packages()
+        self.emit(
+            event(
+                "agent_package_deleted",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="agent_package",
+                payload={**result, "packages": packages},
+            )
+        )
+
+    def list_agent_package_sessions(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        if not package_id:
+            self._emit_error(command, "list_agent_package_sessions requires package_id")
+            return
+        sessions = self.agent_package_runtime.list_sessions(package_id)
+        self.emit(
+            event(
+                "agent_package_sessions_listed",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="agent_package",
+                payload={"package_id": package_id, "sessions": sessions},
+            )
+        )
+
+    def run_agent_package(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        message = str(command.payload.get("message") or command.message or "").strip()
+        session_id = str(command.payload.get("session_id") or "").strip() or None
+        if not package_id:
+            self._emit_error(command, "run_agent_package requires package_id")
+            return
+        if not message:
+            self._emit_error(command, "run_agent_package requires message")
+            return
+        if self.pending_run is not None or self.pending_agent_package_run is not None:
+            self._emit_error(command, "cannot run an agent package while an interrupt is pending")
+            return
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=command.request_id,
+            session_id=self._session_id(),
+            mode="agent_package",
+            graph_id="agent_package_runtime",
+        )
+        try:
+            run = self.agent_package_runtime.stream(
+                package_id,
+                user_input=message,
+                session_id=session_id,
+                request_id=command.request_id,
+            )
+            self._consume_agent_package_stream(
+                package_id=package_id,
+                run=run,
+                normalizer=normalizer,
+            )
+        except Exception as exc:
+            normalizer.emit_run_failed(exc)
+
+    def _resume_agent_package_interrupt(self, command: FactoryFrontendCommand) -> None:
+        pending = self.pending_agent_package_run
+        self.pending_agent_package_run = None
+        if pending is None:
+            self._emit_error(command, "no pending agent package interrupt to resume")
+            return
+        try:
+            run = self.agent_package_runtime.resume_stream(
+                pending.package_id,
+                session_id=pending.session_id,
+                resume_payload=command.payload,
+                request_id=command.request_id,
+            )
+            self._consume_agent_package_stream(
+                package_id=pending.package_id,
+                run=run,
+                normalizer=pending.normalizer,
+            )
+        except Exception as exc:
+            pending.normalizer.emit_run_failed(exc)
+
+    def _consume_agent_package_stream(
+        self,
+        *,
+        package_id: str,
+        run: Any,
+        normalizer: RuntimeEventNormalizer,
+    ) -> None:
+        final_state = None
+        terminal_event_seen = False
+        for stream_mode, chunk in run.events:
+            if stream_mode == "frontend_event":
+                item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+                if item.session_id:
+                    run.session["session_id"] = item.session_id
+                if item.event_type in {"run_completed", "run_failed"}:
+                    terminal_event_seen = True
+                if item.event_type == "interrupt_requested":
+                    session_id = str(item.session_id or (run.session or {}).get("session_id") or "")
+                    if not session_id:
+                        raise RuntimeError("agent package interrupt missing session_id")
+                    self.pending_agent_package_run = PendingAgentPackageRun(
+                        package_id=package_id,
+                        session_id=session_id,
+                        normalizer=normalizer,
+                    )
+                self.emit(item)
+                if item.event_type == "interrupt_requested":
+                    return
+                continue
+            if stream_mode == "stderr":
+                normalizer.runtime_event(
+                    "debug_patch",
+                    span_id=normalizer.run_span_id,
+                    payload={"agent_package_stderr": json_safe(chunk)},
+                )
+                continue
+            interrupt_payload = _extract_interrupt_payload(chunk)
+            if interrupt_payload is not None:
+                session_id = str((run.session or {}).get("session_id") or "")
+                if not session_id:
+                    raise RuntimeError("agent package interrupt missing session_id")
+                self.pending_agent_package_run = PendingAgentPackageRun(
+                    package_id=package_id,
+                    session_id=session_id,
+                    normalizer=normalizer,
+                )
+                normalizer.emit_interrupt(json_safe(interrupt_payload))
+                return
+            if stream_mode == "messages":
+                normalizer.emit_message_chunk(chunk)
+            elif stream_mode == "debug":
+                normalizer.emit_debug_event(json_safe(chunk))
+            elif stream_mode == "custom":
+                normalizer.emit_custom_event(json_safe(chunk))
+            elif stream_mode == "updates":
+                normalizer.runtime_event(
+                    "debug_patch",
+                    span_id=normalizer.run_span_id,
+                    payload={"agent_package_update": json_safe(chunk)},
+                )
+            elif stream_mode == "runtime_final":
+                final_state = chunk
+        if terminal_event_seen:
+            return
+        if final_state is None:
+            raise RuntimeError("agent package runtime did not produce a final state")
+        normalizer.complete_open_model_streams(reason="run_completed")
+        normalizer.emit_run_completed(
+            {
+                "status": final_state.execution.finish_status,
+                "package_id": package_id,
+                "agent_id": run.package.assembly_spec.agent.id,
+                "agent_session": run.session,
+            }
         )
 
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:

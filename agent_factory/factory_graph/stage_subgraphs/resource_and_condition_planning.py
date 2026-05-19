@@ -10,7 +10,6 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
 from agent_factory.factory_graph.model_call import (
@@ -27,7 +26,9 @@ from agent_factory.factory_graph.schemas import (
 )
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.models import get_main_model, get_main_model_settings
+from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.prompts import PromptId, output_json_schema
+from agent_factory.tooling.langgraph_node import build_tool_node_runner
 from agent_factory.tooling.registry import get_factory_tools, get_factory_tool_specs
 
 STAGE_ID = "resource_and_condition_planning"
@@ -46,7 +47,7 @@ END_BLOCKED_NODE = "end_blocked"
 RESOURCE_FILE_VERSION = "factory_resources.v0"
 SANDBOX_CONTRACT_VERSION = "sandbox_contract.v0"
 RESOURCE_REPORT_VERSION = "resource_preparation_report.v0"
-DEFAULT_SANDBOX_IMAGE = "python:3.12-slim"
+DEFAULT_SANDBOX_IMAGE = "agentfactory-runtime-python:3.12"
 RESOURCE_ALLOWED_TOOL_IDS = ("ls", "read", "glob", "grep", "bash", "bash_status", "bash_stop")
 ALLOWED_CONTAINER_PREFIXES = ("/volumes", "/resources", "/package", "/artifacts", "/workdir")
 MAX_RESOURCE_REVISION_ROUNDS = STRUCTURED_OUTPUT_MAX_ATTEMPTS
@@ -79,7 +80,14 @@ def _build_graph():
     builder.add_node(INITIALIZE_NODE, _initialize_resource_runtime_context)
     builder.add_node(RESOURCE_MODEL_NODE, _resource_react_model)
     builder.add_node(RESOURCE_TOOL_PROPOSAL_NODE, _emit_resource_tool_proposals)
-    builder.add_node(RESOURCE_TOOLS_NODE, ToolNode(_resource_tools(), name=RESOURCE_TOOLS_NODE))
+    builder.add_node(
+        RESOURCE_TOOLS_NODE,
+        build_tool_node_runner(
+            _resource_tools(),
+            node_id=RESOURCE_TOOLS_NODE,
+            name=RESOURCE_TOOLS_NODE,
+        ),
+    )
     builder.add_node(RESOURCE_TOOL_EVENT_NODE, _emit_resource_tool_events)
     builder.add_node(FINALIZE_NODE, _finalize_resource_preparation_decision)
     builder.add_node(VALIDATE_NODE, _validate_resource_and_sandbox_contract)
@@ -360,7 +368,7 @@ def _validate_resource_and_sandbox_contract(state: ResourcePreparationGraphState
     validation = _validate_ready_decision(
         resource_draft=decision_data.get("resource_draft") or {},
         sandbox_contract_draft=decision_data.get("sandbox_contract_draft") or {},
-        project_root=Path.cwd(),
+        project_root=project_root(),
     )
     validation_dict = validation.model_dump(mode="json")
     if validation.status == "complete":
@@ -773,7 +781,7 @@ def _delta_patch(state: ResourcePreparationGraphState, *, original_stage_log_cou
 
 def _resource_paths(state: ResourcePreparationGraphState | FactoryGraphState) -> dict[str, str]:
     run_id = str(state.get("factory_run_id") or "default")
-    base = Path(".agentfactory") / "resources" / run_id
+    base = factory_artifact_path("resources", run_id)
     return {
         "resource_file_path": str(base / "factory_resources.json"),
         "sandbox_contract_path": str(base / "sandbox_contract.json"),

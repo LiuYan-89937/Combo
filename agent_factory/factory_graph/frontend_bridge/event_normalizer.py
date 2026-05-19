@@ -38,6 +38,7 @@ class RuntimeEventNormalizer:
     session_id: str | None
     mode: FactoryMode
     graph_id: str
+    producer_type: str = "factory_runtime"
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     sequence: int = 0
     run_span_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -72,7 +73,7 @@ class RuntimeEventNormalizer:
             event_type,
             request_id=self.request_id,
             protocol_version=protocol_version,
-            producer_type=producer_type,
+            producer_type=producer_type or self.producer_type,
             run_id=self.run_id,
             session_id=self.session_id,
             thread_id=thread_id,
@@ -304,6 +305,9 @@ class RuntimeEventNormalizer:
         if not content:
             return
         stream = self._model_stream(node_id or "model")
+        content = _delta_for_stream(stream, content, is_chunk=_is_message_chunk(message_chunk))
+        if not content:
+            return
         stream.content += content
         self.runtime_event(
             "model_stream_delta",
@@ -598,6 +602,20 @@ def _content_to_text(content: Any) -> str:
                 parts.append(str(item.get("text") or ""))
         return "".join(parts)
     return str(content) if content else ""
+
+
+def _is_message_chunk(value: Any) -> bool:
+    return value.__class__.__name__.endswith("Chunk")
+
+
+def _delta_for_stream(stream: ModelStreamState, content: str, *, is_chunk: bool) -> str:
+    if is_chunk or not stream.content:
+        return content
+    if content == stream.content or stream.content.endswith(content):
+        return ""
+    if content.startswith(stream.content):
+        return content[len(stream.content) :]
+    return content
 
 
 def _optional_str(value: Any) -> str | None:

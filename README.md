@@ -248,12 +248,18 @@ error
   agent_package.json
   assembly_spec.json
   resources.json
-  session.json
-  memory/
-    config.json
-    store.json
+  sandbox_contract.json
   render_manifest.json
   package_report.json
+  contracts/
+    dependencies.json
+    memory.json
+    model.json
+    render.json
+    resources.json
+    sandbox.json
+    session.json
+    tools.json
   bindings/
   prompts/
   tools/
@@ -272,28 +278,52 @@ error
 
 ## 第九阶段 Sandbox 运行边界
 
-第九阶段已经接入 `harness_generation_and_test` 子图，负责把第八阶段 AgentPackage draft 放入受控 sandbox 契约中验证：
+子 Agent 普通运行和第九阶段 harness 统一走 Docker Runtime Image + 容器内 Agent Runtime Bridge：
 
-- 不把 MySQL、Postgres、Redis 等业务依赖临时安装进 AgentPackage 测试容器。
-- AgentPackage 测试容器只负责运行生成的 agent/tool 代码。
+```text
+AgentPackage
+-> agentfactory-runtime-python:3.12
+-> sandbox init dependency check/install
+-> python -m agent_factory.agent_runtime_bridge.stdio_server
+-> RuntimeKernel compile/run
+-> JSONL events
+-> TS CLI render
+```
+
+构建标准 runtime image：
+
+```bash
+docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
+```
+
+第九阶段 `harness_generation_and_test` 负责把第八阶段 AgentPackage draft 放入受控 sandbox 契约中验证：
+
+- 不在宿主机直跑 RuntimeKernel。
+- 不直接 import `tools/<tool_id>/tool.py` 调用 `run(...)`。
+- AgentPackage 普通运行通过长期 Docker runtime container + 容器内常驻 bridge 执行真实 RuntimeKernel 链路。
+- `contracts/model.json` 声明模型服务来源；普通运行从容器环境变量读取 Factory mainModel 配置，不写入 `resources.json`。
+- 依赖由 `contracts/dependencies.json` 声明，并在 sandbox init 阶段检查或安装；安装结果写入 artifacts，不污染宿主机环境。
 - 业务依赖通过显式资源接入：宿主机服务、独立 Docker service、远程服务或声明的数据卷。
 - 资源入口只来自第六阶段 `resources.json`，不读取宿主机 `.env`。
-- Docker 默认禁用网络；如工具能力需要网络，必须由资源/测试契约显式声明。
+- Docker 默认允许联网，用于 sandbox init 安装依赖；如后续需要收紧网络，必须通过 sandbox contract 显式声明。
 - 端口、network、volume、service dependency 必须通过 sandbox contract 声明。
 - sandbox 执行失败后，stdout/stderr/exit_code/report 会作为 observation 回到第九阶段模型；模型只能修正 runtime、host interaction、dependency、execution plan 契约后重跑，不能修改第八阶段 package/tool 代码。
-- 依赖由 `sandbox_dependency_plan.json` 声明，并在 sandbox 内安装或检查；安装结果会写入 `dependency_results`，不会污染宿主机环境。
 
-建议的 sandbox 挂载约定：
+sandbox 挂载约定：
 
 ```text
 /package      read-only   AgentPackage
-/resources    read-only   resources.json
+/resources/resources.json read-only resources.json
 /artifacts    read-write  测试报告、日志、输出文件
 /workdir      read-write  临时工作目录
+/runtime      read-write  子 Agent session/checkpoint/memory
+/runtime/extensions read-write  用户后配置 MCP/Skill/扩展工具
 /volumes/*    configurable  用户声明的数据卷
 ```
 
 如果需要访问宿主机 MySQL，资源应被规范化为容器可访问地址，例如 `host.docker.internal:<port>`。如果是同一 Docker network 内的依赖服务，则使用 service name，例如 `mysql:3306`。
+
+子 Agent 使用宿主机 MCP 时，不需要把 `mcp_servers.json` 改成容器专用配置。宿主机 runtime 会读取 `.agentfactory/agent_runtime/<package_id>/extensions/mcp_servers.json`，启动 Host MCP Gateway，并向容器注入 `AGENTFACTORY_MCP_GATEWAY_URL=http://host.docker.internal:<port>`。容器内仍按统一工具系统发现 MCP 工具，工具调用继续经过参数校验、风险审批和 observation。
 
 第九阶段落盘产物：
 
@@ -342,6 +372,10 @@ AGENTFACTORY_EMBEDDING_MODEL=
 AGENTFACTORY_EMBEDDING_DIMS=1536
 AGENTFACTORY_EMBEDDING_TIMEOUT_SECONDS=60
 AGENTFACTORY_MEMORY_INDEX_FIELDS=content,metadata.evidence_summary,metadata.keywords,metadata.entities,metadata.embedding_text
+AGENTFACTORY_TOOL_MAX_REVISIONS=5
+AGENTFACTORY_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS=1800
+AGENTFACTORY_HOST_MCP_GATEWAY_BIND_HOST=127.0.0.1
+AGENTFACTORY_HOST_MCP_GATEWAY_PORT=
 AGENTFACTORY_RUN_PROVIDER_SMOKE=0
 ```
 

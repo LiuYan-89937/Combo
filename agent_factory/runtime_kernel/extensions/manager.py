@@ -1,10 +1,10 @@
 from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from agent_factory.runtime_kernel.extensions.loader import AgentInstanceExtensionConfigLoader
 from agent_factory.runtime_kernel.extensions.schema import AgentInstanceExtensionLoadReport
+from agent_factory.mcp_gateway import build_gateway_clients, configured_container_gateway_url
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.entrypoints import MCPToolClient
 from agent_factory.tooling.gateway import ToolApprovalHandler
@@ -27,17 +27,18 @@ class AgentInstanceExtensionManager:
         extension_root: str | Path,
         mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
         mcp_tool_clients: Mapping[str, MCPToolClient] | None = None,
+        mcp_gateway_url: str | None = None,
     ) -> None:
         self.loader = AgentInstanceExtensionConfigLoader(extension_root)
         self.mcp_catalog_clients = dict(mcp_catalog_clients or {})
         self._configured_mcp_tool_clients = dict(mcp_tool_clients or {})
         self._effective_mcp_tool_clients: dict[str, MCPToolClient] = dict(mcp_tool_clients or {})
+        self.mcp_gateway_url = mcp_gateway_url
 
     def discover(self, context: ToolProviderContext | None = None) -> tuple[ToolProviderResult, AgentInstanceExtensionLoadReport]:
         bundle = self.loader.load()
-        mcp_runtime = MCPRuntimeManager(bundle.mcp_servers)
-        catalog_clients = self.mcp_catalog_clients or mcp_runtime.clients()
-        self._effective_mcp_tool_clients = self._configured_mcp_tool_clients or mcp_runtime.clients()
+        catalog_clients, tool_clients = self._mcp_clients(bundle.mcp_servers)
+        self._effective_mcp_tool_clients = tool_clients
         provider_context = context or ToolProviderContext(extension_root=bundle.sources.extension_root)
         if provider_context.extension_root is None:
             provider_context = provider_context.model_copy(
@@ -53,6 +54,7 @@ class AgentInstanceExtensionManager:
             mcp_servers_path=str(bundle.sources.mcp_servers_path) if bundle.sources.mcp_servers_path else None,
             enabled_skills_path=str(bundle.sources.enabled_skills_path) if bundle.sources.enabled_skills_path else None,
             tool_ids=[tool.id for tool in result.tool_specs],
+            system_tool_ids=list(result.system_tool_ids),
             prompt_fragment_ids=[fragment.fragment_id for fragment in result.prompt_fragments],
             runtime_dependency_ids=[dependency.dependency_id for dependency in result.runtime_dependencies],
             diagnostics=result.diagnostics,
@@ -80,7 +82,6 @@ class AgentInstanceExtensionManager:
         max_revisions: int | None = None,
     ) -> ToolCompiler:
         bundle = self.loader.load()
-        mcp_runtime = MCPRuntimeManager(bundle.mcp_servers)
         extension_result, _report = self.discover(
             context=ToolProviderContext(extension_root=bundle.sources.extension_root)
         )
@@ -90,8 +91,24 @@ class AgentInstanceExtensionManager:
             resources={**dict(resources or {}), **extension_result.runtime_resources},
             approval_handler=approval_handler,
             max_revisions=max_revisions,
-            mcp_clients=self._configured_mcp_tool_clients or self._effective_mcp_tool_clients or mcp_runtime.clients(),
+            mcp_clients=self._configured_mcp_tool_clients or self._effective_mcp_tool_clients,
         )
 
     def mcp_tool_clients(self) -> dict[str, MCPToolClient]:
         return dict(self._effective_mcp_tool_clients)
+
+    def _mcp_clients(self, config: Any) -> tuple[dict[str, MCPToolCatalogClient], dict[str, MCPToolClient]]:
+        gateway_url = self._gateway_url()
+        if gateway_url:
+            base_clients = build_gateway_clients(config, gateway_url)
+        else:
+            runtime = MCPRuntimeManager(config)
+            base_clients = runtime.clients()
+        catalog_clients = {**dict(base_clients), **self.mcp_catalog_clients}
+        tool_clients = {**dict(base_clients), **self._configured_mcp_tool_clients}
+        return catalog_clients, tool_clients
+
+    def _gateway_url(self) -> str | None:
+        if self.mcp_gateway_url and self.mcp_gateway_url.strip():
+            return self.mcp_gateway_url.strip()
+        return configured_container_gateway_url()

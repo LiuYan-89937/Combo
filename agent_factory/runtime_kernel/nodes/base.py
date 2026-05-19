@@ -16,10 +16,12 @@ class NodeExecutionContext(BaseModel):
     node_id: str
     impl: str
     bindings: list[dict[str, Any]] = Field(default_factory=list)
+    all_bindings: list[dict[str, Any]] = Field(default_factory=list)
     hook_bindings: list[dict[str, Any]] = Field(default_factory=list)
     services: RuntimeServices
     emit_event: Callable[[dict[str, Any]], None]
     render_spec: NodeRenderSpec | None = None
+    graph_messages: list[Any] = Field(default_factory=list)
 
 
 class NodeImplementation(Protocol):

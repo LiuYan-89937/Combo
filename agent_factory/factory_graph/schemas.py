@@ -322,7 +322,7 @@ class SandboxContract(BaseModel):
 
     version: Literal["sandbox_contract.v0"] = "sandbox_contract.v0"
     backend: Literal["docker"] = "docker"
-    image: str = "python:3.12-slim"
+    image: str = "agentfactory-runtime-python:3.12"
     workdir: str = "/workdir"
     network_policy: SandboxNetworkPolicy = Field(default_factory=SandboxNetworkPolicy)
     mounts: list[SandboxContractMount] = Field(default_factory=list)
@@ -507,7 +507,7 @@ class PackageGenerationState(BaseModel):
 SandboxBackend = Literal["docker", "local_isolated", "local_trusted"]
 SandboxMountAccess = Literal["read_only", "read_write"]
 SandboxServiceKind = Literal["host_port", "docker_service", "remote_service"]
-SandboxInstallMode = Literal["none", "sandbox_only"]
+SandboxInstallMode = Literal["none", "sandbox_only", "sandbox_init"]
 HarnessStatus = Literal["passed", "failed", "blocked"]
 
 
@@ -537,7 +537,7 @@ class RuntimeEnvironmentContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     backend: SandboxBackend = "docker"
-    image: str = "python:3.11-slim"
+    image: str = "agentfactory-runtime-python:3.12"
     workdir: str = "/workdir"
     network_policy: SandboxNetworkPolicy = Field(default_factory=SandboxNetworkPolicy)
     limits: SandboxRuntimeLimits = Field(default_factory=SandboxRuntimeLimits)

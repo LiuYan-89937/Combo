@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from langgraph.errors import GraphInterrupt
+
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
@@ -10,13 +12,15 @@ from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution, RuntimeDiagnostic
 from agent_factory.runtime_contracts.schema import (
     MemoryContract,
+    DependenciesContract,
+    ModelContract,
     RenderContract,
     ResourcesContract,
     SandboxRuntimeContract,
     SessionContract,
     ToolsContract,
 )
-from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry
+from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
 from agent_factory.runtime_kernel.wrappers.system_memory import MEMORY_RETRIEVE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.persistence import (
@@ -27,7 +31,7 @@ from agent_factory.runtime_kernel.persistence import (
 )
 from agent_factory.runtime_kernel.types import ToolExecutionResult
 from agent_factory.tooling.compiler import ToolCompiler
-from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
+from agent_factory.tooling.providers import BuiltinToolProvider, PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.registry import ToolRegistry
 from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
 
@@ -65,21 +69,39 @@ class ToolsContractBuilder:
         diagnostics: list[RuntimeDiagnostic] = []
         runtime_resources: dict[str, Any] = {}
         mcp_clients = {}
+        system_tool_ids: set[str] = set()
         instance_extension_root = Path(config.instance_extension_root).expanduser().resolve()
         provider_context = ToolProviderContext(
             package_root=context.package_root,
             extension_root=instance_extension_root,
             resources=context.resources,
         )
+        if config.builtin_tools_enabled:
+            builtin_result = BuiltinToolProvider(tool_ids=config.builtin_tool_ids).discover(
+                ToolProviderContext(
+                    package_root=context.package_root,
+                    extension_root=instance_extension_root,
+                    resources={
+                        "builtin_workspace_root": config.builtin_workspace_root,
+                        "builtin_allow_external_paths": config.builtin_allow_external_paths,
+                    },
+                )
+            )
+            specs.extend(builtin_result.tool_specs)
+            system_tool_ids.update(builtin_result.system_tool_ids)
+            runtime_resources.update(builtin_result.runtime_resources)
+            diagnostics.extend(_provider_diagnostics(builtin_result.diagnostics))
         if config.package_tools_enabled:
             package_result = PackageToolProvider().discover(provider_context)
             specs.extend(package_result.tool_specs)
+            system_tool_ids.update(package_result.system_tool_ids)
             runtime_resources.update(package_result.runtime_resources)
             diagnostics.extend(_provider_diagnostics(package_result.diagnostics))
         if config.instance_extensions_enabled:
             manager = AgentInstanceExtensionManager(extension_root=instance_extension_root)
             extension_result, extension_report = manager.discover(context=provider_context)
             specs.extend(extension_result.tool_specs)
+            system_tool_ids.update(extension_result.system_tool_ids)
             runtime_resources.update(extension_result.runtime_resources)
             mcp_clients = manager.mcp_tool_clients()
             diagnostics.extend(_provider_diagnostics(extension_result.diagnostics))
@@ -103,7 +125,9 @@ class ToolsContractBuilder:
             {
                 tool_id: _runtime_tool_executor(tool_id, tool)
                 for tool_id, tool in compiled_tools.items()
-            }
+            },
+            model_tools=compiled_tools,
+            system_tool_ids=system_tool_ids,
         )
         return RuntimeContribution(services={"tool_registry": runtime_registry}, diagnostics=diagnostics)
 
@@ -161,6 +185,18 @@ class MemoryContractBuilder:
         )
 
 
+class ModelContractBuilder:
+    contract_type = "model"
+    contract_version = "model_contract.v0"
+
+    def build(self, contract: ModelContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        if contract.config.source != "factory_runtime_env":
+            raise ValueError(f"unsupported model contract source: {contract.config.source}")
+        if contract.config.role != "main":
+            raise ValueError(f"unsupported model contract role: {contract.config.role}")
+        return RuntimeContribution(services={"model_service": LangChainModelServiceAdapter()})
+
+
 class RenderContractBuilder:
     contract_type = "render"
     contract_version = "render_contract.v0"
@@ -188,10 +224,20 @@ class SandboxContractBuilder:
         return RuntimeContribution(sandbox_contract=context.sandbox_contract)
 
 
+class DependenciesContractBuilder:
+    contract_type = "dependencies"
+    contract_version = "dependencies_contract.v0"
+
+    def build(self, contract: DependenciesContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        return RuntimeContribution(dependency_plan=contract.config.model_dump(mode="json"))
+
+
 def _runtime_tool_executor(tool_id: str, tool) -> Any:
     def execute(arguments: dict[str, Any], _state: Any) -> ToolExecutionResult:
         try:
             output = tool.invoke(arguments)
+        except GraphInterrupt:
+            raise
         except Exception as exc:
             return ToolExecutionResult(
                 status="failed",
@@ -199,6 +245,8 @@ def _runtime_tool_executor(tool_id: str, tool) -> Any:
                 observation_summary=f"{tool_id} failed: {type(exc).__name__}",
             )
         if isinstance(output, dict):
+            if output.get("type") == "tool_observation":
+                return _tool_observation_result(output)
             status = str(output.get("status") or "completed")
             if status not in {"completed", "failed", "interrupted"}:
                 status = "completed"
@@ -206,11 +254,31 @@ def _runtime_tool_executor(tool_id: str, tool) -> Any:
                 status=status,  # type: ignore[arg-type]
                 output=output,
                 error=output.get("error"),
+                interrupt_type=output.get("interrupt_type"),
                 observation_summary=output.get("observation_summary"),
             )
         return ToolExecutionResult(status="completed", output={"value": output})
 
     return execute
+
+
+def _tool_observation_result(observation: dict[str, Any]) -> ToolExecutionResult:
+    observation_status = str(observation.get("status") or "")
+    message = str(observation.get("message") or observation_status or "tool observation")
+    if observation_status == "completed":
+        return ToolExecutionResult(
+            status="completed",
+            output=observation,
+            observation_summary=message,
+            metadata={"tool_observation_status": observation_status},
+        )
+    return ToolExecutionResult(
+        status="failed",
+        output=observation,
+        error=message,
+        observation_summary=message,
+        metadata={"tool_observation_status": observation_status},
+    )
 
 
 def _provider_diagnostics(items) -> list[RuntimeDiagnostic]:

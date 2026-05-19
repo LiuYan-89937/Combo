@@ -10,20 +10,22 @@ export type ShellCommandSpec = {
 export const shellCommands: ShellCommandSpec[] = [
 	{name: '/chat', usage: '/chat', description: '进入聊天模式', availableIn: ['root', 'chat', 'create_agent']},
 	{name: '/create-agent', usage: '/create-agent', description: '进入 Agent 制造模式', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/exit', usage: '/exit', description: '退出当前模式', availableIn: ['chat', 'create_agent']},
-	{name: '/quit', usage: '/quit', description: '退出 CLI', availableIn: ['root', 'chat', 'create_agent', 'interrupt']},
-	{name: '/help', usage: '/help', description: '显示命令帮助', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/session', usage: '/session', description: '显示当前会话', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/sessions', usage: '/sessions', description: '打开历史会话选择器', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/new-session', usage: '/new-session', description: '创建新会话', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/resume', usage: '/resume <session_id>', description: '按完整 id 切换会话', availableIn: ['root', 'chat', 'create_agent']},
+	{name: '/exit', usage: '/exit', description: '退出当前模式', availableIn: ['chat', 'create_agent', 'agent_package']},
+	{name: '/quit', usage: '/quit', description: '退出 CLI', availableIn: ['root', 'chat', 'create_agent', 'agent_package', 'interrupt']},
+	{name: '/help', usage: '/help', description: '显示命令帮助', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/session', usage: '/session', description: '显示当前会话', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/sessions', usage: '/sessions', description: '打开历史会话选择器', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/new-session', usage: '/new-session', description: '创建新会话', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/resume', usage: '/resume <session_id>', description: '按完整 id 切换会话', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
 	{name: '/rerun', usage: '/rerun <stage_id>', description: '从指定制造阶段入口 checkpoint 重跑', availableIn: ['create_agent']},
-	{name: '/tools', usage: '/tools', description: '显示工厂基础工具', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/stages', usage: '/stages', description: '显示 FactoryGraph 阶段', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/state', usage: '/state on|off', description: '切换最终 state 展示', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/messages', usage: '/messages on|off', description: '切换最终 messages 展示', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/tool-grep', usage: '/tool-grep <query|off>', description: '过滤工具执行与 Observation 展示', availableIn: ['root', 'chat', 'create_agent']},
-	{name: '/stop', usage: '/stop <stage_id|off>', description: '设置制造阶段断点', availableIn: ['root', 'chat', 'create_agent']}
+	{name: '/run-agent-package', usage: '/run-agent-package', description: '扫描正式产物目录并进入已生产 Agent', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/agent-sessions', usage: '/agent-sessions', description: '选择当前 AgentPackage 的会话', availableIn: ['agent_package']},
+	{name: '/tools', usage: '/tools', description: '显示工厂基础工具', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/stages', usage: '/stages', description: '显示 FactoryGraph 阶段', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/state', usage: '/state on|off', description: '切换最终 state 展示', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/messages', usage: '/messages on|off', description: '切换最终 messages 展示', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/tool-grep', usage: '/tool-grep <query|off>', description: '过滤工具执行与 Observation 展示', availableIn: ['root', 'chat', 'create_agent', 'agent_package']},
+	{name: '/stop', usage: '/stop <stage_id|off>', description: '设置制造阶段断点', availableIn: ['root', 'chat', 'create_agent', 'agent_package']}
 ];
 
 export const factoryStages = [

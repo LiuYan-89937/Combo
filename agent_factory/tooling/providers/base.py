@@ -58,6 +58,7 @@ class ToolProviderResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tool_specs: list[ToolSpec] = Field(default_factory=list)
+    system_tool_ids: list[str] = Field(default_factory=list)
     prompt_fragments: list[PromptFragment] = Field(default_factory=list)
     resource_requirements: list[ResourceRequirementHint] = Field(default_factory=list)
     runtime_dependencies: list[RuntimeDependency] = Field(default_factory=list)
@@ -67,6 +68,7 @@ class ToolProviderResult(BaseModel):
     def merge(self, other: "ToolProviderResult") -> "ToolProviderResult":
         return ToolProviderResult(
             tool_specs=[*self.tool_specs, *other.tool_specs],
+            system_tool_ids=_unique([*self.system_tool_ids, *other.system_tool_ids]),
             prompt_fragments=[*self.prompt_fragments, *other.prompt_fragments],
             resource_requirements=[*self.resource_requirements, *other.resource_requirements],
             runtime_dependencies=[*self.runtime_dependencies, *other.runtime_dependencies],
@@ -84,3 +86,14 @@ class ToolProvider(Protocol):
 
 def diagnostic(provider_id: str, level: ProviderDiagnosticLevel, message: str, **details: Any) -> ProviderDiagnostic:
     return ProviderDiagnostic(provider_id=provider_id, level=level, message=message, details=details)
+
+
+def _unique(values: list[str]) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value).strip()
+        if item and item not in seen:
+            items.append(item)
+            seen.add(item)
+    return items

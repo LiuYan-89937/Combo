@@ -13,6 +13,7 @@ from agent_factory.factory_graph.model_call import (
     call_structured_model,
     prompt_values,
 )
+from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.factory_graph.sandbox_runtime import (
     SandboxRuntimeError,
     runtime_for_backend,
@@ -390,8 +391,8 @@ def _contract_errors(decision: HarnessContractDecision, state: FactoryGraphState
         errors.append(_error("harness.contract", "missing_runtime_environment", "RuntimeEnvironmentContract is required."))
     if decision.host_interaction is None:
         errors.append(_error("harness.contract", "missing_host_interaction", "HostInteractionContract is required."))
-    if decision.dependency_plan is None:
-        errors.append(_error("harness.contract", "missing_dependency_plan", "SandboxDependencyPlan is required."))
+    if _package_dependencies_plan(state) is None and decision.dependency_plan is None:
+        errors.append(_error("harness.contract", "missing_dependency_plan", "dependencies contract or SandboxDependencyPlan is required."))
     if decision.execution_plan is None:
         errors.append(_error("harness.contract", "missing_execution_plan", "HarnessExecutionPlan is required."))
     if errors:
@@ -405,7 +406,7 @@ def _contract_errors(decision: HarnessContractDecision, state: FactoryGraphState
     for mount in all_mounts:
         errors.extend(_mount_errors(mount, resources))
     services = decision.host_interaction.services
-    dependency_plan = decision.dependency_plan or SandboxDependencyPlan()
+    dependency_plan = _package_dependencies_plan(state) or decision.dependency_plan or SandboxDependencyPlan()
     dependency_needs_network = bool(dependency_plan.python_requirements or dependency_plan.system_packages)
     network_mode = decision.runtime_environment.network_policy.mode
     if services and network_mode == "none":
@@ -432,6 +433,7 @@ def _required_mount_errors(mounts: list[Any], *, package_root: Path, resources_p
         "/resources": ("read_only", str(resources_path.parent)),
         "/artifacts": ("read_write", None),
         "/workdir": ("read_write", None),
+        "/runtime": ("read_write", None),
     }
     errors: list[HarnessReportError] = []
     by_container = {mount.container_path: mount for mount in mounts}
@@ -649,7 +651,7 @@ def _tool_observations(messages: list[Any]) -> list[dict[str, str]]:
 
 
 def _allowed_container_path(path: str) -> bool:
-    return path in {"/package", "/resources", "/artifacts", "/workdir"} or path.startswith("/volumes/")
+    return path in {"/package", "/resources", "/artifacts", "/workdir", "/runtime"} or path.startswith("/volumes/")
 
 
 def _dangerous_host_path(path: Path) -> bool:
@@ -657,7 +659,7 @@ def _dangerous_host_path(path: Path) -> bool:
         resolved = path.resolve()
     except Exception:
         resolved = path.absolute()
-    dangerous = {Path("/").resolve(), Path("/Users").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+    dangerous = {Path("/").resolve(), Path("/Users").resolve(), Path.home().resolve(), project_root()}
     return any(resolved == item for item in dangerous)
 
 
@@ -718,6 +720,14 @@ def _with_prepared_sandbox_contract(decision: HarnessContractDecision, state: Fa
             "purpose": "Provide sandbox working directory.",
             "authorization_source": "system_required",
         },
+        {
+            "resource_id": "agent_runtime",
+            "host_path": str(harness_root / "runtime"),
+            "container_path": "/runtime",
+            "access": "read_write",
+            "purpose": "Persist generated agent sessions, checkpoints, and memory while testing in sandbox.",
+            "authorization_source": "system_required",
+        },
     ]
     runtime_environment = RuntimeEnvironmentContract.model_validate(
         {
@@ -759,13 +769,35 @@ def _with_prepared_sandbox_contract(decision: HarnessContractDecision, state: Fa
         update={
             "runtime_environment": runtime_environment,
             "host_interaction": host_interaction,
+            "dependency_plan": _package_dependencies_plan(state) or decision.dependency_plan or SandboxDependencyPlan(),
             "revision_notes": [
                 *decision.revision_notes,
-                "runtime_environment and host_interaction were fixed from stage 6 sandbox_contract",
+                "runtime_environment, host_interaction, and dependency_plan were fixed from package contracts",
             ][:12],
         },
         deep=True,
     )
+
+
+def _package_dependencies_plan(state: FactoryGraphState) -> SandboxDependencyPlan | None:
+    package_root = _package_root(state, str(state.get("factory_run_id") or "default"))
+    path = package_root / "contracts" / "dependencies.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        config = payload.get("config") if isinstance(payload, dict) else None
+        if not isinstance(config, dict):
+            return SandboxDependencyPlan()
+        return SandboxDependencyPlan.model_validate(
+            {
+                "python_requirements": config.get("python_requirements") or [],
+                "system_packages": config.get("system_packages") or [],
+                "install_mode": config.get("install_mode") or "sandbox_init",
+            }
+        )
+    except Exception:
+        return None
 
 
 def _prepared_sandbox_contract(state: FactoryGraphState) -> SandboxContract | None:
@@ -826,7 +858,7 @@ def _package_resources_path(package_root: Path) -> Path:
 
 
 def _harness_root(factory_run_id: str) -> Path:
-    return Path(HARNESS_ROOT) / factory_run_id
+    return factory_artifact_path("harness", factory_run_id)
 
 
 def _error(where: str, why: str, message: str, evidence: dict[str, Any] | None = None) -> HarnessReportError:

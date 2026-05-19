@@ -1,13 +1,9 @@
 """Unified ToolSpec-based tool system."""
 
+from typing import Any
+
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.entrypoint import ToolEntrypointLoader
-from agent_factory.tooling.factory_extensions import (
-    FACTORY_EXTENSION_ROOT_ENV,
-    FactoryExtensionLoadReport,
-    FactoryExtensionManager,
-    default_factory_extension_root,
-)
 from agent_factory.tooling.gateway import ToolExecutionGateway
 from agent_factory.tooling.mcp_runtime import MCPRuntimeClient, MCPRuntimeError, MCPRuntimeManager
 from agent_factory.tooling.providers import (
@@ -36,6 +32,20 @@ from agent_factory.tooling.spec import (
     ToolRiskResult,
     ToolSpec,
 )
+
+
+def __getattr__(name: str) -> Any:
+    if name in {
+        "FACTORY_EXTENSION_ROOT_ENV",
+        "FactoryExtensionLoadReport",
+        "FactoryExtensionManager",
+        "default_factory_extension_root",
+    }:
+        from agent_factory.tooling import factory_extensions
+
+        return getattr(factory_extensions, name)
+    raise AttributeError(name)
+
 
 __all__ = [
     "ModelToolView",

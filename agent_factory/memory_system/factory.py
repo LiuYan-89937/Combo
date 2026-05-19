@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 from typing import Any
 
+from agent_factory.paths import resolve_project_path
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.config import (
     MemoryBackgroundConfig,
@@ -94,11 +95,12 @@ def _factory_memory_config() -> MemorySystemConfig:
     backend = os.getenv("AGENTFACTORY_MEMORY_STORE_BACKEND", "sqlite").strip().lower() or "sqlite"
     if backend not in {"sqlite", "memory"}:
         backend = "sqlite"
-    path = os.getenv("AGENTFACTORY_MEMORY_STORE_PATH", ".agentfactory/memory/factory.sqlite")
+    path = resolve_project_path(os.getenv("AGENTFACTORY_MEMORY_STORE_PATH", ".agentfactory/memory/factory.sqlite"))
+    journal_root = resolve_project_path(".agentfactory/memory/jobs")
     return MemorySystemConfig(
-        store=MemoryStoreRuntimeConfig(backend=backend, path=path),
+        store=MemoryStoreRuntimeConfig(backend=backend, path=str(path)),
         background=MemoryBackgroundConfig(
-            journal_root=".agentfactory/memory/jobs",
+            journal_root=str(journal_root),
             write_interval_turns=memory_write_interval_turns_from_env(),
         ),
         semantic_index=memory_semantic_index_config_from_env(),

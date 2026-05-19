@@ -4,10 +4,10 @@ import uuid
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
 from langchain_core.tools import BaseTool
 
 from agent_factory.tooling import get_factory_tools
+from agent_factory.tooling.langgraph_node import build_tool_node_runner
 from agent_factory.factory_graph.constants import STAGE_IDS
 from agent_factory.factory_graph.render_manifest import get_factory_node_render_spec, validate_factory_render_manifest
 from agent_factory.factory_graph.render_wrapper import wrap_factory_node
@@ -33,7 +33,15 @@ def build_factory_graph(
     validate_factory_render_manifest()
     graph = StateGraph(FactoryGraphState)
     if has_tools:
-        graph.add_node(FACTORY_TOOLS_NODE, ToolNode(resolved_tools, name=FACTORY_TOOLS_NODE))
+        graph.add_node(
+            FACTORY_TOOLS_NODE,
+            build_tool_node_runner(
+                resolved_tools,
+                node_id=FACTORY_TOOLS_NODE,
+                name=FACTORY_TOOLS_NODE,
+                stream_events=True,
+            ),
+        )
     for stage_id in STAGE_IDS:
         graph.add_node(
             stage_id,

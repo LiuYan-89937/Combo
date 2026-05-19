@@ -1,9 +1,13 @@
 import {createInterface} from 'node:readline';
 import {randomUUID} from 'node:crypto';
+import {existsSync} from 'node:fs';
+import {dirname, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {execa, type ResultPromise} from 'execa';
 import {type FactoryCommand, type FactoryEvent, eventSchema} from '../protocol.js';
 
 type EventHandler = (event: FactoryEvent) => void;
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 export class PythonBridge {
 	private process?: ResultPromise;
@@ -13,9 +17,9 @@ export class PythonBridge {
 		if (this.process) {
 			return;
 		}
-		const python = process.env.AGENTFACTORY_PYTHON ?? 'python';
+		const python = resolvePythonExecutable();
 		this.process = execa(python, ['-m', 'agent_factory.factory_graph.frontend_bridge.stdio_server'], {
-			cwd: process.cwd(),
+			cwd: projectRoot,
 			stdin: 'pipe',
 			stdout: 'pipe',
 			stderr: 'pipe',
@@ -70,6 +74,17 @@ export class PythonBridge {
 			handler(event);
 		}
 	}
+}
+
+function resolvePythonExecutable(): string {
+	if (process.env.AGENTFACTORY_PYTHON) {
+		return process.env.AGENTFACTORY_PYTHON;
+	}
+	const projectVenvPython = resolve(projectRoot, '.venv/bin/python');
+	if (existsSync(projectVenvPython)) {
+		return projectVenvPython;
+	}
+	return 'python';
 }
 
 function errorEvent(message: string): FactoryEvent {

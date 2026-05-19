@@ -29,6 +29,7 @@ class RuntimeContribution:
     resources: dict[str, Any] = field(default_factory=dict)
     render_manifest: RenderManifest | None = None
     sandbox_contract: dict[str, Any] | None = None
+    dependency_plan: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -39,6 +40,7 @@ class RuntimeBuildResult:
     session_config: dict[str, Any] = field(default_factory=dict)
     resources: dict[str, Any] = field(default_factory=dict)
     sandbox_contract: dict[str, Any] = field(default_factory=dict)
+    dependency_plan: dict[str, Any] = field(default_factory=dict)
     diagnostics: list[RuntimeDiagnostic] = field(default_factory=list)
     background_workers: list[Any] = field(default_factory=list)
     contracts: dict[str, Any] = field(default_factory=dict)
@@ -61,6 +63,7 @@ class RuntimeContributionMerger:
         session_config: dict[str, Any] = {}
         resources: dict[str, Any] = {}
         sandbox_contract: dict[str, Any] = {}
+        dependency_plan: dict[str, Any] = {}
         render_manifest: RenderManifest | None = None
         for contribution in contributions:
             for name, value in contribution.services.items():
@@ -92,6 +95,10 @@ class RuntimeContributionMerger:
                 if sandbox_contract and sandbox_contract != contribution.sandbox_contract:
                     raise RuntimeContributionMergeError("conflicting sandbox contract contribution")
                 sandbox_contract = dict(contribution.sandbox_contract)
+            if contribution.dependency_plan is not None:
+                if dependency_plan and dependency_plan != contribution.dependency_plan:
+                    raise RuntimeContributionMergeError("conflicting dependency plan contribution")
+                dependency_plan = dict(contribution.dependency_plan)
             diagnostics.extend(contribution.diagnostics)
             background_workers.extend(contribution.background_workers)
         if render_manifest is None:
@@ -103,6 +110,7 @@ class RuntimeContributionMerger:
             session_config=session_config,
             resources=resources,
             sandbox_contract=sandbox_contract,
+            dependency_plan=dependency_plan,
             diagnostics=diagnostics,
             background_workers=background_workers,
         )
@@ -110,7 +118,7 @@ class RuntimeContributionMerger:
 
 def _service_slots(services: RuntimeServices) -> dict[str, Any]:
     return {
-        "model_service": services.model_service,
+        "model_service": None,
         "tool_registry": None,
         "memory_store": None,
         "memory_system": None,

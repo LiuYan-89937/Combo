@@ -112,6 +112,12 @@ export type RuntimeState = {
 	sessionTitle: string | null;
 	sessions: Array<Record<string, unknown>>;
 	sessionPickerOpen: boolean;
+	agentPackages: Array<Record<string, unknown>>;
+	agentPackagePickerOpen: boolean;
+	activeAgentPackage: Record<string, unknown> | null;
+	agentPackageSessions: Array<Record<string, unknown>>;
+	agentSessionPickerOpen: boolean;
+	activeAgentSessionId: string | null;
 	logs: string[];
 	transcript: TranscriptItem[];
 	events: Array<FactoryEvent>;
@@ -141,6 +147,10 @@ export type RuntimeAction =
 	| FactoryEvent
 	| {ui_type: 'set_tool_grep'; query: string}
 	| {ui_type: 'set_session_picker_open'; open: boolean}
+	| {ui_type: 'set_agent_package_picker_open'; open: boolean}
+	| {ui_type: 'set_agent_session_picker_open'; open: boolean}
+	| {ui_type: 'select_agent_session'; sessionId: string | null}
+	| {ui_type: 'clear_agent_package_selection'}
 	| {ui_type: 'local_user_message'; message: string}
 	| {ui_type: 'interrupt_response_submitted'; message: string}
 	| {ui_type: 'clear_memory_activity'; updatedAt: string | null}
@@ -159,6 +169,12 @@ export function createInitialRuntimeState(): RuntimeState {
 		sessionTitle: null,
 		sessions: [],
 		sessionPickerOpen: false,
+		agentPackages: [],
+		agentPackagePickerOpen: false,
+		activeAgentPackage: null,
+		agentPackageSessions: [],
+		agentSessionPickerOpen: false,
+		activeAgentSessionId: null,
 		logs: [],
 		transcript: [],
 		events: [],
@@ -287,6 +303,26 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 	if (action.ui_type === 'set_session_picker_open') {
 		return {...state, sessionPickerOpen: action.open};
 	}
+	if (action.ui_type === 'set_agent_package_picker_open') {
+		return {...state, agentPackagePickerOpen: action.open};
+	}
+	if (action.ui_type === 'set_agent_session_picker_open') {
+		return {...state, agentSessionPickerOpen: action.open};
+	}
+	if (action.ui_type === 'select_agent_session') {
+		return {...state, activeAgentSessionId: action.sessionId, agentSessionPickerOpen: false};
+	}
+	if (action.ui_type === 'clear_agent_package_selection') {
+		return {
+			...state,
+			mode: null,
+			activeAgentPackage: null,
+			agentPackageSessions: [],
+			activeAgentSessionId: null,
+			agentPackagePickerOpen: false,
+			agentSessionPickerOpen: false
+		};
+	}
 	if (action.ui_type === 'local_user_message') {
 		return appendTranscript(state, {
 			id: `local-user-${Date.now()}-${state.transcript.length}`,
@@ -337,6 +373,42 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		}
 		case 'sessions_listed':
 			return {...base, sessions: (event.payload?.sessions as Array<Record<string, unknown>>) ?? []};
+		case 'agent_packages_listed':
+			return {
+				...base,
+				agentPackages: (event.payload?.packages as Array<Record<string, unknown>>) ?? [],
+				logs: [...base.logs, 'agent packages listed']
+			};
+		case 'agent_package_selected': {
+			const selectedPackage = (event.payload?.package ?? null) as Record<string, unknown> | null;
+			const sessions = (event.payload?.sessions as Array<Record<string, unknown>>) ?? [];
+			return {
+				...base,
+				mode: 'agent_package',
+				activeAgentPackage: selectedPackage,
+				agentPackageSessions: sessions,
+				activeAgentSessionId: null,
+				agentPackagePickerOpen: false,
+				agentSessionPickerOpen: true,
+				helpVisible: false,
+				logs: [...base.logs, `agent package selected: ${String(selectedPackage?.package_id ?? '-')}`]
+			};
+		}
+		case 'agent_package_deleted':
+			return {
+				...base,
+				agentPackages: (event.payload?.packages as Array<Record<string, unknown>>) ?? base.agentPackages,
+				activeAgentPackage: String(base.activeAgentPackage?.package_id ?? '') === String(event.payload?.package_id ?? '') ? null : base.activeAgentPackage,
+				activeAgentSessionId: String(base.activeAgentPackage?.package_id ?? '') === String(event.payload?.package_id ?? '') ? null : base.activeAgentSessionId,
+				logs: [...base.logs, `agent package deleted: ${String(event.payload?.package_id ?? '-')}`]
+			};
+		case 'agent_package_sessions_listed':
+			return {
+				...base,
+				agentPackageSessions: (event.payload?.sessions as Array<Record<string, unknown>>) ?? [],
+				agentSessionPickerOpen: true,
+				logs: [...base.logs, 'agent package sessions listed']
+			};
 		case 'mode_changed':
 			return {...base, mode: event.mode ?? null, helpVisible: false, logs: [...base.logs, `mode: ${event.mode ?? '-'}`]};
 		case 'run_started':
@@ -393,7 +465,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 					recentActivities: appendRunActivity(base.recentActivities, event),
 					logs: [...base.logs, `model failed: ${String(event.payload?.prompt_id ?? event.node_id ?? '-')}`]
 				},
-				String(event.payload?.message ?? event.message ?? 'model failed')
+				errorMessageFromEvent(event, 'model failed')
 			);
 		case 'tool_call_proposed':
 		case 'tool_call_started':
@@ -443,7 +515,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'node_failed':
 			return recordError(
 				{...updateNodeStatus(base, event, 'failed'), runStatus: 'failed', recentActivities: appendRunActivity(base.recentActivities, event)},
-				`node failed: ${event.node_label ?? event.node_id ?? '-'}`
+				errorMessageFromEvent(event, `node failed: ${event.node_label ?? event.node_id ?? '-'}`)
 			);
 		case 'interrupt_requested':
 			return appendInterruptTranscript({
@@ -492,7 +564,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 					runStatus: 'failed',
 					recentActivities: appendRunActivity(base.recentActivities, event)
 				},
-				`stage failed: ${event.stage_id ?? '-'}`
+				errorMessageFromEvent(event, `stage failed: ${event.stage_id ?? '-'}`)
 			);
 		case 'run_completed':
 			return {
@@ -502,15 +574,16 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				currentNodeId: null,
 				pendingInterrupt: null,
 				recentActivities: appendRunActivity(base.recentActivities, event),
+				activeAgentSessionId: agentSessionIdFromEvent(event) ?? base.activeAgentSessionId,
 				logs: [...base.logs, `run completed: ${String(event.payload?.status ?? '-')}`]
 			};
 		case 'run_failed':
 			return recordError(
 				{...base, runStatus: 'failed', pendingInterrupt: null, recentActivities: appendRunActivity(base.recentActivities, event)},
-				event.message ?? 'run failed'
+				errorMessageFromEvent(event, 'run failed')
 			);
 		case 'error':
-			return recordError(base, event.message ?? 'unknown error');
+			return recordError(base, errorMessageFromEvent(event, 'unknown error'));
 		default:
 			return base;
 	}
@@ -578,6 +651,73 @@ function updateStageStatus(state: RuntimeState, event: FactoryEvent, status: Sta
 
 function recordError(state: RuntimeState, message: string): RuntimeState {
 	return {...state, lastError: message, errors: [...state.errors.slice(-8), message]};
+}
+
+function errorMessageFromEvent(event: FactoryEvent, fallback: string): string {
+	const payload = recordValue(event.payload) ?? {};
+	const lines = [
+		primaryErrorMessage(event, payload, fallback),
+		labeledValue('where', payload.where),
+		labeledValue('why', payload.why),
+		labeledValue('error_type', payload.error_type ?? payload.errorType),
+		labeledValue('suggested_action', payload.suggested_action ?? payload.suggestedAction),
+		errorListSummary(payload.errors),
+		labeledValue('evidence', payload.evidence)
+	].filter((line): line is string => Boolean(line));
+	const unique: string[] = [];
+	for (const line of lines) {
+		if (!unique.includes(line)) {
+			unique.push(line);
+		}
+	}
+	return unique.join('\n');
+}
+
+function primaryErrorMessage(event: FactoryEvent, payload: Record<string, unknown>, fallback: string): string {
+	const payloadMessage = stringValue(payload.message) || stringValue(payload.error) || stringValue(payload.error_message);
+	if (payloadMessage) {
+		return payloadMessage;
+	}
+	if (event.message && !isGenericFailureText(event.message)) {
+		return event.message;
+	}
+	return fallback;
+}
+
+function labeledValue(label: string, value: unknown): string | null {
+	const text = typeof value === 'string' ? value.trim() : value === undefined || value === null ? '' : compactValue(value, 900);
+	return text ? `${label}: ${text}` : null;
+}
+
+function errorListSummary(value: unknown): string | null {
+	if (!Array.isArray(value) || value.length === 0) {
+		return null;
+	}
+	const items = value
+		.slice(0, 3)
+		.map(item => {
+			const record = recordValue(item);
+			if (!record) {
+				return compactValue(item, 300);
+			}
+			const parts = [
+				stringValue(record.where),
+				stringValue(record.why),
+				stringValue(record.message) || stringValue(record.error)
+			].filter(Boolean);
+			return parts.length ? parts.join(' / ') : compactValue(record, 300);
+		});
+	const suffix = value.length > items.length ? `; +${value.length - items.length} more` : '';
+	return `errors: ${items.join('; ')}${suffix}`;
+}
+
+function isGenericFailureText(value: string): boolean {
+	const normalized = value.trim().toLowerCase();
+	return ['failed', 'run failed', 'error', 'unknown error'].includes(normalized);
+}
+
+function firstLine(value: string): string {
+	return value.split('\n').find(line => line.trim())?.trim() ?? value;
 }
 
 function isToolApprovalInterrupt(event: FactoryEvent | null): boolean {
@@ -875,7 +1015,9 @@ function runActivity(event: FactoryEvent): RunActivity | null {
 			stageId: event.stage_id ?? null,
 			nodeId: event.node_id ?? null,
 			label: readableEventType(eventType),
-			detail: event.message ?? String(payload.type ?? payload.status ?? event.node_label ?? node),
+			detail: eventType.endsWith('failed') || eventType === 'run_failed'
+				? firstLine(errorMessageFromEvent(event, readableEventType(eventType)))
+				: event.message ?? String(payload.type ?? payload.status ?? event.node_label ?? node),
 			color: colorForEvent(eventType)
 		};
 	}
@@ -1363,6 +1505,15 @@ function sessionTitle(session: Record<string, unknown>): string | null {
 	const displayTitle = stringValue(session.display_title);
 	const firstUserInput = stringValue(session.first_user_input);
 	return displayTitle || firstUserInput || null;
+}
+
+function agentSessionIdFromEvent(event: FactoryEvent): string | null {
+	if (event.mode !== 'agent_package') {
+		return null;
+	}
+	const session = recordValue(event.payload?.agent_session);
+	const sessionId = stringValue(session?.session_id);
+	return sessionId || stringValue(event.session_id) || null;
 }
 
 function shortValue(value: string, limit: number): string {

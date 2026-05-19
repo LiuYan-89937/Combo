@@ -13,6 +13,7 @@ from agent_factory.tooling.providers.base import (
     diagnostic,
 )
 from agent_factory.tooling.skills import (
+    SKILL_TOOL_ID,
     SkillRegistry,
     build_skill_tool_spec,
     parse_skill_directory,
@@ -80,6 +81,7 @@ class SkillProvider:
         if payload["skills"]:
             result.runtime_resources["skills"] = payload
             result.tool_specs.append(build_skill_tool_spec(registry))
+            result.system_tool_ids.append(SKILL_TOOL_ID)
         return result
 
 

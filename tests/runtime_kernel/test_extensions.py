@@ -57,7 +57,9 @@ class AgentInstanceExtensionTest(unittest.TestCase):
 
         self.assertEqual(registry.ids(), ["search_search"])
         self.assertEqual(result.tool_specs[0].entrypoint, "mcp:search_server/search")
+        self.assertEqual(result.system_tool_ids, ["search_search"])
         self.assertEqual(report.tool_ids, ["search_search"])
+        self.assertEqual(report.system_tool_ids, ["search_search"])
         self.assertEqual(tool.invoke({})["output"], {"tool": "search", "arguments": {}})
 
     def test_skill_extension_config_loads_progressive_skill_tool(self) -> None:

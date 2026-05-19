@@ -8,6 +8,8 @@ export function ShellLayout({children}: {children: React.ReactNode}) {
 	const sessionId = useStoreSelector(state => state.sessionId);
 	const sessionTitle = useStoreSelector(state => state.sessionTitle);
 	const mode = useStoreSelector(state => state.mode);
+	const activeAgentPackage = useStoreSelector(state => state.activeAgentPackage);
+	const activeAgentSessionId = useStoreSelector(state => state.activeAgentSessionId);
 	const runStatus = useStoreSelector(state => state.runStatus);
 	const stopAfterStage = useStoreSelector(state => state.stopAfterStage);
 	const currentStageId = useStoreSelector(state => state.currentStageId);
@@ -32,6 +34,8 @@ export function ShellLayout({children}: {children: React.ReactNode}) {
 					<Pill label="session" value={shortId(sessionId)} />
 					{sessionTitle && <Pill label="title" value={sessionTitle} color="white" />}
 					<Pill label="mode" value={mode ?? '-'} color={mode ? 'cyan' : 'gray'} />
+					{mode === 'agent_package' && <Pill label="agent" value={agentPackageLabel(activeAgentPackage)} color="cyan" />}
+					{mode === 'agent_package' && <Pill label="agent-session" value={shortId(activeAgentSessionId)} color="white" />}
 					<Pill label="run" value={runStatus} color={statusColor} />
 					<Pill label="stop" value={stopAfterStage ?? 'off'} color="white" />
 					{memoryStatus !== 'idle' && <Pill label="memory" value={memoryHint(memoryLabel, memoryDetail)} color={memoryColor(memoryStatus)} />}
@@ -67,6 +71,14 @@ function shortId(value: string | null): string {
 		return '-';
 	}
 	return value.length > 12 ? `${value.slice(0, 10)}...` : value;
+}
+
+function agentPackageLabel(value: Record<string, unknown> | null): string {
+	if (!value) {
+		return '-';
+	}
+	const label = String(value.agent_name ?? value.agent_id ?? value.package_id ?? '-');
+	return label.length > 24 ? `${label.slice(0, 22)}...` : label;
 }
 
 function currentNodeLabelFromState(currentNodeId: string | null, nodeStatuses: Record<string, {label: string | null}>): string {

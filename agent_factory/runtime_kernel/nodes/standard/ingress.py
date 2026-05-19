@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from langchain_core.messages import HumanMessage
-
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
 
@@ -20,13 +18,7 @@ class IngressNode:
         state: RuntimeState,
         context: NodeExecutionContext,
     ) -> dict[str, object]:
-        messages = []
-        if state.conversation.current_user_input:
-            messages.append(
-                HumanMessage(content=state.conversation.current_user_input)
-            )
         return {
-            "messages": messages,
             "conversation": {
                 "current_user_input_id": state.conversation.current_user_input_id or uuid4().hex,
                 "turn_index": state.conversation.turn_index + 1,

@@ -10,6 +10,7 @@ from agent_factory.runtime_contracts.builtins import default_runtime_contract_re
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistryError
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.bindings import RuntimeServices
+from agent_factory.tooling.builtins import get_builtin_tool_ids
 
 
 class RuntimeContractsTest(unittest.TestCase):
@@ -98,11 +99,42 @@ class RuntimeContractsTest(unittest.TestCase):
                 base_services=_base_services(),
             )
 
-            self.assertEqual(result.services.tool_registry.list_tool_ids(), ["skill"])
+            expected_system_tools = sorted([*get_builtin_tool_ids(), "skill"])
+            self.assertEqual(result.services.tool_registry.list_tool_ids(), expected_system_tools)
+            self.assertEqual(result.services.tool_registry.system_tool_ids(), expected_system_tools)
 
-    def test_missing_required_contract_fails_build_planner(self) -> None:
+    def test_tools_contract_can_limit_builtin_tool_surface(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            package_path = _write_package(Path(temp_dir), include_tools_contract=False)
+            package_path = _write_package(
+                Path(temp_dir),
+                tools_config={
+                    "builtin_tools_enabled": True,
+                    "builtin_tool_ids": ["ls", "read"],
+                    "builtin_workspace_root": "/workdir",
+                    "package_tools_enabled": False,
+                    "instance_extensions_enabled": False,
+                },
+            )
+            package = AgentPackageLoader().load_path(package_path)
+            result = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+                package,
+                base_services=_base_services(),
+            )
+
+            self.assertEqual(result.services.tool_registry.list_tool_ids(), ["ls", "read"])
+            self.assertEqual(result.services.tool_registry.system_tool_ids(), ["ls", "read"])
+
+    def test_tools_contract_rejects_unknown_builtin_tool_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_path = _write_package(
+                Path(temp_dir),
+                tools_config={
+                    "builtin_tools_enabled": True,
+                    "builtin_tool_ids": ["not_a_tool"],
+                    "package_tools_enabled": False,
+                    "instance_extensions_enabled": False,
+                },
+            )
             package = AgentPackageLoader().load_path(package_path)
 
             with self.assertRaises(ValueError) as context:
@@ -110,6 +142,15 @@ class RuntimeContractsTest(unittest.TestCase):
                     package,
                     base_services=_base_services(),
                 )
+
+            self.assertIn("unknown builtin tool ids", str(context.exception))
+
+    def test_missing_required_contract_fails_manifest_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_path = _write_package(Path(temp_dir), include_tools_contract=False)
+
+            with self.assertRaises(ValueError) as context:
+                AgentPackageLoader().load_path(package_path)
 
             self.assertIn("tools", str(context.exception))
 
@@ -136,6 +177,8 @@ def _write_package(
     _write_json(root / "resources.json", {"version": "factory_resources.v0", "resources": {}})
     _write_json(root / "sandbox_contract.json", {"version": "sandbox_contract.v0", "backend": "docker"})
     contracts = {
+        "dependencies": "contracts/dependencies.json",
+        "model": "contracts/model.json",
         "render": "contracts/render.json",
         "resources": "contracts/resources.json",
         "sandbox": "contracts/sandbox.json",
@@ -147,6 +190,8 @@ def _write_package(
     _write_json(root / "contracts/render.json", {"type": "render", "version": "render_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/resources.json", {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/sandbox.json", {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {}})
+    _write_json(root / "contracts/dependencies.json", {"type": "dependencies", "version": "dependencies_contract.v0", "enabled": True, "config": {}})
+    _write_json(root / "contracts/model.json", {"type": "model", "version": "model_contract.v0", "enabled": True, "config": {}})
     _write_json(
         root / "contracts/session.json",
         {

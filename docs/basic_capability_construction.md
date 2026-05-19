@@ -108,7 +108,7 @@ AgentPackageManifest
 | Contract | 文件 | 作用 |
 | --- | --- | --- |
 | `session` | `contracts/session.json` | 创建 AgentSessionManager 所需配置，并构建 LangGraph checkpointer。 |
-| `tools` | `contracts/tools.json` | 加载 package tools 与实例级 MCP / Skill 扩展，并形成统一 tool registry。 |
+| `tools` | `contracts/tools.json` | 加载 AgentInstance 内置工具、package tools 与实例级 MCP / Skill 扩展，并形成统一 tool registry。 |
 | `memory` | `contracts/memory.json` | 可选，启用跨会话记忆时构建 BaseStore、MemorySystemRuntime、后台 worker 和记忆注入系统 wrapper。 |
 | `render` | `contracts/render.json` | 加载 `render_manifest.json`，并通过 RuntimeContribution 注入 `observability.render_node` 系统 wrapper。 |
 | `resources` | `contracts/resources.json` | 声明运行时资源来源，工具系统按 sandbox 视角读取资源。 |
@@ -137,11 +137,42 @@ ToolProvider
 这条链路同时服务：
 
 - Factory 内置工具。
+- AgentInstance 内置工具。
 - AgentPackage 自带工具。
 - Factory 配置的 MCP / Skill 工具。
 - AgentInstance 配置的 MCP / Skill 工具。
 
 模型不能直接看到 MCP server、Skill 文件、真实资源值或 entrypoint 执行细节。模型只能看到编译后的工具视图，并通过标准 tool call 调用。
+
+Factory 与 AgentInstance 的内置工具必须来自同一个 `BuiltinToolProvider` / `ToolSpec` 实现，不允许维护两套 read/write/bash 语义。差异只能来自运行域：
+
+```text
+Factory
+  -> builtin tools
+  -> filesystem/process root = 当前 Factory workspace
+
+AgentInstance
+  -> builtin tools
+  -> filesystem/process root = sandbox workspace，例如 /workdir
+```
+
+AgentInstance 的内置工具属于系统工具，不依赖业务 `tool_access` binding 才能被模型看到；但执行时仍必须经过 `ToolExecutionGateway`，按工具风险等级、参数风险校验和人工审批策略处理。
+
+内置 `bash` 工具继承 runtime image 的基础 shell 能力，不要求每个 AgentPackage 重复声明这些依赖：
+
+```text
+bash
+coreutils
+findutils
+grep
+sed
+gawk
+procps
+ca-certificates
+curl
+```
+
+这些是 `agentfactory-runtime-python:3.12` 的 baseline。Package 的 `contracts/dependencies.json` 只声明业务工具、Skill 或 MCP 额外需要的增量依赖，例如数据库客户端、图像处理命令、Node.js 或浏览器运行时。
 
 ### 2.2 ToolSpec
 
@@ -305,14 +336,31 @@ tools/mysql_query/tool.py:evaluate_risk
 MCP 接入：
 
 ```text
-mcp_servers.json
-  -> MCPToolProvider
-  -> ToolSpec(entrypoint="mcp:<server_id>/<tool_name>")
-  -> MCPEntrypointAdapter
-  -> MCPRuntimeClient.call_tool(...)
+Factory host:
+  mcp_servers.json
+    -> MCPRuntimeManager(stdio/SSE/后续 transport)
+    -> MCPToolProvider
+    -> ToolSpec(entrypoint="mcp:<server_id>/<tool_name>")
+    -> MCPEntrypointAdapter
+    -> MCPRuntimeClient.call_tool(...)
+
+Agent sandbox:
+  host .agentfactory/agent_runtime/<package_id>/extensions/mcp_servers.json
+    -> HostMCPGatewayManager
+    -> HTTP MCP Gateway on host port
+    -> container AGENTFACTORY_MCP_GATEWAY_URL=http://host.docker.internal:<port>
+    -> MCPGatewayClient
+    -> MCPToolProvider / MCPEntrypointAdapter
 ```
 
 `mcp_servers.json` 中每个 server 可以声明 `risk_level_default`。MCP tool 默认按中风险处理；如果 server 或 tool metadata 明确给出风险等级，则转换为统一 `ToolSpec.risk_level`。
+
+子 Agent 的 MCP 配置文件与宿主机一致，不要求用户把 `stdio` 配置改成 HTTP 配置。运行域决定执行方式：
+
+- Factory 在宿主机进程内运行，直接按 `mcp_servers.json` 启动 MCP server。
+- 子 Agent 在 Docker sandbox 内运行，不能直接启动宿主机 stdio MCP server；宿主机会按同一份配置启动 Host MCP Gateway，容器只通过 `AGENTFACTORY_MCP_GATEWAY_URL` 调用 gateway。
+- MCP Gateway 只转发 tool catalog 与 tool call，不绕过统一工具系统；MCP 工具仍然会转换为 `ToolSpec`，仍然经过 Gateway 参数校验、风险校验、审批和 observation。
+- Gateway 端口默认由系统分配，也可以通过 `AGENTFACTORY_HOST_MCP_GATEWAY_PORT` 固定；容器内访问地址由 runtime launcher 注入，不写进 package 或 resources。
 
 Skill 接入：
 
@@ -397,8 +445,10 @@ AgentInstance 扩展默认位置：
 
 - Factory 可以扫描自己的 MCP / Skill 配置并注册工具。
 - RuntimeKernel 通过 `tools` contract 自动加载实例级 MCP / Skill 配置。
+- RuntimeKernel 通过 `tools` contract 自动注册 AgentInstance 内置工具，默认工作区为 `/workdir`。
 - MCP 最终转换成各自 `ToolSpec`。
 - Skill 最终转换成一个统一 `skill` ToolSpec，具体 Skill 内容按需加载。
+- `skill`、实例级 MCP 工具与 AgentInstance 内置工具都作为系统工具暴露，业务 package tools 仍受 Assembly/tool binding 控制。
 
 后续还需要补齐：
 

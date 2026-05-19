@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any, AsyncIterator
 
 from agent_factory.tooling.providers.mcp import (
@@ -97,6 +98,7 @@ class MCPRuntimeClient:
                     yield session
         finally:
             self._stderr_logs.extend(stderr_capture.lines())
+            stderr_capture.close()
 
 
 class MCPRuntimeManager:
@@ -126,18 +128,25 @@ def _cached_client(server: MCPServerConfig) -> MCPRuntimeClient:
 
 class _MCPStderrCapture:
     def __init__(self) -> None:
-        self._chunks: list[str] = []
+        self._file = tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace")
 
     def write(self, value: Any) -> int:
         text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
-        self._chunks.append(text)
-        return len(text)
+        return self._file.write(text)
 
     def flush(self) -> None:
-        return None
+        self._file.flush()
+
+    def fileno(self) -> int:
+        return self._file.fileno()
 
     def lines(self) -> list[str]:
-        return [line.strip() for line in "".join(self._chunks).splitlines() if line.strip()]
+        self._file.flush()
+        self._file.seek(0)
+        return [line.strip() for line in self._file.read().splitlines() if line.strip()]
+
+    def close(self) -> None:
+        self._file.close()
 
 
 def _run_async(coro: Any) -> Any:
