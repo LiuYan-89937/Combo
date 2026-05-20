@@ -8,6 +8,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.tooling.execution_context import current_tool_call
+from agent_factory.tooling.resource_context import build_tool_resource_context
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
 from agent_factory.tooling.spec import ToolObservation, ToolRiskContext, ToolRiskResult, ToolSpec
@@ -86,7 +87,8 @@ class ToolExecutionGateway:
                 arguments=arguments,
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
-        arguments, risk = self._evaluate_risk(arguments, tool_resources)
+        risk_context_resources = build_tool_resource_context(tool_resources)
+        arguments, risk = self._evaluate_risk(arguments, risk_context_resources)
         approval = self._approval(arguments, risk)
         if approval.action == "deny":
             return self._observation(
@@ -145,13 +147,13 @@ class ToolExecutionGateway:
     def _evaluate_risk(
         self,
         arguments: dict[str, Any],
-        tool_resources: dict[str, Any],
+        risk_context_resources: dict[str, Any],
     ) -> tuple[dict[str, Any], ToolRiskResult]:
         context = ToolRiskContext(
             tool_id=self.spec.id,
             base_risk_level=self.spec.risk_level,
             arguments=arguments,
-            resources=tool_resources,
+            resources=risk_context_resources,
         ).model_dump(mode="json")
         results: list[ToolRiskResult] = []
         if self.hard_risk_evaluator is not None:

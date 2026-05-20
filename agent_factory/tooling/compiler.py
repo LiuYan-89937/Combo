@@ -86,7 +86,13 @@ class ToolCompiler:
             description=spec.description,
             args_schema=input_schema.pydantic_model,
             infer_schema=False,
-            metadata={"agent_factory": {"tool_id": spec.id, "concurrent": spec.concurrent}},
+            metadata={
+                "agent_factory": {
+                    "tool_id": spec.id,
+                    "concurrent": spec.concurrent,
+                    "risk_level": spec.risk_level,
+                }
+            },
             handle_validation_error=lambda error: json.dumps(
                 {
                     "type": "tool_observation",

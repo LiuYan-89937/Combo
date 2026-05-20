@@ -175,6 +175,42 @@ class GatewayAndCompilerTest(unittest.TestCase):
         self.assertEqual(exceeded["status"], "execution_failed")
         self.assertFalse(exceeded["retryable"])
 
+    def test_gateway_separates_runtime_resources_from_risk_context(self) -> None:
+        runtime_resource = _RuntimeOnlyResource()
+        risk_contexts = []
+        entrypoint_resources = []
+
+        def risk_evaluator(_arguments: dict, context: dict) -> dict:
+            risk_contexts.append(context)
+            return {"action": "allow", "risk_level": "medium"}
+
+        def entrypoint(arguments: dict, resources: dict) -> dict:
+            entrypoint_resources.append(resources)
+            return {"ok": True, "query": arguments["query"]}
+
+        spec = _tool_spec(
+            risk_level="medium",
+            resources={"runtime": "runtime_service"},
+            risk_evaluator=ToolRiskEvaluatorConfig(),
+        )
+        gateway = ToolExecutionGateway(
+            spec=spec,
+            input_schema=compile_json_schema(schema=spec.input_schema, model_name="RuntimeResourceArgs"),
+            output_schema=compile_json_schema(schema=spec.output_schema, model_name="RuntimeResourceOutput"),
+            entrypoint=entrypoint,
+            global_resources={"runtime_service": runtime_resource},
+            hard_risk_evaluator=risk_evaluator,
+        )
+
+        result = gateway.execute({"query": "hello"}, tool_call_id="call_resource")
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIs(entrypoint_resources[0]["runtime"], runtime_resource)
+        self.assertEqual(
+            risk_contexts[0]["resources"]["runtime"],
+            {"kind": "runtime_object", "type": f"{__name__}._RuntimeOnlyResource"},
+        )
+
     def test_registry_and_compiler_produce_langchain_tool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -251,7 +287,13 @@ class GatewayAndCompilerTest(unittest.TestCase):
                 self.assertFalse(_contains_unexpected_none(result["output"]["arguments"], spec.input_schema))
 
 
-def _tool_spec(*, risk_level: str = "low", entrypoint: str = "tools/sample_tool/tool.py:run") -> ToolSpec:
+def _tool_spec(
+    *,
+    risk_level: str = "low",
+    entrypoint: str = "tools/sample_tool/tool.py:run",
+    resources: dict[str, str] | None = None,
+    risk_evaluator: ToolRiskEvaluatorConfig | None = None,
+) -> ToolSpec:
     return ToolSpec(
         id="sample_tool",
         description="Sample tool.",
@@ -268,11 +310,15 @@ def _tool_spec(*, risk_level: str = "low", entrypoint: str = "tools/sample_tool/
             "required": ["ok"],
             "additionalProperties": True,
         },
-        resources={},
+        resources=resources or {},
         risk_level=risk_level,
-        risk_evaluator=ToolRiskEvaluatorConfig(),
+        risk_evaluator=risk_evaluator or ToolRiskEvaluatorConfig(),
         concurrent=True,
     )
+
+
+class _RuntimeOnlyResource:
+    pass
 
 
 def _builtin_catalog_specs() -> list[ToolSpec]:

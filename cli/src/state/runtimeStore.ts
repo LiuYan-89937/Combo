@@ -34,7 +34,7 @@ export type NodeStatus = {
 	payload: Record<string, unknown>;
 };
 
-export type ActivityColor = 'gray' | 'blue' | 'cyan' | 'green' | 'yellow' | 'red';
+export type ActivityColor = 'gray' | 'blue' | 'cyan' | 'green' | 'yellow' | 'red' | 'magenta';
 
 export type RunActivity = {
 	activityKey: string;
@@ -79,6 +79,17 @@ export type MemoryActivity = {
 	jobId: string | null;
 	namespace: string | null;
 	updatedAt: string | null;
+};
+
+export type SchedulerActivity = {
+	eventType: FactoryEvent['event_type'];
+	timestamp: string;
+	jobId: string | null;
+	runId: string | null;
+	targetType: string | null;
+	status: string | null;
+	detail: string;
+	reportPath: string | null;
 };
 
 export type SpanRecord = {
@@ -130,6 +141,7 @@ export type RuntimeState = {
 	modelStreams: Record<string, ModelStream>;
 	toolActivities: ToolActivity[];
 	memoryActivity: MemoryActivity;
+	schedulerActivities: SchedulerActivity[];
 	debugEvents: FactoryEvent[];
 	pendingInterrupt: FactoryEvent | null;
 	currentRunId: string | null;
@@ -187,6 +199,7 @@ export function createInitialRuntimeState(): RuntimeState {
 		modelStreams: {},
 		toolActivities: [],
 		memoryActivity: idleMemoryActivity(),
+		schedulerActivities: [],
 		debugEvents: [],
 		pendingInterrupt: null,
 		currentRunId: null,
@@ -492,6 +505,20 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'memory_write_completed':
 		case 'memory_write_failed':
 			return {...base, memoryActivity: memoryActivityForEvent(event)};
+		case 'scheduler_job_created':
+		case 'scheduler_job_updated':
+		case 'scheduler_job_deleted':
+		case 'scheduler_run_scheduled':
+		case 'scheduler_run_started':
+		case 'scheduler_run_completed':
+		case 'scheduler_run_failed':
+		case 'scheduler_run_skipped':
+		case 'scheduler_run_cancelled':
+			return {
+				...base,
+				schedulerActivities: [...base.schedulerActivities.slice(-19), schedulerActivityForEvent(event)],
+				recentActivities: appendRunActivity(base.recentActivities, event)
+			};
 		case 'debug_patch':
 			return {...base, debugEvents: [...base.debugEvents.slice(-30), event]};
 		case 'node_started':
@@ -1007,6 +1034,18 @@ function runActivity(event: FactoryEvent): RunActivity | null {
 			color: colorForEvent(eventType)
 		};
 	}
+	if (eventType.startsWith('scheduler_')) {
+		return {
+			activityKey: `${event.event_id}:activity`,
+			eventType,
+			timestamp: event.timestamp,
+			stageId: event.stage_id ?? null,
+			nodeId: event.node_id ?? null,
+			label: readableEventType(eventType),
+			detail: schedulerActivityDetail(event.payload ?? {}),
+			color: colorForEvent(eventType)
+		};
+	}
 	if (eventType.startsWith('stage_') || eventType.startsWith('node_') || eventType.startsWith('run_') || eventType.includes('interrupt') || eventType.startsWith('runtime_')) {
 		return {
 			activityKey: `${event.event_id}:activity`,
@@ -1087,7 +1126,40 @@ function colorForEvent(eventType: string): ActivityColor {
 	if (eventType.includes('tool')) {
 		return 'yellow';
 	}
+	if (eventType.includes('scheduler')) {
+		return 'magenta';
+	}
 	return 'blue';
+}
+
+function schedulerActivityForEvent(event: FactoryEvent): SchedulerActivity {
+	const payload = event.payload ?? {};
+	return {
+		eventType: event.event_type,
+		timestamp: event.timestamp,
+		jobId: stringValue(payload.job_id) || null,
+		runId: stringValue(payload.run_id) || null,
+		targetType: stringValue(payload.target_type) || null,
+		status: stringValue(payload.status) || null,
+		detail: schedulerActivityDetail(payload),
+		reportPath: stringValue(payload.report_path) || null
+	};
+}
+
+function schedulerActivityDetail(payload: Record<string, unknown>): string {
+	const target = stringValue(payload.target_type);
+	const status = stringValue(payload.status);
+	const job = stringValue(payload.job_id);
+	const error = stringValue(payload.error_summary);
+	const report = stringValue(payload.report_path);
+	const parts = [
+		status ? `status=${status}` : null,
+		target ? `target=${target}` : null,
+		job ? `job=${shortValue(job, 10)}` : null,
+		error ? `error=${shortValue(error, 80)}` : null,
+		report ? `report=${shortValue(report, 48)}` : null
+	].filter((item): item is string => Boolean(item));
+	return parts.join(' ');
 }
 
 function idleMemoryActivity(): MemoryActivity {

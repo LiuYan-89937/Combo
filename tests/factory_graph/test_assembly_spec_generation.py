@@ -45,6 +45,7 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("contracts/render.json", plan_paths)
                 self.assertIn("contracts/resources.json", plan_paths)
                 self.assertIn("contracts/sandbox.json", plan_paths)
+                self.assertIn("contracts/scheduler.json", plan_paths)
                 self.assertIn("contracts/memory.json", plan_paths)
                 self.assertEqual(plan["manifest_contract"]["contracts"]["memory"], "contracts/memory.json")
                 self.assertEqual(plan["tools"][0]["manifest"]["input_schema"], {"type": "object"})

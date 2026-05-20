@@ -59,6 +59,7 @@ REQUIRED_PACKAGE_FILES = {
     "contracts/render.json",
     "contracts/resources.json",
     "contracts/sandbox.json",
+    "contracts/scheduler.json",
     "contracts/session.json",
     "contracts/tools.json",
 }
@@ -485,7 +486,7 @@ def _validate_agent_package_manifest(package_root: Path, manifest_path: Path) ->
             default_runtime_contract_registry().parse(TypeAdapter(dict[str, object]).validate_json(target.read_text(encoding="utf-8")))
         except Exception as exc:
             errors.append(f"agent_package.json contracts.{key} invalid: {type(exc).__name__}: {exc}")
-    required_contracts = {"dependencies", "model", "render", "resources", "sandbox", "session", "tools"}
+    required_contracts = {"dependencies", "model", "render", "resources", "sandbox", "scheduler", "session", "tools"}
     missing_contracts = sorted(required_contracts - set(manifest.contracts))
     for key in missing_contracts:
         errors.append(f"agent_package.json missing contracts.{key}")

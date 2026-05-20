@@ -160,6 +160,9 @@ class RuntimeEventNormalizer:
         if chunk.get("type") == "memory_event":
             self._emit_memory_event(chunk.get("payload") or {})
             return
+        if chunk.get("type") == "scheduler_event":
+            self._emit_scheduler_event(chunk.get("payload") or {})
+            return
         if chunk.get("type") != "model_activity":
             self.runtime_event(
                 "debug_patch",
@@ -202,6 +205,31 @@ class RuntimeEventNormalizer:
             stage_id=self.current_stage_id,
             span_id=uuid.uuid4().hex,
             parent_span_id=self.run_span_id,
+            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        )
+
+    def _emit_scheduler_event(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        event_type = str(payload.get("event_type") or "")
+        if event_type not in {
+            "scheduler_job_created",
+            "scheduler_job_updated",
+            "scheduler_job_deleted",
+            "scheduler_run_scheduled",
+            "scheduler_run_started",
+            "scheduler_run_completed",
+            "scheduler_run_failed",
+            "scheduler_run_skipped",
+            "scheduler_run_cancelled",
+        }:
+            return
+        self.runtime_event(
+            event_type,  # type: ignore[arg-type]
+            stage_id=self.current_stage_id,
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self.run_span_id,
+            severity="error" if event_type.endswith("failed") else None,
             payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
         )
 

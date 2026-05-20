@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from agent_factory.tooling.builtins.network.specs import get_network_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
+from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
 from agent_factory.tooling.spec import ToolSpec
 
 
@@ -17,6 +18,7 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "bash",
     "bash_status",
     "bash_stop",
+    "scheduler",
 }
 
 
@@ -25,6 +27,7 @@ def get_builtin_tool_specs() -> list[ToolSpec]:
         *get_filesystem_tool_specs(),
         *get_process_tool_specs(),
         *get_network_tool_specs(),
+        *get_scheduler_tool_specs(),
     ]
     return [tool for tool in catalog if tool.id in IMPLEMENTED_BUILTIN_TOOL_IDS]
 

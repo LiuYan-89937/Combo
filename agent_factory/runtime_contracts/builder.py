@@ -39,12 +39,27 @@ class RuntimeBuildPlanner:
             resources=_resource_values(package.resources),
             sandbox_contract=package.sandbox_contract,
         )
-        contracts = [self.registry.parse(payload) for payload in package.contracts.values()]
+        contracts = sorted(
+            [self.registry.parse(payload) for payload in package.contracts.values()],
+            key=_contract_build_priority,
+        )
         contributions = []
+        build_resources = dict(context.resources)
         for contract in contracts:
             if not bool(getattr(contract, "enabled", True)):
                 continue
-            contributions.append(self.registry.builder_for(contract).build(contract, context))
+            contract_context = RuntimeBuildContext(
+                package_root=context.package_root,
+                package=context.package,
+                resources=build_resources,
+                sandbox_contract=context.sandbox_contract,
+            )
+            contribution = self.registry.builder_for(contract).build(contract, contract_context)
+            for key, value in contribution.resources.items():
+                if key in build_resources and build_resources[key] != value:
+                    raise ValueError(f"conflicting runtime build resource: {key}")
+                build_resources[key] = value
+            contributions.append(contribution)
         result = RuntimeContributionMerger(base_services=base_services).merge(contributions)
         result.contracts = {str(getattr(contract, "type")): _contract_dump(contract) for contract in contracts}
         return result
@@ -59,3 +74,19 @@ def _resource_values(payload: dict[str, object]) -> dict[str, object]:
 
 def _contract_dump(contract: BaseModel) -> dict[str, object]:
     return contract.model_dump(mode="json")
+
+
+def _contract_build_priority(contract: BaseModel) -> tuple[int, str]:
+    contract_type = str(getattr(contract, "type"))
+    priority = {
+        "session": 10,
+        "resources": 20,
+        "scheduler": 30,
+        "tools": 40,
+        "render": 50,
+        "memory": 60,
+        "model": 70,
+        "sandbox": 80,
+        "dependencies": 90,
+    }
+    return (priority.get(contract_type, 100), contract_type)

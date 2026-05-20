@@ -176,10 +176,13 @@ def _agent_package_manifest() -> dict:
         "sandbox_contract_path": "sandbox_contract.json",
         "render_manifest_path": "render_manifest.json",
         "contracts": {
+            "dependencies": "contracts/dependencies.json",
+            "model": "contracts/model.json",
             "memory": "contracts/memory.json",
             "render": "contracts/render.json",
             "resources": "contracts/resources.json",
             "sandbox": "contracts/sandbox.json",
+            "scheduler": "contracts/scheduler.json",
             "session": "contracts/session.json",
             "tools": "contracts/tools.json",
         },
@@ -246,10 +249,13 @@ def _materialization_plan() -> dict:
             {"path": "bindings/services.json", "file_type": "json", "source_kind": "binding", "source_id": "services", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.services", "required": True},
             {"path": "bindings/node_bindings.json", "file_type": "json", "source_kind": "binding", "source_id": "node_bindings", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.node_bindings", "required": True},
             {"path": "bindings/hooks.json", "file_type": "json", "source_kind": "binding", "source_id": "hooks", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.hooks", "required": True},
+            {"path": "contracts/dependencies.json", "file_type": "json", "source_kind": "contract", "source_id": "dependencies", "generation_mode": "system_generated", "contract_source": "runtime_contract:dependencies", "required": True},
+            {"path": "contracts/model.json", "file_type": "json", "source_kind": "contract", "source_id": "model", "generation_mode": "system_generated", "contract_source": "runtime_contract:model", "required": True},
             {"path": "contracts/memory.json", "file_type": "json", "source_kind": "contract", "source_id": "memory", "generation_mode": "system_generated", "contract_source": "runtime_contract:memory", "required": True},
             {"path": "contracts/render.json", "file_type": "json", "source_kind": "contract", "source_id": "render", "generation_mode": "system_generated", "contract_source": "runtime_contract:render", "required": True},
             {"path": "contracts/resources.json", "file_type": "json", "source_kind": "contract", "source_id": "resources", "generation_mode": "system_generated", "contract_source": "runtime_contract:resources", "required": True},
             {"path": "contracts/sandbox.json", "file_type": "json", "source_kind": "contract", "source_id": "sandbox", "generation_mode": "system_generated", "contract_source": "runtime_contract:sandbox", "required": True},
+            {"path": "contracts/scheduler.json", "file_type": "json", "source_kind": "contract", "source_id": "scheduler", "generation_mode": "system_generated", "contract_source": "runtime_contract:scheduler", "required": True},
             {"path": "contracts/session.json", "file_type": "json", "source_kind": "contract", "source_id": "session", "generation_mode": "system_generated", "contract_source": "runtime_contract:session", "required": True},
             {"path": "contracts/tools.json", "file_type": "json", "source_kind": "contract", "source_id": "tools", "generation_mode": "system_generated", "contract_source": "runtime_contract:tools", "required": True},
             {"path": "prompts/prompt.ledger.answer.md", "file_type": "markdown", "source_kind": "prompt", "source_id": "prompt.ledger.answer", "generation_mode": "system_generated", "contract_source": "binding:answer_prompt", "required": True},
@@ -345,6 +351,8 @@ def _assembly_spec() -> dict:
 
 def _contracts() -> dict:
     return {
+        "dependencies": {"type": "dependencies", "version": "dependencies_contract.v0", "enabled": True, "config": {}},
+        "model": {"type": "model", "version": "model_contract.v0", "enabled": True, "config": {}},
         "memory": {
             "type": "memory",
             "version": "memory_contract.v0",
@@ -354,6 +362,7 @@ def _contracts() -> dict:
         "render": {"type": "render", "version": "render_contract.v0", "enabled": True, "config": {"manifest_path": "render_manifest.json"}},
         "resources": {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {"resources_path": "resources.json"}},
         "sandbox": {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {"sandbox_contract_path": "sandbox_contract.json"}},
+        "scheduler": {"type": "scheduler", "version": "scheduler_contract.v0", "enabled": True, "config": {"store_path": ".agent_runtime/scheduler/agent.sqlite"}},
         "session": {
             "type": "session",
             "version": "session_contract.v0",

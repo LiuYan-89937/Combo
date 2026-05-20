@@ -11,7 +11,7 @@
 | 工具系统 | 已系统化搭建，是当前最成熟的一类。 |
 | 记忆系统 | 已形成 LangGraph 原生规范：会话内 messages/checkpointer，跨会话 BaseStore。 |
 | 知识系统 | 有 RuntimeKernel 实现迹象，但未形成统一规范。 |
-| 定时任务系统 | 暂未看到项目内正式实现。 |
+| 定时任务系统 | 已接入统一 SchedulerSystem：SQLite 事实源、APScheduler 触发、ToolExecutionGateway 执行。 |
 | Trace 系统 | 目前只有事件流、debug patch、render 事件等分散能力，尚未形成独立 trace 模块。 |
 | 上下文管理系统 | RuntimeKernel 有 ContextEngine 迹象，Factory prompt context 也已存在，但尚未形成统一上下文工程。 |
 
@@ -113,6 +113,9 @@ AgentPackageManifest
 | `render` | `contracts/render.json` | 加载 `render_manifest.json`，并通过 RuntimeContribution 注入 `observability.render_node` 系统 wrapper。 |
 | `resources` | `contracts/resources.json` | 声明运行时资源来源，工具系统按 sandbox 视角读取资源。 |
 | `sandbox` | `contracts/sandbox.json` | 供第九阶段 harness 使用，不在普通运行时隐式执行。 |
+| `dependencies` | `contracts/dependencies.json` | 声明 sandbox init 需要检查或安装的 Python/system 依赖。 |
+| `model` | `contracts/model.json` | 声明模型服务从 Factory 运行环境注入，避免写入业务资源。 |
+| `scheduler` | `contracts/scheduler.json` | 启用 SQLite + APScheduler 定时任务运行时、后台 worker 和内置 scheduler 工具。 |
 
 ---
 
@@ -796,40 +799,112 @@ Factory 生产链路迹象：
 
 ## 5. 定时任务系统
 
-定时任务系统当前基本为空。
+定时任务系统已经作为基础能力接入，不做独立 cron 补丁。
 
-### 5.1 当前实现迹象
+### 5.1 当前架构
 
-项目内目前没有发现正式 scheduler、cron、timer、automation 类型的运行系统。
+当前实现统一放在：
 
-可作为外围参考的只有：
+```text
+agent_factory/scheduler_system/
+  schema.py
+  config.py
+  store.py
+  triggers.py
+  runtime.py
+  worker.py
+  executor.py
+  tools.py
+  events.py
+  reports.py
+```
 
-- RuntimeKernel 已有 session、checkpoint、resume 能力。
-- Factory bridge 有 session 和 rerun 能力。
-- Codex App 自身有 automation 能力，但这不是 FastAgentFactory 项目内系统，不能算项目实现。
+核心链路：
 
-### 5.2 当前问题
+```text
+contracts/scheduler.json
+  -> SchedulerContractBuilder
+  -> SchedulerRuntime + SQLiteSchedulerStore
+  -> SchedulerWorker + APScheduler trigger engine
+  -> RuntimeKernel graph_run 或 ToolExecutionGateway script/tool run
+  -> scheduler_* 标准事件
+  -> scheduler execution report
+```
 
-定时任务系统尚未定义：
+SQLite 是任务和执行记录事实源，APScheduler 只负责时间触发，不承担持久事实源。
 
-- trigger 形态。
-- 执行目标。
-- 与 Agent graph / node 的关系。
-- 与 checkpoint / session 的关系。
-- 失败重试与错过执行策略。
-- CLI/WebUI 如何展示计划任务。
-- AgentPackage 如何声明定时任务。
+### 5.2 Contract
 
-### 5.3 后续处理原则
+AgentPackage 通过 `contracts/scheduler.json` 声明：
 
-暂时留空，不做伪规范。
+```json
+{
+  "type": "scheduler",
+  "version": "scheduler_contract.v0",
+  "enabled": true,
+  "config": {
+    "store_backend": "sqlite",
+    "store_path": "/runtime/scheduler/scheduler.sqlite",
+    "timezone": "Asia/Shanghai",
+    "default_concurrency_policy": "skip",
+    "default_timeout_seconds": 900,
+    "unattended_policy": "deny_if_approval_required"
+  }
+}
+```
 
-等工具、记忆、知识三类系统稳定后，再讨论定时任务是否应该是：
+`enabled=false` 时 contract 合法，但不产生 scheduler runtime、worker 或 scheduler tool。
 
-- RuntimeKernel 内部 scheduler。
-- AgentInstance 外部调度器。
-- AgentPackage 中的声明式 trigger。
-- 或者三者组合。
+### 5.3 Job 语义
+
+任务类型固定为：
+
+| target_type | 执行方式 |
+| --- | --- |
+| `graph_run` | 进入当前 owner 的 RuntimeKernel / Factory graph 运行入口。 |
+| `script_run` | 通过统一 `bash` ToolSpec 和 `ToolExecutionGateway` 执行，不允许裸 `subprocess`。 |
+| `tool_call` | 通过统一工具注册表和 `ToolExecutionGateway` 执行目标工具。 |
+
+调度类型固定为 `cron / interval / date`，并发策略固定为 `skip / queue / replace`。第一版默认策略是：
+
+```text
+timezone = Asia/Shanghai
+concurrency_policy = skip
+max_concurrent_runs = 1
+timeout_seconds = 900
+unattended_policy = deny_if_approval_required
+```
+
+无人值守执行时，如果目标工具按风险策略需要人工审批，默认直接失败并写入 scheduler report，不阻塞等待用户。
+
+### 5.4 Factory 与生成 Agent
+
+Factory 与生成 Agent 共用 schema、store、worker、executor、tool 和事件规范，但数据隔离。
+
+| 运行体 | 默认 store | namespace |
+| --- | --- | --- |
+| Factory | `.agentfactory/scheduler/factory.sqlite` | `("scheduler", "factory", <project_id>)` |
+| 生成 Agent | `/runtime/scheduler/scheduler.sqlite` | `("scheduler", "agent", <agent_id>)` |
+
+Factory chat/free/create-agent 模式通过同一个内置 `scheduler` 工具管理任务。生成 Agent 在 RuntimeContract 编译时得到 `services.scheduler_runtime`、后台 worker，并通过内置 `scheduler` 工具管理自己的任务。
+
+### 5.5 事件与展示
+
+定时任务生命周期使用标准事件：
+
+```text
+scheduler_job_created
+scheduler_job_updated
+scheduler_job_deleted
+scheduler_run_scheduled
+scheduler_run_started
+scheduler_run_completed
+scheduler_run_failed
+scheduler_run_skipped
+scheduler_run_cancelled
+```
+
+CLI/WebUI 只消费事件摘要，例如 `job_id / run_id / target_type / status / duration_ms / error_summary / report_path`。完整 stdout、stderr、证据和错误细节写入 scheduler execution report。
 
 ---
 
@@ -960,6 +1035,9 @@ agent_package/
     render.json
     resources.json
     sandbox.json
+    dependencies.json
+    model.json
+    scheduler.json
     memory.json        # 可选
 
   tools/
@@ -979,7 +1057,7 @@ agent_package/
 - `tools/` 已经有较明确方向。
 - `retrieval/`、`strategies/`、`policies/` 当前更多是 Assembly binding 的物化结果，不等于完整 memory/knowledge 系统。
 - `extensions/*.example.json` 只作为实例扩展配置示例，不表示 AgentPackage 自带用户扩展。
-- memory、knowledge、schedules 等能力统一优先通过 `contracts/*.json` 进入编译层；是否还需要运行期数据目录，等对应系统规范明确后再定。
+- memory、knowledge、scheduler 等能力统一优先通过 `contracts/*.json` 进入编译层；运行期数据目录必须由对应 contract 的 runtime 规则决定。
 
 ---
 
@@ -992,7 +1070,7 @@ agent_package/
 | 工具系统 | 已完成系统底座，且已接入 builtin / package / MCP / Skill。 |
 | 记忆系统 | 已确定会话内/跨会话两类记忆，以及 read/write 四个标准端口。 |
 | 知识系统 | 有 RuntimeKernel 内部实现迹象，需要后续清理成正式系统。 |
-| 定时任务系统 | 暂无正式实现，先留空。 |
+| 定时任务系统 | 已接入 SchedulerSystem，Factory 与生成 Agent 共用 contract/store/worker/tool/event 规范。 |
 | Trace 系统 | 当前只有事件流和 render/debug 线索，后续需要独立模块化。 |
 | 上下文管理系统 | 当前有 prompt context 与 Runtime ContextEngine 线索，后续需要统一上下文工程。 |
 
@@ -1009,7 +1087,7 @@ agent_package/
   -> 清理现有 KnowledgeEngine / knowledge_retrieve
 
 定时任务系统
-  -> 暂缓，等前三类稳定后再设计
+  -> 继续完善报表查询、错过执行策略和 CLI 操作体验
 
 Trace 系统
   -> 从现有事件流、render wrapper、debug patch 中抽出统一 trace 规范

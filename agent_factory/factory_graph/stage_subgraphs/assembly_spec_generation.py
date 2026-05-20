@@ -37,6 +37,7 @@ from agent_factory.runtime_contracts.builtins import (
     default_render_contract,
     default_resources_contract,
     default_sandbox_contract,
+    default_scheduler_contract,
     default_session_contract,
     default_tools_contract,
 )
@@ -577,6 +578,7 @@ def _package_contracts(spec: AgentAssemblySpec) -> dict[str, dict[str, object]]:
         "render": default_render_contract().model_dump(mode="json"),
         "resources": default_resources_contract().model_dump(mode="json"),
         "sandbox": default_sandbox_contract().model_dump(mode="json"),
+        "scheduler": default_scheduler_contract().model_dump(mode="json"),
         "session": default_session_contract().model_dump(mode="json"),
         "tools": default_tools_contract().model_dump(mode="json"),
     }
@@ -640,6 +642,7 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "contracts/render.json",
         "contracts/resources.json",
         "contracts/sandbox.json",
+        "contracts/scheduler.json",
         "contracts/session.json",
         "contracts/tools.json",
     }

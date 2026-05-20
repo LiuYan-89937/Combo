@@ -128,4 +128,6 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "observability_manager": services.observability_manager,
         "checkpointer": None,
         "harness_bridge": services.harness_bridge,
+        "scheduler_store": None,
+        "scheduler_runtime": None,
     }

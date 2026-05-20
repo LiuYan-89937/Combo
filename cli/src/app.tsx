@@ -16,6 +16,7 @@ import {MessagesPanel} from './views/MessagesPanel.js';
 import {AgentPackagePanel, AgentSessionPanel} from './views/AgentPackagePanel.js';
 import {SessionPanel} from './views/SessionPanel.js';
 import {ShellLayout} from './views/ShellLayout.js';
+import {SchedulerPanel} from './views/SchedulerPanel.js';
 import {ToolEventsPanel} from './views/ToolEventsPanel.js';
 
 export function App() {
@@ -209,6 +210,7 @@ export function App() {
 					onSelect={sessionId => store.dispatch({ui_type: 'select_agent_session', sessionId})}
 				/>
 				<CreateAgentView />
+				<SchedulerPanel />
 				<ToolEventsPanel />
 				<MessagesPanel />
 				<InterruptChoicePanel onSubmit={resumeInterrupt} />

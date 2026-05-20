@@ -7,6 +7,7 @@ from agent_factory.runtime_contracts.builtins.builders import (
     RenderContractBuilder,
     ResourcesContractBuilder,
     SandboxContractBuilder,
+    SchedulerContractBuilder,
     SessionContractBuilder,
     ToolsContractBuilder,
 )
@@ -17,6 +18,7 @@ from agent_factory.runtime_contracts.builtins.defaults import (
     default_render_contract,
     default_resources_contract,
     default_sandbox_contract,
+    default_scheduler_contract,
     default_session_contract,
     default_tools_contract,
 )
@@ -28,6 +30,7 @@ from agent_factory.runtime_contracts.schema import (
     RenderContract,
     ResourcesContract,
     SandboxRuntimeContract,
+    SchedulerContract,
     SessionContract,
     ToolsContract,
 )
@@ -78,6 +81,12 @@ def default_runtime_contract_registry() -> RuntimeContractRegistry:
         builder=SandboxContractBuilder(),
     )
     registry.register(
+        contract_type="scheduler",
+        version="scheduler_contract.v0",
+        model=SchedulerContract,
+        builder=SchedulerContractBuilder(),
+    )
+    registry.register(
         contract_type="dependencies",
         version="dependencies_contract.v0",
         model=DependenciesContract,
@@ -94,6 +103,7 @@ __all__ = [
     "default_resources_contract",
     "default_runtime_contract_registry",
     "default_sandbox_contract",
+    "default_scheduler_contract",
     "default_session_contract",
     "default_tools_contract",
 ]

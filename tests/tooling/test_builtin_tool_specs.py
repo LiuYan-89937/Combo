@@ -18,9 +18,10 @@ EXPECTED_TOOL_IDS = [
     "bash",
     "bash_status",
     "bash_stop",
+    "scheduler",
 ]
 
-PROTECTED_TOOL_IDS = ["write", "edit", "multi_edit", "bash", "bash_stop"]
+PROTECTED_TOOL_IDS = ["write", "edit", "multi_edit", "bash", "bash_stop", "scheduler"]
 
 
 class BuiltinToolSpecTest(unittest.TestCase):
@@ -52,6 +53,8 @@ class BuiltinToolSpecTest(unittest.TestCase):
 
         for tool_id in ["bash", "bash_status", "bash_stop"]:
             self.assertEqual(resources[tool_id], {"process_runtime": "process_runtime"})
+
+        self.assertEqual(resources["scheduler"], {"scheduler_runtime": "scheduler_runtime"})
 
 
 if __name__ == "__main__":

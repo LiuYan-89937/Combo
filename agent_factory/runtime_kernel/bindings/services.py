@@ -20,6 +20,8 @@ class RuntimeServices(BaseModel):
     observability_manager: object | None = None
     checkpointer: object | None = None
     harness_bridge: object | None = None
+    scheduler_store: object | None = None
+    scheduler_runtime: object | None = None
 
     def get_required(self, name: str) -> Any:
         value = getattr(self, name, None)

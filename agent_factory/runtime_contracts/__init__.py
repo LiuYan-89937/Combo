@@ -18,6 +18,7 @@ from agent_factory.runtime_contracts.schema import (
     ResourcesContract,
     RuntimeContractEnvelope,
     SandboxRuntimeContract,
+    SchedulerContract,
     SessionContract,
     ToolsContract,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "RuntimeContributionMerger",
     "RuntimeDiagnostic",
     "SandboxRuntimeContract",
+    "SchedulerContract",
     "SessionContract",
     "ToolsContract",
 ]

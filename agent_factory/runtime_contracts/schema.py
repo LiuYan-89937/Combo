@@ -6,9 +6,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
+from agent_factory.scheduler_system.schema import SchedulerContractConfig
 
 
-ContractType = Literal["session", "tools", "memory", "render", "resources", "sandbox", "dependencies", "model"]
+ContractType = Literal["session", "tools", "memory", "render", "resources", "sandbox", "dependencies", "model", "scheduler"]
 ContractVersion = Literal[
     "session_contract.v0",
     "tools_contract.v0",
@@ -18,8 +19,11 @@ ContractVersion = Literal[
     "sandbox_contract.v0",
     "dependencies_contract.v0",
     "model_contract.v0",
+    "scheduler_contract.v0",
 ]
-REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset({"dependencies", "model", "render", "resources", "sandbox", "session", "tools"})
+REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
+    {"dependencies", "model", "render", "resources", "sandbox", "scheduler", "session", "tools"}
+)
 
 
 class ContractValidationError(ValueError):
@@ -259,6 +263,15 @@ class DependenciesContract(BaseModel):
     config: DependenciesContractConfig = Field(default_factory=DependenciesContractConfig)
 
 
+class SchedulerContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["scheduler"] = "scheduler"
+    version: Literal["scheduler_contract.v0"] = "scheduler_contract.v0"
+    enabled: bool = True
+    config: SchedulerContractConfig = Field(default_factory=SchedulerContractConfig)
+
+
 RuntimeContract = (
     SessionContract
     | ToolsContract
@@ -268,6 +281,7 @@ RuntimeContract = (
     | SandboxRuntimeContract
     | DependenciesContract
     | ModelContract
+    | SchedulerContract
 )
 
 

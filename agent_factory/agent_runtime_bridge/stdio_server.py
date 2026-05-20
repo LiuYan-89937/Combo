@@ -13,6 +13,8 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
+from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
+from agent_factory.scheduler_system.events import SchedulerEventPayload
 
 
 PACKAGE_ROOT = Path("/package")
@@ -47,6 +49,7 @@ class BridgeRuntimeState:
             producer_type="agent_runtime",
         )
         if command_type == "shutdown":
+            self.shutdown()
             return 0
         normalizer.emit_run_started({"command": command_type})
         if command_type == "list_sessions":
@@ -138,6 +141,7 @@ class BridgeRuntimeState:
         compiler = AgentAssemblyCompiler(facade=facade)
         compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
         self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
+        _configure_scheduler_runtime(package=package, compiled=compiled, facade=facade)
         normalizer.runtime_event(
             "node_completed",
             node_id="package_compile",
@@ -149,6 +153,15 @@ class BridgeRuntimeState:
 
     def _load_package(self) -> LoadedAgentPackage:
         return _load_package()
+
+    def shutdown(self) -> None:
+        runtime = self.compiled_runtime
+        if runtime is None:
+            return
+        for worker in runtime.compiled.runtime_build.background_workers:
+            shutdown = getattr(worker, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
 
 
 def main() -> int:
@@ -166,6 +179,7 @@ def main() -> int:
             exit_code = 1
             continue
         if str(command.get("type") or "") == "shutdown":
+            state.shutdown()
             break
         try:
             result = state.handle(command)
@@ -184,6 +198,118 @@ def main() -> int:
             )
             exit_code = 1
     return exit_code
+
+
+def _configure_scheduler_runtime(*, package: LoadedAgentPackage, compiled: Any, facade: RuntimeKernelFacade) -> None:
+    scheduler_runtime = getattr(compiled.compiled_app.services, "scheduler_runtime", None)
+    if scheduler_runtime is None:
+        return
+    tool_registry = getattr(compiled.compiled_app.services, "tool_registry", None)
+    scheduler_runtime.event_sink = _scheduler_event_sink
+    scheduler_runtime.executor = SchedulerExecutor(
+        graph_runner=_scheduled_graph_runner(package=package, compiled=compiled, facade=facade),
+        tool_runner=runtime_tool_runner(tool_registry) if tool_registry is not None else None,
+    )
+    for worker in compiled.runtime_build.background_workers:
+        if getattr(worker, "runtime", None) is scheduler_runtime:
+            try:
+                worker.start()
+            except Exception as exc:
+                _scheduler_event_sink(
+                    SchedulerEventPayload(
+                        event_type="scheduler_run_failed",
+                        owner_type="agent",
+                        owner_id=package.assembly_spec.agent.id,
+                        status="failed",
+                        error_summary=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+
+
+def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facade: RuntimeKernelFacade):
+    def run(job, run_record) -> dict[str, Any]:
+        payload = dict(job.target.payload)
+        message = str(payload.get("message") or "").strip()
+        session_config = dict(compiled.runtime_config["session_config"])
+        thread_policy = str(payload.get("thread_policy") or "new_thread_per_run")
+        if thread_policy == "fixed_thread":
+            session_config["session_id"] = str(payload.get("fixed_thread_id") or "")
+        normalizer = RuntimeEventNormalizer(
+            emit=_write_event,
+            request_id=None,
+            session_id=None,
+            mode="agent_package",
+            graph_id="agent_package_scheduler",
+            producer_type="agent_runtime",
+        )
+        normalizer.emit_run_started(
+            {
+                "command": "scheduler_graph_run",
+                "job_id": job.job_id,
+                "scheduler_run_id": run_record.run_id,
+                "package_id": package.package_root.name,
+                "agent_id": package.assembly_spec.agent.id,
+            }
+        )
+        run_context = facade.prepare_run_context(
+            compiled.compiled_app,
+            user_input=message,
+            user_config=compiled.runtime_config["user_config"],
+            agent_config=compiled.runtime_config["agent_config"],
+            session_config=session_config,
+        )
+        normalizer.session_id = run_context.session_id
+        final_state = None
+        interrupted = False
+        for stream_mode, chunk in facade.instance.controller.stream(
+            compiled.compiled_app,
+            run_context.state,
+            thread_id=run_context.thread_id,
+        ):
+            if _handle_stream_item(normalizer, stream_mode, chunk):
+                interrupted = True
+                break
+            if stream_mode == "runtime_final":
+                final_state = chunk
+        if interrupted:
+            normalizer.emit_run_failed(RuntimeError("scheduled graph run requires interrupt handling"))
+            return {"status": "failed", "error": "scheduled graph run requires interrupt handling"}
+        if final_state is None:
+            normalizer.emit_run_failed(RuntimeError("scheduled graph run did not produce a final state"))
+            return {"status": "failed", "error": "scheduled graph run did not produce a final state"}
+        agent_session = run_context.session_manager.touch_turn(
+            run_context.session_id,
+            first_user_input=run_context.first_user_input,
+        )
+        normalizer.complete_open_model_streams(reason="run_completed")
+        normalizer.emit_run_completed(
+            {
+                "status": final_state.execution.finish_status,
+                "command": "scheduler_graph_run",
+                "package_id": package.package_root.name,
+                "agent_id": package.assembly_spec.agent.id,
+                "agent_session": agent_session.model_dump(mode="json"),
+            }
+        )
+        return {
+            "status": final_state.execution.finish_status or "completed",
+            "final_answer": final_state.conversation.final_answer,
+            "output_summary": final_state.conversation.final_answer,
+        }
+
+    return run
+
+
+def _scheduler_event_sink(payload: SchedulerEventPayload) -> None:
+    _write_event(
+        event(
+            payload.event_type,
+            mode="agent_package",
+            graph_id="agent_package_scheduler",
+            producer_type="agent_runtime",
+            payload={key: value for key, value in payload.model_dump(mode="json").items() if key != "event_type"},
+        )
+    )
 
 
 def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], runtime: CompiledRuntime) -> int:

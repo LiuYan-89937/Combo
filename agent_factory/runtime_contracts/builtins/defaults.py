@@ -10,6 +10,7 @@ from agent_factory.runtime_contracts.schema import (
     RenderContract,
     ResourcesContract,
     SandboxRuntimeContract,
+    SchedulerContract,
     SessionContract,
     SessionContractConfig,
     ToolsContract,
@@ -60,3 +61,7 @@ def default_sandbox_contract() -> SandboxRuntimeContract:
 
 def default_dependencies_contract() -> DependenciesContract:
     return DependenciesContract()
+
+
+def default_scheduler_contract() -> SchedulerContract:
+    return SchedulerContract()

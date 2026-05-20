@@ -17,9 +17,11 @@ from agent_factory.runtime_contracts.schema import (
     RenderContract,
     ResourcesContract,
     SandboxRuntimeContract,
+    SchedulerContract,
     SessionContract,
     ToolsContract,
 )
+from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
 from agent_factory.runtime_kernel.wrappers.system_memory import MEMORY_RETRIEVE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYSTEM_WRAPPER_ID
@@ -87,6 +89,9 @@ class ToolsContractBuilder:
                     },
                 )
             )
+            if "scheduler_runtime" not in context.resources:
+                builtin_result.tool_specs = [spec for spec in builtin_result.tool_specs if spec.id != "scheduler"]
+                builtin_result.system_tool_ids = [tool_id for tool_id in builtin_result.system_tool_ids if tool_id != "scheduler"]
             specs.extend(builtin_result.tool_specs)
             system_tool_ids.update(builtin_result.system_tool_ids)
             runtime_resources.update(builtin_result.runtime_resources)
@@ -222,6 +227,37 @@ class SandboxContractBuilder:
 
     def build(self, contract: SandboxRuntimeContract, context: RuntimeBuildContext) -> RuntimeContribution:
         return RuntimeContribution(sandbox_contract=context.sandbox_contract)
+
+
+class SchedulerContractBuilder:
+    contract_type = "scheduler"
+    contract_version = "scheduler_contract.v0"
+
+    def build(self, contract: SchedulerContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        config = contract.config
+        owner_id = context.package.assembly_spec.agent.id
+        store = SQLiteSchedulerStore(config.store_path)
+        runtime = SchedulerRuntime(
+            config=config,
+            owner_type="agent",
+            owner_id=owner_id,
+            store=store,
+            executor=SchedulerExecutor(),
+        )
+        worker = SchedulerWorker(runtime)
+        return RuntimeContribution(
+            services={"scheduler_store": store, "scheduler_runtime": runtime},
+            resources={"scheduler_runtime": runtime},
+            background_workers=[worker],
+            diagnostics=[
+                RuntimeDiagnostic(
+                    where="scheduler.runtime",
+                    level="info",
+                    message="scheduler runtime configured",
+                    details={"store_path": config.store_path, "owner_id": owner_id},
+                )
+            ],
+        )
 
 
 class DependenciesContractBuilder:

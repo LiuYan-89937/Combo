@@ -29,7 +29,16 @@ from agent_factory.memory_system.config import memory_write_interval_turns_from_
 from agent_factory.memory_system.namespace import factory_memory_namespace
 from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.memory_system.segment import build_conversation_segment
+from agent_factory.scheduler_system import (
+    SchedulerExecutor,
+    SchedulerWorker,
+    deny_if_unattended_approval_required,
+    default_factory_scheduler_runtime,
+    scheduler_enabled_from_env,
+)
+from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.tooling import get_factory_base_tool_ids
+from agent_factory.tooling import get_factory_tools
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -70,6 +79,7 @@ class FactoryRuntimeAdapter:
     pending_run: PendingRun | None = None
     pending_agent_package_run: PendingAgentPackageRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
+    scheduler_worker: SchedulerWorker | None = None
 
     def __post_init__(self) -> None:
         load_agentfactory_dotenv()
@@ -80,12 +90,16 @@ class FactoryRuntimeAdapter:
             self.checkpointer = self.checkpointer_handle.saver
         if self.agent_package_runtime is None:
             self.agent_package_runtime = AgentPackageRuntimeManager()
+        if scheduler_enabled_from_env():
+            self._start_factory_scheduler()
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
         try:
             if command.type == "shutdown":
                 if self.agent_package_runtime is not None:
                     self.agent_package_runtime.close_all()
+                if self.scheduler_worker is not None:
+                    self.scheduler_worker.shutdown()
                 return False
             if command.type == "start_session":
                 self.start_session(command)
@@ -697,6 +711,97 @@ class FactoryRuntimeAdapter:
             "persistent": self._use_checkpoint_memory(),
             "path": None,
         }
+
+    def _start_factory_scheduler(self) -> None:
+        runtime = default_factory_scheduler_runtime(event_sink=self._emit_scheduler_event)
+        runtime.executor = SchedulerExecutor(
+            graph_runner=self._scheduler_graph_runner,
+            tool_runner=self._scheduler_tool_runner,
+        )
+        worker = SchedulerWorker(runtime)
+        try:
+            worker.start()
+            self.scheduler_worker = worker
+        except Exception as exc:
+            self._emit_scheduler_event(
+                SchedulerEventPayload(
+                    event_type="scheduler_run_failed",
+                    owner_type="factory",
+                    owner_id="default",
+                    status="failed",
+                    error_summary=f"{type(exc).__name__}: {exc}",
+                )
+            )
+
+    def _emit_scheduler_event(self, payload: SchedulerEventPayload) -> None:
+        self.emit(
+            event(
+                payload.event_type,
+                session_id=self._session_id(),
+                mode=self.mode,
+                graph_id="factory_scheduler",
+                producer_type="factory_runtime",
+                severity="error" if payload.event_type.endswith("failed") else None,
+                payload={key: value for key, value in payload.model_dump(mode="json").items() if key != "event_type"},
+            )
+        )
+
+    def _scheduler_tool_runner(self, tool_id: str, arguments: dict[str, Any], job: Any, _run: Any) -> dict[str, Any]:
+        tools = {tool.name: tool for tool in get_factory_tools()}
+        tool = tools.get(tool_id)
+        if tool is None:
+            return {"status": "failed", "error": f"unknown factory tool: {tool_id}"}
+        denial = deny_if_unattended_approval_required(job=job, tool_id=tool_id, model_tool=tool)
+        if denial is not None:
+            return denial
+        result = tool.invoke(arguments)
+        if isinstance(result, dict):
+            return result
+        return {"status": "completed", "value": result}
+
+    def _scheduler_graph_runner(self, job: Any, _run: Any) -> dict[str, Any]:
+        payload = dict(job.target.payload)
+        message = str(payload.get("message") or "").strip()
+        mode = str(payload.get("mode") or "chat")
+        if mode not in {"chat", "create_agent"}:
+            return {"status": "failed", "error": f"unsupported factory scheduler graph mode: {mode}"}
+        self._ensure_session(FactoryFrontendCommand(type="start_session"))
+        new_message = HumanMessage(content=message)
+        if mode == "chat":
+            app = build_factory_chat_graph(enable_interrupts=True, checkpointer=self.checkpointer)
+            initial_state = initial_factory_chat_state([new_message])
+            graph_id = "factory_chat_scheduler"
+        else:
+            app = build_factory_graph(
+                stop_after_stage=self.options.stop_after_stage,
+                enable_interrupts=True,
+                checkpointer=self.checkpointer,
+            )
+            initial_state = initial_factory_graph_state(
+                requirement=message,
+                messages=[new_message],
+                force_manufacture=True,
+                interaction_mode="create_agent",
+            )
+            graph_id = "factory_create_agent_scheduler"
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=None,
+            session_id=self._session_id(),
+            mode=mode,  # type: ignore[arg-type]
+            graph_id=graph_id,
+        )
+        self._stream_run(
+            request_id=None,
+            mode=mode,  # type: ignore[arg-type]
+            app=app,
+            stream_input=initial_state,
+            config={"configurable": {"thread_id": f"factory-scheduler-{job.job_id}"}},
+            initial_final_state=initial_state,
+            normalizer=normalizer,
+            run_started_payload={"scheduler_job_id": job.job_id, "trigger": "scheduler"},
+        )
+        return {"status": "completed", "output_summary": f"factory scheduled {mode} run completed"}
 
 
 def _session_payload(record: Any | None) -> dict[str, Any]:

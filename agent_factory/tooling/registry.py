@@ -16,6 +16,7 @@ from agent_factory.tooling.builtins import (
     get_builtin_tool_specs,
 )
 from agent_factory.tooling.spec import ModelToolView, ToolSpec, model_tool_view
+from agent_factory.scheduler_system import default_factory_scheduler_runtime, scheduler_enabled_from_env
 
 
 class ToolRegistry:
@@ -64,6 +65,11 @@ def get_factory_tools(
         mcp_tool_clients=mcp_tool_clients,
     )
     factory_extension_root = Path(extension_root).expanduser().resolve() if extension_root else default_factory_extension_root()
+    scheduler_resources = (
+        {"scheduler_runtime": default_factory_scheduler_runtime()}
+        if scheduler_enabled_from_env()
+        else {}
+    )
     compiler = ToolCompiler(
         allowed_python_roots=[factory_extension_root],
         mcp_clients=effective_mcp_clients,
@@ -77,6 +83,7 @@ def get_factory_tools(
                 "allow_external": False,
             },
             **runtime_resources,
+            **scheduler_resources,
         }
     )
     return compiler.compile_many(specs)
@@ -111,6 +118,8 @@ def _collect_factory_tool_specs(
     from agent_factory.tooling.factory_extensions import FactoryExtensionManager
 
     specs = get_builtin_tool_specs()
+    if not scheduler_enabled_from_env():
+        specs = [spec for spec in specs if spec.id != "scheduler"]
     effective_mcp_clients: Mapping[str, MCPToolClient] = dict(mcp_tool_clients or {})
     runtime_resources: dict[str, object] = {}
     if include_extensions:

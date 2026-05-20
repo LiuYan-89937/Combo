@@ -29,6 +29,7 @@ FactoryGraph 十阶段生产
 - **Skill 系统**：采用递进式披露，模型先通过内置 `skill` 工具读取 metadata，再按需 load `SKILL.md` 或 resource；脚本执行仍走 `bash` 与审批。
 - **MCP 接入**：Factory 可直接加载 MCP；生成 Agent 通过 `/runtime/extensions` 与 Host MCP Gateway 使用宿主机 MCP server。
 - **记忆系统**：会话内记忆使用 LangGraph `messages + checkpointer + thread_id`；跨会话记忆使用独立 BaseStore/SQLite，支持后台写入与语义召回。
+- **定时任务系统**：Factory 与生成 Agent 共用 Scheduler Contract、SQLite job store、APScheduler trigger engine、ToolExecutionGateway 执行链路和 `scheduler_*` 标准事件。
 - **Runtime Render Wrapper**：Factory 与生成 Agent 共用 `NodeRenderSpec` 和 `runtime_render_event`，节点生命周期由系统 wrapper 发出。
 - **Contract/Builder 编译层**：AgentPackage 运行基础设施统一通过 `contracts/*.json` 和系统 Builder 注入 RuntimeContribution。
 - **子 Agent 普通运行**：`/run-agent-package` 扫描 `.agentfactory/packages`，选择已生产 AgentPackage 后通过 Docker runtime container 执行真实 RuntimeKernel 链路。
@@ -37,7 +38,8 @@ FactoryGraph 十阶段生产
 
 - 第十阶段 `repair_or_finalize` 仍是空阶段。
 - 第六阶段资源与 sandbox 准备已升级，但仍是当前重点精修区域。
-- 知识系统、定时任务系统、Trace 系统、上下文管理系统尚未完成与工具/记忆同等级别的统一规范。
+- 定时任务系统已接入统一 Contract/Builder/ToolExecutionGateway 链路，仍需继续打磨运行体验与报表查询。
+- 知识系统、Trace 系统、上下文管理系统尚未完成与工具/记忆同等级别的统一规范。
 - Web UI 未实现；当前只保证 CLI-first。
 - 当前不要求跑特化业务示例，验证以语法、静态、协议级、非业务单元测试为主。
 

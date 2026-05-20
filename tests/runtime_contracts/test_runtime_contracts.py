@@ -62,6 +62,20 @@ class RuntimeContractsTest(unittest.TestCase):
             self.assertIsNotNone(result.services.memory_store)
             self.assertIsNotNone(result.services.memory_system)
 
+    def test_enabled_scheduler_contract_contributes_scheduler_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_path = _write_package(Path(temp_dir), scheduler_enabled=True)
+            package = AgentPackageLoader().load_path(package_path)
+            result = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+                package,
+                base_services=_base_services(),
+            )
+
+            self.assertIsNotNone(result.services.scheduler_store)
+            self.assertIsNotNone(result.services.scheduler_runtime)
+            self.assertIn("scheduler_runtime", result.resources)
+            self.assertTrue(result.background_workers)
+
     def test_tools_contract_loads_instance_extensions_outside_package_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -99,7 +113,7 @@ class RuntimeContractsTest(unittest.TestCase):
                 base_services=_base_services(),
             )
 
-            expected_system_tools = sorted([*get_builtin_tool_ids(), "skill"])
+            expected_system_tools = sorted([tool_id for tool_id in get_builtin_tool_ids() if tool_id != "scheduler"] + ["skill"])
             self.assertEqual(result.services.tool_registry.list_tool_ids(), expected_system_tools)
             self.assertEqual(result.services.tool_registry.system_tool_ids(), expected_system_tools)
 
@@ -171,6 +185,7 @@ def _write_package(
     memory_enabled: bool = False,
     include_tools_contract: bool = True,
     tools_config: dict | None = None,
+    scheduler_enabled: bool = False,
 ) -> Path:
     _write_json(root / "assembly_spec.json", _assembly_spec())
     _write_json(root / "render_manifest.json", _render_manifest())
@@ -182,6 +197,7 @@ def _write_package(
         "render": "contracts/render.json",
         "resources": "contracts/resources.json",
         "sandbox": "contracts/sandbox.json",
+        "scheduler": "contracts/scheduler.json",
         "session": "contracts/session.json",
     }
     if include_tools_contract:
@@ -190,6 +206,15 @@ def _write_package(
     _write_json(root / "contracts/render.json", {"type": "render", "version": "render_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/resources.json", {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/sandbox.json", {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {}})
+    _write_json(
+        root / "contracts/scheduler.json",
+        {
+            "type": "scheduler",
+            "version": "scheduler_contract.v0",
+            "enabled": scheduler_enabled,
+            "config": {"store_path": str(root / ".agent_runtime" / "scheduler" / "agent.sqlite")},
+        },
+    )
     _write_json(root / "contracts/dependencies.json", {"type": "dependencies", "version": "dependencies_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/model.json", {"type": "model", "version": "model_contract.v0", "enabled": True, "config": {}})
     _write_json(
