@@ -10,8 +10,12 @@ from agent_factory.memory_system.config import should_enqueue_memory_write
 from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.memory_system.segment import build_conversation_segment
 from agent_factory.memory_system.schema import MemoryWriteJob
+from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.runtime_kernel.observability.schema import TraceEvent
 from agent_factory.runtime_kernel.state import RuntimeState
+
+
+LANGGRAPH_TECHNICAL_RECURSION_LIMIT = 1000
 
 
 class ExecutionController:
@@ -54,7 +58,9 @@ class ExecutionController:
                 final_raw = chunk
                 graph_messages = list(chunk.get("messages") or [])
             yield stream_mode, chunk
-        result = self._final_state_from_raw(final_raw)
+        final_raw = _authoritative_raw(compiled_app, final_raw, thread_id=thread_id)
+        graph_messages = list(final_raw.get("messages") or graph_messages)
+        result = self._final_state_from_raw(final_raw, messages=graph_messages)
         memory_event = self._enqueue_memory_write(compiled_app, result, thread_id=thread_id, messages=graph_messages)
         if memory_event is not None:
             yield "custom", memory_event
@@ -82,7 +88,9 @@ class ExecutionController:
                 final_raw = chunk
                 graph_messages = list(chunk.get("messages") or [])
             yield stream_mode, chunk
-        result = self._final_state_from_raw(final_raw)
+        final_raw = _authoritative_raw(compiled_app, final_raw, thread_id=thread_id)
+        graph_messages = list(final_raw.get("messages") or graph_messages)
+        result = self._final_state_from_raw(final_raw, messages=graph_messages)
         memory_event = self._enqueue_memory_write(compiled_app, result, thread_id=thread_id, messages=graph_messages)
         if memory_event is not None:
             yield "custom", memory_event
@@ -117,7 +125,9 @@ class ExecutionController:
             _graph_input(state),
             config=_graph_config(state, thread_id=thread_id),
         )
-        return self._final_state_from_raw(raw), list(raw.get("messages") or [])
+        raw = _authoritative_raw(compiled_app, raw, thread_id=thread_id)
+        messages = list(raw.get("messages") or [])
+        return self._final_state_from_raw(raw, messages=messages), messages
 
     def _stream_graph(
         self,
@@ -133,22 +143,41 @@ class ExecutionController:
             stream_mode=["updates", "values", "messages", "debug", "custom"],
         )
 
-    def _final_state_from_raw(self, raw: dict[str, Any]) -> RuntimeState:
+    def _final_state_from_raw(self, raw: dict[str, Any], *, messages: list[Any] | None = None) -> RuntimeState:
         result = RuntimeState.model_validate(raw.get("runtime") or {})
+        if result.execution.interrupted or result.policy.interrupted:
+            result.execution.finished = True
+            result.execution.finish_status = "interrupted"
+            return result
+        missing_tool_call_ids = incomplete_tool_call_ids(list(messages or raw.get("messages") or []))
+        if missing_tool_call_ids:
+            result.execution.finished = True
+            result.execution.finish_status = "failed"
+            result.execution.last_error = (
+                "Runtime graph ended with incomplete tool call history: "
+                f"missing_tool_call_ids={missing_tool_call_ids}"
+            )
+            result.execution.last_error_location = "runtime.finalize"
+            return result
         if not result.execution.finished:
             result.execution.finished = True
-            result.execution.finish_status = result.execution.finish_status or "completed"
+            result.execution.finish_status = "failed"
+            result.execution.last_error = result.execution.last_error or "Runtime graph ended before a terminal node."
+            result.execution.last_error_location = result.execution.last_error_location or "runtime.finalize"
         return result
 
     def _emit_run_completed(self, compiled_app: Any, state: RuntimeState) -> None:
+        failed = state.execution.finish_status == "failed"
         self._emit(
             compiled_app,
             state,
-            "run_completed",
-            message=state.execution.finish_status or "completed",
+            "run_failed" if failed else "run_completed",
+            message=state.execution.last_error if failed else (state.execution.finish_status or "completed"),
             payload={
                 "finish_status": state.execution.finish_status or "completed",
                 "turn_count": state.execution.turn_count,
+                "error": state.execution.last_error,
+                "where": state.execution.last_error_location,
             },
         )
 
@@ -207,7 +236,7 @@ class ExecutionController:
             source=source,
             messages=messages or _messages_delta(state),
             end_turn=turn_index,
-            max_turns=runtime.config.background.write_interval_turns,
+            max_user_turns=runtime.config.background.write_interval_turns,
         )
         if segment is None:
             return None
@@ -264,8 +293,37 @@ def _graph_input(state: RuntimeState) -> dict[str, Any]:
 
 
 def _graph_config(state: RuntimeState, *, thread_id: str) -> dict[str, Any]:
-    recursion_limit = max(state.execution.max_turns + state.execution.max_subgraph_depth + 8, 25)
     return {
-        "recursion_limit": recursion_limit,
+        "recursion_limit": LANGGRAPH_TECHNICAL_RECURSION_LIMIT,
         "configurable": {"thread_id": thread_id},
     }
+
+
+def _authoritative_raw(compiled_app: Any, raw: dict[str, Any], *, thread_id: str) -> dict[str, Any]:
+    """Merge stream output with the persisted LangGraph checkpoint.
+
+    Stream chunks are transport updates. The checkpointer state is the
+    authoritative protocol state for the messages channel, especially for
+    assistant tool-call/tool-observation pairing.
+    """
+    values = _checkpoint_values(compiled_app, thread_id=thread_id)
+    if not values:
+        return raw
+    merged = dict(raw)
+    checkpoint_messages = values.get("messages")
+    if checkpoint_messages is not None:
+        merged["messages"] = checkpoint_messages
+    if not merged.get("runtime") and values.get("runtime") is not None:
+        merged["runtime"] = values["runtime"]
+    return merged
+
+
+def _checkpoint_values(compiled_app: Any, *, thread_id: str) -> dict[str, Any]:
+    try:
+        snapshot = compiled_app.graph_app.get_state({"configurable": {"thread_id": thread_id}})
+    except Exception:
+        return {}
+    values = getattr(snapshot, "values", {}) or {}
+    if isinstance(values, dict):
+        return dict(values)
+    return {}

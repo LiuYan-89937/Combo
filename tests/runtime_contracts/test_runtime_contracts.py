@@ -63,6 +63,17 @@ class RuntimeContractsTest(unittest.TestCase):
             self.assertIsNotNone(result.services.memory_store)
             self.assertIsNotNone(result.services.memory_system)
 
+    def test_model_contract_contributes_configured_model_role(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_path = _write_package(Path(temp_dir), model_config={"role": "task"})
+            package = AgentPackageLoader().load_path(package_path)
+            result = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+                package,
+                base_services=_base_services(),
+            )
+
+            self.assertEqual(getattr(result.services.model_service, "model_role"), "task")
+
     def test_enabled_scheduler_contract_contributes_scheduler_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             package_path = _write_package(Path(temp_dir), scheduler_enabled=True)
@@ -202,6 +213,7 @@ def _write_package(
     memory_enabled: bool = False,
     include_tools_contract: bool = True,
     tools_config: dict | None = None,
+    model_config: dict | None = None,
     scheduler_enabled: bool = False,
 ) -> Path:
     _write_json(root / "assembly_spec.json", _assembly_spec())
@@ -233,7 +245,7 @@ def _write_package(
         },
     )
     _write_json(root / "contracts/dependencies.json", {"type": "dependencies", "version": "dependencies_contract.v0", "enabled": True, "config": {}})
-    _write_json(root / "contracts/model.json", {"type": "model", "version": "model_contract.v0", "enabled": True, "config": {}})
+    _write_json(root / "contracts/model.json", {"type": "model", "version": "model_contract.v0", "enabled": True, "config": model_config or {}})
     _write_json(
         root / "contracts/session.json",
         {

@@ -11,6 +11,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.runtime import Runtime
 
+from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.tooling.execution_context import tool_call_context
 
 
@@ -217,30 +218,6 @@ def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, lis
         ]
         return message, unresolved
     return None, []
-
-
-def incomplete_tool_call_ids(messages: Sequence[Any]) -> list[str]:
-    missing: list[str] = []
-    pending: list[str] = []
-    for message in messages:
-        if pending and not isinstance(message, ToolMessage):
-            missing.extend(pending)
-            pending = []
-        if isinstance(message, AIMessage):
-            calls = getattr(message, "tool_calls", None) or []
-            pending = [
-                str(call.get("id") or call.get("tool_call_id") or "")
-                for call in calls
-                if isinstance(call, dict) and str(call.get("id") or call.get("tool_call_id") or "")
-            ]
-            continue
-        if isinstance(message, ToolMessage):
-            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
-            if tool_call_id in pending:
-                pending = [item for item in pending if item != tool_call_id]
-    if pending:
-        missing.extend(pending)
-    return missing
 
 
 def _complete_tool_message_set(

@@ -114,7 +114,7 @@ AgentPackageManifest
 | `resources` | `contracts/resources.json` | 声明运行时资源来源，工具系统按 sandbox 视角读取资源。 |
 | `sandbox` | `contracts/sandbox.json` | 供第九阶段 harness 使用，不在普通运行时隐式执行。 |
 | `dependencies` | `contracts/dependencies.json` | 声明 sandbox init 需要检查或安装的 Python/system 依赖。 |
-| `model` | `contracts/model.json` | 声明模型服务从 Factory 运行环境注入，避免写入业务资源。 |
+| `model` | `contracts/model.json` | 声明模型服务从 Factory 运行环境注入，并通过 `role=main/task` 控制生成 Agent 使用主模型或小任务模型，避免写入业务资源。 |
 | `scheduler` | `contracts/scheduler.json` | 启用 SQLite + APScheduler 定时任务运行时、后台 worker 和内置 scheduler 工具。 |
 
 ---

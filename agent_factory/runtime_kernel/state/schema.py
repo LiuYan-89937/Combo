@@ -88,11 +88,10 @@ class ExecutionState(BaseModel):
     subgraph_depth: int = 0
     route_decision: str | None = None
     turn_count: int = 0
-    max_turns: int = 16
     retry_count: int = 0
     max_retries: int = 2
     max_subgraph_depth: int = 4
-    timeout_seconds: int = 60
+    timeout_seconds: int = 0
     interrupted: bool = False
     interrupt_payload: dict[str, Any] = Field(default_factory=dict)
     resume_payload: dict[str, Any] = Field(default_factory=dict)

@@ -12,6 +12,11 @@ from agent_factory.runtime_contracts import LoadedAgentPackage
 
 DEFAULT_RUNTIME_IMAGE = "agentfactory-runtime-python:3.12"
 RUNTIME_IMAGE_BUILD_COMMAND = "docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile ."
+RUNTIME_IMAGE_MIRROR_BUILD_COMMAND = (
+    "docker build -t agentfactory-runtime-python:3.12 "
+    "--build-arg PYTHON_BASE_IMAGE=<python-3.12-slim-mirror> "
+    "-f docker/agent-runtime/Dockerfile ."
+)
 IMAGE_INSPECT_COMMAND_LABEL = "docker image inspect"
 
 MODEL_ENV_ALLOWLIST = (
@@ -23,6 +28,10 @@ MODEL_ENV_ALLOWLIST = (
     "AGENTFACTORY_LLM_MAX_OUTPUT_TOKENS",
     "AGENTFACTORY_LLM_TIMEOUT_SECONDS",
     "AGENTFACTORY_LLM_THINKING",
+    "AGENTFACTORY_TASK_MODEL",
+    "AGENTFACTORY_TASK_TEMPERATURE",
+    "AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS",
+    "AGENTFACTORY_TASK_THINKING",
 )
 
 
@@ -191,12 +200,16 @@ class DockerAgentRuntimeLauncher:
                 where="docker.image_preflight",
                 why="runtime_image_check_timeout",
                 message=f"Docker runtime image preflight timed out: {image}",
-                suggested_action=RUNTIME_IMAGE_BUILD_COMMAND,
+                suggested_action=_runtime_image_build_suggestion(),
             ) from exc
         if result.returncode != 0:
             detail = _docker_error_text(result)
             why = "runtime_image_missing" if _looks_like_missing_image(detail) else "runtime_image_inspect_failed"
-            suggested_action = RUNTIME_IMAGE_BUILD_COMMAND if why == "runtime_image_missing" else "Check Docker context, Docker socket permissions, and Docker Desktop status."
+            suggested_action = (
+                _runtime_image_build_suggestion()
+                if why == "runtime_image_missing"
+                else "Check Docker context, Docker socket permissions, and Docker Desktop status."
+            )
             raise AgentRuntimeLaunchError(
                 where="docker.image_preflight",
                 why=why,
@@ -301,3 +314,7 @@ def _docker_error_text(result: subprocess.CompletedProcess[str]) -> str:
 def _looks_like_missing_image(value: str) -> bool:
     normalized = value.lower()
     return "no such image" in normalized or "no such object" in normalized or "not found" in normalized
+
+
+def _runtime_image_build_suggestion() -> str:
+    return f"{RUNTIME_IMAGE_BUILD_COMMAND} 或 {RUNTIME_IMAGE_MIRROR_BUILD_COMMAND}"

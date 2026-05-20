@@ -28,6 +28,7 @@ from agent_factory.runtime_kernel.patterns.validator import PatternValidator
 from agent_factory.runtime_kernel.state import RuntimeGraphState, RuntimeState, merge_state_patch
 from agent_factory.runtime_kernel.wrappers import DEFAULT_NODE_WRAPPER_REGISTRY, NodeWrapperRegistry
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_SYSTEM_WRAPPER_REGISTRY
+from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, default_node_render_spec, validate_render_manifest
 
 
@@ -198,13 +199,9 @@ def _make_wrapped_runner(
         state = _runtime_state_from_graph(raw_state)
         if state.execution.finished:
             return _runtime_graph_patch(state)
-        if _timed_out(state):
+        if _timed_out(state) and not _must_repair_tool_protocol(node, raw_state):
             _finish_state(state, status="failed", error="Execution timed out before node execution.")
             return _runtime_graph_patch(state)
-        if state.execution.turn_count >= state.execution.max_turns:
-            _finish_state(state, status="failed", error="Execution exceeded max_turns.")
-            return _runtime_graph_patch(state)
-
         started = perf_counter()
         span = services.observability_manager.start_span(
             trace_id=state.observability.trace_id,
@@ -561,7 +558,7 @@ def _resolve_after_node(
     state: RuntimeState,
     services: RuntimeServices,
 ) -> None:
-    if _timed_out(state):
+    if _timed_out(state) and state.execution.route_decision != "model.requests_tool":
         _finish_state(state, status="failed", error="Execution timed out.")
         return
     if state.policy.interrupted or state.execution.interrupted:
@@ -587,9 +584,6 @@ def _resolve_after_node(
         state.execution.finish_status = state.execution.finish_status or (
             "blocked" if state.policy.blocked else "completed"
         )
-        return
-    if state.execution.turn_count >= state.execution.max_turns:
-        _finish_state(state, status="failed", error="Execution exceeded max_turns.")
         return
     route = resolve_route(pattern, current_node=node.id, state=state)
     if route.next_node is None or route.condition is None:
@@ -643,6 +637,10 @@ def _timed_out(state: RuntimeState) -> bool:
         started_at = started_at.replace(tzinfo=timezone.utc)
     elapsed = datetime.now(timezone.utc) - started_at
     return elapsed.total_seconds() > state.execution.timeout_seconds
+
+
+def _must_repair_tool_protocol(node: PatternNodeSpec, raw_state: dict[str, Any]) -> bool:
+    return node.impl == "operational.tool_call" and bool(incomplete_tool_call_ids(raw_state.get("messages") or []))
 
 
 def _emit_state_event(

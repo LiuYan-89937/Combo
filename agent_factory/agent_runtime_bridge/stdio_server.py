@@ -13,10 +13,11 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
+from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
-from agent_factory.tooling.langgraph_node import incomplete_tool_call_ids
+from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 
 
 PACKAGE_ROOT = Path("/package")
@@ -284,6 +285,10 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
         if final_state is None:
             normalizer.emit_run_failed(RuntimeError("scheduled graph run did not produce a final state"))
             return {"status": "failed", "error": "scheduled graph run did not produce a final state"}
+        if not runtime_completed(final_state):
+            error = runtime_error_message(final_state, command="scheduler_graph_run")
+            normalizer.emit_run_failed(RuntimeError(error))
+            return {"status": "failed", "error": error}
         agent_session = run_context.session_manager.touch_turn(
             run_context.session_id,
             first_user_input=run_context.first_user_input,
@@ -362,6 +367,8 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
     if final_state is None:
         normalizer.emit_run_failed(RuntimeError("agent runtime did not produce a final state"))
         return 1
+    if not runtime_completed(final_state):
+        return _emit_failed_runtime_final(normalizer, final_state, command="run_message")
     agent_session = run_context.session_manager.touch_turn(
         run_context.session_id,
         first_user_input=run_context.first_user_input,
@@ -416,6 +423,7 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
     session_config["session_id"] = session_id
     normalizer.session_id = session_id
     normalizer.emit_runtime_resumed(resume_payload if isinstance(resume_payload, dict) else {})
+    final_state = None
     for stream_mode, chunk in facade.stream_resume(
         compiled.compiled_app,
         session_id=session_id,
@@ -424,6 +432,13 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
     ):
         if _handle_stream_item(normalizer, stream_mode, chunk):
             return 0
+        if stream_mode == "runtime_final":
+            final_state = chunk
+    if final_state is None:
+        normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
+        return 1
+    if not runtime_completed(final_state):
+        return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
     normalizer.complete_open_model_streams(reason="run_completed")
     agent_session = facade.prepare_resume_context(
         compiled.compiled_app,
@@ -544,6 +559,12 @@ def _handle_stream_item(normalizer: RuntimeEventNormalizer, stream_mode: str, ch
     elif stream_mode == "updates":
         normalizer.runtime_event("debug_patch", span_id=normalizer.run_span_id, payload={"agent_package_update": json_safe(chunk)})
     return False
+
+
+def _emit_failed_runtime_final(normalizer: RuntimeEventNormalizer, final_state: Any, *, command: str) -> int:
+    normalizer.complete_open_model_streams(reason="run_failed")
+    normalizer.emit_run_failed(RuntimeError(runtime_error_message(final_state, command=command)))
+    return 1
 
 
 def _extract_interrupt_payload(chunk: Any) -> Any | None:

@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.models import get_main_model, get_main_model_settings
+from agent_factory.models import (
+    ChatModelSettings,
+    get_main_model,
+    get_main_model_settings,
+    get_task_model,
+    get_task_model_settings,
+)
 from agent_factory.runtime_kernel.types import ModelInvocationResult
+
+
+ModelRole = Literal["main", "task"]
 
 
 class ModelServiceAdapter(Protocol):
@@ -53,11 +63,14 @@ class ScriptedModelService:
 
 
 class LangChainModelServiceAdapter:
-    """RuntimeKernel model adapter backed by the configured Factory main model.
+    """RuntimeKernel model adapter backed by a configured Factory model role.
 
     This adapter deliberately performs only model invocation. It does not plan
     tools, choose routes, approve actions, or synthesize graph control.
     """
+
+    def __init__(self, *, role: ModelRole = "main") -> None:
+        self.model_role = role
 
     def generate(
         self,
@@ -67,10 +80,9 @@ class LangChainModelServiceAdapter:
         messages: list[Any] | None = None,
         tools: list[BaseTool] | None = None,
     ) -> ModelInvocationResult:
-        model = get_main_model()
-        settings = get_main_model_settings()
+        model, settings = _configured_model_for_role(self.model_role)
         if model is None:
-            raise RuntimeError("main model is not configured for AgentPackage runtime")
+            raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
         bound_model = _bind_tools(model, tools or [])
         response = bound_model.invoke(
             _messages_for_state(
@@ -93,6 +105,14 @@ class LangChainModelServiceAdapter:
                 "tool_count": len(tools or []),
             },
         )
+
+
+def _configured_model_for_role(role: ModelRole) -> tuple[Any, ChatModelSettings]:
+    if role == "main":
+        return get_main_model(), get_main_model_settings()
+    if role == "task":
+        return get_task_model(), get_task_model_settings()
+    raise ValueError(f"unsupported model role: {role}")
 
 
 def _bind_tools(model: Any, tools: list[BaseTool]) -> Any:
@@ -139,23 +159,42 @@ def _tool_protocol_instruction(tools: list[BaseTool]) -> str:
 
 def _tool_calls_from_response(response: Any) -> list[dict[str, Any]]:
     calls = getattr(response, "tool_calls", None) or []
+    if not calls:
+        additional_kwargs = getattr(response, "additional_kwargs", None) or {}
+        if isinstance(additional_kwargs, dict):
+            calls = additional_kwargs.get("tool_calls") or []
     normalized: list[dict[str, Any]] = []
     for index, call in enumerate(calls):
         if not isinstance(call, dict):
             continue
-        name = str(call.get("name") or "")
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = str(call.get("name") or function.get("name") or "")
         if not name:
             continue
         args = call.get("args")
+        if args is None:
+            args = function.get("arguments")
         normalized.append(
             {
                 "name": name,
-                "args": dict(args) if isinstance(args, dict) else {},
+                "args": _tool_call_args(args),
                 "id": str(call.get("id") or f"call_{index}_{name}"),
                 "type": "tool_call",
             }
         )
     return normalized
+
+
+def _tool_call_args(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _cross_session_memory_text(state: Any) -> str:

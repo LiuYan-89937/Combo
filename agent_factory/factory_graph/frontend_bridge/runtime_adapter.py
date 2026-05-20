@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 import uuid
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.types import Command
 
 from agent_factory.env import load_agentfactory_dotenv
@@ -30,6 +30,8 @@ from agent_factory.memory_system.namespace import factory_memory_namespace
 from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.memory_system.segment import build_conversation_segment
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
+from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
+from agent_factory.runtime_protocol.messages import has_complete_tool_call_history
 from agent_factory.scheduler_system import (
     SchedulerExecutor,
     SchedulerRuntime,
@@ -566,6 +568,10 @@ class FactoryRuntimeAdapter:
             return
         if final_state is None:
             raise RuntimeError("agent package runtime did not produce a final state")
+        if not runtime_completed(final_state):
+            normalizer.complete_open_model_streams(reason="run_failed")
+            normalizer.emit_run_failed(RuntimeError(runtime_error_message(final_state, command="agent package runtime")))
+            return
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_run_completed(
             {
@@ -744,7 +750,7 @@ class FactoryRuntimeAdapter:
             source=source,
             messages=final_state.get("messages", []),
             end_turn=turn_index,
-            max_turns=memory_write_interval_turns_from_env(),
+            max_user_turns=memory_write_interval_turns_from_env(),
         )
         if segment is None:
             return
@@ -985,7 +991,7 @@ def _can_commit_session_messages(final_state: dict[str, Any]) -> bool:
     messages = final_state.get("messages", [])
     if not isinstance(messages, list):
         return False
-    return _has_complete_tool_call_history(messages)
+    return has_complete_tool_call_history(messages)
 
 
 def _factory_turn_count(record: Any | None, mode: FactoryMode, *, fallback_messages: Any) -> int:
@@ -999,31 +1005,6 @@ def _factory_turn_count(record: Any | None, mode: FactoryMode, *, fallback_messa
     if isinstance(fallback_messages, list):
         return sum(1 for message in fallback_messages if isinstance(message, HumanMessage))
     return 0
-
-
-def _has_complete_tool_call_history(messages: list[Any]) -> bool:
-    pending_tool_call_ids: set[str] = set()
-    for message in messages:
-        tool_calls = getattr(message, "tool_calls", None) or []
-        if isinstance(message, AIMessage) and tool_calls:
-            if pending_tool_call_ids:
-                return False
-            pending_tool_call_ids = {
-                str(tool_call.get("id") or "")
-                for tool_call in tool_calls
-                if tool_call.get("id")
-            }
-            if not pending_tool_call_ids:
-                return False
-            continue
-        if isinstance(message, ToolMessage):
-            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
-            if tool_call_id in pending_tool_call_ids:
-                pending_tool_call_ids.remove(tool_call_id)
-            continue
-        if pending_tool_call_ids:
-            return False
-    return not pending_tool_call_ids
 
 
 def _latest_stage_entry_snapshot(app: Any, *, config: dict[str, Any], stage_id: str) -> Any | None:

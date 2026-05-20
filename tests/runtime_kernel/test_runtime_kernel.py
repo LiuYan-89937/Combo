@@ -10,10 +10,14 @@ from langchain_core.tools import StructuredTool
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, ScriptedModelService
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.context import ContextEngine
+from agent_factory.runtime_kernel.execution import ExecutionController
 from agent_factory.runtime_kernel.kernel.facade import RuntimeKernelFacade
+from agent_factory.runtime_protocol.messages import has_complete_tool_call_history, incomplete_tool_call_ids
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.nodes.standard.answer import CognitiveAnswerNode
 from agent_factory.runtime_kernel.nodes.standard.tool_call import OperationalToolCallNode
+from agent_factory.runtime_kernel.patterns.compiler import _must_repair_tool_protocol
+from agent_factory.runtime_kernel.patterns.schema import PatternNodeSpec
 from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.observability import ObservabilityManager
 from agent_factory.runtime_kernel.persistence import (
@@ -28,6 +32,8 @@ from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessio
 from agent_factory.runtime_kernel.state import RuntimeGraphState
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_kernel.types import ModelInvocationResult, ToolExecutionResult
+from agent_factory.tooling.compiler import ToolCompiler
+from agent_factory.tooling.spec import ToolSpec
 from agent_factory.memory_system import MemorySystemConfig, MemorySystemRuntime
 from agent_factory.memory_system.config import MemoryBackgroundConfig
 from agent_factory.memory_system.schema import MemoryWriteReport
@@ -37,6 +43,8 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
     def test_runtime_graph_state_uses_messages_channel(self) -> None:
         self.assertIn("messages", RuntimeGraphState.__annotations__)
         self.assertIn("runtime", RuntimeGraphState.__annotations__)
+        self.assertNotIn("max_turns", RuntimeState().execution.model_dump())
+        self.assertEqual(RuntimeState().execution.timeout_seconds, 0)
 
     def test_agent_session_manager_maps_session_to_thread_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -204,11 +212,12 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
 class RuntimeKernelToolPermissionTest(unittest.TestCase):
     def test_answer_node_routes_tools_from_model_tool_calls(self) -> None:
         state = RuntimeState()
+        events: list[dict] = []
         context = NodeExecutionContext(
             node_id="answer",
             impl="cognitive.answer",
             services=RuntimeServices(model_service=_ToolCallingModelService()),
-            emit_event=lambda _event: None,
+            emit_event=events.append,
         )
 
         patch = CognitiveAnswerNode().execute(state, context)
@@ -216,6 +225,7 @@ class RuntimeKernelToolPermissionTest(unittest.TestCase):
         self.assertEqual(patch["execution"]["route_decision"], "model.requests_tool")
         self.assertIsInstance(patch["messages"][0], AIMessage)
         self.assertEqual(patch["messages"][0].tool_calls[0]["name"], "ls")
+        self.assertEqual(events, [])
 
     def test_tool_node_returns_tool_messages_when_registry_is_missing(self) -> None:
         state = RuntimeState()
@@ -300,11 +310,117 @@ class RuntimeKernelToolPermissionTest(unittest.TestCase):
         self.assertEqual(patch["messages"][0].tool_call_id, "call_other")
         self.assertEqual(registry.calls, [])
 
+    def test_tool_approval_interrupt_originates_from_tool_exec_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            tool = _compiled_high_risk_tool(root)
+            services = _runtime_services(
+                model_service=_ToolCallingModelService(tool_id="approval_tool"),
+                tool_registry=InMemoryToolRegistry(
+                    {"approval_tool": lambda _arguments, _state: {"status": "completed"}},
+                    model_tools={"approval_tool": tool},
+                    system_tool_ids=["approval_tool"],
+                ),
+            )
+            facade = _runtime_facade()
+            bindings = BindingSet.model_validate(
+                {
+                    "node_bindings": [
+                        {
+                            "binding_id": "tool_exec_access",
+                            "binding_type": "tool_access",
+                            "target": {"node_id": "tool_exec", "impl": "operational.tool_call"},
+                            "payload": {"allowed_tool_ids": ["approval_tool"]},
+                        }
+                    ]
+                }
+            )
+            compiled = facade.compile(pattern_id="react_agent", bindings=bindings, services=services)
+            run_context = facade.prepare_run_context(
+                compiled,
+                user_input="call tool",
+                session_config={"session_root": str(root / "sessions")},
+            )
 
-def _runtime_services() -> RuntimeServices:
+            tool_events: list[dict] = []
+            interrupt_payload = None
+            for stream_mode, chunk in facade.instance.controller.stream(
+                compiled,
+                run_context.state,
+                thread_id=run_context.thread_id,
+            ):
+                if stream_mode == "custom" and isinstance(chunk, dict) and chunk.get("type") == "tool_activity":
+                    tool_events.extend(chunk.get("payload", {}).get("events", []))
+                if isinstance(chunk, dict) and chunk.get("__interrupt__"):
+                    interrupt_payload = getattr(chunk["__interrupt__"][0], "value", None)
+                    break
+
+            self.assertEqual(interrupt_payload["type"], "tool_approval")
+            self.assertTrue(tool_events)
+            self.assertEqual({event["node_id"] for event in tool_events}, {"tool_exec"})
+            snapshot = compiled.graph_app.get_state({"configurable": {"thread_id": run_context.thread_id}})
+            self.assertTrue(getattr(snapshot, "interrupts", None))
+
+    def test_controller_rejects_incomplete_tool_call_final_state(self) -> None:
+        state = RuntimeState()
+        result = ExecutionController()._final_state_from_raw(
+            {
+                "runtime": state.model_dump(mode="python"),
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[{"name": "approval_tool", "args": {}, "id": "call_missing"}],
+                    )
+                ],
+            }
+        )
+
+        self.assertEqual(result.execution.finish_status, "failed")
+        self.assertIn("call_missing", result.execution.last_error or "")
+
+    def test_message_protocol_validation_handles_serialized_messages(self) -> None:
+        serialized = [
+            {"type": "human", "content": "use tool"},
+            {
+                "type": "ai",
+                "content": "",
+                "tool_calls": [{"name": "ls", "args": {}, "id": "call_serialized"}],
+            },
+        ]
+        completed = [
+            *serialized,
+            {"type": "tool", "tool_call_id": "call_serialized", "content": "{}"},
+        ]
+
+        self.assertEqual(incomplete_tool_call_ids(serialized), ["call_serialized"])
+        self.assertFalse(has_complete_tool_call_history(serialized))
+        self.assertEqual(incomplete_tool_call_ids(completed), [])
+        self.assertTrue(has_complete_tool_call_history(completed))
+
+    def test_timeout_cannot_preempt_pending_tool_protocol_repair(self) -> None:
+        tool_node = PatternNodeSpec(id="tool_exec", type="operational", impl="operational.tool_call")
+        answer_node = PatternNodeSpec(id="answer", type="cognitive", impl="cognitive.answer")
+        raw_state = {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "ls", "args": {}, "id": "call_pending"}],
+                )
+            ]
+        }
+
+        self.assertTrue(_must_repair_tool_protocol(tool_node, raw_state))
+        self.assertFalse(_must_repair_tool_protocol(answer_node, raw_state))
+
+
+def _runtime_services(
+    *,
+    model_service=None,
+    tool_registry=None,
+) -> RuntimeServices:
     return RuntimeServices(
-        model_service=ScriptedModelService(),
-        tool_registry=InMemoryToolRegistry(),
+        model_service=model_service or ScriptedModelService(),
+        tool_registry=tool_registry or InMemoryToolRegistry(),
         memory_store=LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store,
         knowledge_engine=KnowledgeEngine(),
         context_engine=ContextEngine(),
@@ -370,16 +486,39 @@ class _SystemToolRegistry:
 
 
 class _ToolCallingModelService:
+    def __init__(self, *, tool_id: str = "ls") -> None:
+        self.tool_id = tool_id
+
     def generate(self, **_kwargs) -> ModelInvocationResult:
+        arguments = {"path": "."} if self.tool_id == "ls" else {}
         ai_message = AIMessage(
             content="",
-            tool_calls=[{"name": "ls", "args": {"path": "."}, "id": "call_ls"}],
+            tool_calls=[{"name": self.tool_id, "args": arguments, "id": f"call_{self.tool_id}"}],
         )
         return ModelInvocationResult(
             ai_message=ai_message,
             assistant_draft="",
-            tool_calls=[{"name": "ls", "args": {"path": "."}, "id": "call_ls"}],
+            tool_calls=list(ai_message.tool_calls),
         )
+
+
+def _compiled_high_risk_tool(root: Path):
+    package_tool = root / "tools" / "approval_tool" / "tool.py"
+    package_tool.parent.mkdir(parents=True)
+    package_tool.write_text(
+        "def run(arguments: dict, resources: dict) -> dict:\n"
+        "    return {'status': 'completed'}\n",
+        encoding="utf-8",
+    )
+    spec = ToolSpec(
+        id="approval_tool",
+        description="Approval test tool.",
+        entrypoint="tools/approval_tool/tool.py:run",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        output_schema={"type": "object"},
+        risk_level="high",
+    )
+    return ToolCompiler(package_root=root).compile(spec)
 
 
 def _runtime_facade() -> RuntimeKernelFacade:

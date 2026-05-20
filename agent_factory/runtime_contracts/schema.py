@@ -172,7 +172,7 @@ class MemoryContract(BaseModel):
 class ModelContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: Literal["main"] = "main"
+    role: Literal["main", "task"] = "main"
     source: Literal["factory_runtime_env"] = "factory_runtime_env"
 
 

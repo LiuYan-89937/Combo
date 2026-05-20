@@ -106,7 +106,7 @@ AGENTFACTORY_EMBEDDING_MODEL=
 AGENTFACTORY_EMBEDDING_DIMS=1536
 ```
 
-主模型用于 Factory 制造流程和生成 Agent 普通回答。小任务模型用于轻量分类、llmRisk、记忆提取等。embedding 模型用于跨会话记忆语义召回。
+主模型用于 Factory 制造流程。生成 Agent 使用 `contracts/model.json` 声明的模型角色，测试 Agent 可以设置为 `task` 使用小任务模型。小任务模型也用于轻量分类、llmRisk、记忆提取等。embedding 模型用于跨会话记忆语义召回。
 
 ## 启动 CLI
 
@@ -488,6 +488,15 @@ AgentPackage
 
 ```bash
 docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
+```
+
+如果 Docker Hub 拉取 `python:3.12-slim` metadata 超时，可以显式指定兼容的
+Python 3.12 slim 基础镜像源：
+
+```bash
+docker build -t agentfactory-runtime-python:3.12 \
+  --build-arg PYTHON_BASE_IMAGE=<python-3.12-slim-mirror> \
+  -f docker/agent-runtime/Dockerfile .
 ```
 
 普通运行不再宿主机直跑 RuntimeKernel。`/run-agent-package` 会启动或复用长期 Docker runtime container，pending interrupt、工具审批和 session 恢复都通过同一个容器 bridge。

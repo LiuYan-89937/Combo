@@ -17,6 +17,7 @@ from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.context import ContextEngine
 from agent_factory.runtime_kernel.execution import ExecutionController
+from agent_factory.runtime_protocol.completion import runtime_completed
 from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp, RuntimeKernelInstance
 from agent_factory.runtime_kernel.nodes.registry import NodeRegistry
@@ -205,7 +206,8 @@ class RuntimeKernelFacade:
             session_config=session_config,
         )
         result = self.instance.controller.run(compiled, run_context.state, thread_id=run_context.thread_id)
-        run_context.session_manager.touch_turn(run_context.session_id, first_user_input=run_context.first_user_input)
+        if runtime_completed(result):
+            run_context.session_manager.touch_turn(run_context.session_id, first_user_input=run_context.first_user_input)
         return result
 
     def stream(
@@ -224,12 +226,12 @@ class RuntimeKernelFacade:
             agent_config=agent_config,
             session_config=session_config,
         )
-        final_seen = False
+        final_state: RuntimeState | None = None
         for item in self.instance.controller.stream(compiled, run_context.state, thread_id=run_context.thread_id):
             if item[0] == "runtime_final":
-                final_seen = True
+                final_state = item[1]
             yield item
-        if final_seen:
+        if runtime_completed(final_state):
             run_context.session_manager.touch_turn(run_context.session_id, first_user_input=run_context.first_user_input)
 
     def prepare_run_context(
@@ -306,7 +308,7 @@ class RuntimeKernelFacade:
             session_id=session_id,
             session_config=session_config,
         )
-        final_seen = False
+        final_state: RuntimeState | None = None
         for item in self.instance.controller.stream_resume(
             compiled,
             run_context.state,
@@ -314,9 +316,9 @@ class RuntimeKernelFacade:
             resume_payload=resume_payload,
         ):
             if item[0] == "runtime_final":
-                final_seen = True
+                final_state = item[1]
             yield item
-        if final_seen:
+        if runtime_completed(final_state):
             run_context.session_manager.touch_turn(run_context.session_id)
 
     def prepare_resume_context(

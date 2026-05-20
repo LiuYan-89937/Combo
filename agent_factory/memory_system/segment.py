@@ -14,7 +14,7 @@ def build_conversation_segment(
     source: dict[str, Any],
     messages: Any,
     end_turn: int,
-    max_turns: int,
+    max_user_turns: int,
 ) -> MemoryConversationSegment | None:
     normalized = normalize_conversation_messages(messages)
     if not normalized:
@@ -22,7 +22,7 @@ def build_conversation_segment(
     user_positions = [index for index, message in enumerate(normalized) if message.role == "user"]
     if not user_positions:
         return None
-    turn_window = max(1, min(int(max_turns), len(user_positions)))
+    turn_window = max(1, min(int(max_user_turns), len(user_positions)))
     start_index = user_positions[-turn_window]
     selected = normalized[start_index:]
     if not selected:

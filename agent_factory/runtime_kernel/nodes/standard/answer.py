@@ -44,21 +44,9 @@ class CognitiveAnswerNode:
                     "route_decision": result.route_decision or "subgraph.need_more_input",
                 },
             }
-        tool_calls = result.tool_calls
+        ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
+        tool_calls = _message_tool_calls(ai_message) or list(result.tool_calls or [])
         if tool_calls:
-            ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
-            first_call = tool_calls[0]
-            tool_id = str(first_call.get("name") or "")
-            tool_call_id = str(first_call.get("id") or tool_id)
-            arguments = dict(first_call.get("args") or {})
-            context.emit_event(
-                {
-                    "event_type": "tool_proposed",
-                    "tool_id": tool_id,
-                    "tool_call_id": tool_call_id,
-                    "arguments": arguments,
-                }
-            )
             return {
                 "messages": [ai_message or AIMessage(content=result.assistant_draft or "", tool_calls=tool_calls)],
                 "conversation": {
@@ -74,9 +62,13 @@ class CognitiveAnswerNode:
                 },
             }
         final_answer = result.final_answer or result.assistant_draft or ""
-        ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
+        response_message = (
+            ai_message
+            if ai_message is not None and not _message_tool_calls(ai_message)
+            else AIMessage(content=final_answer)
+        )
         return {
-            "messages": [ai_message or AIMessage(content=final_answer)],
+            "messages": [response_message],
             "conversation": {
                 "assistant_draft": result.assistant_draft,
                 "final_answer": final_answer,
@@ -92,6 +84,13 @@ def _first_binding_payload(bindings: list[dict[str, Any]]) -> dict[str, Any] | N
     if not bindings:
         return None
     return dict(bindings[0].get("payload") or {})
+
+
+def _message_tool_calls(message: AIMessage | None) -> list[dict[str, Any]]:
+    if message is None:
+        return []
+    calls = getattr(message, "tool_calls", None) or []
+    return [dict(item) for item in calls if isinstance(item, dict)]
 
 
 def _visible_tools(context: NodeExecutionContext) -> list[Any]:

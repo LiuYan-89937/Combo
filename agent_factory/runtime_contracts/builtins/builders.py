@@ -184,9 +184,9 @@ class ModelContractBuilder:
     def build(self, contract: ModelContract, context: RuntimeBuildContext) -> RuntimeContribution:
         if contract.config.source != "factory_runtime_env":
             raise ValueError(f"unsupported model contract source: {contract.config.source}")
-        if contract.config.role != "main":
-            raise ValueError(f"unsupported model contract role: {contract.config.role}")
-        return RuntimeContribution(services={"model_service": LangChainModelServiceAdapter()})
+        return RuntimeContribution(
+            services={"model_service": LangChainModelServiceAdapter(role=contract.config.role)}
+        )
 
 
 class RenderContractBuilder:
