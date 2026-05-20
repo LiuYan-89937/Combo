@@ -825,6 +825,7 @@ agent_factory/scheduler_system/
 contracts/scheduler.json
   -> SchedulerContractBuilder
   -> SchedulerRuntime + SQLiteSchedulerStore
+  -> RuntimeBackgroundWorkerManager
   -> SchedulerWorker + APScheduler trigger engine
   -> RuntimeKernel graph_run 或 ToolExecutionGateway script/tool run
   -> scheduler_* 标准事件
@@ -832,6 +833,8 @@ contracts/scheduler.json
 ```
 
 SQLite 是任务和执行记录事实源，APScheduler 只负责时间触发，不承担持久事实源。
+
+后台 worker 生命周期统一交给 `RuntimeBackgroundWorkerManager` 管理。Factory 可以不走 AgentPackage 编译，但 scheduler worker、memory worker 的 start/shutdown 语义要和生成 Agent 的 RuntimeContribution worker 保持一致；Contract Builder 只贡献 worker，不直接启动 worker。
 
 ### 5.2 Contract
 
@@ -848,7 +851,12 @@ AgentPackage 通过 `contracts/scheduler.json` 声明：
     "timezone": "Asia/Shanghai",
     "default_concurrency_policy": "skip",
     "default_timeout_seconds": 900,
-    "unattended_policy": "deny_if_approval_required"
+    "unattended_policy": "deny_if_approval_required",
+    "default_failure_policy": {
+      "enabled": true,
+      "max_consecutive_failures": 3,
+      "action": "pause"
+    }
   }
 }
 ```
@@ -873,9 +881,12 @@ concurrency_policy = skip
 max_concurrent_runs = 1
 timeout_seconds = 900
 unattended_policy = deny_if_approval_required
+failure_policy = pause after 3 consecutive failures
 ```
 
-无人值守执行时，如果目标工具按风险策略需要人工审批，默认直接失败并写入 scheduler report，不阻塞等待用户。
+任务创建/变更本身需要经过工具审批或 CLI 显式命令。任务被批准后，定时执行仍然通过 `ToolExecutionGateway` 做参数、资源、风险和输出校验，但跳过人工审批 interrupt，避免无人值守任务卡住对话。
+
+失败治理是 Job 契约的一部分。默认 `failure_policy.enabled=true`，同一任务连续失败达到 `max_consecutive_failures` 后自动将 job 置为 disabled，并发出 `scheduler_job_auto_paused` 事件。成功执行会自然打断连续失败计数。
 
 ### 5.4 Factory 与生成 Agent
 
@@ -886,7 +897,21 @@ Factory 与生成 Agent 共用 schema、store、worker、executor、tool 和事�
 | Factory | `.agentfactory/scheduler/factory.sqlite` | `("scheduler", "factory", <project_id>)` |
 | 生成 Agent | `/runtime/scheduler/scheduler.sqlite` | `("scheduler", "agent", <agent_id>)` |
 
-Factory chat/free/create-agent 模式通过同一个内置 `scheduler` 工具管理任务。生成 Agent 在 RuntimeContract 编译时得到 `services.scheduler_runtime`、后台 worker，并通过内置 `scheduler` 工具管理自己的任务。
+Factory chat/free/create-agent 模式可以通过同一个内置 `scheduler` 工具管理任务，也可以通过 CLI 硬管理入口 `/scheduler ...` 管理任务。生成 Agent 在 RuntimeContract 编译时得到 `services.scheduler_runtime`、后台 worker，并通过内置 `scheduler` 工具管理自己的任务。
+
+Factory CLI 硬管理入口：
+
+```text
+/scheduler list
+/scheduler describe <job_id>
+/scheduler runs [job_id] [limit]
+/scheduler pause <job_id>
+/scheduler resume <job_id>
+/scheduler delete <job_id>
+/scheduler run-now <job_id>
+```
+
+这些命令直接访问当前 Factory scheduler runtime，不通过模型，不要求 Agent 再调用工具。
 
 ### 5.5 事件与展示
 
@@ -896,12 +921,18 @@ Factory chat/free/create-agent 模式通过同一个内置 `scheduler` 工具管
 scheduler_job_created
 scheduler_job_updated
 scheduler_job_deleted
+scheduler_job_auto_paused
+scheduler_jobs_listed
+scheduler_job_described
+scheduler_runs_listed
 scheduler_run_scheduled
 scheduler_run_started
 scheduler_run_completed
 scheduler_run_failed
 scheduler_run_skipped
 scheduler_run_cancelled
+scheduler_feedback_completed
+scheduler_feedback_failed
 ```
 
 CLI/WebUI 只消费事件摘要，例如 `job_id / run_id / target_type / status / duration_ms / error_summary / report_path`。完整 stdout、stderr、证据和错误细节写入 scheduler execution report。

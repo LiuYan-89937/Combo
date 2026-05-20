@@ -38,7 +38,7 @@ FactoryGraph 十阶段生产
 
 - 第十阶段 `repair_or_finalize` 仍是空阶段。
 - 第六阶段资源与 sandbox 准备已升级，但仍是当前重点精修区域。
-- 定时任务系统已接入统一 Contract/Builder/ToolExecutionGateway 链路，仍需继续打磨运行体验与报表查询。
+- 定时任务系统已接入统一 Contract/Builder/ToolExecutionGateway 链路；当前 `graph_run` 只表示“向当前主链路 Graph 投递一条 message”，动态 GraphPattern 选择会在生产链路成熟后再升级。
 - 知识系统、Trace 系统、上下文管理系统尚未完成与工具/记忆同等级别的统一规范。
 - Web UI 未实现；当前只保证 CLI-first。
 - 当前不要求跑特化业务示例，验证以语法、静态、协议级、非业务单元测试为主。
@@ -217,6 +217,21 @@ tool_call_started
 tool_call_completed
 tool_call_failed
 tool_observation_available
+scheduler_job_created
+scheduler_job_updated
+scheduler_job_deleted
+scheduler_job_auto_paused
+scheduler_jobs_listed
+scheduler_job_described
+scheduler_runs_listed
+scheduler_run_scheduled
+scheduler_run_started
+scheduler_run_completed
+scheduler_run_failed
+scheduler_run_skipped
+scheduler_run_cancelled
+scheduler_feedback_completed
+scheduler_feedback_failed
 interrupt_requested
 runtime_paused
 runtime_resumed
@@ -368,11 +383,16 @@ contracts/session.json
 contracts/tools.json
 ```
 
-可选 contract：
+当前可选 contract：
 
 ```text
 contracts/memory.json
 ```
+
+说明：
+
+- `contracts/scheduler.json` 当前是 required contract。它可以通过 `enabled=false` 合法关闭运行贡献，但 package manifest 必须显式声明，避免运行时能力边界不清。
+- `contracts/memory.json` 是跨会话记忆能力 contract，没有声明跨会话记忆的 AgentPackage 可以不生成。
 
 规则：
 
@@ -419,6 +439,7 @@ contracts/memory.json
     render.json
     resources.json
     sandbox.json
+    scheduler.json
     session.json
     tools.json
     memory.json
@@ -470,6 +491,19 @@ docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerf
 ```
 
 普通运行不再宿主机直跑 RuntimeKernel。`/run-agent-package` 会启动或复用长期 Docker runtime container，pending interrupt、工具审批和 session 恢复都通过同一个容器 bridge。
+
+当前定时任务的 `graph_run` 运行语义：
+
+```text
+Factory graph_run
+  -> mode=chat         -> Factory chat 主链路
+  -> mode=create_agent -> FactoryGraph 制造主链路
+
+子 Agent graph_run
+  -> 当前 AgentPackage 已编译的主 RuntimeKernel GraphPattern
+```
+
+也就是说，当前 `graph_run` 是主链路消息触发，不是任意 Graph 动态编排。后续生产链路完善后再升级为可根据任务选择不同 GraphPattern / entrypoint / input adapter 的动态 Graph。
 
 sandbox 挂载约定：
 

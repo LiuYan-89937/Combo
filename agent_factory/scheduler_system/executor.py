@@ -5,11 +5,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from agent_factory.scheduler_system.schema import SchedulerExecutionReport, SchedulerJob, SchedulerRun
+from agent_factory.tooling.execution_context import tool_approval_override
 
 
 SchedulerGraphRunner = Callable[[SchedulerJob, SchedulerRun], dict[str, Any]]
 SchedulerToolRunner = Callable[[str, dict[str, Any], SchedulerJob, SchedulerRun], dict[str, Any]]
-APPROVAL_REQUIRED_RISK_LEVELS = {"medium", "high"}
 
 
 class SchedulerExecutor:
@@ -32,13 +32,13 @@ class SchedulerExecutor:
             else:
                 output = self._execute_tool(job, run)
             status = "completed" if str(output.get("status") or "completed") == "completed" else "failed"
-            error_summary = None if status == "completed" else _summary(output.get("error") or output.get("observation_summary"))
+            error_summary = _error_summary(status=status, evidence=output)
             return self._report(
                 job=job,
                 run=run,
                 started=started,
                 status=status,
-                output_summary=_summary(output.get("output_summary") or output.get("message") or output.get("final_answer")),
+                output_summary=_output_summary(output),
                 error_summary=error_summary,
                 evidence=output,
             )
@@ -98,8 +98,8 @@ class SchedulerExecutor:
             duration_ms=duration_ms,
             output_summary=output_summary,
             error_summary=error_summary,
-            stdout_preview=_summary(evidence.get("stdout")),
-            stderr_preview=_summary(evidence.get("stderr")),
+            stdout_preview=_stdout_preview(evidence),
+            stderr_preview=_stderr_preview(evidence),
             exit_code=_exit_code(evidence),
             evidence=evidence,
         )
@@ -109,19 +109,13 @@ def runtime_tool_runner(registry: Any) -> SchedulerToolRunner:
     def run(tool_id: str, arguments: dict[str, Any], job: SchedulerJob, run_record: SchedulerRun) -> dict[str, Any]:
         from agent_factory.runtime_kernel.state import RuntimeState
 
-        denial = deny_if_unattended_approval_required(
-            job=job,
-            tool_id=tool_id,
-            model_tool=_model_tool_for_id(registry, tool_id),
-        )
-        if denial is not None:
-            return denial
         state = RuntimeState()
         state.run.agent_id = job.owner_id
         state.run.run_id = run_record.run_id
         state.runtime_config.agent_config["triggered_by"] = "scheduler"
         state.runtime_config.agent_config["scheduler_job_id"] = job.job_id
-        result = registry.execute(tool_id, arguments, state=state)
+        with scheduler_tool_approval_override(job=job, tool_id=tool_id):
+            result = registry.execute(tool_id, arguments, state=state)
         output = result.output if isinstance(result.output, dict) else {"value": result.output}
         return {
             "status": result.status,
@@ -133,44 +127,18 @@ def runtime_tool_runner(registry: Any) -> SchedulerToolRunner:
     return run
 
 
-def deny_if_unattended_approval_required(*, job: SchedulerJob, tool_id: str, model_tool: Any | None) -> dict[str, Any] | None:
-    if job.unattended_policy != "deny_if_approval_required":
-        return None
-    risk_level = _risk_level_from_model_tool(model_tool)
-    if risk_level not in APPROVAL_REQUIRED_RISK_LEVELS:
-        return None
-    message = f"scheduler unattended policy denied approval-required tool: {tool_id}"
-    return {
-        "status": "failed",
-        "error": message,
-        "observation_summary": message,
-        "risk_level": risk_level,
-        "unattended_policy": job.unattended_policy,
-    }
-
-
-def _model_tool_for_id(registry: Any, tool_id: str) -> Any | None:
-    try:
-        tools = registry.model_tools([tool_id])
-    except Exception:
-        return None
-    return tools[0] if tools else None
-
-
-def _risk_level_from_model_tool(model_tool: Any | None) -> str | None:
-    metadata = getattr(model_tool, "metadata", None)
-    if not isinstance(metadata, dict):
-        return None
-    agent_factory = metadata.get("agent_factory")
-    if not isinstance(agent_factory, dict):
-        return None
-    risk_level = agent_factory.get("risk_level")
-    return str(risk_level) if risk_level else None
+def scheduler_tool_approval_override(*, job: SchedulerJob, tool_id: str):
+    return tool_approval_override(
+        reason=(
+            f"scheduler job {job.job_id} was approved at creation time; "
+            f"skip human approval interrupt for scheduled tool {tool_id}"
+        )
+    )
 
 
 def _optional_tool_args(payload: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for key in ("cwd", "timeout_seconds", "env"):
+    for key in ("cwd", "mode", "wait_seconds", "max_output_chars"):
         if key in payload:
             result[key] = payload[key]
     return result
@@ -189,11 +157,55 @@ def _summary(value: Any, limit: int = 500) -> str | None:
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
+def _output_payload(evidence: dict[str, Any]) -> dict[str, Any]:
+    output = evidence.get("output")
+    return output if isinstance(output, dict) else {}
+
+
+def _result_value(evidence: dict[str, Any], key: str) -> Any:
+    if key in evidence:
+        return evidence[key]
+    return _output_payload(evidence).get(key)
+
+
+def _stdout_preview(evidence: dict[str, Any]) -> str | None:
+    return _summary(_result_value(evidence, "stdout"))
+
+
+def _stderr_preview(evidence: dict[str, Any]) -> str | None:
+    return _summary(_result_value(evidence, "stderr"))
+
+
+def _output_summary(evidence: dict[str, Any]) -> str | None:
+    stdout = _stdout_preview(evidence)
+    if stdout:
+        return stdout
+    for key in ("output_summary", "final_answer", "summary", "message"):
+        summary = _summary(_result_value(evidence, key))
+        if summary:
+            return summary
+    return None
+
+
+def _error_summary(*, status: str, evidence: dict[str, Any]) -> str | None:
+    if status == "completed":
+        return None
+    for key in ("error", "error_summary"):
+        summary = _summary(_result_value(evidence, key))
+        if summary:
+            return summary
+    stderr = _stderr_preview(evidence)
+    if stderr:
+        return stderr
+    for key in ("observation_summary", "message"):
+        summary = _summary(_result_value(evidence, key))
+        if summary:
+            return summary
+    return None
+
+
 def _exit_code(evidence: dict[str, Any]) -> int | None:
-    value = evidence.get("exit_code")
+    value = _result_value(evidence, "exit_code")
     if isinstance(value, int):
         return value
-    output = evidence.get("output")
-    if isinstance(output, dict) and isinstance(output.get("exit_code"), int):
-        return output["exit_code"]
     return None

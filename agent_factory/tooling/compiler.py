@@ -84,7 +84,7 @@ class ToolCompiler:
             func=invoke_tool,
             name=spec.id,
             description=spec.description,
-            args_schema=input_schema.pydantic_model,
+            args_schema=input_schema.schema,
             infer_schema=False,
             metadata={
                 "agent_factory": {
@@ -98,7 +98,7 @@ class ToolCompiler:
                     "type": "tool_observation",
                     "status": "invalid_arguments",
                     "tool_id": spec.id,
-                    "message": "Tool arguments failed Pydantic validation.",
+                    "message": "Tool arguments failed transport validation.",
                     "retryable": True,
                     "errors": [str(error)],
                 },

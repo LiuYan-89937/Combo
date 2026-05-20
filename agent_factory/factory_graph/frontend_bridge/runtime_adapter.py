@@ -24,16 +24,18 @@ from agent_factory.factory_graph.session import (
     build_factory_checkpointer_handle,
     is_factory_checkpointer_persistent,
 )
-from agent_factory.memory_system.factory import enqueue_factory_memory_write
+from agent_factory.memory_system.factory import enqueue_factory_memory_write, shutdown_factory_memory_worker
 from agent_factory.memory_system.config import memory_write_interval_turns_from_env
 from agent_factory.memory_system.namespace import factory_memory_namespace
 from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.memory_system.segment import build_conversation_segment
+from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.scheduler_system import (
     SchedulerExecutor,
+    SchedulerRuntime,
     SchedulerWorker,
-    deny_if_unattended_approval_required,
     default_factory_scheduler_runtime,
+    scheduler_tool_approval_override,
     scheduler_enabled_from_env,
 )
 from agent_factory.scheduler_system.events import SchedulerEventPayload
@@ -79,7 +81,8 @@ class FactoryRuntimeAdapter:
     pending_run: PendingRun | None = None
     pending_agent_package_run: PendingAgentPackageRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
-    scheduler_worker: SchedulerWorker | None = None
+    scheduler_runtime: SchedulerRuntime | None = None
+    background_workers: RuntimeBackgroundWorkerManager | None = None
 
     def __post_init__(self) -> None:
         load_agentfactory_dotenv()
@@ -98,8 +101,8 @@ class FactoryRuntimeAdapter:
             if command.type == "shutdown":
                 if self.agent_package_runtime is not None:
                     self.agent_package_runtime.close_all()
-                if self.scheduler_worker is not None:
-                    self.scheduler_worker.shutdown()
+                self._shutdown_background_workers()
+                shutdown_factory_memory_worker()
                 return False
             if command.type == "start_session":
                 self.start_session(command)
@@ -117,6 +120,8 @@ class FactoryRuntimeAdapter:
                 self.send_message(command)
             elif command.type == "rerun_from_stage":
                 self.rerun_from_stage(command)
+            elif command.type == "scheduler_manage":
+                self.scheduler_manage(command)
             elif command.type == "list_agent_packages":
                 self.list_agent_packages(command)
             elif command.type == "select_agent_package":
@@ -273,6 +278,7 @@ class FactoryRuntimeAdapter:
             return
         app = build_factory_graph(
             stop_after_stage=self.options.stop_after_stage,
+            tools=self._factory_tools(),
             enable_interrupts=True,
             checkpointer=self.checkpointer,
         )
@@ -297,6 +303,83 @@ class FactoryRuntimeAdapter:
                 "checkpoint": _checkpoint_payload(checkpoint_config),
             },
         )
+
+    def scheduler_manage(self, command: FactoryFrontendCommand) -> None:
+        runtime = self.scheduler_runtime
+        if runtime is None:
+            self._emit_error(command, "scheduler runtime is not enabled")
+            return
+        action = str(command.payload.get("action") or "list").strip()
+        job_id = str(command.payload.get("job_id") or "").strip()
+        limit = _bounded_int(command.payload.get("limit"), default=20, minimum=1, maximum=200)
+        if action == "list":
+            jobs = runtime.list_jobs()
+            self._emit_scheduler_event(
+                SchedulerEventPayload(
+                    event_type="scheduler_jobs_listed",
+                    owner_type=runtime.owner_type,
+                    owner_id=runtime.owner_id,
+                    status="listed",
+                    payload={"jobs": [job.model_dump(mode="json") for job in jobs], "count": len(jobs)},
+                )
+            )
+            return
+        if action == "describe":
+            if not job_id:
+                self._emit_error(command, "scheduler describe requires job_id")
+                return
+            description = runtime.describe_job(job_id)
+            job_payload = description.get("job") if isinstance(description.get("job"), dict) else {}
+            self._emit_scheduler_event(
+                SchedulerEventPayload(
+                    event_type="scheduler_job_described",
+                    job_id=job_id,
+                    owner_type=runtime.owner_type,
+                    owner_id=runtime.owner_id,
+                    target_type=job_payload.get("target", {}).get("target_type") if isinstance(job_payload.get("target"), dict) else None,
+                    status="described",
+                    payload=description,
+                )
+            )
+            return
+        if action == "runs":
+            runs = runtime.store.list_runs(job_id=job_id or None, limit=limit)
+            self._emit_scheduler_event(
+                SchedulerEventPayload(
+                    event_type="scheduler_runs_listed",
+                    job_id=job_id or None,
+                    owner_type=runtime.owner_type,
+                    owner_id=runtime.owner_id,
+                    status="listed",
+                    payload={"runs": [run.model_dump(mode="json") for run in runs], "count": len(runs), "limit": limit},
+                )
+            )
+            return
+        if action == "pause":
+            if not job_id:
+                self._emit_error(command, "scheduler pause requires job_id")
+                return
+            runtime.set_job_enabled(job_id, False)
+            return
+        if action == "resume":
+            if not job_id:
+                self._emit_error(command, "scheduler resume requires job_id")
+                return
+            runtime.set_job_enabled(job_id, True)
+            return
+        if action == "delete":
+            if not job_id:
+                self._emit_error(command, "scheduler delete requires job_id")
+                return
+            runtime.delete_job(job_id)
+            return
+        if action == "run_now":
+            if not job_id:
+                self._emit_error(command, "scheduler run_now requires job_id")
+                return
+            runtime.run_now(job_id)
+            return
+        self._emit_error(command, f"unsupported scheduler action: {action}")
 
     def list_agent_packages(self, command: FactoryFrontendCommand) -> None:
         packages = self.agent_package_runtime.list_packages()
@@ -433,7 +516,7 @@ class FactoryRuntimeAdapter:
                     run.session["session_id"] = item.session_id
                 if item.event_type in {"run_completed", "run_failed"}:
                     terminal_event_seen = True
-                if item.event_type == "interrupt_requested":
+                if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
                     session_id = str(item.session_id or (run.session or {}).get("session_id") or "")
                     if not session_id:
                         raise RuntimeError("agent package interrupt missing session_id")
@@ -443,7 +526,7 @@ class FactoryRuntimeAdapter:
                         normalizer=normalizer,
                     )
                 self.emit(item)
-                if item.event_type == "interrupt_requested":
+                if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
                     return
                 continue
             if stream_mode == "stderr":
@@ -499,7 +582,11 @@ class FactoryRuntimeAdapter:
         messages: list[BaseMessage] = [new_message]
         if not self._use_checkpoint_memory():
             messages = [*self.session_manager.messages(self.session_record, "chat"), new_message]
-        app = build_factory_chat_graph(enable_interrupts=True, checkpointer=self.checkpointer)
+        app = build_factory_chat_graph(
+            tools=self._factory_tools(),
+            enable_interrupts=True,
+            checkpointer=self.checkpointer,
+        )
         initial_state = initial_factory_chat_state(messages)
         self._stream_run(
             request_id=command.request_id,
@@ -518,6 +605,7 @@ class FactoryRuntimeAdapter:
             messages = [*self.session_manager.messages(self.session_record, "create_agent"), new_message]
         app = build_factory_graph(
             stop_after_stage=self.options.stop_after_stage,
+            tools=self._factory_tools(),
             enable_interrupts=True,
             checkpointer=self.checkpointer,
         )
@@ -719,19 +807,34 @@ class FactoryRuntimeAdapter:
             tool_runner=self._scheduler_tool_runner,
         )
         worker = SchedulerWorker(runtime)
-        try:
-            worker.start()
-            self.scheduler_worker = worker
-        except Exception as exc:
-            self._emit_scheduler_event(
-                SchedulerEventPayload(
-                    event_type="scheduler_run_failed",
-                    owner_type="factory",
-                    owner_id="default",
-                    status="failed",
-                    error_summary=f"{type(exc).__name__}: {exc}",
-                )
+        if self.background_workers is None:
+            self.background_workers = RuntimeBackgroundWorkerManager()
+        self.background_workers.add(worker)
+        self.scheduler_runtime = runtime
+        for lifecycle_event in self.background_workers.start_all():
+            if lifecycle_event.status == "failed":
+                self._emit_worker_lifecycle_failure(lifecycle_event)
+
+    def _shutdown_background_workers(self) -> None:
+        if self.background_workers is None:
+            return
+        for lifecycle_event in self.background_workers.shutdown_all():
+            if lifecycle_event.status == "failed":
+                self._emit_worker_lifecycle_failure(lifecycle_event)
+
+    def _emit_worker_lifecycle_failure(self, lifecycle_event: WorkerLifecycleEvent) -> None:
+        self._emit_scheduler_event(
+            SchedulerEventPayload(
+                event_type="scheduler_run_failed",
+                owner_type="factory",
+                owner_id="default",
+                status="failed",
+                error_summary=(
+                    f"background worker {lifecycle_event.action} failed: "
+                    f"{lifecycle_event.worker_id}: {lifecycle_event.message}"
+                ),
             )
+        )
 
     def _emit_scheduler_event(self, payload: SchedulerEventPayload) -> None:
         self.emit(
@@ -747,14 +850,12 @@ class FactoryRuntimeAdapter:
         )
 
     def _scheduler_tool_runner(self, tool_id: str, arguments: dict[str, Any], job: Any, _run: Any) -> dict[str, Any]:
-        tools = {tool.name: tool for tool in get_factory_tools()}
+        tools = {tool.name: tool for tool in self._factory_tools()}
         tool = tools.get(tool_id)
         if tool is None:
             return {"status": "failed", "error": f"unknown factory tool: {tool_id}"}
-        denial = deny_if_unattended_approval_required(job=job, tool_id=tool_id, model_tool=tool)
-        if denial is not None:
-            return denial
-        result = tool.invoke(arguments)
+        with scheduler_tool_approval_override(job=job, tool_id=tool_id):
+            result = tool.invoke(arguments)
         if isinstance(result, dict):
             return result
         return {"status": "completed", "value": result}
@@ -768,12 +869,17 @@ class FactoryRuntimeAdapter:
         self._ensure_session(FactoryFrontendCommand(type="start_session"))
         new_message = HumanMessage(content=message)
         if mode == "chat":
-            app = build_factory_chat_graph(enable_interrupts=True, checkpointer=self.checkpointer)
+            app = build_factory_chat_graph(
+                tools=self._factory_tools(),
+                enable_interrupts=True,
+                checkpointer=self.checkpointer,
+            )
             initial_state = initial_factory_chat_state([new_message])
             graph_id = "factory_chat_scheduler"
         else:
             app = build_factory_graph(
                 stop_after_stage=self.options.stop_after_stage,
+                tools=self._factory_tools(),
                 enable_interrupts=True,
                 checkpointer=self.checkpointer,
             )
@@ -802,6 +908,17 @@ class FactoryRuntimeAdapter:
             run_started_payload={"scheduler_job_id": job.job_id, "trigger": "scheduler"},
         )
         return {"status": "completed", "output_summary": f"factory scheduled {mode} run completed"}
+
+    def _factory_tools(self, tool_ids: list[str] | set[str] | tuple[str, ...] | None = None) -> list[Any]:
+        return get_factory_tools(
+            tool_ids=tool_ids,
+            runtime_resources=self._factory_tool_runtime_resources(),
+        )
+
+    def _factory_tool_runtime_resources(self) -> dict[str, Any]:
+        if self.scheduler_runtime is None:
+            return {}
+        return {"scheduler_runtime": self.scheduler_runtime}
 
 
 def _session_payload(record: Any | None) -> dict[str, Any]:
@@ -923,6 +1040,14 @@ def _checkpoint_payload(config: dict[str, Any]) -> dict[str, Any]:
         "checkpoint_id": configurable.get("checkpoint_id"),
         "checkpoint_ns": configurable.get("checkpoint_ns"),
     }
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, number))
 
 
 def _extract_interrupt_payload(chunk: Any) -> Any | None:

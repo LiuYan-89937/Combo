@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 import sys
 from pathlib import Path
@@ -12,9 +12,11 @@ from agent_factory.factory_graph.frontend_bridge.event_normalizer import Runtime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
+from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.tooling.langgraph_node import incomplete_tool_call_ids
 
 
 PACKAGE_ROOT = Path("/package")
@@ -35,6 +37,7 @@ class CompiledRuntime:
 class BridgeRuntimeState:
     sandbox_initialized: bool = False
     compiled_runtime: CompiledRuntime | None = None
+    background_workers: RuntimeBackgroundWorkerManager = field(default_factory=RuntimeBackgroundWorkerManager)
 
     def handle(self, command: dict[str, Any]) -> int:
         command_type = str(command.get("type") or "")
@@ -142,6 +145,10 @@ class BridgeRuntimeState:
         compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
         self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
         _configure_scheduler_runtime(package=package, compiled=compiled, facade=facade)
+        self.background_workers.add_many(runtime_build.background_workers)
+        for lifecycle_event in self.background_workers.start_all():
+            if lifecycle_event.status == "failed":
+                _emit_worker_lifecycle_failure(package=package, lifecycle_event=lifecycle_event)
         normalizer.runtime_event(
             "node_completed",
             node_id="package_compile",
@@ -155,13 +162,12 @@ class BridgeRuntimeState:
         return _load_package()
 
     def shutdown(self) -> None:
-        runtime = self.compiled_runtime
-        if runtime is None:
-            return
-        for worker in runtime.compiled.runtime_build.background_workers:
-            shutdown = getattr(worker, "shutdown", None)
-            if callable(shutdown):
-                shutdown()
+        for lifecycle_event in self.background_workers.shutdown_all():
+            if lifecycle_event.status == "failed" and self.compiled_runtime is not None:
+                _emit_worker_lifecycle_failure(
+                    package=self.compiled_runtime.package,
+                    lifecycle_event=lifecycle_event,
+                )
 
 
 def main() -> int:
@@ -210,20 +216,21 @@ def _configure_scheduler_runtime(*, package: LoadedAgentPackage, compiled: Any, 
         graph_runner=_scheduled_graph_runner(package=package, compiled=compiled, facade=facade),
         tool_runner=runtime_tool_runner(tool_registry) if tool_registry is not None else None,
     )
-    for worker in compiled.runtime_build.background_workers:
-        if getattr(worker, "runtime", None) is scheduler_runtime:
-            try:
-                worker.start()
-            except Exception as exc:
-                _scheduler_event_sink(
-                    SchedulerEventPayload(
-                        event_type="scheduler_run_failed",
-                        owner_type="agent",
-                        owner_id=package.assembly_spec.agent.id,
-                        status="failed",
-                        error_summary=f"{type(exc).__name__}: {exc}",
-                    )
-                )
+
+
+def _emit_worker_lifecycle_failure(*, package: LoadedAgentPackage, lifecycle_event: WorkerLifecycleEvent) -> None:
+    _scheduler_event_sink(
+        SchedulerEventPayload(
+            event_type="scheduler_run_failed",
+            owner_type="agent",
+            owner_id=package.assembly_spec.agent.id,
+            status="failed",
+            error_summary=(
+                f"background worker {lifecycle_event.action} failed: "
+                f"{lifecycle_event.worker_id}: {lifecycle_event.message}"
+            ),
+        )
+    )
 
 
 def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facade: RuntimeKernelFacade):
@@ -331,6 +338,17 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
         session_config=session_config,
     )
     normalizer.session_id = run_context.session_id
+    if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
+        return 0
+    missing_tool_call_ids = _checkpoint_incomplete_tool_call_ids(compiled.compiled_app, run_context.thread_id)
+    if missing_tool_call_ids:
+        normalizer.emit_run_failed(
+            RuntimeError(
+                "agent session has incomplete tool call history; resume the pending tool interaction "
+                f"before sending a new message. missing_tool_call_ids={missing_tool_call_ids}"
+            )
+        )
+        return 1
     final_state = None
     for stream_mode, chunk in facade.instance.controller.stream(
         compiled.compiled_app,
@@ -359,6 +377,30 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
         }
     )
     return 0
+
+
+def _emit_pending_checkpoint_interrupt(normalizer: RuntimeEventNormalizer, compiled_app: Any, thread_id: str) -> bool:
+    try:
+        snapshot = compiled_app.graph_app.get_state({"configurable": {"thread_id": thread_id}})
+    except Exception:
+        return False
+    interrupts = tuple(getattr(snapshot, "interrupts", ()) or ())
+    if not interrupts:
+        return False
+    first = interrupts[0]
+    normalizer.emit_interrupt(json_safe(getattr(first, "value", first)))
+    return True
+
+
+def _checkpoint_incomplete_tool_call_ids(compiled_app: Any, thread_id: str) -> list[str]:
+    try:
+        snapshot = compiled_app.graph_app.get_state({"configurable": {"thread_id": thread_id}})
+    except Exception:
+        return []
+    values = getattr(snapshot, "values", {}) or {}
+    if not isinstance(values, dict):
+        return []
+    return incomplete_tool_call_ids(list(values.get("messages") or []))
 
 
 def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], runtime: CompiledRuntime) -> int:

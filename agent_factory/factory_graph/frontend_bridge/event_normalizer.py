@@ -216,12 +216,18 @@ class RuntimeEventNormalizer:
             "scheduler_job_created",
             "scheduler_job_updated",
             "scheduler_job_deleted",
+            "scheduler_job_auto_paused",
+            "scheduler_jobs_listed",
+            "scheduler_job_described",
+            "scheduler_runs_listed",
             "scheduler_run_scheduled",
             "scheduler_run_started",
             "scheduler_run_completed",
             "scheduler_run_failed",
             "scheduler_run_skipped",
             "scheduler_run_cancelled",
+            "scheduler_feedback_completed",
+            "scheduler_feedback_failed",
         }:
             return
         self.runtime_event(
@@ -386,11 +392,17 @@ class RuntimeEventNormalizer:
                     payload=request,
                 )
             self.runtime_event(
+                "runtime_paused",
+                span_id=self.run_span_id,
+                payload={"reason": "tool_approval"},
+            )
+            self.runtime_event(
                 "tool_approval_requested",
                 span_id=interrupt_span_id,
                 parent_span_id=self.run_span_id,
                 payload=safe_payload,
             )
+            return
         self.runtime_event(
             "interrupt_requested",
             span_id=interrupt_span_id,

@@ -7,13 +7,15 @@ from agent_factory.scheduler_system.config import (
 )
 from agent_factory.scheduler_system.executor import (
     SchedulerExecutor,
-    deny_if_unattended_approval_required,
     runtime_tool_runner,
+    scheduler_tool_approval_override,
 )
 from agent_factory.scheduler_system.runtime import SchedulerRuntime, default_factory_scheduler_runtime
 from agent_factory.scheduler_system.schema import (
     SchedulerContractConfig,
     SchedulerExecutionReport,
+    SchedulerFeedbackConfig,
+    SchedulerFeedbackSummaryDecision,
     SchedulerJob,
     SchedulerLease,
     SchedulerRun,
@@ -26,6 +28,8 @@ __all__ = [
     "SchedulerContractConfig",
     "SchedulerExecutionReport",
     "SchedulerExecutor",
+    "SchedulerFeedbackConfig",
+    "SchedulerFeedbackSummaryDecision",
     "SchedulerJob",
     "SchedulerLease",
     "SchedulerRun",
@@ -35,8 +39,8 @@ __all__ = [
     "SQLiteSchedulerStore",
     "default_factory_scheduler_config",
     "default_factory_scheduler_runtime",
-    "deny_if_unattended_approval_required",
     "factory_scheduler_owner_id",
     "runtime_tool_runner",
     "scheduler_enabled_from_env",
+    "scheduler_tool_approval_override",
 ]

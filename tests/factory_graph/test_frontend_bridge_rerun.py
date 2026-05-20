@@ -14,6 +14,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter import (
     _can_commit_session_messages,
 )
 from agent_factory.factory_graph.session import FactorySessionConfig, FactorySessionManager
+from agent_factory.scheduler_system import SchedulerContractConfig, SchedulerRuntime
 
 
 class FakeApp:
@@ -127,6 +128,52 @@ class FrontendBridgeRerunTest(unittest.TestCase):
             stream_calls[0]["run_started_payload"]["rerun_from_stage"],
             "resource_and_condition_planning",
         )
+
+    def test_scheduler_manage_lists_jobs_without_model_tool_call(self) -> None:
+        scheduler_runtime = SchedulerRuntime(
+            config=SchedulerContractConfig(store_path=str(Path(self.temp_dir.name) / "scheduler.sqlite")),
+            owner_type="factory",
+            owner_id="test",
+        )
+        scheduler_runtime.create_job(
+            {
+                "job_id": "daily_status",
+                "schedule_type": "interval",
+                "schedule_expr": "60",
+                "target": {"target_type": "graph_run", "payload": {"message": "hello"}},
+            }
+        )
+        self.adapter.scheduler_runtime = scheduler_runtime
+
+        self.adapter.scheduler_manage(FactoryFrontendCommand(type="scheduler_manage", payload={"action": "list"}))
+
+        self.assertEqual(self.events[-1].event_type, "scheduler_jobs_listed")
+        self.assertEqual(self.events[-1].payload["payload"]["count"], 1)
+        self.assertEqual(self.events[-1].payload["payload"]["jobs"][0]["job_id"], "daily_status")
+
+    def test_scheduler_manage_deletes_job_without_model_tool_call(self) -> None:
+        scheduler_runtime = SchedulerRuntime(
+            config=SchedulerContractConfig(store_path=str(Path(self.temp_dir.name) / "scheduler.sqlite")),
+            owner_type="factory",
+            owner_id="test",
+            event_sink=self.adapter._emit_scheduler_event,
+        )
+        scheduler_runtime.create_job(
+            {
+                "job_id": "delete_me",
+                "schedule_type": "interval",
+                "schedule_expr": "60",
+                "target": {"target_type": "graph_run", "payload": {"message": "hello"}},
+            }
+        )
+        self.adapter.scheduler_runtime = scheduler_runtime
+
+        self.adapter.scheduler_manage(
+            FactoryFrontendCommand(type="scheduler_manage", payload={"action": "delete", "job_id": "delete_me"})
+        )
+
+        self.assertIsNone(scheduler_runtime.store.get_job("delete_me"))
+        self.assertEqual(self.events[-1].event_type, "scheduler_job_deleted")
 
     def test_session_messages_do_not_commit_failed_runs(self) -> None:
         self.assertFalse(

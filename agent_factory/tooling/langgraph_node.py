@@ -76,7 +76,7 @@ class AgentFactoryToolNode:
             batch_state[self.messages_key] = _replace_latest_ai_tool_calls(messages, ai_message, batch)
             raw_output = self._invoke_native_tool_node(batch_state, config=config, runtime=runtime)
             outputs.extend(_messages_from_tool_node_output(raw_output, self.messages_key))
-        return {self.messages_key: outputs}
+        return {self.messages_key: _complete_tool_message_set(tool_calls, outputs)}
 
     def _invoke_native_tool_node(
         self,
@@ -117,14 +117,14 @@ class AgentFactoryToolNode:
             return _tool_message(tool_id=tool_id, tool_call_id=tool_call_id, payload=payload, status="error")
         self._emit(
             {
-                "event_type": "tool_started",
+                "event_type": "tool_proposed",
                 "tool_id": tool_id,
                 "tool_call_id": tool_call_id,
                 "arguments": arguments,
-                "status": "running",
+                "status": "proposed",
             }
         )
-        with tool_call_context(tool_id=tool_id, tool_call_id=tool_call_id):
+        with tool_call_context(tool_id=tool_id, tool_call_id=tool_call_id, event_sink=self._emit):
             result = execute(request)
         if isinstance(result, ToolMessage):
             normalized = _normalize_tool_message(
@@ -199,12 +199,77 @@ def build_tool_node_runner(
 
 
 def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, list[dict[str, Any]]]:
+    following_tool_message_ids: set[str] = set()
     for message in reversed(messages):
+        if isinstance(message, ToolMessage):
+            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+            if tool_call_id:
+                following_tool_message_ids.add(tool_call_id)
+            continue
         if not isinstance(message, AIMessage):
             continue
         calls = getattr(message, "tool_calls", None) or []
-        return message, [_normalize_tool_call(item, index=index) for index, item in enumerate(calls)]
+        normalized = [_normalize_tool_call(item, index=index) for index, item in enumerate(calls)]
+        unresolved = [
+            call
+            for call in normalized
+            if str(call.get("id") or "") and str(call.get("id") or "") not in following_tool_message_ids
+        ]
+        return message, unresolved
     return None, []
+
+
+def incomplete_tool_call_ids(messages: Sequence[Any]) -> list[str]:
+    missing: list[str] = []
+    pending: list[str] = []
+    for message in messages:
+        if pending and not isinstance(message, ToolMessage):
+            missing.extend(pending)
+            pending = []
+        if isinstance(message, AIMessage):
+            calls = getattr(message, "tool_calls", None) or []
+            pending = [
+                str(call.get("id") or call.get("tool_call_id") or "")
+                for call in calls
+                if isinstance(call, dict) and str(call.get("id") or call.get("tool_call_id") or "")
+            ]
+            continue
+        if isinstance(message, ToolMessage):
+            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+            if tool_call_id in pending:
+                pending = [item for item in pending if item != tool_call_id]
+    if pending:
+        missing.extend(pending)
+    return missing
+
+
+def _complete_tool_message_set(
+    tool_calls: Sequence[dict[str, Any]],
+    messages: Sequence[ToolMessage],
+) -> list[ToolMessage]:
+    by_call_id: dict[str, ToolMessage] = {}
+    for message in messages:
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+        if tool_call_id and tool_call_id not in by_call_id:
+            by_call_id[tool_call_id] = message
+    completed: list[ToolMessage] = []
+    for call in tool_calls:
+        tool_id = str(call.get("name") or "")
+        tool_call_id = str(call.get("id") or tool_id)
+        if tool_call_id in by_call_id:
+            completed.append(by_call_id[tool_call_id])
+            continue
+        completed.append(
+            tool_observation_message(
+                status="execution_failed",
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                message="ToolNode did not return an observation for this tool call.",
+                arguments=dict(call.get("args") or {}),
+                retryable=True,
+            )
+        )
+    return completed
 
 
 def tool_messages_to_runtime_patch(

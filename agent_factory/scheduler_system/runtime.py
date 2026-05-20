@@ -8,10 +8,12 @@ from uuid import uuid4
 from agent_factory.scheduler_system.config import default_factory_scheduler_config, factory_scheduler_owner_id
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.executor import SchedulerExecutor
+from agent_factory.scheduler_system.feedback import summarize_scheduler_feedback
 from agent_factory.scheduler_system.reports import SchedulerReportWriter
 from agent_factory.scheduler_system.schema import (
     SchedulerContractConfig,
     SchedulerExecutionReport,
+    SchedulerFeedbackSummaryDecision,
     SchedulerJob,
     SchedulerRun,
     utc_now,
@@ -20,6 +22,7 @@ from agent_factory.scheduler_system.store import SQLiteSchedulerStore
 
 
 SchedulerEventSink = Callable[[SchedulerEventPayload], None]
+SchedulerFeedbackSummarizer = Callable[..., SchedulerFeedbackSummaryDecision]
 
 
 class SchedulerRuntime:
@@ -33,6 +36,7 @@ class SchedulerRuntime:
         executor: SchedulerExecutor | None = None,
         report_root: str | Path | None = None,
         event_sink: SchedulerEventSink | None = None,
+        feedback_summarizer: SchedulerFeedbackSummarizer | None = None,
     ) -> None:
         self.config = config
         self.owner_type = owner_type
@@ -41,6 +45,7 @@ class SchedulerRuntime:
         self.executor = executor or SchedulerExecutor()
         self.report_writer = SchedulerReportWriter(report_root or Path(config.store_path).with_suffix("") / "reports")
         self.event_sink = event_sink
+        self.feedback_summarizer = feedback_summarizer or summarize_scheduler_feedback
         self.worker = None
         self.holder_id = f"{owner_type}:{owner_id}:{uuid4().hex}"
 
@@ -156,7 +161,16 @@ class SchedulerRuntime:
                 report=report,
                 report_path=report_path,
             )
-            return report.model_copy(update={"evidence": {**report.evidence, "report_path": report_path}})
+            if status == "failed":
+                self._auto_pause_after_failures(job=job, run=completed, report=report, report_path=report_path)
+            report_with_path = report.model_copy(update={"evidence": {**report.evidence, "report_path": report_path}})
+            self._emit_feedback(
+                job=job,
+                run=completed,
+                report=report_with_path,
+                report_path=report_path,
+            )
+            return report_with_path
         finally:
             self.store.release_lease(job_id=job.job_id, run_id=run.run_id)
 
@@ -174,6 +188,7 @@ class SchedulerRuntime:
         status: str | None = None,
         report: SchedulerExecutionReport | None = None,
         report_path: str | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> None:
         if self.event_sink is None:
             return
@@ -190,16 +205,21 @@ class SchedulerRuntime:
             duration_ms=duration_ms,
             error_summary=report.error_summary if report else run.error_summary if run else None,
             report_path=report_path,
+            payload=payload or {},
         )
         self.event_sink(payload)
 
     def _job_from_payload(self, payload: dict[str, Any]) -> SchedulerJob:
+        payload = dict(payload)
+        if not str(payload.get("task_content") or "").strip():
+            payload["task_content"] = _derived_task_content(payload)
         job_payload = {
             "owner_type": self.owner_type,
             "owner_id": self.owner_id,
             "timezone": self.config.timezone,
             "concurrency_policy": self.config.default_concurrency_policy,
             "timeout_seconds": self.config.default_timeout_seconds,
+            "failure_policy": self.config.default_failure_policy.model_dump(mode="json"),
             "unattended_policy": self.config.unattended_policy,
             **payload,
         }
@@ -211,6 +231,89 @@ class SchedulerRuntime:
             raise KeyError(f"unknown scheduler job: {job_id}")
         return job
 
+    def _auto_pause_after_failures(
+        self,
+        *,
+        job: SchedulerJob,
+        run: SchedulerRun,
+        report: SchedulerExecutionReport,
+        report_path: str,
+    ) -> None:
+        policy = job.failure_policy
+        if not policy.enabled or policy.action != "pause" or not job.enabled:
+            return
+        consecutive_failures = self.store.count_consecutive_runs(job_id=job.job_id, status="failed")
+        if consecutive_failures < policy.max_consecutive_failures:
+            return
+        paused = self.store.set_job_enabled(job.job_id, False)
+        self.emit(
+            "scheduler_job_auto_paused",
+            job=paused,
+            run=run,
+            report=report,
+            report_path=report_path,
+            status="auto_paused",
+            payload={
+                "reason": "max_consecutive_failures",
+                "consecutive_failures": consecutive_failures,
+                "threshold": policy.max_consecutive_failures,
+            },
+        )
+        self.reschedule()
+
+    def _emit_feedback(
+        self,
+        *,
+        job: SchedulerJob,
+        run: SchedulerRun,
+        report: SchedulerExecutionReport,
+        report_path: str,
+    ) -> None:
+        if self.event_sink is None or not job.feedback.enabled:
+            return
+        completed_count = self.store.count_runs(job_id=job.job_id, status="completed")
+        task_content = job.task_content or _derived_task_content(job.model_dump(mode="json"))
+        try:
+            decision = self.feedback_summarizer(
+                job=job,
+                run=run,
+                report=report,
+                completed_count=completed_count,
+            )
+            self.event_sink(
+                SchedulerEventPayload(
+                    event_type="scheduler_feedback_completed",
+                    job_id=job.job_id,
+                    run_id=run.run_id,
+                    owner_type=job.owner_type,
+                    owner_id=job.owner_id,
+                    target_type=job.target.target_type,
+                    status=report.status,
+                    completed_at=report.completed_at,
+                    completed_count=completed_count,
+                    task_content=task_content,
+                    summary=decision.summary,
+                    report_path=report_path,
+                )
+            )
+        except Exception as exc:
+            self.event_sink(
+                SchedulerEventPayload(
+                    event_type="scheduler_feedback_failed",
+                    job_id=job.job_id,
+                    run_id=run.run_id,
+                    owner_type=job.owner_type,
+                    owner_id=job.owner_id,
+                    target_type=job.target.target_type,
+                    status=report.status,
+                    completed_at=report.completed_at,
+                    completed_count=completed_count,
+                    task_content=task_content,
+                    error_summary=f"{type(exc).__name__}: {exc}",
+                    report_path=report_path,
+                )
+            )
+
 
 def default_factory_scheduler_runtime(*, event_sink: SchedulerEventSink | None = None) -> SchedulerRuntime:
     return SchedulerRuntime(
@@ -219,3 +322,19 @@ def default_factory_scheduler_runtime(*, event_sink: SchedulerEventSink | None =
         owner_id=factory_scheduler_owner_id(),
         event_sink=event_sink,
     )
+
+
+def _derived_task_content(payload: dict[str, Any]) -> str:
+    target = payload.get("target")
+    if not isinstance(target, dict):
+        return str(payload.get("job_id") or "scheduler job")
+    target_type = str(target.get("target_type") or "")
+    target_payload = target.get("payload")
+    target_payload = target_payload if isinstance(target_payload, dict) else {}
+    if target_type == "graph_run":
+        return str(target_payload.get("message") or payload.get("job_id") or "scheduled graph run")
+    if target_type == "tool_call":
+        return f"调用工具 {target_payload.get('tool_id') or payload.get('job_id') or 'tool'}"
+    if target_type == "script_run":
+        return str(payload.get("job_id") or "执行脚本定时任务")
+    return str(payload.get("job_id") or "scheduler job")

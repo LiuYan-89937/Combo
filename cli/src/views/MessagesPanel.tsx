@@ -37,6 +37,9 @@ function colorForRole(role: string): string {
 	if (role === 'interrupt') {
 		return 'magenta';
 	}
+	if (role === 'scheduler') {
+		return 'magenta';
+	}
 	return 'gray';
 }
 

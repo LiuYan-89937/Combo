@@ -155,8 +155,10 @@ class FrontendEventNormalizerTest(unittest.TestCase):
 
         proposed = [event for event in events if event.event_type == "tool_call_proposed"]
         approvals = [event for event in events if event.event_type == "tool_approval_requested"]
+        generic_interrupts = [event for event in events if event.event_type == "interrupt_requested"]
         self.assertEqual(len(proposed), 1)
         self.assertEqual(len(approvals), 1)
+        self.assertEqual(generic_interrupts, [])
         self.assertEqual(approvals[0].payload["requests"][0]["tool_call_id"], "call-a")
 
     def test_model_stream_completes_between_repeated_model_node_calls(self) -> None:

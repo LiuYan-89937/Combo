@@ -18,11 +18,13 @@ from agent_factory.memory_system.formatting import memory_context_text
 from agent_factory.memory_system.injection import default_factory_runtime, inject_factory_cross_session_memory
 from agent_factory.memory_system.schema import MemoryConversationSegment, MemoryWriteJob, MemoryWriteReport
 from agent_factory.memory_system.store_index import build_memory_store_index
+from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
 from agent_factory.runtime_kernel.persistence import LangGraphStoreConfig, LangGraphStoreFactory
 
 
 _FACTORY_MEMORY_RUNTIME = None
 _FACTORY_MEMORY_WORKER: MemoryBackgroundWorker | None = None
+_FACTORY_MEMORY_WORKERS = RuntimeBackgroundWorkerManager()
 
 
 def inject_factory_prompt_memory(*, stage_id: str, values: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -86,9 +88,22 @@ def _factory_memory_worker(runtime) -> MemoryBackgroundWorker:
     if _FACTORY_MEMORY_WORKER is not None:
         return _FACTORY_MEMORY_WORKER
     _FACTORY_MEMORY_WORKER = MemoryBackgroundWorker(store=runtime.store, config=runtime.config)
-    _FACTORY_MEMORY_WORKER.start()
     runtime.writer = _FACTORY_MEMORY_WORKER
+    _FACTORY_MEMORY_WORKERS.add(_FACTORY_MEMORY_WORKER)
+    events = _FACTORY_MEMORY_WORKERS.start_all()
+    failed = [event for event in events if event.status == "failed"]
+    if failed:
+        runtime.writer = None
+        _FACTORY_MEMORY_WORKER = None
+        raise RuntimeError("; ".join(event.message for event in failed if event.message) or "factory memory worker start failed")
     return _FACTORY_MEMORY_WORKER
+
+
+def shutdown_factory_memory_worker() -> None:
+    global _FACTORY_MEMORY_WORKER, _FACTORY_MEMORY_WORKERS
+    _FACTORY_MEMORY_WORKERS.shutdown_all()
+    _FACTORY_MEMORY_WORKER = None
+    _FACTORY_MEMORY_WORKERS = RuntimeBackgroundWorkerManager()
 
 
 def _factory_memory_config() -> MemorySystemConfig:

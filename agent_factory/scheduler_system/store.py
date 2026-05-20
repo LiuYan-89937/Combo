@@ -158,6 +158,31 @@ class SQLiteSchedulerStore:
             rows = conn.execute(query, args).fetchall()
         return [SchedulerRun.model_validate_json(str(row["payload_json"])) for row in rows]
 
+    def count_runs(self, *, job_id: str, status: str | None = None) -> int:
+        query = "select count(*) from scheduler_runs where job_id = ?"
+        args: list[Any] = [job_id]
+        if status:
+            query += " and status = ?"
+            args.append(status)
+        with self._connect() as conn:
+            row = conn.execute(query, args).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def count_consecutive_runs(self, *, job_id: str, status: str) -> int:
+        query = """
+            select status from scheduler_runs
+            where job_id = ? and status in ('completed', 'failed', 'skipped', 'cancelled')
+            order by coalesce(completed_at, scheduled_at) desc
+        """
+        count = 0
+        with self._connect() as conn:
+            rows = conn.execute(query, (job_id,)).fetchall()
+        for row in rows:
+            if str(row["status"]) != status:
+                break
+            count += 1
+        return count
+
     def acquire_lease(self, *, job_id: str, run_id: str, holder_id: str, ttl_seconds: int) -> SchedulerLease | None:
         now = utc_now().isoformat()
         lease = SchedulerLease(

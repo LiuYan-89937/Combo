@@ -7,9 +7,42 @@ import unittest
 from unittest.mock import patch
 
 from agent_factory.tooling import FactoryExtensionManager, get_factory_tool_specs, get_factory_tools
+from agent_factory.scheduler_system import SchedulerContractConfig, SchedulerRuntime
 
 
 class FactoryExtensionTest(unittest.TestCase):
+    def test_factory_scheduler_tool_uses_supplied_runtime_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = SchedulerRuntime(
+                config=SchedulerContractConfig(store_path=str(Path(temp_dir) / "scheduler.sqlite")),
+                owner_type="factory",
+                owner_id="test_factory",
+            )
+            runtime.create_job(
+                {
+                    "job_id": "job_1",
+                    "schedule_type": "interval",
+                    "schedule_expr": "60",
+                    "target": {"target_type": "script_run", "payload": {"command": "echo hello"}},
+                }
+            )
+            tools = get_factory_tools(
+                tool_ids=["scheduler"],
+                include_extensions=False,
+                runtime_resources={"scheduler_runtime": runtime},
+            )
+
+            self.assertEqual([tool.name for tool in tools], ["scheduler"])
+            result = tools[0].invoke({"action": "list"})
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["output"]["jobs"][0]["job_id"], "job_1")
+
+    def test_factory_scheduler_tool_is_not_compiled_without_runtime_instance(self) -> None:
+        tools = get_factory_tools(tool_ids=["scheduler"], include_extensions=False)
+
+        self.assertEqual(tools, [])
+
     def test_factory_extension_manager_discovers_skill_tool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

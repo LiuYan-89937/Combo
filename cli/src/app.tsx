@@ -126,6 +126,15 @@ export function App() {
 			send(command('rerun_from_stage', {payload: {stage_id: value.slice('/rerun '.length).trim()}}));
 			return;
 		}
+		if (value === '/scheduler' || value.startsWith('/scheduler ')) {
+			const schedulerPayload = parseSchedulerCommand(value);
+			if ('error' in schedulerPayload) {
+				store.dispatch({ui_type: 'notice', message: schedulerPayload.error});
+				return;
+			}
+			send(command('scheduler_manage', {payload: schedulerPayload}));
+			return;
+		}
 		if (value.startsWith('/stop ')) {
 			const stop_after_stage = value.slice('/stop '.length).trim();
 			send(command('set_options', {options: {stop_after_stage}}));
@@ -254,6 +263,41 @@ function modeLabel(mode: FactoryMode): string {
 
 function activePackageId(value: Record<string, unknown> | null): string {
 	return typeof value?.package_id === 'string' ? value.package_id : '';
+}
+
+type SchedulerCommandPayload = {action: string; job_id?: string; limit?: number} | {error: string};
+
+function parseSchedulerCommand(value: string): SchedulerCommandPayload {
+	const parts = value.trim().split(/\s+/).filter(Boolean);
+	const action = parts[1] ?? 'list';
+	if (action === 'list') {
+		return {action: 'list'};
+	}
+	if (action === 'runs') {
+		const payload: {action: string; job_id?: string; limit?: number} = {action: 'runs'};
+		if (parts[2] && !/^\d+$/.test(parts[2])) {
+			payload.job_id = parts[2];
+		}
+		const limitText = payload.job_id ? parts[3] : parts[2];
+		if (limitText && /^\d+$/.test(limitText)) {
+			payload.limit = Number(limitText);
+		}
+		return payload;
+	}
+	if (action === 'run-now') {
+		return _schedulerJobCommand('run_now', parts[2]);
+	}
+	if (['describe', 'pause', 'resume', 'delete'].includes(action)) {
+		return _schedulerJobCommand(action, parts[2]);
+	}
+	return {error: 'usage: /scheduler <list|describe|runs|pause|resume|delete|run-now> [job_id] [limit]'};
+}
+
+function _schedulerJobCommand(action: string, jobId: string | undefined): SchedulerCommandPayload {
+	if (!jobId) {
+		return {error: `/scheduler ${action.replace('_', '-')} requires job_id`};
+	}
+	return {action, job_id: jobId};
 }
 
 function pickerDisabledText(

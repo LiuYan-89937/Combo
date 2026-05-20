@@ -1,5 +1,6 @@
 .env
 .agentfactory/
+.agent_runtime/
 .venv/
 docs/*
 !docs/refactor_progress.md

@@ -51,6 +51,7 @@ from agent_factory.runtime_kernel.persistence import (
 from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
 from agent_factory.runtime_render import RenderManifest, default_node_render_spec, validate_render_manifest
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS
 
@@ -122,13 +123,13 @@ class RuntimeKernelFacade:
             config=memory_config,
             store=memory_store,
         )
+        self.background_workers = RuntimeBackgroundWorkerManager()
+        self._default_memory_worker: MemoryBackgroundWorker | None = None
         if memory_config.write_enabled:
-            try:
-                worker = MemoryBackgroundWorker(store=memory_store, config=memory_config)
-                worker.start()
-                memory_runtime.writer = worker
-            except Exception:
-                memory_runtime.writer = None
+            worker = MemoryBackgroundWorker(store=memory_store, config=memory_config)
+            memory_runtime.writer = worker
+            self._default_memory_worker = worker
+            self.background_workers.add(worker)
         services = RuntimeServices(
             model_service=None,
             tool_registry=InMemoryToolRegistry(),
@@ -160,6 +161,8 @@ class RuntimeKernelFacade:
         system_wrapper_ids: list[str] | tuple[str, ...] | None = None,
     ) -> CompiledKernelApp:
         services = services or self.instance.services
+        if services is self.instance.services:
+            self._start_default_background_workers()
         bindings = bindings or BindingSet()
         pattern = self.instance.pattern_registry.get(pattern_id)
         resolved_render_manifest = _resolve_render_manifest(pattern, render_manifest)
@@ -172,6 +175,18 @@ class RuntimeKernelFacade:
             render_manifest=resolved_render_manifest,
             system_wrapper_ids=DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS if system_wrapper_ids is None else system_wrapper_ids,
         )
+
+    def _start_default_background_workers(self) -> None:
+        if self._default_memory_worker is None:
+            return
+        events = self.background_workers.start_all()
+        if any(event.status == "failed" and event.worker_type == "MemoryBackgroundWorker" for event in events):
+            memory_system = getattr(self.instance.services, "memory_system", None)
+            if memory_system is not None:
+                memory_system.writer = None
+
+    def shutdown(self) -> None:
+        self.background_workers.shutdown_all()
 
     def run(
         self,

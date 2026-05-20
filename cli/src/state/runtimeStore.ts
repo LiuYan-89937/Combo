@@ -102,7 +102,7 @@ export type SpanRecord = {
 	payload: Record<string, unknown>;
 };
 
-export type TranscriptRole = 'user' | 'assistant' | 'tool' | 'interrupt' | 'system';
+export type TranscriptRole = 'user' | 'assistant' | 'tool' | 'interrupt' | 'scheduler' | 'system';
 
 export type TranscriptItem = {
 	id: string;
@@ -508,14 +508,20 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'scheduler_job_created':
 		case 'scheduler_job_updated':
 		case 'scheduler_job_deleted':
+		case 'scheduler_job_auto_paused':
+		case 'scheduler_jobs_listed':
+		case 'scheduler_job_described':
+		case 'scheduler_runs_listed':
 		case 'scheduler_run_scheduled':
 		case 'scheduler_run_started':
 		case 'scheduler_run_completed':
 		case 'scheduler_run_failed':
 		case 'scheduler_run_skipped':
 		case 'scheduler_run_cancelled':
+		case 'scheduler_feedback_completed':
+		case 'scheduler_feedback_failed':
 			return {
-				...base,
+				...appendSchedulerTranscript(base, event),
 				schedulerActivities: [...base.schedulerActivities.slice(-19), schedulerActivityForEvent(event)],
 				recentActivities: appendRunActivity(base.recentActivities, event)
 			};
@@ -1152,10 +1158,21 @@ function schedulerActivityDetail(payload: Record<string, unknown>): string {
 	const job = stringValue(payload.job_id);
 	const error = stringValue(payload.error_summary);
 	const report = stringValue(payload.report_path);
+	const summary = stringValue(payload.summary);
+	const completedCount = numberValue(payload.completed_count);
+	const nested = recordValue(payload.payload) ?? {};
+	const listedCount = numberValue(nested.count);
+	const consecutiveFailures = numberValue(nested.consecutive_failures);
+	const threshold = numberValue(nested.threshold);
 	const parts = [
 		status ? `status=${status}` : null,
 		target ? `target=${target}` : null,
 		job ? `job=${shortValue(job, 10)}` : null,
+		typeof listedCount === 'number' ? `items=${listedCount}` : null,
+		typeof completedCount === 'number' ? `count=${completedCount}` : null,
+		typeof consecutiveFailures === 'number' ? `failures=${consecutiveFailures}` : null,
+		typeof threshold === 'number' ? `threshold=${threshold}` : null,
+		summary ? `summary=${shortValue(summary, 80)}` : null,
 		error ? `error=${shortValue(error, 80)}` : null,
 		report ? `report=${shortValue(report, 48)}` : null
 	].filter((item): item is string => Boolean(item));
@@ -1385,6 +1402,8 @@ function isImmediateEvent(eventType: FactoryEvent['event_type']): boolean {
 		'interrupt_requested',
 		'tool_approval_requested',
 		'model_message_completed',
+		'scheduler_feedback_completed',
+		'scheduler_feedback_failed',
 		'runtime_resumed',
 		'run_completed',
 		'error'
@@ -1477,6 +1496,162 @@ function appendInterruptTranscript(state: RuntimeState, event: FactoryEvent): Ru
 		eventType: event.event_type,
 		metadata: payload
 	});
+}
+
+function appendSchedulerTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	if (event.event_type === 'scheduler_jobs_listed') {
+		return appendSchedulerJobsTranscript(state, event);
+	}
+	if (event.event_type === 'scheduler_job_described') {
+		return appendSchedulerJobDescriptionTranscript(state, event);
+	}
+	if (event.event_type === 'scheduler_runs_listed') {
+		return appendSchedulerRunsTranscript(state, event);
+	}
+	if (event.event_type === 'scheduler_job_auto_paused') {
+		return appendSchedulerAutoPausedTranscript(state, event);
+	}
+	return appendSchedulerFeedbackTranscript(state, event);
+}
+
+function appendSchedulerFeedbackTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	if (event.event_type !== 'scheduler_feedback_completed' && event.event_type !== 'scheduler_feedback_failed') {
+		return state;
+	}
+	const payload = event.payload ?? {};
+	const summary = stringValue(payload.summary);
+	const error = stringValue(payload.error_summary);
+	const task = stringValue(payload.task_content);
+	const completedAt = stringValue(payload.completed_at);
+	const count = numberValue(payload.completed_count);
+	const lines = [
+		task ? `任务：${task}` : null,
+		completedAt ? `完成时间：${completedAt}` : null,
+		typeof count === 'number' ? `完成次数：${count}` : null,
+		summary ? `总结：${summary}` : null,
+		error ? `错误：${error}` : null
+	].filter((item): item is string => Boolean(item));
+	return appendTranscript(state, {
+		id: `scheduler-feedback-${event.event_id}`,
+		role: 'scheduler',
+		timestamp: event.timestamp,
+		title: `Scheduler / ${stringValue(payload.job_id) || '-'}`,
+		content: lines.join('\n') || compactValue(payload, 1200),
+		eventType: event.event_type,
+		metadata: payload
+	});
+}
+
+function appendSchedulerJobsTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	const payload = recordValue(event.payload?.payload) ?? {};
+	const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+	const lines = jobs.length
+		? jobs.slice(0, 20).map(item => schedulerJobLine(recordValue(item))).filter(Boolean)
+		: ['暂无定时任务'];
+	return appendTranscript(state, {
+		id: `scheduler-jobs-${event.event_id}`,
+		role: 'scheduler',
+		timestamp: event.timestamp,
+		title: 'Scheduler / jobs',
+		content: lines.join('\n'),
+		eventType: event.event_type,
+		metadata: event.payload ?? {}
+	});
+}
+
+function appendSchedulerJobDescriptionTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	const payload = recordValue(event.payload?.payload) ?? {};
+	const job = recordValue(payload.job);
+	const runs = Array.isArray(payload.recent_runs) ? payload.recent_runs : [];
+	const lines = [
+		schedulerJobLine(job),
+		...runs.slice(0, 8).map(item => schedulerRunLine(recordValue(item))).filter(Boolean)
+	].filter((item): item is string => Boolean(item));
+	return appendTranscript(state, {
+		id: `scheduler-job-${event.event_id}`,
+		role: 'scheduler',
+		timestamp: event.timestamp,
+		title: `Scheduler / ${stringValue(job?.job_id) || stringValue(event.payload?.job_id) || '-'}`,
+		content: lines.join('\n') || compactValue(event.payload, 1200),
+		eventType: event.event_type,
+		metadata: event.payload ?? {}
+	});
+}
+
+function appendSchedulerRunsTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	const payload = recordValue(event.payload?.payload) ?? {};
+	const runs = Array.isArray(payload.runs) ? payload.runs : [];
+	const lines = runs.length
+		? runs.slice(0, 20).map(item => schedulerRunLine(recordValue(item))).filter(Boolean)
+		: ['暂无执行记录'];
+	return appendTranscript(state, {
+		id: `scheduler-runs-${event.event_id}`,
+		role: 'scheduler',
+		timestamp: event.timestamp,
+		title: 'Scheduler / runs',
+		content: lines.join('\n'),
+		eventType: event.event_type,
+		metadata: event.payload ?? {}
+	});
+}
+
+function appendSchedulerAutoPausedTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	const payload = event.payload ?? {};
+	const detail = recordValue(payload.payload) ?? {};
+	const lines = [
+		`任务 ${stringValue(payload.job_id) || '-'} 已自动暂停`,
+		stringValue(detail.reason) ? `原因：${stringValue(detail.reason)}` : null,
+		typeof numberValue(detail.consecutive_failures) === 'number' ? `连续失败：${numberValue(detail.consecutive_failures)}` : null,
+		typeof numberValue(detail.threshold) === 'number' ? `阈值：${numberValue(detail.threshold)}` : null,
+		stringValue(payload.report_path) ? `report：${stringValue(payload.report_path)}` : null
+	].filter((item): item is string => Boolean(item));
+	return appendTranscript(state, {
+		id: `scheduler-auto-paused-${event.event_id}`,
+		role: 'scheduler',
+		timestamp: event.timestamp,
+		title: `Scheduler / auto paused`,
+		content: lines.join('\n'),
+		eventType: event.event_type,
+		metadata: payload
+	});
+}
+
+function schedulerJobLine(job: Record<string, unknown> | null | undefined): string | null {
+	if (!job) {
+		return null;
+	}
+	const target = recordValue(job.target);
+	const enabled = job.enabled === false ? 'paused' : 'enabled';
+	const task = stringValue(job.task_content) || stringValue(job.job_id) || '-';
+	const schedule = [stringValue(job.schedule_type), stringValue(job.schedule_expr)].filter(Boolean).join(' ');
+	const failurePolicy = recordValue(job.failure_policy);
+	const threshold = numberValue(failurePolicy?.max_consecutive_failures);
+	const failureText = failurePolicy?.enabled === false
+		? 'auto-pause=off'
+		: typeof threshold === 'number'
+			? `auto-pause=${threshold} failures`
+			: null;
+	return [
+		shortValue(stringValue(job.job_id), 10),
+		enabled,
+		stringValue(target?.target_type),
+		schedule,
+		failureText,
+		task
+	].filter(Boolean).join(' | ');
+}
+
+function schedulerRunLine(run: Record<string, unknown> | null | undefined): string | null {
+	if (!run) {
+		return null;
+	}
+	return [
+		shortValue(stringValue(run.run_id), 10),
+		stringValue(run.status),
+		stringValue(run.target_type),
+		stringValue(run.completed_at) || stringValue(run.started_at) || stringValue(run.scheduled_at),
+		shortValue(stringValue(run.error_summary) || stringValue(run.output_summary), 80)
+	].filter(Boolean).join(' | ');
 }
 
 function transcriptFromSession(session: Record<string, unknown>, mode: FactoryMode | null): TranscriptItem[] {

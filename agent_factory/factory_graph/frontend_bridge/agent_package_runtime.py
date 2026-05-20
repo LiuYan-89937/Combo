@@ -382,6 +382,7 @@ class AgentRuntimeContainerHandle:
             if item.request_id == request_id and item.event_type in {
                 "run_completed",
                 "run_failed",
+                "tool_approval_requested",
                 "interrupt_requested",
                 "agent_package_sessions_listed",
                 "error",

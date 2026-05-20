@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from agent_factory.paths import project_root
-from agent_factory.scheduler_system.schema import SchedulerContractConfig
+from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerFailurePolicy
 
 
 def default_factory_scheduler_config() -> SchedulerContractConfig:
@@ -20,6 +20,10 @@ def default_factory_scheduler_config() -> SchedulerContractConfig:
         unattended_policy=os.getenv(
             "AGENTFACTORY_SCHEDULER_UNATTENDED_POLICY",
             "deny_if_approval_required",
+        ),
+        default_failure_policy=SchedulerFailurePolicy(
+            enabled=_env_bool("AGENTFACTORY_SCHEDULER_FAILURE_AUTO_PAUSE_ENABLED", True),
+            max_consecutive_failures=_env_int("AGENTFACTORY_SCHEDULER_MAX_CONSECUTIVE_FAILURES", 3),
         ),
     )
 
@@ -47,3 +51,15 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return max(value, 1)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default

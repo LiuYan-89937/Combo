@@ -4,16 +4,17 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import ValidationError
 
 from agent_factory.tooling import ToolCompiler, ToolRegistry, ToolRiskEvaluatorConfig, ToolSpec, compile_json_schema
 from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from agent_factory.tooling.builtins.network.specs import get_network_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
+from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
 from agent_factory.tooling.entrypoint import ToolEntrypointError, ToolEntrypointLoader
 from agent_factory.tooling.gateway import ToolApprovalDecision, ToolExecutionGateway
-from agent_factory.tooling.langgraph_node import build_tool_node_runner
+from agent_factory.tooling.langgraph_node import build_tool_node_runner, incomplete_tool_call_ids, latest_ai_tool_calls
 
 
 try:
@@ -232,6 +233,76 @@ class GatewayAndCompilerTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["output"]["query"], "hello")
 
+    def test_compiler_routes_argument_validation_through_gateway(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_tool = root / "tools" / "sample_tool" / "tool.py"
+            package_tool.parent.mkdir(parents=True)
+            package_tool.write_text(
+                "def run(arguments: dict, resources: dict) -> dict:\n"
+                "    return {'ok': True, 'query': arguments['query']}\n",
+                encoding="utf-8",
+            )
+            tool = ToolCompiler(package_root=root).compile(_tool_spec(entrypoint="tools/sample_tool/tool.py:run"))
+
+        self.assertIsInstance(tool.args_schema, dict)
+        result = tool.invoke({})
+
+        self.assertEqual(result["status"], "invalid_arguments")
+        self.assertEqual(result["message"], "Tool arguments failed schema validation.")
+        self.assertNotIn("Pydantic", result["message"])
+
+    def test_scheduler_argument_validation_reaches_gateway(self) -> None:
+        scheduler_spec = get_scheduler_tool_specs()[0]
+        tool = ToolCompiler(resources={"scheduler_runtime": object()}).compile(scheduler_spec)
+
+        result = tool.invoke({"action": "create", "job": {"schedule_type": "interval"}})
+
+        self.assertEqual(result["status"], "invalid_arguments")
+        self.assertEqual(result["tool_id"], "scheduler")
+        self.assertNotIn("Pydantic", result["message"])
+
+    def test_scheduler_schema_matches_script_run_contract(self) -> None:
+        scheduler_spec = get_scheduler_tool_specs()[0]
+        compiled = compile_json_schema(schema=scheduler_spec.input_schema, model_name="SchedulerToolArgs")
+        valid = {
+            "action": "create",
+            "job": {
+                "schedule_type": "interval",
+                "schedule_expr": "120",
+                "target": {
+                    "target_type": "script_run",
+                    "payload": {"command": "echo ok"},
+                },
+            },
+        }
+        command_array = {
+            "action": "create",
+            "job": {
+                "schedule_type": "interval",
+                "schedule_expr": "120",
+                "target": {
+                    "target_type": "script_run",
+                    "payload": {"command": ["echo", "ok"]},
+                },
+            },
+        }
+        named_interval = {
+            "action": "create",
+            "job": {
+                "schedule_type": "interval",
+                "schedule_expr": "minutes=2",
+                "target": {
+                    "target_type": "script_run",
+                    "payload": {"command": "echo ok"},
+                },
+            },
+        }
+
+        self.assertEqual(compiled.errors_for(valid), [])
+        self.assertTrue(compiled.errors_for(command_array))
+        self.assertTrue(compiled.errors_for(named_interval))
+
     def test_langgraph_tool_node_adapter_preserves_tool_call_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -266,6 +337,100 @@ class GatewayAndCompilerTest(unittest.TestCase):
         message = output["messages"][0]
         self.assertEqual(message.tool_call_id, "call_sample")
         self.assertIn('"tool_call_id": "call_sample"', message.content)
+
+    def test_langgraph_tool_node_adapter_completes_every_tool_call_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_tool = root / "tools" / "sample_tool" / "tool.py"
+            package_tool.parent.mkdir(parents=True)
+            package_tool.write_text(
+                "def run(arguments: dict, resources: dict) -> dict:\n"
+                "    return {'ok': True, 'query': arguments['query']}\n",
+                encoding="utf-8",
+            )
+            compiler = ToolCompiler(package_root=root)
+            tool = compiler.compile(_tool_spec(entrypoint="tools/sample_tool/tool.py:run"))
+
+        runner = build_tool_node_runner([tool], node_id="tools")
+        original_invoke = runner._invoke_native_tool_node
+
+        def drop_second_observation(state, *, config, runtime):
+            output = original_invoke(state, config=config, runtime=runtime)
+            messages = list(output.get("messages") or [])
+            return {"messages": messages[:1]}
+
+        runner._invoke_native_tool_node = drop_second_observation
+        output = runner.invoke(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {"name": "sample_tool", "args": {"query": "one"}, "id": "call_one"},
+                            {"name": "sample_tool", "args": {"query": "two"}, "id": "call_two"},
+                        ],
+                    )
+                ]
+            }
+        )
+
+        tool_call_ids = [message.tool_call_id for message in output["messages"]]
+        self.assertEqual(tool_call_ids, ["call_one", "call_two"])
+        self.assertIn("did not return an observation", output["messages"][1].content)
+
+    def test_tool_node_emits_started_only_after_gateway_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_tool = root / "tools" / "sample_tool" / "tool.py"
+            package_tool.parent.mkdir(parents=True)
+            package_tool.write_text(
+                "def run(arguments: dict, resources: dict) -> dict:\n"
+                "    return {'ok': True, 'query': arguments['query']}\n",
+                encoding="utf-8",
+            )
+            compiler = ToolCompiler(
+                package_root=root,
+                approval_handler=lambda _spec, _arguments, _risk: ToolApprovalDecision(action="deny"),
+            )
+            tool = compiler.compile(_tool_spec(risk_level="high", entrypoint="tools/sample_tool/tool.py:run"))
+
+        events: list[dict] = []
+        runner = build_tool_node_runner([tool], node_id="tools", emit_event=events.append)
+        runner.invoke(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[{"name": "sample_tool", "args": {"query": "hello"}, "id": "call_sample"}],
+                    )
+                ]
+            }
+        )
+
+        self.assertEqual([event["event_type"] for event in events], ["tool_proposed", "tool_failed"])
+
+    def test_tool_call_history_helpers_detect_unresolved_calls(self) -> None:
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "sample_tool", "args": {"query": "one"}, "id": "call_one"},
+                {"name": "sample_tool", "args": {"query": "two"}, "id": "call_two"},
+            ],
+        )
+        complete_messages = [
+            ai_message,
+            ToolMessage(content="{}", name="sample_tool", tool_call_id="call_one"),
+            ToolMessage(content="{}", name="sample_tool", tool_call_id="call_two"),
+        ]
+        partial_messages = [
+            ai_message,
+            ToolMessage(content="{}", name="sample_tool", tool_call_id="call_one"),
+        ]
+
+        self.assertEqual(incomplete_tool_call_ids(complete_messages), [])
+        self.assertEqual(incomplete_tool_call_ids(partial_messages), ["call_two"])
+        _message, unresolved = latest_ai_tool_calls(partial_messages)
+        self.assertEqual([call["id"] for call in unresolved], ["call_two"])
 
     def test_builtin_tool_optional_arguments_are_not_sent_as_null(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

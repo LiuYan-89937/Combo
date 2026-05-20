@@ -165,28 +165,15 @@ class MemoryContractBuilder:
             config=config,
             store=store,
         )
-        diagnostics: list[RuntimeDiagnostic] = []
         background_workers: list[Any] = []
         if config.write_enabled:
-            try:
-                worker = MemoryBackgroundWorker(store=store, config=config)
-                worker.start()
-                runtime.writer = worker
-                background_workers.append(worker)
-            except Exception as exc:
-                runtime.writer = None
-                diagnostics.append(
-                    RuntimeDiagnostic(
-                        where="memory.background_worker",
-                        level="warning",
-                        message=f"{type(exc).__name__}: {exc}",
-                    )
-                )
+            worker = MemoryBackgroundWorker(store=store, config=config)
+            runtime.writer = worker
+            background_workers.append(worker)
         return RuntimeContribution(
             services={"memory_store": store, "memory_system": runtime},
             system_wrappers=[MEMORY_RETRIEVE_SYSTEM_WRAPPER_ID],
             background_workers=background_workers,
-            diagnostics=diagnostics,
         )
 
 

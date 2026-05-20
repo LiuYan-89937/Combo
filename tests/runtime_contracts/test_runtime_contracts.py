@@ -10,6 +10,7 @@ from agent_factory.runtime_contracts.builtins import default_runtime_contract_re
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistryError
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.bindings import RuntimeServices
+from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.tooling.builtins import get_builtin_tool_ids
 
 
@@ -75,6 +76,22 @@ class RuntimeContractsTest(unittest.TestCase):
             self.assertIsNotNone(result.services.scheduler_runtime)
             self.assertIn("scheduler_runtime", result.resources)
             self.assertTrue(result.background_workers)
+
+            result.services.scheduler_runtime.create_job(
+                {
+                    "job_id": "job_1",
+                    "schedule_type": "interval",
+                    "schedule_expr": "60",
+                    "target": {"target_type": "script_run", "payload": {"command": "echo hello"}},
+                }
+            )
+            tool_result = result.services.tool_registry.execute(
+                "scheduler",
+                {"action": "list"},
+                state=RuntimeState(),
+            )
+            self.assertEqual(tool_result.status, "completed")
+            self.assertEqual(tool_result.output["output"]["jobs"][0]["job_id"], "job_1")
 
     def test_tools_contract_loads_instance_extensions_outside_package_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

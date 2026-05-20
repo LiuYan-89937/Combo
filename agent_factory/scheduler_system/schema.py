@@ -15,6 +15,16 @@ SchedulerConcurrencyPolicy = Literal["skip", "queue", "replace"]
 SchedulerUnattendedPolicy = Literal["deny_if_approval_required", "pause_and_wait_for_user", "allow_preapproved_only"]
 SchedulerRunStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled"]
 SchedulerThreadPolicy = Literal["new_thread_per_run", "fixed_thread", "inherit_agent_default"]
+SchedulerFeedbackMode = Literal["llm_summary"]
+SchedulerFailureAction = Literal["pause"]
+
+
+class SchedulerFailurePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_consecutive_failures: int = Field(default=3, ge=1)
+    action: SchedulerFailureAction = "pause"
 
 
 class SchedulerContractConfig(BaseModel):
@@ -26,6 +36,7 @@ class SchedulerContractConfig(BaseModel):
     default_concurrency_policy: SchedulerConcurrencyPolicy = "skip"
     default_timeout_seconds: int = Field(default=900, ge=1)
     unattended_policy: SchedulerUnattendedPolicy = "deny_if_approval_required"
+    default_failure_policy: SchedulerFailurePolicy = Field(default_factory=SchedulerFailurePolicy)
 
 
 class SchedulerTarget(BaseModel):
@@ -47,8 +58,8 @@ class SchedulerTarget(BaseModel):
                 raise ValueError("graph_run target payload fixed_thread requires fixed_thread_id")
         elif self.target_type == "script_run":
             command = self.payload.get("command")
-            if not isinstance(command, list) or not all(isinstance(item, str) and item for item in command):
-                raise ValueError("script_run target payload requires command as non-empty string array")
+            if not isinstance(command, str) or not command.strip():
+                raise ValueError("script_run target payload requires command as non-empty string")
         elif self.target_type == "tool_call":
             tool_id = str(self.payload.get("tool_id") or "").strip()
             arguments = self.payload.get("arguments")
@@ -57,6 +68,13 @@ class SchedulerTarget(BaseModel):
             if arguments is not None and not isinstance(arguments, dict):
                 raise ValueError("tool_call target payload arguments must be an object")
         return self
+
+
+class SchedulerFeedbackConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    mode: SchedulerFeedbackMode = "llm_summary"
 
 
 class SchedulerJob(BaseModel):
@@ -69,11 +87,14 @@ class SchedulerJob(BaseModel):
     schedule_type: SchedulerScheduleType
     schedule_expr: str
     timezone: str = "Asia/Shanghai"
+    task_content: str = ""
     target: SchedulerTarget
+    feedback: SchedulerFeedbackConfig = Field(default_factory=SchedulerFeedbackConfig)
     concurrency_policy: SchedulerConcurrencyPolicy = "skip"
     max_concurrent_runs: int = Field(default=1, ge=1)
     timeout_seconds: int = Field(default=900, ge=1)
     retry_policy: dict[str, Any] = Field(default_factory=dict)
+    failure_policy: SchedulerFailurePolicy = Field(default_factory=SchedulerFailurePolicy)
     unattended_policy: SchedulerUnattendedPolicy = "deny_if_approval_required"
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
     updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
@@ -83,6 +104,11 @@ class SchedulerJob(BaseModel):
     def _non_empty(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("value must not be empty")
+        return value.strip()
+
+    @field_validator("task_content")
+    @classmethod
+    def _strip_optional_text(cls, value: str) -> str:
         return value.strip()
 
     @model_validator(mode="after")
@@ -145,6 +171,12 @@ class SchedulerExecutionReport(BaseModel):
     stderr_preview: str | None = None
     exit_code: int | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class SchedulerFeedbackSummaryDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(min_length=1)
 
 
 def utc_now() -> datetime:

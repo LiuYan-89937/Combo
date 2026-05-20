@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from langchain_core.tools import BaseTool
 
@@ -16,7 +16,7 @@ from agent_factory.tooling.builtins import (
     get_builtin_tool_specs,
 )
 from agent_factory.tooling.spec import ModelToolView, ToolSpec, model_tool_view
-from agent_factory.scheduler_system import default_factory_scheduler_runtime, scheduler_enabled_from_env
+from agent_factory.scheduler_system import scheduler_enabled_from_env
 
 
 class ToolRegistry:
@@ -53,23 +53,22 @@ def get_factory_tools(
     extension_root: str | Path | None = None,
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
     mcp_tool_clients: Mapping[str, MCPToolClient] | None = None,
+    runtime_resources: Mapping[str, Any] | None = None,
 ) -> list[BaseTool]:
     from agent_factory.tooling.factory_extensions import default_factory_extension_root
 
     selected_ids = set(tool_ids or [])
-    specs, effective_mcp_clients, runtime_resources = _collect_factory_tool_specs(
+    base_runtime_resources = dict(runtime_resources or {})
+    specs, effective_mcp_clients, discovered_runtime_resources = _collect_factory_tool_specs(
         selected_ids=selected_ids,
         include_extensions=include_extensions,
         extension_root=extension_root,
         mcp_catalog_clients=mcp_catalog_clients,
         mcp_tool_clients=mcp_tool_clients,
+        runtime_resources=base_runtime_resources,
     )
+    effective_runtime_resources = _merge_runtime_resources(base_runtime_resources, discovered_runtime_resources)
     factory_extension_root = Path(extension_root).expanduser().resolve() if extension_root else default_factory_extension_root()
-    scheduler_resources = (
-        {"scheduler_runtime": default_factory_scheduler_runtime()}
-        if scheduler_enabled_from_env()
-        else {}
-    )
     compiler = ToolCompiler(
         allowed_python_roots=[factory_extension_root],
         mcp_clients=effective_mcp_clients,
@@ -82,8 +81,7 @@ def get_factory_tools(
                 "root": str(_default_filesystem_root()),
                 "allow_external": False,
             },
-            **runtime_resources,
-            **scheduler_resources,
+            **effective_runtime_resources,
         }
     )
     return compiler.compile_many(specs)
@@ -103,6 +101,7 @@ def get_factory_tool_specs(
         extension_root=extension_root,
         mcp_catalog_clients=mcp_catalog_clients,
         mcp_tool_clients=None,
+        runtime_resources={},
     )
     return specs
 
@@ -114,14 +113,15 @@ def _collect_factory_tool_specs(
     extension_root: str | Path | None,
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None,
     mcp_tool_clients: Mapping[str, MCPToolClient] | None,
+    runtime_resources: Mapping[str, Any],
 ) -> tuple[list[ToolSpec], Mapping[str, MCPToolClient], dict[str, object]]:
     from agent_factory.tooling.factory_extensions import FactoryExtensionManager
 
     specs = get_builtin_tool_specs()
-    if not scheduler_enabled_from_env():
+    if not scheduler_enabled_from_env() or "scheduler_runtime" not in runtime_resources:
         specs = [spec for spec in specs if spec.id != "scheduler"]
     effective_mcp_clients: Mapping[str, MCPToolClient] = dict(mcp_tool_clients or {})
-    runtime_resources: dict[str, object] = {}
+    discovered_runtime_resources: dict[str, object] = {}
     if include_extensions:
         manager = FactoryExtensionManager(
             extension_root=extension_root,
@@ -130,14 +130,14 @@ def _collect_factory_tool_specs(
         )
         extension_result, _report = manager.discover()
         effective_mcp_clients = manager.mcp_tool_clients()
-        runtime_resources.update(extension_result.runtime_resources)
+        discovered_runtime_resources.update(extension_result.runtime_resources)
         registry = ToolRegistry(specs)
         for spec in extension_result.tool_specs:
             if selected_ids and spec.id not in selected_ids:
                 continue
             registry.register(spec)
         specs = registry.all()
-    return [tool for tool in specs if not selected_ids or tool.id in selected_ids], effective_mcp_clients, runtime_resources
+    return [tool for tool in specs if not selected_ids or tool.id in selected_ids], effective_mcp_clients, discovered_runtime_resources
 
 
 def get_factory_model_tools() -> list[BaseTool]:
@@ -154,3 +154,15 @@ def get_factory_protected_tool_ids() -> list[str]:
 
 def _default_filesystem_root() -> Path:
     return project_root()
+
+
+def _merge_runtime_resources(
+    base: Mapping[str, Any],
+    discovered: Mapping[str, object],
+) -> dict[str, object]:
+    merged: dict[str, object] = dict(base)
+    for key, value in discovered.items():
+        if key in merged and merged[key] is not value and merged[key] != value:
+            raise ValueError(f"conflicting factory tool runtime resource: {key}")
+        merged[key] = value
+    return merged

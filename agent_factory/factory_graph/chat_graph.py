@@ -9,7 +9,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
-from agent_factory.tooling import get_factory_model_tools, get_factory_tools
+from agent_factory.tooling import get_factory_tools
 from agent_factory.tooling.langgraph_node import build_tool_node_runner
 from agent_factory.factory_graph.model_call import prompt_values
 from agent_factory.factory_graph.session import build_factory_checkpointer
@@ -36,7 +36,7 @@ def build_factory_chat_graph(
     resolved_tools = tools if tools is not None else get_factory_tools()
     has_tools = bool(resolved_tools)
     graph = StateGraph(FactoryChatState)
-    graph.add_node(FACTORY_CHAT_MODEL_NODE, _chat_model_node)
+    graph.add_node(FACTORY_CHAT_MODEL_NODE, _make_chat_model_node(model_tools=resolved_tools))
     if has_tools:
         graph.add_node(
             FACTORY_CHAT_TOOLS_NODE,
@@ -60,28 +60,30 @@ def build_factory_chat_graph(
     return graph.compile(checkpointer=resolved_checkpointer)
 
 
-def _chat_model_node(state: FactoryChatState) -> dict[str, Any]:
-    task_model = get_task_model()
-    task_settings = get_task_model_settings()
-    if task_model is None:
-        return _model_error("task model is not configured")
-    try:
-        prompt_value = get_prompt(PromptId.FACTORY_CHAT).invoke(
-            prompt_values("factory_chat", {"messages": state.get("messages", [])})
-        )
-        model_tools = get_factory_model_tools()
-        chat_model = task_model.bind_tools(model_tools) if model_tools else task_model
-        if task_settings.max_tokens is not None:
-            chat_model = chat_model.bind(max_tokens=task_settings.max_tokens)
-        response = chat_model.invoke(prompt_value)
-        if not isinstance(response, AIMessage):
-            response = AIMessage(content=str(getattr(response, "content", response)))
-        return {
-            "messages": [response],
-            "status": "running" if response.tool_calls else "answered",
-        }
-    except Exception as exc:
-        return _model_error(f"{type(exc).__name__}: {exc}")
+def _make_chat_model_node(*, model_tools: list[BaseTool]):
+    def chat_model_node(state: FactoryChatState) -> dict[str, Any]:
+        task_model = get_task_model()
+        task_settings = get_task_model_settings()
+        if task_model is None:
+            return _model_error("task model is not configured")
+        try:
+            prompt_value = get_prompt(PromptId.FACTORY_CHAT).invoke(
+                prompt_values("factory_chat", {"messages": state.get("messages", [])})
+            )
+            chat_model = task_model.bind_tools(model_tools) if model_tools else task_model
+            if task_settings.max_tokens is not None:
+                chat_model = chat_model.bind(max_tokens=task_settings.max_tokens)
+            response = chat_model.invoke(prompt_value)
+            if not isinstance(response, AIMessage):
+                response = AIMessage(content=str(getattr(response, "content", response)))
+            return {
+                "messages": [response],
+                "status": "running" if response.tool_calls else "answered",
+            }
+        except Exception as exc:
+            return _model_error(f"{type(exc).__name__}: {exc}")
+
+    return chat_model_node
 
 
 def _make_chat_model_router(*, has_tools: bool):

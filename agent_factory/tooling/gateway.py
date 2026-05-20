@@ -7,7 +7,7 @@ from typing import Any, Callable, Literal, Mapping
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_factory.tooling.execution_context import current_tool_call
+from agent_factory.tooling.execution_context import current_tool_approval_override, current_tool_call, current_tool_event_sink
 from agent_factory.tooling.resource_context import build_tool_resource_context
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
@@ -106,6 +106,7 @@ class ToolExecutionGateway:
                 arguments=arguments,
                 user_instruction=approval.revision_guidance or "Please regenerate the tool call.",
             )
+        self._emit_execution_started(arguments=arguments, risk=risk, tool_call_id=tool_call_id)
         try:
             output = self.entrypoint(arguments=arguments, resources=tool_resources)
         except Exception as exc:
@@ -209,6 +210,8 @@ class ToolExecutionGateway:
             return ToolApprovalDecision(action="deny", revision_guidance=_risk_guidance(risk))
         if policy_action == "allow":
             return ToolApprovalDecision(action="approve")
+        if current_tool_approval_override() is not None:
+            return ToolApprovalDecision(action="approve")
         if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(self.spec.id):
             return ToolApprovalDecision(action="approve")
         handler = self.approval_handler or default_interrupt_approval
@@ -225,6 +228,28 @@ class ToolExecutionGateway:
         if missing:
             raise KeyError(f"missing required resources: {', '.join(sorted(missing))}")
         return resources
+
+    def _emit_execution_started(
+        self,
+        *,
+        arguments: dict[str, Any],
+        risk: ToolRiskResult,
+        tool_call_id: str | None,
+    ) -> None:
+        sink = current_tool_event_sink()
+        if sink is None:
+            return
+        sink(
+            {
+                "event_type": "tool_started",
+                "tool_id": self.spec.id,
+                "tool_call_id": tool_call_id or "",
+                "arguments": arguments,
+                "status": "running",
+                "risk_level": risk.risk_level,
+                "risk_reasons": risk.reasons,
+            }
+        )
 
     def _observation(
         self,
