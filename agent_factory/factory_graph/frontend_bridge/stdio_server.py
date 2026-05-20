@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from typing import Any
 
 from pydantic import ValidationError
@@ -37,13 +38,17 @@ def main() -> None:
 
 
 class _JsonLineWriter:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
     def write(self, payload: Any) -> None:
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(mode="json")
         else:
             data = payload
-        sys.stdout.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+        with self._lock:
+            sys.stdout.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":

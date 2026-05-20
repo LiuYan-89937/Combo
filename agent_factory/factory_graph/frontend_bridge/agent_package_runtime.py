@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
@@ -9,7 +11,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any, Deque, Iterator
 from uuid import uuid4
 
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
@@ -26,6 +28,17 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
 
 DEFAULT_AGENT_PACKAGE_ROOT = ".agentfactory/packages"
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
+TERMINAL_EVENT_TYPES = {
+    "run_completed",
+    "run_failed",
+    "tool_approval_requested",
+    "interrupt_requested",
+    "agent_package_sessions_listed",
+    "error",
+}
+
+Emit = Callable[[FactoryFrontendEvent], None]
+ContainerStreamItem = tuple[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +61,7 @@ class AgentPackageRuntimeManager:
         *,
         package_root: str | Path | None = None,
         launcher: DockerAgentRuntimeLauncher | None = None,
+        emit: Emit | None = None,
     ) -> None:
         configured_root = package_root or os.getenv("AGENTFACTORY_PACKAGE_ROOT")
         self.package_root = Path(configured_root).expanduser() if configured_root else _default_package_root()
@@ -59,6 +73,12 @@ class AgentPackageRuntimeManager:
         )
         self._containers: dict[str, AgentRuntimeContainerHandle] = {}
         self._mcp_gateways = HostMCPGatewayManager()
+        self._emit = emit
+
+    def set_emit(self, emit: Emit | None) -> None:
+        self._emit = emit
+        for handle in self._containers.values():
+            handle.set_emit(emit)
 
     def list_packages(self) -> list[dict[str, Any]]:
         self.package_root.mkdir(parents=True, exist_ok=True)
@@ -285,6 +305,7 @@ class AgentPackageRuntimeManager:
             package_fingerprint=fingerprint,
             idle_timeout_seconds=self.idle_timeout_seconds,
             command=plan.command,
+            emit=self._emit,
         )
         handle.startup_payload = {
             "status": "running",
@@ -334,11 +355,18 @@ class AgentRuntimeContainerHandle:
         package_fingerprint: str,
         idle_timeout_seconds: int,
         command: list[str],
+        emit: Emit | None = None,
     ) -> None:
         self.package_id = package_id
         self.package_fingerprint = package_fingerprint
         self.idle_timeout_seconds = idle_timeout_seconds
         self._idle_timer: threading.Timer | None = None
+        self._emit = emit
+        self._condition = threading.Condition()
+        self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
+        self._reader_error: BaseException | None = None
+        self._stdout_closed = False
+        self._closing = False
         self.process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -349,7 +377,16 @@ class AgentRuntimeContainerHandle:
         )
         self.startup_payload: dict[str, Any] | None = None
         self.last_used = time.monotonic()
+        self._reader_thread = threading.Thread(
+            target=self._read_stdout,
+            name=f"agent-runtime-stdout-{package_id}",
+            daemon=True,
+        )
+        self._reader_thread.start()
         self._schedule_idle_shutdown()
+
+    def set_emit(self, emit: Emit | None) -> None:
+        self._emit = emit
 
     @property
     def is_running(self) -> bool:
@@ -361,40 +398,37 @@ class AgentRuntimeContainerHandle:
     def send(self, command: dict[str, Any]) -> Iterator[tuple[str, Any]]:
         if not self.is_running:
             raise RuntimeError(f"agent runtime container for {self.package_id} is not running")
-        if self.process.stdin is None or self.process.stdout is None:
+        if self.process.stdin is None:
             raise RuntimeError("agent runtime container stdio is unavailable")
         request_id = str(command.get("request_id") or uuid4().hex)
         command["request_id"] = request_id
+        with self._condition:
+            if request_id in self._request_events:
+                raise RuntimeError(f"agent runtime request is already active: {request_id}")
+            self._request_events[request_id] = deque()
         self.process.stdin.write(json.dumps(command, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
         self.last_used = time.monotonic()
         self._cancel_idle_shutdown()
-        for line in self.process.stdout:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                item = FactoryFrontendEvent.model_validate_json(stripped)
-            except Exception:
-                yield "stderr", stripped
-                continue
-            yield "frontend_event", item
-            if item.request_id == request_id and item.event_type in {
-                "run_completed",
-                "run_failed",
-                "tool_approval_requested",
-                "interrupt_requested",
-                "agent_package_sessions_listed",
-                "error",
-            }:
-                self.last_used = time.monotonic()
-                self._schedule_idle_shutdown()
-                return
-        return_code = self.process.wait()
-        raise RuntimeError(f"agent runtime container exited with {return_code}")
+        terminal_seen = False
+        try:
+            while not terminal_seen:
+                batch = self._next_request_batch(request_id)
+                for stream_mode, item in batch:
+                    yield stream_mode, item
+                    if _is_terminal_request_event(item, request_id):
+                        terminal_seen = True
+                if terminal_seen:
+                    return
+        finally:
+            with self._condition:
+                self._request_events.pop(request_id, None)
+            self.last_used = time.monotonic()
+            self._schedule_idle_shutdown()
 
     def close(self) -> None:
         self._cancel_idle_shutdown()
+        self._closing = True
         if self.process.stdin is not None and self.is_running:
             try:
                 self.process.stdin.write(json.dumps({"type": "shutdown", "request_id": uuid4().hex}) + "\n")
@@ -410,6 +444,89 @@ class AgentRuntimeContainerHandle:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+        with self._condition:
+            self._stdout_closed = True
+            self._condition.notify_all()
+        self._reader_thread.join(timeout=1)
+        self._close_stdio()
+
+    def _next_request_batch(self, request_id: str) -> list[ContainerStreamItem]:
+        while True:
+            with self._condition:
+                queue = self._request_events.get(request_id)
+                if queue is None:
+                    return []
+                if queue:
+                    batch = list(queue)
+                    queue.clear()
+                    return batch
+                if self._reader_error is not None:
+                    raise RuntimeError(f"agent runtime stdout reader failed: {self._reader_error}") from self._reader_error
+                if self._stdout_closed:
+                    return_code = self.process.poll()
+                    raise RuntimeError(f"agent runtime container exited with {return_code}")
+                self._condition.wait(timeout=0.2)
+
+    def _read_stdout(self) -> None:
+        try:
+            if self.process.stdout is None:
+                raise RuntimeError("agent runtime container stdout is unavailable")
+            for line in self.process.stdout:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                self.last_used = time.monotonic()
+                try:
+                    item = FactoryFrontendEvent.model_validate_json(stripped)
+                except Exception:
+                    self._dispatch_stderr(stripped)
+                    continue
+                self._dispatch_event(item)
+        except BaseException as exc:
+            with self._condition:
+                if not self._closing:
+                    self._reader_error = exc
+                self._condition.notify_all()
+        finally:
+            with self._condition:
+                self._stdout_closed = True
+                self._condition.notify_all()
+
+    def _dispatch_event(self, item: FactoryFrontendEvent) -> None:
+        background_event: FactoryFrontendEvent | None = None
+        with self._condition:
+            queue = self._request_events.get(str(item.request_id or ""))
+            if queue is not None:
+                queue.append(("frontend_event", item))
+                self._condition.notify_all()
+                return
+            background_event = item
+        self._emit_background_event(background_event)
+
+    def _dispatch_stderr(self, value: str) -> None:
+        background_stderr = True
+        with self._condition:
+            active_request_ids = list(self._request_events)
+            if len(active_request_ids) == 1:
+                self._request_events[active_request_ids[0]].append(("stderr", value))
+                self._condition.notify_all()
+                background_stderr = False
+        if background_stderr:
+            self._emit_background_event(
+                event(
+                    "debug_patch",
+                    mode="agent_package",
+                    graph_id="agent_package_runtime",
+                    producer_type="agent_runtime_host",
+                    payload={"agent_package_stderr": value, "package_id": self.package_id},
+                )
+            )
+
+    def _emit_background_event(self, item: FactoryFrontendEvent) -> None:
+        if self._emit is not None:
+            self._emit(item)
+        if not self._request_events:
+            self._schedule_idle_shutdown()
 
     def _schedule_idle_shutdown(self) -> None:
         self._cancel_idle_shutdown()
@@ -423,6 +540,15 @@ class AgentRuntimeContainerHandle:
         if self._idle_timer is not None:
             self._idle_timer.cancel()
             self._idle_timer = None
+
+    def _close_stdio(self) -> None:
+        for stream in (self.process.stdin, self.process.stdout):
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except Exception:
+                pass
 
 
 def _host_runtime_root(package_id: str) -> Path:
@@ -469,6 +595,14 @@ def _run_failed_event(request_id: str, payload: dict[str, Any]) -> FactoryFronte
         severity="error",
         message=str(payload.get("message") or "agent runtime launch failed"),
         payload=payload,
+    )
+
+
+def _is_terminal_request_event(item: Any, request_id: str) -> bool:
+    return (
+        isinstance(item, FactoryFrontendEvent)
+        and item.request_id == request_id
+        and item.event_type in TERMINAL_EVENT_TYPES
     )
 
 

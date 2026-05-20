@@ -95,6 +95,7 @@ class FactoryRuntimeAdapter:
             self.checkpointer = self.checkpointer_handle.saver
         if self.agent_package_runtime is None:
             self.agent_package_runtime = AgentPackageRuntimeManager()
+        self.agent_package_runtime.set_emit(self.emit)
         if scheduler_enabled_from_env():
             self._start_factory_scheduler()
 
