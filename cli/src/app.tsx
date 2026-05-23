@@ -59,7 +59,7 @@ export function App() {
 			return;
 		}
 		if (value === '/chat') {
-			send(command('set_mode', {mode: 'chat'}));
+			send(command('set_mode', {mode: 'chat', payload: {package_id: 'factory_chat'}}));
 			return;
 		}
 		if (value === '/create-agent' || value === '/create—agent') {

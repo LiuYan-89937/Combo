@@ -764,8 +764,8 @@ Factory 生产链路迹象：
 
 | 位置 | 现状 |
 | --- | --- |
-| `agent_factory/factory_graph/stage_subgraphs/assembly_spec_generation.py` | Assembly services 会要求 `knowledge_engine`。 |
-| `agent_factory/factory_graph/stage_subgraphs/package_generation.py` | 会物化 knowledge 相关 package 文件，但具体知识系统目录仍待统一。 |
+| `agent_factory/factory_package/stage_subgraphs/assembly_spec_generation.py` | Assembly services 会要求 `knowledge_engine`。 |
+| `agent_factory/factory_package/stage_subgraphs/package_generation.py` | 会物化 knowledge 相关 package 文件，但具体知识系统目录仍待统一。 |
 | `tests/factory_graph/test_assembly_spec_generation.py` | 后续需要按新的知识系统契约重写。 |
 
 ### 4.2 当前问题
@@ -1006,8 +1006,8 @@ agent_factory/trace_system/
 
 | 位置 | 现状 |
 | --- | --- |
-| `agent_factory/factory_graph/prompt_context.py` | Factory 阶段模型调用会注入统一运行边界与阶段边界。 |
-| `agent_factory/factory_graph/model_call.py` | Factory 模型调用入口会统一调用 ContextSystem，跨会话记忆读取作为 ContextSource 进入上下文组装。 |
+| `agent_factory/factory_package/prompt_context.py` | Factory 阶段模型调用会注入统一运行边界与阶段边界。 |
+| `agent_factory/factory_package/model_call.py` | Factory 模型调用入口会统一调用 ContextSystem，跨会话记忆读取作为 ContextSource 进入上下文组装。 |
 | `agent_factory/context_system/` | 统一实现压缩摘要、检索召回、组装注入、事件 payload 与 Factory adapter。 |
 | `agent_factory/runtime_contracts/` | `contracts/context.json` 通过 `ContextContractBuilder` 贡献 `services.context_system` 和 `system.context_prepare`。 |
 | `agent_factory/runtime_kernel/wrappers/system_context.py` | 生产子 Agent 在 `cognitive.*` 节点前同步执行 context prepare。 |

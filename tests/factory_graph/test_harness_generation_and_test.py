@@ -8,13 +8,13 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from agent_factory.factory_graph.sandbox_runtime import PreparedSandbox, HarnessExecutionResult
-from agent_factory.factory_graph.schemas import (
+from agent_factory.factory_package.sandbox_runtime import PreparedSandbox, HarnessExecutionResult
+from agent_factory.factory_package.schemas import (
     ArtifactManifestEntry,
     HarnessContractDecision,
     HarnessReportError,
 )
-from agent_factory.factory_graph.stage_subgraphs.harness_generation_and_test import (
+from agent_factory.factory_package.stage_subgraphs.harness_generation_and_test import (
     run_harness_generation_and_test_subgraph,
 )
 
@@ -200,15 +200,15 @@ def _run_with_decisions(
             raise AssertionError("unexpected harness decision call")
         return queue.pop(0)
 
-    with patch("agent_factory.factory_graph.stage_subgraphs.harness_generation_and_test.get_main_model", return_value=_FakeModel()):
+    with patch("agent_factory.factory_package.stage_subgraphs.harness_generation_and_test.get_main_model", return_value=_FakeModel()):
         with patch(
-            "agent_factory.factory_graph.stage_subgraphs.harness_generation_and_test.call_structured_model",
+            "agent_factory.factory_package.stage_subgraphs.harness_generation_and_test.call_structured_model",
             side_effect=fake_call_structured_model,
         ):
             if runtime is not None:
-                with patch("agent_factory.factory_graph.stage_subgraphs.harness_generation_and_test.runtime_for_backend", return_value=runtime):
+                with patch("agent_factory.factory_package.stage_subgraphs.harness_generation_and_test.runtime_for_backend", return_value=runtime):
                     return run_harness_generation_and_test_subgraph(_base_state())
-            with patch("agent_factory.factory_graph.sandbox_runtime.shutil.which", return_value=docker_path):
+            with patch("agent_factory.factory_package.sandbox_runtime.shutil.which", return_value=docker_path):
                 return run_harness_generation_and_test_subgraph(_base_state())
 
 
@@ -264,6 +264,14 @@ def _valid_decision(
                         "purpose": "Sandbox temporary workdir",
                         "authorization_source": "system_required",
                     },
+                    {
+                        "resource_id": "runtime",
+                        "host_path": ".agentfactory/harness/run_1/runtime",
+                        "container_path": "/runtime",
+                        "access": "read_write",
+                        "purpose": "Sandbox runtime state",
+                        "authorization_source": "system_required",
+                    },
                 ],
                 "volumes": [],
                 "services": [],
@@ -301,6 +309,7 @@ class _FakeRuntime:
             resources_path=str(kwargs["resources_path"]),
             artifacts_root=str(kwargs["artifacts_root"]),
             workdir_host_path=str(Path(kwargs["artifacts_root"]) / "workdir"),
+            runtime_host_path=str(Path(kwargs["artifacts_root"]).parent / "runtime"),
         )
 
     def run(self, *, sandbox, plan):

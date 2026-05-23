@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from agent_factory.factory_graph.schemas import AssemblyReactDecision
-from agent_factory.factory_graph.stage_subgraphs.assembly_spec_generation import (
+from agent_factory.factory_package.schemas import AssemblyReactDecision
+from agent_factory.factory_package.stage_subgraphs.assembly_spec_generation import (
     run_assembly_spec_generation_subgraph,
 )
 
@@ -144,7 +144,7 @@ def _run_with_decisions(decisions: list[AssemblyReactDecision]):
         return queue.pop(0)
 
     with patch(
-        "agent_factory.factory_graph.stage_subgraphs.assembly_spec_generation.call_structured_model",
+        "agent_factory.factory_package.stage_subgraphs.assembly_spec_generation.call_structured_model",
         side_effect=fake_call_structured_model,
     ):
         return run_assembly_spec_generation_subgraph(_base_state())

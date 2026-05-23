@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from agent_factory.factory_graph.schemas import RequirementClarityOutput, RequirementFrame, RequirementMergeOutput
-from agent_factory.factory_graph.stage_subgraphs.requirement_clarification import (
+from agent_factory.factory_package.schemas import RequirementClarityOutput, RequirementFrame, RequirementMergeOutput
+from agent_factory.factory_package.stage_subgraphs.requirement_clarification import (
     run_requirement_capture_subgraph,
 )
 
@@ -19,7 +19,7 @@ class RequirementCaptureSubgraphTest(unittest.TestCase):
             output_expectation="给出整理计划和执行结果",
         )
         with patch(
-            "agent_factory.factory_graph.stage_subgraphs.requirement_clarification.call_structured_model",
+            "agent_factory.factory_package.stage_subgraphs.requirement_clarification.call_structured_model",
             side_effect=[
                 RequirementMergeOutput(current_requirement=frame.goal, requirement_frame=frame),
                 RequirementClarityOutput(is_clear=True, confidence=0.92, reason="目标和边界已足够明确"),
@@ -43,7 +43,7 @@ class RequirementCaptureSubgraphTest(unittest.TestCase):
     def test_unclear_requirement_stops_with_human_review_when_iteration_limit_reached(self) -> None:
         frame = RequirementFrame(goal="做一个 Agent")
         with patch(
-            "agent_factory.factory_graph.stage_subgraphs.requirement_clarification.call_structured_model",
+            "agent_factory.factory_package.stage_subgraphs.requirement_clarification.call_structured_model",
             side_effect=[
                 RequirementMergeOutput(current_requirement=frame.goal, requirement_frame=frame),
                 RequirementClarityOutput(

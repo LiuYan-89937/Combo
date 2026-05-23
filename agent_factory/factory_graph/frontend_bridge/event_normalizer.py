@@ -7,15 +7,16 @@ import uuid
 
 from langchain_core.messages import BaseMessage, ToolMessage
 
-from agent_factory.factory_graph.chat_graph import FACTORY_CHAT_TOOLS_NODE
-from agent_factory.factory_graph.constants import STAGE_IDS
+from agent_factory.factory_package.constants import STAGE_IDS
 from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendEvent,
     FactoryFrontendEventType,
     FactoryMode,
     event,
 )
-from agent_factory.factory_graph.graph import FACTORY_TOOLS_NODE
+
+
+FACTORY_TOOLS_NODE = "factory_tools"
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -136,7 +137,7 @@ class RuntimeEventNormalizer:
         self.emit_model_activity_from_patch(node_id, stage_id, patch)
         self._emit_tool_proposals(node_id, stage_id, node_span_id, patch)
         self._emit_tool_observations(node_id, stage_id, node_span_id, patch)
-        if _patch_has_ai_message(patch) and node_id not in {FACTORY_TOOLS_NODE, FACTORY_CHAT_TOOLS_NODE}:
+        if _patch_has_ai_message(patch) and node_id != FACTORY_TOOLS_NODE:
             self._complete_model_stream_for_node(node_id or "model", reason="node_completed")
 
     def emit_debug_event(self, chunk: Any) -> None:
@@ -359,7 +360,7 @@ class RuntimeEventNormalizer:
         if "nostream" in set(metadata.get("tags", [])):
             return
         node_id = str(metadata.get("langgraph_node") or "")
-        if node_id in {FACTORY_TOOLS_NODE, FACTORY_CHAT_TOOLS_NODE}:
+        if node_id == FACTORY_TOOLS_NODE:
             return
         if isinstance(message_chunk, ToolMessage):
             return

@@ -5,7 +5,7 @@ FastAgentFactory 是一个 CLI-first 的 Agent 工厂工程。它的目标不是
 当前项目围绕一条统一链路建设：
 
 ```text
-FactoryGraph 十阶段生产
+SystemPackage/factory_create_agent 十阶段生产
   -> AgentAssemblySpec
   -> PackageMaterializationPlan
   -> AgentPackageManifest + RuntimeContracts
@@ -21,7 +21,7 @@ FactoryGraph 十阶段生产
 
 已完成并正在使用的主干能力：
 
-- **FactoryGraph**：10 阶段 LangGraph 生产图，已接入标准运行事件、阶段 checkpoint、阶段级 `/rerun <stage_id>`。
+- **Factory SystemPackage**：`/create-agent` 已迁移到 `SystemPackage/factory_create_agent`，通过 RuntimeContracts 编译为 RuntimeKernel package 执行。
 - **TypeScript CLI**：Ink/React 前端，使用外部 `RuntimeStore` 和 selector 订阅事件状态，支持 chat、create-agent、agent-package 三种模式。
 - **Runtime Bridge**：Python bridge 通过 JSONL over stdio 暴露标准事件与命令，CLI/WebUI 不再解析 LangGraph 原始 patch 作为主数据源。
 - **统一工具系统**：Factory、生成 Agent、Package 工具、MCP、Skill 共用 `ToolSpec -> ToolRegistry -> ToolCompiler -> ToolExecutionGateway -> ToolNode`。
@@ -37,6 +37,7 @@ FactoryGraph 十阶段生产
 仍未完成或仍在精修的边界：
 
 - 第十阶段 `repair_or_finalize` 仍是空阶段。
+- `/rerun <stage_id>` 需要补齐持久 bookmark/checkpoint 定位后再恢复启用。
 - 第六阶段资源与 sandbox 准备已升级，但仍是当前重点精修区域。
 - 定时任务系统已接入统一 Contract/Builder/ToolExecutionGateway 链路；当前 `graph_run` 只表示“向当前主链路 Graph 投递一条 message”，动态 GraphPattern 选择会在生产链路成熟后再升级。
 - 知识系统、Trace 系统、上下文管理系统尚未完成与工具/记忆同等级别的统一规范。
@@ -148,11 +149,11 @@ pnpm --dir cli factory
 说明：
 
 - `/chat`：Factory 自由对话/测试模式，走同一套工具系统、事件系统和记忆系统。
-- `/create-agent`：进入 FactoryGraph 十阶段制造模式。
+- `/create-agent`：进入 `factory_create_agent` SystemPackage 十阶段制造模式。
 - `/run-agent-package`：扫描 `.agentfactory/packages`，选择已生产 AgentPackage 并进入子 Agent 对话。
 - `/agent-sessions`：在当前 AgentPackage 下选择子 Agent session。
 - `/sessions`：选择 Factory 会话。
-- `/rerun <stage_id>`：基于 LangGraph checkpoint history 从指定阶段入口重跑。
+- `/rerun <stage_id>`：阶段级重跑入口，当前等待 RuntimeKernel 持久 bookmark/checkpoint 定位补齐。
 - `/tool-grep <query|off>`：过滤工具活动展示。
 
 ## 运行时事件协议
@@ -507,7 +508,7 @@ docker build -t agentfactory-runtime-python:3.12 \
 ```text
 Factory graph_run
   -> mode=chat         -> Factory chat 主链路
-  -> mode=create_agent -> FactoryGraph 制造主链路
+  -> mode=create_agent -> factory_create_agent SystemPackage 制造主链路
 
 子 Agent graph_run
   -> 当前 AgentPackage 已编译的主 RuntimeKernel GraphPattern
@@ -607,7 +608,6 @@ python3 -m unittest \
   tests.factory_graph.test_frontend_event_normalizer \
   tests.tooling.test_factory_extensions \
   tests.tooling.test_tooling_core \
-  tests.factory_graph.test_factory_chat_graph \
   tests.runtime_kernel.test_runtime_kernel -v
 ```
 

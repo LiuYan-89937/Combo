@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from agent_factory.prompts import CaptureIntentOutput, PromptId, get_prompt, output_json_schema
-from agent_factory.factory_graph.model_call import prompt_values
+from agent_factory.factory_package.schemas import CaptureIntentOutput
+from agent_factory.prompts import PromptId, get_prompt, output_json_schema
+from agent_factory.factory_package.model_call import prompt_values
 
 
 class PromptTest(unittest.TestCase):

@@ -1,0 +1,14 @@
+{
+  "version": "sandbox_contract.v0",
+  "backend": "docker",
+  "image": "agentfactory-runtime-python:3.12",
+  "workdir": "/workdir",
+  "network_policy": {
+    "mode": "default_allow"
+  },
+  "mounts": [],
+  "services": [],
+  "secrets": [],
+  "env": {},
+  "volumes": []
+}

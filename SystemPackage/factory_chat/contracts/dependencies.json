@@ -1,0 +1,15 @@
+{
+  "type": "dependencies",
+  "version": "dependencies_contract.v0",
+  "enabled": true,
+  "config": {
+    "python_requirements": [],
+    "system_packages": [],
+    "system_binaries": [
+      "bash",
+      "grep",
+      "sed"
+    ],
+    "install_mode": "sandbox_init"
+  }
+}

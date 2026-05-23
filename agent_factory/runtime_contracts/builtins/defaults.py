@@ -3,17 +3,20 @@ from __future__ import annotations
 from agent_factory.memory_system import default_agent_memory_config
 from agent_factory.memory_system.config import MemoryStoreRuntimeConfig
 from agent_factory.runtime_contracts.schema import (
+    ArtifactContract,
     ContextContract,
     DependenciesContract,
     MemoryContract,
     MemoryContractConfig,
     ModelContract,
+    NodeProviderContract,
     RenderContract,
     ResourcesContract,
     SandboxRuntimeContract,
     SchedulerContract,
     SessionContract,
     SessionContractConfig,
+    StateContract,
     ToolsContract,
 )
 
@@ -34,6 +37,18 @@ def default_tools_contract() -> ToolsContract:
 
 def default_model_contract() -> ModelContract:
     return ModelContract()
+
+
+def default_state_contract() -> StateContract:
+    return StateContract(enabled=False)
+
+
+def default_node_provider_contract() -> NodeProviderContract:
+    return NodeProviderContract()
+
+
+def default_artifact_contract() -> ArtifactContract:
+    return ArtifactContract()
 
 
 def default_memory_contract() -> MemoryContract:

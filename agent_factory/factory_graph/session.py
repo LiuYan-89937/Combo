@@ -8,8 +8,7 @@ from pathlib import Path
 import uuid
 from typing import Any, Literal
 
-from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from agent_factory.paths import resolve_project_path
 from agent_factory.runtime_kernel.persistence import (
@@ -18,7 +17,6 @@ from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerHandle,
     is_checkpointer_persistent,
 )
-from agent_factory.runtime_kernel.state.messages import MessageRecord, dump_messages, load_messages
 
 
 FactorySessionMode = Literal["chat", "create_agent"]
@@ -37,12 +35,10 @@ class FactorySessionRecord(BaseModel):
     first_user_input: str | None = None
     display_title: str | None = None
     current_mode: FactorySessionMode | None = None
-    chat_thread_id: str
-    create_agent_thread_id: str
+    chat_agent_package_session_id: str | None = None
+    create_agent_package_session_id: str | None = None
     chat_turn_count: int = 0
     create_agent_turn_count: int = 0
-    chat_messages: list[MessageRecord] = Field(default_factory=list)
-    create_agent_messages: list[MessageRecord] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -96,8 +92,6 @@ class FactorySessionManager:
             session_id=uuid.uuid4().hex,
             created_at=now,
             updated_at=now,
-            chat_thread_id=f"factory-chat-{uuid.uuid4().hex}",
-            create_agent_thread_id=f"factory-create-{uuid.uuid4().hex}",
         )
         self.save(record)
         return record
@@ -146,20 +140,16 @@ class FactorySessionManager:
         return record
 
     def thread_id(self, record: FactorySessionRecord, mode: FactorySessionMode) -> str:
-        if mode == "chat":
-            return record.chat_thread_id
-        return record.create_agent_thread_id
+        raise ValueError(f"{mode} mode is backed by a SystemPackage session")
 
-    def messages(self, record: FactorySessionRecord, mode: FactorySessionMode) -> list[BaseMessage]:
-        if mode == "chat":
-            return load_messages(record.chat_messages)
-        return load_messages(record.create_agent_messages)
+    def messages(self, record: FactorySessionRecord, mode: FactorySessionMode) -> list[Any]:
+        raise ValueError(f"{mode} mode messages are stored in the SystemPackage session")
 
     def replace_messages(
         self,
         session_id: str,
         mode: FactorySessionMode,
-        messages: list[BaseMessage],
+        messages: list[Any],
     ) -> FactorySessionRecord:
         record = self.load(session_id)
         if not record.first_user_input:
@@ -167,10 +157,8 @@ class FactorySessionManager:
         if not record.display_title:
             record.display_title = _display_title(record.first_user_input)
         if mode == "chat":
-            record.chat_messages = dump_messages(messages)
             record.chat_turn_count = _human_message_count(messages)
         else:
-            record.create_agent_messages = dump_messages(messages)
             record.create_agent_turn_count = _human_message_count(messages)
         self.save(record)
         return record
@@ -209,11 +197,11 @@ def is_factory_checkpointer_persistent(checkpointer: object | None) -> bool:
     return is_checkpointer_persistent(checkpointer)
 
 
-def _human_message_count(messages: list[BaseMessage]) -> int:
+def _human_message_count(messages: list[Any]) -> int:
     return sum(1 for message in messages if message.__class__.__name__ == "HumanMessage")
 
 
-def _first_user_input(messages: list[BaseMessage]) -> str | None:
+def _first_user_input(messages: list[Any]) -> str | None:
     for message in messages:
         if message.__class__.__name__ == "HumanMessage":
             content = message.content

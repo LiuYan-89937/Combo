@@ -27,7 +27,6 @@ class PromptId(str, Enum):
     HARNESS_REACT = "factory.harness_generation_and_test.react"
     HARNESS_CONTRACT_DECISION = "factory.harness_generation_and_test.contract_decision"
     SCHEDULER_FEEDBACK_SUMMARY = "scheduler.feedback.summary"
-    FACTORY_CHAT = "factory.chat"
 
 
 def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
@@ -628,20 +627,6 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "ReAct 模型最后输出：\n{raw_model_output}\n\n"
                     "请返回 JSON。",
                 ),
-            ]
-        )
-    if prompt_id == PromptId.FACTORY_CHAT:
-        return ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are FastAgentFactory's shell assistant.\n"
-                    "Answer normal chat directly in Chinese.\n"
-                    "Be concise, warm, and practical.\n\n"
-                    "Factory 运行边界：\n{factory_operating_context}\n\n"
-                    "当前阶段边界：\n{stage_operating_context}",
-                ),
-                ("placeholder", "{messages}"),
             ]
         )
     if prompt_id == PromptId.SCHEDULER_FEEDBACK_SUMMARY:

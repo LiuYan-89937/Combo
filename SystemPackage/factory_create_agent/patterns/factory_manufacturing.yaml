@@ -1,0 +1,101 @@
+pattern_id: factory_manufacturing
+kind: main
+embeddable: false
+version: 1
+name: Factory Manufacturing
+description: FastAgentFactory ten-stage manufacturing workflow.
+metadata:
+  summary: Runs the production factory stages as RuntimeKernel package nodes.
+  use_when:
+    - The user wants to create or refine an AgentPackage through the factory.
+  avoid_when: []
+  selection_notes:
+    - This is a SystemPackage workflow and is not exposed as a generated-agent template.
+  tags:
+    - factory
+    - manufacturing
+    - system-package
+entry_node: requirement_capture
+nodes:
+  - id: requirement_capture
+    type: cognitive
+    impl: builtin.factory.requirement_capture
+  - id: runtime_pattern_selection
+    type: cognitive
+    impl: builtin.factory.runtime_pattern_selection
+  - id: graph_behavior_planning
+    type: cognitive
+    impl: builtin.factory.graph_behavior_planning
+  - id: node_strategy_planning
+    type: cognitive
+    impl: builtin.factory.node_strategy_planning
+  - id: tool_capability_planning
+    type: cognitive
+    impl: builtin.factory.tool_capability_planning
+  - id: resource_and_condition_planning
+    type: cognitive
+    impl: builtin.factory.resource_and_condition_planning
+  - id: assembly_spec_generation
+    type: cognitive
+    impl: builtin.factory.assembly_spec_generation
+  - id: package_generation
+    type: cognitive
+    impl: builtin.factory.package_generation
+  - id: harness_generation_and_test
+    type: cognitive
+    impl: builtin.factory.harness_generation_and_test
+  - id: repair_or_finalize
+    type: cognitive
+    impl: builtin.factory.repair_or_finalize
+edges:
+  - from: requirement_capture
+    to: runtime_pattern_selection
+    when: always
+  - from: runtime_pattern_selection
+    to: graph_behavior_planning
+    when: always
+  - from: graph_behavior_planning
+    to: node_strategy_planning
+    when: always
+  - from: node_strategy_planning
+    to: tool_capability_planning
+    when: always
+  - from: tool_capability_planning
+    to: resource_and_condition_planning
+    when: always
+  - from: resource_and_condition_planning
+    to: assembly_spec_generation
+    when: always
+  - from: assembly_spec_generation
+    to: package_generation
+    when: always
+  - from: package_generation
+    to: harness_generation_and_test
+    when: always
+  - from: harness_generation_and_test
+    to: repair_or_finalize
+    when: always
+interrupt_points: []
+termination:
+  success_nodes:
+    - repair_or_finalize
+  failure_nodes: []
+constraints:
+  allowed_node_types:
+    - cognitive
+  required_capabilities:
+    - tools
+    - context
+input_contract:
+  readable_sections:
+    - package_state
+    - conversation
+  writable_sections: []
+output_contract:
+  readable_sections: []
+  writable_sections:
+    - package_state
+    - conversation
+    - execution
+exit_routes: []
+state_mode: shared

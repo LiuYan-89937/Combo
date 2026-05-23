@@ -1,0 +1,88 @@
+{
+  "version": "render_manifest.v0",
+  "graph_id": "factory_chat",
+  "producer_type": "agent",
+  "nodes": {
+    "ingress": {
+      "node_id": "ingress",
+      "label": "Ingress",
+      "kind": "reserved",
+      "purpose": "Receive the user's chat input.",
+      "doing": "Preparing the chat turn for RuntimeKernel.",
+      "expected_output": "Runtime state contains the latest user input.",
+      "visible_to_user": false
+    },
+    "knowledge_retrieve": {
+      "node_id": "knowledge_retrieve",
+      "label": "Knowledge Retrieve",
+      "kind": "operational",
+      "purpose": "Retrieve package knowledge when configured.",
+      "doing": "Checking configured knowledge sources.",
+      "expected_output": "Relevant knowledge candidates are available to later nodes.",
+      "visible_to_user": false
+    },
+    "precheck": {
+      "node_id": "precheck",
+      "label": "Precheck",
+      "kind": "governance",
+      "purpose": "Apply lightweight policy checks before answering.",
+      "doing": "Evaluating whether the request may proceed.",
+      "expected_output": "The turn is either allowed, blocked, or sent to approval.",
+      "visible_to_user": false
+    },
+    "approval_gate": {
+      "node_id": "approval_gate",
+      "label": "Approval Gate",
+      "kind": "governance",
+      "purpose": "Pause for human approval when policy requires it.",
+      "doing": "Waiting for an approval decision.",
+      "expected_output": "The approved request continues to the answer node.",
+      "visible_to_user": true
+    },
+    "answer": {
+      "node_id": "answer",
+      "label": "Answer",
+      "kind": "cognitive",
+      "purpose": "Generate the assistant response or request tool calls.",
+      "doing": "Calling the configured task model with current context and tools.",
+      "expected_output": "Assistant text or native tool calls.",
+      "visible_to_user": true
+    },
+    "tool_exec": {
+      "node_id": "tool_exec",
+      "label": "Tool Execution",
+      "kind": "operational",
+      "purpose": "Execute model-requested tools through the unified gateway.",
+      "doing": "Validating and running tool calls.",
+      "expected_output": "Tool observation messages are returned to the model.",
+      "visible_to_user": true
+    },
+    "postcheck": {
+      "node_id": "postcheck",
+      "label": "Postcheck",
+      "kind": "governance",
+      "purpose": "Apply final policy checks before committing the response.",
+      "doing": "Reviewing the completed response.",
+      "expected_output": "The response is allowed or blocked.",
+      "visible_to_user": false
+    },
+    "commit": {
+      "node_id": "commit",
+      "label": "Commit",
+      "kind": "terminal",
+      "purpose": "Commit the completed conversation turn.",
+      "doing": "Finalizing answer state.",
+      "expected_output": "The final answer is available.",
+      "visible_to_user": false
+    },
+    "finalize": {
+      "node_id": "finalize",
+      "label": "Finalize",
+      "kind": "reserved",
+      "purpose": "Finish the chat turn.",
+      "doing": "Closing the runtime turn.",
+      "expected_output": "Runtime reports turn completion.",
+      "visible_to_user": false
+    }
+  }
+}

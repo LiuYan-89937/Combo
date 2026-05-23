@@ -22,15 +22,16 @@ class CognitiveAnswerNode:
         context: NodeExecutionContext,
     ) -> dict[str, Any]:
         binding_payload = _first_binding_payload(context.bindings)
-        model_service = context.services.model_service
-        if model_service is None:
-            raise RuntimeKernelError("cognitive.answer requires model_service.")
+        model_operation_service = context.services.model_operation_service
+        if model_operation_service is None:
+            raise RuntimeKernelError("cognitive.answer requires model_operation_service.")
         visible_tools = _visible_tools(context)
-        result = model_service.generate(
+        result = model_operation_service.tool_bound_chat(
             state=state,
             prompt_binding=binding_payload,
             messages=context.graph_messages,
             tools=visible_tools,
+            emit_event=context.emit_event,
         )
         if result.clarification_question:
             return {

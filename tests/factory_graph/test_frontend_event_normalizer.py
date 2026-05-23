@@ -168,14 +168,14 @@ class FrontendEventNormalizerTest(unittest.TestCase):
             request_id="request-a",
             session_id="session-a",
             mode="chat",
-            graph_id="factory_chat_graph",
+            graph_id="factory_chat_package",
         )
 
         normalizer.emit_message_chunk(
-            (AIMessageChunk(content="before tool"), {"langgraph_node": "chat_model", "tags": []})
+            (AIMessageChunk(content="before tool"), {"langgraph_node": "answer", "tags": []})
         )
         normalizer.emit_update(
-            "chat_model",
+            "answer",
             {
                 "messages": [
                     {
@@ -189,9 +189,9 @@ class FrontendEventNormalizerTest(unittest.TestCase):
             },
         )
         normalizer.emit_message_chunk(
-            (AIMessageChunk(content="after tool"), {"langgraph_node": "chat_model", "tags": []})
+            (AIMessageChunk(content="after tool"), {"langgraph_node": "answer", "tags": []})
         )
-        normalizer.emit_update("chat_model", {"messages": [{"type": "AIMessage", "content": "after tool"}]})
+        normalizer.emit_update("answer", {"messages": [{"type": "AIMessage", "content": "after tool"}]})
 
         completed = [event for event in events if event.event_type == "model_message_completed"]
         self.assertEqual([event.payload["content"] for event in completed], ["before tool", "after tool"])

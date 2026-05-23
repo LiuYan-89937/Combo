@@ -10,7 +10,21 @@ from agent_factory.memory_system import MemorySystemConfig, default_agent_memory
 from agent_factory.scheduler_system.schema import SchedulerContractConfig
 
 
-ContractType = Literal["session", "tools", "memory", "render", "resources", "sandbox", "dependencies", "model", "scheduler", "context"]
+ContractType = Literal[
+    "session",
+    "tools",
+    "memory",
+    "render",
+    "resources",
+    "sandbox",
+    "dependencies",
+    "model",
+    "scheduler",
+    "context",
+    "state",
+    "node_provider",
+    "artifact",
+]
 ContractVersion = Literal[
     "session_contract.v0",
     "tools_contract.v0",
@@ -22,9 +36,25 @@ ContractVersion = Literal[
     "model_contract.v0",
     "scheduler_contract.v0",
     "context_contract.v0",
+    "state_contract.v0",
+    "node_provider_contract.v0",
+    "artifact_contract.v0",
 ]
 REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
-    {"context", "dependencies", "model", "render", "resources", "sandbox", "scheduler", "session", "tools"}
+    {
+        "artifact",
+        "context",
+        "dependencies",
+        "model",
+        "node_provider",
+        "render",
+        "resources",
+        "sandbox",
+        "scheduler",
+        "session",
+        "state",
+        "tools",
+    }
 )
 
 
@@ -45,6 +75,7 @@ class AgentPackageManifest(BaseModel):
     sandbox_contract_path: str
     contracts: dict[str, str] = Field(default_factory=dict)
     bindings: dict[str, str] = Field(default_factory=dict)
+    patterns: list[str] = Field(default_factory=list)
     prompts: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
     policies: list[str] = Field(default_factory=list)
@@ -69,7 +100,7 @@ class AgentPackageManifest(BaseModel):
             _validate_package_relative_path(value, field_name=f"contracts.{key}")
         for key, value in self.bindings.items():
             _validate_package_relative_path(value, field_name=f"bindings.{key}")
-        for field_name in ("prompts", "tools", "policies", "strategies", "formatters"):
+        for field_name in ("patterns", "prompts", "tools", "policies", "strategies", "formatters"):
             for value in getattr(self, field_name):
                 _validate_package_relative_path(value, field_name=field_name)
         return self
@@ -196,6 +227,133 @@ class ModelContract(BaseModel):
     config: ModelContractConfig = Field(default_factory=ModelContractConfig)
 
 
+class StateContractConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    namespace: str = "package"
+    schema_path: str = "state/package.schema.json"
+    initial_state_path: str = "state/package.initial.json"
+    writable_node_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("namespace")
+    @classmethod
+    def _namespace_is_valid(cls, value: str) -> str:
+        namespace = str(value).strip()
+        if not namespace:
+            raise ValueError("state namespace must not be empty")
+        if not namespace.replace("_", "").replace(".", "").isalnum() or namespace[0].isdigit():
+            raise ValueError("state namespace must use lowercase alphanumeric, underscore, and dot segments")
+        for part in namespace.split("."):
+            if not part or not part[0].isalpha() or part.lower() != part:
+                raise ValueError("state namespace segments must start with a lowercase letter")
+        return namespace
+
+    @field_validator("schema_path", "initial_state_path")
+    @classmethod
+    def _state_paths_are_relative(cls, value: str) -> str:
+        return _validate_package_relative_path(value, field_name="state contract path")
+
+    @field_validator("writable_node_ids")
+    @classmethod
+    def _node_ids_are_non_empty(cls, value: list[str]) -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            node_id = str(item).strip()
+            if not node_id:
+                raise ValueError("writable_node_ids must not contain empty values")
+            if node_id not in seen:
+                ids.append(node_id)
+                seen.add(node_id)
+        return ids
+
+
+class StateContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["state"] = "state"
+    version: Literal["state_contract.v0"] = "state_contract.v0"
+    enabled: bool = False
+    config: StateContractConfig = Field(default_factory=StateContractConfig)
+
+
+class NodeProviderContractConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("provider_ids")
+    @classmethod
+    def _provider_ids_are_non_empty(cls, value: list[str]) -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            provider_id = str(item).strip()
+            if not provider_id:
+                raise ValueError("provider_ids must not contain empty values")
+            if provider_id not in seen:
+                ids.append(provider_id)
+                seen.add(provider_id)
+        return ids
+
+
+class NodeProviderContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["node_provider"] = "node_provider"
+    version: Literal["node_provider_contract.v0"] = "node_provider_contract.v0"
+    enabled: bool = True
+    config: NodeProviderContractConfig = Field(default_factory=NodeProviderContractConfig)
+
+
+class ArtifactContractConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root: str = "/artifacts"
+    index_path: str = "/artifacts/index.jsonl"
+    allowed_kinds: list[str] = Field(default_factory=lambda: ["report", "artifact"])
+
+    @field_validator("root", "index_path")
+    @classmethod
+    def _artifact_path_is_safe(cls, value: str) -> str:
+        raw = str(value).strip()
+        if not raw:
+            raise ValueError("artifact paths must not be empty")
+        path = PurePosixPath(raw)
+        if path == PurePosixPath("/"):
+            raise ValueError("artifact paths must not point at the container root")
+        if any(part in {"", ".", ".."} for part in path.parts):
+            raise ValueError("artifact paths must not contain empty, current, or parent segments")
+        return raw
+
+    @field_validator("allowed_kinds")
+    @classmethod
+    def _allowed_kinds_are_valid(cls, value: list[str]) -> list[str]:
+        kinds: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            kind = str(item).strip()
+            if not kind:
+                raise ValueError("allowed_kinds must not contain empty values")
+            if "/" in kind or ".." in kind:
+                raise ValueError("artifact kind must be a simple identifier")
+            if kind not in seen:
+                kinds.append(kind)
+                seen.add(kind)
+        if not kinds:
+            raise ValueError("allowed_kinds must not be empty")
+        return kinds
+
+
+class ArtifactContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["artifact"] = "artifact"
+    version: Literal["artifact_contract.v0"] = "artifact_contract.v0"
+    enabled: bool = True
+    config: ArtifactContractConfig = Field(default_factory=ArtifactContractConfig)
+
+
 class RenderContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -294,6 +452,9 @@ RuntimeContract = (
     | DependenciesContract
     | ModelContract
     | SchedulerContract
+    | StateContract
+    | NodeProviderContract
+    | ArtifactContract
 )
 
 

@@ -136,7 +136,7 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
     def test_enabled_cross_session_memory_requires_base_store(self) -> None:
         facade = _runtime_facade()
         services = RuntimeServices(
-            model_service=ScriptedModelService(),
+            model_operation_service=_ModelOperationServiceFromAdapter(ScriptedModelService()),
             tool_registry=InMemoryToolRegistry(),
             memory_store=None,
             memory_system=MemorySystemRuntime(config=MemorySystemConfig(), store=None),
@@ -154,7 +154,7 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
     def test_cross_session_memory_is_optional_for_generated_agent_runtime(self) -> None:
         facade = _runtime_facade()
         services = RuntimeServices(
-            model_service=ScriptedModelService(),
+            model_operation_service=_ModelOperationServiceFromAdapter(ScriptedModelService()),
             tool_registry=InMemoryToolRegistry(),
             memory_store=None,
             memory_system=None,
@@ -180,7 +180,7 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
             injection_enabled=False,
         )
         services = RuntimeServices(
-            model_service=ScriptedModelService(),
+            model_operation_service=_ModelOperationServiceFromAdapter(ScriptedModelService()),
             tool_registry=InMemoryToolRegistry(),
             memory_store=LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store,
             memory_system=MemorySystemRuntime(
@@ -220,7 +220,7 @@ class RuntimeKernelToolPermissionTest(unittest.TestCase):
         context = NodeExecutionContext(
             node_id="answer",
             impl="cognitive.answer",
-            services=RuntimeServices(model_service=_ToolCallingModelService()),
+            services=RuntimeServices(model_operation_service=_ToolCallingModelOperationService()),
             emit_event=events.append,
         )
 
@@ -420,10 +420,13 @@ class RuntimeKernelToolPermissionTest(unittest.TestCase):
 def _runtime_services(
     *,
     model_service=None,
+    model_operation_service=None,
     tool_registry=None,
 ) -> RuntimeServices:
+    adapter = model_service or ScriptedModelService()
     return RuntimeServices(
-        model_service=model_service or ScriptedModelService(),
+        model_service=adapter,
+        model_operation_service=model_operation_service or _ModelOperationServiceFromAdapter(adapter),
         tool_registry=tool_registry or InMemoryToolRegistry(),
         memory_store=LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store,
         context_system=default_context_runtime(),
@@ -505,6 +508,24 @@ class _ToolCallingModelService:
             assistant_draft="",
             tool_calls=list(ai_message.tool_calls),
         )
+
+
+class _ModelOperationServiceFromAdapter:
+    def __init__(self, adapter) -> None:
+        self.adapter = adapter
+
+    def tool_bound_chat(self, **kwargs) -> ModelInvocationResult:
+        kwargs.pop("emit_event", None)
+        return self.adapter.generate(**kwargs)
+
+
+class _ToolCallingModelOperationService:
+    def __init__(self, *, tool_id: str = "ls") -> None:
+        self.adapter = _ToolCallingModelService(tool_id=tool_id)
+
+    def tool_bound_chat(self, **kwargs) -> ModelInvocationResult:
+        kwargs.pop("emit_event", None)
+        return self.adapter.generate(**kwargs)
 
 
 def _compiled_high_risk_tool(root: Path):

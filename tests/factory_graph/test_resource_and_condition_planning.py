@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning import (
+from agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning import (
     RESOURCE_MODEL_NODE,
     _route_after_validation,
     _validate_ready_decision,
@@ -16,7 +16,7 @@ class ResourceAndConditionPlanningTest(unittest.TestCase):
     def test_docker_unavailable_blocks_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
                 return_value=["docker_not_available: Docker CLI was not found"],
             ):
                 result = _validate_ready_decision(
@@ -31,10 +31,10 @@ class ResourceAndConditionPlanningTest(unittest.TestCase):
     def test_rejects_unconverted_host_resource_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
                 return_value=[],
             ), patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_image_error",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_image_error",
                 return_value=None,
             ):
                 result = _validate_ready_decision(
@@ -49,10 +49,10 @@ class ResourceAndConditionPlanningTest(unittest.TestCase):
     def test_rejects_host_loopback_resource_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
                 return_value=[],
             ), patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_image_error",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_image_error",
                 return_value=None,
             ):
                 result = _validate_ready_decision(
@@ -89,10 +89,10 @@ class ResourceAndConditionPlanningTest(unittest.TestCase):
                 }
             ]
             with patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
                 return_value=[],
             ), patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_image_error",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_image_error",
                 return_value=None,
             ):
                 result = _validate_ready_decision(
@@ -135,10 +135,10 @@ class ResourceAndConditionPlanningTest(unittest.TestCase):
                 }
             ]
             with patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_blocking_errors",
                 return_value=[],
             ), patch(
-                "agent_factory.factory_graph.stage_subgraphs.resource_and_condition_planning._docker_image_error",
+                "agent_factory.factory_package.stage_subgraphs.resource_and_condition_planning._docker_image_error",
                 return_value=None,
             ):
                 result = _validate_ready_decision(

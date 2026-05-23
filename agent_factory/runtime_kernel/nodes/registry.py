@@ -9,6 +9,8 @@ class NodeRegistry:
         self._implementations: dict[str, NodeImplementation] = {}
 
     def register(self, implementation: NodeImplementation) -> None:
+        if implementation.impl_id in self._implementations:
+            raise RuntimeKernelError(f"Duplicate node implementation: {implementation.impl_id}")
         self._implementations[implementation.impl_id] = implementation
 
     def get(self, impl_id: str) -> NodeImplementation:

@@ -1,0 +1,97 @@
+{
+  "version": "render_manifest.v0",
+  "graph_id": "factory_manufacturing",
+  "producer_type": "agent",
+  "nodes": {
+    "requirement_capture": {
+      "node_id": "requirement_capture",
+      "label": "需求捕获",
+      "kind": "factory_stage",
+      "purpose": "捕获并规范化用户要制造的 Agent 需求。",
+      "doing": "分析输入、补齐制造边界，并决定是否需要继续澄清。",
+      "expected_output": "形成可进入后续阶段的需求摘要与阶段状态。",
+      "visible_to_user": true
+    },
+    "runtime_pattern_selection": {
+      "node_id": "runtime_pattern_selection",
+      "label": "运行模式选择",
+      "kind": "factory_stage",
+      "purpose": "选择适合该 Agent 的 RuntimeKernel pattern。",
+      "doing": "读取需求摘要并匹配可编译的运行图模式。",
+      "expected_output": "冻结候选运行图与选择依据。",
+      "visible_to_user": true
+    },
+    "graph_behavior_planning": {
+      "node_id": "graph_behavior_planning",
+      "label": "图行为规划",
+      "kind": "factory_stage",
+      "purpose": "规划 Agent 图的节点行为与整体流程语义。",
+      "doing": "推导节点间职责、边界、输入输出与终止条件。",
+      "expected_output": "形成图行为计划。",
+      "visible_to_user": true
+    },
+    "node_strategy_planning": {
+      "node_id": "node_strategy_planning",
+      "label": "节点策略规划",
+      "kind": "factory_stage",
+      "purpose": "为每个节点确定策略、上下文和运行约束。",
+      "doing": "生成节点级策略契约并对齐图行为计划。",
+      "expected_output": "形成节点策略计划。",
+      "visible_to_user": true
+    },
+    "tool_capability_planning": {
+      "node_id": "tool_capability_planning",
+      "label": "工具能力规划",
+      "kind": "factory_stage",
+      "purpose": "定义 Agent 需要的工具能力和工具契约。",
+      "doing": "将需求与节点策略映射为统一工具系统可编译的能力契约。",
+      "expected_output": "形成工具能力计划。",
+      "visible_to_user": true
+    },
+    "resource_and_condition_planning": {
+      "node_id": "resource_and_condition_planning",
+      "label": "资源与沙箱准备",
+      "kind": "factory_stage",
+      "purpose": "准备资源视角与沙箱运行契约。",
+      "doing": "检查资源需求、运行条件和 sandbox contract。",
+      "expected_output": "写出资源与沙箱准备报告。",
+      "visible_to_user": true
+    },
+    "assembly_spec_generation": {
+      "node_id": "assembly_spec_generation",
+      "label": "装配契约冻结",
+      "kind": "factory_stage",
+      "purpose": "冻结 AssemblySpec 与 PackageMaterializationPlan。",
+      "doing": "根据前序契约生成并校验可物化的装配规格。",
+      "expected_output": "写出 assembly spec、物化计划和校验报告。",
+      "visible_to_user": true
+    },
+    "package_generation": {
+      "node_id": "package_generation",
+      "label": "Package 物化",
+      "kind": "factory_stage",
+      "purpose": "按冻结计划生成 AgentPackage draft。",
+      "doing": "系统写入 contract 文件，模型生成允许的代码与说明文件。",
+      "expected_output": "写出可编译的 AgentPackage 目录与 package report。",
+      "visible_to_user": true
+    },
+    "harness_generation_and_test": {
+      "node_id": "harness_generation_and_test",
+      "label": "沙箱验证",
+      "kind": "factory_stage",
+      "purpose": "在 sandbox 中生成并执行 package 验证计划。",
+      "doing": "准备测试契约、运行 harness 并收集报告。",
+      "expected_output": "写出 harness report。",
+      "visible_to_user": true
+    },
+    "repair_or_finalize": {
+      "node_id": "repair_or_finalize",
+      "label": "维修或完成",
+      "kind": "factory_stage",
+      "purpose": "根据验证结果决定返厂修复或完成制造。",
+      "doing": "汇总结果、错误和下一步修复输入。",
+      "expected_output": "形成最终制造报告。",
+      "visible_to_user": true
+    }
+  }
+}

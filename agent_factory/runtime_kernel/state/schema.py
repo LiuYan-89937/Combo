@@ -126,6 +126,7 @@ class RuntimeState(BaseModel):
     schema_version: str = RUNTIME_STATE_SCHEMA_VERSION
     run: RunState = Field(default_factory=RunState)
     runtime_config: RuntimeConfigState = Field(default_factory=RuntimeConfigState)
+    package_state: dict[str, Any] = Field(default_factory=dict)
     conversation: ConversationState = Field(default_factory=ConversationState)
     context: ContextState = Field(default_factory=ContextState)
     tools: ToolState = Field(default_factory=ToolState)

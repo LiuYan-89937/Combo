@@ -41,6 +41,8 @@ class AgentAssemblyCompiler:
         render_manifest: RenderManifest | None = None,
         system_wrapper_ids: list[str] | tuple[str, ...] | None = None,
     ) -> CompiledAgentAssembly:
+        if runtime_build and runtime_build.node_providers:
+            self.facade.register_node_providers(runtime_build.node_providers)
         self.validator.validate(spec)
         assembled_pattern = self._assemble_pattern(spec)
         resolved_render_manifest = self._render_manifest_for_compile(
@@ -56,6 +58,8 @@ class AgentAssemblyCompiler:
             services=resolved_services,
             render_manifest=resolved_render_manifest,
             system_wrapper_ids=runtime_build.system_wrappers if runtime_build else system_wrapper_ids,
+            node_providers=runtime_build.node_providers if runtime_build else None,
+            state_contracts=runtime_build.state_contracts if runtime_build else None,
         )
         return CompiledAgentAssembly(
             spec=spec,

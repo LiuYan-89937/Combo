@@ -11,6 +11,7 @@ class RuntimeServices(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     model_service: object | None = None
+    model_operation_service: object | None = None
     tool_registry: object | None = None
     memory_store: object | None = None
     memory_system: object | None = None
@@ -23,6 +24,9 @@ class RuntimeServices(BaseModel):
     harness_bridge: object | None = None
     scheduler_store: object | None = None
     scheduler_runtime: object | None = None
+    artifact_store: object | None = None
+    report_store: object | None = None
+    bookmark_store: object | None = None
     runtime_resources: dict[str, Any] = {}
 
     def get_required(self, name: str) -> Any:

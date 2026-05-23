@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import json
 
 from langgraph.errors import GraphInterrupt
 
@@ -12,19 +13,26 @@ from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution, RuntimeDiagnostic
 from agent_factory.runtime_contracts.schema import (
+    ArtifactContract,
     ContextContract,
     MemoryContract,
     DependenciesContract,
     ModelContract,
+    NodeProviderContract,
     RenderContract,
     ResourcesContract,
     SandboxRuntimeContract,
     SchedulerContract,
     SessionContract,
+    StateContract,
     ToolsContract,
 )
+from agent_factory.artifact_system import ArtifactStore, ReportStore
 from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
+from agent_factory.runtime_kernel.model_operations import ModelOperationService
+from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
+from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
 from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
@@ -198,7 +206,66 @@ class ModelContractBuilder:
         if contract.config.source != "factory_runtime_env":
             raise ValueError(f"unsupported model contract source: {contract.config.source}")
         return RuntimeContribution(
-            services={"model_service": LangChainModelServiceAdapter(role=contract.config.role)}
+            services={
+                "model_service": LangChainModelServiceAdapter(role=contract.config.role),
+                "model_operation_service": ModelOperationService(role=contract.config.role),
+            }
+        )
+
+
+class StateContractBuilder:
+    contract_type = "state"
+    contract_version = "state_contract.v0"
+
+    def build(self, contract: StateContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        config = contract.config
+        schema = _read_package_json(context.package_root, config.schema_path)
+        initial_state = _read_package_json(context.package_root, config.initial_state_path)
+        if not isinstance(schema, dict):
+            raise ValueError("state contract schema file must contain a JSON object")
+        if not isinstance(initial_state, dict):
+            raise ValueError("state contract initial state file must contain a JSON object")
+        return RuntimeContribution(
+            state_contracts=[
+                StateNamespaceSpec(
+                    namespace=config.namespace,
+                    schema=schema,
+                    initial_state=initial_state,
+                    writable_node_ids=frozenset(config.writable_node_ids),
+                )
+            ]
+        )
+
+
+class NodeProviderContractBuilder:
+    contract_type = "node_provider"
+    contract_version = "node_provider_contract.v0"
+
+    def __init__(self, *, provider_registry: NodeProviderRegistry | None = None) -> None:
+        self.provider_registry = provider_registry or NodeProviderRegistry()
+
+    def build(self, contract: NodeProviderContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        return RuntimeContribution(
+            node_providers=self.provider_registry.resolve_many(contract.config.provider_ids)
+        )
+
+
+class ArtifactContractBuilder:
+    contract_type = "artifact"
+    contract_version = "artifact_contract.v0"
+
+    def build(self, contract: ArtifactContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        config = contract.config
+        artifact_store = ArtifactStore(
+            root=config.root,
+            index_path=config.index_path,
+            allowed_kinds=config.allowed_kinds,
+        )
+        return RuntimeContribution(
+            services={
+                "artifact_store": artifact_store,
+                "report_store": ReportStore(artifact_store=artifact_store),
+            }
         )
 
 
@@ -327,3 +394,13 @@ def _provider_diagnostics(items) -> list[RuntimeDiagnostic]:
         )
         for item in items
     ]
+
+
+def _read_package_json(package_root: Path, relative_path: str) -> Any:
+    target = (package_root / relative_path).resolve()
+    root = package_root.resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"package path escapes package root: {relative_path}") from exc
+    return json.loads(target.read_text(encoding="utf-8"))

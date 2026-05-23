@@ -1,0 +1,14 @@
+{
+  "type": "artifact",
+  "version": "artifact_contract.v0",
+  "enabled": true,
+  "config": {
+    "root": "/artifacts",
+    "index_path": "/artifacts/index.jsonl",
+    "allowed_kinds": [
+      "report",
+      "artifact",
+      "scheduler_report"
+    ]
+  }
+}

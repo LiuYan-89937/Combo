@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from agent_factory.factory_graph.schemas import PackageBuildDecision, PackageMaterializationPlan
-from agent_factory.factory_graph.stage_subgraphs.package_generation import run_package_generation_subgraph
+from agent_factory.factory_package.schemas import PackageBuildDecision, PackageMaterializationPlan
+from agent_factory.factory_package.stage_subgraphs.package_generation import run_package_generation_subgraph
 
 
 class PackageGenerationTest(unittest.TestCase):
@@ -106,9 +106,9 @@ def _run_with_decisions(decisions: list[PackageBuildDecision]):
             raise AssertionError("unexpected package decision call")
         return queue.pop(0)
 
-    with patch("agent_factory.factory_graph.stage_subgraphs.package_generation.get_main_model", return_value=_FakeModel()):
+    with patch("agent_factory.factory_package.stage_subgraphs.package_generation.get_main_model", return_value=_FakeModel()):
         with patch(
-            "agent_factory.factory_graph.stage_subgraphs.package_generation.call_structured_model",
+            "agent_factory.factory_package.stage_subgraphs.package_generation.call_structured_model",
             side_effect=fake_call_structured_model,
         ):
             return run_package_generation_subgraph(_base_state())
@@ -176,15 +176,18 @@ def _agent_package_manifest() -> dict:
         "sandbox_contract_path": "sandbox_contract.json",
         "render_manifest_path": "render_manifest.json",
         "contracts": {
+            "artifact": "contracts/artifact.json",
             "context": "contracts/context.json",
             "dependencies": "contracts/dependencies.json",
             "model": "contracts/model.json",
             "memory": "contracts/memory.json",
+            "node_provider": "contracts/node_provider.json",
             "render": "contracts/render.json",
             "resources": "contracts/resources.json",
             "sandbox": "contracts/sandbox.json",
             "scheduler": "contracts/scheduler.json",
             "session": "contracts/session.json",
+            "state": "contracts/state.json",
             "tools": "contracts/tools.json",
         },
         "bindings": {
@@ -250,15 +253,18 @@ def _materialization_plan() -> dict:
             {"path": "bindings/services.json", "file_type": "json", "source_kind": "binding", "source_id": "services", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.services", "required": True},
             {"path": "bindings/node_bindings.json", "file_type": "json", "source_kind": "binding", "source_id": "node_bindings", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.node_bindings", "required": True},
             {"path": "bindings/hooks.json", "file_type": "json", "source_kind": "binding", "source_id": "hooks", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.hooks", "required": True},
+            {"path": "contracts/artifact.json", "file_type": "json", "source_kind": "contract", "source_id": "artifact", "generation_mode": "system_generated", "contract_source": "runtime_contract:artifact", "required": True},
             {"path": "contracts/context.json", "file_type": "json", "source_kind": "contract", "source_id": "context", "generation_mode": "system_generated", "contract_source": "runtime_contract:context", "required": True},
             {"path": "contracts/dependencies.json", "file_type": "json", "source_kind": "contract", "source_id": "dependencies", "generation_mode": "system_generated", "contract_source": "runtime_contract:dependencies", "required": True},
             {"path": "contracts/model.json", "file_type": "json", "source_kind": "contract", "source_id": "model", "generation_mode": "system_generated", "contract_source": "runtime_contract:model", "required": True},
             {"path": "contracts/memory.json", "file_type": "json", "source_kind": "contract", "source_id": "memory", "generation_mode": "system_generated", "contract_source": "runtime_contract:memory", "required": True},
+            {"path": "contracts/node_provider.json", "file_type": "json", "source_kind": "contract", "source_id": "node_provider", "generation_mode": "system_generated", "contract_source": "runtime_contract:node_provider", "required": True},
             {"path": "contracts/render.json", "file_type": "json", "source_kind": "contract", "source_id": "render", "generation_mode": "system_generated", "contract_source": "runtime_contract:render", "required": True},
             {"path": "contracts/resources.json", "file_type": "json", "source_kind": "contract", "source_id": "resources", "generation_mode": "system_generated", "contract_source": "runtime_contract:resources", "required": True},
             {"path": "contracts/sandbox.json", "file_type": "json", "source_kind": "contract", "source_id": "sandbox", "generation_mode": "system_generated", "contract_source": "runtime_contract:sandbox", "required": True},
             {"path": "contracts/scheduler.json", "file_type": "json", "source_kind": "contract", "source_id": "scheduler", "generation_mode": "system_generated", "contract_source": "runtime_contract:scheduler", "required": True},
             {"path": "contracts/session.json", "file_type": "json", "source_kind": "contract", "source_id": "session", "generation_mode": "system_generated", "contract_source": "runtime_contract:session", "required": True},
+            {"path": "contracts/state.json", "file_type": "json", "source_kind": "contract", "source_id": "state", "generation_mode": "system_generated", "contract_source": "runtime_contract:state", "required": True},
             {"path": "contracts/tools.json", "file_type": "json", "source_kind": "contract", "source_id": "tools", "generation_mode": "system_generated", "contract_source": "runtime_contract:tools", "required": True},
             {"path": "prompts/prompt.ledger.answer.md", "file_type": "markdown", "source_kind": "prompt", "source_id": "prompt.ledger.answer", "generation_mode": "system_generated", "contract_source": "binding:answer_prompt", "required": True},
             {"path": "policies/policy.ledger.precheck.json", "file_type": "json", "source_kind": "policy", "source_id": "policy.ledger.precheck", "generation_mode": "system_generated", "contract_source": "binding:precheck_policy", "required": True},
@@ -353,6 +359,7 @@ def _assembly_spec() -> dict:
 
 def _contracts() -> dict:
     return {
+        "artifact": {"type": "artifact", "version": "artifact_contract.v0", "enabled": True, "config": {}},
         "context": {"type": "context", "version": "context_contract.v0", "enabled": True, "config": {}},
         "dependencies": {"type": "dependencies", "version": "dependencies_contract.v0", "enabled": True, "config": {}},
         "model": {"type": "model", "version": "model_contract.v0", "enabled": True, "config": {}},
@@ -362,6 +369,7 @@ def _contracts() -> dict:
             "enabled": True,
             "config": {"memory_system": _memory_system_config()},
         },
+        "node_provider": {"type": "node_provider", "version": "node_provider_contract.v0", "enabled": True, "config": {}},
         "render": {"type": "render", "version": "render_contract.v0", "enabled": True, "config": {"manifest_path": "render_manifest.json"}},
         "resources": {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {"resources_path": "resources.json"}},
         "sandbox": {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {"sandbox_contract_path": "sandbox_contract.json"}},
@@ -376,6 +384,7 @@ def _contracts() -> dict:
                 "checkpoint_path": ".agent_runtime/checkpoints/agent.sqlite",
             },
         },
+        "state": {"type": "state", "version": "state_contract.v0", "enabled": False, "config": {}},
         "tools": {"type": "tools", "version": "tools_contract.v0", "enabled": True, "config": {}},
     }
 

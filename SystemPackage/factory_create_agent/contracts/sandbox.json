@@ -1,0 +1,8 @@
+{
+  "type": "sandbox",
+  "version": "sandbox_contract.v0",
+  "enabled": true,
+  "config": {
+    "sandbox_contract_path": "sandbox_contract.json"
+  }
+}

@@ -24,6 +24,7 @@ class PatternRegistry:
         self.validator = validator or PatternValidator()
         self._patterns: dict[str, GraphPatternSpec] = {}
         self._catalog: dict[str, PatternCatalogItemSpec] = {}
+        self._known_node_impl_ids: set[str] = set()
         if builtins_dir is not None:
             self.load_builtins(builtins_dir)
 
@@ -49,7 +50,11 @@ class PatternRegistry:
 
     def register(self, pattern: GraphPatternSpec) -> None:
         known_ids = {*self._patterns, pattern.pattern_id}
-        validated = self.validator.validate(pattern, known_patterns=known_ids)
+        validated = self.validator.validate(
+            pattern,
+            known_patterns=known_ids,
+            known_node_impls=set(self._known_node_impl_ids),
+        )
         self._patterns[pattern.pattern_id] = validated
         self._catalog[pattern.pattern_id] = PatternCatalogItemSpec.model_validate(
             validated.model_dump(
@@ -67,6 +72,9 @@ class PatternRegistry:
 
     def list_pattern_ids(self) -> list[str]:
         return sorted(self._patterns)
+
+    def register_node_impl_ids(self, impl_ids: list[str] | tuple[str, ...] | set[str]) -> None:
+        self._known_node_impl_ids.update(str(impl_id) for impl_id in impl_ids)
 
     def list_pattern_catalog(self, *, include_embeddable: bool = False) -> list[PatternCatalogItemSpec]:
         items = self._catalog.values()

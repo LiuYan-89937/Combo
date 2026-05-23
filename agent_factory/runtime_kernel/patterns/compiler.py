@@ -26,6 +26,7 @@ from agent_factory.runtime_kernel.patterns.schema import (
 )
 from agent_factory.runtime_kernel.patterns.validator import PatternValidator
 from agent_factory.runtime_kernel.state import RuntimeGraphState, RuntimeState, merge_state_patch
+from agent_factory.runtime_kernel.state_contracts import PackageStateManager
 from agent_factory.runtime_kernel.wrappers import DEFAULT_NODE_WRAPPER_REGISTRY, NodeWrapperRegistry
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_SYSTEM_WRAPPER_REGISTRY
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
@@ -52,9 +53,14 @@ class PatternCompiler:
         services: RuntimeServices,
         render_manifest: RenderManifest,
         system_wrapper_ids: list[str] | tuple[str, ...],
+        package_state_manager: PackageStateManager | None = None,
     ) -> CompiledKernelApp:
         pattern = self.pattern_registry.get(pattern_id)
-        self.validator.validate(pattern, known_patterns=set(self.pattern_registry.list_pattern_ids()))
+        self.validator.validate(
+            pattern,
+            known_patterns=set(self.pattern_registry.list_pattern_ids()),
+            known_node_impls=set(self.node_registry.list_impl_ids()),
+        )
         validate_render_manifest(render_manifest, {node.id for node in pattern.nodes})
         system_wrappers = DEFAULT_SYSTEM_WRAPPER_REGISTRY.resolve_many(system_wrapper_ids)
         node_runners = {
@@ -66,6 +72,7 @@ class PatternCompiler:
                 render_manifest=render_manifest,
                 system_wrapper_ids=system_wrapper_ids,
                 system_wrappers=system_wrappers,
+                package_state_manager=package_state_manager,
             )
             for node in pattern.nodes
         }
@@ -94,6 +101,7 @@ class PatternCompiler:
             bindings=bindings,
             metadata={
                 "compiled_pattern_id": pattern.pattern_id,
+                "package_state_manager": package_state_manager,
             },
             node_runners=node_runners,
         )
@@ -108,6 +116,7 @@ class PatternCompiler:
         render_manifest: RenderManifest,
         system_wrapper_ids: list[str] | tuple[str, ...],
         system_wrappers: list[Any],
+        package_state_manager: PackageStateManager | None,
     ):
         node_bindings = [
             item.model_dump(mode="json")
@@ -126,6 +135,7 @@ class PatternCompiler:
                 services=services,
                 render_manifest=_default_render_manifest_for_pattern(child_pattern),
                 system_wrapper_ids=system_wrapper_ids,
+                package_state_manager=package_state_manager,
             )
             _validate_subgraph_exit_routes(node_id=node.id, pattern=pattern, child=child.pattern_spec)
             execute = _make_subgraph_executor(
@@ -150,6 +160,8 @@ class PatternCompiler:
                 node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
                 render_spec=render_manifest.nodes.get(node.id),
                 system_wrappers=system_wrappers,
+                package_state_manager=package_state_manager,
+                writable_sections=set(child.pattern_spec.output_contract.writable_sections),
             )
         impl = self.node_registry.get(node.impl)
 
@@ -170,6 +182,8 @@ class PatternCompiler:
             node_wrapper_registry=DEFAULT_NODE_WRAPPER_REGISTRY,
             render_spec=render_manifest.nodes.get(node.id),
             system_wrappers=system_wrappers,
+            package_state_manager=package_state_manager,
+            writable_sections=set(getattr(impl, "writable_sections", set())),
         )
 
 
@@ -188,6 +202,8 @@ def _make_wrapped_runner(
     node_wrapper_registry: NodeWrapperRegistry,
     render_spec: NodeRenderSpec | None,
     system_wrappers: list[Any],
+    package_state_manager: PackageStateManager | None,
+    writable_sections: set[str],
 ):
     node_wrappers = sorted(node_wrappers, key=lambda item: int(item.order))
 
@@ -239,6 +255,7 @@ def _make_wrapped_runner(
             graph_config=config,
             graph_runtime=runtime,
         )
+        _record_bookmark(services, state, context, "entry")
         active_state = state
         system_messages_patch: list[Any] = []
         try:
@@ -257,6 +274,7 @@ def _make_wrapped_runner(
                 wrapper_specs=node_wrappers,
                 wrapper_registry=node_wrapper_registry,
                 services=services,
+                package_state_manager=package_state_manager,
             )
             active_state = before_state
             memory_state, memory_patch = _run_system_before(
@@ -268,6 +286,7 @@ def _make_wrapped_runner(
             active_state = memory_state
             system_pre_messages, system_runtime_patch = _split_graph_patch(memory_patch)
             if system_runtime_patch:
+                _validate_package_state_patch(package_state_manager, node.id, system_runtime_patch)
                 memory_state = merge_state_patch(memory_state, system_runtime_patch)
                 active_state = memory_state
             system_messages_patch.extend(system_pre_messages)
@@ -276,7 +295,8 @@ def _make_wrapped_runner(
             if system_messages_patch:
                 messages_patch = [*system_messages_patch, *messages_patch]
             if validate_sections:
-                _validate_patch_sections(node.impl, patch)
+                _validate_patch_sections(node.impl, patch, writable_sections)
+            _validate_package_state_patch(package_state_manager, node.id, patch)
             updated = merge_state_patch(memory_state, patch)
             active_state = updated
             after_state, _after_patch = _run_node_wrappers(
@@ -286,6 +306,7 @@ def _make_wrapped_runner(
                 wrapper_specs=node_wrappers,
                 wrapper_registry=node_wrapper_registry,
                 services=services,
+                package_state_manager=package_state_manager,
                 node_result=patch,
             )
             active_state = after_state
@@ -313,6 +334,7 @@ def _make_wrapped_runner(
                 node_id=node.id,
                 payload={"impl": node.impl, "duration_ms": duration_ms},
             )
+            _record_bookmark(services, updated, context, "completion")
             services.observability_manager.finish_span(
                 span.span_id,
                 trace_id=updated.observability.trace_id,
@@ -334,6 +356,7 @@ def _make_wrapped_runner(
                     wrapper_specs=node_wrappers,
                     wrapper_registry=node_wrapper_registry,
                     services=services,
+                    package_state_manager=package_state_manager,
                     error=exc,
                 )
                 if on_error_patch:
@@ -500,6 +523,7 @@ def _run_node_wrappers(
     wrapper_specs: list[PatternNodeWrapperSpec],
     wrapper_registry: NodeWrapperRegistry,
     services: RuntimeServices,
+    package_state_manager: PackageStateManager | None,
     node_result: dict[str, Any] | None = None,
     error: Exception | None = None,
 ) -> tuple[RuntimeState, dict[str, Any]]:
@@ -536,6 +560,7 @@ def _run_node_wrappers(
                 raise RuntimeKernelError(f"Unsupported node wrapper phase: {phase}")
             patch = patch or {}
             _validate_wrapper_patch_sections(spec.id, wrapper.writable_sections, patch)
+            _validate_package_state_patch(package_state_manager, context.node_id, patch)
             if patch:
                 working = merge_state_patch(working, patch)
                 cumulative_patch = _merge_patches(cumulative_patch, patch)
@@ -672,6 +697,37 @@ def _emit_state_event(
     )
     services.observability_manager.emit(event)
     state.observability.events.append(event.model_dump(mode="json"))
+
+
+def _record_bookmark(
+    services: RuntimeServices,
+    state: RuntimeState,
+    context: NodeExecutionContext,
+    position: str,
+) -> None:
+    bookmark_store = getattr(services, "bookmark_store", None)
+    if bookmark_store is None:
+        return
+    thread_id = _thread_id_from_config(context.graph_config) or state.runtime_config.session_config.get("thread_id") or ""
+    if not thread_id:
+        return
+    bookmark_store.record(
+        thread_id=str(thread_id),
+        node_id=context.node_id,
+        position=position,
+        checkpoint_id=None,
+        metadata={"run_id": state.run.run_id, "impl": context.impl},
+    )
+
+
+def _thread_id_from_config(config: Any) -> str | None:
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    value = configurable.get("thread_id")
+    return str(value) if value else None
 
 
 def _push_span(state: RuntimeState, span_id: str, span_type: str, name: str) -> None:
@@ -854,48 +910,8 @@ def _first_binding_payload(bindings: list[dict[str, Any]], binding_type: str) ->
     return None
 
 
-def _validate_patch_sections(impl_id: str, patch: dict[str, Any]) -> None:
-    from agent_factory.runtime_kernel.nodes.standard import (
-        CognitiveAnswerNode,
-        CognitiveClarifyNode,
-        CognitivePlanNode,
-        CognitiveReviewNode,
-        CognitiveRouteNode,
-        FinalizeNode,
-        GovernanceApprovalGateNode,
-        GovernancePostcheckNode,
-        GovernancePrecheckNode,
-        GovernanceRefusalGateNode,
-        IngressNode,
-        OperationalKnowledgeRetrieveNode,
-        OperationalResourceProbeNode,
-        OperationalToolCallNode,
-        TerminalCloseNode,
-        TerminalCommitNode,
-    )
-
-    implementations = {
-        item.impl_id: item
-        for item in [
-            IngressNode(),
-            GovernancePrecheckNode(),
-            GovernancePostcheckNode(),
-            GovernanceApprovalGateNode(),
-            GovernanceRefusalGateNode(),
-            CognitiveClarifyNode(),
-            CognitivePlanNode(),
-            CognitiveRouteNode(),
-            CognitiveAnswerNode(),
-            CognitiveReviewNode(),
-            OperationalToolCallNode(),
-            OperationalKnowledgeRetrieveNode(),
-            OperationalResourceProbeNode(),
-            TerminalCommitNode(),
-            TerminalCloseNode(),
-            FinalizeNode(),
-        ]
-    }
-    allowed = implementations[impl_id].writable_sections
+def _validate_patch_sections(impl_id: str, patch: dict[str, Any], writable_sections: set[str]) -> None:
+    allowed = writable_sections
     patch_sections = set(patch)
     illegal = patch_sections.difference(allowed)
     if illegal:
@@ -913,6 +929,18 @@ def _validate_wrapper_patch_sections(
         raise ValueError(
             f"{wrapper_id} attempted to write disallowed sections: {', '.join(sorted(illegal))}"
         )
+
+
+def _validate_package_state_patch(
+    manager: PackageStateManager | None,
+    node_id: str,
+    patch: dict[str, Any],
+) -> None:
+    if "package_state" not in patch:
+        return
+    if manager is None:
+        raise RuntimeKernelError(f"node {node_id} attempted to write package_state without a state contract")
+    manager.validate_patch(node_id=node_id, patch=patch["package_state"])
 
 
 def _merge_patches(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:

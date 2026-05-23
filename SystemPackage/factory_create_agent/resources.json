@@ -1,0 +1,8 @@
+{
+  "version": "factory_resources.v0",
+  "resources": {
+    "system_package_id": "factory_create_agent",
+    "system_package_role": "create_agent_mode",
+    "runtime_surface": "cli_create_agent"
+  }
+}

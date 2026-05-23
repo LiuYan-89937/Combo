@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
+from agent_factory.runtime_kernel.patterns.loader import PatternLoader
+from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
 from agent_factory.runtime_render import RenderManifest
 
 if TYPE_CHECKING:
@@ -22,6 +24,7 @@ class LoadedAgentPackage:
     resources: dict[str, Any]
     sandbox_contract: dict[str, Any]
     contracts: dict[str, dict[str, Any]]
+    patterns: list[GraphPatternSpec]
 
 
 class AgentPackageLoader:
@@ -43,6 +46,11 @@ class AgentPackageLoader:
             key: _json_object(_read_package_file(package_root, value), f"contracts.{key}")
             for key, value in manifest.contracts.items()
         }
+        pattern_loader = PatternLoader()
+        patterns = [
+            pattern_loader.load_path(_package_file_path(package_root, value))
+            for value in manifest.patterns
+        ]
         return LoadedAgentPackage(
             package_root=package_root,
             manifest_path=manifest_path,
@@ -52,10 +60,15 @@ class AgentPackageLoader:
             resources=resources,
             sandbox_contract=sandbox_contract,
             contracts=contracts,
+            patterns=patterns,
         )
 
 
 def _read_package_file(package_root: Path, relative_path: str) -> str:
+    return _package_file_path(package_root, relative_path).read_text(encoding="utf-8")
+
+
+def _package_file_path(package_root: Path, relative_path: str) -> Path:
     target = (package_root / relative_path).resolve()
     root = package_root.resolve()
     try:
@@ -64,7 +77,7 @@ def _read_package_file(package_root: Path, relative_path: str) -> str:
         raise ValueError(f"package path escapes package root: {relative_path}") from exc
     if not target.is_file():
         raise FileNotFoundError(f"package file not found: {relative_path}")
-    return target.read_text(encoding="utf-8")
+    return target
 
 
 def _json_object(content: str, label: str) -> dict[str, Any]:

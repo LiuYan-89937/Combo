@@ -1,0 +1,19 @@
+{
+  "version": "mcp_servers.v0",
+  "servers": [
+    {
+      "server_id": "tavily",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "tavily-mcp@latest"],
+      "env": {
+        "TAVILY_API_KEY": "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",
+        "DEFAULT_PARAMETERS": "{\"include_images\": false, \"max_results\": 10, \"search_depth\": \"advanced\"}"
+      },
+      "enabled": false,
+      "tool_id_prefix": "tavily",
+      "risk_level_default": "medium",
+      "timeout_seconds": 60
+    }
+  ]
+}

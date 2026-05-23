@@ -18,6 +18,7 @@ from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPacka
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.extensions.loader import AgentInstanceExtensionConfigLoader
 from agent_factory.mcp_gateway import HostMCPGatewayManager
+from agent_factory.package_runtime import PackageRuntimeCore, host_runtime_package_view
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
@@ -27,6 +28,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
 
 
 DEFAULT_AGENT_PACKAGE_ROOT = ".agentfactory/packages"
+DEFAULT_SYSTEM_PACKAGE_ROOT = "SystemPackage"
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
 TERMINAL_EVENT_TYPES = {
     "run_completed",
@@ -60,11 +62,16 @@ class AgentPackageRuntimeManager:
         self,
         *,
         package_root: str | Path | None = None,
+        system_package_root: str | Path | None = None,
         launcher: DockerAgentRuntimeLauncher | None = None,
         emit: Emit | None = None,
     ) -> None:
         configured_root = package_root or os.getenv("AGENTFACTORY_PACKAGE_ROOT")
         self.package_root = Path(configured_root).expanduser() if configured_root else _default_package_root()
+        configured_system_root = system_package_root or os.getenv("AGENTFACTORY_SYSTEM_PACKAGE_ROOT")
+        self.system_package_root = (
+            Path(configured_system_root).expanduser() if configured_system_root else _default_system_package_root()
+        )
         self.loader = AgentPackageLoader()
         self.launcher = launcher or DockerAgentRuntimeLauncher()
         self.idle_timeout_seconds = _env_int(
@@ -72,12 +79,15 @@ class AgentPackageRuntimeManager:
             DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS,
         )
         self._containers: dict[str, AgentRuntimeContainerHandle] = {}
+        self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
         self._mcp_gateways = HostMCPGatewayManager()
         self._emit = emit
 
     def set_emit(self, emit: Emit | None) -> None:
         self._emit = emit
         for handle in self._containers.values():
+            handle.set_emit(emit)
+        for handle in self._system_handles.values():
             handle.set_emit(emit)
 
     def list_packages(self) -> list[dict[str, Any]]:
@@ -92,7 +102,7 @@ class AgentPackageRuntimeManager:
 
     def delete_package(self, package_id: str) -> dict[str, Any]:
         self._close_container(package_id)
-        target = self._package_dir(package_id)
+        target = self._package_dir(package_id, include_system_packages=False)
         if not target.exists():
             raise FileNotFoundError(f"agent package not found: {package_id}")
         shutil.rmtree(target)
@@ -101,6 +111,25 @@ class AgentPackageRuntimeManager:
     def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
         package = self.loader.load_path(self._manifest_path(package_id))
         return self._list_sessions_for_loaded_package(package)
+
+    def ensure_session(
+        self,
+        package_id: str,
+        *,
+        session_id: str | None = None,
+        first_user_input: str | None = None,
+    ) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        manager = self._session_manager_for_package(package_id, package)
+        if session_id:
+            try:
+                return manager.load(session_id).model_dump(mode="json")
+            except FileNotFoundError:
+                pass
+        return manager.create(
+            agent_id=package.assembly_spec.agent.id,
+            first_user_input=first_user_input,
+        ).model_dump(mode="json")
 
     def run(self, package_id: str, *, user_input: str, session_id: str | None = None) -> AgentPackageRunResult:
         raise RuntimeError("AgentPackage host-process execution is disabled; use stream() for sandbox execution.")
@@ -112,6 +141,7 @@ class AgentPackageRuntimeManager:
         user_input: str,
         session_id: str | None = None,
         request_id: str | None = None,
+        user_config: dict[str, Any] | None = None,
     ) -> AgentPackageStreamRun:
         package = self.loader.load_path(self._manifest_path(package_id))
         command = {
@@ -120,8 +150,15 @@ class AgentPackageRuntimeManager:
             "payload": {
                 "message": user_input,
                 "session_id": session_id,
+                "user_config": dict(user_config or {}),
             },
         }
+        if _is_host_system_package(package):
+            return AgentPackageStreamRun(
+                package=package,
+                session={"session_id": session_id} if session_id else {},
+                events=self._system_events(package_id, package=package, command=command),
+            )
         return AgentPackageStreamRun(
             package=package,
             session={"session_id": session_id} if session_id else {},
@@ -147,6 +184,12 @@ class AgentPackageRuntimeManager:
             },
         }
 
+        if _is_host_system_package(package):
+            return AgentPackageStreamRun(
+                package=package,
+                session=session.model_dump(mode="json"),
+                events=self._system_events(package_id, package=package, command=command),
+            )
         return AgentPackageStreamRun(
             package=package,
             session=session.model_dump(mode="json"),
@@ -173,7 +216,7 @@ class AgentPackageRuntimeManager:
                 "tool_count": len(package.assembly_spec.tools),
                 "session_count": len(sessions),
                 "sandbox": sandbox,
-                "extensions": _extensions_summary(package_id),
+                "extensions": _extensions_summary(package_id, package=package),
             }
         except Exception as exc:
             return {
@@ -207,7 +250,55 @@ class AgentPackageRuntimeManager:
     def close_all(self) -> None:
         for package_id in list(self._containers):
             self._close_container(package_id)
+        for package_id in list(self._system_handles):
+            self._close_system(package_id)
         self._mcp_gateways.close_all()
+
+    def _system_events(
+        self,
+        package_id: str,
+        *,
+        package: LoadedAgentPackage,
+        command: dict[str, Any],
+    ) -> Iterator[tuple[str, Any]]:
+        request_id = str(command.get("request_id") or uuid4().hex)
+        command["request_id"] = request_id
+        will_start = not self._has_reusable_system_handle(package_id, package)
+        if will_start:
+            yield "frontend_event", _node_event(
+                request_id,
+                "node_started",
+                node_id="runtime_container",
+                payload={"package_id": package_id, "backend": "host", "status": "preflight"},
+            )
+        try:
+            handle = self._system_handle(package_id, package)
+            if handle.startup_payload is not None:
+                yield "frontend_event", _node_event(
+                    request_id,
+                    "node_completed",
+                    node_id="runtime_container",
+                    payload=handle.startup_payload,
+                )
+                handle.startup_payload = None
+        except Exception as exc:
+            failure_payload = {
+                "where": "system_package.launch",
+                "why": "host_runtime_start_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+                "suggested_action": "Check the SystemPackage manifest, contracts, and runtime paths.",
+            }
+            if will_start:
+                yield "frontend_event", _node_event(
+                    request_id,
+                    "node_failed",
+                    node_id="runtime_container",
+                    payload=failure_payload,
+                    severity="error",
+                )
+            yield "frontend_event", _run_failed_event(request_id, failure_payload)
+            return
+        yield from handle.send(command)
 
     def _container_events(
         self,
@@ -287,7 +378,7 @@ class AgentPackageRuntimeManager:
         runtime_root = _host_runtime_root(package_id)
         artifacts_root = runtime_root / "artifacts" / uuid4().hex
         workdir_root = runtime_root / "workdir"
-        extension_root = runtime_root / "extensions"
+        extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
         mcp_gateway = self._mcp_gateways.ensure_gateway(
@@ -298,6 +389,7 @@ class AgentPackageRuntimeManager:
             runtime_root=runtime_root,
             artifacts_root=artifacts_root,
             workdir_root=workdir_root,
+            extension_root=extension_root,
             mcp_gateway_url=mcp_gateway.docker_url if mcp_gateway is not None else None,
         )
         handle = AgentRuntimeContainerHandle(
@@ -319,9 +411,59 @@ class AgentPackageRuntimeManager:
         self._containers[package_id] = handle
         return handle
 
+    def _system_handle(self, package_id: str, package: LoadedAgentPackage) -> "SystemPackageRuntimeHandle":
+        existing = self._system_handles.get(package_id)
+        fingerprint = _package_fingerprint(package)
+        if (
+            existing is not None
+            and existing.package_fingerprint == fingerprint
+            and not existing.is_idle(self.idle_timeout_seconds)
+        ):
+            return existing
+        self._close_system(package_id)
+        runtime_root = _host_runtime_root(package_id)
+        artifacts_root = runtime_root / "artifacts"
+        workdir_root = runtime_root / "workdir"
+        extension_root = _extension_root_for_package(package_id, package)
+        for path in (artifacts_root, workdir_root, runtime_root, extension_root):
+            path.mkdir(parents=True, exist_ok=True)
+        host_package = host_runtime_package_view(
+            package,
+            runtime_root=runtime_root,
+            artifacts_root=artifacts_root,
+            workdir_root=workdir_root,
+            extension_root=extension_root,
+        )
+        handle = SystemPackageRuntimeHandle(
+            package_id=package_id,
+            package=host_package,
+            package_fingerprint=fingerprint,
+            idle_timeout_seconds=self.idle_timeout_seconds,
+            emit=self._emit,
+        )
+        handle.startup_payload = {
+            "status": "running",
+            "backend": "host",
+            "package_id": package_id,
+            "runtime_root": str(runtime_root),
+            "artifact_root": str(artifacts_root),
+            "workdir": str(workdir_root),
+            "extension_root": str(extension_root),
+        }
+        self._system_handles[package_id] = handle
+        return handle
+
     def _has_reusable_container(self, package_id: str, package: LoadedAgentPackage) -> bool:
         existing = self._containers.get(package_id)
         if existing is None or not existing.is_running:
+            return False
+        if existing.package_fingerprint != _package_fingerprint(package):
+            return False
+        return not existing.is_idle(self.idle_timeout_seconds)
+
+    def _has_reusable_system_handle(self, package_id: str, package: LoadedAgentPackage) -> bool:
+        existing = self._system_handles.get(package_id)
+        if existing is None:
             return False
         if existing.package_fingerprint != _package_fingerprint(package):
             return False
@@ -332,19 +474,24 @@ class AgentPackageRuntimeManager:
         if handle is not None:
             handle.close()
 
+    def _close_system(self, package_id: str) -> None:
+        handle = self._system_handles.pop(package_id, None)
+        if handle is not None:
+            handle.close()
+
     def _manifest_path(self, package_id: str) -> Path:
         return self._package_dir(package_id) / "agent_package.json"
 
-    def _package_dir(self, package_id: str) -> Path:
+    def _package_dir(self, package_id: str, *, include_system_packages: bool = True) -> Path:
         if not package_id or "/" in package_id or "\\" in package_id or package_id in {".", ".."}:
             raise ValueError(f"invalid agent package id: {package_id}")
-        root = self.package_root.resolve()
-        target = (root / package_id).resolve()
-        try:
-            target.relative_to(root)
-        except ValueError as exc:
-            raise ValueError(f"agent package escapes package root: {package_id}") from exc
-        return target
+        user_target = _safe_child(self.package_root, package_id, label="agent package")
+        if user_target.exists() or not include_system_packages:
+            return user_target
+        system_target = _safe_child(self.system_package_root, package_id, label="system package")
+        if system_target.exists():
+            return system_target
+        return user_target
 
 
 class AgentRuntimeContainerHandle:
@@ -551,6 +698,153 @@ class AgentRuntimeContainerHandle:
                 pass
 
 
+class SystemPackageRuntimeHandle:
+    def __init__(
+        self,
+        *,
+        package_id: str,
+        package: LoadedAgentPackage,
+        package_fingerprint: str,
+        idle_timeout_seconds: int,
+        emit: Emit | None = None,
+    ) -> None:
+        self.package_id = package_id
+        self.package_fingerprint = package_fingerprint
+        self.idle_timeout_seconds = idle_timeout_seconds
+        self._emit = emit
+        self._idle_timer: threading.Timer | None = None
+        self._closing = False
+        self._condition = threading.Condition()
+        self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
+        self._request_done: dict[str, bool] = {}
+        self._request_errors: dict[str, BaseException] = {}
+        self.last_used = time.monotonic()
+        self.startup_payload: dict[str, Any] | None = None
+        self.core = PackageRuntimeCore(
+            package=package,
+            emit_background=self._emit_background_event,
+            graph_id=f"{package_id}_runtime",
+            producer_type="factory_runtime" if _is_system_package(package) else "agent_runtime_host",
+        )
+        self._schedule_idle_shutdown()
+
+    def set_emit(self, emit: Emit | None) -> None:
+        self._emit = emit
+
+    def is_idle(self, timeout_seconds: int) -> bool:
+        return timeout_seconds > 0 and (time.monotonic() - self.last_used) > timeout_seconds
+
+    def send(self, command: dict[str, Any]) -> Iterator[tuple[str, Any]]:
+        if self._closing:
+            raise RuntimeError(f"system package runtime for {self.package_id} is closed")
+        request_id = str(command.get("request_id") or uuid4().hex)
+        command["request_id"] = request_id
+        with self._condition:
+            if self._request_events:
+                raise RuntimeError(f"system package runtime for {self.package_id} is already handling a request")
+            self._request_events[request_id] = deque()
+            self._request_done[request_id] = False
+
+        def collect(item: FactoryFrontendEvent) -> None:
+            with self._condition:
+                queue = self._request_events.get(request_id)
+                if queue is not None:
+                    queue.append(("frontend_event", item))
+                    self._condition.notify_all()
+
+        def run_request() -> None:
+            try:
+                self.core.handle(command, emit=collect)
+            except BaseException as exc:
+                with self._condition:
+                    self._request_errors[request_id] = exc
+                    self._condition.notify_all()
+            finally:
+                with self._condition:
+                    self._request_done[request_id] = True
+                    self._condition.notify_all()
+
+        self.last_used = time.monotonic()
+        self._cancel_idle_shutdown()
+        worker = threading.Thread(
+            target=run_request,
+            name=f"system-package-runtime-{self.package_id}-{request_id}",
+            daemon=True,
+        )
+        worker.start()
+        terminal_seen = False
+        try:
+            while not terminal_seen:
+                for stream_mode, item in self._next_request_batch(request_id):
+                    yield stream_mode, item
+                    if _is_terminal_request_event(item, request_id):
+                        terminal_seen = True
+                if terminal_seen:
+                    break
+                with self._condition:
+                    if self._request_done.get(request_id) and not self._request_events.get(request_id):
+                        error = self._request_errors.get(request_id)
+                        if error is not None:
+                            raise RuntimeError(f"system package runtime request failed: {error}") from error
+                        raise RuntimeError(
+                            f"system package runtime request ended without terminal event: {request_id}"
+                        )
+        finally:
+            worker.join(timeout=0.1)
+            with self._condition:
+                self._request_events.pop(request_id, None)
+                self._request_done.pop(request_id, None)
+                self._request_errors.pop(request_id, None)
+            self.last_used = time.monotonic()
+            self._schedule_idle_shutdown()
+
+    def close(self) -> None:
+        self._cancel_idle_shutdown()
+        if self._closing:
+            return
+        self._closing = True
+        self.core.shutdown()
+        with self._condition:
+            self._condition.notify_all()
+
+    def _next_request_batch(self, request_id: str) -> list[ContainerStreamItem]:
+        while True:
+            with self._condition:
+                queue = self._request_events.get(request_id)
+                if queue is None:
+                    return []
+                if queue:
+                    batch = list(queue)
+                    queue.clear()
+                    return batch
+                error = self._request_errors.get(request_id)
+                if error is not None:
+                    raise RuntimeError(f"system package runtime request failed: {error}") from error
+                if self._request_done.get(request_id):
+                    return []
+                if self._closing:
+                    raise RuntimeError(f"system package runtime for {self.package_id} is closed")
+                self._condition.wait(timeout=0.2)
+
+    def _emit_background_event(self, item: FactoryFrontendEvent) -> None:
+        if self._emit is not None:
+            self._emit(item)
+        self._schedule_idle_shutdown()
+
+    def _schedule_idle_shutdown(self) -> None:
+        self._cancel_idle_shutdown()
+        if self.idle_timeout_seconds <= 0 or self._closing:
+            return
+        self._idle_timer = threading.Timer(self.idle_timeout_seconds, self.close)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _cancel_idle_shutdown(self) -> None:
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+
 def _host_runtime_root(package_id: str) -> Path:
     return factory_artifact_path("agent_runtime", package_id)
 
@@ -559,8 +853,22 @@ def _default_package_root() -> Path:
     return project_root() / DEFAULT_AGENT_PACKAGE_ROOT
 
 
+def _default_system_package_root() -> Path:
+    return project_root() / DEFAULT_SYSTEM_PACKAGE_ROOT
+
+
 def _default_project_root() -> Path:
     return project_root()
+
+
+def _safe_child(root: Path, child_name: str, *, label: str) -> Path:
+    resolved_root = root.resolve()
+    target = (resolved_root / child_name).resolve()
+    try:
+        target.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(f"{label} escapes package root: {child_name}") from exc
+    return target
 
 
 def _node_event(
@@ -610,8 +918,11 @@ def _package_fingerprint(package: LoadedAgentPackage) -> str:
     digest = hashlib.sha256()
     digest.update(str(package.package_root.resolve()).encode("utf-8"))
     _hash_tree(digest, package.package_root)
-    _hash_tree(digest, _host_runtime_root(package.package_root.name) / "extensions")
-    digest.update(_runtime_image_identity(package).encode("utf-8"))
+    _hash_tree(digest, _extension_root_for_package(package.package_root.name, package))
+    if _is_host_system_package(package):
+        digest.update(b"host-system-package")
+    else:
+        digest.update(_runtime_image_identity(package).encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -674,9 +985,27 @@ def _sandbox_summary(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extensions_summary(package_id: str) -> dict[str, str]:
+def _extension_root_for_package(package_id: str, package: LoadedAgentPackage) -> Path:
+    if _is_system_package(package):
+        return package.package_root.parent / "extensions"
+    return _host_runtime_root(package_id) / "extensions"
+
+
+def _is_system_package(package: LoadedAgentPackage) -> bool:
+    return bool(package.manifest.runtime.get("system_package"))
+
+
+def _is_host_system_package(package: LoadedAgentPackage) -> bool:
+    if not _is_system_package(package):
+        return False
+    backend = str(package.manifest.runtime.get("execution_backend") or "host").strip().lower()
+    return backend == "host"
+
+
+def _extensions_summary(package_id: str, *, package: LoadedAgentPackage | None = None) -> dict[str, str]:
+    host_root = _extension_root_for_package(package_id, package) if package is not None else _host_runtime_root(package_id) / "extensions"
     return {
-        "host_root": str(_host_runtime_root(package_id) / "extensions"),
+        "host_root": str(host_root),
         "container_root": "/runtime/extensions",
     }
 

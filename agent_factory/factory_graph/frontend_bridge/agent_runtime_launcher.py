@@ -32,6 +32,19 @@ MODEL_ENV_ALLOWLIST = (
     "AGENTFACTORY_TASK_TEMPERATURE",
     "AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS",
     "AGENTFACTORY_TASK_THINKING",
+    "AGENTFACTORY_COMPRESSION_MODEL",
+    "AGENTFACTORY_COMPRESSION_API_KEY",
+    "AGENTFACTORY_COMPRESSION_BASE_URL",
+    "AGENTFACTORY_COMPRESSION_TEMPERATURE",
+    "AGENTFACTORY_COMPRESSION_MAX_OUTPUT_TOKENS",
+    "AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS",
+    "AGENTFACTORY_COMPRESSION_THINKING",
+    "AGENTFACTORY_EMBEDDING_PROVIDER",
+    "AGENTFACTORY_EMBEDDING_MODEL",
+    "AGENTFACTORY_EMBEDDING_API_KEY",
+    "AGENTFACTORY_EMBEDDING_BASE_URL",
+    "AGENTFACTORY_EMBEDDING_DIMS",
+    "AGENTFACTORY_EMBEDDING_TIMEOUT_SECONDS",
 )
 
 
@@ -65,6 +78,7 @@ class DockerAgentRuntimeLauncher:
         runtime_root: Path,
         artifacts_root: Path,
         workdir_root: Path,
+        extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
     ) -> DockerAgentRuntimePlan:
         docker = self._docker_executable()
@@ -80,7 +94,7 @@ class DockerAgentRuntimeLauncher:
                 message=f"AgentPackage resources file is missing: {resources_path}",
             )
         network = self._network_mode(sandbox)
-        extension_root = runtime_root / "extensions"
+        extension_root = extension_root or runtime_root / "extensions"
         extension_root.mkdir(parents=True, exist_ok=True)
         service_env = self._service_environment(sandbox)
         env = {**self._environment(sandbox), **service_env}
@@ -141,6 +155,7 @@ class DockerAgentRuntimeLauncher:
         runtime_root: Path,
         artifacts_root: Path,
         workdir_root: Path,
+        extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
     ) -> list[str]:
         return self.prepare(
@@ -148,6 +163,7 @@ class DockerAgentRuntimeLauncher:
             runtime_root=runtime_root,
             artifacts_root=artifacts_root,
             workdir_root=workdir_root,
+            extension_root=extension_root,
             mcp_gateway_url=mcp_gateway_url,
         ).command
 

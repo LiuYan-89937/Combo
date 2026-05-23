@@ -15,6 +15,8 @@ from agent_factory.runtime_contracts.builtins import default_runtime_contract_re
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
+from agent_factory.package_runtime import register_package_patterns
+from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
@@ -137,11 +139,15 @@ class BridgeRuntimeState:
             payload={"manifest": str(PACKAGE_MANIFEST)},
         )
         package = self._load_package()
-        facade = RuntimeKernelFacade()
+        facade = RuntimeKernelFacade(
+            checkpointer_config=LangGraphCheckpointerConfig(backend="memory"),
+            memory_store_config=LangGraphStoreConfig(backend="memory"),
+        )
         runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
             package,
             base_services=facade.instance.services,
         )
+        register_package_patterns(facade=facade, package=package, runtime_build=runtime_build)
         compiler = AgentAssemblyCompiler(facade=facade)
         compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
         self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
@@ -338,7 +344,7 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
     run_context = facade.prepare_run_context(
         compiled.compiled_app,
         user_input=message,
-        user_config=compiled.runtime_config["user_config"],
+        user_config={**compiled.runtime_config["user_config"], **(payload.get("user_config") if isinstance(payload.get("user_config"), dict) else {})},
         agent_config=compiled.runtime_config["agent_config"],
         session_config=session_config,
     )

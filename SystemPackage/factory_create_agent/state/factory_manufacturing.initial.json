@@ -1,0 +1,8 @@
+{
+  "status": "running",
+  "force_manufacture": true,
+  "interaction_mode": "create_agent",
+  "model_activity": [],
+  "stage_log": [],
+  "errors": []
+}

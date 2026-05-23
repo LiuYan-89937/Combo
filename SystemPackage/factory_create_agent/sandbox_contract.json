@@ -1,0 +1,14 @@
+{
+  "version": "sandbox_contract.v0",
+  "backend": "host",
+  "image": "",
+  "workdir": "/workdir",
+  "network_policy": {
+    "mode": "default_allow"
+  },
+  "mounts": [],
+  "services": [],
+  "secrets": [],
+  "env": {},
+  "volumes": []
+}

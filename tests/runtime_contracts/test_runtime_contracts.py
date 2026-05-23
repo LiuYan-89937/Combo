@@ -75,6 +75,7 @@ class RuntimeContractsTest(unittest.TestCase):
             )
 
             self.assertEqual(getattr(result.services.model_service, "model_role"), "task")
+            self.assertEqual(getattr(result.services.model_operation_service, "model_role"), "task")
 
     def test_enabled_scheduler_contract_contributes_scheduler_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -202,6 +203,7 @@ class RuntimeContractsTest(unittest.TestCase):
 def _base_services() -> RuntimeServices:
     return RuntimeServices(
         model_service=object(),
+        model_operation_service=object(),
         knowledge_engine=object(),
         context_engine=object(),
         policy_engine=object(),
@@ -223,14 +225,17 @@ def _write_package(
     _write_json(root / "resources.json", {"version": "factory_resources.v0", "resources": {}})
     _write_json(root / "sandbox_contract.json", {"version": "sandbox_contract.v0", "backend": "docker"})
     contracts = {
+        "artifact": "contracts/artifact.json",
         "context": "contracts/context.json",
         "dependencies": "contracts/dependencies.json",
         "model": "contracts/model.json",
+        "node_provider": "contracts/node_provider.json",
         "render": "contracts/render.json",
         "resources": "contracts/resources.json",
         "sandbox": "contracts/sandbox.json",
         "scheduler": "contracts/scheduler.json",
         "session": "contracts/session.json",
+        "state": "contracts/state.json",
     }
     if include_tools_contract:
         contracts["tools"] = "contracts/tools.json"
@@ -239,6 +244,9 @@ def _write_package(
     _write_json(root / "contracts/context.json", {"type": "context", "version": "context_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/resources.json", {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/sandbox.json", {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {}})
+    _write_json(root / "contracts/state.json", {"type": "state", "version": "state_contract.v0", "enabled": False, "config": {}})
+    _write_json(root / "contracts/node_provider.json", {"type": "node_provider", "version": "node_provider_contract.v0", "enabled": True, "config": {}})
+    _write_json(root / "contracts/artifact.json", {"type": "artifact", "version": "artifact_contract.v0", "enabled": True, "config": {}})
     _write_json(
         root / "contracts/scheduler.json",
         {

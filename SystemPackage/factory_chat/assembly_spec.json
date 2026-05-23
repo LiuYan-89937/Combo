@@ -1,0 +1,51 @@
+{
+  "schema_version": "0.1",
+  "agent": {
+    "id": "factory_chat",
+    "name": "Factory Chat",
+    "description": "FastAgentFactory system chat assistant.",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "pattern_id": "react_agent",
+    "compiled_pattern_id": null,
+    "user_config": {},
+    "agent_config": {
+      "agent_id": "factory_chat"
+    }
+  },
+  "graph_overrides": {
+    "node_wrappers": []
+  },
+  "bindings": {
+    "services": [],
+    "node_bindings": [
+      {
+        "binding_id": "factory_chat.answer.prompt",
+        "binding_type": "prompt",
+        "target": {
+          "node_id": "answer",
+          "impl": "cognitive.answer"
+        },
+        "payload": {
+          "prompt_id": "system.factory_chat.answer",
+          "template": "You are FastAgentFactory's shell assistant. Answer normal chat directly in Chinese. Be concise, warm, and practical. You may use available tools when they are genuinely useful. Use native tool calls only, never textual pseudo tool syntax. Factory runtime boundaries: this chat runs as a SystemPackage through RuntimeKernel, with the same tool, memory, scheduler, context, render, and sandbox contracts used by produced AgentPackages.",
+          "variables": []
+        }
+      }
+    ],
+    "hooks": []
+  },
+  "tools": [],
+  "output": {
+    "citations_required": false,
+    "format": "text"
+  },
+  "harness": [],
+  "metadata": {
+    "provenance": {
+      "source": "system_package",
+      "package_id": "factory_chat"
+    }
+  }
+}

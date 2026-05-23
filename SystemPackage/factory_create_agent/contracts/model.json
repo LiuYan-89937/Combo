@@ -1,0 +1,9 @@
+{
+  "type": "model",
+  "version": "model_contract.v0",
+  "enabled": true,
+  "config": {
+    "role": "main",
+    "source": "factory_runtime_env"
+  }
+}

@@ -1797,8 +1797,7 @@ function schedulerRunLine(run: Record<string, unknown> | null | undefined): stri
 function transcriptFromSession(session: Record<string, unknown>, mode: FactoryMode | null): TranscriptItem[] {
 	const snapshot = recordValue(session.snapshot);
 	const snapshotMessages = Array.isArray(snapshot?.messages) ? snapshot.messages : null;
-	const modeMessages = mode === 'create_agent' ? session.create_agent_messages : mode === 'chat' ? session.chat_messages : null;
-	const messages = snapshotMessages ?? (Array.isArray(modeMessages) ? modeMessages : []);
+	const messages = snapshotMessages ?? [];
 	return messages
 		.map((message, index) => transcriptItemFromMessage(message, index))
 		.filter((item): item is TranscriptItem => Boolean(item));

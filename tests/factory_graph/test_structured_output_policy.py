@@ -7,13 +7,13 @@ from unittest.mock import patch
 
 from langchain_core.exceptions import OutputParserException
 
-from agent_factory.factory_graph.model_call import (
+from agent_factory.factory_package.model_call import (
     FactoryModelCallError,
     STRUCTURED_OUTPUT_MAX_ATTEMPTS,
     call_structured_model,
 )
-from agent_factory.factory_graph.schemas import RequirementClarityOutput
-from agent_factory.factory_graph.stages import (
+from agent_factory.factory_package.schemas import RequirementClarityOutput
+from agent_factory.factory_package.stages import (
     graph_behavior_planning,
     node_strategy_planning,
     tool_capability_planning,
@@ -64,9 +64,9 @@ class StructuredOutputPolicyTest(unittest.TestCase):
 
         fake_model = FakeModel()
         with (
-            patch("agent_factory.factory_graph.model_call.get_main_model", return_value=fake_model),
+            patch("agent_factory.factory_package.model_call.get_main_model", return_value=fake_model),
             patch(
-                "agent_factory.factory_graph.model_call.get_main_model_settings",
+                "agent_factory.factory_package.model_call.get_main_model_settings",
                 return_value=SimpleNamespace(max_tokens=None),
             ),
         ):
@@ -112,9 +112,9 @@ class StructuredOutputPolicyTest(unittest.TestCase):
 
         fake_model = FakeModel()
         with (
-            patch("agent_factory.factory_graph.model_call.get_main_model", return_value=fake_model),
+            patch("agent_factory.factory_package.model_call.get_main_model", return_value=fake_model),
             patch(
-                "agent_factory.factory_graph.model_call.get_main_model_settings",
+                "agent_factory.factory_package.model_call.get_main_model_settings",
                 return_value=SimpleNamespace(max_tokens=None),
             ),
             self.assertRaisesRegex(FactoryModelCallError, "schema still invalid"),

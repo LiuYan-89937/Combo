@@ -40,8 +40,16 @@ ALLOWED_REQUIRED_CAPABILITIES = {
 
 
 class PatternValidator:
-    def validate(self, spec: GraphPatternSpec, *, known_patterns: set[str] | None = None) -> GraphPatternSpec:
+    def validate(
+        self,
+        spec: GraphPatternSpec,
+        *,
+        known_patterns: set[str] | None = None,
+        known_node_impls: set[str] | None = None,
+    ) -> GraphPatternSpec:
         known_patterns = known_patterns or set()
+        known_node_impls = known_node_impls or set()
+        allowed_node_impls = NODE_IMPLEMENTATION_IDS.union(known_node_impls)
         if not spec.pattern_id.strip():
             raise PatternValidationError("pattern_id must not be empty.")
         if spec.version <= 0:
@@ -69,7 +77,7 @@ class PatternValidator:
             else:
                 if node.impl == "pattern_ref":
                     raise PatternValidationError("Only sub_graph nodes can use impl=pattern_ref.")
-                if node.impl not in NODE_IMPLEMENTATION_IDS:
+                if node.impl not in allowed_node_impls:
                     raise PatternValidationError(f"Unknown node impl: {node.impl}")
         for capability in spec.constraints.required_capabilities:
             if capability not in ALLOWED_REQUIRED_CAPABILITIES:

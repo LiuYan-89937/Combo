@@ -16,12 +16,15 @@ from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.namespace import agent_memory_namespace
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
+from agent_factory.runtime_kernel.bookmarks import InMemoryBookmarkStore
 from agent_factory.runtime_kernel.context import ContextEngine
 from agent_factory.runtime_kernel.execution import ExecutionController
 from agent_factory.runtime_protocol.completion import runtime_completed
 from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp, RuntimeKernelInstance
 from agent_factory.runtime_kernel.nodes.registry import NodeRegistry
+from agent_factory.runtime_kernel.node_providers import NodeProvider
+from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.nodes.standard import (
     CognitiveAnswerNode,
     CognitiveClarifyNode,
@@ -52,7 +55,19 @@ from agent_factory.runtime_kernel.persistence import (
 )
 from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
-from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.state import (
+    ContextState,
+    ConversationState,
+    ExecutionState,
+    KnowledgeState,
+    ObservabilityState,
+    PolicyState,
+    RunState,
+    RuntimeConfigState,
+    RuntimeState,
+    ToolState,
+)
+from agent_factory.runtime_kernel.state_contracts import PackageStateManager, StateNamespaceSpec
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
 from agent_factory.runtime_render import RenderManifest, default_node_render_spec, validate_render_manifest
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS
@@ -134,6 +149,7 @@ class RuntimeKernelFacade:
             self.background_workers.add(worker)
         services = RuntimeServices(
             model_service=None,
+            model_operation_service=ModelOperationService(role="main"),
             tool_registry=InMemoryToolRegistry(),
             memory_store=memory_store,
             memory_system=memory_runtime,
@@ -143,6 +159,7 @@ class RuntimeKernelFacade:
             policy_engine=PolicyEngine(),
             observability_manager=ObservabilityManager(),
             checkpointer=checkpointer,
+            bookmark_store=InMemoryBookmarkStore(),
         )
         self.session_manager = AgentSessionManager(session_config)
         self.instance = RuntimeKernelInstance(
@@ -162,13 +179,18 @@ class RuntimeKernelFacade:
         services: RuntimeServices | None = None,
         render_manifest: RenderManifest | dict | None = None,
         system_wrapper_ids: list[str] | tuple[str, ...] | None = None,
+        node_providers: list[NodeProvider] | tuple[NodeProvider, ...] | None = None,
+        state_contracts: list[StateNamespaceSpec] | tuple[StateNamespaceSpec, ...] | None = None,
     ) -> CompiledKernelApp:
         services = services or self.instance.services
         if services is self.instance.services:
             self._start_default_background_workers()
         bindings = bindings or BindingSet()
+        if node_providers:
+            self.register_node_providers(node_providers)
         pattern = self.instance.pattern_registry.get(pattern_id)
         resolved_render_manifest = _resolve_render_manifest(pattern, render_manifest)
+        package_state_manager = PackageStateManager(tuple(state_contracts or ())) if state_contracts else None
         _ensure_memory_runtime(services)
         services.validate_required(_required_services_for_pattern(pattern))
         return self.instance.compiler.compile(
@@ -177,7 +199,22 @@ class RuntimeKernelFacade:
             services=services,
             render_manifest=resolved_render_manifest,
             system_wrapper_ids=DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS if system_wrapper_ids is None else system_wrapper_ids,
+            package_state_manager=package_state_manager,
         )
+
+    def register_node_providers(self, providers: list[NodeProvider] | tuple[NodeProvider, ...]) -> None:
+        registered_impl_ids: list[str] = []
+        for provider in providers:
+            for implementation in provider.implementations():
+                if self.instance.node_registry.has(implementation.impl_id):
+                    existing = self.instance.node_registry.get(implementation.impl_id)
+                    if existing is implementation:
+                        continue
+                    raise RuntimeError(f"node implementation already registered: {implementation.impl_id}")
+                self.instance.node_registry.register(implementation)
+                registered_impl_ids.append(implementation.impl_id)
+        if registered_impl_ids:
+            self.instance.pattern_registry.register_node_impl_ids(registered_impl_ids)
 
     def _start_default_background_workers(self) -> None:
         if self._default_memory_worker is None:
@@ -254,13 +291,24 @@ class RuntimeKernelFacade:
             agent_id=agent_id,
             first_user_input=user_input,
         )
-        state = RuntimeState()
-        state.run.agent_id = agent_id
-        state.run.session_id = session.session_id
-        state.run.pattern_id = compiled.pattern_spec.pattern_id
-        state.run.pattern_version = compiled.pattern_spec.version
-        state.conversation.current_user_input = user_input
-        state.conversation.turn_index = int(session.turn_count or 0)
+        state = _state_for_new_turn(compiled, thread_id=session.thread_id)
+        state.run = RunState(
+            agent_id=agent_id,
+            session_id=session.session_id,
+            pattern_id=compiled.pattern_spec.pattern_id,
+            pattern_version=compiled.pattern_spec.version,
+        )
+        state.conversation = ConversationState(
+            current_user_input=user_input,
+            turn_index=int(session.turn_count or 0),
+        )
+        state.context = ContextState()
+        state.tools = ToolState()
+        state.knowledge = KnowledgeState()
+        state.policy = PolicyState()
+        state.execution = ExecutionState()
+        state.observability = ObservabilityState()
+        state.runtime_config = RuntimeConfigState()
         state.runtime_config.user_config = dict(user_config or {})
         state.runtime_config.agent_config = agent_config
         state.runtime_config.session_config = {
@@ -333,6 +381,7 @@ class RuntimeKernelFacade:
         session_manager = _session_manager_from_config(session_config or {}, default=self.session_manager)
         session = session_manager.load(session_id)
         state = RuntimeState()
+        state.package_state = _initial_package_state(compiled)
         state.run.agent_id = session.agent_id
         state.run.session_id = session.session_id
         state.run.pattern_id = compiled.pattern_spec.pattern_id
@@ -356,7 +405,7 @@ def _required_services_for_pattern(pattern) -> list[str]:
     required = {"observability_manager", "checkpointer"}
     for node in pattern.nodes:
         if node.impl.startswith("cognitive."):
-            required.update({"model_service", "context_engine", "context_system"})
+            required.update({"model_operation_service", "context_engine", "context_system"})
         elif node.impl == "governance.precheck" or node.impl == "governance.postcheck":
             required.add("policy_engine")
         elif node.impl.startswith("operational.tool_call"):
@@ -426,3 +475,49 @@ def _resolve_render_manifest(pattern, render_manifest: RenderManifest | dict | N
     else:
         manifest = RenderManifest.model_validate(render_manifest)
     return validate_render_manifest(manifest, {node.id for node in pattern.nodes})
+
+
+def _initial_package_state(compiled: CompiledKernelApp) -> dict[str, object]:
+    manager = compiled.metadata.get("package_state_manager")
+    if isinstance(manager, PackageStateManager):
+        return manager.initial_state()
+    return {}
+
+
+def _state_for_new_turn(compiled: CompiledKernelApp, *, thread_id: str) -> RuntimeState:
+    state = _checkpoint_runtime_state(compiled, thread_id=thread_id) or RuntimeState()
+    state.package_state = _merge_package_state_defaults(
+        _initial_package_state(compiled),
+        state.package_state,
+    )
+    return state
+
+
+def _checkpoint_runtime_state(compiled: CompiledKernelApp, *, thread_id: str) -> RuntimeState | None:
+    try:
+        snapshot = compiled.graph_app.get_state({"configurable": {"thread_id": thread_id}})
+    except Exception:
+        return None
+    values = getattr(snapshot, "values", {}) or {}
+    if not isinstance(values, dict):
+        return None
+    runtime = values.get("runtime")
+    if runtime is None:
+        return None
+    try:
+        return RuntimeState.model_validate(runtime)
+    except Exception:
+        return None
+
+
+def _merge_package_state_defaults(defaults: dict[str, object], existing: dict[str, object]) -> dict[str, object]:
+    merged: dict[str, object] = {
+        key: dict(value) if isinstance(value, dict) else value
+        for key, value in dict(defaults or {}).items()
+    }
+    for namespace, value in dict(existing or {}).items():
+        if isinstance(merged.get(namespace), dict) and isinstance(value, dict):
+            merged[namespace] = {**dict(merged[namespace]), **value}
+        else:
+            merged[namespace] = value
+    return merged

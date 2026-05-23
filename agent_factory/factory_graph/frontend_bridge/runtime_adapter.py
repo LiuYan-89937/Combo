@@ -2,14 +2,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
-import uuid
-
-from langchain_core.messages import BaseMessage, HumanMessage
-from langgraph.types import Command
 
 from agent_factory.env import load_agentfactory_dotenv
-from agent_factory.factory_graph.chat_graph import build_factory_chat_graph, initial_factory_chat_state
-from agent_factory.factory_graph.constants import DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE, STAGE_IDS
+from agent_factory.factory_package.constants import DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE, STAGE_IDS
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
 from agent_factory.factory_graph.frontend_bridge.protocol import (
@@ -18,27 +13,19 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryMode,
     event,
 )
-from agent_factory.factory_graph.graph import build_factory_graph, initial_factory_graph_state
 from agent_factory.factory_graph.session import (
     FactorySessionManager,
-    build_factory_checkpointer_handle,
-    is_factory_checkpointer_persistent,
 )
-from agent_factory.memory_system.factory import enqueue_factory_memory_write, shutdown_factory_memory_worker
-from agent_factory.memory_system.config import memory_write_interval_turns_from_env
-from agent_factory.memory_system.namespace import factory_memory_namespace
-from agent_factory.memory_system.reports import memory_event_payload
-from agent_factory.memory_system.segment import build_conversation_segment
+from agent_factory.memory_system.factory import shutdown_factory_memory_worker
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
-from agent_factory.runtime_protocol.messages import has_complete_tool_call_history
 from agent_factory.scheduler_system import (
     SchedulerExecutor,
     SchedulerRuntime,
     SchedulerWorker,
     default_factory_scheduler_runtime,
-    scheduler_tool_approval_override,
     scheduler_enabled_from_env,
+    scheduler_tool_approval_override,
 )
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.tooling import get_factory_base_tool_ids
@@ -46,6 +33,8 @@ from agent_factory.tooling import get_factory_tools
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
+SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
+SYSTEM_CREATE_AGENT_PACKAGE_ID = "factory_create_agent"
 
 
 @dataclass(slots=True)
@@ -53,15 +42,6 @@ class FactoryBridgeOptions:
     stop_after_stage: str | None = DEFAULT_CREATE_AGENT_BREAKPOINT_STAGE
     show_state: bool = False
     show_messages: bool = True
-
-
-@dataclass(slots=True)
-class PendingRun:
-    mode: FactoryMode
-    app: Any
-    config: dict[str, Any]
-    last_state: dict[str, Any]
-    normalizer: RuntimeEventNormalizer
 
 
 @dataclass(slots=True)
@@ -80,7 +60,6 @@ class FactoryRuntimeAdapter:
     options: FactoryBridgeOptions = field(default_factory=FactoryBridgeOptions)
     session_record: Any | None = None
     mode: FactoryMode | None = None
-    pending_run: PendingRun | None = None
     pending_agent_package_run: PendingAgentPackageRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
     scheduler_runtime: SchedulerRuntime | None = None
@@ -90,9 +69,6 @@ class FactoryRuntimeAdapter:
         load_agentfactory_dotenv()
         if self.session_manager is None:
             self.session_manager = FactorySessionManager.from_env()
-        if self.checkpointer is None:
-            self.checkpointer_handle = build_factory_checkpointer_handle()
-            self.checkpointer = self.checkpointer_handle.saver
         if self.agent_package_runtime is None:
             self.agent_package_runtime = AgentPackageRuntimeManager()
         self.agent_package_runtime.set_emit(self.emit)
@@ -181,13 +157,13 @@ class FactoryRuntimeAdapter:
             return
         self.session_record = self.session_manager.load(command.session_id)
         self.mode = self.session_record.current_mode
-        self.pending_run = None
+        self.pending_agent_package_run = None
         self._emit_session_event(command.request_id, session_event_type="session_switched")
 
     def new_session(self, command: FactoryFrontendCommand) -> None:
         self.session_record = self.session_manager.create()
         self.mode = None
-        self.pending_run = None
+        self.pending_agent_package_run = None
         self._emit_session_event(command.request_id, session_event_type="session_started")
 
     def set_mode(self, command: FactoryFrontendCommand) -> None:
@@ -203,7 +179,11 @@ class FactoryRuntimeAdapter:
                 request_id=command.request_id,
                 session_id=self._session_id(),
                 mode=self.mode,
-                payload={"mode": self.mode},
+                payload={
+                    "mode": self.mode,
+                    **({"package_id": SYSTEM_CHAT_PACKAGE_ID} if self.mode == "chat" else {}),
+                    **({"package_id": SYSTEM_CREATE_AGENT_PACKAGE_ID} if self.mode == "create_agent" else {}),
+                },
             )
         )
 
@@ -238,7 +218,7 @@ class FactoryRuntimeAdapter:
         if not message:
             self._emit_error(command, "send_message requires message")
             return
-        if self.pending_run is not None:
+        if self.pending_agent_package_run is not None:
             self._emit_error(command, "cannot send a new message while an interrupt is pending")
             return
         if self.mode == "chat":
@@ -247,25 +227,10 @@ class FactoryRuntimeAdapter:
             self._run_create_agent(command, message)
 
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
-        if self.pending_run is None and self.pending_agent_package_run is None:
+        if self.pending_agent_package_run is None:
             self._emit_error(command, "no pending interrupt to resume")
             return
-        if self.pending_agent_package_run is not None:
-            self._resume_agent_package_interrupt(command)
-            return
-        pending = self.pending_run
-        self.pending_run = None
-        pending.normalizer.emit_runtime_resumed(command.payload)
-        self._stream_run(
-            request_id=command.request_id,
-            mode=pending.mode,
-            app=pending.app,
-            stream_input=Command(resume=command.payload),
-            config=pending.config,
-            initial_final_state=pending.last_state,
-            normalizer=pending.normalizer,
-            emit_run_started=False,
-        )
+        self._resume_agent_package_interrupt(command)
 
     def rerun_from_stage(self, command: FactoryFrontendCommand) -> None:
         self._ensure_session(command)
@@ -273,38 +238,15 @@ class FactoryRuntimeAdapter:
         if self.mode != "create_agent":
             self._emit_error(command, "rerun_from_stage is only available in create_agent mode")
             return
-        if self.pending_run is not None:
+        if self.pending_agent_package_run is not None:
             self._emit_error(command, "cannot rerun while an interrupt is pending")
             return
         if stage_id not in STAGE_IDS:
             self._emit_error(command, f"unknown stage_id: {stage_id}")
             return
-        app = build_factory_graph(
-            stop_after_stage=self.options.stop_after_stage,
-            tools=self._factory_tools(),
-            enable_interrupts=True,
-            checkpointer=self.checkpointer,
-        )
-        base_config = {"configurable": {"thread_id": self._thread_id("create_agent")}}
-        snapshot = _latest_stage_entry_snapshot(app, config=base_config, stage_id=stage_id)
-        if snapshot is None:
-            self._emit_error(command, f"no checkpoint found at stage entry: {stage_id}")
-            return
-        self.pending_run = None
-        initial_state = dict(snapshot.values or {}) if isinstance(snapshot.values, dict) else {}
-        checkpoint_config = dict(snapshot.config or base_config)
-        self._stream_run(
-            request_id=command.request_id,
-            mode="create_agent",
-            app=app,
-            stream_input=None,
-            config=checkpoint_config,
-            initial_final_state=initial_state,
-            run_started_payload={
-                "stop_after_stage": self.options.stop_after_stage,
-                "rerun_from_stage": stage_id,
-                "checkpoint": _checkpoint_payload(checkpoint_config),
-            },
+        self._emit_error(
+            command,
+            f"RuntimeKernel bookmark rerun is not available for stage yet: {stage_id}",
         )
 
     def scheduler_manage(self, command: FactoryFrontendCommand) -> None:
@@ -457,7 +399,7 @@ class FactoryRuntimeAdapter:
         if not message:
             self._emit_error(command, "run_agent_package requires message")
             return
-        if self.pending_run is not None or self.pending_agent_package_run is not None:
+        if self.pending_agent_package_run is not None:
             self._emit_error(command, "cannot run an agent package while an interrupt is pending")
             return
         normalizer = RuntimeEventNormalizer(
@@ -499,6 +441,8 @@ class FactoryRuntimeAdapter:
                 package_id=pending.package_id,
                 run=run,
                 normalizer=pending.normalizer,
+                frontend_mode=pending.normalizer.mode if pending.normalizer.mode == "chat" else None,
+                frontend_session_id=pending.normalizer.session_id if pending.normalizer.mode == "chat" else None,
             )
         except Exception as exc:
             pending.normalizer.emit_run_failed(exc)
@@ -509,18 +453,25 @@ class FactoryRuntimeAdapter:
         package_id: str,
         run: Any,
         normalizer: RuntimeEventNormalizer,
+        frontend_mode: FactoryMode | None = None,
+        frontend_session_id: str | None = None,
     ) -> None:
         final_state = None
         terminal_event_seen = False
         for stream_mode, chunk in run.events:
             if stream_mode == "frontend_event":
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-                if item.session_id:
-                    run.session["session_id"] = item.session_id
+                agent_session_id = item.session_id
+                if agent_session_id:
+                    run.session["session_id"] = agent_session_id
                 if item.event_type in {"run_completed", "run_failed"}:
                     terminal_event_seen = True
+                if item.event_type == "run_completed" and frontend_mode == "chat":
+                    self._sync_system_chat_session_summary(item)
+                if item.event_type == "run_completed" and frontend_mode == "create_agent":
+                    self._sync_system_create_agent_session_summary(item)
                 if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
-                    session_id = str(item.session_id or (run.session or {}).get("session_id") or "")
+                    session_id = str(agent_session_id or (run.session or {}).get("session_id") or "")
                     if not session_id:
                         raise RuntimeError("agent package interrupt missing session_id")
                     self.pending_agent_package_run = PendingAgentPackageRun(
@@ -528,7 +479,7 @@ class FactoryRuntimeAdapter:
                         session_id=session_id,
                         normalizer=normalizer,
                     )
-                self.emit(item)
+                self.emit(_frontend_scoped_agent_event(item, mode=frontend_mode, session_id=frontend_session_id))
                 if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
                     return
                 continue
@@ -584,126 +535,89 @@ class FactoryRuntimeAdapter:
         )
 
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
-        self.session_record = self.session_manager.remember_first_user_input(self.session_record.session_id, message)
-        new_message = HumanMessage(content=message)
-        messages: list[BaseMessage] = [new_message]
-        if not self._use_checkpoint_memory():
-            messages = [*self.session_manager.messages(self.session_record, "chat"), new_message]
-        app = build_factory_chat_graph(
-            tools=self._factory_tools(),
-            enable_interrupts=True,
-            checkpointer=self.checkpointer,
-        )
-        initial_state = initial_factory_chat_state(messages)
-        self._stream_run(
-            request_id=command.request_id,
-            mode="chat",
-            app=app,
-            stream_input=initial_state,
-            config={"configurable": {"thread_id": self._thread_id("chat")}},
-            initial_final_state=initial_state,
-        )
-
-    def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
-        self.session_record = self.session_manager.remember_first_user_input(self.session_record.session_id, message)
-        new_message = HumanMessage(content=message)
-        messages: list[BaseMessage] = [new_message]
-        if not self._use_checkpoint_memory():
-            messages = [*self.session_manager.messages(self.session_record, "create_agent"), new_message]
-        app = build_factory_graph(
-            stop_after_stage=self.options.stop_after_stage,
-            tools=self._factory_tools(),
-            enable_interrupts=True,
-            checkpointer=self.checkpointer,
-        )
-        initial_state = initial_factory_graph_state(
-            requirement=message,
-            messages=messages,
-            force_manufacture=True,
-            interaction_mode="create_agent",
-        )
-        self._stream_run(
-            request_id=command.request_id,
-            mode="create_agent",
-            app=app,
-            stream_input=initial_state,
-            config={"configurable": {"thread_id": self._thread_id("create_agent")}},
-            initial_final_state=initial_state,
-        )
-
-    def _stream_run(
-        self,
-        *,
-        request_id: str | None,
-        mode: FactoryMode,
-        app: Any,
-        stream_input: Any,
-        config: dict[str, Any],
-        initial_final_state: dict[str, Any],
-        normalizer: RuntimeEventNormalizer | None = None,
-        emit_run_started: bool = True,
-        run_started_payload: dict[str, Any] | None = None,
-    ) -> None:
-        normalizer = normalizer or RuntimeEventNormalizer(
+        agent_session_id = self._ensure_system_chat_agent_session(message)
+        normalizer = RuntimeEventNormalizer(
             emit=self.emit,
-            request_id=request_id,
+            request_id=command.request_id,
             session_id=self._session_id(),
-            mode=mode,
-            graph_id="factory_chat_graph" if mode == "chat" else "factory_graph",
+            mode="chat",
+            graph_id="factory_chat_package",
+            producer_type="factory_runtime",
         )
-        if emit_run_started:
-            normalizer.emit_run_started(run_started_payload or {"stop_after_stage": self.options.stop_after_stage})
-        final_state = initial_final_state
         try:
-            for stream_mode, chunk in app.stream(
-                stream_input,
-                config=config,
-                stream_mode=["updates", "values", "messages", "debug", "custom"],
-            ):
-                interrupt_payload = _extract_interrupt_payload(chunk)
-                if interrupt_payload is not None:
-                    self.pending_run = PendingRun(
-                        mode=mode,
-                        app=app,
-                        config=config,
-                        last_state=final_state,
-                        normalizer=normalizer,
-                    )
-                    normalizer.emit_interrupt(json_safe(interrupt_payload))
-                    return
-                if stream_mode == "updates":
-                    self._emit_updates(normalizer, chunk)
-                elif stream_mode == "values":
-                    final_state = chunk
-                elif stream_mode == "messages":
-                    normalizer.emit_message_chunk(chunk)
-                elif stream_mode == "debug":
-                    normalizer.emit_debug_event(json_safe(chunk))
-                elif stream_mode == "custom":
-                    normalizer.emit_custom_event(json_safe(chunk))
-            can_commit_messages = _can_commit_session_messages(final_state)
-            if can_commit_messages:
-                self._save_messages(mode, final_state)
-                self._enqueue_factory_memory(normalizer, mode, config, final_state)
-            normalizer.emit_run_completed(_summary_payload(final_state, self.options))
+            run = self.agent_package_runtime.stream(
+                SYSTEM_CHAT_PACKAGE_ID,
+                user_input=message,
+                session_id=agent_session_id,
+                request_id=command.request_id,
+            )
+            self._consume_agent_package_stream(
+                package_id=SYSTEM_CHAT_PACKAGE_ID,
+                run=run,
+                normalizer=normalizer,
+                frontend_mode="chat",
+                frontend_session_id=self._session_id(),
+            )
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
-    def _emit_updates(self, normalizer: RuntimeEventNormalizer, chunk: Any) -> None:
-        if not isinstance(chunk, dict):
-            return
-        for node_id, patch in chunk.items():
-            normalizer.emit_update(str(node_id), json_safe(patch))
+    def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
+        agent_session_id = self._ensure_system_create_agent_session(message)
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=command.request_id,
+            session_id=self._session_id(),
+            mode="create_agent",
+            graph_id="factory_create_agent_package",
+            producer_type="factory_runtime",
+        )
+        try:
+            run = self.agent_package_runtime.stream(
+                SYSTEM_CREATE_AGENT_PACKAGE_ID,
+                user_input=message,
+                session_id=agent_session_id,
+                request_id=command.request_id,
+                user_config={"stop_after_stage": self.options.stop_after_stage},
+            )
+            self._consume_agent_package_stream(
+                package_id=SYSTEM_CREATE_AGENT_PACKAGE_ID,
+                run=run,
+                normalizer=normalizer,
+                frontend_mode="create_agent",
+                frontend_session_id=self._session_id(),
+            )
+        except Exception as exc:
+            normalizer.emit_run_failed(exc)
 
-    def _save_messages(self, mode: FactoryMode, final_state: dict[str, Any]) -> None:
+    def _sync_system_chat_session_summary(self, item: FactoryFrontendEvent) -> None:
         if self.session_record is None:
             return
-        messages = final_state.get("messages", [])
-        self.session_record = self.session_manager.replace_messages(
-            self.session_record.session_id,
-            mode,
-            messages,
-        )
+        agent_session = item.payload.get("agent_session") if isinstance(item.payload, dict) else None
+        if isinstance(agent_session, dict):
+            self.session_record.chat_agent_package_session_id = str(
+                agent_session.get("session_id") or self.session_record.chat_agent_package_session_id or ""
+            ) or None
+            try:
+                self.session_record.chat_turn_count = int(agent_session.get("turn_count") or self.session_record.chat_turn_count)
+            except (TypeError, ValueError):
+                pass
+        self.session_manager.save(self.session_record)
+
+    def _sync_system_create_agent_session_summary(self, item: FactoryFrontendEvent) -> None:
+        if self.session_record is None:
+            return
+        agent_session = item.payload.get("agent_session") if isinstance(item.payload, dict) else None
+        if isinstance(agent_session, dict):
+            self.session_record.create_agent_package_session_id = str(
+                agent_session.get("session_id") or self.session_record.create_agent_package_session_id or ""
+            ) or None
+            try:
+                self.session_record.create_agent_turn_count = int(
+                    agent_session.get("turn_count") or self.session_record.create_agent_turn_count
+                )
+            except (TypeError, ValueError):
+                pass
+        self.session_manager.save(self.session_record)
 
     def _emit_session_event(self, request_id: str | None, *, session_event_type: str = "session_switched") -> None:
         self.emit(
@@ -727,83 +641,55 @@ class FactoryRuntimeAdapter:
             )
         )
 
-    def _enqueue_factory_memory(
-        self,
-        normalizer: RuntimeEventNormalizer,
-        mode: FactoryMode,
-        config: dict[str, Any],
-        final_state: dict[str, Any],
-    ) -> None:
-        if final_state.get("status") in {"failed", "blocked"} or final_state.get("errors"):
-            return
-        configurable = dict(config.get("configurable") or {})
-        turn_index = _factory_turn_count(self.session_record, mode, fallback_messages=final_state.get("messages", []))
-        source = {
-            "session_id": self._session_id(),
-            "thread_id": configurable.get("thread_id"),
-            "mode": mode,
-            "run_id": final_state.get("factory_run_id") or final_state.get("run_id"),
-            "node_id": final_state.get("current_stage"),
-        }
-        segment = build_conversation_segment(
-            scope="factory",
-            namespace=factory_memory_namespace("default"),
-            source=source,
-            messages=final_state.get("messages", []),
-            end_turn=turn_index,
-            max_user_turns=memory_write_interval_turns_from_env(),
-        )
-        if segment is None:
-            return
-        try:
-            report = enqueue_factory_memory_write(segment=segment)
-            if report.status == "noop":
-                return
-            event_type = "memory_write_queued" if report.status == "queued" else "memory_write_queued_failed"
-            normalizer.emit_custom_event(
-                {
-                    "type": "memory_event",
-                    "payload": {"event_type": event_type, **memory_event_payload(report)},
-                }
-            )
-        except Exception as exc:
-            normalizer.emit_custom_event(
-                {
-                    "type": "memory_event",
-                    "payload": {
-                        "event_type": "memory_write_queued_failed",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    },
-                }
-            )
-
     def _ensure_session(self, command: FactoryFrontendCommand) -> None:
         if self.session_record is None:
             self.start_session(FactoryFrontendCommand(type="start_session", request_id=command.request_id))
+
+    def _ensure_system_chat_agent_session(self, first_user_input: str) -> str:
+        if self.session_record is None:
+            self.start_session(FactoryFrontendCommand(type="start_session"))
+        self.session_record = self.session_manager.remember_first_user_input(
+            self.session_record.session_id,
+            first_user_input,
+        )
+        agent_session = self.agent_package_runtime.ensure_session(
+            SYSTEM_CHAT_PACKAGE_ID,
+            session_id=self.session_record.chat_agent_package_session_id,
+            first_user_input=first_user_input,
+        )
+        agent_session_id = str(agent_session.get("session_id") or "")
+        if agent_session_id != self.session_record.chat_agent_package_session_id:
+            self.session_record.chat_agent_package_session_id = agent_session_id
+            self.session_manager.save(self.session_record)
+        return agent_session_id
+
+    def _ensure_system_create_agent_session(self, first_user_input: str) -> str:
+        if self.session_record is None:
+            self.start_session(FactoryFrontendCommand(type="start_session"))
+        self.session_record = self.session_manager.remember_first_user_input(
+            self.session_record.session_id,
+            first_user_input,
+        )
+        agent_session = self.agent_package_runtime.ensure_session(
+            SYSTEM_CREATE_AGENT_PACKAGE_ID,
+            session_id=self.session_record.create_agent_package_session_id,
+            first_user_input=first_user_input,
+        )
+        agent_session_id = str(agent_session.get("session_id") or "")
+        if agent_session_id != self.session_record.create_agent_package_session_id:
+            self.session_record.create_agent_package_session_id = agent_session_id
+            self.session_manager.save(self.session_record)
+        return agent_session_id
 
     def _session_id(self) -> str | None:
         if self.session_record is None:
             return None
         return str(self.session_record.session_id)
 
-    def _thread_id(self, mode: FactoryMode) -> str:
-        if self.session_record is None:
-            return f"factory-{mode}-{uuid.uuid4().hex}"
-        return self.session_manager.thread_id(self.session_record, mode)
-
-    def _use_checkpoint_memory(self) -> bool:
-        return is_factory_checkpointer_persistent(self.checkpointer)
-
     def checkpointer_payload(self) -> dict[str, Any]:
-        if self.checkpointer_handle is not None:
-            return {
-                "backend": self.checkpointer_handle.backend,
-                "persistent": self.checkpointer_handle.persistent,
-                "path": str(self.checkpointer_handle.path) if self.checkpointer_handle.path else None,
-            }
         return {
-            "backend": "external",
-            "persistent": self._use_checkpoint_memory(),
+            "backend": "system_package",
+            "persistent": True,
             "path": None,
         }
 
@@ -874,46 +760,38 @@ class FactoryRuntimeAdapter:
         if mode not in {"chat", "create_agent"}:
             return {"status": "failed", "error": f"unsupported factory scheduler graph mode: {mode}"}
         self._ensure_session(FactoryFrontendCommand(type="start_session"))
-        new_message = HumanMessage(content=message)
-        if mode == "chat":
-            app = build_factory_chat_graph(
-                tools=self._factory_tools(),
-                enable_interrupts=True,
-                checkpointer=self.checkpointer,
-            )
-            initial_state = initial_factory_chat_state([new_message])
-            graph_id = "factory_chat_scheduler"
-        else:
-            app = build_factory_graph(
-                stop_after_stage=self.options.stop_after_stage,
-                tools=self._factory_tools(),
-                enable_interrupts=True,
-                checkpointer=self.checkpointer,
-            )
-            initial_state = initial_factory_graph_state(
-                requirement=message,
-                messages=[new_message],
-                force_manufacture=True,
-                interaction_mode="create_agent",
-            )
-            graph_id = "factory_create_agent_scheduler"
+        package_id = SYSTEM_CHAT_PACKAGE_ID if mode == "chat" else SYSTEM_CREATE_AGENT_PACKAGE_ID
+        agent_session_id = (
+            self._ensure_system_chat_agent_session(message)
+            if mode == "chat"
+            else self._ensure_system_create_agent_session(message)
+        )
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=None,
             session_id=self._session_id(),
             mode=mode,  # type: ignore[arg-type]
-            graph_id=graph_id,
+            graph_id=f"factory_{mode}_package_scheduler",
+            producer_type="factory_runtime",
         )
-        self._stream_run(
-            request_id=None,
-            mode=mode,  # type: ignore[arg-type]
-            app=app,
-            stream_input=initial_state,
-            config={"configurable": {"thread_id": f"factory-scheduler-{job.job_id}"}},
-            initial_final_state=initial_state,
-            normalizer=normalizer,
-            run_started_payload={"scheduler_job_id": job.job_id, "trigger": "scheduler"},
-        )
+        try:
+            run = self.agent_package_runtime.stream(
+                package_id,
+                user_input=message,
+                session_id=agent_session_id,
+                request_id=None,
+                user_config={"stop_after_stage": self.options.stop_after_stage} if mode == "create_agent" else None,
+            )
+            self._consume_agent_package_stream(
+                package_id=package_id,
+                run=run,
+                normalizer=normalizer,
+                frontend_mode=mode,  # type: ignore[arg-type]
+                frontend_session_id=self._session_id(),
+            )
+        except Exception as exc:
+            normalizer.emit_run_failed(exc)
+            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
         return {"status": "completed", "output_summary": f"factory scheduled {mode} run completed"}
 
     def _factory_tools(self, tool_ids: list[str] | set[str] | tuple[str, ...] | None = None) -> list[Any]:
@@ -932,32 +810,31 @@ def _session_payload(record: Any | None) -> dict[str, Any]:
     if record is None:
         return {}
     payload = record.model_dump(mode="json")
-    first_user_input = payload.get("first_user_input") or _first_message_content(payload.get("create_agent_messages"))
-    first_user_input = first_user_input or _first_message_content(payload.get("chat_messages"))
+    first_user_input = payload.get("first_user_input")
     payload["first_user_input"] = first_user_input
     payload["display_title"] = payload.get("display_title") or _display_title(first_user_input)
     mode = payload.get("current_mode")
-    active_messages = payload.get("chat_messages") if mode == "chat" else payload.get("create_agent_messages") if mode == "create_agent" else []
     payload["snapshot"] = {
         "mode": mode,
-        "messages": json_safe(active_messages or []),
+        "messages": [],
         "pending_interrupt": None,
         "recent_tool_activities": [],
     }
     return payload
 
 
-def _first_message_content(messages: Any) -> str | None:
-    if not isinstance(messages, list):
-        return None
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        if message.get("role") == "user" and isinstance(message.get("content"), str):
-            value = message["content"].strip()
-            if value:
-                return value
-    return None
+def _frontend_scoped_agent_event(
+    item: FactoryFrontendEvent,
+    *,
+    mode: FactoryMode | None,
+    session_id: str | None,
+) -> FactoryFrontendEvent:
+    updates: dict[str, Any] = {}
+    if mode is not None:
+        updates["mode"] = mode
+    if session_id is not None:
+        updates["session_id"] = session_id
+    return item.model_copy(update=updates) if updates else item
 
 
 def _display_title(value: str | None, *, limit: int = 42) -> str | None:
@@ -967,61 +844,6 @@ def _display_title(value: str | None, *, limit: int = 42) -> str | None:
     if len(compact) <= limit:
         return compact
     return f"{compact[:limit - 1]}…"
-
-
-def _summary_payload(final_state: dict[str, Any], options: FactoryBridgeOptions) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "status": final_state.get("status"),
-        "current_stage": final_state.get("current_stage"),
-        "stage_log_count": len(final_state.get("stage_log", [])),
-        "message_count": len(final_state.get("messages", [])),
-        "error_count": len(final_state.get("errors", [])),
-    }
-    if options.show_state:
-        payload["state"] = json_safe(final_state)
-    if options.show_messages:
-        payload["messages"] = json_safe(final_state.get("messages", []))
-    return payload
-
-
-def _can_commit_session_messages(final_state: dict[str, Any]) -> bool:
-    if final_state.get("status") in {"failed", "blocked"}:
-        return False
-    if final_state.get("errors"):
-        return False
-    messages = final_state.get("messages", [])
-    if not isinstance(messages, list):
-        return False
-    return has_complete_tool_call_history(messages)
-
-
-def _factory_turn_count(record: Any | None, mode: FactoryMode, *, fallback_messages: Any) -> int:
-    if record is not None:
-        if mode == "chat":
-            count = int(getattr(record, "chat_turn_count", 0) or 0)
-        else:
-            count = int(getattr(record, "create_agent_turn_count", 0) or 0)
-        if count > 0:
-            return count
-    if isinstance(fallback_messages, list):
-        return sum(1 for message in fallback_messages if isinstance(message, HumanMessage))
-    return 0
-
-
-def _latest_stage_entry_snapshot(app: Any, *, config: dict[str, Any], stage_id: str) -> Any | None:
-    for snapshot in app.get_state_history(config):
-        if stage_id in tuple(getattr(snapshot, "next", ()) or ()):
-            return snapshot
-    return None
-
-
-def _checkpoint_payload(config: dict[str, Any]) -> dict[str, Any]:
-    configurable = dict(config.get("configurable") or {})
-    return {
-        "thread_id": configurable.get("thread_id"),
-        "checkpoint_id": configurable.get("checkpoint_id"),
-        "checkpoint_ns": configurable.get("checkpoint_ns"),
-    }
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
