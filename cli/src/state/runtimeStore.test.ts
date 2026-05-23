@@ -239,6 +239,29 @@ describe('RuntimeStore', () => {
 		store.destroy();
 		vi.useRealTimers();
 	});
+
+	it('shows context activity when context is injected', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('context_injection_completed', {
+			payload: {
+				node_id: 'answer',
+				item_count: 3,
+				token_estimate: 420
+			}
+		}));
+
+		expect(store.getSnapshot().contextActivity.status).toBe('completed');
+		expect(store.getSnapshot().contextActivity.label).toContain('上下文已注入');
+		expect(store.getSnapshot().contextActivity.detail).toBe('3 items');
+
+		vi.advanceTimersByTime(2500);
+		expect(store.getSnapshot().contextActivity.status).toBe('idle');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
 });
 
 function event(

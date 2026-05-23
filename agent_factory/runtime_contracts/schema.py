@@ -5,11 +5,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent_factory.context_system import ContextContractConfig
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
 from agent_factory.scheduler_system.schema import SchedulerContractConfig
 
 
-ContractType = Literal["session", "tools", "memory", "render", "resources", "sandbox", "dependencies", "model", "scheduler"]
+ContractType = Literal["session", "tools", "memory", "render", "resources", "sandbox", "dependencies", "model", "scheduler", "context"]
 ContractVersion = Literal[
     "session_contract.v0",
     "tools_contract.v0",
@@ -20,9 +21,10 @@ ContractVersion = Literal[
     "dependencies_contract.v0",
     "model_contract.v0",
     "scheduler_contract.v0",
+    "context_contract.v0",
 ]
 REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
-    {"dependencies", "model", "render", "resources", "sandbox", "scheduler", "session", "tools"}
+    {"context", "dependencies", "model", "render", "resources", "sandbox", "scheduler", "session", "tools"}
 )
 
 
@@ -46,7 +48,7 @@ class AgentPackageManifest(BaseModel):
     prompts: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
     policies: list[str] = Field(default_factory=list)
-    strategy_profiles: list[str] = Field(default_factory=list)
+    strategies: list[str] = Field(default_factory=list)
     formatters: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -67,7 +69,7 @@ class AgentPackageManifest(BaseModel):
             _validate_package_relative_path(value, field_name=f"contracts.{key}")
         for key, value in self.bindings.items():
             _validate_package_relative_path(value, field_name=f"bindings.{key}")
-        for field_name in ("prompts", "tools", "policies", "strategy_profiles", "formatters"):
+        for field_name in ("prompts", "tools", "policies", "strategies", "formatters"):
             for value in getattr(self, field_name):
                 _validate_package_relative_path(value, field_name=field_name)
         return self
@@ -167,6 +169,15 @@ class MemoryContract(BaseModel):
     version: Literal["memory_contract.v0"] = "memory_contract.v0"
     enabled: bool = True
     config: MemoryContractConfig = Field(default_factory=MemoryContractConfig)
+
+
+class ContextContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["context"] = "context"
+    version: Literal["context_contract.v0"] = "context_contract.v0"
+    enabled: bool = True
+    config: ContextContractConfig = Field(default_factory=ContextContractConfig)
 
 
 class ModelContractConfig(BaseModel):
@@ -276,6 +287,7 @@ RuntimeContract = (
     SessionContract
     | ToolsContract
     | MemoryContract
+    | ContextContract
     | RenderContract
     | ResourcesContract
     | SandboxRuntimeContract

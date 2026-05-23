@@ -85,7 +85,8 @@ def _contract_build_priority(contract: BaseModel) -> tuple[int, str]:
         "tools": 40,
         "render": 50,
         "memory": 60,
-        "model": 70,
+        "context": 70,
+        "model": 80,
         "sandbox": 80,
         "dependencies": 90,
     }

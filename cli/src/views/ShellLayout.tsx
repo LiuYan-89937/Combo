@@ -19,6 +19,9 @@ export function ShellLayout({children}: {children: React.ReactNode}) {
 	const memoryStatus = useStoreSelector(state => state.memoryActivity.status);
 	const memoryLabel = useStoreSelector(state => state.memoryActivity.label);
 	const memoryDetail = useStoreSelector(state => state.memoryActivity.detail);
+	const contextStatus = useStoreSelector(state => state.contextActivity.status);
+	const contextLabel = useStoreSelector(state => state.contextActivity.label);
+	const contextDetail = useStoreSelector(state => state.contextActivity.detail);
 	const statusColor = runStatus === 'failed' ? 'red' : runStatus === 'running' ? 'green' : runStatus === 'interrupted' ? 'yellow' : 'gray';
 	return (
 		<Box flexDirection="column">
@@ -39,6 +42,7 @@ export function ShellLayout({children}: {children: React.ReactNode}) {
 					<Pill label="run" value={runStatus} color={statusColor} />
 					<Pill label="stop" value={stopAfterStage ?? 'off'} color="white" />
 					{memoryStatus !== 'idle' && <Pill label="memory" value={memoryHint(memoryLabel, memoryDetail)} color={memoryColor(memoryStatus)} />}
+					{contextStatus !== 'idle' && <Pill label="context" value={contextHint(contextLabel, contextDetail)} color={contextColor(contextStatus)} />}
 				</Box>
 				<Box marginTop={1}>
 					<Pill label="stage" value={currentStageId ?? '-'} color={currentStageId ? 'blue' : 'gray'} />
@@ -57,6 +61,21 @@ function memoryHint(label: string, detail: string | null): string {
 }
 
 function memoryColor(status: string): string {
+	if (status === 'failed') {
+		return 'red';
+	}
+	if (status === 'completed') {
+		return 'green';
+	}
+	return 'yellow';
+}
+
+function contextHint(label: string, detail: string | null): string {
+	const value = detail ? `${label} ${detail}` : label;
+	return value.length > 38 ? `${value.slice(0, 38)}...` : value;
+}
+
+function contextColor(status: string): string {
 	if (status === 'failed') {
 		return 'red';
 	}

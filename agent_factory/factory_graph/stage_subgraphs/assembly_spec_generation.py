@@ -31,6 +31,7 @@ from agent_factory.factory_graph.schemas import (
 from agent_factory.factory_graph.state import FactoryGraphState
 from agent_factory.prompts import PromptId, output_json_schema
 from agent_factory.runtime_contracts.builtins import (
+    default_context_contract,
     default_dependencies_contract,
     default_memory_contract,
     default_model_contract,
@@ -552,7 +553,7 @@ def _build_package_materialization_plan(
         "prompts": sorted(item.path for item in files if item.source_kind == "prompt"),
         "tools": sorted(item.manifest_path for item in tool_specs),
         "policies": sorted(item.path for item in files if item.source_kind == "policy"),
-        "strategy_profiles": sorted(item.path for item in files if item.source_kind == "strategy"),
+        "strategies": sorted(item.path for item in files if item.source_kind == "strategy"),
         "formatters": sorted(item.path for item in files if item.source_kind == "formatter"),
     }
     return PackageMaterializationPlan(
@@ -573,6 +574,7 @@ def _risk_level_from_capability(capability: dict[str, object]) -> ToolRiskLevel:
 
 def _package_contracts(spec: AgentAssemblySpec) -> dict[str, dict[str, object]]:
     contracts = {
+        "context": default_context_contract().model_dump(mode="json"),
         "dependencies": default_dependencies_contract().model_dump(mode="json"),
         "model": default_model_contract().model_dump(mode="json"),
         "render": default_render_contract().model_dump(mode="json"),
@@ -638,6 +640,7 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "render_manifest.json",
         "sandbox_contract.json",
         "contracts/dependencies.json",
+        "contracts/context.json",
         "contracts/model.json",
         "contracts/render.json",
         "contracts/resources.json",

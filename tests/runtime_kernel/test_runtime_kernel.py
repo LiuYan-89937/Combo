@@ -37,6 +37,7 @@ from agent_factory.tooling.spec import ToolSpec
 from agent_factory.memory_system import MemorySystemConfig, MemorySystemRuntime
 from agent_factory.memory_system.config import MemoryBackgroundConfig
 from agent_factory.memory_system.schema import MemoryWriteReport
+from agent_factory.context_system.runtime import default_context_runtime
 
 
 class RuntimeKernelMemorySystemTest(unittest.TestCase):
@@ -139,6 +140,7 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
             tool_registry=InMemoryToolRegistry(),
             memory_store=None,
             memory_system=MemorySystemRuntime(config=MemorySystemConfig(), store=None),
+            context_system=default_context_runtime(),
             knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
@@ -156,6 +158,7 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
             tool_registry=InMemoryToolRegistry(),
             memory_store=None,
             memory_system=None,
+            context_system=default_context_runtime(),
             knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
@@ -186,6 +189,7 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
                 namespace=("memory", "agent", "agent_a"),
                 writer=writer,
             ),
+            context_system=default_context_runtime(),
             knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
@@ -422,6 +426,7 @@ def _runtime_services(
         model_service=model_service or ScriptedModelService(),
         tool_registry=tool_registry or InMemoryToolRegistry(),
         memory_store=LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store,
+        context_system=default_context_runtime(),
         knowledge_engine=KnowledgeEngine(),
         context_engine=ContextEngine(),
         policy_engine=PolicyEngine(),

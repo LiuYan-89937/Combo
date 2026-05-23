@@ -176,6 +176,7 @@ def _agent_package_manifest() -> dict:
         "sandbox_contract_path": "sandbox_contract.json",
         "render_manifest_path": "render_manifest.json",
         "contracts": {
+            "context": "contracts/context.json",
             "dependencies": "contracts/dependencies.json",
             "model": "contracts/model.json",
             "memory": "contracts/memory.json",
@@ -194,7 +195,7 @@ def _agent_package_manifest() -> dict:
         "prompts": ["prompts/prompt.ledger.answer.md"],
         "tools": ["tools/ledger_lookup/manifest.json"],
         "policies": ["policies/policy.ledger.precheck.json"],
-        "strategy_profiles": [],
+        "strategies": [],
         "formatters": ["formatters/formatter.ledger.final.json"],
     }
 
@@ -249,6 +250,7 @@ def _materialization_plan() -> dict:
             {"path": "bindings/services.json", "file_type": "json", "source_kind": "binding", "source_id": "services", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.services", "required": True},
             {"path": "bindings/node_bindings.json", "file_type": "json", "source_kind": "binding", "source_id": "node_bindings", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.node_bindings", "required": True},
             {"path": "bindings/hooks.json", "file_type": "json", "source_kind": "binding", "source_id": "hooks", "generation_mode": "system_generated", "contract_source": "assembly_spec.bindings.hooks", "required": True},
+            {"path": "contracts/context.json", "file_type": "json", "source_kind": "contract", "source_id": "context", "generation_mode": "system_generated", "contract_source": "runtime_contract:context", "required": True},
             {"path": "contracts/dependencies.json", "file_type": "json", "source_kind": "contract", "source_id": "dependencies", "generation_mode": "system_generated", "contract_source": "runtime_contract:dependencies", "required": True},
             {"path": "contracts/model.json", "file_type": "json", "source_kind": "contract", "source_id": "model", "generation_mode": "system_generated", "contract_source": "runtime_contract:model", "required": True},
             {"path": "contracts/memory.json", "file_type": "json", "source_kind": "contract", "source_id": "memory", "generation_mode": "system_generated", "contract_source": "runtime_contract:memory", "required": True},
@@ -351,6 +353,7 @@ def _assembly_spec() -> dict:
 
 def _contracts() -> dict:
     return {
+        "context": {"type": "context", "version": "context_contract.v0", "enabled": True, "config": {}},
         "dependencies": {"type": "dependencies", "version": "dependencies_contract.v0", "enabled": True, "config": {}},
         "model": {"type": "model", "version": "model_contract.v0", "enabled": True, "config": {}},
         "memory": {

@@ -103,6 +103,7 @@ class RuntimeContributionMerger:
             background_workers.extend(contribution.background_workers)
         if render_manifest is None:
             raise RuntimeContributionMergeError("render contract did not provide a render manifest")
+        services["runtime_resources"] = dict(resources)
         return RuntimeBuildResult(
             services=RuntimeServices(**services),
             render_manifest=render_manifest,
@@ -122,6 +123,7 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "tool_registry": None,
         "memory_store": None,
         "memory_system": None,
+        "context_system": None,
         "knowledge_engine": services.knowledge_engine,
         "context_engine": services.context_engine,
         "policy_engine": services.policy_engine,
@@ -130,4 +132,5 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "harness_bridge": services.harness_bridge,
         "scheduler_store": None,
         "scheduler_runtime": None,
+        "runtime_resources": dict(services.runtime_resources),
     }

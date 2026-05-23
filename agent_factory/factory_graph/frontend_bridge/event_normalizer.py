@@ -163,6 +163,9 @@ class RuntimeEventNormalizer:
         if chunk.get("type") == "scheduler_event":
             self._emit_scheduler_event(chunk.get("payload") or {})
             return
+        if chunk.get("type") == "context_event":
+            self._emit_context_event(chunk.get("payload") or {})
+            return
         if chunk.get("type") != "model_activity":
             self.runtime_event(
                 "debug_patch",
@@ -205,6 +208,29 @@ class RuntimeEventNormalizer:
             stage_id=self.current_stage_id,
             span_id=uuid.uuid4().hex,
             parent_span_id=self.run_span_id,
+            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        )
+
+    def _emit_context_event(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        event_type = str(payload.get("event_type") or "")
+        if event_type not in {
+            "context_compression_started",
+            "context_compression_completed",
+            "context_compression_failed",
+            "context_retrieval_completed",
+            "context_assembly_completed",
+            "context_injection_completed",
+        }:
+            return
+        self.runtime_event(
+            event_type,  # type: ignore[arg-type]
+            stage_id=self.current_stage_id,
+            node_id=_optional_str(payload.get("node_id")),
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self.run_span_id,
+            severity="error" if event_type.endswith("failed") else None,
             payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
         )
 

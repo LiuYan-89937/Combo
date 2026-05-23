@@ -13,7 +13,7 @@
 | 知识系统 | 有 RuntimeKernel 实现迹象，但未形成统一规范。 |
 | 定时任务系统 | 已接入统一 SchedulerSystem：SQLite 事实源、APScheduler 触发、ToolExecutionGateway 执行。 |
 | Trace 系统 | 目前只有事件流、debug patch、render 事件等分散能力，尚未形成独立 trace 模块。 |
-| 上下文管理系统 | RuntimeKernel 有 ContextEngine 迹象，Factory prompt context 也已存在，但尚未形成统一上下文工程。 |
+| 上下文管理系统 | 已接入统一 ContextSystem：同步压缩、检索召回、组装注入，Factory 与生成 Agent 共用规范。 |
 
 本文档的作用：
 
@@ -109,7 +109,8 @@ AgentPackageManifest
 | --- | --- | --- |
 | `session` | `contracts/session.json` | 创建 AgentSessionManager 所需配置，并构建 LangGraph checkpointer。 |
 | `tools` | `contracts/tools.json` | 加载 AgentInstance 内置工具、package tools 与实例级 MCP / Skill 扩展，并形成统一 tool registry。 |
-| `memory` | `contracts/memory.json` | 可选，启用跨会话记忆时构建 BaseStore、MemorySystemRuntime、后台 worker 和记忆注入系统 wrapper。 |
+| `memory` | `contracts/memory.json` | 可选，启用跨会话记忆时构建 BaseStore、MemorySystemRuntime 和后台 worker；读取注入由 ContextSystem 统一完成。 |
+| `context` | `contracts/context.json` | 启用上下文系统，编译 `system.context_prepare` 系统 wrapper，在 cognitive 节点前做压缩、检索和组装注入。 |
 | `render` | `contracts/render.json` | 加载 `render_manifest.json`，并通过 RuntimeContribution 注入 `observability.render_node` 系统 wrapper。 |
 | `resources` | `contracts/resources.json` | 声明运行时资源来源，工具系统按 sandbox 视角读取资源。 |
 | `sandbox` | `contracts/sandbox.json` | 供第九阶段 harness 使用，不在普通运行时隐式执行。 |
@@ -999,52 +1000,56 @@ agent_factory/trace_system/
 
 上下文管理系统也需要作为独立基础设施处理，不能继续散落在 prompt 拼接、记忆注入、knowledge retrieve 或节点策略里。
 
-### 7.1 当前实现迹象
+### 7.1 当前实现
 
-当前项目里已有上下文相关能力：
+当前项目已经形成统一 `ContextSystem`：
 
 | 位置 | 现状 |
 | --- | --- |
 | `agent_factory/factory_graph/prompt_context.py` | Factory 阶段模型调用会注入统一运行边界与阶段边界。 |
-| `agent_factory/factory_graph/model_call.py` | Factory 模型调用入口会统一处理 prompt values 与跨会话记忆注入。 |
+| `agent_factory/factory_graph/model_call.py` | Factory 模型调用入口会统一调用 ContextSystem，跨会话记忆读取作为 ContextSource 进入上下文组装。 |
+| `agent_factory/context_system/` | 统一实现压缩摘要、检索召回、组装注入、事件 payload 与 Factory adapter。 |
+| `agent_factory/runtime_contracts/` | `contracts/context.json` 通过 `ContextContractBuilder` 贡献 `services.context_system` 和 `system.context_prepare`。 |
+| `agent_factory/runtime_kernel/wrappers/system_context.py` | 生产子 Agent 在 `cognitive.*` 节点前同步执行 context prepare。 |
 | `agent_factory/runtime_kernel/context/engine.py` | RuntimeKernel 有 ContextEngine。 |
 | `agent_factory/runtime_kernel/state/schema.py` | RuntimeState 有 context / model_context 相关结构。 |
-| `agent_factory/memory_system/injection.py` | 跨会话记忆当前注入到 model context，不写入 messages。 |
+| `agent_factory/memory_system/` | 跨会话记忆继续负责长期写入和 BaseStore 检索；临时注入由 ContextSystem 统一完成。 |
 
-这些能力目前还没有形成完整上下文系统，只是各模块按各自需要拼装模型输入。
+### 7.2 执行边界
 
-### 7.2 当前问题
+- 上下文系统拆成压缩摘要、检索、组装注入三条链路。
+- 压缩摘要不同于跨会话记忆写入：压缩是当前会话内的同步流程，达到阈值或限定条件后阻断当前任务，压缩完成后继续执行。
+- 第一版压缩触发点只放在 `before cognitive node`；工具大输出压缩属于工具系统职责。
+- 压缩使用独立 compression 模型配置，当前可以复用小任务模型配置。
+- 检索源通过统一 `ContextSource` 抽象接入，后续知识库也必须对接这条检索接口。
+- 组装注入通过 RuntimeKernel 系统级 wrapper 完成，不由业务节点自行拼接。
+- `ContextPolicy` 不允许出现 `profile / template / preset`。策略是节点级字段配置：compression、retrieval、assembly。
+- `node context policy` 由第七阶段根据 `graph_behavior_plan + node_strategy_plan + pattern node kind` 确定性生成，第八阶段只物化。
 
-当前缺口：
-
-- 没有统一上下文源分类。
-- 没有上下文预算和裁剪的统一策略。
-- 没有明确区分 system / developer / memory / knowledge / tool observation / user message 的注入顺序。
-- 没有上下文压缩、摘要、去重和失效策略。
-- Factory 与生成 Agent 的上下文策略还没有同构编译。
-- `messages` 作为会话内记忆已经确定，但其他上下文源如何进入模型仍需统一。
-
-### 7.3 后续处理原则
-
-上下文管理系统后续应独立成模块，例如：
+### 7.3 运行链路
 
 ```text
-agent_factory/context_system/
-  schema.py
-  sources.py
-  assembler.py
-  budget.py
-  compression.py
-  injection.py
+Factory model call
+  -> ContextSystemRuntime.prepare_factory_values
+  -> prompt values
+  -> main/task model
+
+AgentPackage
+  -> contracts/context.json
+  -> ContextContractBuilder
+  -> services.context_system
+  -> system.context_prepare
+  -> cognitive node model call
 ```
 
 基础边界：
 
 - 会话内记忆仍只操作 LangGraph `messages`。
-- 跨会话记忆、知识检索、资源、策略、节点说明都作为上下文源进入 assembler。
-- 上下文系统负责排序、裁剪、去重、压缩、注入位置，不负责记忆写入。
+- 压缩摘要可以同步更新当前会话 `messages`，但必须保留 system/developer/policy 消息、最近窗口、未闭合 tool call / ToolMessage 配对和 pending interrupt 附近消息。
+- 跨会话记忆、知识检索、资源、工具元信息、定时任务状态都作为上下文源进入 assembler。
+- 上下文系统负责排序、裁剪、去重、同步压缩和注入位置，不负责跨会话记忆写入。
 - Factory 与生成 Agent 使用同一套上下文源分类和预算思想，但数据隔离。
-- 第四阶段可以规划上下文策略名称，第七/八阶段物化配置，RuntimeKernel 编译后执行。
+- CLI/WebUI 只消费 `context_*` 标准事件展示压缩、检索、组装、注入状态，不从 debug patch 猜上下文状态。
 
 ---
 
@@ -1103,7 +1108,7 @@ agent_package/
 | 知识系统 | 有 RuntimeKernel 内部实现迹象，需要后续清理成正式系统。 |
 | 定时任务系统 | 已接入 SchedulerSystem，Factory 与生成 Agent 共用 contract/store/worker/tool/event 规范。 |
 | Trace 系统 | 当前只有事件流和 render/debug 线索，后续需要独立模块化。 |
-| 上下文管理系统 | 当前有 prompt context 与 Runtime ContextEngine 线索，后续需要统一上下文工程。 |
+| 上下文管理系统 | 已接入 ContextSystem，Factory 与生成 Agent 共用 schema、runtime、system wrapper 和事件协议。 |
 
 下一步不应继续抽象总能力系统，而应按系统逐个成熟：
 
@@ -1124,5 +1129,5 @@ Trace 系统
   -> 从现有事件流、render wrapper、debug patch 中抽出统一 trace 规范
 
 上下文管理系统
-  -> 从 prompt_context、ContextEngine、memory/knowledge injection 中抽出统一上下文装配规范
+  -> 继续接入知识库、trace、工具输出压缩等后续 ContextSource
 ```

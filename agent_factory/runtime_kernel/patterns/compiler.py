@@ -240,6 +240,7 @@ def _make_wrapped_runner(
             graph_runtime=runtime,
         )
         active_state = state
+        system_messages_patch: list[Any] = []
         try:
             active_state, _system_start_patch = _run_system_before(
                 stage="node_start",
@@ -258,15 +259,22 @@ def _make_wrapped_runner(
                 services=services,
             )
             active_state = before_state
-            memory_state, _memory_patch = _run_system_before(
+            memory_state, memory_patch = _run_system_before(
                 stage="pre_execute",
                 wrappers=system_wrappers,
                 state=before_state,
                 context=context,
             )
             active_state = memory_state
+            system_pre_messages, system_runtime_patch = _split_graph_patch(memory_patch)
+            if system_runtime_patch:
+                memory_state = merge_state_patch(memory_state, system_runtime_patch)
+                active_state = memory_state
+            system_messages_patch.extend(system_pre_messages)
             raw_patch = _execute_with_retries(memory_state, context, execute)
             messages_patch, patch = _split_graph_patch(raw_patch)
+            if system_messages_patch:
+                messages_patch = [*system_messages_patch, *messages_patch]
             if validate_sections:
                 _validate_patch_sections(node.impl, patch)
             updated = merge_state_patch(memory_state, patch)

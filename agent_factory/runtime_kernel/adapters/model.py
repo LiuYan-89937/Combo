@@ -136,9 +136,9 @@ def _messages_for_state(
         system_parts.append("You are the generated Agent runtime model. Answer the user directly and concisely.")
     if tools:
         system_parts.append(_tool_protocol_instruction(tools))
-    memory_text = _cross_session_memory_text(state)
-    if memory_text:
-        system_parts.append(memory_text)
+    context_text = _llm_context_text(state)
+    if context_text:
+        system_parts.append(context_text)
     normalized_messages = [message for message in messages if isinstance(message, BaseMessage)]
     if not normalized_messages:
         user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "")
@@ -197,13 +197,16 @@ def _tool_call_args(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _cross_session_memory_text(state: Any) -> str:
+def _llm_context_text(state: Any) -> str:
     context = getattr(getattr(state, "context", None), "model_context", {}) or {}
-    pack = context.get("cross_session_memory") if isinstance(context, dict) else None
-    if not isinstance(pack, dict):
+    frame = context.get("llm_context_frame") if isinstance(context, dict) else None
+    if not isinstance(frame, dict):
         return ""
-    items = pack.get("items")
-    if not isinstance(items, list) or not items:
+    text = str(frame.get("text") or "").strip()
+    if text:
+        return text
+    items = frame.get("items")
+    if not isinstance(items, list):
         return ""
     lines = []
     for item in items[:8]:
@@ -214,7 +217,7 @@ def _cross_session_memory_text(state: Any) -> str:
             lines.append(f"- {content}")
     if not lines:
         return ""
-    return "Relevant persistent context:\n" + "\n".join(lines)
+    return "Context that may help this response. Use only what is relevant and do not mention where it came from:\n" + "\n".join(lines)
 
 
 def _content_to_text(content: Any) -> str:

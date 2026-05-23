@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent_factory.memory_system import default_agent_memory_config
 from agent_factory.memory_system.config import MemoryStoreRuntimeConfig
 from agent_factory.runtime_contracts.schema import (
+    ContextContract,
     DependenciesContract,
     MemoryContract,
     MemoryContractConfig,
@@ -45,6 +46,10 @@ def default_memory_contract() -> MemoryContract:
         deep=True,
     )
     return MemoryContract(config=MemoryContractConfig(memory_system=config))
+
+
+def default_context_contract() -> ContextContract:
+    return ContextContract()
 
 
 def default_render_contract() -> RenderContract:

@@ -11,6 +11,8 @@ from langchain_openai import ChatOpenAI
 
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.models import (
+    get_compression_model,
+    get_compression_model_settings,
     get_main_model,
     get_main_model_settings,
     get_task_model,
@@ -37,6 +39,13 @@ class ChatModelTest(unittest.TestCase):
                 "AGENTFACTORY_TASK_TEMPERATURE": "0",
                 "AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS": "512",
                 "AGENTFACTORY_TASK_THINKING": "disabled",
+                "AGENTFACTORY_COMPRESSION_BASE_URL": "https://compression.example/v1",
+                "AGENTFACTORY_COMPRESSION_API_KEY": "compression-key",
+                "AGENTFACTORY_COMPRESSION_MODEL": "compression-model",
+                "AGENTFACTORY_COMPRESSION_TEMPERATURE": "0.1",
+                "AGENTFACTORY_COMPRESSION_MAX_OUTPUT_TOKENS": "1024",
+                "AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS": "120",
+                "AGENTFACTORY_COMPRESSION_THINKING": "disabled",
                 "UNRELATED_MODEL": "ignored-model",
                 "UNRELATED_API_KEY": "ignored-key",
                 "UNRELATED_BASE_URL": "https://ignored.example/v1",
@@ -46,8 +55,10 @@ class ChatModelTest(unittest.TestCase):
             reset_chat_models()
             main_settings = get_main_model_settings()
             task_settings = get_task_model_settings()
+            compression_settings = get_compression_model_settings()
             main_model = get_main_model()
             task_model = get_task_model()
+            compression_model = get_compression_model()
 
         self.assertEqual(main_settings.model, "main-model")
         self.assertEqual(main_settings.api_key, "shared-key")
@@ -61,16 +72,26 @@ class ChatModelTest(unittest.TestCase):
         self.assertEqual(task_settings.temperature, 0)
         self.assertEqual(task_settings.max_tokens, 512)
         self.assertEqual(task_settings.thinking, "disabled")
+        self.assertEqual(compression_settings.model, "compression-model")
+        self.assertEqual(compression_settings.api_key, "compression-key")
+        self.assertEqual(compression_settings.base_url, "https://compression.example/v1")
+        self.assertEqual(compression_settings.temperature, 0.1)
+        self.assertEqual(compression_settings.max_tokens, 1024)
+        self.assertEqual(compression_settings.timeout_seconds, 120)
+        self.assertEqual(compression_settings.thinking, "disabled")
         self.assertIsInstance(main_model, ChatOpenAI)
         self.assertIsInstance(task_model, ChatOpenAI)
+        self.assertIsInstance(compression_model, ChatOpenAI)
         self.assertEqual(main_model.extra_body, {"thinking": {"type": "enabled"}})
         self.assertEqual(task_model.extra_body, {"thinking": {"type": "disabled"}})
+        self.assertEqual(compression_model.extra_body, {"thinking": {"type": "disabled"}})
 
     def test_returns_none_when_model_is_not_configured(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             reset_chat_models()
             self.assertIsNone(get_main_model())
             self.assertIsNone(get_task_model())
+            self.assertIsNone(get_compression_model())
 
     def test_does_not_fallback_to_standard_openai_env(self) -> None:
         with patch.dict(

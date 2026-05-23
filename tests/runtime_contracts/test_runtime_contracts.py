@@ -45,9 +45,10 @@ class RuntimeContractsTest(unittest.TestCase):
             self.assertIsNotNone(result.services.checkpointer)
             self.assertIsNotNone(result.services.tool_registry)
             self.assertEqual(result.session_config["checkpointer_backend"], "memory")
-            self.assertEqual(result.system_wrappers, ["observability.render_node"])
+            self.assertEqual(result.system_wrappers, ["observability.render_node", "system.context_prepare"])
+            self.assertIsNotNone(result.services.context_system)
 
-    def test_enabled_memory_contract_contributes_memory_system_wrapper(self) -> None:
+    def test_enabled_memory_contract_contributes_memory_system_service(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             package_path = _write_package(Path(temp_dir), memory_enabled=True)
             package = AgentPackageLoader().load_path(package_path)
@@ -58,10 +59,11 @@ class RuntimeContractsTest(unittest.TestCase):
 
             self.assertEqual(
                 result.system_wrappers,
-                ["observability.render_node", "system.cross_session_memory_inject"],
+                ["observability.render_node", "system.context_prepare"],
             )
             self.assertIsNotNone(result.services.memory_store)
             self.assertIsNotNone(result.services.memory_system)
+            self.assertIsNotNone(result.services.context_system)
 
     def test_model_contract_contributes_configured_model_role(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -221,6 +223,7 @@ def _write_package(
     _write_json(root / "resources.json", {"version": "factory_resources.v0", "resources": {}})
     _write_json(root / "sandbox_contract.json", {"version": "sandbox_contract.v0", "backend": "docker"})
     contracts = {
+        "context": "contracts/context.json",
         "dependencies": "contracts/dependencies.json",
         "model": "contracts/model.json",
         "render": "contracts/render.json",
@@ -233,6 +236,7 @@ def _write_package(
         contracts["tools"] = "contracts/tools.json"
     contracts["memory"] = "contracts/memory.json"
     _write_json(root / "contracts/render.json", {"type": "render", "version": "render_contract.v0", "enabled": True, "config": {}})
+    _write_json(root / "contracts/context.json", {"type": "context", "version": "context_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/resources.json", {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/sandbox.json", {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {}})
     _write_json(

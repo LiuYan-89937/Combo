@@ -34,6 +34,10 @@ def get_task_model() -> BaseChatModel | None:
     return _get_task_model()
 
 
+def get_compression_model() -> BaseChatModel | None:
+    return _get_compression_model()
+
+
 def get_main_model_settings() -> ChatModelSettings:
     return _main_settings()
 
@@ -42,9 +46,14 @@ def get_task_model_settings() -> ChatModelSettings:
     return _task_settings()
 
 
+def get_compression_model_settings() -> ChatModelSettings:
+    return _compression_settings()
+
+
 def reset_chat_models() -> None:
     _get_main_model.cache_clear()
     _get_task_model.cache_clear()
+    _get_compression_model.cache_clear()
 
 
 @lru_cache(maxsize=1)
@@ -55,6 +64,11 @@ def _get_main_model() -> BaseChatModel | None:
 @lru_cache(maxsize=1)
 def _get_task_model() -> BaseChatModel | None:
     return _create_model(_task_settings())
+
+
+@lru_cache(maxsize=1)
+def _get_compression_model() -> BaseChatModel | None:
+    return _create_model(_compression_settings())
 
 
 def _create_model(settings: ChatModelSettings) -> BaseChatModel | None:
@@ -103,6 +117,19 @@ def _task_settings() -> ChatModelSettings:
         max_tokens=_env_int("AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS"),
         timeout_seconds=_env_float("AGENTFACTORY_LLM_TIMEOUT_SECONDS"),
         thinking=_env_choice("AGENTFACTORY_TASK_THINKING", {"enabled", "disabled"}),
+    )
+
+
+def _compression_settings() -> ChatModelSettings:
+    return ChatModelSettings(
+        role="compression",
+        model=os.getenv("AGENTFACTORY_COMPRESSION_MODEL"),
+        api_key=os.getenv("AGENTFACTORY_COMPRESSION_API_KEY"),
+        base_url=os.getenv("AGENTFACTORY_COMPRESSION_BASE_URL"),
+        temperature=_env_float("AGENTFACTORY_COMPRESSION_TEMPERATURE"),
+        max_tokens=_env_int("AGENTFACTORY_COMPRESSION_MAX_OUTPUT_TOKENS"),
+        timeout_seconds=_env_float("AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS"),
+        thinking=_env_choice("AGENTFACTORY_COMPRESSION_THINKING", {"enabled", "disabled"}),
     )
 
 

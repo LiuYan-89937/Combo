@@ -81,6 +81,16 @@ export type MemoryActivity = {
 	updatedAt: string | null;
 };
 
+export type ContextActivityStatus = 'idle' | 'running' | 'completed' | 'failed';
+
+export type ContextActivity = {
+	status: ContextActivityStatus;
+	label: string;
+	detail: string | null;
+	nodeId: string | null;
+	updatedAt: string | null;
+};
+
 export type SchedulerActivity = {
 	eventType: FactoryEvent['event_type'];
 	timestamp: string;
@@ -141,6 +151,7 @@ export type RuntimeState = {
 	modelStreams: Record<string, ModelStream>;
 	toolActivities: ToolActivity[];
 	memoryActivity: MemoryActivity;
+	contextActivity: ContextActivity;
 	schedulerActivities: SchedulerActivity[];
 	debugEvents: FactoryEvent[];
 	pendingInterrupt: FactoryEvent | null;
@@ -166,12 +177,15 @@ export type RuntimeAction =
 	| {ui_type: 'local_user_message'; message: string}
 	| {ui_type: 'interrupt_response_submitted'; message: string}
 	| {ui_type: 'clear_memory_activity'; updatedAt: string | null}
+	| {ui_type: 'clear_context_activity'; updatedAt: string | null}
 	| {ui_type: 'show_help'}
 	| {ui_type: 'notice'; message: string};
 
 const STREAM_FLUSH_MS = 33;
 const ACTIVE_MEMORY_HINT_MS = 8000;
 const TERMINAL_MEMORY_HINT_MS = 3000;
+const ACTIVE_CONTEXT_HINT_MS = 5000;
+const TERMINAL_CONTEXT_HINT_MS = 2500;
 
 export function createInitialRuntimeState(): RuntimeState {
 	return {
@@ -199,6 +213,7 @@ export function createInitialRuntimeState(): RuntimeState {
 		modelStreams: {},
 		toolActivities: [],
 		memoryActivity: idleMemoryActivity(),
+		contextActivity: idleContextActivity(),
 		schedulerActivities: [],
 		debugEvents: [],
 		pendingInterrupt: null,
@@ -220,6 +235,7 @@ export class RuntimeStore {
 	private pendingStreamEvents: FactoryEvent[] = [];
 	private streamTimer: ReturnType<typeof setTimeout> | null = null;
 	private memoryActivityTimer: ReturnType<typeof setTimeout> | null = null;
+	private contextActivityTimer: ReturnType<typeof setTimeout> | null = null;
 
 	getSnapshot = (): RuntimeState => this.state;
 
@@ -246,6 +262,12 @@ export class RuntimeStore {
 				isTerminalMemoryEvent(action.event_type) ? TERMINAL_MEMORY_HINT_MS : ACTIVE_MEMORY_HINT_MS
 			);
 		}
+		if ('event_type' in action && isContextEvent(action.event_type)) {
+			this.scheduleContextActivityClear(
+				this.state.contextActivity.updatedAt,
+				isTerminalContextEvent(action.event_type) ? TERMINAL_CONTEXT_HINT_MS : ACTIVE_CONTEXT_HINT_MS
+			);
+		}
 		this.notify();
 	};
 
@@ -257,6 +279,10 @@ export class RuntimeStore {
 		if (this.memoryActivityTimer) {
 			clearTimeout(this.memoryActivityTimer);
 			this.memoryActivityTimer = null;
+		}
+		if (this.contextActivityTimer) {
+			clearTimeout(this.contextActivityTimer);
+			this.contextActivityTimer = null;
 		}
 		this.pendingStreamEvents = [];
 		this.listeners.clear();
@@ -298,6 +324,16 @@ export class RuntimeStore {
 		this.memoryActivityTimer = setTimeout(() => {
 			this.memoryActivityTimer = null;
 			this.dispatch({ui_type: 'clear_memory_activity', updatedAt});
+		}, delayMs);
+	}
+
+	private scheduleContextActivityClear(updatedAt: string | null, delayMs: number): void {
+		if (this.contextActivityTimer) {
+			clearTimeout(this.contextActivityTimer);
+		}
+		this.contextActivityTimer = setTimeout(() => {
+			this.contextActivityTimer = null;
+			this.dispatch({ui_type: 'clear_context_activity', updatedAt});
 		}, delayMs);
 	}
 }
@@ -356,6 +392,9 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 	}
 	if (action.ui_type === 'clear_memory_activity') {
 		return state.memoryActivity.updatedAt === action.updatedAt ? {...state, memoryActivity: idleMemoryActivity()} : state;
+	}
+	if (action.ui_type === 'clear_context_activity') {
+		return state.contextActivity.updatedAt === action.updatedAt ? {...state, contextActivity: idleContextActivity()} : state;
 	}
 	if (action.ui_type === 'show_help') {
 		return {...state, helpVisible: true};
@@ -505,6 +544,17 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'memory_write_completed':
 		case 'memory_write_failed':
 			return {...base, memoryActivity: memoryActivityForEvent(event)};
+		case 'context_compression_started':
+		case 'context_compression_completed':
+		case 'context_compression_failed':
+		case 'context_retrieval_completed':
+		case 'context_assembly_completed':
+		case 'context_injection_completed':
+			return {
+				...base,
+				contextActivity: contextActivityForEvent(event),
+				recentActivities: appendRunActivity(base.recentActivities, event)
+			};
 		case 'scheduler_job_created':
 		case 'scheduler_job_updated':
 		case 'scheduler_job_deleted':
@@ -1190,6 +1240,16 @@ function idleMemoryActivity(): MemoryActivity {
 	};
 }
 
+function idleContextActivity(): ContextActivity {
+	return {
+		status: 'idle',
+		label: '',
+		detail: null,
+		nodeId: null,
+		updatedAt: null
+	};
+}
+
 function memoryActivityForEvent(event: FactoryEvent): MemoryActivity {
 	const payload = event.payload ?? {};
 	const jobId = stringValue(payload.job_id) || null;
@@ -1270,6 +1330,66 @@ function memoryNamespaceLabel(value: unknown): string | null {
 	return text ? shortValue(text, 42) : null;
 }
 
+function contextActivityForEvent(event: FactoryEvent): ContextActivity {
+	const payload = event.payload ?? {};
+	return {
+		status: contextActivityStatusForEvent(event.event_type),
+		label: contextActivityLabelForEvent(event.event_type),
+		detail: contextActivityDetail(payload),
+		nodeId: stringValue(payload.node_id) || event.node_id || null,
+		updatedAt: event.timestamp
+	};
+}
+
+function contextActivityStatusForEvent(eventType: FactoryEvent['event_type']): ContextActivityStatus {
+	if (eventType === 'context_compression_failed') {
+		return 'failed';
+	}
+	if (eventType === 'context_compression_started') {
+		return 'running';
+	}
+	return 'completed';
+}
+
+function contextActivityLabelForEvent(eventType: FactoryEvent['event_type']): string {
+	if (eventType === 'context_compression_started') {
+		return '上下文压缩中';
+	}
+	if (eventType === 'context_compression_completed') {
+		return '上下文压缩完成';
+	}
+	if (eventType === 'context_compression_failed') {
+		return '上下文压缩失败';
+	}
+	if (eventType === 'context_retrieval_completed') {
+		return '上下文检索完成';
+	}
+	if (eventType === 'context_assembly_completed') {
+		return '上下文组装完成';
+	}
+	return '上下文已注入';
+}
+
+function contextActivityDetail(payload: Record<string, unknown>): string | null {
+	const error = stringValue(payload.error);
+	if (error) {
+		return shortValue(error, 42);
+	}
+	const itemCount = numberValue(payload.item_count);
+	if (itemCount !== null) {
+		return `${itemCount} items`;
+	}
+	const selectedCount = numberValue(payload.selected_count);
+	if (selectedCount !== null) {
+		return `${selectedCount} selected`;
+	}
+	const tokenEstimate = numberValue(payload.token_estimate_after) ?? numberValue(payload.token_estimate);
+	if (tokenEstimate !== null) {
+		return `${tokenEstimate} tokens`;
+	}
+	return null;
+}
+
 function isMemoryWriteEvent(eventType: FactoryEvent['event_type']): boolean {
 	return [
 		'memory_write_queued',
@@ -1283,6 +1403,25 @@ function isMemoryWriteEvent(eventType: FactoryEvent['event_type']): boolean {
 
 function isTerminalMemoryEvent(eventType: FactoryEvent['event_type']): boolean {
 	return ['memory_write_queued_failed', 'memory_write_completed', 'memory_write_failed'].includes(eventType);
+}
+
+function isContextEvent(eventType: FactoryEvent['event_type']): boolean {
+	return [
+		'context_compression_started',
+		'context_compression_completed',
+		'context_compression_failed',
+		'context_retrieval_completed',
+		'context_assembly_completed',
+		'context_injection_completed'
+	].includes(eventType);
+}
+
+function isTerminalContextEvent(eventType: FactoryEvent['event_type']): boolean {
+	return [
+		'context_compression_completed',
+		'context_compression_failed',
+		'context_injection_completed'
+	].includes(eventType);
 }
 
 function approvalState(payload: Record<string, unknown>): ToolActivity['approvalState'] {
@@ -1404,6 +1543,7 @@ function isImmediateEvent(eventType: FactoryEvent['event_type']): boolean {
 		'model_message_completed',
 		'scheduler_feedback_completed',
 		'scheduler_feedback_failed',
+		'context_compression_failed',
 		'runtime_resumed',
 		'run_completed',
 		'error'

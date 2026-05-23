@@ -100,13 +100,14 @@ AGENTFACTORY_OPENAI_MODEL=
 
 ```bash
 AGENTFACTORY_TASK_MODEL=
+AGENTFACTORY_COMPRESSION_MODEL=
 AGENTFACTORY_EMBEDDING_BASE_URL=
 AGENTFACTORY_EMBEDDING_API_KEY=
 AGENTFACTORY_EMBEDDING_MODEL=
 AGENTFACTORY_EMBEDDING_DIMS=1536
 ```
 
-主模型用于 Factory 制造流程。生成 Agent 使用 `contracts/model.json` 声明的模型角色，测试 Agent 可以设置为 `task` 使用小任务模型。小任务模型也用于轻量分类、llmRisk、记忆提取等。embedding 模型用于跨会话记忆语义召回。
+主模型用于 Factory 制造流程。生成 Agent 使用 `contracts/model.json` 声明的模型角色，测试 Agent 可以设置为 `task` 使用小任务模型。小任务模型也用于轻量分类、llmRisk、记忆提取等。上下文压缩使用独立的 compression 模型配置，当前可以复制小任务模型配置。embedding 模型用于跨会话记忆语义召回。
 
 ## 启动 CLI
 
@@ -555,6 +556,16 @@ AGENTFACTORY_TASK_MODEL=
 AGENTFACTORY_TASK_TEMPERATURE=0.1
 AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS=2048
 AGENTFACTORY_TASK_THINKING=disabled
+
+# Dedicated model for synchronous context compression.
+# For now this can copy the small-task model settings.
+AGENTFACTORY_COMPRESSION_BASE_URL=
+AGENTFACTORY_COMPRESSION_API_KEY=
+AGENTFACTORY_COMPRESSION_MODEL=
+AGENTFACTORY_COMPRESSION_TEMPERATURE=0.1
+AGENTFACTORY_COMPRESSION_MAX_OUTPUT_TOKENS=2048
+AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS=600
+AGENTFACTORY_COMPRESSION_THINKING=disabled
 
 AGENTFACTORY_SESSION_ROOT=.agentfactory/sessions
 AGENTFACTORY_CHECKPOINTER_BACKEND=sqlite

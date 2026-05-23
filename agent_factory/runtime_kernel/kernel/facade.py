@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_factory.context_system.runtime import default_context_runtime
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry
 from agent_factory.memory_system import (
     MemorySystemConfig,
@@ -136,6 +137,7 @@ class RuntimeKernelFacade:
             tool_registry=InMemoryToolRegistry(),
             memory_store=memory_store,
             memory_system=memory_runtime,
+            context_system=default_context_runtime(),
             knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
@@ -354,7 +356,7 @@ def _required_services_for_pattern(pattern) -> list[str]:
     required = {"observability_manager", "checkpointer"}
     for node in pattern.nodes:
         if node.impl.startswith("cognitive."):
-            required.update({"model_service", "context_engine"})
+            required.update({"model_service", "context_engine", "context_system"})
         elif node.impl == "governance.precheck" or node.impl == "governance.postcheck":
             required.add("policy_engine")
         elif node.impl.startswith("operational.tool_call"):

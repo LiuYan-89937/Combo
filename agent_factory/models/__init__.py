@@ -1,5 +1,7 @@
 from agent_factory.models.chat_model import (
     ChatModelSettings,
+    get_compression_model,
+    get_compression_model_settings,
     get_main_model,
     get_main_model_settings,
     get_task_model,
@@ -18,6 +20,8 @@ __all__ = [
     "EmbeddingModelSettings",
     "get_embedding_model",
     "get_embedding_model_settings",
+    "get_compression_model",
+    "get_compression_model_settings",
     "get_main_model",
     "get_main_model_settings",
     "get_task_model",

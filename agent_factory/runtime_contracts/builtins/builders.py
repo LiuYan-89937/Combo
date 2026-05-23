@@ -5,12 +5,14 @@ from typing import Any
 
 from langgraph.errors import GraphInterrupt
 
+from agent_factory.context_system.runtime import default_context_runtime
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution, RuntimeDiagnostic
 from agent_factory.runtime_contracts.schema import (
+    ContextContract,
     MemoryContract,
     DependenciesContract,
     ModelContract,
@@ -23,7 +25,6 @@ from agent_factory.runtime_contracts.schema import (
 )
 from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
-from agent_factory.runtime_kernel.wrappers.system_memory import MEMORY_RETRIEVE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
@@ -172,8 +173,20 @@ class MemoryContractBuilder:
             background_workers.append(worker)
         return RuntimeContribution(
             services={"memory_store": store, "memory_system": runtime},
-            system_wrappers=[MEMORY_RETRIEVE_SYSTEM_WRAPPER_ID],
             background_workers=background_workers,
+        )
+
+
+class ContextContractBuilder:
+    contract_type = "context"
+    contract_version = "context_contract.v0"
+
+    def build(self, contract: ContextContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
+
+        return RuntimeContribution(
+            services={"context_system": default_context_runtime(contract.config)},
+            system_wrappers=[CONTEXT_PREPARE_SYSTEM_WRAPPER_ID],
         )
 
 

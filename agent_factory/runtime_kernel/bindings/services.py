@@ -14,6 +14,7 @@ class RuntimeServices(BaseModel):
     tool_registry: object | None = None
     memory_store: object | None = None
     memory_system: object | None = None
+    context_system: object | None = None
     knowledge_engine: object | None = None
     context_engine: object | None = None
     policy_engine: object | None = None
@@ -22,6 +23,7 @@ class RuntimeServices(BaseModel):
     harness_bridge: object | None = None
     scheduler_store: object | None = None
     scheduler_runtime: object | None = None
+    runtime_resources: dict[str, Any] = {}
 
     def get_required(self, name: str) -> Any:
         value = getattr(self, name, None)

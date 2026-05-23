@@ -44,6 +44,10 @@ def inject_factory_prompt_memory(*, stage_id: str, values: dict[str, Any]) -> tu
     return updated, report.model_dump(mode="json")
 
 
+def factory_memory_runtime():
+    return _factory_memory_runtime()
+
+
 def _factory_memory_runtime():
     global _FACTORY_MEMORY_RUNTIME
     if _FACTORY_MEMORY_RUNTIME is not None:

@@ -42,6 +42,7 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("sandbox_contract.json", plan_paths)
                 self.assertIn("contracts/session.json", plan_paths)
                 self.assertIn("contracts/tools.json", plan_paths)
+                self.assertIn("contracts/context.json", plan_paths)
                 self.assertIn("contracts/render.json", plan_paths)
                 self.assertIn("contracts/resources.json", plan_paths)
                 self.assertIn("contracts/sandbox.json", plan_paths)

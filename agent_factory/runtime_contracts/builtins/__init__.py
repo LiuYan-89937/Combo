@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent_factory.runtime_contracts.builtins.builders import (
+    ContextContractBuilder,
     DependenciesContractBuilder,
     MemoryContractBuilder,
     ModelContractBuilder,
@@ -12,6 +13,7 @@ from agent_factory.runtime_contracts.builtins.builders import (
     ToolsContractBuilder,
 )
 from agent_factory.runtime_contracts.builtins.defaults import (
+    default_context_contract,
     default_dependencies_contract,
     default_memory_contract,
     default_model_contract,
@@ -24,6 +26,7 @@ from agent_factory.runtime_contracts.builtins.defaults import (
 )
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
 from agent_factory.runtime_contracts.schema import (
+    ContextContract,
     DependenciesContract,
     MemoryContract,
     ModelContract,
@@ -55,6 +58,12 @@ def default_runtime_contract_registry() -> RuntimeContractRegistry:
         version="memory_contract.v0",
         model=MemoryContract,
         builder=MemoryContractBuilder(),
+    )
+    registry.register(
+        contract_type="context",
+        version="context_contract.v0",
+        model=ContextContract,
+        builder=ContextContractBuilder(),
     )
     registry.register(
         contract_type="model",
@@ -96,6 +105,7 @@ def default_runtime_contract_registry() -> RuntimeContractRegistry:
 
 
 __all__ = [
+    "default_context_contract",
     "default_dependencies_contract",
     "default_memory_contract",
     "default_model_contract",
