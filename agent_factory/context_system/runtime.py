@@ -18,6 +18,7 @@ from agent_factory.context_system.schema import (
     LLMContextFrame,
 )
 from agent_factory.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
+from agent_factory.context_system.token_counter import TokenCountResult, count_messages_tokens, context_window_payload
 
 
 class ContextPreparationResult(BaseModel):
@@ -66,10 +67,26 @@ class ContextSystemRuntime:
         policy = self.policy_for_node(node_id)
         working_messages = list(messages)
         working_state = state
+        initial_count = count_messages_tokens(working_messages, services=services)
+        _emit_context_window_if_available(
+            services=services,
+            state=working_state,
+            node_id=node_id,
+            count=initial_count,
+            compression_threshold_tokens=policy.compression.trigger_token_threshold,
+            source="context_prepare.before_compression",
+        )
+        trigger_count = _compression_trigger_count(
+            state=working_state,
+            current_count=initial_count,
+            threshold=policy.compression.trigger_token_threshold,
+        )
         compression_messages, compression_report = maybe_compress_messages(
             messages=working_messages,
             policy=policy.compression,
             node_id=node_id,
+            token_counter=lambda items: count_messages_tokens(items, services=services),
+            trigger_count=trigger_count,
         )
         emit_context_event(
             services=services,
@@ -82,6 +99,16 @@ class ContextSystemRuntime:
             raise RuntimeError(compression_report.error or "context compression failed")
         messages_changed = compression_messages != working_messages
         working_messages = compression_messages
+        if messages_changed:
+            compressed_count = count_messages_tokens(working_messages, services=services)
+            _emit_context_window_if_available(
+                services=services,
+                state=working_state,
+                node_id=node_id,
+                count=compressed_count,
+                compression_threshold_tokens=policy.compression.trigger_token_threshold,
+                source="context_prepare.after_compression",
+            )
         query = self._query_for_state(state=working_state, node_id=node_id, impl=impl, messages=working_messages)
         candidates, retrieval_report = self._retrieve(
             query=query,
@@ -257,6 +284,55 @@ class ContextSystemRuntime:
 
 def default_context_runtime(config: ContextContractConfig | None = None) -> ContextSystemRuntime:
     return ContextSystemRuntime(config=config or ContextContractConfig())
+
+
+def _compression_trigger_count(
+    *,
+    state: Any,
+    current_count: TokenCountResult,
+    threshold: int,
+) -> TokenCountResult | None:
+    if current_count.token_count is not None:
+        return current_count
+    budget = dict(getattr(getattr(state, "context", None), "token_budget", {}) or {})
+    value = budget.get("last_provider_input_tokens")
+    if not isinstance(value, int) and not isinstance(value, float):
+        return current_count
+    token_count = int(value)
+    if token_count < threshold:
+        return current_count
+    return TokenCountResult(
+        token_count=token_count,
+        method="previous_provider_usage",
+        model_role=str(budget.get("last_provider_model_role") or current_count.model_role or "main"),
+    )
+
+
+def _emit_context_window_if_available(
+    *,
+    services: Any,
+    state: Any,
+    node_id: str,
+    count: TokenCountResult,
+    compression_threshold_tokens: int,
+    source: str,
+) -> None:
+    if count.token_count is None:
+        return
+    emit_context_event(
+        services=services,
+        state=state,
+        event_type="context_window_updated",
+        node_id=node_id,
+        payload=context_window_payload(
+            node_id=node_id,
+            token_count=count.token_count,
+            token_count_method=count.method,
+            compression_threshold_tokens=compression_threshold_tokens,
+            model_role=count.model_role,
+            source=source,
+        ),
+    )
 
 
 def _factory_query_text(*, stage_id: str, values: dict[str, Any]) -> str:

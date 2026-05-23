@@ -71,6 +71,7 @@ FactoryFrontendEventType = Literal[
     "context_compression_started",
     "context_compression_completed",
     "context_compression_failed",
+    "context_window_updated",
     "context_retrieval_completed",
     "context_assembly_completed",
     "context_injection_completed",

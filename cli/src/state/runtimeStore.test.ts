@@ -61,6 +61,7 @@ describe('RuntimeStore', () => {
 		}));
 
 		expect(store.getSnapshot().transcript.map(item => item.content)).toEqual(['你好', '你好，我在']);
+		expect(store.getSnapshot().timelineItems.map(item => item.body)).toEqual(['你好', '你好，我在']);
 	});
 
 	it('summarizes session tool messages instead of showing raw JSON', () => {
@@ -134,7 +135,20 @@ describe('RuntimeStore', () => {
 		expect(snapshot.toolActivities).toHaveLength(1);
 		expect(snapshot.toolActivities[0]?.status).toBe('approval');
 		expect(snapshot.toolActivities[0]?.approvalState).toBe('pending');
+		expect(snapshot.timelineItems.some(item => item.title === 'Tool approval write')).toBe(true);
 		expect(snapshot.transcript.some(item => item.title === 'Tool Approval Requested')).toBe(false);
+	});
+
+	it('keeps timeline as stable store view state across unrelated ui changes', () => {
+		const store = createRuntimeStore();
+		store.dispatch({ui_type: 'local_user_message', message: 'hello'});
+
+		const timeline = store.getSnapshot().timelineItems;
+		expect(timeline).toHaveLength(1);
+		expect(timeline[0]?.title).toBe('You');
+
+		store.dispatch({ui_type: 'set_tool_grep', query: 'write'});
+		expect(store.getSnapshot().timelineItems).toBe(timeline);
 	});
 
 	it('resolves tool approval without creating a second raw tool activity', () => {

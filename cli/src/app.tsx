@@ -6,18 +6,15 @@ import {buildResumePayload} from './interrupts.js';
 import {command, type FactoryCommand, type FactoryEvent, type FactoryMode} from './protocol.js';
 import {createRuntimeStore} from './state/runtimeStore.js';
 import {RuntimeStoreProvider, useStoreSelector} from './state/useStoreSelector.js';
-import {CommandInput} from './views/CommandInput.js';
-import {CreateAgentView} from './views/CreateAgentView.js';
-import {ErrorPanel} from './views/ErrorPanel.js';
+import {Composer} from './views/Composer.js';
 import {HelpPanel} from './views/HelpPanel.js';
 import {InterruptChoicePanel, isChoiceInterrupt} from './views/InterruptChoicePanel.js';
 import {InterruptPrompt} from './views/InterruptPrompt.js';
-import {MessagesPanel} from './views/MessagesPanel.js';
 import {AgentPackagePanel, AgentSessionPanel} from './views/AgentPackagePanel.js';
+import {LiveStatusLine} from './views/LiveStatusLine.js';
 import {SessionPanel} from './views/SessionPanel.js';
 import {ShellLayout} from './views/ShellLayout.js';
-import {SchedulerPanel} from './views/SchedulerPanel.js';
-import {ToolEventsPanel} from './views/ToolEventsPanel.js';
+import {TimelineView} from './views/TimelineView.js';
 
 export function App() {
 	const {exit} = useApp();
@@ -199,7 +196,7 @@ export function App() {
 	return (
 		<RuntimeStoreProvider store={store}>
 			<ShellLayout>
-				<ErrorPanel />
+				<LiveStatusLine />
 				<SessionPanel
 					onClose={() => store.dispatch({ui_type: 'set_session_picker_open', open: false})}
 					onSelect={sessionId => {
@@ -218,13 +215,10 @@ export function App() {
 					onClose={() => store.dispatch({ui_type: 'set_agent_session_picker_open', open: false})}
 					onSelect={sessionId => store.dispatch({ui_type: 'select_agent_session', sessionId})}
 				/>
-				<CreateAgentView />
-				<SchedulerPanel />
-				<ToolEventsPanel />
-				<MessagesPanel />
+				<TimelineView />
 				<InterruptChoicePanel onSubmit={resumeInterrupt} />
 				<InterruptPrompt />
-				<ConnectedCommandInput onSubmit={onSubmit} />
+				<ConnectedComposer onSubmit={onSubmit} />
 			</ShellLayout>
 		</RuntimeStoreProvider>
 	);
@@ -237,22 +231,25 @@ function ConnectedHelpPanel() {
 	return helpVisible ? <HelpPanel mode={mode} hasInterrupt={hasInterrupt} /> : null;
 }
 
-function ConnectedCommandInput({onSubmit}: {onSubmit: (value: string) => void}) {
+function ConnectedComposer({onSubmit}: {onSubmit: (value: string) => void}) {
 	const mode = useStoreSelector(state => state.mode);
 	const pendingInterrupt = useStoreSelector(state => state.pendingInterrupt);
 	const runStatus = useStoreSelector(state => state.runStatus);
 	const sessionPickerOpen = useStoreSelector(state => state.sessionPickerOpen);
 	const agentPackagePickerOpen = useStoreSelector(state => state.agentPackagePickerOpen);
 	const agentSessionPickerOpen = useStoreSelector(state => state.agentSessionPickerOpen);
+	const contextCompressionRunning = useStoreSelector(
+		state => state.contextActivity.status === 'running' && state.contextActivity.label === '上下文压缩中'
+	);
 	const choiceInterrupt = isChoiceInterrupt(pendingInterrupt);
-	const inputDisabled = runStatus === 'running' || sessionPickerOpen || agentPackagePickerOpen || agentSessionPickerOpen;
+	const inputDisabled = runStatus === 'running' || sessionPickerOpen || agentPackagePickerOpen || agentSessionPickerOpen || contextCompressionRunning;
 	return (
-		<CommandInput
+		<Composer
 			prompt={`factory${mode ? `:${modeLabel(mode)}` : ''}`}
 			onSubmit={onSubmit}
 			getSuggestions={value => commandSuggestions(value, mode, pendingInterrupt?.event_type === 'tool_approval_requested')}
 			disabled={inputDisabled || choiceInterrupt}
-			disabledText={pickerDisabledText(sessionPickerOpen, agentPackagePickerOpen, agentSessionPickerOpen, choiceInterrupt)}
+			disabledText={pickerDisabledText(sessionPickerOpen, agentPackagePickerOpen, agentSessionPickerOpen, choiceInterrupt, contextCompressionRunning)}
 		/>
 	);
 }
@@ -304,7 +301,8 @@ function pickerDisabledText(
 	sessionPickerOpen: boolean,
 	agentPackagePickerOpen: boolean,
 	agentSessionPickerOpen: boolean,
-	choiceInterrupt: boolean
+	choiceInterrupt: boolean,
+	contextCompressionRunning: boolean
 ): string {
 	if (sessionPickerOpen) {
 		return 'select a factory session above';
@@ -317,6 +315,9 @@ function pickerDisabledText(
 	}
 	if (choiceInterrupt) {
 		return 'use the option panel above';
+	}
+	if (contextCompressionRunning) {
+		return 'compressing conversation context';
 	}
 	return 'runtime running; waiting for event, tool approval, or interrupt';
 }

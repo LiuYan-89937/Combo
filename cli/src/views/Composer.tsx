@@ -3,7 +3,7 @@ import {Box, Text, useInput} from 'ink';
 import {type ShellCommandSpec} from '../commands.js';
 import {Muted} from './ui.js';
 
-export function CommandInput({
+export function Composer({
 	prompt,
 	onSubmit,
 	getSuggestions,
@@ -78,31 +78,29 @@ export function CommandInput({
 	});
 	return (
 		<Box flexDirection="column" marginTop={1}>
-			<Box borderStyle="round" borderColor="cyan" paddingX={1}>
+			<Box>
 				<Text color="cyan" bold>{prompt}</Text>
-				<Text color="gray"> $ </Text>
+				<Text color="gray"> {'> '}</Text>
 				{disabled ? (
-					<Text color="gray">{disabledText}</Text>
+					<Text color="gray">input paused: {disabledText}</Text>
 				) : (
 					<>
-						<Text>{value || ''}</Text>
+						<Text>{value}</Text>
 						<Text inverse>{' '}</Text>
-						{!value && <Text color="gray"> type a command or message</Text>}
+						{!value && <Text color="gray">message or /help</Text>}
 					</>
 				)}
 			</Box>
 			{!disabled && suggestions.length > 0 && (
-				<Box flexDirection="column" paddingX={1}>
+				<Box flexDirection="column">
 					<Muted>Tab complete / Up Down history</Muted>
-					<Box flexDirection="column">
-						{suggestions.slice(0, 5).map((item, index) => (
-							<Box key={item.usage}>
-								<Text color={index === 0 ? 'cyan' : 'gray'}>{index === 0 ? '> ' : '  '}</Text>
-								<Text color={index === 0 ? 'cyan' : 'white'}>{item.usage.padEnd(24)}</Text>
-								<Text color="gray">{item.description}</Text>
-							</Box>
-						))}
-					</Box>
+					{suggestions.slice(0, 5).map((item, index) => (
+						<Box key={item.usage}>
+							<Text color={index === 0 ? 'cyan' : 'gray'}>{index === 0 ? '> ' : '  '}</Text>
+							<Text color={index === 0 ? 'cyan' : 'white'}>{item.usage.padEnd(24)}</Text>
+							<Text color="gray">{item.description}</Text>
+						</Box>
+					))}
 				</Box>
 			)}
 		</Box>

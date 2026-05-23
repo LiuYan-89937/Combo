@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from time import perf_counter
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent_factory.context_system.schema import CompressionPolicy, ContextCompressionReport
+from agent_factory.context_system.token_counter import TokenCountResult
 from agent_factory.models import get_compression_model, get_compression_model_settings
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 
@@ -16,11 +18,27 @@ def maybe_compress_messages(
     messages: list[Any],
     policy: CompressionPolicy,
     node_id: str,
+    token_counter: Callable[[list[Any]], TokenCountResult] | None = None,
+    trigger_count: TokenCountResult | None = None,
 ) -> tuple[list[Any], ContextCompressionReport]:
     started = perf_counter()
     if not policy.enabled:
         return messages, ContextCompressionReport(status="skipped", node_id=node_id)
-    token_before = estimate_messages_tokens(messages)
+    count_before = trigger_count or _count_messages(messages, token_counter=token_counter)
+    if count_before.token_count is None:
+        return (
+            messages,
+            ContextCompressionReport(
+                status="skipped",
+                node_id=node_id,
+                original_message_count=len(messages),
+                compressed_message_count=len(messages),
+                token_count_method=count_before.method,
+                token_count_error=count_before.error,
+                duration_ms=int((perf_counter() - started) * 1000),
+            ),
+        )
+    token_before = count_before.token_count
     if token_before < policy.trigger_token_threshold:
         return (
             messages,
@@ -31,6 +49,7 @@ def maybe_compress_messages(
                 compressed_message_count=len(messages),
                 token_estimate_before=token_before,
                 token_estimate_after=token_before,
+                token_count_method=count_before.method,
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
         )
@@ -45,6 +64,7 @@ def maybe_compress_messages(
                 compressed_message_count=len(messages),
                 token_estimate_before=token_before,
                 token_estimate_after=token_before,
+                token_count_method=count_before.method,
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
         )
@@ -63,7 +83,8 @@ def maybe_compress_messages(
         missing = incomplete_tool_call_ids(compressed_messages)
         if missing:
             raise RuntimeError("compressed messages contain incomplete tool call history: " + ", ".join(missing))
-        token_after = estimate_messages_tokens(compressed_messages)
+        count_after = _count_messages(compressed_messages, token_counter=token_counter)
+        token_after = count_after.token_count or 0
         return (
             compressed_messages,
             ContextCompressionReport(
@@ -73,6 +94,8 @@ def maybe_compress_messages(
                 compressed_message_count=len(compressed_messages),
                 token_estimate_before=token_before,
                 token_estimate_after=token_after,
+                token_count_method=count_after.method,
+                token_count_error=count_after.error,
                 summary_token_estimate=estimate_text_tokens(summary),
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
@@ -87,10 +110,21 @@ def maybe_compress_messages(
                 compressed_message_count=len(messages),
                 token_estimate_before=token_before,
                 token_estimate_after=token_before,
+                token_count_method=count_before.method,
                 error=f"{type(exc).__name__}: {exc}",
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
         )
+
+
+def _count_messages(
+    messages: list[Any],
+    *,
+    token_counter: Callable[[list[Any]], TokenCountResult] | None,
+) -> TokenCountResult:
+    if token_counter is None:
+        return TokenCountResult(token_count=estimate_messages_tokens(messages), method="legacy_approximation")
+    return token_counter(messages)
 
 
 def estimate_messages_tokens(messages: list[Any]) -> int:

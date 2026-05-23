@@ -1,4 +1,4 @@
-import React, {createContext, useContext, useSyncExternalStore} from 'react';
+import React, {createContext, useContext, useRef, useSyncExternalStore} from 'react';
 import {type RuntimeState, type RuntimeStore} from './runtimeStore.js';
 
 const RuntimeStoreContext = createContext<RuntimeStore | null>(null);
@@ -15,11 +15,23 @@ export function useRuntimeStore(): RuntimeStore {
 	return store;
 }
 
-export function useStoreSelector<T>(selector: (state: RuntimeState) => T): T {
+export function useStoreSelector<T>(
+	selector: (state: RuntimeState) => T,
+	isEqual: (left: T, right: T) => boolean = Object.is
+): T {
 	const store = useRuntimeStore();
+	const snapshotRef = useRef<{value: T} | null>(null);
+	const getSelectedSnapshot = () => {
+		const selected = selector(store.getSnapshot());
+		if (snapshotRef.current && isEqual(snapshotRef.current.value, selected)) {
+			return snapshotRef.current.value;
+		}
+		snapshotRef.current = {value: selected};
+		return selected;
+	};
 	return useSyncExternalStore(
 		store.subscribe,
-		() => selector(store.getSnapshot()),
-		() => selector(store.getSnapshot())
+		getSelectedSnapshot,
+		getSelectedSnapshot
 	);
 }

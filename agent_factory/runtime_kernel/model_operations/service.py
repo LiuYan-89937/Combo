@@ -15,6 +15,12 @@ from agent_factory.runtime_kernel.adapters.model import (
     _tool_calls_from_response,
 )
 from agent_factory.runtime_kernel.types import ModelInvocationResult
+from agent_factory.context_system.events import emit_context_event
+from agent_factory.context_system.token_counter import (
+    count_messages_tokens,
+    context_window_payload,
+    token_count_from_usage_metadata,
+)
 
 
 class ModelOperationService:
@@ -52,6 +58,8 @@ class ModelOperationService:
         messages: list[Any] | None = None,
         tools: list[BaseTool] | None = None,
         emit_event=None,
+        services: Any | None = None,
+        node_id: str | None = None,
     ) -> ModelInvocationResult:
         model, metadata = self._resolve_model()
         tool_list = list(tools or [])
@@ -61,6 +69,15 @@ class ModelOperationService:
             messages=messages or [],
             tools=tool_list,
         )
+        _emit_context_window(
+            state=state,
+            services=services,
+            node_id=node_id,
+            model=model,
+            messages=request_messages,
+            tools=tool_list,
+            source="model_operation.before_call",
+        )
         _emit(emit_event, "model_call_started", {"operation": "tool_bound_chat", "model_role": self.model_role})
         try:
             response = _bind_tools(model, tool_list).invoke(request_messages)
@@ -69,17 +86,33 @@ class ModelOperationService:
             raise
         text = _content_to_text(getattr(response, "content", response)).strip()
         tool_calls = _tool_calls_from_response(response)
+        usage_metadata = getattr(response, "usage_metadata", None) or {}
         _emit(
             emit_event,
             "model_call_completed",
-            {"operation": "tool_bound_chat", "tool_call_count": len(tool_calls)},
+            {
+                "operation": "tool_bound_chat",
+                "tool_call_count": len(tool_calls),
+                "usage_metadata": usage_metadata,
+            },
+        )
+        _emit_provider_usage_context_window(
+            state=state,
+            services=services,
+            node_id=node_id,
+            response=response,
         )
         return ModelInvocationResult(
             ai_message=response if isinstance(response, BaseMessage) else None,
             assistant_draft=text,
             final_answer=None if tool_calls else text,
             tool_calls=tool_calls,
-            metadata={**metadata, "tool_count": len(tool_list)},
+            metadata={
+                **metadata,
+                "tool_count": len(tool_list),
+                "usage_metadata": usage_metadata,
+                "provider_input_tokens": token_count_from_usage_metadata(usage_metadata),
+            },
         )
 
     def structured_json(
@@ -142,3 +175,79 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
         return
     emit_event({"event_type": event_type, **payload})
+
+
+def _emit_context_window(
+    *,
+    state: Any,
+    services: Any | None,
+    node_id: str | None,
+    model: Any,
+    messages: list[Any],
+    tools: list[BaseTool],
+    source: str,
+) -> None:
+    if services is None or node_id is None:
+        return
+    threshold = _compression_threshold(services=services, node_id=node_id)
+    result = count_messages_tokens(messages, services=services, model=model, tools=tools)
+    if result.token_count is None:
+        return
+    emit_context_event(
+        services=services,
+        state=state,
+        event_type="context_window_updated",
+        node_id=node_id,
+        payload=context_window_payload(
+            node_id=node_id,
+            token_count=result.token_count,
+            token_count_method=result.method,
+            compression_threshold_tokens=threshold,
+            error=result.error,
+            model_role=result.model_role or _model_role(services),
+            source=source,
+        ),
+    )
+
+
+def _emit_provider_usage_context_window(
+    *,
+    state: Any,
+    services: Any | None,
+    node_id: str | None,
+    response: Any,
+) -> None:
+    if services is None or node_id is None:
+        return
+    token_count = token_count_from_usage_metadata(getattr(response, "usage_metadata", None))
+    if token_count is None:
+        return
+    emit_context_event(
+        services=services,
+        state=state,
+        event_type="context_window_updated",
+        node_id=node_id,
+        payload=context_window_payload(
+            node_id=node_id,
+            token_count=token_count,
+            token_count_method="provider_usage",
+            compression_threshold_tokens=_compression_threshold(services=services, node_id=node_id),
+            model_role=_model_role(services),
+            source="model_operation.provider_usage",
+        ),
+    )
+
+
+def _compression_threshold(*, services: Any, node_id: str) -> int | None:
+    runtime = getattr(services, "context_system", None)
+    if runtime is None or not hasattr(runtime, "policy_for_node"):
+        return None
+    try:
+        return int(runtime.policy_for_node(node_id).compression.trigger_token_threshold)
+    except Exception:
+        return None
+
+
+def _model_role(services: Any) -> str:
+    service = getattr(services, "model_operation_service", None)
+    return str(getattr(service, "model_role", None) or "main")

@@ -151,6 +151,8 @@ class ContextCompressionReport(BaseModel):
     compressed_message_count: int = 0
     token_estimate_before: int = 0
     token_estimate_after: int = 0
+    token_count_method: str | None = None
+    token_count_error: str | None = None
     summary_token_estimate: int = 0
     error: str | None = None
     duration_ms: int = 0

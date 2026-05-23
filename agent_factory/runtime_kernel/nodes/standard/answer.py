@@ -14,7 +14,7 @@ class CognitiveAnswerNode:
     node_type = "cognitive"
     supports_interrupt = False
     supports_subgraph_slot = True
-    writable_sections = {"conversation", "tools", "execution"}
+    writable_sections = {"conversation", "context", "tools", "execution"}
 
     def execute(
         self,
@@ -32,10 +32,13 @@ class CognitiveAnswerNode:
             messages=context.graph_messages,
             tools=visible_tools,
             emit_event=context.emit_event,
+            services=context.services,
+            node_id=context.node_id,
         )
         if result.clarification_question:
             return {
                 "messages": [AIMessage(content=result.clarification_question)],
+                **_context_token_budget_patch(result.metadata, context.node_id),
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
                     "clarification_question": result.clarification_question,
@@ -50,6 +53,7 @@ class CognitiveAnswerNode:
         if tool_calls:
             return {
                 "messages": [ai_message or AIMessage(content=result.assistant_draft or "", tool_calls=tool_calls)],
+                **_context_token_budget_patch(result.metadata, context.node_id),
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
                 },
@@ -70,6 +74,7 @@ class CognitiveAnswerNode:
         )
         return {
             "messages": [response_message],
+            **_context_token_budget_patch(result.metadata, context.node_id),
             "conversation": {
                 "assistant_draft": result.assistant_draft,
                 "final_answer": final_answer,
@@ -85,6 +90,25 @@ def _first_binding_payload(bindings: list[dict[str, Any]]) -> dict[str, Any] | N
     if not bindings:
         return None
     return dict(bindings[0].get("payload") or {})
+
+
+def _context_token_budget_patch(metadata: dict[str, Any] | None, node_id: str) -> dict[str, Any]:
+    data = dict(metadata or {})
+    input_tokens = data.get("provider_input_tokens")
+    if not isinstance(input_tokens, int) and not isinstance(input_tokens, float):
+        return {}
+    usage_metadata = data.get("usage_metadata") if isinstance(data.get("usage_metadata"), dict) else {}
+    return {
+        "context": {
+            "token_budget": {
+                "last_provider_input_tokens": int(input_tokens),
+                "last_provider_token_count_method": "provider_usage",
+                "last_provider_node_id": node_id,
+                "last_provider_model_role": str(data.get("model_role") or ""),
+                "last_provider_usage_metadata": usage_metadata,
+            }
+        }
+    }
 
 
 def _message_tool_calls(message: AIMessage | None) -> list[dict[str, Any]]:

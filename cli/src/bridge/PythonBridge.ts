@@ -42,7 +42,8 @@ export class PythonBridge {
 			}
 		});
 		this.process.stderr?.on('data', chunk => {
-			this.emit(errorEvent(String(chunk)));
+			const message = String(chunk);
+			this.emit(isPythonWarning(message) ? diagnosticEvent(message) : errorEvent(message));
 		});
 	}
 
@@ -111,4 +112,34 @@ function errorEvent(message: string): FactoryEvent {
 		message,
 		payload: {}
 	};
+}
+
+function diagnosticEvent(message: string): FactoryEvent {
+	return {
+		event_id: randomUUID(),
+		protocol_version: 'factory_frontend.v1',
+		event_type: 'debug_patch',
+		producer_type: 'typescript_cli',
+		request_id: null,
+		run_id: null,
+		session_id: null,
+		thread_id: null,
+		mode: null,
+		graph_id: 'typescript_cli',
+		node_id: null,
+		node_label: null,
+		node_kind: null,
+		stage_id: null,
+		span_id: null,
+		parent_span_id: null,
+		sequence: 0,
+		timestamp: new Date().toISOString(),
+		severity: 'warning',
+		message: 'Python diagnostic',
+		payload: {stderr: message}
+	};
+}
+
+function isPythonWarning(message: string): boolean {
+	return /\b(?:UserWarning|DeprecationWarning|RuntimeWarning|FutureWarning|ResourceWarning):/.test(message);
 }
