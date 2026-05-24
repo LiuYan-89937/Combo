@@ -11,9 +11,18 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter import FactoryRuntimeAdapter
 
 
+LONG_RUNNING_COMMANDS = {
+    "send_message",
+    "resume_interrupt",
+    "run_agent_package",
+    "scheduler_manage",
+}
+
+
 def main() -> None:
     writer = _JsonLineWriter()
     adapter = FactoryRuntimeAdapter(emit=writer.write)
+    dispatcher = _CommandDispatcher(adapter=adapter, writer=writer)
     writer.write(
         event(
             "runtime_ready",
@@ -32,9 +41,81 @@ def main() -> None:
         except ValidationError as exc:
             writer.write(event("error", message=f"invalid command: {exc}"))
             continue
-        should_continue = adapter.handle(command)
+        should_continue = dispatcher.handle(command)
         if not should_continue:
             break
+    dispatcher.join()
+
+
+class _CommandDispatcher:
+    def __init__(self, *, adapter: FactoryRuntimeAdapter, writer: "_JsonLineWriter") -> None:
+        self.adapter = adapter
+        self.writer = writer
+        self._lock = threading.Lock()
+        self._active_thread: threading.Thread | None = None
+        self._active_request_id: str | None = None
+
+    def handle(self, command: FactoryFrontendCommand) -> bool:
+        if command.type == "shutdown":
+            self.adapter.handle(command)
+            return False
+        if command.type == "cancel_runtime_request":
+            self.adapter.handle(command)
+            return True
+        if command.type in LONG_RUNNING_COMMANDS:
+            return self._start_long_running(command)
+        if self._has_active_request():
+            self.writer.write(
+                event(
+                    "error",
+                    request_id=command.request_id,
+                    message="runtime is busy; cancel the active request before sending another command",
+                    payload={"active_request_id": self._active_request_id},
+                )
+            )
+            return True
+        self.adapter.handle(command)
+        return True
+
+    def join(self) -> None:
+        thread = self._active_thread
+        if thread is not None:
+            thread.join(timeout=0.2)
+
+    def _start_long_running(self, command: FactoryFrontendCommand) -> bool:
+        with self._lock:
+            if self._active_thread is not None and self._active_thread.is_alive():
+                self.writer.write(
+                    event(
+                        "error",
+                        request_id=command.request_id,
+                        message="runtime is already handling a request",
+                        payload={"active_request_id": self._active_request_id},
+                    )
+                )
+                return True
+            self._active_request_id = command.request_id
+            self._active_thread = threading.Thread(
+                target=self._run_command,
+                args=(command,),
+                name=f"factory-frontend-command-{command.request_id or command.type}",
+                daemon=True,
+            )
+            self._active_thread.start()
+        return True
+
+    def _run_command(self, command: FactoryFrontendCommand) -> None:
+        try:
+            self.adapter.handle(command)
+        finally:
+            with self._lock:
+                if self._active_request_id == command.request_id:
+                    self._active_request_id = None
+                self._active_thread = None
+
+    def _has_active_request(self) -> bool:
+        with self._lock:
+            return self._active_thread is not None and self._active_thread.is_alive()
 
 
 class _JsonLineWriter:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from agent_factory.context_system.events import ContextEventSink
 from agent_factory.context_system.runtime import ContextSystemRuntime
 from agent_factory.memory_system.factory import factory_memory_runtime
 
@@ -15,9 +16,15 @@ class FactoryContextServices:
     memory_system: Any | None = None
     tool_registry: Any | None = None
     scheduler_runtime: Any | None = None
+    context_event_sink: ContextEventSink | None = None
 
 
-def inject_factory_prompt_context(*, stage_id: str, values: dict[str, Any]) -> dict[str, Any]:
+def inject_factory_prompt_context(
+    *,
+    stage_id: str,
+    values: dict[str, Any],
+    context_event_sink: ContextEventSink | None = None,
+) -> dict[str, Any]:
     runtime = _factory_context_runtime()
     try:
         memory_runtime = factory_memory_runtime()
@@ -26,7 +33,7 @@ def inject_factory_prompt_context(*, stage_id: str, values: dict[str, Any]) -> d
     return runtime.prepare_factory_values(
         stage_id=stage_id,
         values=values,
-        services=FactoryContextServices(memory_system=memory_runtime),
+        services=FactoryContextServices(memory_system=memory_runtime, context_event_sink=context_event_sink),
     )
 
 

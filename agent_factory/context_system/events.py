@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from langgraph.config import get_stream_writer
+
+ContextEventSink = Callable[[dict[str, Any]], None]
 
 
 def context_event_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -16,8 +19,11 @@ def emit_context_event(
     event_type: str,
     payload: dict[str, Any],
     node_id: str | None = None,
+    event_sink: ContextEventSink | None = None,
 ) -> None:
     event_payload = context_event_payload(event_type, payload)
+    if event_sink is not None:
+        event_sink(event_payload)
     if services is not None and state is not None and getattr(services, "observability_manager", None) is not None:
         from agent_factory.runtime_kernel.observability.schema import TraceEvent
 

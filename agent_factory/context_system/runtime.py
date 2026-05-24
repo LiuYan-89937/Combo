@@ -87,11 +87,23 @@ class ContextSystemRuntime:
             node_id=node_id,
             token_counter=lambda items: count_messages_tokens(items, services=services),
             trigger_count=trigger_count,
+            on_start=lambda report: emit_context_event(
+                services=services,
+                state=working_state,
+                event_type="context_compression_started",
+                node_id=node_id,
+                payload=report.model_dump(mode="json"),
+            ),
         )
+        compression_event_type = {
+            "completed": "context_compression_completed",
+            "failed": "context_compression_failed",
+            "skipped": "context_compression_skipped",
+        }.get(compression_report.status, "context_compression_skipped")
         emit_context_event(
             services=services,
             state=working_state,
-            event_type="context_compression_completed" if compression_report.status != "failed" else "context_compression_failed",
+            event_type=compression_event_type,
             node_id=node_id,
             payload=compression_report.model_dump(mode="json"),
         )
@@ -201,12 +213,38 @@ class ContextSystemRuntime:
             candidates=candidates,
             policy=policy.assembly,
         )
+        retrieval_report.selected_count = len(frame.items)
+        retrieval_report.token_estimate = frame.token_estimate
+        injection_report = ContextInjectionReport(
+            status="completed" if frame.text else "skipped",
+            node_id=stage_id,
+            item_count=len(frame.items),
+            token_estimate=frame.token_estimate,
+        )
+        event_sink = getattr(services, "context_event_sink", None)
         emit_context_event(
-            services=None,
+            services=services,
             state=None,
             event_type="context_retrieval_completed",
             node_id=stage_id,
             payload=retrieval_report.model_dump(mode="json"),
+            event_sink=event_sink,
+        )
+        emit_context_event(
+            services=services,
+            state=None,
+            event_type="context_assembly_completed",
+            node_id=stage_id,
+            payload=injection_report.model_dump(mode="json"),
+            event_sink=event_sink,
+        )
+        emit_context_event(
+            services=services,
+            state=None,
+            event_type="context_injection_completed",
+            node_id=stage_id,
+            payload=injection_report.model_dump(mode="json"),
+            event_sink=event_sink,
         )
         if not frame.text:
             return values

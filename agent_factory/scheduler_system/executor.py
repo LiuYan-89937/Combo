@@ -40,7 +40,7 @@ class SchedulerExecutor:
                 status=status,
                 output_summary=_output_summary(output),
                 error_summary=error_summary,
-                evidence=output,
+                evidence=_execution_evidence(job=job, run=run, output=output),
             )
         except Exception as exc:
             return self._report(
@@ -49,7 +49,7 @@ class SchedulerExecutor:
                 started=started,
                 status="failed",
                 error_summary=f"{type(exc).__name__}: {exc}",
-                evidence={},
+                evidence=_execution_evidence(job=job, run=run, exception=exc),
             )
 
     def _execute_graph(self, job: SchedulerJob, run: SchedulerRun) -> dict[str, Any]:
@@ -144,6 +144,108 @@ def _optional_tool_args(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _execution_evidence(
+    *,
+    job: SchedulerJob,
+    run: SchedulerRun,
+    output: dict[str, Any] | None = None,
+    exception: Exception | None = None,
+) -> dict[str, Any]:
+    output = output or {}
+    return {
+        "job": _job_evidence(job),
+        "run": _run_evidence(run),
+        "target": _target_evidence(job),
+        "execution": _execution_summary(output=output, exception=exception),
+    }
+
+
+def _job_evidence(job: SchedulerJob) -> dict[str, Any]:
+    return {
+        "job_id": job.job_id,
+        "owner_type": job.owner_type,
+        "owner_id": job.owner_id,
+        "schedule_type": job.schedule_type,
+        "schedule_expr": _summary(job.schedule_expr, limit=120),
+        "timezone": job.timezone,
+        "task_content_preview": _summary(job.task_content, limit=240),
+    }
+
+
+def _run_evidence(run: SchedulerRun) -> dict[str, Any]:
+    return {
+        "run_id": run.run_id,
+        "trigger_reason": run.trigger_reason,
+        "scheduled_at": run.scheduled_at,
+    }
+
+
+def _target_evidence(job: SchedulerJob) -> dict[str, Any]:
+    target = job.target
+    payload = dict(target.payload or {})
+    if target.target_type == "script_run":
+        command = payload.get("command")
+        return {
+            "target_type": target.target_type,
+            "tool_id": "bash",
+            "command_preview": _command_preview(command),
+            "option_keys": sorted(key for key in payload if key != "command"),
+        }
+    if target.target_type == "tool_call":
+        arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        return {
+            "target_type": target.target_type,
+            "tool_id": _summary(payload.get("tool_id"), limit=120),
+            "argument_keys": sorted(str(key) for key in arguments),
+            "argument_shape": _shape_preview(arguments),
+        }
+    return {
+        "target_type": target.target_type,
+        "message_preview": _summary(payload.get("message"), limit=360),
+        "thread_policy": _summary(payload.get("thread_policy") or "new_thread_per_run", limit=80),
+        "fixed_thread_id": _summary(payload.get("fixed_thread_id"), limit=120),
+    }
+
+
+def _execution_summary(*, output: dict[str, Any], exception: Exception | None) -> dict[str, Any]:
+    if exception is not None:
+        return {
+            "status": "failed",
+            "failure_phase": "target_execution",
+            "error_type": type(exception).__name__,
+            "error_summary": _summary(str(exception), limit=500),
+        }
+    return {
+        "status": _summary(output.get("status"), limit=80) or "completed",
+        "message": _summary(output.get("message"), limit=500),
+        "error": _summary(_result_value(output, "error"), limit=500),
+        "error_summary": _summary(_result_value(output, "error_summary"), limit=500),
+        "observation_summary": _summary(_result_value(output, "observation_summary"), limit=500),
+        "output_summary": _output_summary(output),
+        "stdout_preview": _stdout_preview(output),
+        "stderr_preview": _stderr_preview(output),
+        "exit_code": _exit_code(output),
+        "result_keys": _result_keys(output),
+    }
+
+
+def _command_preview(command: Any) -> str | None:
+    if isinstance(command, str):
+        return _summary(command, limit=500)
+    return _summary(command, limit=500)
+
+
+def _shape_preview(value: dict[str, Any]) -> dict[str, str]:
+    return {str(key): type(item).__name__ for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))[:32]}
+
+
+def _result_keys(output: dict[str, Any]) -> list[str]:
+    keys = set(str(key) for key in output)
+    nested = _output_payload(output)
+    keys.update(f"output.{key}" for key in nested)
+    return sorted(keys)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -165,6 +267,13 @@ def _output_payload(evidence: dict[str, Any]) -> dict[str, Any]:
 def _result_value(evidence: dict[str, Any], key: str) -> Any:
     if key in evidence:
         return evidence[key]
+    execution = evidence.get("execution")
+    if isinstance(execution, dict):
+        if key in execution:
+            return execution[key]
+        preview_key = f"{key}_preview"
+        if preview_key in execution:
+            return execution[preview_key]
     return _output_payload(evidence).get(key)
 
 

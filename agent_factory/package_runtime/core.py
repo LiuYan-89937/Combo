@@ -16,6 +16,7 @@ from agent_factory.runtime_protocol.completion import runtime_completed, runtime
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -150,6 +151,9 @@ class PackageRuntimeCore:
             agent_config=compiled.runtime_config["agent_config"],
             session_config=session_config,
         )
+        run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
+            payload.get("runtime_request")
+        ).timeout_seconds
         normalizer.session_id = run_context.session_id
         if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
             return 0
@@ -207,12 +211,20 @@ class PackageRuntimeCore:
         session_config["session_id"] = session_id
         normalizer.session_id = session_id
         normalizer.emit_runtime_resumed(resume_payload if isinstance(resume_payload, dict) else {})
-        final_state = None
-        for stream_mode, chunk in facade.stream_resume(
+        run_context = facade.prepare_resume_context(
             compiled.compiled_app,
             session_id=session_id,
-            resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
             session_config=session_config,
+        )
+        run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
+            payload.get("runtime_request")
+        ).timeout_seconds
+        final_state = None
+        for stream_mode, chunk in facade.instance.controller.stream_resume(
+            compiled.compiled_app,
+            run_context.state,
+            thread_id=run_context.thread_id,
+            resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
         ):
             if _handle_stream_item(normalizer, stream_mode, chunk):
                 return 0
@@ -223,11 +235,7 @@ class PackageRuntimeCore:
             return 1
         if not runtime_completed(final_state):
             return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
-        agent_session = facade.prepare_resume_context(
-            compiled.compiled_app,
-            session_id=session_id,
-            session_config=session_config,
-        ).session_manager.load(session_id)
+        agent_session = run_context.session_manager.touch_turn(session_id)
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_run_completed(
             {

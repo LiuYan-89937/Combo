@@ -239,6 +239,40 @@ class MemorySystemTest(unittest.TestCase):
             self.assertEqual(results[0].key, record.memory_id)
             self.assertIsNotNone(results[0].score)
 
+    def test_retrieval_reports_semantic_index_failure_and_lexical_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = LangGraphStoreFactory().build(
+                LangGraphStoreConfig(
+                    backend="sqlite",
+                    path=Path(temp_dir) / "memory.sqlite",
+                    index=LangGraphStoreIndexConfig(embed=_FailingEmbeddings(), dims=3, fields=("content",)),
+                )
+            ).store
+            namespace = ("memory", "factory", "default")
+            record = MemoryRecord(
+                scope="factory",
+                kind="preference",
+                content="用户喜欢吃布丁",
+                metadata={"importance": 1.0},
+            )
+
+            store.put(namespace, record.memory_id, record.model_dump(mode="json"))
+            pack = retrieve_memory_context(
+                store=store,
+                namespace=namespace,
+                query="布丁",
+                config=MemorySystemConfig(
+                    store=MemoryStoreRuntimeConfig(backend="sqlite", path=""),
+                    ranking=MemoryRankingConfig(min_score=0.0),
+                ),
+            )
+
+            self.assertEqual(pack.report["semantic_status"], "semantic_failed")
+            self.assertTrue(pack.report["lexical_fallback_used"])
+            self.assertTrue(pack.items)
+            reasons = {item.get("reason") for item in pack.report["semantic_diagnostics"]}
+            self.assertIn("embedding_error", reasons)
+
     def test_injection_writes_model_context_not_messages(self) -> None:
         store = LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store
         namespace = ("memory", "agent", "agent_a")
@@ -324,6 +358,14 @@ class _FakeEmbeddings:
         if "mysql" in normalized or "database" in normalized:
             return [1.0, 0.0, 0.0]
         return [0.0, 1.0, 0.0]
+
+
+class _FailingEmbeddings:
+    def embed_documents(self, _texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embedding service unavailable")
+
+    def embed_query(self, _text: str) -> list[float]:
+        raise RuntimeError("embedding service unavailable")
 
 
 if __name__ == "__main__":

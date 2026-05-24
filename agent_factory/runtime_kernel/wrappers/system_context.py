@@ -26,22 +26,49 @@ class ContextPrepareSystemWrapper:
         emit_context_event(
             services=context.services,
             state=state,
-            event_type="context_compression_started",
+            event_type="context_prepare_started",
             node_id=context.node_id,
             payload={"node_id": context.node_id, "status": "started"},
         )
-        result = runtime.prepare_before_model_call(
-            state=state,
-            node_id=context.node_id,
-            impl=context.impl,
-            messages=list(context.graph_messages or []),
-            services=context.services,
-            resources=getattr(context.services, "runtime_resources", {}) or {},
-        )
+        try:
+            result = runtime.prepare_before_model_call(
+                state=state,
+                node_id=context.node_id,
+                impl=context.impl,
+                messages=list(context.graph_messages or []),
+                services=context.services,
+                resources=getattr(context.services, "runtime_resources", {}) or {},
+            )
+        except Exception as exc:
+            emit_context_event(
+                services=context.services,
+                state=state,
+                event_type="context_prepare_failed",
+                node_id=context.node_id,
+                payload={
+                    "node_id": context.node_id,
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            raise
         context.graph_messages = list(result.messages)
         patch: dict[str, Any] = {"context": result.state.context.model_dump(mode="json")}
         if result.messages_changed:
             patch["messages"] = [RemoveMessage(id=REMOVE_ALL_MESSAGES), *result.messages]
+        emit_context_event(
+            services=context.services,
+            state=result.state,
+            event_type="context_prepare_completed",
+            node_id=context.node_id,
+            payload={
+                "node_id": context.node_id,
+                "status": "completed",
+                "messages_changed": result.messages_changed,
+                "item_count": len(result.frame.items) if result.frame is not None else 0,
+                "token_estimate": result.frame.token_estimate if result.frame is not None else 0,
+            },
+        )
         return result.state, patch
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
 
 from agent_factory.runtime_kernel.bindings import RuntimeServices
@@ -28,6 +29,7 @@ class RuntimeContribution:
     diagnostics: list[RuntimeDiagnostic] = field(default_factory=list)
     session_config: dict[str, Any] = field(default_factory=dict)
     resources: dict[str, Any] = field(default_factory=dict)
+    tool_runtime_resources: dict[str, Any] = field(default_factory=dict)
     state_contracts: list[Any] = field(default_factory=list)
     render_manifest: RenderManifest | None = None
     sandbox_contract: dict[str, Any] | None = None
@@ -41,6 +43,7 @@ class RuntimeBuildResult:
     system_wrappers: list[str] = field(default_factory=list)
     session_config: dict[str, Any] = field(default_factory=dict)
     resources: dict[str, Any] = field(default_factory=dict)
+    tool_runtime_resources: dict[str, Any] = field(default_factory=dict)
     sandbox_contract: dict[str, Any] = field(default_factory=dict)
     dependency_plan: dict[str, Any] = field(default_factory=dict)
     diagnostics: list[RuntimeDiagnostic] = field(default_factory=list)
@@ -69,6 +72,7 @@ class RuntimeContributionMerger:
         seen_system_wrappers: set[str] = set()
         session_config: dict[str, Any] = {}
         resources: dict[str, Any] = {}
+        tool_runtime_resources: dict[str, Any] = {}
         sandbox_contract: dict[str, Any] = {}
         dependency_plan: dict[str, Any] = {}
         render_manifest: RenderManifest | None = None
@@ -101,9 +105,14 @@ class RuntimeContributionMerger:
                     raise RuntimeContributionMergeError(f"conflicting session config: {key}")
                 session_config[key] = value
             for key, value in contribution.resources.items():
+                _assert_json_serializable_runtime_resource(key, value)
                 if key in resources and resources[key] != value:
                     raise RuntimeContributionMergeError(f"conflicting runtime resource: {key}")
                 resources[key] = value
+            for key, value in contribution.tool_runtime_resources.items():
+                if key in tool_runtime_resources and tool_runtime_resources[key] is not value:
+                    raise RuntimeContributionMergeError(f"conflicting tool runtime resource: {key}")
+                tool_runtime_resources[key] = value
             if contribution.render_manifest is not None:
                 if render_manifest is not None and render_manifest != contribution.render_manifest:
                     raise RuntimeContributionMergeError("conflicting render manifest contribution")
@@ -122,12 +131,14 @@ class RuntimeContributionMerger:
         if render_manifest is None:
             raise RuntimeContributionMergeError("render contract did not provide a render manifest")
         services["runtime_resources"] = dict(resources)
+        services["tool_runtime_resources"] = dict(tool_runtime_resources)
         return RuntimeBuildResult(
             services=RuntimeServices(**services),
             render_manifest=render_manifest,
             system_wrappers=system_wrappers,
             session_config=session_config,
             resources=resources,
+            tool_runtime_resources=tool_runtime_resources,
             sandbox_contract=sandbox_contract,
             dependency_plan=dependency_plan,
             diagnostics=diagnostics,
@@ -157,4 +168,14 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "report_store": None,
         "bookmark_store": services.bookmark_store,
         "runtime_resources": dict(services.runtime_resources),
+        "tool_runtime_resources": dict(services.tool_runtime_resources),
     }
+
+
+def _assert_json_serializable_runtime_resource(key: str, value: Any) -> None:
+    try:
+        json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeContributionMergeError(
+            f"runtime resource must be JSON serializable: {key}"
+        ) from exc

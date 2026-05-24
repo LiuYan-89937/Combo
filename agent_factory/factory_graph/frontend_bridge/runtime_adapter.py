@@ -113,6 +113,8 @@ class FactoryRuntimeAdapter:
                 self.run_agent_package(command)
             elif command.type == "resume_interrupt":
                 self.resume_interrupt(command)
+            elif command.type == "cancel_runtime_request":
+                self.cancel_runtime_request(command)
             else:
                 self._emit_error(command, f"unsupported command: {command.type}")
         except Exception as exc:
@@ -446,6 +448,29 @@ class FactoryRuntimeAdapter:
             )
         except Exception as exc:
             pending.normalizer.emit_run_failed(exc)
+
+    def cancel_runtime_request(self, command: FactoryFrontendCommand) -> None:
+        reason = str(command.payload.get("reason") or "user_cancelled")
+        if self.agent_package_runtime is not None:
+            cancelled = self.agent_package_runtime.cancel_active_requests(reason=reason)
+        else:
+            cancelled = 0
+        self.pending_agent_package_run = None
+        self.emit(
+            event(
+                "debug_patch",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode=self.mode,
+                graph_id="factory_runtime",
+                producer_type="factory_runtime",
+                payload={
+                    "source": "runtime_request_cancel",
+                    "reason": reason,
+                    "cancelled_requests": cancelled,
+                },
+            )
+        )
 
     def _consume_agent_package_stream(
         self,
@@ -797,7 +822,7 @@ class FactoryRuntimeAdapter:
     def _factory_tools(self, tool_ids: list[str] | set[str] | tuple[str, ...] | None = None) -> list[Any]:
         return get_factory_tools(
             tool_ids=tool_ids,
-            runtime_resources=self._factory_tool_runtime_resources(),
+            tool_runtime_resources=self._factory_tool_runtime_resources(),
         )
 
     def _factory_tool_runtime_resources(self) -> dict[str, Any]:

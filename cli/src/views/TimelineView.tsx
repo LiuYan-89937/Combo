@@ -67,7 +67,7 @@ type ConversationWindowModel = {
 
 function conversationWindowModel(items: TimelineItem[]): ConversationWindowModel {
 	const userIndexes = items
-		.map((item, index) => item.title === 'You' ? index : -1)
+		.map((item, index) => isUserMessage(item) ? index : -1)
 		.filter(index => index >= 0);
 	if (userIndexes.length <= 2) {
 		return {items, userIndexes, windowCount: 1};
@@ -122,7 +122,7 @@ function TimelineScrollHint({
 
 function TimelineBlock({item}: {item: TimelineItem}) {
 	const body = trimContent(item.body);
-	if (item.title === 'You') {
+	if (isUserMessage(item)) {
 		return (
 			<Box marginBottom={1}>
 				<Text color="cyan" bold>{'> '}</Text>
@@ -139,6 +139,10 @@ function TimelineBlock({item}: {item: TimelineItem}) {
 			{body ? <Text>{indent(body)}</Text> : null}
 		</Box>
 	);
+}
+
+function isUserMessage(item: TimelineItem): boolean {
+	return item.kind === 'message' && item.role === 'user';
 }
 
 function trimContent(value: string): string {

@@ -29,7 +29,7 @@ class FactoryExtensionTest(unittest.TestCase):
             tools = get_factory_tools(
                 tool_ids=["scheduler"],
                 include_extensions=False,
-                runtime_resources={"scheduler_runtime": runtime},
+                tool_runtime_resources={"scheduler_runtime": runtime},
             )
 
             self.assertEqual([tool.name for tool in tools], ["scheduler"])

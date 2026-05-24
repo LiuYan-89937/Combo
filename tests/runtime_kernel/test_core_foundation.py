@@ -195,6 +195,31 @@ class RuntimeKernelCoreFoundationTest(unittest.TestCase):
         self.assertEqual(text_result.final_answer, "hello")
         self.assertEqual(structured_result.answer, "ok")
 
+    def test_model_operation_structured_json_repairs_from_validator_observation(self) -> None:
+        class Decision(BaseModel):
+            answer: str
+
+        model = _RepairingFakeModel()
+        events: list[dict] = []
+        service = ModelOperationService(model=model)
+
+        result = service.structured_json(
+            output_model=Decision,
+            state=RuntimeState(),
+            max_attempts=2,
+            emit_event=events.append,
+        )
+
+        self.assertEqual(result.answer, "fixed")
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("Validation observation", model.calls[1][-1].content)
+        self.assertEqual([event["event_type"] for event in events], [
+            "model_call_started",
+            "model_call_failed",
+            "model_call_started",
+            "model_call_completed",
+        ])
+
     def test_artifact_and_report_stores_write_index_records(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "artifacts"
@@ -252,6 +277,26 @@ class _FakeModel:
 
     def with_structured_output(self, output_model: type[BaseModel]):
         return _FakeStructuredModel(output_model)
+
+
+class _RepairingStructuredModel:
+    def __init__(self, parent: "_RepairingFakeModel", output_model: type[BaseModel]) -> None:
+        self.parent = parent
+        self.output_model = output_model
+
+    def invoke(self, messages):
+        self.parent.calls.append(list(messages))
+        if any("Validation observation" in str(getattr(message, "content", "")) for message in messages):
+            return self.output_model(answer="fixed")
+        return {"unexpected": "shape"}
+
+
+class _RepairingFakeModel:
+    def __init__(self) -> None:
+        self.calls: list[list] = []
+
+    def with_structured_output(self, output_model: type[BaseModel]):
+        return _RepairingStructuredModel(self, output_model)
 
 
 def _facade() -> RuntimeKernelFacade:

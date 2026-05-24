@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
+import re
 import shutil
 import subprocess
 from typing import Any
 
+from agent_factory.paths import project_root
 from agent_factory.runtime_contracts import LoadedAgentPackage
 
 
@@ -46,6 +49,15 @@ MODEL_ENV_ALLOWLIST = (
     "AGENTFACTORY_EMBEDDING_BASE_URL",
     "AGENTFACTORY_EMBEDDING_DIMS",
     "AGENTFACTORY_EMBEDDING_TIMEOUT_SECONDS",
+)
+
+SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+ALLOWED_CONTAINER_ROOTS = (
+    PurePosixPath("/resources"),
+    PurePosixPath("/package"),
+    PurePosixPath("/artifacts"),
+    PurePosixPath("/workdir"),
+    PurePosixPath("/runtime"),
 )
 
 
@@ -284,27 +296,27 @@ class DockerAgentRuntimeLauncher:
     def _mount_arg(self, mount: object) -> str | None:
         if not isinstance(mount, dict):
             return None
-        host_path = str(mount.get("host_path") or "")
-        container_path = str(mount.get("container_path") or "")
+        validated = self._validate_contract_mount(mount)
+        access = "ro" if validated.access == "read_only" else "rw"
+        return f"{validated.host_path}:{validated.container_path}:{access}"
+
+    def _validate_contract_mount(self, mount: dict[str, Any]) -> "_ValidatedContractMount":
+        host_path = str(mount.get("host_path") or "").strip()
+        container_path = str(mount.get("container_path") or "").strip()
         if not host_path or not container_path:
             raise AgentRuntimeLaunchError(
                 where="sandbox.mounts",
                 why="invalid_mount",
                 message="Sandbox mount requires host_path and container_path.",
             )
-        if not container_path.startswith("/"):
-            raise AgentRuntimeLaunchError(
-                where="sandbox.mounts",
-                why="invalid_container_path",
-                message=f"Sandbox container path must be absolute: {container_path}",
-            )
+        resource_id = str(mount.get("resource_id") or "").strip()
+        self._validate_resource_id(resource_id, required=False)
+        normalized_container_path = self._validate_container_path(
+            container_path,
+            resource_id=resource_id or None,
+        )
         host = Path(host_path).expanduser().resolve()
-        if not host.exists():
-            raise AgentRuntimeLaunchError(
-                where="sandbox.mounts",
-                why="host_path_missing",
-                message=f"Sandbox mount host path does not exist: {host}",
-            )
+        self._validate_host_path(host)
         access_value = str(mount.get("access") or "read_write")
         if access_value not in {"read_only", "read_write"}:
             raise AgentRuntimeLaunchError(
@@ -312,8 +324,99 @@ class DockerAgentRuntimeLauncher:
                 why="invalid_mount_access",
                 message=f"Sandbox mount access must be read_only or read_write: {access_value}",
             )
-        access = "ro" if access_value == "read_only" else "rw"
-        return f"{host}:{container_path}:{access}"
+        return _ValidatedContractMount(
+            host_path=host,
+            container_path=str(normalized_container_path),
+            access=access_value,
+        )
+
+    def _validate_host_path(self, host: Path) -> None:
+        if not host.exists():
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="host_path_missing",
+                message=f"Sandbox mount host path does not exist: {host}",
+            )
+        dangerous_paths = _dangerous_host_paths()
+        if host in dangerous_paths:
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="dangerous_host_path",
+                message=f"Sandbox mount host path is not allowed: {host}",
+            )
+
+    def _validate_container_path(self, container_path: str, *, resource_id: str | None) -> PurePosixPath:
+        if not container_path.startswith("/"):
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="invalid_container_path",
+                message=f"Sandbox container path must be absolute: {container_path}",
+            )
+        path = PurePosixPath(container_path)
+        if ".." in path.parts:
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="invalid_container_path",
+                message=f"Sandbox container path cannot contain '..': {container_path}",
+            )
+        if path == PurePosixPath("/"):
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="invalid_container_path",
+                message="Sandbox container path cannot be root.",
+            )
+        if _is_volumes_path(path):
+            path_resource_id = _volume_resource_id(path)
+            self._validate_resource_id(path_resource_id, required=True)
+            if resource_id and path_resource_id != resource_id:
+                raise AgentRuntimeLaunchError(
+                    where="sandbox.mounts",
+                    why="resource_id_container_path_mismatch",
+                    message=(
+                        "Sandbox mount resource_id must match /volumes/<resource_id>: "
+                        f"{resource_id} != {path_resource_id}"
+                    ),
+                )
+            return path
+        if not _is_allowed_container_path(path):
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="disallowed_container_path",
+                message=f"Sandbox container path is outside allowed runtime roots: {container_path}",
+            )
+        if not resource_id:
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="missing_resource_id",
+                message=(
+                    "Sandbox contract mounts outside /volumes/<resource_id> must declare resource_id. "
+                    f"container_path={container_path}"
+                ),
+            )
+        return path
+
+    def _validate_resource_id(self, resource_id: str | None, *, required: bool) -> None:
+        if not resource_id:
+            if required:
+                raise AgentRuntimeLaunchError(
+                    where="sandbox.mounts",
+                    why="missing_resource_id",
+                    message="Sandbox mount requires a safe resource_id.",
+                )
+            return
+        if not SAFE_RESOURCE_ID_RE.fullmatch(resource_id):
+            raise AgentRuntimeLaunchError(
+                where="sandbox.mounts",
+                why="invalid_resource_id",
+                message=f"Sandbox mount resource_id contains unsupported characters: {resource_id}",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedContractMount:
+    host_path: Path
+    container_path: str
+    access: str
 
 
 def _env_key_fragment(value: str) -> str:
@@ -322,6 +425,30 @@ def _env_key_fragment(value: str) -> str:
     if result[0].isdigit():
         result = f"SERVICE_{result}"
     return result
+
+
+def _dangerous_host_paths() -> set[Path]:
+    candidates = [
+        Path("/"),
+        Path.home(),
+        project_root(),
+        Path("/Users"),
+    ]
+    return {candidate.expanduser().resolve() for candidate in candidates}
+
+
+def _is_allowed_container_path(path: PurePosixPath) -> bool:
+    return any(path == root or root in path.parents for root in ALLOWED_CONTAINER_ROOTS)
+
+
+def _is_volumes_path(path: PurePosixPath) -> bool:
+    return len(path.parts) >= 3 and path.parts[0] == "/" and path.parts[1] == "volumes"
+
+
+def _volume_resource_id(path: PurePosixPath) -> str:
+    if not _is_volumes_path(path):
+        return ""
+    return path.parts[2]
 
 
 def _docker_error_text(result: subprocess.CompletedProcess[str]) -> str:

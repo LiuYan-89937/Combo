@@ -197,6 +197,34 @@ class FrontendEventNormalizerTest(unittest.TestCase):
         self.assertEqual([event.payload["content"] for event in completed], ["before tool", "after tool"])
         self.assertEqual(len({event.payload["stream_id"] for event in completed}), 2)
 
+    def test_context_prepare_and_skipped_compression_events_are_forwarded(self) -> None:
+        events = []
+        normalizer = RuntimeEventNormalizer(
+            emit=events.append,
+            request_id="request-a",
+            session_id="session-a",
+            mode="chat",
+            graph_id="factory_chat_package",
+        )
+
+        for event_type in ("context_prepare_started", "context_prepare_completed", "context_compression_skipped"):
+            normalizer.emit_custom_event(
+                {
+                    "type": "context_event",
+                    "payload": {
+                        "event_type": event_type,
+                        "node_id": "answer",
+                        "status": "skipped" if event_type.endswith("skipped") else "completed",
+                    },
+                }
+            )
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["context_prepare_started", "context_prepare_completed", "context_compression_skipped"],
+        )
+        self.assertEqual(events[-1].node_id, "answer")
+
 
 if __name__ == "__main__":
     unittest.main()

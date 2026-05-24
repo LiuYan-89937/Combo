@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,6 @@ from agent_factory.memory_system import (
     default_agent_runtime,
 )
 from agent_factory.memory_system.background import MemoryBackgroundWorker
-from agent_factory.memory_system.namespace import agent_memory_namespace
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.bookmarks import InMemoryBookmarkStore
@@ -22,6 +20,18 @@ from agent_factory.runtime_kernel.execution import ExecutionController
 from agent_factory.runtime_protocol.completion import runtime_completed
 from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp, RuntimeKernelInstance
+from agent_factory.runtime_kernel.kernel.compile_support import (
+    ensure_memory_runtime,
+    required_services_for_pattern,
+    resolve_render_manifest,
+)
+from agent_factory.runtime_kernel.kernel.run_context import (
+    RuntimeKernelRunContext,
+    configure_memory_runtime_for_agent,
+    initial_package_state,
+    session_manager_from_config,
+    state_for_new_turn,
+)
 from agent_factory.runtime_kernel.nodes.registry import NodeRegistry
 from agent_factory.runtime_kernel.node_providers import NodeProvider
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
@@ -69,17 +79,8 @@ from agent_factory.runtime_kernel.state import (
 )
 from agent_factory.runtime_kernel.state_contracts import PackageStateManager, StateNamespaceSpec
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
-from agent_factory.runtime_render import RenderManifest, default_node_render_spec, validate_render_manifest
+from agent_factory.runtime_render import RenderManifest
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS
-
-
-@dataclass(slots=True)
-class RuntimeKernelRunContext:
-    state: RuntimeState
-    thread_id: str
-    session_manager: AgentSessionManager
-    session_id: str
-    first_user_input: str
 
 
 class RuntimeKernelFacade:
@@ -189,10 +190,10 @@ class RuntimeKernelFacade:
         if node_providers:
             self.register_node_providers(node_providers)
         pattern = self.instance.pattern_registry.get(pattern_id)
-        resolved_render_manifest = _resolve_render_manifest(pattern, render_manifest)
+        resolved_render_manifest = resolve_render_manifest(pattern, render_manifest)
         package_state_manager = PackageStateManager(tuple(state_contracts or ())) if state_contracts else None
-        _ensure_memory_runtime(services)
-        services.validate_required(_required_services_for_pattern(pattern))
+        ensure_memory_runtime(services)
+        services.validate_required(required_services_for_pattern(pattern))
         return self.instance.compiler.compile(
             pattern_id=pattern_id,
             bindings=bindings,
@@ -285,13 +286,13 @@ class RuntimeKernelFacade:
         agent_config = dict(agent_config or {})
         session_config = dict(session_config or {})
         agent_id = str(agent_config.get("agent_id") or compiled.metadata.get("agent_id") or compiled.pattern_spec.pattern_id)
-        session_manager = _session_manager_from_config(session_config, default=self.session_manager)
+        session_manager = session_manager_from_config(session_config, default=self.session_manager)
         session_id = session_config.get("session_id")
         session = session_manager.load(str(session_id)) if session_id else session_manager.create(
             agent_id=agent_id,
             first_user_input=user_input,
         )
-        state = _state_for_new_turn(compiled, thread_id=session.thread_id)
+        state = state_for_new_turn(compiled, thread_id=session.thread_id)
         state.run = RunState(
             agent_id=agent_id,
             session_id=session.session_id,
@@ -316,7 +317,7 @@ class RuntimeKernelFacade:
             "session_id": session.session_id,
             "thread_id": session.thread_id,
         }
-        _configure_memory_runtime_for_agent(compiled.services, agent_id)
+        configure_memory_runtime_for_agent(compiled.services, agent_id)
         return RuntimeKernelRunContext(
             state=state,
             thread_id=session.thread_id,
@@ -378,10 +379,10 @@ class RuntimeKernelFacade:
         session_id: str,
         session_config: dict | None = None,
     ) -> RuntimeKernelRunContext:
-        session_manager = _session_manager_from_config(session_config or {}, default=self.session_manager)
+        session_manager = session_manager_from_config(session_config or {}, default=self.session_manager)
         session = session_manager.load(session_id)
         state = RuntimeState()
-        state.package_state = _initial_package_state(compiled)
+        state.package_state = initial_package_state(compiled)
         state.run.agent_id = session.agent_id
         state.run.session_id = session.session_id
         state.run.pattern_id = compiled.pattern_spec.pattern_id
@@ -391,7 +392,7 @@ class RuntimeKernelFacade:
             "session_id": session.session_id,
             "thread_id": session.thread_id,
         }
-        _configure_memory_runtime_for_agent(compiled.services, session.agent_id)
+        configure_memory_runtime_for_agent(compiled.services, session.agent_id)
         return RuntimeKernelRunContext(
             state=state,
             thread_id=session.thread_id,
@@ -399,125 +400,3 @@ class RuntimeKernelFacade:
             session_id=session.session_id,
             first_user_input=session.first_user_input or "",
         )
-
-
-def _required_services_for_pattern(pattern) -> list[str]:
-    required = {"observability_manager", "checkpointer"}
-    for node in pattern.nodes:
-        if node.impl.startswith("cognitive."):
-            required.update({"model_operation_service", "context_engine", "context_system"})
-        elif node.impl == "governance.precheck" or node.impl == "governance.postcheck":
-            required.add("policy_engine")
-        elif node.impl.startswith("operational.tool_call"):
-            required.add("tool_registry")
-        elif node.impl.startswith("operational.knowledge_retrieve"):
-            required.add("knowledge_engine")
-        for wrapper in node.wrappers:
-            if wrapper.id.startswith("context."):
-                required.add("context_engine")
-            elif wrapper.id.startswith("policy."):
-                required.add("policy_engine")
-            elif wrapper.id.startswith("tool."):
-                required.add("tool_registry")
-    for capability in pattern.constraints.required_capabilities:
-        if capability == "tools":
-            required.add("tool_registry")
-        elif capability == "knowledge":
-            required.add("knowledge_engine")
-        elif capability == "context":
-            required.add("context_engine")
-        elif capability == "policy":
-            required.add("policy_engine")
-        elif capability == "harness":
-            required.add("harness_bridge")
-    return sorted(required)
-
-
-def _ensure_memory_runtime(services: RuntimeServices) -> None:
-    if services.memory_system is None:
-        return
-    runtime = services.memory_system
-    config = getattr(runtime, "config", None)
-    if config is None or not getattr(config, "enabled", False):
-        return
-    if getattr(runtime, "store", None) is None:
-        if services.memory_store is None:
-            raise RuntimeError("cross-session memory is enabled but BaseStore is missing")
-        runtime.store = services.memory_store
-
-
-def _configure_memory_runtime_for_agent(services: RuntimeServices, agent_id: str) -> None:
-    runtime = getattr(services, "memory_system", None)
-    if runtime is None:
-        return
-    runtime.scope = "agent"
-    runtime.namespace = agent_memory_namespace(agent_id)
-
-
-def _session_manager_from_config(session_config: dict, *, default: AgentSessionManager) -> AgentSessionManager:
-    root = session_config.get("session_root")
-    if root:
-        return AgentSessionManager(AgentSessionConfig(root=Path(str(root))))
-    return default
-
-
-def _resolve_render_manifest(pattern, render_manifest: RenderManifest | dict | None) -> RenderManifest:
-    if render_manifest is None:
-        manifest = RenderManifest(
-            graph_id=pattern.pattern_id,
-            nodes={
-                node.id: default_node_render_spec(node_id=node.id, node_type=node.type, impl=node.impl)
-                for node in pattern.nodes
-            },
-        )
-    elif isinstance(render_manifest, RenderManifest):
-        manifest = render_manifest
-    else:
-        manifest = RenderManifest.model_validate(render_manifest)
-    return validate_render_manifest(manifest, {node.id for node in pattern.nodes})
-
-
-def _initial_package_state(compiled: CompiledKernelApp) -> dict[str, object]:
-    manager = compiled.metadata.get("package_state_manager")
-    if isinstance(manager, PackageStateManager):
-        return manager.initial_state()
-    return {}
-
-
-def _state_for_new_turn(compiled: CompiledKernelApp, *, thread_id: str) -> RuntimeState:
-    state = _checkpoint_runtime_state(compiled, thread_id=thread_id) or RuntimeState()
-    state.package_state = _merge_package_state_defaults(
-        _initial_package_state(compiled),
-        state.package_state,
-    )
-    return state
-
-
-def _checkpoint_runtime_state(compiled: CompiledKernelApp, *, thread_id: str) -> RuntimeState | None:
-    try:
-        snapshot = compiled.graph_app.get_state({"configurable": {"thread_id": thread_id}})
-    except Exception:
-        return None
-    values = getattr(snapshot, "values", {}) or {}
-    if not isinstance(values, dict):
-        return None
-    runtime = values.get("runtime")
-    if runtime is None:
-        return None
-    try:
-        return RuntimeState.model_validate(runtime)
-    except Exception:
-        return None
-
-
-def _merge_package_state_defaults(defaults: dict[str, object], existing: dict[str, object]) -> dict[str, object]:
-    merged: dict[str, object] = {
-        key: dict(value) if isinstance(value, dict) else value
-        for key, value in dict(defaults or {}).items()
-    }
-    for namespace, value in dict(existing or {}).items():
-        if isinstance(merged.get(namespace), dict) and isinstance(value, dict):
-            merged[namespace] = {**dict(merged[namespace]), **value}
-        else:
-            merged[namespace] = value
-    return merged

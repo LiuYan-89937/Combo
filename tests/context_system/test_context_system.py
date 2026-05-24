@@ -14,8 +14,11 @@ from agent_factory.context_system.schema import (
     CompressionPolicy,
     ContextCandidate,
     ContextContractConfig,
+    ContextPolicy,
     ContextQuery,
+    RetrievalPolicy,
 )
+from agent_factory.context_system.factory import FactoryContextServices
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.observability import ObservabilityManager
@@ -105,6 +108,67 @@ class ContextSystemTest(unittest.TestCase):
         self.assertFalse(result.messages_changed)
         self.assertIsNotNone(result.frame)
         self.assertIn("llm_context_frame", result.state.context.model_context)
+        context_events = [
+            event["event_type"]
+            for event in result.state.observability.events
+            if str(event["event_type"]).startswith("context_")
+        ]
+        self.assertIn("context_compression_skipped", context_events)
+        self.assertNotIn("context_compression_started", context_events)
+
+    def test_system_wrapper_emits_prepare_events_separate_from_compression(self) -> None:
+        runtime = ContextSystemRuntime()
+        state = RuntimeState()
+        state.conversation.current_user_input = "what resources exist?"
+        services = RuntimeServices(
+            observability_manager=ObservabilityManager(),
+            context_system=runtime,
+            runtime_resources={"support_contact": "runtime-fixture"},
+        )
+        context = NodeExecutionContext(
+            node_id="answer",
+            impl="cognitive.answer",
+            services=services,
+            emit_event=lambda _payload: None,
+            graph_messages=[HumanMessage(content="what resources exist?")],
+        )
+
+        updated, patch = SYSTEM_CONTEXT_PREPARE_WRAPPER.before(state=state, context=context)
+
+        self.assertIn("context", patch)
+        context_events = [
+            event["event_type"]
+            for event in updated.observability.events
+            if str(event["event_type"]).startswith("context_")
+        ]
+        self.assertIn("context_prepare_started", context_events)
+        self.assertIn("context_prepare_completed", context_events)
+        self.assertIn("context_compression_skipped", context_events)
+        self.assertNotIn("context_compression_started", context_events)
+
+    def test_factory_context_uses_explicit_event_sink(self) -> None:
+        events: list[dict] = []
+        runtime = ContextSystemRuntime(
+            config=ContextContractConfig(
+                default_policy=ContextPolicy(
+                    retrieval=RetrievalPolicy(source_ids=["recent_messages"], min_score=0.0),
+                )
+            ),
+            sources={"recent_messages": _FactoryOnlySource()},
+        )
+
+        values = runtime.prepare_factory_values(
+            stage_id="requirement_capture",
+            values={"user_input": "build a local agent"},
+            services=FactoryContextServices(context_event_sink=events.append),
+        )
+
+        self.assertIn("context_frame", values)
+        self.assertEqual(
+            [event["event_type"] for event in events],
+            ["context_retrieval_completed", "context_assembly_completed", "context_injection_completed"],
+        )
+        self.assertEqual(events[-1]["item_count"], 1)
 
 
 class _FakeSettings:
@@ -117,6 +181,22 @@ class _FakeModel:
 
     def invoke(self, _messages):
         return AIMessage(content="summary of older conversation")
+
+
+class _FactoryOnlySource:
+    source_id = "recent_messages"
+
+    def retrieve(self, *, query: ContextQuery, runtime_context):
+        return [
+            ContextCandidate(
+                candidate_id="factory:context",
+                source_id=self.source_id,
+                kind="recent_message",
+                content=f"factory query: {query.text}",
+                score=0.9,
+                token_estimate=24,
+            )
+        ]
 
 
 def _candidate(candidate_id: str, source_id: str, content: str, score: float, tokens: int) -> ContextCandidate:

@@ -55,6 +55,11 @@ export function App() {
 			exit();
 			return;
 		}
+		if (value === '/cancel') {
+			store.dispatch({ui_type: 'notice', message: 'cancel requested'});
+			send(command('cancel_runtime_request', {payload: {reason: 'user_cancelled'}}));
+			return;
+		}
 		if (value === '/chat') {
 			send(command('set_mode', {mode: 'chat', payload: {package_id: 'factory_chat'}}));
 			return;
@@ -218,7 +223,13 @@ export function App() {
 				<TimelineView />
 				<InterruptChoicePanel onSubmit={resumeInterrupt} />
 				<InterruptPrompt />
-				<ConnectedComposer onSubmit={onSubmit} />
+				<ConnectedComposer
+					onSubmit={onSubmit}
+					onCancel={() => {
+						store.dispatch({ui_type: 'notice', message: 'cancel requested'});
+						send(command('cancel_runtime_request', {payload: {reason: 'user_cancelled'}}));
+					}}
+				/>
 			</ShellLayout>
 		</RuntimeStoreProvider>
 	);
@@ -231,7 +242,7 @@ function ConnectedHelpPanel() {
 	return helpVisible ? <HelpPanel mode={mode} hasInterrupt={hasInterrupt} /> : null;
 }
 
-function ConnectedComposer({onSubmit}: {onSubmit: (value: string) => void}) {
+function ConnectedComposer({onSubmit, onCancel}: {onSubmit: (value: string) => void; onCancel: () => void}) {
 	const mode = useStoreSelector(state => state.mode);
 	const pendingInterrupt = useStoreSelector(state => state.pendingInterrupt);
 	const runStatus = useStoreSelector(state => state.runStatus);
@@ -247,6 +258,7 @@ function ConnectedComposer({onSubmit}: {onSubmit: (value: string) => void}) {
 		<Composer
 			prompt={`factory${mode ? `:${modeLabel(mode)}` : ''}`}
 			onSubmit={onSubmit}
+			onCancel={onCancel}
 			getSuggestions={value => commandSuggestions(value, mode, pendingInterrupt?.event_type === 'tool_approval_requested')}
 			disabled={inputDisabled || choiceInterrupt}
 			disabledText={pickerDisabledText(sessionPickerOpen, agentPackagePickerOpen, agentSessionPickerOpen, choiceInterrupt, contextCompressionRunning)}

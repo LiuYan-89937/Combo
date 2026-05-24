@@ -23,12 +23,14 @@ def retrieve_memory_context(
             query=query,
             report={"status": "skipped", "reason": "memory disabled or store missing"},
         )
+    semantic_report_before = _semantic_index_report(store)
     semantic_items, semantic_error = _search_with_query(
         store=store,
         namespace=namespace,
         query=query,
         limit=max(config.ranking.max_items_total * 4, 16),
     )
+    semantic_report_after = _semantic_index_report(store)
     lexical_items, lexical_error = _search_without_query(
         store=store,
         namespace=namespace,
@@ -36,6 +38,12 @@ def retrieve_memory_context(
     )
     raw_items = _merge_search_items([*semantic_items, *lexical_items])
     ranked, token_estimate = rank_memory_items(items=raw_items, query=query, config=config.ranking)
+    semantic_status = _semantic_status(
+        semantic_error=semantic_error,
+        semantic_items=semantic_items,
+        report_before=semantic_report_before,
+        report_after=semantic_report_after,
+    )
     return MemoryContextPack(
         namespace=namespace,
         query=query,
@@ -47,8 +55,12 @@ def retrieve_memory_context(
             "semantic_count": len(semantic_items),
             "lexical_count": len(lexical_items),
             "selected_count": len(ranked),
+            "semantic_status": semantic_status,
             "semantic_error": semantic_error,
             "lexical_error": lexical_error,
+            "lexical_fallback_used": semantic_status in {"semantic_failed", "semantic_unavailable"} and bool(lexical_items),
+            "semantic_diagnostics": _recent_semantic_diagnostics(semantic_report_after),
+            "semantic_query_diagnostic": _latest_semantic_diagnostic(semantic_report_after, operation="query_embedding"),
             "duration_ms": int((perf_counter() - started) * 1000),
         },
     )
@@ -97,3 +109,65 @@ def _score_value(item: SearchItem) -> float:
         return float(score)
     except (TypeError, ValueError):
         return -1.0
+
+
+def _semantic_index_report(store: BaseStore) -> dict:
+    reporter = getattr(store, "semantic_index_report", None)
+    if not callable(reporter):
+        return {"enabled": None, "diagnostics": []}
+    try:
+        report = reporter()
+    except Exception as exc:
+        return {
+            "enabled": None,
+            "diagnostics": [
+                {
+                    "operation": "semantic_index_report",
+                    "status": "failed",
+                    "reason": "report_error",
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+            ],
+        }
+    return report if isinstance(report, dict) else {"enabled": None, "diagnostics": []}
+
+
+def _semantic_status(
+    *,
+    semantic_error: str | None,
+    semantic_items: list[SearchItem],
+    report_before: dict,
+    report_after: dict,
+) -> str:
+    if semantic_error:
+        return "semantic_failed"
+    latest_query = _latest_semantic_diagnostic(report_after, operation="query_embedding")
+    if latest_query:
+        status = str(latest_query.get("status") or "")
+        if status == "ok":
+            return "semantic_available"
+        if status == "failed":
+            return "semantic_failed"
+        if status == "unavailable":
+            return "semantic_unavailable"
+    if report_after.get("enabled") is False:
+        return "semantic_unavailable"
+    if semantic_items and report_after.get("enabled") is not False:
+        return "semantic_available"
+    if _recent_semantic_diagnostics(report_after) != _recent_semantic_diagnostics(report_before):
+        return "semantic_failed"
+    return "semantic_unavailable"
+
+
+def _recent_semantic_diagnostics(report: dict) -> list[dict]:
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, list):
+        return []
+    return [item for item in diagnostics[-5:] if isinstance(item, dict)]
+
+
+def _latest_semantic_diagnostic(report: dict, *, operation: str) -> dict | None:
+    for item in reversed(_recent_semantic_diagnostics(report)):
+        if str(item.get("operation") or "") == operation:
+            return item
+    return None

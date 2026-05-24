@@ -79,6 +79,7 @@ class ToolsContractBuilder:
         specs = []
         diagnostics: list[RuntimeDiagnostic] = []
         runtime_resources: dict[str, Any] = {}
+        tool_runtime_resources = dict(context.tool_runtime_resources)
         mcp_clients = {}
         system_tool_ids: set[str] = set()
         instance_extension_root = Path(config.instance_extension_root).expanduser().resolve()
@@ -98,7 +99,7 @@ class ToolsContractBuilder:
                     },
                 )
             )
-            if "scheduler_runtime" not in context.resources:
+            if "scheduler_runtime" not in tool_runtime_resources:
                 builtin_result.tool_specs = [spec for spec in builtin_result.tool_specs if spec.id != "scheduler"]
                 builtin_result.system_tool_ids = [tool_id for tool_id in builtin_result.system_tool_ids if tool_id != "scheduler"]
             specs.extend(builtin_result.tool_specs)
@@ -130,7 +131,11 @@ class ToolsContractBuilder:
         registry = ToolRegistry(specs)
         compiler = ToolCompiler(
             package_root=context.package_root,
-            resources={**context.resources, **runtime_resources},
+            resources=_merge_tool_resources(
+                serializable_resources=context.resources,
+                provider_runtime_resources=runtime_resources,
+                tool_runtime_resources=tool_runtime_resources,
+            ),
             allowed_python_roots=[instance_extension_root],
             mcp_clients=mcp_clients,
         )
@@ -314,7 +319,7 @@ class SchedulerContractBuilder:
         worker = SchedulerWorker(runtime)
         return RuntimeContribution(
             services={"scheduler_store": store, "scheduler_runtime": runtime},
-            resources={"scheduler_runtime": runtime},
+            tool_runtime_resources={"scheduler_runtime": runtime},
             background_workers=[worker],
             diagnostics=[
                 RuntimeDiagnostic(
@@ -394,6 +399,24 @@ def _provider_diagnostics(items) -> list[RuntimeDiagnostic]:
         )
         for item in items
     ]
+
+
+def _merge_tool_resources(
+    *,
+    serializable_resources: dict[str, object],
+    provider_runtime_resources: dict[str, Any],
+    tool_runtime_resources: dict[str, Any],
+) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(serializable_resources)
+    for source_name, source in (
+        ("provider runtime resource", provider_runtime_resources),
+        ("tool runtime resource", tool_runtime_resources),
+    ):
+        for key, value in source.items():
+            if key in merged and merged[key] is not value and merged[key] != value:
+                raise ValueError(f"conflicting {source_name}: {key}")
+            merged[key] = value
+    return merged
 
 
 def _read_package_json(package_root: Path, relative_path: str) -> Any:

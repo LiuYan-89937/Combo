@@ -20,6 +20,7 @@ from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
+from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 
 PACKAGE_ROOT = Path("/package")
@@ -348,6 +349,9 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
         agent_config=compiled.runtime_config["agent_config"],
         session_config=session_config,
     )
+    run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
+        payload.get("runtime_request")
+    ).timeout_seconds
     normalizer.session_id = run_context.session_id
     if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
         return 0
@@ -429,12 +433,20 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
     session_config["session_id"] = session_id
     normalizer.session_id = session_id
     normalizer.emit_runtime_resumed(resume_payload if isinstance(resume_payload, dict) else {})
-    final_state = None
-    for stream_mode, chunk in facade.stream_resume(
+    run_context = facade.prepare_resume_context(
         compiled.compiled_app,
         session_id=session_id,
-        resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
         session_config=session_config,
+    )
+    run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
+        payload.get("runtime_request")
+    ).timeout_seconds
+    final_state = None
+    for stream_mode, chunk in facade.instance.controller.stream_resume(
+        compiled.compiled_app,
+        run_context.state,
+        thread_id=run_context.thread_id,
+        resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
     ):
         if _handle_stream_item(normalizer, stream_mode, chunk):
             return 0
@@ -446,11 +458,7 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
     if not runtime_completed(final_state):
         return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
     normalizer.complete_open_model_streams(reason="run_completed")
-    agent_session = facade.prepare_resume_context(
-        compiled.compiled_app,
-        session_id=session_id,
-        session_config=session_config,
-    ).session_manager.load(session_id)
+    agent_session = run_context.session_manager.touch_turn(session_id)
     normalizer.emit_run_completed(
         {
             "status": "completed",

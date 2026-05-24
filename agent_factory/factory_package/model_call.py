@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, TypeVar
 import uuid
 
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from langgraph.config import get_stream_writer
 
@@ -11,6 +10,7 @@ from agent_factory.context_system.factory import inject_factory_prompt_context
 from agent_factory.factory_package.prompt_context import prompt_context_values
 from agent_factory.models import get_main_model, get_main_model_settings
 from agent_factory.prompts import PromptId, get_prompt
+from agent_factory.runtime_kernel.model_operations import ModelOperationService
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -23,7 +23,11 @@ class FactoryModelCallError(RuntimeError):
 
 def prompt_values(stage_id: str, values: dict[str, Any]) -> dict[str, Any]:
     merged = {**prompt_context_values(stage_id), **values}
-    return inject_factory_prompt_context(stage_id=stage_id, values=merged)
+    return inject_factory_prompt_context(
+        stage_id=stage_id,
+        values=merged,
+        context_event_sink=emit_context_activity,
+    )
 
 
 def call_structured_model(
@@ -42,80 +46,29 @@ def call_structured_model(
         raise FactoryModelCallError("main model is not configured")
     prompt_value = get_prompt(prompt_id).invoke(prompt_values(stage_id, values))
     messages = prompt_value.to_messages()
-    structured_model = model.with_structured_output(output_model, method="json_mode").with_config(
-        tags=["nostream"]
-    )
+    configured_model = model
     if settings.max_tokens is not None:
-        structured_model = structured_model.bind(max_tokens=settings.max_tokens)
-    last_error: Exception | None = None
+        configured_model = configured_model.bind(max_tokens=settings.max_tokens)
+    service = ModelOperationService(role="main", model=configured_model)
     try:
-        for attempt in range(1, STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
-            emit_model_activity(
-                model_activity_started(
-                    prompt_id=prompt_id,
-                    call_kind="structured_json",
-                    span_id=span_id,
-                    schema_name=output_model.__name__,
-                    attempt=attempt,
-                    max_attempts=STRUCTURED_OUTPUT_MAX_ATTEMPTS,
-                )
-            )
-            try:
-                result = structured_model.invoke(messages)
-                emit_model_activity(
-                    model_activity_completed(
-                        prompt_id=prompt_id,
-                        call_kind="structured_json",
-                        span_id=span_id,
-                        output_summary=f"{output_model.__name__} attempt={attempt}",
-                    )
-                )
-                return result
-            except Exception as exc:
-                last_error = exc
-                if attempt >= STRUCTURED_OUTPUT_MAX_ATTEMPTS:
-                    break
-                messages.append(
-                    HumanMessage(
-                        content=_structured_retry_instruction(
-                            output_model=output_model,
-                            error=exc,
-                            attempt=attempt,
-                            max_attempts=STRUCTURED_OUTPUT_MAX_ATTEMPTS,
-                            output_json_schema=str(values["output_json_schema"]),
-                        )
-                    )
-                )
-        raise last_error or FactoryModelCallError("structured model did not return a result")
-    except Exception as exc:
-        emit_model_activity(
-            model_activity_failed(
-                prompt_id=prompt_id,
-                call_kind="structured_json",
-                span_id=span_id,
-                message=f"{type(exc).__name__}: {exc}",
-            )
+        result = service.structured_json(
+            output_model=output_model,
+            state=None,
+            prebuilt_messages=messages,
+            structured_method="json_mode",
+            config_tags=["nostream"],
+            max_attempts=STRUCTURED_OUTPUT_MAX_ATTEMPTS,
+            emit_event=emit_model_activity,
+            operation_metadata={
+                "prompt_id": str(getattr(prompt_id, "value", prompt_id)),
+                "call_kind": "structured_json",
+                "span_id": span_id,
+                "schema_name": output_model.__name__,
+            },
         )
+        return result
+    except Exception as exc:
         raise FactoryModelCallError(f"{type(exc).__name__}: {exc}") from exc
-
-
-def _structured_retry_instruction(
-    *,
-    output_model: type[BaseModel],
-    error: Exception,
-    attempt: int,
-    max_attempts: int,
-    output_json_schema: str,
-) -> str:
-    return (
-        "The previous structured JSON output failed schema validation.\n"
-        "Regenerate the full response as JSON only. Do not explain the error.\n"
-        "You must obey every JSON schema constraint, including required fields, enum values, "
-        "minItems, maxItems, field types, numeric ranges, and extra=forbid.\n"
-        f"Schema name: {output_model.__name__}\n"
-        f"Validation observation from attempt {attempt}/{max_attempts}:\n{type(error).__name__}: {error}\n\n"
-        f"Output JSON schema:\n{output_json_schema}"
-    )
 
 
 def call_text_model(
@@ -225,6 +178,14 @@ def emit_model_activity(payload: dict[str, Any]) -> None:
     try:
         writer = get_stream_writer()
         writer({"type": "model_activity", "payload": payload})
+    except Exception:
+        return
+
+
+def emit_context_activity(payload: dict[str, Any]) -> None:
+    try:
+        writer = get_stream_writer()
+        writer({"type": "context_event", "payload": payload})
     except Exception:
         return
 

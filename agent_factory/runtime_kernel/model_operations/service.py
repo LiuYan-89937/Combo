@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -122,11 +123,15 @@ class ModelOperationService:
         state: Any,
         prompt_binding: dict[str, Any] | None = None,
         messages: list[Any] | None = None,
+        prebuilt_messages: list[Any] | None = None,
+        structured_method: str | None = None,
+        config_tags: list[str] | None = None,
         max_attempts: int = 3,
         emit_event=None,
+        operation_metadata: dict[str, Any] | None = None,
     ) -> BaseModel:
         model, metadata = self._resolve_model()
-        request_messages = _messages_for_state(
+        request_messages = list(prebuilt_messages) if prebuilt_messages is not None else _messages_for_state(
             state=state,
             prompt_binding=prompt_binding or {},
             messages=messages or [],
@@ -134,14 +139,21 @@ class ModelOperationService:
         )
         attempts = max(1, int(max_attempts))
         last_error: Exception | None = None
+        operation_context = {**metadata, **(operation_metadata or {})}
+        schema_payload = _schema_payload(output_model)
         for attempt in range(1, attempts + 1):
             _emit(
                 emit_event,
                 "model_call_started",
-                {"operation": "structured_json", "attempt": attempt, **metadata},
+                {"operation": "structured_json", "attempt": attempt, "max_attempts": attempts, **operation_context},
             )
             try:
-                structured_model = model.with_structured_output(output_model)
+                structured_model = _structured_model(
+                    model=model,
+                    output_model=output_model,
+                    method=structured_method,
+                    config_tags=config_tags,
+                )
                 result = structured_model.invoke(request_messages)
                 if isinstance(result, output_model):
                     parsed = result
@@ -158,8 +170,27 @@ class ModelOperationService:
                 _emit(
                     emit_event,
                     "model_call_failed",
-                    {"operation": "structured_json", "attempt": attempt, "error": str(exc)},
+                    {
+                        "operation": "structured_json",
+                        "attempt": attempt,
+                        "max_attempts": attempts,
+                        "error": str(exc),
+                        **operation_context,
+                    },
                 )
+                if attempt < attempts:
+                    request_messages = [
+                        *request_messages,
+                        HumanMessage(
+                            content=_structured_retry_instruction(
+                                output_model=output_model,
+                                error=exc,
+                                attempt=attempt,
+                                max_attempts=attempts,
+                                output_json_schema=schema_payload,
+                            )
+                        ),
+                    ]
         raise RuntimeError(f"structured model operation failed after {attempts} attempts: {last_error}")
 
     def _resolve_model(self) -> tuple[Any, dict[str, Any]]:
@@ -175,6 +206,49 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
         return
     emit_event({"event_type": event_type, **payload})
+
+
+def _structured_model(
+    *,
+    model: Any,
+    output_model: type[BaseModel],
+    method: str | None,
+    config_tags: list[str] | None,
+) -> Any:
+    structured = (
+        model.with_structured_output(output_model, method=method)
+        if method
+        else model.with_structured_output(output_model)
+    )
+    if config_tags and hasattr(structured, "with_config"):
+        structured = structured.with_config(tags=list(config_tags))
+    return structured
+
+
+def _schema_payload(output_model: type[BaseModel]) -> str:
+    try:
+        return json.dumps(output_model.model_json_schema(), ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return output_model.__name__
+
+
+def _structured_retry_instruction(
+    *,
+    output_model: type[BaseModel],
+    error: Exception,
+    attempt: int,
+    max_attempts: int,
+    output_json_schema: Any,
+) -> str:
+    return (
+        "The previous structured JSON output failed schema validation.\n"
+        "Regenerate the full response as JSON only. Do not explain the error.\n"
+        "You must obey every JSON schema constraint, including required fields, enum values, "
+        "minItems, maxItems, field types, numeric ranges, and extra=forbid.\n"
+        f"Schema name: {output_model.__name__}\n"
+        f"Validation observation from attempt {attempt}/{max_attempts}:\n{type(error).__name__}: {error}\n\n"
+        f"Output JSON schema:\n{output_json_schema}"
+    )
 
 
 def _emit_context_window(

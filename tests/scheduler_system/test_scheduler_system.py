@@ -202,6 +202,11 @@ class SchedulerSystemTest(unittest.TestCase):
         self.assertEqual(report.stderr_preview, "permission denied")
         self.assertEqual(report.error_summary, "permission denied")
         self.assertEqual(report.exit_code, 126)
+        self.assertEqual(report.evidence["target"]["target_type"], "script_run")
+        self.assertEqual(report.evidence["target"]["tool_id"], "bash")
+        self.assertEqual(report.evidence["target"]["command_preview"], "echo weather")
+        self.assertIsNone(report.evidence["execution"].get("failure_phase"))
+        self.assertEqual(report.evidence["execution"]["stderr_preview"], "permission denied")
 
     def test_unconfigured_high_level_target_fails_as_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -221,6 +226,51 @@ class SchedulerSystemTest(unittest.TestCase):
 
             self.assertEqual(report.status, "failed")
             self.assertIn("graph_run target is not configured", report.error_summary or "")
+            self.assertEqual(report.evidence["target"]["target_type"], "graph_run")
+            self.assertEqual(report.evidence["target"]["message_preview"], "hello")
+            self.assertEqual(report.evidence["execution"]["failure_phase"], "target_execution")
+            self.assertEqual(report.evidence["execution"]["error_type"], "RuntimeError")
+
+    def test_failed_report_keeps_safe_target_and_argument_evidence(self) -> None:
+        def tool_runner(_tool_id, _arguments, _job, _run):
+            return {
+                "status": "failed",
+                "error": "schema validation failed",
+                "output": {"stderr": "bad args", "exit_code": 2},
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = SchedulerRuntime(
+                config=SchedulerContractConfig(store_path=str(Path(temp_dir) / "scheduler.sqlite")),
+                owner_type="factory",
+                owner_id="default",
+                executor=SchedulerExecutor(tool_runner=tool_runner),
+            )
+            job = runtime.create_job(
+                {
+                    "schedule_type": "interval",
+                    "schedule_expr": "60",
+                    "target": {
+                        "target_type": "tool_call",
+                        "payload": {
+                            "tool_id": "schema_checked_tool",
+                            "arguments": {
+                                "path": "/workdir/input.txt",
+                                "secret_token": "must-not-be-copied",
+                            },
+                        },
+                    },
+                }
+            )
+            report = runtime.run_now(job.job_id)
+
+        self.assertEqual(report.status, "failed")
+        self.assertEqual(report.evidence["target"]["target_type"], "tool_call")
+        self.assertEqual(report.evidence["target"]["tool_id"], "schema_checked_tool")
+        self.assertEqual(report.evidence["target"]["argument_keys"], ["path", "secret_token"])
+        self.assertEqual(report.evidence["target"]["argument_shape"], {"path": "str", "secret_token": "str"})
+        self.assertNotIn("must-not-be-copied", str(report.evidence))
+        self.assertEqual(report.evidence["execution"]["stderr_preview"], "bad args")
 
     def test_job_auto_pauses_after_consecutive_failures(self) -> None:
         events = []

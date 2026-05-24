@@ -81,6 +81,7 @@ class SqliteBaseStore(BaseStore):
         super().__init__()
         self.path = Path(path)
         self.index = index
+        self._semantic_diagnostics: list[dict[str, Any]] = []
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
@@ -150,7 +151,12 @@ class SqliteBaseStore(BaseStore):
         namespace_key = _namespace_key(namespace)
         value_json = json.dumps(value, ensure_ascii=False, sort_keys=True)
         indexed_text = _indexed_text(value, _index_fields(self.index, index))
-        embedding_json = _embedding_json(self.index, indexed_text) if indexed_text else None
+        embedding_json, embedding_diagnostic = _embedding_json(self.index, indexed_text) if indexed_text else (None, None)
+        self._record_semantic_diagnostic(
+            embedding_diagnostic,
+            namespace=namespace,
+            key=key,
+        )
         conn = self._connect()
         try:
             existing = conn.execute(
@@ -185,7 +191,12 @@ class SqliteBaseStore(BaseStore):
         offset: int = 0,
         refresh_ttl: bool | None = None,
     ) -> list[SearchItem]:
-        query_embedding = _embed_query(self.index, query) if query else None
+        query_embedding, query_diagnostic = _embed_query(self.index, query) if query else (None, None)
+        self._record_semantic_diagnostic(
+            query_diagnostic,
+            namespace=namespace_prefix,
+            key=None,
+        )
         conn = self._connect()
         try:
             rows = conn.execute(
@@ -211,6 +222,14 @@ class SqliteBaseStore(BaseStore):
         if query_embedding is not None:
             results.sort(key=lambda item: (item.score or 0.0, item.updated_at or ""), reverse=True)
         return results[int(offset) : int(offset) + int(limit)]
+
+    def semantic_index_report(self) -> dict[str, Any]:
+        return {
+            "enabled": self.index is not None,
+            "dims": self.index.dims if self.index is not None else None,
+            "fields": list(self.index.fields) if self.index is not None else [],
+            "diagnostics": list(self._semantic_diagnostics[-20:]),
+        }
 
     def delete(self, namespace: tuple[str, ...], key: str) -> None:
         conn = self._connect()
@@ -276,6 +295,25 @@ class SqliteBaseStore(BaseStore):
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _record_semantic_diagnostic(
+        self,
+        diagnostic: dict[str, Any] | None,
+        *,
+        namespace: tuple[str, ...],
+        key: str | None,
+    ) -> None:
+        if diagnostic is None:
+            return
+        self._semantic_diagnostics.append(
+            {
+                **diagnostic,
+                "namespace": list(namespace),
+                "key": key,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        self._semantic_diagnostics = self._semantic_diagnostics[-50:]
 
 
 def _namespace_key(namespace: tuple[str, ...]) -> str:
@@ -371,29 +409,96 @@ def _select_field(value: dict[str, Any], field: str) -> Any:
     return current
 
 
-def _embedding_json(index_config: LangGraphStoreIndexConfig | None, text: str) -> str | None:
+def _embedding_json(index_config: LangGraphStoreIndexConfig | None, text: str) -> tuple[str | None, dict[str, Any] | None]:
     if index_config is None or not text.strip():
-        return None
+        return None, None
     try:
         vectors = index_config.embed.embed_documents([text])
-    except Exception:
-        return None
+    except Exception as exc:
+        return None, _semantic_diagnostic(
+            operation="write_embedding",
+            status="failed",
+            reason="embedding_error",
+            message=f"{type(exc).__name__}: {exc}",
+            expected_dims=index_config.dims,
+        )
     if not vectors:
-        return None
+        return None, _semantic_diagnostic(
+            operation="write_embedding",
+            status="failed",
+            reason="empty_embedding",
+            expected_dims=index_config.dims,
+        )
     vector = [float(item) for item in vectors[0]]
     if len(vector) != index_config.dims:
-        return None
-    return json.dumps(vector, separators=(",", ":"))
+        return None, _semantic_diagnostic(
+            operation="write_embedding",
+            status="failed",
+            reason="dimension_mismatch",
+            expected_dims=index_config.dims,
+            actual_dims=len(vector),
+        )
+    return json.dumps(vector, separators=(",", ":")), _semantic_diagnostic(
+        operation="write_embedding",
+        status="ok",
+        reason="indexed",
+        expected_dims=index_config.dims,
+        actual_dims=len(vector),
+    )
 
 
-def _embed_query(index_config: LangGraphStoreIndexConfig | None, query: str | None) -> list[float] | None:
+def _embed_query(index_config: LangGraphStoreIndexConfig | None, query: str | None) -> tuple[list[float] | None, dict[str, Any] | None]:
     if index_config is None or not query or not query.strip():
-        return None
+        return None, _semantic_diagnostic(
+            operation="query_embedding",
+            status="unavailable",
+            reason="index_disabled" if index_config is None else "empty_query",
+            expected_dims=index_config.dims if index_config is not None else None,
+        )
     try:
         vector = [float(item) for item in index_config.embed.embed_query(query)]
-    except Exception:
-        return None
-    return vector if len(vector) == index_config.dims else None
+    except Exception as exc:
+        return None, _semantic_diagnostic(
+            operation="query_embedding",
+            status="failed",
+            reason="embedding_error",
+            message=f"{type(exc).__name__}: {exc}",
+            expected_dims=index_config.dims,
+        )
+    if len(vector) != index_config.dims:
+        return None, _semantic_diagnostic(
+            operation="query_embedding",
+            status="failed",
+            reason="dimension_mismatch",
+            expected_dims=index_config.dims,
+            actual_dims=len(vector),
+        )
+    return vector, _semantic_diagnostic(
+        operation="query_embedding",
+        status="ok",
+        reason="embedded",
+        expected_dims=index_config.dims,
+        actual_dims=len(vector),
+    )
+
+
+def _semantic_diagnostic(
+    *,
+    operation: str,
+    status: str,
+    reason: str,
+    message: str | None = None,
+    expected_dims: int | None = None,
+    actual_dims: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "operation": operation,
+        "status": status,
+        "reason": reason,
+        "message": message,
+        "expected_dims": expected_dims,
+        "actual_dims": actual_dims,
+    }
 
 
 def _row_score(row: sqlite3.Row, *, query: str | None, query_embedding: list[float] | None) -> float | None:

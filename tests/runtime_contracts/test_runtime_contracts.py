@@ -7,10 +7,16 @@ import unittest
 
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
+from agent_factory.runtime_contracts.contribution import (
+    RuntimeContribution,
+    RuntimeContributionMergeError,
+    RuntimeContributionMerger,
+)
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistryError
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_render import RenderManifest
 from agent_factory.tooling.builtins import get_builtin_tool_ids
 
 
@@ -88,7 +94,10 @@ class RuntimeContractsTest(unittest.TestCase):
 
             self.assertIsNotNone(result.services.scheduler_store)
             self.assertIsNotNone(result.services.scheduler_runtime)
-            self.assertIn("scheduler_runtime", result.resources)
+            self.assertNotIn("scheduler_runtime", result.resources)
+            self.assertNotIn("scheduler_runtime", result.services.runtime_resources)
+            self.assertIs(result.tool_runtime_resources["scheduler_runtime"], result.services.scheduler_runtime)
+            self.assertIs(result.services.tool_runtime_resources["scheduler_runtime"], result.services.scheduler_runtime)
             self.assertTrue(result.background_workers)
 
             result.services.scheduler_runtime.create_job(
@@ -106,6 +115,19 @@ class RuntimeContractsTest(unittest.TestCase):
             )
             self.assertEqual(tool_result.status, "completed")
             self.assertEqual(tool_result.output["output"]["jobs"][0]["job_id"], "job_1")
+
+    def test_runtime_resources_must_be_json_serializable(self) -> None:
+        with self.assertRaises(RuntimeContributionMergeError) as context:
+            RuntimeContributionMerger(base_services=_base_services()).merge(
+                [
+                    RuntimeContribution(
+                        render_manifest=RenderManifest(graph_id="test_graph"),
+                        resources={"bad_runtime_object": object()},
+                    )
+                ]
+            )
+
+        self.assertIn("bad_runtime_object", str(context.exception))
 
     def test_tools_contract_loads_instance_extensions_outside_package_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

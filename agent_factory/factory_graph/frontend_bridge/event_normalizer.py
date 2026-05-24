@@ -217,9 +217,13 @@ class RuntimeEventNormalizer:
             return
         event_type = str(payload.get("event_type") or "")
         if event_type not in {
+            "context_prepare_started",
+            "context_prepare_completed",
+            "context_prepare_failed",
             "context_compression_started",
             "context_compression_completed",
             "context_compression_failed",
+            "context_compression_skipped",
             "context_window_updated",
             "context_retrieval_completed",
             "context_assembly_completed",

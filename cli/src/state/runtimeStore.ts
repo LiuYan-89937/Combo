@@ -1,4 +1,5 @@
 import {type FactoryEvent, type FactoryMode} from '../protocol.js';
+import {withTimelineItems} from './timeline.js';
 
 export type ModelStream = {
 	streamId: string;
@@ -81,7 +82,7 @@ export type MemoryActivity = {
 	updatedAt: string | null;
 };
 
-export type ContextActivityStatus = 'idle' | 'running' | 'completed' | 'failed';
+export type ContextActivityStatus = 'idle' | 'running' | 'completed' | 'failed' | 'skipped';
 
 export type ContextActivity = {
 	status: ContextActivityStatus;
@@ -143,6 +144,11 @@ export type TimelineItem = {
 	color: ActivityColor | 'white';
 	title: string;
 	body: string;
+	kind: 'message' | 'tool' | 'scheduler' | 'activity' | 'error';
+	role: TranscriptRole | null;
+	source: 'transcript' | 'tool' | 'scheduler' | 'runtime_activity' | 'runtime_error';
+	turnId: string | null;
+	eventType: FactoryEvent['event_type'] | null;
 	active?: boolean;
 };
 
@@ -206,7 +212,6 @@ export type RuntimeAction =
 const STREAM_FLUSH_MS = 33;
 const ACTIVE_MEMORY_HINT_MS = 8000;
 const TERMINAL_MEMORY_HINT_MS = 3000;
-const ACTIVE_CONTEXT_HINT_MS = 5000;
 const TERMINAL_CONTEXT_HINT_MS = 2500;
 
 export function createInitialRuntimeState(): RuntimeState {
@@ -287,10 +292,11 @@ export class RuntimeStore {
 			);
 		}
 		if ('event_type' in action && isContextEvent(action.event_type)) {
-			this.scheduleContextActivityClear(
-				this.state.contextActivity.updatedAt,
-				isTerminalContextEvent(action.event_type) ? TERMINAL_CONTEXT_HINT_MS : ACTIVE_CONTEXT_HINT_MS
-			);
+			if (isTerminalContextEvent(action.event_type)) {
+				this.scheduleContextActivityClear(this.state.contextActivity.updatedAt, TERMINAL_CONTEXT_HINT_MS);
+			} else {
+				this.cancelContextActivityClear();
+			}
 		}
 		this.notify();
 	};
@@ -360,221 +366,18 @@ export class RuntimeStore {
 			this.dispatch({ui_type: 'clear_context_activity', updatedAt});
 		}, delayMs);
 	}
+
+	private cancelContextActivityClear(): void {
+		if (!this.contextActivityTimer) {
+			return;
+		}
+		clearTimeout(this.contextActivityTimer);
+		this.contextActivityTimer = null;
+	}
 }
 
 export function createRuntimeStore(): RuntimeStore {
 	return new RuntimeStore();
-}
-
-function withTimelineItems(state: RuntimeState): RuntimeState {
-	const timelineItems = buildTimelineItems(state);
-	if (timelineItemsEqual(state.timelineItems, timelineItems)) {
-		return state;
-	}
-	return {...state, timelineItems};
-}
-
-function buildTimelineItems(state: RuntimeState): TimelineItem[] {
-	const transcriptItems = state.transcript
-		.filter(item => item.role !== 'tool')
-		.map((item, index) => transcriptTimelineItem(item, index));
-	const toolItems = state.toolActivities.slice(-30).map((item, index) => toolTimelineItem(item, index));
-	const schedulerItems = state.schedulerActivities
-		.filter(item => !['scheduler_feedback_completed', 'scheduler_feedback_failed'].includes(item.eventType))
-		.slice(-16)
-		.map((item, index) => schedulerTimelineItem(item, index));
-	const activityItems = state.mode === 'create_agent'
-		? state.recentActivities
-			.filter(item => !item.eventType.startsWith('tool_') && !item.eventType.startsWith('scheduler_'))
-			.slice(-18)
-			.map((item, index) => ({
-				id: `activity:${item.activityKey}`,
-				timestamp: item.timestamp,
-				order: 40_000 + index,
-				color: item.color,
-				title: item.label,
-				body: [item.stageId, item.nodeId, item.detail].filter(Boolean).join('  ')
-			}))
-		: [];
-	const errorItems = state.errors.slice(-3).map((message, index) => ({
-		id: `error:${index}:${message}`,
-		timestamp: '',
-		order: 90_000 + index,
-		color: 'red' as const,
-		title: 'Runtime error',
-		body: message
-	}));
-	return [...transcriptItems, ...toolItems, ...schedulerItems, ...activityItems, ...errorItems]
-		.sort((left, right) => compareTimelineItems(left, right));
-}
-
-function timelineItemsEqual(left: TimelineItem[], right: TimelineItem[]): boolean {
-	if (left === right) {
-		return true;
-	}
-	if (left.length !== right.length) {
-		return false;
-	}
-	return left.every((item, index) => {
-		const other = right[index];
-		return Boolean(other)
-			&& item.id === other.id
-			&& item.timestamp === other.timestamp
-			&& item.order === other.order
-			&& item.color === other.color
-			&& item.title === other.title
-			&& item.body === other.body
-			&& item.active === other.active;
-	});
-}
-
-function transcriptTimelineItem(item: TranscriptItem, index: number): TimelineItem {
-	return {
-		id: `message:${item.id}`,
-		timestamp: item.timestamp,
-		order: index,
-		color: colorForTranscriptRole(item.role),
-		title: titleForTranscript(item),
-		body: item.content,
-		active: item.active
-	};
-}
-
-function toolTimelineItem(item: ToolActivity, index: number): TimelineItem {
-	return {
-		id: `tool:${item.activityKey}`,
-		timestamp: item.timestamp,
-		order: 20_000 + index,
-		color: colorForToolStatus(item.status),
-		title: `Tool ${toolStatusLabel(item.status)} ${item.toolName}`,
-		body: toolTimelineBody(item)
-	};
-}
-
-function schedulerTimelineItem(item: SchedulerActivity, index: number): TimelineItem {
-	return {
-		id: `scheduler:${item.timestamp}:${item.eventType}:${item.jobId ?? index}`,
-		timestamp: item.timestamp,
-		order: 30_000 + index,
-		color: colorForSchedulerStatus(item.status),
-		title: `Scheduler ${item.eventType.replaceAll('_', ' ')}`,
-		body: [
-			item.jobId ? `job ${shortTimelineValue(item.jobId, 16)}` : null,
-			item.runId ? `run ${shortTimelineValue(item.runId, 16)}` : null,
-			item.targetType ? `target ${item.targetType}` : null,
-			item.status ? `status ${item.status}` : null,
-			item.detail || null,
-			item.reportPath ? `report ${item.reportPath}` : null
-		].filter((value): value is string => Boolean(value)).join('\n')
-	};
-}
-
-function toolTimelineBody(item: ToolActivity): string {
-	const lines = [
-		item.toolCallId ? `call ${shortTimelineValue(item.toolCallId, 18)}` : null,
-		item.stageId || item.nodeId ? `node ${[item.stageId, item.nodeId].filter(Boolean).join(' / ')}` : null,
-		item.approvalState ? `approval ${item.approvalState}` : null,
-		item.exitCode !== null ? `exit ${item.exitCode}` : null,
-		item.durationMs !== null ? `duration ${item.durationMs}ms` : null,
-		item.argsPreview ? `args ${item.argsPreview}` : null,
-		item.stdoutPreview ? `stdout ${previewTimelineMultiline(item.stdoutPreview)}` : null,
-		item.stderrPreview ? `stderr ${previewTimelineMultiline(item.stderrPreview)}` : null,
-		item.resultPreview ? `result ${previewTimelineMultiline(item.resultPreview)}` : null
-	];
-	return lines.filter((line): line is string => Boolean(line)).join('\n');
-}
-
-function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
-	const leftTime = Date.parse(left.timestamp);
-	const rightTime = Date.parse(right.timestamp);
-	const timeDelta = (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
-	return timeDelta || left.order - right.order;
-}
-
-function titleForTranscript(item: TranscriptItem): string {
-	if (item.role === 'user') {
-		return 'You';
-	}
-	if (item.role === 'assistant') {
-		return item.title.replace(/^Assistant \/ /, 'Assistant ');
-	}
-	if (item.role === 'scheduler') {
-		return item.title.replace(/^Scheduler \/ /, 'Scheduler ');
-	}
-	if (item.role === 'interrupt') {
-		return item.title.replace(/^Interrupt \/ /, 'Interrupt ');
-	}
-	return item.title;
-}
-
-function colorForTranscriptRole(role: string): ActivityColor | 'white' {
-	if (role === 'user') {
-		return 'cyan';
-	}
-	if (role === 'assistant') {
-		return 'green';
-	}
-	if (role === 'scheduler') {
-		return 'magenta';
-	}
-	if (role === 'interrupt') {
-		return 'yellow';
-	}
-	if (role === 'system') {
-		return 'gray';
-	}
-	return 'white';
-}
-
-function colorForToolStatus(status: string): ActivityColor {
-	if (status === 'failed') {
-		return 'red';
-	}
-	if (status === 'completed' || status === 'observed') {
-		return 'green';
-	}
-	if (status === 'started') {
-		return 'cyan';
-	}
-	return 'yellow';
-}
-
-function colorForSchedulerStatus(status: string | null): ActivityColor {
-	if (status === 'failed' || status === 'cancelled') {
-		return 'red';
-	}
-	if (status === 'completed') {
-		return 'green';
-	}
-	if (status === 'running') {
-		return 'cyan';
-	}
-	if (status === 'skipped') {
-		return 'yellow';
-	}
-	return 'magenta';
-}
-
-function toolStatusLabel(status: string): string {
-	return status === 'started' ? 'running' : status;
-}
-
-function previewTimelineMultiline(value: string): string {
-	const normalized = value.replace(/\r/g, '').trim();
-	const lines = normalized.split('\n');
-	if (lines.length <= 6) {
-		return trimTimelineContent(normalized);
-	}
-	return `${lines.slice(0, 6).join('\n')}\n... ${lines.length - 6} more lines`;
-}
-
-function trimTimelineContent(value: string): string {
-	const limit = 3600;
-	return value.length > limit ? `...${value.slice(value.length - limit)}` : value;
-}
-
-function shortTimelineValue(value: string, limit: number): string {
-	return value.length > limit ? `${value.slice(0, Math.max(1, limit - 3))}...` : value;
 }
 
 export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction): RuntimeState {
@@ -594,10 +397,14 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 		return {...state, agentSessionPickerOpen: action.open};
 	}
 	if (action.ui_type === 'select_agent_session') {
-		return {...state, activeAgentSessionId: action.sessionId, agentSessionPickerOpen: false};
+		return resetSessionScopedProjection({
+			...state,
+			activeAgentSessionId: action.sessionId,
+			agentSessionPickerOpen: false
+		}, []);
 	}
 	if (action.ui_type === 'clear_agent_package_selection') {
-		return {
+		return resetSessionScopedProjection({
 			...state,
 			mode: null,
 			activeAgentPackage: null,
@@ -605,7 +412,7 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 			activeAgentSessionId: null,
 			agentPackagePickerOpen: false,
 			agentSessionPickerOpen: false
-		};
+		}, []);
 	}
 	if (action.ui_type === 'local_user_message') {
 		return appendTranscript(state, {
@@ -649,14 +456,13 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'session_switched': {
 			const session = (event.payload?.session ?? {}) as Record<string, unknown>;
 			const transcript = transcriptFromSession(session, event.mode ?? null);
-			return {
+			return resetSessionScopedProjection({
 				...base,
 				sessionId: String(session.session_id ?? event.session_id ?? ''),
 				sessionTitle: sessionTitle(session),
 				mode: (session.current_mode as FactoryMode | null) ?? event.mode ?? null,
-				transcript,
 				logs: [...base.logs, `session: ${String(session.session_id ?? event.session_id ?? '-')}`]
-			};
+			}, transcript);
 		}
 		case 'sessions_listed':
 			return {...base, sessions: (event.payload?.sessions as Array<Record<string, unknown>>) ?? []};
@@ -669,7 +475,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'agent_package_selected': {
 			const selectedPackage = (event.payload?.package ?? null) as Record<string, unknown> | null;
 			const sessions = (event.payload?.sessions as Array<Record<string, unknown>>) ?? [];
-			return {
+			return resetSessionScopedProjection({
 				...base,
 				mode: 'agent_package',
 				activeAgentPackage: selectedPackage,
@@ -679,7 +485,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				agentSessionPickerOpen: true,
 				helpVisible: false,
 				logs: [...base.logs, `agent package selected: ${String(selectedPackage?.package_id ?? '-')}`]
-			};
+			}, []);
 		}
 		case 'agent_package_deleted':
 			return {
@@ -780,9 +586,13 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'memory_write_completed':
 		case 'memory_write_failed':
 			return {...base, memoryActivity: memoryActivityForEvent(event)};
+		case 'context_prepare_started':
+		case 'context_prepare_completed':
+		case 'context_prepare_failed':
 		case 'context_compression_started':
 		case 'context_compression_completed':
 		case 'context_compression_failed':
+		case 'context_compression_skipped':
 		case 'context_retrieval_completed':
 		case 'context_assembly_completed':
 		case 'context_injection_completed':
@@ -912,6 +722,30 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		default:
 			return base;
 	}
+}
+
+function resetSessionScopedProjection(state: RuntimeState, transcript: TranscriptItem[]): RuntimeState {
+	return {
+		...state,
+		transcript,
+		stageStatuses: {},
+		nodeStatuses: {},
+		currentStageId: null,
+		currentNodeId: null,
+		recentActivities: [],
+		modelStreams: {},
+		toolActivities: [],
+		memoryActivity: idleMemoryActivity(),
+		contextActivity: idleContextActivity(),
+		contextWindow: emptyContextWindow(),
+		schedulerActivities: [],
+		debugEvents: [],
+		pendingInterrupt: null,
+		currentRunId: null,
+		runStatus: 'idle',
+		lastError: null,
+		errors: []
+	};
 }
 
 function updateCurrentNode(state: RuntimeState, event: FactoryEvent): RuntimeState {
@@ -1609,11 +1443,14 @@ function contextWindowForEvent(event: FactoryEvent): ContextWindow {
 }
 
 function contextActivityStatusForEvent(eventType: FactoryEvent['event_type']): ContextActivityStatus {
-	if (eventType === 'context_compression_failed') {
+	if (eventType === 'context_prepare_failed' || eventType === 'context_compression_failed') {
 		return 'failed';
 	}
-	if (eventType === 'context_compression_started') {
+	if (eventType === 'context_prepare_started' || eventType === 'context_compression_started') {
 		return 'running';
+	}
+	if (eventType === 'context_compression_skipped') {
+		return 'skipped';
 	}
 	if (eventType === 'context_window_updated') {
 		return 'completed';
@@ -1622,6 +1459,15 @@ function contextActivityStatusForEvent(eventType: FactoryEvent['event_type']): C
 }
 
 function contextActivityLabelForEvent(eventType: FactoryEvent['event_type']): string {
+	if (eventType === 'context_prepare_started') {
+		return '上下文准备中';
+	}
+	if (eventType === 'context_prepare_completed') {
+		return '上下文已准备';
+	}
+	if (eventType === 'context_prepare_failed') {
+		return '上下文准备失败';
+	}
 	if (eventType === 'context_compression_started') {
 		return '上下文压缩中';
 	}
@@ -1630,6 +1476,9 @@ function contextActivityLabelForEvent(eventType: FactoryEvent['event_type']): st
 	}
 	if (eventType === 'context_compression_failed') {
 		return '上下文压缩失败';
+	}
+	if (eventType === 'context_compression_skipped') {
+		return '上下文压缩跳过';
 	}
 	if (eventType === 'context_window_updated') {
 		return '上下文窗口更新';
@@ -1689,9 +1538,13 @@ function isTerminalMemoryEvent(eventType: FactoryEvent['event_type']): boolean {
 
 function isContextEvent(eventType: FactoryEvent['event_type']): boolean {
 	return [
+		'context_prepare_started',
+		'context_prepare_completed',
+		'context_prepare_failed',
 		'context_compression_started',
 		'context_compression_completed',
 		'context_compression_failed',
+		'context_compression_skipped',
 		'context_retrieval_completed',
 		'context_assembly_completed',
 		'context_injection_completed'
@@ -1700,8 +1553,11 @@ function isContextEvent(eventType: FactoryEvent['event_type']): boolean {
 
 function isTerminalContextEvent(eventType: FactoryEvent['event_type']): boolean {
 	return [
+		'context_prepare_completed',
+		'context_prepare_failed',
 		'context_compression_completed',
 		'context_compression_failed',
+		'context_compression_skipped',
 		'context_injection_completed'
 	].includes(eventType);
 }
@@ -1840,6 +1696,7 @@ function isImmediateEvent(eventType: FactoryEvent['event_type']): boolean {
 		'model_message_completed',
 		'scheduler_feedback_completed',
 		'scheduler_feedback_failed',
+		'context_prepare_failed',
 		'context_compression_failed',
 		'runtime_resumed',
 		'run_completed',

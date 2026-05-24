@@ -16,7 +16,7 @@ from agent_factory.runtime_protocol.messages import has_complete_tool_call_histo
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.nodes.standard.answer import CognitiveAnswerNode
 from agent_factory.runtime_kernel.nodes.standard.tool_call import OperationalToolCallNode
-from agent_factory.runtime_kernel.patterns.compiler import _must_repair_tool_protocol
+from agent_factory.runtime_kernel.patterns.routing import must_repair_tool_protocol
 from agent_factory.runtime_kernel.patterns.schema import PatternNodeSpec
 from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.observability import ObservabilityManager
@@ -413,8 +413,8 @@ class RuntimeKernelToolPermissionTest(unittest.TestCase):
             ]
         }
 
-        self.assertTrue(_must_repair_tool_protocol(tool_node, raw_state))
-        self.assertFalse(_must_repair_tool_protocol(answer_node, raw_state))
+        self.assertTrue(must_repair_tool_protocol(tool_node, raw_state))
+        self.assertFalse(must_repair_tool_protocol(answer_node, raw_state))
 
 
 def _runtime_services(
@@ -516,6 +516,8 @@ class _ModelOperationServiceFromAdapter:
 
     def tool_bound_chat(self, **kwargs) -> ModelInvocationResult:
         kwargs.pop("emit_event", None)
+        kwargs.pop("services", None)
+        kwargs.pop("node_id", None)
         return self.adapter.generate(**kwargs)
 
 

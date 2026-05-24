@@ -8,6 +8,7 @@ import {type FactoryCommand, type FactoryEvent, eventSchema} from '../protocol.j
 
 type EventHandler = (event: FactoryEvent) => void;
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const maxDiagnosticLineLength = 2000;
 
 export class PythonBridge {
 	private process?: ResultPromise;
@@ -31,15 +32,11 @@ export class PythonBridge {
 		}
 		const lines = createInterface({input: stdout});
 		lines.on('line', line => {
-			if (!line.trim()) {
+			const event = eventFromStdoutLine(line);
+			if (!event) {
 				return;
 			}
-			const parsed = eventSchema.safeParse(JSON.parse(line));
-			if (parsed.success) {
-				this.emit(parsed.data);
-			} else {
-				this.emit(errorEvent(parsed.error.message));
-			}
+			this.emit(event);
 		});
 		this.process.stderr?.on('data', chunk => {
 			const message = String(chunk);
@@ -75,6 +72,21 @@ export class PythonBridge {
 			handler(event);
 		}
 	}
+}
+
+export function eventFromStdoutLine(line: string): FactoryEvent | null {
+	if (!line.trim()) {
+		return null;
+	}
+	const parsedJson = safeJsonParse(line);
+	if (!parsedJson.ok) {
+		return stdoutDiagnosticEvent(line);
+	}
+	const parsed = eventSchema.safeParse(parsedJson.value);
+	if (parsed.success) {
+		return parsed.data;
+	}
+	return errorEvent(parsed.error.message);
 }
 
 function resolvePythonExecutable(): string {
@@ -138,6 +150,52 @@ function diagnosticEvent(message: string): FactoryEvent {
 		message: 'Python diagnostic',
 		payload: {stderr: message}
 	};
+}
+
+function stdoutDiagnosticEvent(line: string): FactoryEvent {
+	const truncated = truncateDiagnosticLine(line);
+	return {
+		event_id: randomUUID(),
+		protocol_version: 'factory_frontend.v1',
+		event_type: 'debug_patch',
+		producer_type: 'typescript_cli',
+		request_id: null,
+		run_id: null,
+		session_id: null,
+		thread_id: null,
+		mode: null,
+		graph_id: 'typescript_cli',
+		node_id: null,
+		node_label: null,
+		node_kind: null,
+		stage_id: null,
+		span_id: null,
+		parent_span_id: null,
+		sequence: 0,
+		timestamp: new Date().toISOString(),
+		severity: 'warning',
+		message: 'Python stdout diagnostic',
+		payload: {
+			source: 'python_stdout_non_json',
+			stdout: truncated,
+			truncated: truncated.length !== line.length
+		}
+	};
+}
+
+function safeJsonParse(line: string): {ok: true; value: unknown} | {ok: false} {
+	try {
+		return {ok: true, value: JSON.parse(line) as unknown};
+	} catch {
+		return {ok: false};
+	}
+}
+
+function truncateDiagnosticLine(line: string): string {
+	if (line.length <= maxDiagnosticLineLength) {
+		return line;
+	}
+	return line.slice(0, maxDiagnosticLineLength);
 }
 
 function isPythonWarning(message: string): boolean {

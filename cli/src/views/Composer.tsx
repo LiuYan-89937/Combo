@@ -6,12 +6,14 @@ import {Muted} from './ui.js';
 export function Composer({
 	prompt,
 	onSubmit,
+	onCancel,
 	getSuggestions,
 	disabled = false,
 	disabledText = 'runtime is busy'
 }: {
 	prompt: string;
 	onSubmit: (value: string) => void;
+	onCancel?: () => void;
 	getSuggestions: (value: string) => ShellCommandSpec[];
 	disabled?: boolean;
 	disabledText?: string;
@@ -23,7 +25,11 @@ export function Composer({
 	useInput((input, key) => {
 		if (disabled) {
 			if (key.ctrl && input === 'c') {
-				onSubmit('/quit');
+				if (onCancel) {
+					onCancel();
+				} else {
+					onSubmit('/quit');
+				}
 			}
 			return;
 		}
@@ -82,7 +88,7 @@ export function Composer({
 				<Text color="cyan" bold>{prompt}</Text>
 				<Text color="gray"> {'> '}</Text>
 				{disabled ? (
-					<Text color="gray">input paused: {disabledText}</Text>
+					<Text color="gray">input paused: {disabledText} · Ctrl+C cancel</Text>
 				) : (
 					<>
 						<Text>{value}</Text>

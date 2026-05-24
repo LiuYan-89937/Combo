@@ -20,6 +20,7 @@ def maybe_compress_messages(
     node_id: str,
     token_counter: Callable[[list[Any]], TokenCountResult] | None = None,
     trigger_count: TokenCountResult | None = None,
+    on_start: Callable[[ContextCompressionReport], None] | None = None,
 ) -> tuple[list[Any], ContextCompressionReport]:
     started = perf_counter()
     if not policy.enabled:
@@ -69,6 +70,19 @@ def maybe_compress_messages(
             ),
         )
     try:
+        if on_start is not None:
+            on_start(
+                ContextCompressionReport(
+                    status="started",
+                    node_id=node_id,
+                    original_message_count=len(messages),
+                    compressed_message_count=len(messages),
+                    token_estimate_before=token_before,
+                    token_estimate_after=token_before,
+                    token_count_method=count_before.method,
+                    duration_ms=int((perf_counter() - started) * 1000),
+                )
+            )
         summary = _summarize_messages(compressible, max_summary_tokens=policy.max_summary_tokens)
         summary_message = SystemMessage(
             content=summary,

@@ -1,0 +1,222 @@
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Callable
+import threading
+import time
+from typing import Any, Deque, Iterator
+from uuid import uuid4
+
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
+from agent_factory.factory_graph.frontend_bridge.runtime_events import (
+    heartbeat_due,
+    is_terminal_request_event,
+    request_cancelled_payload,
+    request_heartbeat_event,
+    request_timed_out,
+    request_timeout_payload,
+    run_failed_event,
+)
+from agent_factory.package_runtime import PackageRuntimeCore
+from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
+from agent_factory.runtime_contracts import LoadedAgentPackage
+
+
+Emit = Callable[[FactoryFrontendEvent], None]
+ContainerStreamItem = tuple[str, Any]
+
+
+class SystemPackageRuntimeHandle:
+    def __init__(
+        self,
+        *,
+        package_id: str,
+        package: LoadedAgentPackage,
+        package_fingerprint: str,
+        idle_timeout_seconds: int,
+        request_policy: RuntimeRequestPolicy,
+        producer_type: str,
+        emit: Emit | None = None,
+    ) -> None:
+        self.package_id = package_id
+        self.package_fingerprint = package_fingerprint
+        self.idle_timeout_seconds = idle_timeout_seconds
+        self.request_policy = request_policy
+        self._emit = emit
+        self._idle_timer: threading.Timer | None = None
+        self._closing = False
+        self._condition = threading.Condition()
+        self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
+        self._request_done: dict[str, bool] = {}
+        self._request_errors: dict[str, BaseException] = {}
+        self.last_used = time.monotonic()
+        self.startup_payload: dict[str, Any] | None = None
+        self.core = PackageRuntimeCore(
+            package=package,
+            emit_background=self._emit_background_event,
+            graph_id=f"{package_id}_runtime",
+            producer_type=producer_type,
+        )
+        self._schedule_idle_shutdown()
+
+    def set_emit(self, emit: Emit | None) -> None:
+        self._emit = emit
+
+    def is_idle(self, timeout_seconds: int) -> bool:
+        return timeout_seconds > 0 and (time.monotonic() - self.last_used) > timeout_seconds
+
+    def send(self, command: dict[str, Any]) -> Iterator[tuple[str, Any]]:
+        if self._closing:
+            raise RuntimeError(f"system package runtime for {self.package_id} is closed")
+        request_id = str(command.get("request_id") or uuid4().hex)
+        command["request_id"] = request_id
+        with self._condition:
+            if self._request_events:
+                raise RuntimeError(f"system package runtime for {self.package_id} is already handling a request")
+            self._request_events[request_id] = deque()
+            self._request_done[request_id] = False
+
+        def collect(item: FactoryFrontendEvent) -> None:
+            with self._condition:
+                queue = self._request_events.get(request_id)
+                if queue is not None:
+                    queue.append(("frontend_event", item))
+                    self._condition.notify_all()
+
+        def run_request() -> None:
+            try:
+                self.core.handle(command, emit=collect)
+            except BaseException as exc:
+                with self._condition:
+                    self._request_errors[request_id] = exc
+                    self._condition.notify_all()
+            finally:
+                with self._condition:
+                    self._request_done[request_id] = True
+                    self._condition.notify_all()
+
+        self.last_used = time.monotonic()
+        self._cancel_idle_shutdown()
+        worker = threading.Thread(
+            target=run_request,
+            name=f"system-package-runtime-{self.package_id}-{request_id}",
+            daemon=True,
+        )
+        worker.start()
+        terminal_seen = False
+        started_at = time.monotonic()
+        last_heartbeat_at = started_at
+        try:
+            while not terminal_seen:
+                for stream_mode, item in self._next_request_batch(request_id):
+                    yield stream_mode, item
+                    if is_terminal_request_event(item, request_id):
+                        terminal_seen = True
+                if terminal_seen:
+                    break
+                now = time.monotonic()
+                if request_timed_out(started_at, now, self.request_policy):
+                    self.close()
+                    yield "frontend_event", run_failed_event(
+                        request_id,
+                        request_timeout_payload(
+                            package_id=self.package_id,
+                            request_id=request_id,
+                            elapsed_seconds=now - started_at,
+                            timeout_seconds=self.request_policy.timeout_seconds,
+                        ),
+                    )
+                    break
+                if heartbeat_due(last_heartbeat_at, now, self.request_policy):
+                    last_heartbeat_at = now
+                    yield "frontend_event", request_heartbeat_event(
+                        request_id,
+                        package_id=self.package_id,
+                        elapsed_seconds=now - started_at,
+                        timeout_seconds=self.request_policy.timeout_seconds,
+                    )
+                with self._condition:
+                    if self._request_done.get(request_id) and not self._request_events.get(request_id):
+                        error = self._request_errors.get(request_id)
+                        if error is not None:
+                            raise RuntimeError(f"system package runtime request failed: {error}") from error
+                        raise RuntimeError(
+                            f"system package runtime request ended without terminal event: {request_id}"
+                        )
+        finally:
+            worker.join(timeout=0.1)
+            with self._condition:
+                self._request_events.pop(request_id, None)
+                self._request_done.pop(request_id, None)
+                self._request_errors.pop(request_id, None)
+            self.last_used = time.monotonic()
+            self._schedule_idle_shutdown()
+
+    def cancel_active_requests(self, *, reason: str) -> int:
+        with self._condition:
+            request_ids = list(self._request_events)
+            for request_id in request_ids:
+                self._request_events[request_id].append(
+                    (
+                        "frontend_event",
+                        run_failed_event(
+                            request_id,
+                            request_cancelled_payload(
+                                package_id=self.package_id,
+                                request_id=request_id,
+                                reason=reason,
+                            ),
+                        ),
+                    )
+                )
+            self._condition.notify_all()
+        if request_ids:
+            self.close()
+        return len(request_ids)
+
+    def close(self) -> None:
+        self._cancel_idle_shutdown()
+        if self._closing:
+            return
+        self._closing = True
+        self.core.shutdown()
+        with self._condition:
+            self._condition.notify_all()
+
+    def _next_request_batch(self, request_id: str) -> list[ContainerStreamItem]:
+        while True:
+            with self._condition:
+                queue = self._request_events.get(request_id)
+                if queue is None:
+                    return []
+                if queue:
+                    batch = list(queue)
+                    queue.clear()
+                    return batch
+                error = self._request_errors.get(request_id)
+                if error is not None:
+                    raise RuntimeError(f"system package runtime request failed: {error}") from error
+                if self._request_done.get(request_id):
+                    return []
+                if self._closing:
+                    raise RuntimeError(f"system package runtime for {self.package_id} is closed")
+                self._condition.wait(timeout=0.2)
+                return []
+
+    def _emit_background_event(self, item: FactoryFrontendEvent) -> None:
+        if self._emit is not None:
+            self._emit(item)
+        self._schedule_idle_shutdown()
+
+    def _schedule_idle_shutdown(self) -> None:
+        self._cancel_idle_shutdown()
+        if self.idle_timeout_seconds <= 0 or self._closing:
+            return
+        self._idle_timer = threading.Timer(self.idle_timeout_seconds, self.close)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _cancel_idle_shutdown(self) -> None:
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None

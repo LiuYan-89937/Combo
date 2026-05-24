@@ -17,6 +17,7 @@ class RuntimeBuildContext:
     package_root: Path
     package: LoadedAgentPackage
     resources: dict[str, object]
+    tool_runtime_resources: dict[str, object]
     sandbox_contract: dict[str, object]
 
 
@@ -37,6 +38,7 @@ class RuntimeBuildPlanner:
             package_root=package.package_root,
             package=package,
             resources=_resource_values(package.resources),
+            tool_runtime_resources={},
             sandbox_contract=package.sandbox_contract,
         )
         contracts = sorted(
@@ -45,6 +47,7 @@ class RuntimeBuildPlanner:
         )
         contributions = []
         build_resources = dict(context.resources)
+        build_tool_runtime_resources: dict[str, object] = {}
         for contract in contracts:
             if not bool(getattr(contract, "enabled", True)):
                 continue
@@ -52,6 +55,7 @@ class RuntimeBuildPlanner:
                 package_root=context.package_root,
                 package=context.package,
                 resources=build_resources,
+                tool_runtime_resources=build_tool_runtime_resources,
                 sandbox_contract=context.sandbox_contract,
             )
             contribution = self.registry.builder_for(contract).build(contract, contract_context)
@@ -59,6 +63,10 @@ class RuntimeBuildPlanner:
                 if key in build_resources and build_resources[key] != value:
                     raise ValueError(f"conflicting runtime build resource: {key}")
                 build_resources[key] = value
+            for key, value in contribution.tool_runtime_resources.items():
+                if key in build_tool_runtime_resources and build_tool_runtime_resources[key] is not value:
+                    raise ValueError(f"conflicting tool runtime build resource: {key}")
+                build_tool_runtime_resources[key] = value
             contributions.append(contribution)
         result = RuntimeContributionMerger(base_services=base_services).merge(contributions)
         result.contracts = {str(getattr(contract, "type")): _contract_dump(contract) for contract in contracts}

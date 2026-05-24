@@ -62,6 +62,45 @@ describe('RuntimeStore', () => {
 
 		expect(store.getSnapshot().transcript.map(item => item.content)).toEqual(['你好', '你好，我在']);
 		expect(store.getSnapshot().timelineItems.map(item => item.body)).toEqual(['你好', '你好，我在']);
+		expect(store.getSnapshot().timelineItems[0]).toMatchObject({
+			kind: 'message',
+			role: 'user',
+			source: 'transcript'
+		});
+	});
+
+	it('clears session scoped projections when switching sessions', () => {
+		const store = createRuntimeStore();
+		store.dispatch(event('run_started'));
+		store.dispatch(event('tool_call_proposed', {
+			payload: {tool_call_id: 'call-1', tool_name: 'ls', arguments: {path: '.'}}
+		}));
+		store.dispatch(event('scheduler_run_completed', {
+			payload: {job_id: 'job-1', run_id: 'run-a', status: 'completed'}
+		}));
+		store.dispatch(event('run_failed', {
+			payload: {message: 'old failure'}
+		}));
+
+		store.dispatch(event('session_switched', {
+			payload: {
+				session: {
+					session_id: 'session-2',
+					current_mode: 'chat',
+					snapshot: {messages: [{role: 'user', content: '新的会话'}]}
+				}
+			}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.sessionId).toBe('session-2');
+		expect(snapshot.transcript.map(item => item.content)).toEqual(['新的会话']);
+		expect(snapshot.toolActivities).toEqual([]);
+		expect(snapshot.schedulerActivities).toEqual([]);
+		expect(snapshot.recentActivities).toEqual([]);
+		expect(snapshot.pendingInterrupt).toBeNull();
+		expect(snapshot.runStatus).toBe('idle');
+		expect(snapshot.errors).toEqual([]);
 	});
 
 	it('summarizes session tool messages instead of showing raw JSON', () => {
@@ -146,6 +185,11 @@ describe('RuntimeStore', () => {
 		const timeline = store.getSnapshot().timelineItems;
 		expect(timeline).toHaveLength(1);
 		expect(timeline[0]?.title).toBe('You');
+		expect(timeline[0]).toMatchObject({
+			kind: 'message',
+			role: 'user',
+			source: 'transcript'
+		});
 
 		store.dispatch({ui_type: 'set_tool_grep', query: 'write'});
 		expect(store.getSnapshot().timelineItems).toBe(timeline);
@@ -270,6 +314,51 @@ describe('RuntimeStore', () => {
 		expect(store.getSnapshot().contextActivity.label).toContain('上下文已注入');
 		expect(store.getSnapshot().contextActivity.detail).toBe('3 items');
 
+		vi.advanceTimersByTime(2500);
+		expect(store.getSnapshot().contextActivity.status).toBe('idle');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
+
+	it('shows skipped context compression separately from completed compression', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('context_compression_skipped', {
+			payload: {
+				node_id: 'answer',
+				status: 'skipped',
+				token_estimate_before: 400,
+				token_estimate_after: 400
+			}
+		}));
+
+		expect(store.getSnapshot().contextActivity.status).toBe('skipped');
+		expect(store.getSnapshot().contextActivity.label).toContain('跳过');
+
+		vi.advanceTimersByTime(2500);
+		expect(store.getSnapshot().contextActivity.status).toBe('idle');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
+
+	it('keeps compression running until a terminal context event arrives', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('context_compression_started', {
+			payload: {node_id: 'answer', status: 'started'}
+		}));
+
+		vi.advanceTimersByTime(10_000);
+		expect(store.getSnapshot().contextActivity.status).toBe('running');
+		expect(store.getSnapshot().contextActivity.label).toContain('压缩中');
+
+		store.dispatch(event('context_compression_completed', {
+			payload: {node_id: 'answer', status: 'completed'}
+		}));
 		vi.advanceTimersByTime(2500);
 		expect(store.getSnapshot().contextActivity.status).toBe('idle');
 

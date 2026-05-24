@@ -54,11 +54,13 @@ def get_factory_tools(
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
     mcp_tool_clients: Mapping[str, MCPToolClient] | None = None,
     runtime_resources: Mapping[str, Any] | None = None,
+    tool_runtime_resources: Mapping[str, Any] | None = None,
 ) -> list[BaseTool]:
     from agent_factory.tooling.factory_extensions import default_factory_extension_root
 
     selected_ids = set(tool_ids or [])
     base_runtime_resources = dict(runtime_resources or {})
+    base_tool_runtime_resources = dict(tool_runtime_resources or {})
     specs, effective_mcp_clients, discovered_runtime_resources = _collect_factory_tool_specs(
         selected_ids=selected_ids,
         include_extensions=include_extensions,
@@ -66,6 +68,7 @@ def get_factory_tools(
         mcp_catalog_clients=mcp_catalog_clients,
         mcp_tool_clients=mcp_tool_clients,
         runtime_resources=base_runtime_resources,
+        tool_runtime_resources=base_tool_runtime_resources,
     )
     effective_runtime_resources = _merge_runtime_resources(base_runtime_resources, discovered_runtime_resources)
     factory_extension_root = Path(extension_root).expanduser().resolve() if extension_root else default_factory_extension_root()
@@ -82,6 +85,7 @@ def get_factory_tools(
                 "allow_external": False,
             },
             **effective_runtime_resources,
+            **base_tool_runtime_resources,
         }
     )
     return compiler.compile_many(specs)
@@ -102,6 +106,7 @@ def get_factory_tool_specs(
         mcp_catalog_clients=mcp_catalog_clients,
         mcp_tool_clients=None,
         runtime_resources={},
+        tool_runtime_resources={},
     )
     return specs
 
@@ -114,11 +119,12 @@ def _collect_factory_tool_specs(
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None,
     mcp_tool_clients: Mapping[str, MCPToolClient] | None,
     runtime_resources: Mapping[str, Any],
+    tool_runtime_resources: Mapping[str, Any],
 ) -> tuple[list[ToolSpec], Mapping[str, MCPToolClient], dict[str, object]]:
     from agent_factory.tooling.factory_extensions import FactoryExtensionManager
 
     specs = get_builtin_tool_specs()
-    if not scheduler_enabled_from_env() or "scheduler_runtime" not in runtime_resources:
+    if not scheduler_enabled_from_env() or "scheduler_runtime" not in tool_runtime_resources:
         specs = [spec for spec in specs if spec.id != "scheduler"]
     effective_mcp_clients: Mapping[str, MCPToolClient] = dict(mcp_tool_clients or {})
     discovered_runtime_resources: dict[str, object] = {}
