@@ -10,7 +10,6 @@ from agent_factory.runtime_kernel.persistence.memory_store import (
     LangGraphStoreConfig,
     LangGraphStoreFactory,
     LangGraphStoreHandle,
-    LangGraphStoreIndexConfig,
     MemoryRecord,
     SqliteBaseStore,
 )
@@ -24,7 +23,6 @@ __all__ = [
     "LangGraphStoreConfig",
     "LangGraphStoreFactory",
     "LangGraphStoreHandle",
-    "LangGraphStoreIndexConfig",
     "MemoryRecord",
     "SqliteBaseStore",
     "is_checkpointer_persistent",

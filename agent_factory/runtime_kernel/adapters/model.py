@@ -7,6 +7,7 @@ from typing import Any, Literal, Protocol
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
+from agent_factory.context_system.compression import is_context_summary_message
 from agent_factory.models import (
     ChatModelSettings,
     get_main_model,
@@ -136,15 +137,38 @@ def _messages_for_state(
         system_parts.append("You are the generated Agent runtime model. Answer the user directly and concisely.")
     if tools:
         system_parts.append(_tool_protocol_instruction(tools))
+    summary_text = _conversation_summary_text(messages)
+    if summary_text:
+        system_parts.append(summary_text)
     context_text = _llm_context_text(state)
     if context_text:
         system_parts.append(context_text)
-    normalized_messages = [message for message in messages if isinstance(message, BaseMessage)]
+    normalized_messages = [
+        message
+        for message in messages
+        if isinstance(message, BaseMessage) and not is_context_summary_message(message)
+    ]
     if not normalized_messages:
         user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "")
         if user_input:
             normalized_messages = [HumanMessage(content=user_input)]
     return [SystemMessage(content="\n\n".join(system_parts)), *normalized_messages]
+
+
+def _conversation_summary_text(messages: list[Any]) -> str:
+    summaries = [
+        str(getattr(message, "content", "") or "").strip()
+        for message in messages
+        if is_context_summary_message(message)
+    ]
+    summaries = [summary for summary in summaries if summary]
+    if not summaries:
+        return ""
+    return (
+        "Internal compressed conversation memory. Use it only to maintain continuity. "
+        "Do not quote, restate, or expose this summary to the user unless they explicitly ask for the prior conversation:\n"
+        + "\n\n".join(summaries[-3:])
+    )
 
 
 def _tool_protocol_instruction(tools: list[BaseTool]) -> str:

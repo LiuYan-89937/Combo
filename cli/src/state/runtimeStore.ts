@@ -113,6 +113,18 @@ export type SchedulerActivity = {
 	reportPath: string | null;
 };
 
+export type KnowledgeActivity = {
+	eventType: FactoryEvent['event_type'];
+	timestamp: string;
+	sourceId: string | null;
+	jobId: string | null;
+	mode: string | null;
+	phase: string | null;
+	status: string | null;
+	detail: string;
+	reportPath: string | null;
+};
+
 export type SpanRecord = {
 	spanId: string;
 	parentSpanId: string | null;
@@ -123,7 +135,7 @@ export type SpanRecord = {
 	payload: Record<string, unknown>;
 };
 
-export type TranscriptRole = 'user' | 'assistant' | 'tool' | 'interrupt' | 'scheduler' | 'system';
+export type TranscriptRole = 'user' | 'assistant' | 'tool' | 'interrupt' | 'scheduler' | 'knowledge' | 'system';
 
 export type TranscriptItem = {
 	id: string;
@@ -144,9 +156,9 @@ export type TimelineItem = {
 	color: ActivityColor | 'white';
 	title: string;
 	body: string;
-	kind: 'message' | 'tool' | 'scheduler' | 'activity' | 'error';
+	kind: 'message' | 'tool' | 'scheduler' | 'knowledge' | 'activity' | 'error';
 	role: TranscriptRole | null;
-	source: 'transcript' | 'tool' | 'scheduler' | 'runtime_activity' | 'runtime_error';
+	source: 'transcript' | 'tool' | 'scheduler' | 'knowledge' | 'runtime_activity' | 'runtime_error';
 	turnId: string | null;
 	eventType: FactoryEvent['event_type'] | null;
 	active?: boolean;
@@ -181,6 +193,7 @@ export type RuntimeState = {
 	contextActivity: ContextActivity;
 	contextWindow: ContextWindow;
 	schedulerActivities: SchedulerActivity[];
+	knowledgeActivities: KnowledgeActivity[];
 	debugEvents: FactoryEvent[];
 	pendingInterrupt: FactoryEvent | null;
 	currentRunId: string | null;
@@ -244,6 +257,7 @@ export function createInitialRuntimeState(): RuntimeState {
 		contextActivity: idleContextActivity(),
 		contextWindow: emptyContextWindow(),
 		schedulerActivities: [],
+		knowledgeActivities: [],
 		debugEvents: [],
 		pendingInterrupt: null,
 		currentRunId: null,
@@ -516,6 +530,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				toolActivities: [],
 				debugEvents: [],
 				contextWindow: emptyContextWindow(),
+				knowledgeActivities: [],
 				currentRunId: event.run_id ?? null,
 				runStatus: 'running',
 				pendingInterrupt: null,
@@ -601,13 +616,31 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				contextActivity: contextActivityForEvent(event),
 				recentActivities: appendRunActivity(base.recentActivities, event)
 			};
-		case 'context_window_updated':
-			return {
-				...base,
-				contextWindow: contextWindowForEvent(event),
-				recentActivities: appendRunActivity(base.recentActivities, event)
-			};
-		case 'scheduler_job_created':
+			case 'context_window_updated':
+				return {
+					...base,
+					contextWindow: contextWindowForEvent(event),
+					recentActivities: appendRunActivity(base.recentActivities, event)
+				};
+			case 'knowledge_source_prepare_started':
+			case 'knowledge_source_preview_available':
+			case 'knowledge_source_approval_requested':
+			case 'knowledge_source_registered':
+			case 'knowledge_ingestion_queued':
+			case 'knowledge_ingestion_started':
+			case 'knowledge_ingestion_progress':
+			case 'knowledge_ingestion_completed':
+			case 'knowledge_ingestion_failed':
+			case 'knowledge_ingestion_cancelled':
+			case 'knowledge_source_ready':
+			case 'knowledge_source_removed':
+			case 'knowledge_source_reindex_requested':
+				return {
+					...appendKnowledgeTranscript(base, event),
+					knowledgeActivities: [...base.knowledgeActivities.slice(-19), knowledgeActivityForEvent(event)],
+					recentActivities: appendRunActivity(base.recentActivities, event)
+				};
+			case 'scheduler_job_created':
 		case 'scheduler_job_updated':
 		case 'scheduler_job_deleted':
 		case 'scheduler_job_auto_paused':
@@ -739,6 +772,7 @@ function resetSessionScopedProjection(state: RuntimeState, transcript: Transcrip
 		contextActivity: idleContextActivity(),
 		contextWindow: emptyContextWindow(),
 		schedulerActivities: [],
+		knowledgeActivities: [],
 		debugEvents: [],
 		pendingInterrupt: null,
 		currentRunId: null,
@@ -1305,6 +1339,50 @@ function schedulerActivityDetail(payload: Record<string, unknown>): string {
 	return parts.join(' ');
 }
 
+function knowledgeActivityForEvent(event: FactoryEvent): KnowledgeActivity {
+	const payload = event.payload ?? {};
+	return {
+		eventType: event.event_type,
+		timestamp: event.timestamp,
+		sourceId: stringValue(payload.source_id) || null,
+		jobId: stringValue(payload.job_id) || null,
+		mode: stringValue(payload.mode) || null,
+		phase: stringValue(payload.phase) || null,
+		status: stringValue(payload.status) || null,
+		detail: knowledgeActivityDetail(payload),
+		reportPath: stringValue(payload.report_path) || null
+	};
+}
+
+function knowledgeActivityDetail(payload: Record<string, unknown>): string {
+	const status = stringValue(payload.status);
+	const mode = stringValue(payload.mode);
+	const phase = stringValue(payload.phase);
+	const source = stringValue(payload.source_id);
+	const message = stringValue(payload.message);
+	const error = recordValue(payload.error);
+	const progress = recordValue(payload.progress);
+	const counts = recordValue(payload.counts);
+	const current = numberValue(progress?.current);
+	const total = numberValue(progress?.total);
+	const percent = numberValue(progress?.percent);
+	const documents = numberValue(counts?.documents_loaded) ?? numberValue(counts?.documents_discovered);
+	const chunks = numberValue(counts?.chunks_created);
+	const parts = [
+		status ? `status=${status}` : null,
+		mode ? `mode=${mode}` : null,
+		phase ? `phase=${phase}` : null,
+		source ? `source=${shortValue(source, 16)}` : null,
+		typeof percent === 'number' ? `${percent}%` : null,
+		typeof current === 'number' && typeof total === 'number' ? `${current}/${total}` : null,
+		typeof documents === 'number' ? `docs=${documents}` : null,
+		typeof chunks === 'number' ? `chunks=${chunks}` : null,
+		error ? `error=${shortValue(stringValue(error.message) || compactValue(error, 120), 80)}` : null,
+		message ? shortValue(message, 80) : null
+	].filter((item): item is string => Boolean(item));
+	return parts.join(' ');
+}
+
 function idleMemoryActivity(): MemoryActivity {
 	return {
 		status: 'idle',
@@ -1790,6 +1868,53 @@ function appendInterruptTranscript(state: RuntimeState, event: FactoryEvent): Ru
 		eventType: event.event_type,
 		metadata: payload
 	});
+}
+
+function appendKnowledgeTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
+	if (event.event_type === 'knowledge_source_preview_available') {
+		const preview = recordValue(event.payload?.preview);
+		const lines = [
+			`来源：${stringValue(preview?.display_name) || stringValue(preview?.source_id) || '-'}`,
+			`类型：${stringValue(preview?.source_type) || '-'}`,
+			`模式：${stringValue(preview?.mount_mode) || '-'}`,
+			`文档数：${numberValue(preview?.estimated_documents) ?? 0}`,
+			`需要 embedding：${preview?.requires_embedding ? 'yes' : 'no'}`,
+			stringValue(preview?.uri) ? `路径：${stringValue(preview?.uri)}` : null
+		].filter((item): item is string => Boolean(item));
+		return appendTranscript(state, {
+			id: `knowledge-preview-${event.event_id}`,
+			role: 'knowledge',
+			timestamp: event.timestamp,
+			title: `Knowledge / preview`,
+			content: lines.join('\n') || compactValue(event.payload, 1200),
+			eventType: event.event_type,
+			metadata: event.payload ?? {}
+		});
+	}
+	if (event.event_type === 'knowledge_source_ready' || event.event_type === 'knowledge_ingestion_completed' || event.event_type === 'knowledge_ingestion_failed' || event.event_type === 'knowledge_source_removed') {
+		const payload = event.payload ?? {};
+		const counts = recordValue(payload.counts) ?? {};
+		const error = recordValue(payload.error);
+		const lines = [
+			`source：${stringValue(payload.source_id) || '-'}`,
+			stringValue(payload.mode) ? `mode：${stringValue(payload.mode)}` : null,
+			stringValue(payload.status) ? `status：${stringValue(payload.status)}` : null,
+			typeof numberValue(counts.documents_loaded) === 'number' ? `documents：${numberValue(counts.documents_loaded)}` : null,
+			typeof numberValue(counts.chunks_created) === 'number' ? `chunks：${numberValue(counts.chunks_created)}` : null,
+			stringValue(payload.report_path) ? `report：${stringValue(payload.report_path)}` : null,
+			error ? `error：${stringValue(error.message) || compactValue(error, 300)}` : null
+		].filter((item): item is string => Boolean(item));
+		return appendTranscript(state, {
+			id: `knowledge-result-${event.event_id}`,
+			role: 'knowledge',
+			timestamp: event.timestamp,
+			title: `Knowledge / ${event.event_type.replace(/^knowledge_/, '').replaceAll('_', ' ')}`,
+			content: lines.join('\n') || compactValue(event.payload, 1200),
+			eventType: event.event_type,
+			metadata: payload
+		});
+	}
+	return state;
 }
 
 function appendSchedulerTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {

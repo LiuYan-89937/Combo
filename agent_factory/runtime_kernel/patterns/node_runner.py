@@ -9,7 +9,7 @@ from langgraph.runtime import Runtime
 
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
-from agent_factory.runtime_kernel.observability.schema import TraceEvent
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from agent_factory.runtime_kernel.patterns.state_patches import (
     runtime_graph_patch,
@@ -21,8 +21,6 @@ from agent_factory.runtime_kernel.patterns.state_patches import (
 from agent_factory.runtime_kernel.patterns.node_observability import (
     apply_node_metrics,
     emit_state_event,
-    pop_span,
-    push_span,
     record_bookmark,
 )
 from agent_factory.runtime_kernel.patterns.routing import (
@@ -79,19 +77,22 @@ def make_wrapped_runner(
             finish_state(state, status="failed", error="Execution timed out before node execution.")
             return runtime_graph_patch(state)
         started = perf_counter()
-        span = services.observability_manager.start_span(
-            trace_id=state.observability.trace_id,
-            run_id=state.run.run_id,
-            span_type=span_type,
-            name=node.id,
-            metadata={"impl": node.impl, "node_id": node.id},
-        )
-        push_span(state, span.span_id, span_type, node.id)
+        trace_recorder = getattr(services, "trace_recorder", None)
+        trace_span_id = None
+        if trace_recorder is not None:
+            trace_span_id = trace_recorder.start_span(
+                trace_id=state.observability.trace_id,
+                run_id=state.run.run_id,
+                span_kind=span_type,
+                name=node.id,
+                node_id=node.id,
+                payload={"impl": node.impl, "node_id": node.id},
+            )
         emit_state_event(services, state, "node_entered", node_id=node.id, payload={"impl": node.impl})
         emitted_events: list[dict[str, Any]] = []
 
         def emit_event(payload: dict[str, Any]) -> None:
-            event = TraceEvent(
+            event = RuntimeObservationEvent(
                 trace_id=state.observability.trace_id,
                 run_id=state.run.run_id,
                 event_type=payload.get("event_type", "node_event"),
@@ -100,6 +101,15 @@ def make_wrapped_runner(
             )
             services.observability_manager.emit(event)
             emitted_events.append(event.model_dump(mode="json"))
+            if trace_recorder is not None:
+                trace_recorder.record_event(
+                    trace_id=state.observability.trace_id,
+                    run_id=state.run.run_id,
+                    event_type=event.event_type,
+                    node_id=node.id,
+                    message=event.message,
+                    payload=event.payload,
+                )
             emit_runtime_tool_activity(payload, node_id=node.id)
 
         context = NodeExecutionContext(
@@ -195,14 +205,17 @@ def make_wrapped_runner(
                 payload={"impl": node.impl, "duration_ms": duration_ms},
             )
             record_bookmark(services, updated, context, "completion")
-            services.observability_manager.finish_span(
-                span.span_id,
-                trace_id=updated.observability.trace_id,
-                run_id=updated.run.run_id,
-                status="completed",
-                metadata={"node_id": node.id, "duration_ms": duration_ms},
-            )
-            pop_span(updated, span.span_id)
+            if trace_recorder is not None and trace_span_id is not None:
+                trace_recorder.finish_span(
+                    trace_id=updated.observability.trace_id,
+                    run_id=updated.run.run_id,
+                    span_id=trace_span_id,
+                    span_kind=span_type,
+                    name=node.id,
+                    status="completed",
+                    node_id=node.id,
+                    payload={"node_id": node.id, "duration_ms": duration_ms},
+                )
             return runtime_graph_patch(updated, messages=messages_patch)
         except GraphInterrupt:
             raise
@@ -234,14 +247,17 @@ def make_wrapped_runner(
                 node_id=node.id,
                 payload={"impl": node.impl, "error": str(exc)},
             )
-            services.observability_manager.finish_span(
-                span.span_id,
-                trace_id=failed.observability.trace_id,
-                run_id=failed.run.run_id,
-                status="failed",
-                metadata={"node_id": node.id, "error": str(exc)},
-            )
-            pop_span(failed, span.span_id)
+            if trace_recorder is not None and trace_span_id is not None:
+                trace_recorder.finish_span(
+                    trace_id=failed.observability.trace_id,
+                    run_id=failed.run.run_id,
+                    span_id=trace_span_id,
+                    span_kind=span_type,
+                    name=node.id,
+                    status="failed",
+                    node_id=node.id,
+                    payload={"node_id": node.id, "error": str(exc)},
+                )
             return runtime_graph_patch(failed)
 
     return runner

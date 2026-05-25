@@ -28,6 +28,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
             "artifact",
             "context",
             "dependencies",
+            "knowledge",
             "memory",
             "model",
             "node_provider",
@@ -38,6 +39,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
             "session",
             "state",
             "tools",
+            "trace",
         })
 
     def test_factory_node_provider_covers_all_stage_impls(self) -> None:
@@ -103,6 +105,21 @@ def _test_runtime_contract_view(package, root: Path):
         "enabled": False,
         "config": {"store_path": str(root / "scheduler.sqlite")},
     }
+    contracts["knowledge"] = {
+        "type": "knowledge",
+        "version": "knowledge_contract.v0",
+        "enabled": True,
+        "config": {
+            "root": str(root / "knowledge"),
+            "catalog_path": str(root / "knowledge" / "catalog" / "knowledge.sqlite"),
+            "rag_store": {
+                "backend": "memory",
+                "path": str(root / "knowledge" / "catalog" / "knowledge_store.sqlite"),
+                "namespace_prefix": ["knowledge"],
+                "index_fields": ["content", "title", "summary"],
+            },
+        },
+    }
     contracts["artifact"] = {
         "type": "artifact",
         "version": "artifact_contract.v0",
@@ -112,6 +129,12 @@ def _test_runtime_contract_view(package, root: Path):
             "index_path": str(root / "artifacts" / "index.jsonl"),
             "allowed_kinds": ["report", "artifact"],
         },
+    }
+    contracts["trace"] = {
+        "type": "trace",
+        "version": "trace_contract.v0",
+        "enabled": True,
+        "config": {"root": str(root / "trace")},
     }
     contracts["tools"] = {
         "type": "tools",

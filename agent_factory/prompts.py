@@ -434,7 +434,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- graph_overrides.node_wrappers[].node_id 只能引用第三阶段已有 node_id。\n"
                     "- tools[].id 只能引用第五阶段已有 capability_id。\n"
                     "- 必须填写 bindings；bindings 是成熟装配契约，不是第八阶段临时补齐项。\n"
-                    "- bindings.services 必须声明该 Agent 运行需要的 Runtime 服务契约，例如 model_service、tool_registry、knowledge_engine、context_engine、policy_engine、observability_manager、checkpointer；跨会话记忆不是强制能力，只有需要长期记忆读取或写入时才声明 memory_store 与 memory_system。\n"
+                    "- bindings.services 必须声明该 Agent 运行需要的 Runtime 服务契约，例如 model_service、tool_registry、context_engine、policy_engine、observability_manager、checkpointer；知识系统通过 knowledge contract 与系统工具接入；跨会话记忆不是强制能力，只有需要长期记忆读取或写入时才声明 memory_store 与 memory_system。\n"
                     "- bindings.node_bindings 必须按节点绑定 prompt、tool_access、policy_profile、strategy_profile、output_formatter、custom 等契约。\n"
                     "- cognitive.* 节点必须有 prompt binding；operational.tool_call 节点必须有 tool_access binding；governance.* 节点必须有 policy_profile binding；terminal/finalize 节点必须有 output_formatter binding。\n"
                     "- 标准 binding payload 必须严格遵守 AssemblyReactDecision JSON schema 中对应 payload 类型；不得给标准 payload 添加未声明字段。\n"

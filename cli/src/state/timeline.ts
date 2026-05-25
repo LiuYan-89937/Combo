@@ -1,5 +1,6 @@
 import type {
 	ActivityColor,
+	KnowledgeActivity,
 	RuntimeState,
 	SchedulerActivity,
 	TimelineItem,
@@ -24,9 +25,12 @@ export function buildTimelineItems(state: RuntimeState): TimelineItem[] {
 		.filter(item => !['scheduler_feedback_completed', 'scheduler_feedback_failed'].includes(item.eventType))
 		.slice(-16)
 		.map((item, index) => schedulerTimelineItem(item, index));
+	const knowledgeItems = state.knowledgeActivities
+		.slice(-16)
+		.map((item, index) => knowledgeTimelineItem(item, index));
 	const activityItems = state.mode === 'create_agent'
 		? state.recentActivities
-			.filter(item => !item.eventType.startsWith('tool_') && !item.eventType.startsWith('scheduler_'))
+			.filter(item => !item.eventType.startsWith('tool_') && !item.eventType.startsWith('scheduler_') && !item.eventType.startsWith('knowledge_'))
 			.slice(-18)
 			.map((item, index) => ({
 				id: `activity:${item.activityKey}`,
@@ -55,7 +59,7 @@ export function buildTimelineItems(state: RuntimeState): TimelineItem[] {
 		turnId: null,
 		eventType: 'error' as const
 	}));
-	return [...transcriptItems, ...toolItems, ...schedulerItems, ...activityItems, ...errorItems]
+	return [...transcriptItems, ...toolItems, ...schedulerItems, ...knowledgeItems, ...activityItems, ...errorItems]
 		.sort((left, right) => compareTimelineItems(left, right));
 }
 
@@ -140,6 +144,30 @@ function schedulerTimelineItem(item: SchedulerActivity, index: number): Timeline
 	};
 }
 
+function knowledgeTimelineItem(item: KnowledgeActivity, index: number): TimelineItem {
+	return {
+		id: `knowledge:${item.timestamp}:${item.eventType}:${item.sourceId ?? item.jobId ?? index}`,
+		timestamp: item.timestamp,
+		order: 35_000 + index,
+		color: colorForKnowledgeStatus(item.status),
+		title: `Knowledge ${item.eventType.replace(/^knowledge_/, '').replaceAll('_', ' ')}`,
+		body: [
+			item.sourceId ? `source ${shortTimelineValue(item.sourceId, 24)}` : null,
+			item.jobId ? `job ${shortTimelineValue(item.jobId, 16)}` : null,
+			item.mode ? `mode ${item.mode}` : null,
+			item.phase ? `phase ${item.phase}` : null,
+			item.status ? `status ${item.status}` : null,
+			item.detail || null,
+			item.reportPath ? `report ${item.reportPath}` : null
+		].filter((value): value is string => Boolean(value)).join('\n'),
+		kind: 'knowledge',
+		role: 'knowledge',
+		source: 'knowledge',
+		turnId: null,
+		eventType: item.eventType
+	};
+}
+
 function turnIdForTranscript(item: TranscriptItem, index: number): string | null {
 	const value = item.metadata?.turn_id ?? item.metadata?.turnId;
 	if (typeof value === 'string' && value.trim()) {
@@ -183,6 +211,9 @@ function titleForTranscript(item: TranscriptItem): string {
 	if (item.role === 'scheduler') {
 		return item.title.replace(/^Scheduler \/ /, 'Scheduler ');
 	}
+	if (item.role === 'knowledge') {
+		return item.title.replace(/^Knowledge \/ /, 'Knowledge ');
+	}
 	if (item.role === 'interrupt') {
 		return item.title.replace(/^Interrupt \/ /, 'Interrupt ');
 	}
@@ -198,6 +229,9 @@ function colorForTranscriptRole(role: string): ActivityColor | 'white' {
 	}
 	if (role === 'scheduler') {
 		return 'magenta';
+	}
+	if (role === 'knowledge') {
+		return 'blue';
 	}
 	if (role === 'interrupt') {
 		return 'yellow';
@@ -235,6 +269,19 @@ function colorForSchedulerStatus(status: string | null): ActivityColor {
 		return 'yellow';
 	}
 	return 'magenta';
+}
+
+function colorForKnowledgeStatus(status: string | null): ActivityColor {
+	if (status === 'failed' || status === 'cancelled' || status === 'removed') {
+		return 'red';
+	}
+	if (status === 'ready' || status === 'completed') {
+		return 'green';
+	}
+	if (status === 'running' || status === 'indexing' || status === 'queued') {
+		return 'cyan';
+	}
+	return 'blue';
 }
 
 function toolStatusLabel(status: string): string {

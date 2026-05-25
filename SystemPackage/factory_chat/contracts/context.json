@@ -9,9 +9,9 @@
       "version": "context_policy.v0",
       "compression": {
         "enabled": true,
-        "trigger_token_threshold": 4000,
-        "keep_recent_messages": 4,
-        "max_summary_tokens": 800
+        "trigger_token_threshold": 258000,
+        "keep_recent_messages": 20,
+        "max_summary_tokens": 20000
       },
       "retrieval": {
         "enabled": true,

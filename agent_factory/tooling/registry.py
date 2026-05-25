@@ -6,11 +6,13 @@ from typing import Any, Mapping
 
 from langchain_core.tools import BaseTool
 
-from agent_factory.paths import project_root
+from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.entrypoints import MCPToolClient
+from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import MCPToolCatalogClient
 from agent_factory.tooling.builtins import (
+    get_always_available_system_tool_ids,
     get_builtin_protected_tool_ids,
     get_builtin_tool_ids,
     get_builtin_tool_specs,
@@ -84,6 +86,7 @@ def get_factory_tools(
                 "root": str(_default_filesystem_root()),
                 "allow_external": False,
             },
+            TOOL_OUTPUT_STORE_RESOURCE: ToolOutputStore(factory_artifact_path("tool_outputs")),
             **effective_runtime_resources,
             **base_tool_runtime_resources,
         }
@@ -126,6 +129,8 @@ def _collect_factory_tool_specs(
     specs = get_builtin_tool_specs()
     if not scheduler_enabled_from_env() or "scheduler_runtime" not in tool_runtime_resources:
         specs = [spec for spec in specs if spec.id != "scheduler"]
+    if "knowledge_runtime" not in tool_runtime_resources:
+        specs = [spec for spec in specs if spec.id != "knowledge"]
     effective_mcp_clients: Mapping[str, MCPToolClient] = dict(mcp_tool_clients or {})
     discovered_runtime_resources: dict[str, object] = {}
     if include_extensions:
@@ -143,7 +148,10 @@ def _collect_factory_tool_specs(
                 continue
             registry.register(spec)
         specs = registry.all()
-    return [tool for tool in specs if not selected_ids or tool.id in selected_ids], effective_mcp_clients, discovered_runtime_resources
+    always_available = get_always_available_system_tool_ids()
+    return [
+        tool for tool in specs if not selected_ids or tool.id in selected_ids or tool.id in always_available
+    ], effective_mcp_clients, discovered_runtime_resources
 
 
 def get_factory_model_tools() -> list[BaseTool]:

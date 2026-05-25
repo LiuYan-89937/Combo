@@ -56,7 +56,16 @@ def _factory_memory_runtime():
     handle = LangGraphStoreFactory().build(
         LangGraphStoreConfig(
             backend=config.store.backend,
-            path=Path(config.store.path) if config.store.backend == "sqlite" else None,
+            path=(
+                Path(config.store.path)
+                if config.store.backend == "sqlite" and config.store.path.strip()
+                else None
+            ),
+            connection_uri=config.store.connection_uri,
+            database_name=config.store.database_name,
+            collection_name=config.store.collection_name,
+            setup=config.store.setup,
+            provider_options=config.store.provider_options,
             index=build_memory_store_index(config),
         )
     )
@@ -112,15 +121,40 @@ def shutdown_factory_memory_worker() -> None:
 
 def _factory_memory_config() -> MemorySystemConfig:
     backend = os.getenv("AGENTFACTORY_MEMORY_STORE_BACKEND", "sqlite").strip().lower() or "sqlite"
-    if backend not in {"sqlite", "memory"}:
-        backend = "sqlite"
     path = resolve_project_path(os.getenv("AGENTFACTORY_MEMORY_STORE_PATH", ".agentfactory/memory/factory.sqlite"))
     journal_root = resolve_project_path(".agentfactory/memory/jobs")
     return MemorySystemConfig(
-        store=MemoryStoreRuntimeConfig(backend=backend, path=str(path)),
+        store=MemoryStoreRuntimeConfig(
+            backend=backend,
+            path=str(path),
+            connection_uri=_env_empty_as_none("AGENTFACTORY_MEMORY_STORE_CONNECTION_URI"),
+            database_name=_env_empty_as_none("AGENTFACTORY_MEMORY_STORE_DATABASE_NAME"),
+            collection_name=_env_empty_as_none("AGENTFACTORY_MEMORY_STORE_COLLECTION_NAME"),
+            setup=_env_bool("AGENTFACTORY_MEMORY_STORE_SETUP", default=True),
+        ),
         background=MemoryBackgroundConfig(
             journal_root=str(journal_root),
             write_interval_turns=memory_write_interval_turns_from_env(),
         ),
         semantic_index=memory_semantic_index_config_from_env(),
     )
+
+
+def _env_empty_as_none(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default

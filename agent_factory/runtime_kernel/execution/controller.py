@@ -11,7 +11,7 @@ from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.memory_system.segment import build_conversation_segment
 from agent_factory.memory_system.schema import MemoryWriteJob
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
-from agent_factory.runtime_kernel.observability.schema import TraceEvent
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
@@ -192,7 +192,7 @@ class ExecutionController:
         payload: dict[str, Any] | None = None,
         subgraph_id: str | None = None,
     ) -> None:
-        event = TraceEvent(
+        event = RuntimeObservationEvent(
             trace_id=state.observability.trace_id,
             run_id=state.run.run_id,
             event_type=event_type,
@@ -203,6 +203,28 @@ class ExecutionController:
         )
         compiled_app.services.observability_manager.emit(event)
         state.observability.events.append(event.model_dump(mode="json"))
+        trace_recorder = getattr(compiled_app.services, "trace_recorder", None)
+        if trace_recorder is not None:
+            trace_recorder.ensure_trace(
+                trace_id=state.observability.trace_id,
+                run_id=state.run.run_id,
+                agent_id=state.run.agent_id,
+                session_id=state.run.session_id,
+            )
+            trace_recorder.record_event(
+                trace_id=state.observability.trace_id,
+                run_id=state.run.run_id,
+                event_type=event_type,
+                node_id=node_id,
+                message=message,
+                payload=payload or {},
+                status=str(payload.get("finish_status")) if isinstance(payload, dict) and payload.get("finish_status") else None,
+            )
+            if event_type in {"run_completed", "run_failed"}:
+                trace_recorder.finish_trace(
+                    trace_id=state.observability.trace_id,
+                    status="failed" if event_type == "run_failed" else "completed",
+                )
 
     def _enqueue_memory_write(
         self,

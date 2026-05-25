@@ -25,9 +25,9 @@ def emit_context_event(
     if event_sink is not None:
         event_sink(event_payload)
     if services is not None and state is not None and getattr(services, "observability_manager", None) is not None:
-        from agent_factory.runtime_kernel.observability.schema import TraceEvent
+        from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 
-        event = TraceEvent(
+        event = RuntimeObservationEvent(
             trace_id=state.observability.trace_id,
             run_id=state.run.run_id,
             event_type=event_type,
@@ -36,6 +36,15 @@ def emit_context_event(
         )
         services.observability_manager.emit(event)
         state.observability.events.append(event.model_dump(mode="json"))
+        trace_recorder = getattr(services, "trace_recorder", None)
+        if trace_recorder is not None:
+            trace_recorder.record_event(
+                trace_id=state.observability.trace_id,
+                run_id=state.run.run_id,
+                event_type=event_type,
+                node_id=node_id,
+                payload=event_payload,
+            )
     _emit_stream_event(event_payload)
 
 

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from agent_factory.tooling.builtins import get_builtin_tool_ids, get_builtin_tool_specs
+from agent_factory.tooling.builtins import (
+    get_always_available_system_tool_ids,
+    get_builtin_tool_ids,
+    get_builtin_tool_specs,
+)
 from agent_factory.tooling.providers.base import ToolProviderContext, ToolProviderResult
 
 
@@ -19,7 +23,8 @@ class BuiltinToolProvider:
             raise ValueError("unknown builtin tool ids: " + ", ".join(unknown_ids))
         specs = get_builtin_tool_specs()
         if self._tool_ids:
-            specs = [spec for spec in specs if spec.id in self._tool_ids]
+            always_available = get_always_available_system_tool_ids()
+            specs = [spec for spec in specs if spec.id in self._tool_ids or spec.id in always_available]
         return ToolProviderResult(
             tool_specs=specs,
             system_tool_ids=[spec.id for spec in specs],

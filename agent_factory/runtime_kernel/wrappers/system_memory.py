@@ -5,7 +5,7 @@ from typing import Any
 from agent_factory.memory_system.injection import inject_runtime_cross_session_memory
 from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
-from agent_factory.runtime_kernel.observability.schema import TraceEvent
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
@@ -33,7 +33,7 @@ SYSTEM_MEMORY_RETRIEVE_WRAPPER = MemoryRetrieveSystemWrapper()
 
 
 def _emit(context: NodeExecutionContext, state: RuntimeState, event_type: str, payload: dict[str, Any]) -> None:
-    event = TraceEvent(
+    event = RuntimeObservationEvent(
         trace_id=state.observability.trace_id,
         run_id=state.run.run_id,
         event_type=event_type,
@@ -42,3 +42,12 @@ def _emit(context: NodeExecutionContext, state: RuntimeState, event_type: str, p
     )
     context.services.observability_manager.emit(event)
     state.observability.events.append(event.model_dump(mode="json"))
+    trace_recorder = getattr(context.services, "trace_recorder", None)
+    if trace_recorder is not None:
+        trace_recorder.record_event(
+            trace_id=state.observability.trace_id,
+            run_id=state.run.run_id,
+            event_type=event_type,
+            node_id=context.node_id,
+            payload=payload,
+        )

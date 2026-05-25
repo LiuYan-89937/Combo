@@ -5,7 +5,6 @@ from agent_factory.runtime_kernel.nodes.standard.close import TerminalCloseNode
 from agent_factory.runtime_kernel.nodes.standard.commit import TerminalCommitNode
 from agent_factory.runtime_kernel.nodes.standard.finalize import FinalizeNode
 from agent_factory.runtime_kernel.nodes.standard.ingress import IngressNode
-from agent_factory.runtime_kernel.nodes.standard.knowledge_retrieve import OperationalKnowledgeRetrieveNode
 from agent_factory.runtime_kernel.nodes.standard.plan import CognitivePlanNode
 from agent_factory.runtime_kernel.nodes.standard.postcheck import GovernancePostcheckNode
 from agent_factory.runtime_kernel.nodes.standard.precheck import GovernancePrecheckNode
@@ -27,7 +26,6 @@ __all__ = [
     "GovernancePrecheckNode",
     "GovernanceRefusalGateNode",
     "IngressNode",
-    "OperationalKnowledgeRetrieveNode",
     "OperationalResourceProbeNode",
     "OperationalToolCallNode",
     "TerminalCloseNode",

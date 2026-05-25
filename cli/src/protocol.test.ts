@@ -67,4 +67,31 @@ describe('frontend bridge protocol', () => {
 			expect(parsed.event_type).toBe(event_type);
 		}
 	});
+
+	it('accepts knowledge lifecycle events', () => {
+		const parsed = eventSchema.parse({
+			event_id: 'knowledge-event',
+			protocol_version: 'factory_frontend.v1',
+			event_type: 'knowledge_source_preview_available',
+			producer_type: 'factory_bridge',
+			request_id: null,
+			run_id: null,
+			session_id: null,
+			thread_id: null,
+			mode: 'chat',
+			graph_id: 'factory_bridge',
+			node_id: null,
+			node_label: null,
+			node_kind: null,
+			stage_id: null,
+			span_id: null,
+			parent_span_id: null,
+			sequence: 1,
+			timestamp: '2026-05-11T00:00:00Z',
+			severity: null,
+			message: null,
+			payload: {source_id: 'docs', status: 'completed'}
+		});
+		expect(parsed.event_type).toBe('knowledge_source_preview_available');
+	});
 });

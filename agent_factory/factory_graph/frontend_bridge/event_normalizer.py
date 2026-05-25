@@ -104,16 +104,6 @@ class RuntimeEventNormalizer:
 
     def emit_run_completed(self, payload: dict[str, Any]) -> None:
         self.complete_open_model_streams(reason="run_completed")
-        self.runtime_event(
-            "trace_snapshot",
-            span_id=self.run_span_id,
-            payload={
-                "run_id": self.run_id,
-                "stage_spans": self.stage_spans,
-                "node_spans": self.node_spans,
-                "sequence": self.sequence,
-            },
-        )
         self.runtime_event("run_completed", span_id=self.run_span_id, payload=payload)
 
     def emit_run_failed(self, exc: Exception) -> None:
@@ -166,6 +156,9 @@ class RuntimeEventNormalizer:
             return
         if chunk.get("type") == "context_event":
             self._emit_context_event(chunk.get("payload") or {})
+            return
+        if chunk.get("type") == "knowledge_event":
+            self._emit_knowledge_event(chunk.get("payload") or {})
             return
         if chunk.get("type") != "model_activity":
             self.runtime_event(
@@ -260,6 +253,35 @@ class RuntimeEventNormalizer:
             "scheduler_run_cancelled",
             "scheduler_feedback_completed",
             "scheduler_feedback_failed",
+        }:
+            return
+        self.runtime_event(
+            event_type,  # type: ignore[arg-type]
+            stage_id=self.current_stage_id,
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self.run_span_id,
+            severity="error" if event_type.endswith("failed") else None,
+            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        )
+
+    def _emit_knowledge_event(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        event_type = str(payload.get("event_type") or "")
+        if event_type not in {
+            "knowledge_source_prepare_started",
+            "knowledge_source_preview_available",
+            "knowledge_source_approval_requested",
+            "knowledge_source_registered",
+            "knowledge_ingestion_queued",
+            "knowledge_ingestion_started",
+            "knowledge_ingestion_progress",
+            "knowledge_ingestion_completed",
+            "knowledge_ingestion_failed",
+            "knowledge_ingestion_cancelled",
+            "knowledge_source_ready",
+            "knowledge_source_removed",
+            "knowledge_source_reindex_requested",
         }:
             return
         self.runtime_event(

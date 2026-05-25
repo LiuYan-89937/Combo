@@ -34,6 +34,7 @@ from agent_factory.runtime_contracts.builtins import (
     default_artifact_contract,
     default_context_contract,
     default_dependencies_contract,
+    default_knowledge_contract,
     default_memory_contract,
     default_model_contract,
     default_node_provider_contract,
@@ -44,6 +45,7 @@ from agent_factory.runtime_contracts.builtins import (
     default_session_contract,
     default_state_contract,
     default_tools_contract,
+    default_trace_contract,
 )
 from agent_factory.runtime_render import NodeRenderSpec, RenderManifest, validate_render_manifest
 from agent_factory.runtime_kernel.patterns import PatternRegistry
@@ -453,8 +455,6 @@ def _required_service_kinds(spec: AgentAssemblySpec, pattern_nodes: dict[str, di
         required.add("context_engine")
     if spec.tools or any(binding.binding_type == "tool_access" for binding in spec.bindings.node_bindings):
         required.add("tool_registry")
-    if any(node["impl"].startswith("operational.knowledge") for node in pattern_nodes.values()):
-        required.add("knowledge_engine")
     if any(node["impl"].startswith("governance.") for node in pattern_nodes.values()):
         required.add("policy_engine")
     return required
@@ -580,6 +580,7 @@ def _package_contracts(spec: AgentAssemblySpec) -> dict[str, dict[str, object]]:
         "artifact": default_artifact_contract().model_dump(mode="json"),
         "context": default_context_contract().model_dump(mode="json"),
         "dependencies": default_dependencies_contract().model_dump(mode="json"),
+        "knowledge": default_knowledge_contract().model_dump(mode="json"),
         "model": default_model_contract().model_dump(mode="json"),
         "node_provider": default_node_provider_contract().model_dump(mode="json"),
         "render": default_render_contract().model_dump(mode="json"),
@@ -589,6 +590,7 @@ def _package_contracts(spec: AgentAssemblySpec) -> dict[str, dict[str, object]]:
         "session": default_session_contract().model_dump(mode="json"),
         "state": default_state_contract().model_dump(mode="json"),
         "tools": default_tools_contract().model_dump(mode="json"),
+        "trace": default_trace_contract().model_dump(mode="json"),
     }
     if _assembly_memory_enabled(spec):
         contracts["memory"] = default_memory_contract().model_dump(mode="json")
@@ -648,6 +650,7 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "contracts/artifact.json",
         "contracts/dependencies.json",
         "contracts/context.json",
+        "contracts/knowledge.json",
         "contracts/model.json",
         "contracts/node_provider.json",
         "contracts/render.json",
@@ -657,6 +660,7 @@ def _validate_materialization_plan(plan: PackageMaterializationPlan, state: Fact
         "contracts/session.json",
         "contracts/state.json",
         "contracts/tools.json",
+        "contracts/trace.json",
     }
     if "memory" in plan.contracts:
         required.add("contracts/memory.json")

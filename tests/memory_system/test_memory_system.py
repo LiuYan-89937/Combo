@@ -24,12 +24,9 @@ from agent_factory.memory_system.schema import (
     MemoryWriteReport,
 )
 from agent_factory.memory_system.writer import MemoryStoreWriter
-from agent_factory.runtime_kernel.persistence import (
-    LangGraphStoreConfig,
-    LangGraphStoreFactory,
-    LangGraphStoreIndexConfig,
-    MemoryRecord,
-)
+from langgraph.store.base import IndexConfig
+
+from agent_factory.runtime_kernel.persistence import LangGraphStoreConfig, LangGraphStoreFactory, MemoryRecord
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
@@ -221,7 +218,7 @@ class MemorySystemTest(unittest.TestCase):
                 LangGraphStoreConfig(
                     backend="sqlite",
                     path=Path(temp_dir) / "memory.sqlite",
-                    index=LangGraphStoreIndexConfig(embed=_FakeEmbeddings(), dims=3, fields=("content",)),
+                    index=IndexConfig(embed=_FakeEmbeddings(), dims=3, fields=["content"]),
                 )
             ).store
             namespace = ("memory", "factory", "default")
@@ -245,7 +242,7 @@ class MemorySystemTest(unittest.TestCase):
                 LangGraphStoreConfig(
                     backend="sqlite",
                     path=Path(temp_dir) / "memory.sqlite",
-                    index=LangGraphStoreIndexConfig(embed=_FailingEmbeddings(), dims=3, fields=("content",)),
+                    index=IndexConfig(embed=_FailingEmbeddings(), dims=3, fields=["content"]),
                 )
             ).store
             namespace = ("memory", "factory", "default")

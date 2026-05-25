@@ -15,6 +15,7 @@ from agent_factory.tooling.gateway import (
     ToolExecutionGateway,
     default_tool_max_revisions,
 )
+from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore, default_tool_output_policy
 from agent_factory.tooling.risk import ToolRiskEvaluator
 from agent_factory.tooling.schema_compiler import compile_json_schema
 from agent_factory.tooling.spec import ToolSpec
@@ -47,6 +48,8 @@ class ToolCompiler:
         self.resources = resources or {}
         self.approval_handler = approval_handler
         self.max_revisions = max_revisions or default_tool_max_revisions()
+        self.output_store = _output_store_from_resources(self.resources)
+        self.output_policy = default_tool_output_policy()
 
     def compile(self, spec: ToolSpec) -> BaseTool:
         try:
@@ -67,6 +70,8 @@ class ToolCompiler:
             llm_risk_prompt=llm_risk_prompt,
             approval_handler=self.approval_handler,
             max_revisions=self.max_revisions,
+            output_store=self.output_store,
+            output_policy=self.output_policy,
         )
 
         def invoke_tool(**kwargs: Any) -> dict[str, Any]:
@@ -195,3 +200,8 @@ def _schema_accepts_null(schema: dict[str, Any]) -> bool:
         ):
             return True
     return False
+
+
+def _output_store_from_resources(resources: Mapping[str, Any]) -> ToolOutputStore | None:
+    value = resources.get(TOOL_OUTPUT_STORE_RESOURCE)
+    return value if isinstance(value, ToolOutputStore) else None

@@ -104,11 +104,7 @@ class AgentAssemblyRunner:
             "final_answer": state.conversation.final_answer,
             "final_state_snapshot": state.model_dump(mode="json"),
             "event_log": state.observability.events,
-            "trace_summary": (
-                compiled.compiled_app.services.observability_manager.summary_for(state.run.run_id).model_dump(mode="json")
-                if compiled.compiled_app.services.observability_manager.summary_for(state.run.run_id)
-                else None
-            ),
+            "trace_summary": _trace_summary(compiled.compiled_app.services, state),
         }
         errors = [result["error"]] if result["error"] else []
         return AssemblyRunReport(
@@ -131,3 +127,10 @@ def _error_from_state(state) -> dict[str, str] | None:
         or "runtime",
         "reason": "runtime_failed",
     }
+
+
+def _trace_summary(services, state) -> dict | None:
+    recorder = getattr(services, "trace_recorder", None)
+    if recorder is None:
+        return None
+    return recorder.manifest_for(state.observability.trace_id)

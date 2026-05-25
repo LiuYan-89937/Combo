@@ -116,6 +116,21 @@ class RuntimeContractsTest(unittest.TestCase):
             self.assertEqual(tool_result.status, "completed")
             self.assertEqual(tool_result.output["output"]["jobs"][0]["job_id"], "job_1")
 
+    def test_enabled_knowledge_contract_contributes_runtime_and_system_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_path = _write_package(Path(temp_dir), memory_enabled=False)
+            package = AgentPackageLoader().load_path(package_path)
+            result = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+                package,
+                base_services=_base_services(),
+            )
+
+            self.assertIsNotNone(result.services.knowledge_runtime)
+            self.assertIs(result.tool_runtime_resources["knowledge_runtime"], result.services.knowledge_runtime)
+            self.assertIs(result.services.tool_runtime_resources["knowledge_runtime"], result.services.knowledge_runtime)
+            self.assertIn("knowledge", result.services.tool_registry.list_tool_ids())
+            self.assertIn("knowledge", result.services.tool_registry.system_tool_ids())
+
     def test_runtime_resources_must_be_json_serializable(self) -> None:
         with self.assertRaises(RuntimeContributionMergeError) as context:
             RuntimeContributionMerger(base_services=_base_services()).merge(
@@ -226,7 +241,6 @@ def _base_services() -> RuntimeServices:
     return RuntimeServices(
         model_service=object(),
         model_operation_service=object(),
-        knowledge_engine=object(),
         context_engine=object(),
         policy_engine=object(),
         observability_manager=object(),
@@ -250,6 +264,7 @@ def _write_package(
         "artifact": "contracts/artifact.json",
         "context": "contracts/context.json",
         "dependencies": "contracts/dependencies.json",
+        "knowledge": "contracts/knowledge.json",
         "model": "contracts/model.json",
         "node_provider": "contracts/node_provider.json",
         "render": "contracts/render.json",
@@ -258,12 +273,31 @@ def _write_package(
         "scheduler": "contracts/scheduler.json",
         "session": "contracts/session.json",
         "state": "contracts/state.json",
+        "trace": "contracts/trace.json",
     }
     if include_tools_contract:
         contracts["tools"] = "contracts/tools.json"
     contracts["memory"] = "contracts/memory.json"
     _write_json(root / "contracts/render.json", {"type": "render", "version": "render_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/context.json", {"type": "context", "version": "context_contract.v0", "enabled": True, "config": {}})
+    _write_json(
+        root / "contracts/knowledge.json",
+        {
+            "type": "knowledge",
+            "version": "knowledge_contract.v0",
+            "enabled": True,
+            "config": {
+                "root": str(root / ".agent_runtime" / "knowledge"),
+                "catalog_path": str(root / ".agent_runtime" / "knowledge" / "catalog" / "knowledge.sqlite"),
+                "rag_store": {
+                    "backend": "memory",
+                    "path": str(root / ".agent_runtime" / "knowledge" / "catalog" / "knowledge_store.sqlite"),
+                    "namespace_prefix": ["knowledge"],
+                    "index_fields": ["content", "title", "summary"],
+                },
+            },
+        },
+    )
     _write_json(root / "contracts/resources.json", {"type": "resources", "version": "resources_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/sandbox.json", {"type": "sandbox", "version": "sandbox_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/state.json", {"type": "state", "version": "state_contract.v0", "enabled": False, "config": {}})
@@ -280,6 +314,7 @@ def _write_package(
     )
     _write_json(root / "contracts/dependencies.json", {"type": "dependencies", "version": "dependencies_contract.v0", "enabled": True, "config": {}})
     _write_json(root / "contracts/model.json", {"type": "model", "version": "model_contract.v0", "enabled": True, "config": model_config or {}})
+    _write_json(root / "contracts/trace.json", {"type": "trace", "version": "trace_contract.v0", "enabled": True, "config": {"root": str(root / ".agent_runtime" / "trace")}})
     _write_json(
         root / "contracts/session.json",
         {

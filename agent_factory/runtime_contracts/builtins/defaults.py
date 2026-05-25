@@ -6,6 +6,7 @@ from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
     DependenciesContract,
+    KnowledgeContract,
     MemoryContract,
     MemoryContractConfig,
     ModelContract,
@@ -18,6 +19,7 @@ from agent_factory.runtime_contracts.schema import (
     SessionContractConfig,
     StateContract,
     ToolsContract,
+    TraceContract,
 )
 
 
@@ -65,6 +67,14 @@ def default_memory_contract() -> MemoryContract:
 
 def default_context_contract() -> ContextContract:
     return ContextContract()
+
+
+def default_trace_contract() -> TraceContract:
+    return TraceContract()
+
+
+def default_knowledge_contract() -> KnowledgeContract:
+    return KnowledgeContract()
 
 
 def default_render_contract() -> RenderContract:

@@ -3,21 +3,21 @@ from __future__ import annotations
 from langgraph.config import get_stream_writer
 
 from agent_factory.runtime_kernel.bindings import RuntimeServices
-from agent_factory.runtime_kernel.observability.schema import TraceEvent
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_render import RuntimeRenderEvent
 
 
-def runtime_render_event_to_trace_event(
+def runtime_render_event_to_observation_event(
     render_event: RuntimeRenderEvent,
     *,
     trace_id: str,
     run_id: str,
-) -> TraceEvent:
+) -> RuntimeObservationEvent:
     payload = {
         "runtime_render": render_event.model_dump(mode="json"),
     }
-    return TraceEvent(
+    return RuntimeObservationEvent(
         trace_id=trace_id,
         run_id=run_id,
         event_type=render_event.event_type,
@@ -27,8 +27,8 @@ def runtime_render_event_to_trace_event(
     )
 
 
-def trace_event_to_runtime_render_event(trace_event: TraceEvent) -> RuntimeRenderEvent | None:
-    raw_event = trace_event.payload.get("runtime_render")
+def observation_event_to_runtime_render_event(event: RuntimeObservationEvent) -> RuntimeRenderEvent | None:
+    raw_event = event.payload.get("runtime_render")
     if not isinstance(raw_event, dict):
         return None
     return RuntimeRenderEvent.model_validate(raw_event)
@@ -40,13 +40,23 @@ def emit_runtime_render_event(
     state: RuntimeState,
     render_event: RuntimeRenderEvent,
 ) -> None:
-    trace_event = runtime_render_event_to_trace_event(
+    observation_event = runtime_render_event_to_observation_event(
         render_event,
         trace_id=state.observability.trace_id,
         run_id=state.run.run_id,
     )
-    services.observability_manager.emit(trace_event)
-    state.observability.events.append(trace_event.model_dump(mode="json"))
+    services.observability_manager.emit(observation_event)
+    state.observability.events.append(observation_event.model_dump(mode="json"))
+    trace_recorder = getattr(services, "trace_recorder", None)
+    if trace_recorder is not None:
+        trace_recorder.record_event(
+            trace_id=state.observability.trace_id,
+            run_id=state.run.run_id,
+            event_type=render_event.event_type,
+            node_id=render_event.node_id,
+            message=render_event.message,
+            payload={"runtime_render": render_event.model_dump(mode="json")},
+        )
     _emit_stream_event(render_event)
 
 

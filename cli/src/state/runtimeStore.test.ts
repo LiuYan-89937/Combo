@@ -321,6 +321,40 @@ describe('RuntimeStore', () => {
 		vi.useRealTimers();
 	});
 
+	it('archives knowledge preview and activity events without exposing document text', () => {
+		const store = createRuntimeStore();
+
+		store.dispatch(event('knowledge_source_preview_available', {
+			payload: {
+				source_id: 'docs',
+				mode: 'rag',
+				status: 'completed',
+				preview: {
+					source_id: 'docs',
+					source_type: 'filesystem',
+					display_name: 'Project docs',
+					estimated_documents: 3,
+					requires_embedding: true
+				}
+			}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.knowledgeActivities).toHaveLength(1);
+		expect(snapshot.knowledgeActivities[0]).toMatchObject({
+			sourceId: 'docs',
+			mode: 'rag',
+			status: 'completed'
+		});
+		expect(snapshot.transcript.at(-1)).toMatchObject({
+			role: 'knowledge',
+			title: 'Knowledge / preview'
+		});
+		expect(snapshot.timelineItems.some(item => item.kind === 'knowledge' && item.source === 'knowledge')).toBe(true);
+		expect(snapshot.transcript.at(-1)?.content).toContain('来源：Project docs');
+		expect(snapshot.transcript.at(-1)?.content).not.toContain('document text');
+	});
+
 	it('shows skipped context compression separately from completed compression', () => {
 		vi.useFakeTimers();
 		const store = createRuntimeStore();

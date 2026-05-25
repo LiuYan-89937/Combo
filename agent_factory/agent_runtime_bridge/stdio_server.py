@@ -19,6 +19,7 @@ from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
@@ -153,6 +154,7 @@ class BridgeRuntimeState:
         compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
         self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
         _configure_scheduler_runtime(package=package, compiled=compiled, facade=facade)
+        _configure_knowledge_runtime(compiled=compiled)
         self.background_workers.add_many(runtime_build.background_workers)
         for lifecycle_event in self.background_workers.start_all():
             if lifecycle_event.status == "failed":
@@ -224,6 +226,13 @@ def _configure_scheduler_runtime(*, package: LoadedAgentPackage, compiled: Any, 
         graph_runner=_scheduled_graph_runner(package=package, compiled=compiled, facade=facade),
         tool_runner=runtime_tool_runner(tool_registry) if tool_registry is not None else None,
     )
+
+
+def _configure_knowledge_runtime(*, compiled: Any) -> None:
+    knowledge_runtime = getattr(compiled.compiled_app.services, "knowledge_runtime", None)
+    if knowledge_runtime is None:
+        return
+    knowledge_runtime.event_sink = _knowledge_event_sink
 
 
 def _emit_worker_lifecycle_failure(*, package: LoadedAgentPackage, lifecycle_event: WorkerLifecycleEvent) -> None:
@@ -327,6 +336,22 @@ def _scheduler_event_sink(payload: SchedulerEventPayload) -> None:
             graph_id="agent_package_scheduler",
             producer_type="agent_runtime",
             payload={key: value for key, value in payload.model_dump(mode="json").items() if key != "event_type"},
+        )
+    )
+
+
+def _knowledge_event_sink(payload: dict[str, Any]) -> None:
+    event_type = str(payload.get("event_type") or "")
+    if event_type not in KNOWLEDGE_EVENT_TYPES:
+        event_type = "knowledge_ingestion_progress"
+    _write_event(
+        event(
+            event_type,  # type: ignore[arg-type]
+            mode="agent_package",
+            graph_id="agent_package_knowledge",
+            producer_type="agent_runtime",
+            severity="error" if event_type.endswith("failed") else None,
+            payload={key: value for key, value in payload.items() if key != "event_type"},
         )
     )
 

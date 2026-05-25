@@ -16,7 +16,6 @@ class ContextEngine:
         variables = binding.get("variables") or []
         context = {
             "current_user_input": state.conversation.current_user_input,
-            "retrieved_items": state.knowledge.ranked_items or state.knowledge.retrieved_items,
             "policy": {
                 "risk_level": state.policy.risk_level,
                 "blocked": state.policy.blocked,
@@ -32,11 +31,6 @@ class ContextEngine:
                     }
                 elif key == "context":
                     filtered["context"] = state.context.model_context
-                elif key == "knowledge":
-                    filtered["knowledge"] = {
-                        "retrieved_items": state.knowledge.ranked_items or state.knowledge.retrieved_items,
-                        "citations": state.knowledge.citations,
-                    }
                 else:
                     filtered[key] = context.get(key)
             return filtered
@@ -50,9 +44,6 @@ class ContextEngine:
     ) -> dict[str, Any]:
         return {
             "current_user_input": state.conversation.current_user_input,
-            "knowledge": {
-                "retrieved_items": state.knowledge.ranked_items or state.knowledge.retrieved_items,
-            },
             "policy": {
                 "risk_level": state.policy.risk_level,
             },

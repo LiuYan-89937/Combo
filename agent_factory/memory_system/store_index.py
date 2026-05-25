@@ -11,10 +11,10 @@ def build_memory_store_index(config: MemorySystemConfig):
     settings = get_embedding_model_settings()
     if embeddings is None or settings.dims is None:
         return None
-    from agent_factory.runtime_kernel.persistence import LangGraphStoreIndexConfig
+    from langgraph.store.base import IndexConfig
 
-    return LangGraphStoreIndexConfig(
+    return IndexConfig(
         embed=embeddings,
         dims=settings.dims,
-        fields=tuple(config.semantic_index.fields or ["$"]),
+        fields=list(config.semantic_index.fields or ["$"]),
     )

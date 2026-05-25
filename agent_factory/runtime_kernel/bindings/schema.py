@@ -10,10 +10,11 @@ ServiceKind = Literal[
     "tool_registry",
     "memory_store",
     "memory_system",
-    "knowledge_engine",
+    "knowledge_runtime",
     "context_engine",
     "policy_engine",
     "observability_manager",
+    "trace_recorder",
     "checkpointer",
     "harness_bridge",
 ]

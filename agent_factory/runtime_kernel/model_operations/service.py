@@ -79,11 +79,27 @@ class ModelOperationService:
             tools=tool_list,
             source="model_operation.before_call",
         )
+        trace_span_id = _start_trace_span(
+            state=state,
+            services=services,
+            node_id=node_id,
+            operation="tool_bound_chat",
+            payload={"model_role": self.model_role, "tool_count": len(tool_list)},
+        )
         _emit(emit_event, "model_call_started", {"operation": "tool_bound_chat", "model_role": self.model_role})
         try:
             response = _bind_tools(model, tool_list).invoke(request_messages)
         except Exception as exc:
             _emit(emit_event, "model_call_failed", {"operation": "tool_bound_chat", "error": str(exc)})
+            _finish_trace_span(
+                state=state,
+                services=services,
+                node_id=node_id,
+                span_id=trace_span_id,
+                operation="tool_bound_chat",
+                status="failed",
+                payload={"error": str(exc)},
+            )
             raise
         text = _content_to_text(getattr(response, "content", response)).strip()
         tool_calls = _tool_calls_from_response(response)
@@ -102,6 +118,15 @@ class ModelOperationService:
             services=services,
             node_id=node_id,
             response=response,
+        )
+        _finish_trace_span(
+            state=state,
+            services=services,
+            node_id=node_id,
+            span_id=trace_span_id,
+            operation="tool_bound_chat",
+            status="completed",
+            payload={"tool_call_count": len(tool_calls), "usage_metadata": usage_metadata},
         )
         return ModelInvocationResult(
             ai_message=response if isinstance(response, BaseMessage) else None,
@@ -129,6 +154,8 @@ class ModelOperationService:
         max_attempts: int = 3,
         emit_event=None,
         operation_metadata: dict[str, Any] | None = None,
+        services: Any | None = None,
+        node_id: str | None = None,
     ) -> BaseModel:
         model, metadata = self._resolve_model()
         request_messages = list(prebuilt_messages) if prebuilt_messages is not None else _messages_for_state(
@@ -141,6 +168,13 @@ class ModelOperationService:
         last_error: Exception | None = None
         operation_context = {**metadata, **(operation_metadata or {})}
         schema_payload = _schema_payload(output_model)
+        trace_span_id = _start_trace_span(
+            state=state,
+            services=services,
+            node_id=node_id,
+            operation="structured_json",
+            payload={"schema_name": output_model.__name__, **operation_context},
+        )
         for attempt in range(1, attempts + 1):
             _emit(
                 emit_event,
@@ -163,6 +197,15 @@ class ModelOperationService:
                     emit_event,
                     "model_call_completed",
                     {"operation": "structured_json", "attempt": attempt},
+                )
+                _finish_trace_span(
+                    state=state,
+                    services=services,
+                    node_id=node_id,
+                    span_id=trace_span_id,
+                    operation="structured_json",
+                    status="completed",
+                    payload={"attempt": attempt, "schema_name": output_model.__name__},
                 )
                 return parsed
             except Exception as exc:
@@ -191,6 +234,15 @@ class ModelOperationService:
                             )
                         ),
                     ]
+        _finish_trace_span(
+            state=state,
+            services=services,
+            node_id=node_id,
+            span_id=trace_span_id,
+            operation="structured_json",
+            status="failed",
+            payload={"error": str(last_error), "schema_name": output_model.__name__},
+        )
         raise RuntimeError(f"structured model operation failed after {attempts} attempts: {last_error}")
 
     def _resolve_model(self) -> tuple[Any, dict[str, Any]]:
@@ -206,6 +258,52 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
         return
     emit_event({"event_type": event_type, **payload})
+
+
+def _start_trace_span(
+    *,
+    state: Any,
+    services: Any | None,
+    node_id: str | None,
+    operation: str,
+    payload: dict[str, Any],
+) -> str | None:
+    recorder = getattr(services, "trace_recorder", None) if services is not None else None
+    if recorder is None or state is None:
+        return None
+    return recorder.start_span(
+        trace_id=state.observability.trace_id,
+        run_id=state.run.run_id,
+        span_kind="model.call",
+        name=operation,
+        node_id=node_id,
+        payload=payload,
+    )
+
+
+def _finish_trace_span(
+    *,
+    state: Any,
+    services: Any | None,
+    node_id: str | None,
+    span_id: str | None,
+    operation: str,
+    status: str,
+    payload: dict[str, Any],
+) -> None:
+    recorder = getattr(services, "trace_recorder", None) if services is not None else None
+    if recorder is None or state is None or span_id is None:
+        return
+    recorder.finish_span(
+        trace_id=state.observability.trace_id,
+        run_id=state.run.run_id,
+        span_id=span_id,
+        span_kind="model.call",
+        name=operation,
+        status=status,
+        node_id=node_id,
+        payload=payload,
+    )
 
 
 def _structured_model(

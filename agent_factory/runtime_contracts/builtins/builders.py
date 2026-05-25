@@ -6,7 +6,10 @@ import json
 
 from langgraph.errors import GraphInterrupt
 
-from agent_factory.context_system.runtime import default_context_runtime
+from agent_factory.context_system.runtime import ContextSystemRuntime
+from agent_factory.context_system.sources import default_context_sources
+from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeContextSource, KnowledgeIngestionWorker, KnowledgeRuntime
+from agent_factory.knowledge_system.store_index import build_knowledge_store_index
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
@@ -15,6 +18,7 @@ from agent_factory.runtime_contracts.contribution import RuntimeContribution, Ru
 from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
+    KnowledgeContract,
     MemoryContract,
     DependenciesContract,
     ModelContract,
@@ -26,6 +30,7 @@ from agent_factory.runtime_contracts.schema import (
     SessionContract,
     StateContract,
     ToolsContract,
+    TraceContract,
 )
 from agent_factory.artifact_system import ArtifactStore, ReportStore
 from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
@@ -42,9 +47,12 @@ from agent_factory.runtime_kernel.persistence import (
 )
 from agent_factory.runtime_kernel.types import ToolExecutionResult
 from agent_factory.tooling.compiler import ToolCompiler
+from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
+from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import BuiltinToolProvider, PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.registry import ToolRegistry
 from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
+from agent_factory.trace_system import JSONLTraceStore, TraceRecorder
 
 
 class SessionContractBuilder:
@@ -83,6 +91,10 @@ class ToolsContractBuilder:
         mcp_clients = {}
         system_tool_ids: set[str] = set()
         instance_extension_root = Path(config.instance_extension_root).expanduser().resolve()
+        tool_runtime_resources.setdefault(
+            TOOL_OUTPUT_STORE_RESOURCE,
+            ToolOutputStore(_tool_output_root(context=context, instance_extension_root=instance_extension_root)),
+        )
         provider_context = ToolProviderContext(
             package_root=context.package_root,
             extension_root=instance_extension_root,
@@ -102,6 +114,9 @@ class ToolsContractBuilder:
             if "scheduler_runtime" not in tool_runtime_resources:
                 builtin_result.tool_specs = [spec for spec in builtin_result.tool_specs if spec.id != "scheduler"]
                 builtin_result.system_tool_ids = [tool_id for tool_id in builtin_result.system_tool_ids if tool_id != "scheduler"]
+            if "knowledge_runtime" not in tool_runtime_resources:
+                builtin_result.tool_specs = [spec for spec in builtin_result.tool_specs if spec.id != "knowledge"]
+                builtin_result.system_tool_ids = [tool_id for tool_id in builtin_result.system_tool_ids if tool_id != "knowledge"]
             specs.extend(builtin_result.tool_specs)
             system_tool_ids.update(builtin_result.system_tool_ids)
             runtime_resources.update(builtin_result.runtime_resources)
@@ -128,6 +143,10 @@ class ToolsContractBuilder:
                     details=extension_report.model_dump(mode="json"),
                 )
             )
+        if TOOL_OUTPUT_STORE_RESOURCE in tool_runtime_resources and not any(spec.id == "tool_output" for spec in specs):
+            tool_output_spec = get_tool_output_tool_specs()[0]
+            specs.append(tool_output_spec)
+            system_tool_ids.add(tool_output_spec.id)
         registry = ToolRegistry(specs)
         compiler = ToolCompiler(
             package_root=context.package_root,
@@ -170,7 +189,16 @@ class MemoryContractBuilder:
             )
         store_config = LangGraphStoreConfig(
             backend=config.store.backend,
-            path=Path(config.store.path) if config.store.backend == "sqlite" else None,
+            path=(
+                Path(config.store.path)
+                if config.store.backend == "sqlite" and config.store.path.strip()
+                else None
+            ),
+            connection_uri=config.store.connection_uri,
+            database_name=config.store.database_name,
+            collection_name=config.store.collection_name,
+            setup=config.store.setup,
+            provider_options=config.store.provider_options,
             index=build_memory_store_index(config),
         )
         store = LangGraphStoreFactory().build(store_config).store
@@ -197,9 +225,95 @@ class ContextContractBuilder:
     def build(self, contract: ContextContract, context: RuntimeBuildContext) -> RuntimeContribution:
         from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
 
+        sources = default_context_sources()
+        knowledge_source = context.tool_runtime_resources.get("knowledge_context_source")
+        if knowledge_source is not None:
+            sources["knowledge"] = knowledge_source
         return RuntimeContribution(
-            services={"context_system": default_context_runtime(contract.config)},
+            services={"context_system": ContextSystemRuntime(config=contract.config, sources=sources)},
             system_wrappers=[CONTEXT_PREPARE_SYSTEM_WRAPPER_ID],
+        )
+
+
+class TraceContractBuilder:
+    contract_type = "trace"
+    contract_version = "trace_contract.v0"
+
+    def build(self, contract: TraceContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        config = contract.config
+        runtime = context.package.manifest.runtime or {}
+        producer_type = "system_package" if runtime.get("system_package") else "agent_runtime"
+        recorder = TraceRecorder(
+            store=JSONLTraceStore(config.root),
+            package_id=context.package.package_root.name,
+            producer_type=producer_type,
+            max_inline_payload_chars=config.max_inline_payload_chars,
+        )
+        return RuntimeContribution(
+            services={"trace_recorder": recorder},
+            diagnostics=[
+                RuntimeDiagnostic(
+                    where="trace.runtime",
+                    level="info",
+                    message="trace recorder configured",
+                    details={"root": config.root, "producer_type": producer_type},
+                )
+            ],
+        )
+
+
+class KnowledgeContractBuilder:
+    contract_type = "knowledge"
+    contract_version = "knowledge_contract.v0"
+
+    def build(self, contract: KnowledgeContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        config = contract.config
+        catalog = KnowledgeCatalog(config.catalog_path)
+        store_handle = LangGraphStoreFactory().build(
+            LangGraphStoreConfig(
+                backend=config.rag_store.backend,
+                path=(
+                    Path(config.rag_store.path)
+                    if config.rag_store.backend == "sqlite" and config.rag_store.path.strip()
+                    else None
+                ),
+                connection_uri=config.rag_store.connection_uri,
+                database_name=config.rag_store.database_name,
+                collection_name=config.rag_store.collection_name,
+                setup=config.rag_store.setup,
+                provider_options=config.rag_store.provider_options,
+                index=build_knowledge_store_index(config),
+            )
+        )
+        runtime = KnowledgeRuntime(
+            config=config,
+            owner_type="agent",
+            owner_id=context.package.assembly_spec.agent.id,
+            catalog=catalog,
+            store=store_handle.store,
+        )
+        context_source = KnowledgeContextSource(runtime)
+        return RuntimeContribution(
+            services={"knowledge_runtime": runtime},
+            tool_runtime_resources={
+                "knowledge_runtime": runtime,
+                "knowledge_context_source": context_source,
+            },
+            context_sources=[context_source],
+            background_workers=[KnowledgeIngestionWorker(runtime)],
+            diagnostics=[
+                RuntimeDiagnostic(
+                    where="knowledge.runtime",
+                    level="info",
+                    message="knowledge runtime configured",
+                    details={
+                        "root": config.root,
+                        "catalog_path": config.catalog_path,
+                        "rag_store_backend": config.rag_store.backend,
+                        "semantic_index_enabled": store_handle.semantic_index_enabled,
+                    },
+                )
+            ],
         )
 
 
@@ -417,6 +531,29 @@ def _merge_tool_resources(
                 raise ValueError(f"conflicting {source_name}: {key}")
             merged[key] = value
     return merged
+
+
+def _tool_output_root(*, context: RuntimeBuildContext, instance_extension_root: Path) -> Path:
+    runtime_root = _runtime_root_from_session_contract(context)
+    if runtime_root is not None:
+        return runtime_root / "tool_outputs"
+    if instance_extension_root.name == "extensions":
+        return instance_extension_root.parent / "tool_outputs"
+    return instance_extension_root / "tool_outputs"
+
+
+def _runtime_root_from_session_contract(context: RuntimeBuildContext) -> Path | None:
+    session_contract = context.package.contracts.get("session")
+    if not isinstance(session_contract, dict):
+        return None
+    config = session_contract.get("config")
+    if not isinstance(config, dict):
+        return None
+    session_root = str(config.get("session_root") or "").strip()
+    if not session_root:
+        return None
+    path = Path(session_root).expanduser().resolve()
+    return path.parent if path.name == "sessions" else path
 
 
 def _read_package_json(package_root: Path, relative_path: str) -> Any:

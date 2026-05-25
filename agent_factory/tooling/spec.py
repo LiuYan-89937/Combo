@@ -134,6 +134,9 @@ class ToolObservation(BaseModel):
     retryable: bool = True
     arguments: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] | None = None
+    output_ref: dict[str, Any] | None = None
+    output_summary: str | None = None
+    output_truncated: bool = False
     errors: list[str] = Field(default_factory=list)
 
 
@@ -147,6 +150,9 @@ class ToolEventPayload(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     status: str
     output: dict[str, Any] | None = None
+    output_ref: dict[str, Any] | None = None
+    output_summary: str | None = None
+    output_truncated: bool = False
     observation: dict[str, Any] | None = None
     message: str = ""
 

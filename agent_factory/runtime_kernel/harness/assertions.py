@@ -140,12 +140,6 @@ class AssertFinalAnswer:
         return {"type": "final_answer", "ok": answer == self.expected, "expected": self.expected, "actual": answer}
 
 
-class AssertCitationPresent:
-    def check(self, *, final_state: Any) -> dict[str, Any]:
-        citations = getattr(getattr(final_state, "knowledge", None), "citations", []) or []
-        return {"type": "citation_present", "ok": bool(citations)}
-
-
 class AssertOutputContains:
     def __init__(self, expected: str) -> None:
         self.expected = expected

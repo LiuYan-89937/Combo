@@ -4,7 +4,7 @@ from typing import Any
 
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
-from agent_factory.runtime_kernel.observability.schema import TraceEvent
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
@@ -18,7 +18,7 @@ def emit_state_event(
     payload: dict[str, Any] | None = None,
     subgraph_id: str | None = None,
 ) -> None:
-    event = TraceEvent(
+    event = RuntimeObservationEvent(
         trace_id=state.observability.trace_id,
         run_id=state.run.run_id,
         event_type=event_type,
@@ -29,6 +29,16 @@ def emit_state_event(
     )
     services.observability_manager.emit(event)
     state.observability.events.append(event.model_dump(mode="json"))
+    trace_recorder = getattr(services, "trace_recorder", None)
+    if trace_recorder is not None:
+        trace_recorder.record_event(
+            trace_id=state.observability.trace_id,
+            run_id=state.run.run_id,
+            event_type=event_type,
+            node_id=node_id,
+            message=message,
+            payload=payload or {},
+        )
 
 
 def record_bookmark(
@@ -60,16 +70,6 @@ def thread_id_from_config(config: Any) -> str | None:
         return None
     value = configurable.get("thread_id")
     return str(value) if value else None
-
-
-def push_span(state: RuntimeState, span_id: str, span_type: str, name: str) -> None:
-    state.observability.span_stack.append({"span_id": span_id, "span_type": span_type, "name": name})
-
-
-def pop_span(state: RuntimeState, span_id: str) -> None:
-    state.observability.span_stack = [
-        item for item in state.observability.span_stack if item.get("span_id") != span_id
-    ]
 
 
 def apply_node_metrics(state: RuntimeState, duration_seconds: float) -> None:

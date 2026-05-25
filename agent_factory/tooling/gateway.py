@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from typing import Any, Callable, Literal, Mapping
 
@@ -8,6 +8,12 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.tooling.execution_context import current_tool_approval_override, current_tool_call, current_tool_event_sink
+from agent_factory.tooling.output_store import (
+    ToolOutputPolicy,
+    ToolOutputStore,
+    default_tool_output_policy,
+    project_tool_output,
+)
 from agent_factory.tooling.resource_context import build_tool_resource_context
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
@@ -51,6 +57,8 @@ class ToolExecutionGateway:
     llm_risk_prompt: str | None = None
     approval_handler: ToolApprovalHandler | None = None
     max_revisions: int = 5
+    output_store: ToolOutputStore | None = None
+    output_policy: ToolOutputPolicy = field(default_factory=default_tool_output_policy)
 
     def execute(
         self,
@@ -136,12 +144,22 @@ class ToolExecutionGateway:
                 output=output,
                 errors=output_errors,
             )
+        projection = project_tool_output(
+            output=output,
+            tool_id=self.spec.id,
+            tool_call_id=tool_call_id,
+            store=self.output_store,
+            policy=self.output_policy,
+        )
         return self._observation(
             "completed",
-            "Tool execution completed.",
+            projection.output_summary or "Tool execution completed.",
             tool_call_id=tool_call_id,
             arguments=arguments,
-            output=output,
+            output=projection.output,
+            output_ref=projection.output_ref,
+            output_summary=projection.output_summary,
+            output_truncated=projection.output_truncated,
             retryable=False,
         )
 
@@ -261,6 +279,9 @@ class ToolExecutionGateway:
         user_instruction: str | None = None,
         retryable: bool = True,
         output: dict[str, Any] | None = None,
+        output_ref: dict[str, Any] | None = None,
+        output_summary: str | None = None,
+        output_truncated: bool = False,
         errors: list[str] | None = None,
     ) -> dict[str, Any]:
         return ToolObservation(
@@ -272,6 +293,9 @@ class ToolExecutionGateway:
             retryable=retryable,
             arguments=arguments,
             output=output,
+            output_ref=output_ref,
+            output_summary=output_summary,
+            output_truncated=output_truncated,
             errors=errors or [],
         ).model_dump(mode="json")
 

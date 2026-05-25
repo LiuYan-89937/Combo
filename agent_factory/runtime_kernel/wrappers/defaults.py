@@ -70,7 +70,7 @@ class PrepareModelContextConfig(BaseModel):
 @wrap_node(
     "context.prepare_model_context",
     phases={"before"},
-    reads={"conversation", "context", "knowledge", "policy", "runtime_config"},
+    reads={"conversation", "context", "policy", "runtime_config"},
     writes={"context"},
     config_schema=PrepareModelContextConfig,
     description="Build model context before a cognitive node runs.",
@@ -101,7 +101,7 @@ class PrepareModelContextWrapper(NodeWrapper):
 @wrap_node(
     "context.prepare_tool_context",
     phases={"before"},
-    reads={"conversation", "context", "knowledge", "policy", "runtime_config"},
+    reads={"conversation", "context", "policy", "runtime_config"},
     writes={"context"},
     description="Build tool context before an operational node runs.",
 )

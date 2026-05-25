@@ -4,7 +4,6 @@ from typing import Any
 
 from agent_factory.runtime_kernel.bindings.services import RuntimeServices
 from agent_factory.runtime_kernel.harness.assertions import (
-    AssertCitationPresent,
     AssertCheckpointCreated,
     AssertContextBuilt,
     AssertContextCompressed,
@@ -45,7 +44,6 @@ class HarnessBridge:
                 "tool_registry": fixture.tool_registry or services.tool_registry,
                 "policy_engine": fixture.policy_engine or services.policy_engine,
                 "memory_store": fixture.memory_store or services.memory_store,
-                "knowledge_engine": fixture.knowledge_engine or services.knowledge_engine,
                 "checkpointer": fixture.checkpointer or services.checkpointer,
             }
         )
@@ -114,9 +112,6 @@ class HarnessBridge:
                 elif kind == "output_contains":
                     assertion = AssertOutputContains(str(raw.get("expected") or ""))
                     assertion_results.append(assertion.check(final_state=result_state))
-                elif kind == "citation_present":
-                    assertion = AssertCitationPresent()
-                    assertion_results.append(assertion.check(final_state=result_state))
                 elif kind == "policy_blocked":
                     assertion = AssertPolicyBlocked()
                     assertion_results.append(assertion.check(final_state=result_state))
@@ -164,11 +159,7 @@ class HarnessBridge:
             final_answer=result_state.conversation.final_answer,
             final_state_snapshot=result_state.model_dump(mode="json"),
             event_log=result_state.observability.events,
-            trace_summary=(
-                merged_services.observability_manager.summary_for(result_state.run.run_id).model_dump(mode="json")
-                if merged_services.observability_manager.summary_for(result_state.run.run_id)
-                else None
-            ),
+            trace_summary=_trace_summary(merged_services, result_state),
         )
 
 
@@ -178,6 +169,13 @@ def _failed_result(*, scenario: HarnessScenario, location: str, exc: Exception) 
         status="failed",
         error=_error_from_exception(exc, location=location),
     )
+
+
+def _trace_summary(services, state) -> dict | None:
+    recorder = getattr(services, "trace_recorder", None)
+    if recorder is None:
+        return None
+    return recorder.manifest_for(state.observability.trace_id)
 
 
 def _error_from_exception(exc: Exception, *, location: str) -> dict[str, str]:

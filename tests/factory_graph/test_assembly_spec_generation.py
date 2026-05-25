@@ -43,12 +43,16 @@ class AssemblySpecGenerationTest(unittest.TestCase):
                 self.assertIn("contracts/session.json", plan_paths)
                 self.assertIn("contracts/tools.json", plan_paths)
                 self.assertIn("contracts/context.json", plan_paths)
+                self.assertIn("contracts/knowledge.json", plan_paths)
                 self.assertIn("contracts/render.json", plan_paths)
                 self.assertIn("contracts/resources.json", plan_paths)
                 self.assertIn("contracts/sandbox.json", plan_paths)
                 self.assertIn("contracts/scheduler.json", plan_paths)
                 self.assertIn("contracts/memory.json", plan_paths)
+                self.assertIn("contracts/trace.json", plan_paths)
+                self.assertEqual(plan["manifest_contract"]["contracts"]["knowledge"], "contracts/knowledge.json")
                 self.assertEqual(plan["manifest_contract"]["contracts"]["memory"], "contracts/memory.json")
+                self.assertEqual(plan["manifest_contract"]["contracts"]["trace"], "contracts/trace.json")
                 self.assertEqual(plan["tools"][0]["manifest"]["input_schema"], {"type": "object"})
 
     def test_validation_observation_drives_revision(self) -> None:
@@ -220,7 +224,6 @@ def _base_state() -> dict:
         "graph_behavior_plan": {
             "nodes": [
                 {"node_id": "ingress", "node_type": "reserved", "impl": "ingress"},
-                {"node_id": "knowledge_retrieve", "node_type": "operational", "impl": "operational.knowledge_retrieve"},
                 {"node_id": "precheck", "node_type": "governance", "impl": "governance.precheck"},
                 {"node_id": "approval_gate", "node_type": "governance", "impl": "governance.approval_gate"},
                 {"node_id": "answer", "node_type": "cognitive", "impl": "cognitive.answer"},
@@ -276,7 +279,6 @@ def _valid_bindings() -> dict:
             {"service_id": "generated_tool_registry", "kind": "tool_registry", "required": True, "config": {}},
             {"service_id": "memory_store", "kind": "memory_store", "required": True, "config": {}},
             {"service_id": "memory_system", "kind": "memory_system", "required": True, "config": {}},
-            {"service_id": "knowledge_engine", "kind": "knowledge_engine", "required": True, "config": {}},
             {"service_id": "context_engine", "kind": "context_engine", "required": True, "config": {}},
             {"service_id": "policy_engine", "kind": "policy_engine", "required": True, "config": {}},
             {"service_id": "observability", "kind": "observability_manager", "required": True, "config": {}},

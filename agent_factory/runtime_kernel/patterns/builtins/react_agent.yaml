@@ -26,9 +26,6 @@ nodes:
   - id: ingress
     type: reserved
     impl: ingress
-  - id: knowledge_retrieve
-    type: operational
-    impl: operational.knowledge_retrieve
   - id: precheck
     type: governance
     impl: governance.precheck
@@ -52,9 +49,6 @@ nodes:
     impl: finalize
 edges:
   - from: ingress
-    to: knowledge_retrieve
-    when: always
-  - from: knowledge_retrieve
     to: precheck
     when: always
   - from: precheck

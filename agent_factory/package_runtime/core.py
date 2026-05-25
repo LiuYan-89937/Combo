@@ -16,6 +16,7 @@ from agent_factory.runtime_protocol.completion import runtime_completed, runtime
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 
@@ -110,6 +111,7 @@ class PackageRuntimeCore:
             facade=facade,
         )
         self._configure_scheduler_runtime(runtime=self.compiled_runtime)
+        self._configure_knowledge_runtime(runtime=self.compiled_runtime)
         self.background_workers.add_many(runtime_build.background_workers)
         for lifecycle_event in self.background_workers.start_all():
             if lifecycle_event.status == "failed":
@@ -277,6 +279,12 @@ class PackageRuntimeCore:
             tool_runner=runtime_tool_runner(tool_registry) if tool_registry is not None else None,
         )
 
+    def _configure_knowledge_runtime(self, *, runtime: CompiledPackageRuntime) -> None:
+        knowledge_runtime = getattr(runtime.compiled.compiled_app.services, "knowledge_runtime", None)
+        if knowledge_runtime is None:
+            return
+        knowledge_runtime.event_sink = self._knowledge_event_sink
+
     def _scheduled_graph_runner(self, *, runtime: CompiledPackageRuntime):
         def run(job, run_record) -> dict[str, Any]:
             payload = dict(job.target.payload)
@@ -362,6 +370,21 @@ class PackageRuntimeCore:
                 graph_id=f"{self.graph_id}.scheduler",
                 producer_type=self.producer_type,
                 payload={key: value for key, value in payload.model_dump(mode="json").items() if key != "event_type"},
+            )
+        )
+
+    def _knowledge_event_sink(self, payload: dict[str, Any]) -> None:
+        event_type = str(payload.get("event_type") or "")
+        if event_type not in KNOWLEDGE_EVENT_TYPES:
+            event_type = "knowledge_ingestion_progress"
+        self._emit_background_or_noop(
+            event(
+                event_type,  # type: ignore[arg-type]
+                mode="agent_package",
+                graph_id=f"{self.graph_id}.knowledge",
+                producer_type=self.producer_type,
+                severity="error" if event_type.endswith("failed") else None,
+                payload={key: value for key, value in payload.items() if key != "event_type"},
             )
         )
 

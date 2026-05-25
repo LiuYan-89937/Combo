@@ -13,6 +13,9 @@ from agent_factory.models import get_compression_model, get_compression_model_se
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 
 
+CONTEXT_SUMMARY_KIND = "context_summary"
+
+
 def maybe_compress_messages(
     *,
     messages: list[Any],
@@ -87,7 +90,7 @@ def maybe_compress_messages(
         summary_message = SystemMessage(
             content=summary,
             additional_kwargs={
-                "kind": "context_summary",
+                "kind": CONTEXT_SUMMARY_KIND,
                 "source": "runtime_context_compression",
                 "compressed_message_count": len(compressible),
             },
@@ -168,7 +171,14 @@ def _is_protected_message(message: Any) -> bool:
     if not isinstance(message, SystemMessage):
         return False
     metadata = dict(getattr(message, "additional_kwargs", {}) or {})
-    return metadata.get("kind") != "context_summary"
+    return metadata.get("kind") != CONTEXT_SUMMARY_KIND
+
+
+def is_context_summary_message(message: Any) -> bool:
+    if not isinstance(message, SystemMessage):
+        return False
+    metadata = dict(getattr(message, "additional_kwargs", {}) or {})
+    return metadata.get("kind") == CONTEXT_SUMMARY_KIND
 
 
 def _is_tool_message(message: Any) -> bool:
@@ -187,9 +197,28 @@ def _summarize_messages(messages: list[Any], *, max_summary_tokens: int) -> str:
     prompt = [
         SystemMessage(
             content=(
-                "Summarize the conversation segment for continuing the same session. "
-                "Preserve user goals, decisions, constraints, pending work, important tool results, and unresolved questions. "
-                "Do not invent facts. Return only the summary text."
+                "You are compacting the current conversation into an internal session snapshot for a future agent turn. "
+                "The snapshot is private runtime state, not a user-facing reply. "
+                "Your job is to preserve enough information for the next agent call to continue work without reading the removed messages.\n\n"
+                "Write the output in exactly this XML-like structure:\n"
+                "<session_snapshot>\n"
+                "  <user_intent>...</user_intent>\n"
+                "  <key_facts>...</key_facts>\n"
+                "  <completed_actions>...</completed_actions>\n"
+                "  <active_state>...</active_state>\n"
+                "  <tool_and_knowledge_results>...</tool_and_knowledge_results>\n"
+                "  <continuation_instructions>...</continuation_instructions>\n"
+                "</session_snapshot>\n\n"
+                "Section rules:\n"
+                "- user_intent: the user's goals, questions, preferences, and constraints from this segment.\n"
+                "- key_facts: concrete facts needed for continuity, including exact names, numbers, URLs, paths, IDs, and answers when they matter.\n"
+                "- completed_actions: actions already completed and their outcomes.\n"
+                "- active_state: unfinished tasks, pending confirmations, blockers, or the exact point where work stopped.\n"
+                "- tool_and_knowledge_results: concise summaries of important tool outputs or knowledge retrieval results; do not paste large raw outputs.\n"
+                "- continuation_instructions: short guidance for the next turn, including what not to repeat or expose.\n\n"
+                "Preserve concrete details that affect future turns. Remove greetings, jokes, repeated phrasing, and details with no future value. "
+                "Do not replace specifics with vague phrases like 'goal achieved', 'task completed', or 'information found'. "
+                "If a section has no useful content, write 'None'. Do not invent facts. Return only the XML-like snapshot."
             )
         ),
         HumanMessage(content=_conversation_text(messages)),

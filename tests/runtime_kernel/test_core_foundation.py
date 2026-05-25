@@ -147,9 +147,11 @@ class RuntimeKernelCoreFoundationTest(unittest.TestCase):
         self.assertIn("node_provider@node_provider_contract.v0", registry.known_contracts())
         self.assertIn("state@state_contract.v0", registry.known_contracts())
         self.assertIn("artifact@artifact_contract.v0", registry.known_contracts())
+        self.assertIn("knowledge@knowledge_contract.v0", registry.known_contracts())
         self.assertIn("node_provider", REQUIRED_AGENT_PACKAGE_CONTRACTS)
         self.assertIn("state", REQUIRED_AGENT_PACKAGE_CONTRACTS)
         self.assertIn("artifact", REQUIRED_AGENT_PACKAGE_CONTRACTS)
+        self.assertIn("knowledge", REQUIRED_AGENT_PACKAGE_CONTRACTS)
 
     def test_state_contract_rejects_unsafe_package_paths(self) -> None:
         payload = {

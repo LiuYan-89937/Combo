@@ -12,7 +12,7 @@ class OperationalResourceProbeNode:
     node_type = "operational"
     supports_interrupt = False
     supports_subgraph_slot = True
-    writable_sections = {"knowledge", "execution"}
+    writable_sections = {"context", "execution"}
 
     def execute(self, state: RuntimeState, context: NodeExecutionContext) -> dict[str, Any]:
         binding_payload = _first_binding_payload(context.bindings) or {}
@@ -29,10 +29,15 @@ class OperationalResourceProbeNode:
                 }
             )
         return {
-            "knowledge": {
-                "source_metadata": {
+            "context": {
+                "hidden_context": {
+                    "resource_probe": {
+                        "probed_resources": results,
+                    }
+                },
+                "tool_context": {
                     "probed_resources": results,
-                }
+                },
             },
             "execution": {"current_node": context.node_id, "route_decision": "always"},
         }

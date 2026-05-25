@@ -56,16 +56,6 @@ class ToolState(BaseModel):
     last_tool_result: dict[str, Any] | None = None
 
 
-class KnowledgeState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    retrieval_query: str | None = None
-    retrieved_items: list[dict[str, Any]] = Field(default_factory=list)
-    ranked_items: list[dict[str, Any]] = Field(default_factory=list)
-    citations: list[dict[str, Any]] = Field(default_factory=list)
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class PolicyState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -114,7 +104,6 @@ class ObservabilityState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trace_id: str = Field(default_factory=lambda: uuid4().hex)
-    span_stack: list[dict[str, Any]] = Field(default_factory=list)
     events: list[dict[str, Any]] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     debug_refs: list[dict[str, Any]] = Field(default_factory=list)
@@ -130,7 +119,6 @@ class RuntimeState(BaseModel):
     conversation: ConversationState = Field(default_factory=ConversationState)
     context: ContextState = Field(default_factory=ContextState)
     tools: ToolState = Field(default_factory=ToolState)
-    knowledge: KnowledgeState = Field(default_factory=KnowledgeState)
     policy: PolicyState = Field(default_factory=PolicyState)
     execution: ExecutionState = Field(default_factory=ExecutionState)
     observability: ObservabilityState = Field(default_factory=ObservabilityState)

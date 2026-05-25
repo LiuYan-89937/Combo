@@ -2,16 +2,41 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+MemoryStoreBackend = Literal["sqlite", "memory", "postgres", "redis", "mongodb"]
 
 
 class MemoryStoreRuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    backend: Literal["sqlite", "memory"] = "sqlite"
+    backend: MemoryStoreBackend = "sqlite"
     path: str = ".agent_runtime/memory/agent.sqlite"
+    connection_uri: str | None = None
+    database_name: str | None = None
+    collection_name: str | None = None
+    setup: bool = True
+    provider_options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider_options")
+    @classmethod
+    def _provider_option_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            option_key = str(key).strip()
+            if not option_key:
+                raise ValueError("provider_options keys must not be empty")
+            result[option_key] = item
+        return result
+
+    @model_validator(mode="after")
+    def _store_location_matches_backend(self) -> "MemoryStoreRuntimeConfig":
+        if self.backend in {"postgres", "redis", "mongodb"} and not str(self.connection_uri or "").strip():
+            raise ValueError(f"{self.backend} memory store requires connection_uri")
+        return self
 
 
 class MemoryRankingConfig(BaseModel):

@@ -6,8 +6,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.context_system import ContextContractConfig
+from agent_factory.knowledge_system import KnowledgeContractConfig
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
 from agent_factory.scheduler_system.schema import SchedulerContractConfig
+from agent_factory.trace_system.schema import TraceContractConfig
 
 
 ContractType = Literal[
@@ -19,8 +21,10 @@ ContractType = Literal[
     "sandbox",
     "dependencies",
     "model",
+    "knowledge",
     "scheduler",
     "context",
+    "trace",
     "state",
     "node_provider",
     "artifact",
@@ -34,8 +38,10 @@ ContractVersion = Literal[
     "sandbox_contract.v0",
     "dependencies_contract.v0",
     "model_contract.v0",
+    "knowledge_contract.v0",
     "scheduler_contract.v0",
     "context_contract.v0",
+    "trace_contract.v0",
     "state_contract.v0",
     "node_provider_contract.v0",
     "artifact_contract.v0",
@@ -46,6 +52,7 @@ REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
         "context",
         "dependencies",
         "model",
+        "knowledge",
         "node_provider",
         "render",
         "resources",
@@ -54,6 +61,7 @@ REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
         "session",
         "state",
         "tools",
+        "trace",
     }
 )
 
@@ -209,6 +217,24 @@ class ContextContract(BaseModel):
     version: Literal["context_contract.v0"] = "context_contract.v0"
     enabled: bool = True
     config: ContextContractConfig = Field(default_factory=ContextContractConfig)
+
+
+class TraceContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["trace"] = "trace"
+    version: Literal["trace_contract.v0"] = "trace_contract.v0"
+    enabled: bool = True
+    config: TraceContractConfig = Field(default_factory=TraceContractConfig)
+
+
+class KnowledgeContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["knowledge"] = "knowledge"
+    version: Literal["knowledge_contract.v0"] = "knowledge_contract.v0"
+    enabled: bool = True
+    config: KnowledgeContractConfig = Field(default_factory=KnowledgeContractConfig)
 
 
 class ModelContractConfig(BaseModel):
@@ -446,6 +472,8 @@ RuntimeContract = (
     | ToolsContract
     | MemoryContract
     | ContextContract
+    | TraceContract
+    | KnowledgeContract
     | RenderContract
     | ResourcesContract
     | SandboxRuntimeContract

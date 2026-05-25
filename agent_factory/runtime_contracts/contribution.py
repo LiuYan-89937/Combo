@@ -50,6 +50,7 @@ class RuntimeBuildResult:
     background_workers: list[Any] = field(default_factory=list)
     contracts: dict[str, Any] = field(default_factory=dict)
     node_providers: list[Any] = field(default_factory=list)
+    context_sources: list[Any] = field(default_factory=list)
     state_contracts: list[Any] = field(default_factory=list)
 
 
@@ -66,6 +67,7 @@ class RuntimeContributionMerger:
         diagnostics: list[RuntimeDiagnostic] = []
         background_workers: list[Any] = []
         node_providers: list[Any] = []
+        context_sources: list[Any] = []
         seen_node_impl_ids: set[str] = set()
         state_contracts: list[Any] = []
         system_wrappers: list[str] = []
@@ -127,6 +129,7 @@ class RuntimeContributionMerger:
                 dependency_plan = dict(contribution.dependency_plan)
             diagnostics.extend(contribution.diagnostics)
             background_workers.extend(contribution.background_workers)
+            context_sources.extend(contribution.context_sources)
             state_contracts.extend(contribution.state_contracts)
         if render_manifest is None:
             raise RuntimeContributionMergeError("render contract did not provide a render manifest")
@@ -144,6 +147,7 @@ class RuntimeContributionMerger:
             diagnostics=diagnostics,
             background_workers=background_workers,
             node_providers=node_providers,
+            context_sources=context_sources,
             state_contracts=state_contracts,
         )
 
@@ -155,8 +159,8 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "tool_registry": None,
         "memory_store": None,
         "memory_system": None,
+        "knowledge_runtime": None,
         "context_system": None,
-        "knowledge_engine": services.knowledge_engine,
         "context_engine": services.context_engine,
         "policy_engine": services.policy_engine,
         "observability_manager": services.observability_manager,
@@ -167,6 +171,7 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "artifact_store": None,
         "report_store": None,
         "bookmark_store": services.bookmark_store,
+        "trace_recorder": services.trace_recorder,
         "runtime_resources": dict(services.runtime_resources),
         "tool_runtime_resources": dict(services.tool_runtime_resources),
     }

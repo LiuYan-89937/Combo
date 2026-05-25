@@ -117,7 +117,6 @@
 - Context State
 - Tool State
 - Memory State
-- Knowledge State
 - Policy State
 - Execution State
 - Observability State
@@ -137,7 +136,6 @@ Kernel 提供受控标准节点目录，Graph Pattern DSL 只能引用标准节�
 
 - `ingress`
 - `context`
-- `knowledge_retrieve`
 - `policy_precheck`
 - `model`
 - `tool`

@@ -18,7 +18,6 @@ from agent_factory.runtime_kernel.nodes.standard.answer import CognitiveAnswerNo
 from agent_factory.runtime_kernel.nodes.standard.tool_call import OperationalToolCallNode
 from agent_factory.runtime_kernel.patterns.routing import must_repair_tool_protocol
 from agent_factory.runtime_kernel.patterns.schema import PatternNodeSpec
-from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.observability import ObservabilityManager
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
@@ -141,7 +140,6 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
             memory_store=None,
             memory_system=MemorySystemRuntime(config=MemorySystemConfig(), store=None),
             context_system=default_context_runtime(),
-            knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
             observability_manager=ObservabilityManager(),
@@ -159,7 +157,6 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
             memory_store=None,
             memory_system=None,
             context_system=default_context_runtime(),
-            knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
             observability_manager=ObservabilityManager(),
@@ -190,7 +187,6 @@ class RuntimeKernelMemorySystemTest(unittest.TestCase):
                 writer=writer,
             ),
             context_system=default_context_runtime(),
-            knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
             observability_manager=ObservabilityManager(),
@@ -430,7 +426,6 @@ def _runtime_services(
         tool_registry=tool_registry or InMemoryToolRegistry(),
         memory_store=LangGraphStoreFactory().build(LangGraphStoreConfig(backend="memory")).store,
         context_system=default_context_runtime(),
-        knowledge_engine=KnowledgeEngine(),
         context_engine=ContextEngine(),
         policy_engine=PolicyEngine(),
         observability_manager=ObservabilityManager(),

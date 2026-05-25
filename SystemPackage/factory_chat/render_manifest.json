@@ -12,15 +12,6 @@
       "expected_output": "Runtime state contains the latest user input.",
       "visible_to_user": false
     },
-    "knowledge_retrieve": {
-      "node_id": "knowledge_retrieve",
-      "label": "Knowledge Retrieve",
-      "kind": "operational",
-      "purpose": "Retrieve package knowledge when configured.",
-      "doing": "Checking configured knowledge sources.",
-      "expected_output": "Relevant knowledge candidates are available to later nodes.",
-      "visible_to_user": false
-    },
     "precheck": {
       "node_id": "precheck",
       "label": "Precheck",

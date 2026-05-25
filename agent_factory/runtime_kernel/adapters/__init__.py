@@ -1,5 +1,4 @@
 from agent_factory.runtime_kernel.adapters.context import ContextEngineAdapter
-from agent_factory.runtime_kernel.adapters.knowledge import KnowledgeEngineAdapter
 from agent_factory.runtime_kernel.adapters.model import (
     LangChainModelServiceAdapter,
     ModelServiceAdapter,
@@ -11,7 +10,6 @@ from agent_factory.runtime_kernel.adapters.tool import InMemoryToolRegistry, Too
 __all__ = [
     "ContextEngineAdapter",
     "InMemoryToolRegistry",
-    "KnowledgeEngineAdapter",
     "LangChainModelServiceAdapter",
     "ModelServiceAdapter",
     "PolicyEngineAdapter",

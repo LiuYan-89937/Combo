@@ -168,11 +168,11 @@ checkpoint_created
 checkpoint_selected
 checkpoint_restored
 artifact_created
-trace_snapshot
 debug_patch
 ```
 
 `debug_patch` 只用于调试面板，不能作为 CLI/WebUI 主渲染数据源。
+全链路 trace 不再通过前端事件快照承载，持久事实源统一写入 `trace_system` 的 JSONL trace store。
 
 ---
 
@@ -451,7 +451,7 @@ CLI 和 WebUI 只消费 `RuntimeRenderEvent`。
 | Live Activity | `node_progress`、`model_*`、`tool_*`、`interrupt_*` |
 | Tool Panel | `tool_*` |
 | Interrupt Panel | `interrupt_requested`、`tool_approval_requested` |
-| Trace / Debug Panel | `trace_snapshot`、`debug_patch` |
+| Trace / Debug Panel | `trace_system` JSONL facts、`debug_patch` |
 | Artifact Panel | `artifact_created` |
 
 前端禁止依赖：

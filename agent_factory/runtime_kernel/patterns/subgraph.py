@@ -5,7 +5,7 @@ from typing import Any
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
-from agent_factory.runtime_kernel.observability.schema import TraceEvent
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec, PatternIOContractSpec
 from agent_factory.runtime_kernel.state import RuntimeState
 
@@ -34,7 +34,7 @@ def make_subgraph_executor(
                     "last_error": "Execution exceeded max_subgraph_depth.",
                 }
             }
-        entered = TraceEvent(
+        entered = RuntimeObservationEvent(
             trace_id=parent_state.observability.trace_id,
             run_id=parent_state.run.run_id,
             event_type="subgraph_entered",
@@ -42,6 +42,7 @@ def make_subgraph_executor(
             subgraph_id=compiled.pattern_spec.pattern_id,
         )
         services.observability_manager.emit(entered)
+        _record_trace_event(services, parent_state, entered)
         child_input = project_state_for_subgraph(
             parent_state,
             input_contract=input_contract,
@@ -61,7 +62,7 @@ def make_subgraph_executor(
             if exit_route == "completed":
                 exit_route = "done"
         merged_sections = merge_subgraph_output(parent_state, child_state, output_contract)
-        exited = TraceEvent(
+        exited = RuntimeObservationEvent(
             trace_id=parent_state.observability.trace_id,
             run_id=parent_state.run.run_id,
             event_type="subgraph_exited",
@@ -70,6 +71,7 @@ def make_subgraph_executor(
             payload={"exit_route": exit_route},
         )
         services.observability_manager.emit(exited)
+        _record_trace_event(services, parent_state, exited)
         return {
             **merged_sections,
             "execution": {
@@ -96,6 +98,20 @@ def make_subgraph_executor(
     return runner
 
 
+def _record_trace_event(services: RuntimeServices, state: RuntimeState, event: RuntimeObservationEvent) -> None:
+    trace_recorder = getattr(services, "trace_recorder", None)
+    if trace_recorder is None:
+        return
+    trace_recorder.record_event(
+        trace_id=state.observability.trace_id,
+        run_id=state.run.run_id,
+        event_type=event.event_type,
+        node_id=event.node_id,
+        message=event.message,
+        payload=event.payload,
+    )
+
+
 def project_state_for_subgraph(
     state: RuntimeState,
     *,
@@ -111,7 +127,6 @@ def project_state_for_subgraph(
         "conversation",
         "context",
         "tools",
-        "knowledge",
         "policy",
         "execution",
         "observability",

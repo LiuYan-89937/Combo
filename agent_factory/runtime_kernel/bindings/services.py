@@ -15,8 +15,8 @@ class RuntimeServices(BaseModel):
     tool_registry: object | None = None
     memory_store: object | None = None
     memory_system: object | None = None
+    knowledge_runtime: object | None = None
     context_system: object | None = None
-    knowledge_engine: object | None = None
     context_engine: object | None = None
     policy_engine: object | None = None
     observability_manager: object | None = None
@@ -27,6 +27,7 @@ class RuntimeServices(BaseModel):
     artifact_store: object | None = None
     report_store: object | None = None
     bookmark_store: object | None = None
+    trace_recorder: object | None = None
     runtime_resources: dict[str, Any] = Field(default_factory=dict)
     tool_runtime_resources: dict[str, Any] = Field(default_factory=dict)
 

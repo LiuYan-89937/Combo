@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import inspect
 import json
 import math
 from pathlib import Path
 import sqlite3
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 from uuid import uuid4
 
-from langgraph.store.base import BaseStore, GetOp, Item, ListNamespacesOp, PutOp, SearchItem, SearchOp
+from langgraph.store.base import BaseStore, GetOp, IndexConfig, Item, ListNamespacesOp, PutOp, SearchItem, SearchOp
 from pydantic import BaseModel, ConfigDict, Field
 
 
-LangGraphStoreBackend = Literal["sqlite", "memory"]
+LangGraphStoreBackend = Literal["sqlite", "memory", "postgres", "redis", "mongodb"]
 
 
 class MemoryRecord(BaseModel):
@@ -34,14 +36,12 @@ class MemoryRecord(BaseModel):
 class LangGraphStoreConfig:
     backend: LangGraphStoreBackend = "sqlite"
     path: Path | None = None
-    index: "LangGraphStoreIndexConfig | None" = None
-
-
-@dataclass(frozen=True, slots=True)
-class LangGraphStoreIndexConfig:
-    embed: Any
-    dims: int
-    fields: tuple[str, ...] = ("$",)
+    connection_uri: str | None = None
+    database_name: str | None = None
+    collection_name: str | None = None
+    setup: bool = True
+    provider_options: Mapping[str, Any] | None = None
+    index: IndexConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +50,7 @@ class LangGraphStoreHandle:
     backend: LangGraphStoreBackend
     persistent: bool
     path: Path | None = None
+    connection_uri: str | None = None
     semantic_index_enabled: bool = False
 
 
@@ -64,20 +65,173 @@ class LangGraphStoreFactory:
                 persistent=False,
                 semantic_index_enabled=config.index is not None,
             )
-        if config.path is None:
-            raise ValueError("SQLite memory store requires a store path.")
-        config.path.parent.mkdir(parents=True, exist_ok=True)
+        if config.backend == "sqlite":
+            if config.path is None:
+                raise ValueError("SQLite LangGraph store requires a store path.")
+            config.path.parent.mkdir(parents=True, exist_ok=True)
+            return LangGraphStoreHandle(
+                store=SqliteBaseStore(config.path, index=config.index),
+                backend="sqlite",
+                persistent=True,
+                path=config.path,
+                semantic_index_enabled=config.index is not None,
+            )
+        store = _build_external_store(config)
         return LangGraphStoreHandle(
-            store=SqliteBaseStore(config.path, index=config.index),
-            backend="sqlite",
+            store=store,
+            backend=config.backend,
             persistent=True,
-            path=config.path,
+            connection_uri=config.connection_uri,
             semantic_index_enabled=config.index is not None,
         )
 
 
+_OPEN_STORE_CONTEXTS: list[Any] = []
+
+
+def _close_open_store_contexts() -> None:
+    while _OPEN_STORE_CONTEXTS:
+        context = _OPEN_STORE_CONTEXTS.pop()
+        close = getattr(context, "__exit__", None)
+        if close is None:
+            continue
+        close(None, None, None)
+
+
+atexit.register(_close_open_store_contexts)
+
+
+def _build_external_store(config: LangGraphStoreConfig) -> BaseStore:
+    if not config.connection_uri:
+        raise ValueError(f"{config.backend} LangGraph store requires connection_uri.")
+    if config.backend == "postgres":
+        return _build_postgres_store(config)
+    if config.backend == "redis":
+        return _build_redis_store(config)
+    if config.backend == "mongodb":
+        return _build_mongodb_store(config)
+    raise ValueError(f"Unsupported LangGraph store backend: {config.backend}")
+
+
+def _build_postgres_store(config: LangGraphStoreConfig) -> BaseStore:
+    try:
+        from langgraph.store.postgres import PostgresStore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Postgres LangGraph store requires the official langgraph-checkpoint-postgres package."
+        ) from exc
+
+    context = _call_store_factory(
+        PostgresStore.from_conn_string,
+        config.connection_uri,
+        index=_index_payload(config.index),
+        **_provider_options(config),
+    )
+    store = _enter_store_context(context)
+    _setup_store(store, config)
+    return store
+
+
+def _build_redis_store(config: LangGraphStoreConfig) -> BaseStore:
+    try:
+        from langgraph.store.redis import RedisStore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Redis LangGraph store requires the official langgraph-checkpoint-redis package."
+        ) from exc
+
+    context = _call_store_factory(
+        RedisStore.from_conn_string,
+        config.connection_uri,
+        index=_index_payload(config.index),
+        **_provider_options(config),
+    )
+    store = _enter_store_context(context)
+    _setup_store(store, config)
+    return store
+
+
+def _build_mongodb_store(config: LangGraphStoreConfig) -> BaseStore:
+    try:
+        from langgraph.store.mongodb import MongoDBStore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "MongoDB LangGraph store requires the official langgraph-store-mongodb package."
+        ) from exc
+
+    kwargs: dict[str, Any] = {
+        **_provider_options(config),
+        "index_config": _mongodb_index_payload(config.index),
+    }
+    if config.database_name:
+        kwargs["db_name"] = config.database_name
+    if config.collection_name:
+        kwargs["collection_name"] = config.collection_name
+    context = _call_store_factory(MongoDBStore.from_conn_string, config.connection_uri, **kwargs)
+    store = _enter_store_context(context)
+    _setup_store(store, config)
+    return store
+
+
+def _provider_options(config: LangGraphStoreConfig) -> dict[str, Any]:
+    return dict(config.provider_options or {})
+
+
+def _call_store_factory(factory, *args: Any, **kwargs: Any) -> Any:
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
+    signature = inspect.signature(factory)
+    if not any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        accepted = {
+            name
+            for name, parameter in signature.parameters.items()
+            if parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        }
+        unsupported = sorted(set(kwargs) - accepted)
+        if unsupported:
+            factory_name = getattr(factory, "__qualname__", repr(factory))
+            raise ValueError(
+                f"{factory_name} does not accept store option(s): {', '.join(unsupported)}"
+            )
+    return factory(*args, **kwargs)
+
+
+def _enter_store_context(context: Any) -> BaseStore:
+    enter = getattr(context, "__enter__", None)
+    if enter is None:
+        return context
+    store = enter()
+    _OPEN_STORE_CONTEXTS.append(context)
+    return store
+
+
+def _setup_store(store: BaseStore, config: LangGraphStoreConfig) -> None:
+    if not config.setup:
+        return
+    setup = getattr(store, "setup", None)
+    if setup is not None:
+        setup()
+
+
+def _mongodb_index_payload(index: IndexConfig | None) -> Any:
+    if index is None:
+        return None
+    try:
+        from langgraph.store.mongodb import create_vector_index_config
+    except ModuleNotFoundError:
+        return _index_payload(index)
+    return create_vector_index_config(
+        embed=index["embed"],
+        dims=index["dims"],
+        fields=list(index.get("fields") or []),
+    )
+
+
 class SqliteBaseStore(BaseStore):
-    def __init__(self, path: str | Path, *, index: LangGraphStoreIndexConfig | None = None) -> None:
+    def __init__(self, path: str | Path, *, index: IndexConfig | None = None) -> None:
         super().__init__()
         self.path = Path(path)
         self.index = index
@@ -226,8 +380,8 @@ class SqliteBaseStore(BaseStore):
     def semantic_index_report(self) -> dict[str, Any]:
         return {
             "enabled": self.index is not None,
-            "dims": self.index.dims if self.index is not None else None,
-            "fields": list(self.index.fields) if self.index is not None else [],
+            "dims": self.index.get("dims") if self.index is not None else None,
+            "fields": list(self.index.get("fields") or []) if self.index is not None else [],
             "diagnostics": list(self._semantic_diagnostics[-20:]),
         }
 
@@ -352,15 +506,15 @@ def _matches_filter(value: dict[str, Any], filter: dict[str, Any]) -> bool:
     return True
 
 
-def _index_payload(index: LangGraphStoreIndexConfig | None) -> dict[str, Any] | None:
+def _index_payload(index: IndexConfig | None) -> dict[str, Any] | None:
     if index is None:
         return None
     payload: dict[str, Any] = {
-        "embed": index.embed,
-        "dims": index.dims,
+        "embed": index["embed"],
+        "dims": index["dims"],
     }
-    if index.fields:
-        payload["fields"] = list(index.fields)
+    if index.get("fields"):
+        payload["fields"] = list(index["fields"] or [])
     return payload
 
 
@@ -371,14 +525,14 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_typ
 
 
 def _index_fields(
-    index_config: LangGraphStoreIndexConfig | None,
+    index_config: IndexConfig | None,
     put_index: Literal[False] | list[str] | None,
 ) -> tuple[str, ...]:
     if index_config is None or put_index is False:
         return ()
     if isinstance(put_index, list):
         return tuple(str(item) for item in put_index if str(item).strip())
-    return index_config.fields
+    return tuple(index_config.get("fields") or ("$",))
 
 
 def _indexed_text(value: dict[str, Any], fields: tuple[str, ...]) -> str:
@@ -409,75 +563,79 @@ def _select_field(value: dict[str, Any], field: str) -> Any:
     return current
 
 
-def _embedding_json(index_config: LangGraphStoreIndexConfig | None, text: str) -> tuple[str | None, dict[str, Any] | None]:
+def _embedding_json(index_config: IndexConfig | None, text: str) -> tuple[str | None, dict[str, Any] | None]:
     if index_config is None or not text.strip():
         return None, None
+    embed = index_config["embed"]
+    dims = int(index_config["dims"])
     try:
-        vectors = index_config.embed.embed_documents([text])
+        vectors = embed.embed_documents([text])
     except Exception as exc:
         return None, _semantic_diagnostic(
             operation="write_embedding",
             status="failed",
             reason="embedding_error",
             message=f"{type(exc).__name__}: {exc}",
-            expected_dims=index_config.dims,
+            expected_dims=dims,
         )
     if not vectors:
         return None, _semantic_diagnostic(
             operation="write_embedding",
             status="failed",
             reason="empty_embedding",
-            expected_dims=index_config.dims,
+            expected_dims=dims,
         )
     vector = [float(item) for item in vectors[0]]
-    if len(vector) != index_config.dims:
+    if len(vector) != dims:
         return None, _semantic_diagnostic(
             operation="write_embedding",
             status="failed",
             reason="dimension_mismatch",
-            expected_dims=index_config.dims,
+            expected_dims=dims,
             actual_dims=len(vector),
         )
     return json.dumps(vector, separators=(",", ":")), _semantic_diagnostic(
         operation="write_embedding",
         status="ok",
         reason="indexed",
-        expected_dims=index_config.dims,
+        expected_dims=dims,
         actual_dims=len(vector),
     )
 
 
-def _embed_query(index_config: LangGraphStoreIndexConfig | None, query: str | None) -> tuple[list[float] | None, dict[str, Any] | None]:
+def _embed_query(index_config: IndexConfig | None, query: str | None) -> tuple[list[float] | None, dict[str, Any] | None]:
     if index_config is None or not query or not query.strip():
         return None, _semantic_diagnostic(
             operation="query_embedding",
             status="unavailable",
             reason="index_disabled" if index_config is None else "empty_query",
-            expected_dims=index_config.dims if index_config is not None else None,
+            expected_dims=index_config.get("dims") if index_config is not None else None,
         )
+    embed = index_config["embed"]
+    dims = int(index_config["dims"])
     try:
-        vector = [float(item) for item in index_config.embed.embed_query(query)]
+        vector = [float(item) for item in embed.embed_query(query)]
     except Exception as exc:
         return None, _semantic_diagnostic(
             operation="query_embedding",
             status="failed",
             reason="embedding_error",
             message=f"{type(exc).__name__}: {exc}",
-            expected_dims=index_config.dims,
+            expected_dims=dims,
         )
-    if len(vector) != index_config.dims:
+    if len(vector) != dims:
         return None, _semantic_diagnostic(
             operation="query_embedding",
             status="failed",
             reason="dimension_mismatch",
-            expected_dims=index_config.dims,
+            expected_dims=dims,
             actual_dims=len(vector),
         )
     return vector, _semantic_diagnostic(
         operation="query_embedding",
         status="ok",
         reason="embedded",
-        expected_dims=index_config.dims,
+        expected_dims=dims,
         actual_dims=len(vector),
     )
 

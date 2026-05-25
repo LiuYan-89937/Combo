@@ -4,7 +4,7 @@ from typing import Any, Protocol
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent_factory.context_system.compression import estimate_text_tokens
+from agent_factory.context_system.compression import estimate_text_tokens, is_context_summary_message
 from agent_factory.context_system.schema import ContextCandidate, ContextQuery
 
 
@@ -38,6 +38,8 @@ class RecentMessagesSource:
     def retrieve(self, *, query: ContextQuery, runtime_context: ContextSourceRuntime) -> list[ContextCandidate]:
         candidates: list[ContextCandidate] = []
         for index, message in enumerate(runtime_context.messages[-8:]):
+            if is_context_summary_message(message):
+                continue
             content = _message_text(message)
             if not content:
                 continue

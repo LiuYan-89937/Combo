@@ -89,9 +89,11 @@ def _contract_build_priority(contract: BaseModel) -> tuple[int, str]:
     priority = {
         "session": 10,
         "resources": 20,
+        "trace": 25,
         "state": 30,
         "artifact": 35,
         "scheduler": 40,
+        "knowledge": 45,
         "tools": 50,
         "node_provider": 55,
         "render": 60,

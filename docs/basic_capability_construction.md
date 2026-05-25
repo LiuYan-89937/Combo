@@ -12,7 +12,7 @@
 | 记忆系统 | 已形成 LangGraph 原生规范：会话内 messages/checkpointer，跨会话 BaseStore。 |
 | 知识系统 | 有 RuntimeKernel 实现迹象，但未形成统一规范。 |
 | 定时任务系统 | 已接入统一 SchedulerSystem：SQLite 事实源、APScheduler 触发、ToolExecutionGateway 执行。 |
-| Trace 系统 | 目前只有事件流、debug patch、render 事件等分散能力，尚未形成独立 trace 模块。 |
+| Trace 系统 | 已形成 JSONL Trace Fact Store 工程方案，尚未进入代码实现。 |
 | 上下文管理系统 | 已接入统一 ContextSystem：同步压缩、检索召回、组装注入，Factory 与生成 Agent 共用规范。 |
 
 本文档的作用：
@@ -271,6 +271,7 @@ agent_factory/tooling/
   registry.py
   compiler.py
   gateway.py
+  output_store.py
   providers/
   entrypoints/
   mcp_runtime.py
@@ -289,6 +290,7 @@ agent_factory/tooling/
 | `registry.py` | 注册、去重、筛选工具。 |
 | `compiler.py` | 将 `ToolSpec` 编译为 LangChain 工具。 |
 | `gateway.py` | 参数校验、风险校验、审批、资源映射、执行、输出校验、observation。 |
+| `output_store.py` | 保存超过模型可见限额的完整工具输出，并提供按 id 读取能力。 |
 | `providers/` | Builtin / Package / MCP / Skill 工具发现。 |
 | `mcp_runtime.py` | MCP server 连接、工具发现和调用。 |
 | `factory_extensions.py` | Factory 自身扩展目录扫描。 |
@@ -318,7 +320,27 @@ tools/mysql_query/tool.py:evaluate_risk
 
 生成出来的 AgentPackage 也遵循同一结构：`tools/<tool_id>/tool.py` 同时提供 `run` 和 `evaluate_risk`，`manifest.json` 的 `risk_evaluator.hard` 指向 `tools/<tool_id>/tool.py:evaluate_risk`。
 
-### 2.5 已实现内置工具
+### 2.5 工具输出投影
+
+工具输出边界由 `ToolExecutionGateway` 统一处理：
+
+```text
+entrypoint output
+  -> output_schema validation
+  -> output size check
+  -> full output archive when over limit
+  -> compact model-visible ToolObservation
+```
+
+规则：
+
+- 未超过 `AGENTFACTORY_TOOL_OUTPUT_MAX_MODEL_CHARS` 时，不压缩、不归档，完整输出直接进入 observation。
+- 超过限额时，完整输出写入 `ToolOutputStore`，observation 只包含压缩预览、`output_ref` 和取回提示。
+- 原始输出可通过系统内置 `tool_output` 工具按 `output_id`、`path`、`offset`、`limit` 读取。
+- 压缩发生在 `output_schema` 校验之后，不改变工具自身的输出契约。
+- `ToolOutputStore` 是工具运行时资源，不进入模型可见 resources、state、debug patch 或普通 runtime resources。
+
+### 2.6 已实现内置工具
 
 | 工具 | 状态 |
 | --- | --- |
@@ -332,10 +354,13 @@ tools/mysql_query/tool.py:evaluate_risk
 | `bash` | 已实现，高风险，带 cwd 和命令风险校验。 |
 | `bash_status` | 已实现，低风险，带进程参数校验。 |
 | `bash_stop` | 已实现，中风险，带进程参数校验。 |
+| `scheduler` | 已实现，系统工具，管理定时任务。 |
+| `knowledge` | 已实现，系统工具，管理和检索显式知识源。 |
+| `tool_output` | 已实现，系统工具，读取被 Gateway 压缩归档的完整工具输出。 |
 | `web_fetch` | 暂留空，不注册为可用工具。 |
 | `web_search` | 暂留空，不注册为可用工具。 |
 
-### 2.6 MCP / Skill 接入现状
+### 2.7 MCP / Skill 接入现状
 
 MCP 接入：
 
@@ -557,8 +582,12 @@ store.put / store.delete
 默认后端：
 
 ```text
-AGENTFACTORY_MEMORY_STORE_BACKEND=sqlite | memory
+AGENTFACTORY_MEMORY_STORE_BACKEND=sqlite | memory | postgres | redis | mongodb
 AGENTFACTORY_MEMORY_STORE_PATH=.agentfactory/memory/factory.sqlite
+AGENTFACTORY_MEMORY_STORE_CONNECTION_URI=
+AGENTFACTORY_MEMORY_STORE_DATABASE_NAME=
+AGENTFACTORY_MEMORY_STORE_COLLECTION_NAME=
+AGENTFACTORY_MEMORY_STORE_SETUP=true
 ```
 
 Factory 与生产出来的 Agent 使用同一套 BaseStore 规范，但 session、checkpoint、store 文件和 namespace 必须隔离。
@@ -585,7 +614,7 @@ BaseStore.search(namespace, query=...)
   -> MemoryContextPack
 ```
 
-支持 semantic index 的 store 负责语义召回；不支持 semantic index 的 store 仍然走同一 `BaseStore.search` 接口，并退化为文本/后端默认检索。上层记忆系统不感知具体后端是 `InMemoryStore`、SQLite 过渡实现、PostgresStore，还是后续自定义 BaseStore。
+支持 semantic index 的 store 负责语义召回；不支持 semantic index 的 store 仍然走同一 `BaseStore.search` 接口，并退化为文本/后端默认检索。上层记忆系统不感知具体后端是 `InMemoryStore`、SQLite 本地实现、官方 `PostgresStore`、官方 `RedisStore`、官方 `MongoDBStore`，还是后续自定义 BaseStore。
 
 ### 3.3 跨会话写入
 
@@ -744,57 +773,156 @@ payload 只携带数量、namespace、job_id、耗时和错误摘要。
 
 ## 4. 知识系统
 
-知识系统当前也没有形成统一规范，但 RuntimeKernel 里已有轻量实现。
+知识系统已经进入统一基础能力链路。Factory、SystemPackage 与生产出来的子 Agent 都通过 `knowledge_contract.v0` 挂载知识运行时，通过系统内置工具 `knowledge` 管理和检索知识；知识不会在每轮模型调用前自动召回。
 
-### 4.1 当前实现迹象
+### 4.1 运行时边界
 
-RuntimeKernel 侧：
-
-| 位置 | 现状 |
-| --- | --- |
-| `agent_factory/runtime_kernel/state/schema.py` | 有 `KnowledgeState`。 |
-| `agent_factory/runtime_kernel/knowledge/engine.py` | 有简单 `KnowledgeEngine`，基于内存 documents 做检索。 |
-| `agent_factory/runtime_kernel/adapters/knowledge.py` | 有 knowledge adapter 协议。 |
-| `agent_factory/runtime_kernel/nodes/standard/knowledge_retrieve.py` | 有 `operational.knowledge_retrieve` 标准节点。 |
-| `agent_factory/runtime_kernel/context/engine.py` | 会把 retrieved knowledge 放入模型上下文。 |
-| `agent_factory/runtime_kernel/patterns/builtins/react_agent.yaml` | react_agent pattern 包含 `knowledge_retrieve` 节点。 |
-| `agent_factory/runtime_kernel/kernel/facade.py` | 默认注入 `KnowledgeEngine`。 |
-
-Factory 生产链路迹象：
-
-| 位置 | 现状 |
-| --- | --- |
-| `agent_factory/factory_package/stage_subgraphs/assembly_spec_generation.py` | Assembly services 会要求 `knowledge_engine`。 |
-| `agent_factory/factory_package/stage_subgraphs/package_generation.py` | 会物化 knowledge 相关 package 文件，但具体知识系统目录仍待统一。 |
-| `tests/factory_graph/test_assembly_spec_generation.py` | 后续需要按新的知识系统契约重写。 |
-
-### 4.2 当前问题
-
-当前 knowledge 更像 RuntimeKernel 内部的示例检索能力，还不是完整知识系统。
-
-主要缺口：
-
-- 没有知识源规范。
-- 没有索引规范。
-- 没有 citation / freshness / multi-source 策略。
-- 旧 retrieval profile 不能继续作为 memory 与 knowledge 的混用边界。
-- AgentPackage 里缺少明确的 knowledge 系统目录与索引文件约定。
-- MCP / Skill 贡献知识源的路径还没有设计。
-
-### 4.3 后续处理原则
-
-暂不提前规定 knowledge 系统形态。
-
-后续应该先基于现有 `KnowledgeEngine`、`KnowledgeState`、`knowledge_retrieve` 节点梳理：
+核心实现：
 
 ```text
-知识源是什么
-索引在哪里
-检索策略在哪里
-引用如何表达
-哪些内容写入 AgentPackage
-哪些内容属于 AgentInstance 运行期配置
+agent_factory/knowledge_system/
+  schema.py
+  catalog.py
+  loaders.py
+  chunking.py
+  runtime.py
+  tools.py
+  events.py
+  context_source.py
+  store_index.py
 ```
+
+Package 入口：
+
+```text
+contracts/knowledge.json
+```
+
+标准 contract：
+
+```json
+{
+  "type": "knowledge",
+  "version": "knowledge_contract.v0",
+  "enabled": true,
+  "config": {
+    "root": "/runtime/knowledge",
+    "catalog_path": "/runtime/knowledge/catalog/knowledge.sqlite",
+    "keyword_backend": "sqlite_fts5",
+    "default_mount_mode": "index_only",
+    "rag_store": {
+      "backend": "sqlite",
+      "path": "/runtime/knowledge/catalog/knowledge_store.sqlite",
+      "connection_uri": null,
+      "database_name": null,
+      "collection_name": null,
+      "setup": true,
+      "provider_options": {},
+      "namespace_prefix": ["knowledge"],
+      "index_fields": ["content", "title", "summary"]
+    }
+  }
+}
+```
+
+运行时贡献：
+
+- `services.knowledge_runtime`
+- `tool_runtime_resources.knowledge_runtime`
+- `context_sources.knowledge`
+- `background_workers.knowledge_ingestion_worker`
+- `diagnostics.knowledge`
+
+### 4.2 知识源类型
+
+第一版完整覆盖以下 source 类型：
+
+| 类型 | 用途 | 存储方式 |
+| --- | --- | --- |
+| `filesystem` | 本地文档或目录。 | 可读文件解析后写 catalog / FTS，可选 RAG。 |
+| `codebase` | 代码目录。 | 默认推荐 `index_only`，允许 RAG。 |
+| `web_snapshot` | 网页内容。 | 只保存 URL、hash、metadata 和 normalized text/index，不保存完整 snapshot。 |
+| `database` | 只读数据库知识源。 | 索引 schema、允许范围或文档化查询结果，不整库导入。 |
+| `mcp` | MCP 管理型知识源。 | 作为 managed source 记录，不复制远端内容。 |
+| `skill` | Skill 说明与引用资料。 | 索引 metadata、`SKILL.md` 与 references。 |
+| `artifact_report` | 运行报告与结构化产物。 | 索引摘要、report metadata 和可读片段。 |
+| `manual_note` | 用户手写知识。 | 直接写 catalog，可选写 BaseStore。 |
+
+### 4.3 索引模式
+
+知识源模式固定为两类：
+
+| 模式 | 行为 |
+| --- | --- |
+| `index_only` | 写 SQLite catalog、document/chunk metadata 和 SQLite FTS5；不调用 embedding。 |
+| `rag` | 在 `index_only` 基础上做 chunk、embedding，并写入 LangGraph `BaseStore`。 |
+
+语义检索不绑定私有向量库。我们只依赖 LangGraph `BaseStore` 抽象，当前代码提供的后端由 `LangGraphStoreFactory` 决定：`sqlite` 和 `memory` 是本地/调试后端，`postgres`、`redis`、`mongodb` 使用 LangGraph 官方扩展包。切换后端只改 contract/env 配置，不改 ingestion、检索或 RuntimeKernel 代码。
+
+### 4.4 系统工具
+
+知识系统对模型暴露单个系统内置工具：
+
+```text
+knowledge
+```
+
+actions：
+
+```text
+list_sources
+describe_source
+prepare_source
+confirm_source
+list_documents
+search
+open
+read
+reindex
+remove_source
+```
+
+风险分级：
+
+- 低风险默认放行：`list_sources`、`describe_source`、`list_documents`、`search`、`open`、`read`。
+- 中风险需要参数审批：`prepare_source`、`confirm_source`、`reindex`。
+- 高风险必须审批：`remove_source`。
+
+删除 source 时只删除系统托管在 knowledge root 内的文件、catalog、FTS、BaseStore item、job/report，不删除外部原始路径。
+
+### 4.5 事件与交互
+
+知识事件统一走 `knowledge_event`，再归一化为前端事件：
+
+```text
+knowledge_source_prepare_started
+knowledge_source_preview_available
+knowledge_source_approval_requested
+knowledge_source_registered
+knowledge_ingestion_queued
+knowledge_ingestion_started
+knowledge_ingestion_progress
+knowledge_ingestion_completed
+knowledge_ingestion_failed
+knowledge_ingestion_cancelled
+knowledge_source_ready
+knowledge_source_removed
+knowledge_source_reindex_requested
+```
+
+事件 payload 只携带 source/job/mode/status/progress/count/report/error 等摘要，不携带文档全文。
+
+CLI 对应显示：
+
+- Knowledge 活动时间线。
+- preview / completed / failed / removed transcript 归档项。
+- ingestion progress 摘要。
+
+### 4.6 与上下文系统的关系
+
+ContextSystem 不默认每轮检索知识库。知识结果只有在模型主动调用 `knowledge` 工具后，才可以作为临时上下文候选被后续上下文组装使用。
+
+旧知识检索执行路径已经清空；新增知识能力必须走 `knowledge_contract.v0 + knowledge` 系统工具。
 
 ---
 
@@ -944,6 +1072,21 @@ CLI/WebUI 只消费事件摘要，例如 `job_id / run_id / target_type / status
 
 Trace 系统需要作为独立运行基础设施处理，不能附属于记忆、工具、CLI 或 render wrapper。
 
+完整工程方案见：
+
+```text
+docs/trace_system_engineering.md
+```
+
+当前决策：
+
+```text
+Trace Fact Store = JSONL
+Runtime Events   = 实时 UI
+Diagnostics      = 从 trace facts 派生
+Exporter         = 可选 OpenTelemetry / Langfuse / Phoenix 等外部观测平台
+```
+
 ### 6.1 当前实现迹象
 
 当前项目里已有一些分散的观测能力：
@@ -956,25 +1099,21 @@ Trace 系统需要作为独立运行基础设施处理，不能附属于记忆�
 | `cli/src/state/runtimeStore.ts` | CLI 已按事件订阅渲染运行状态、工具状态、记忆提示。 |
 | `agent_factory/runtime_kernel/state/schema.py` | RuntimeState 中已有 observability 相关状态。 |
 
-这些能力目前更像“事件流与 UI 渲染基础”，还不是完整 Trace 系统。
+这些能力目前分为两层：实时渲染仍走 runtime events；全链路追踪事实进入独立 `agent_factory/trace_system/` 的 JSONL Trace Fact Store。旧前端 trace 快照已废弃。
 
 ### 6.2 当前问题
 
-当前缺口：
+当前仍需继续完善的部分：
 
-- 没有统一 trace span 模型。
-- 没有统一 trace 存储位置。
-- 没有 run / stage / node / model / tool / memory / context 的统一生命周期记录。
-- 没有把后台任务 trace 和主对话 trace 关联起来。
-- 没有 trace 查询接口。
-- CLI/WebUI 还不能按 trace id 追踪一次完整运行。
-- 第九、十阶段需要读取 harness / repair trace，但当前 trace 规范还不够稳定。
+- trace reader / projection 还需要给 WebUI 提供更方便的查询视图。
+- 后台 worker 与主对话 trace 的 parent/child 关联还需要进一步细化。
+- 第九、十阶段后续应读取 trace/report，而不是从 UI 文案反推失败原因。
 
 跨会话记忆当前只发摘要事件，例如 `memory_write_queued`，但后台 worker 的完整执行过程还没有进入统一 trace。这意味着用户能看到“记忆写入已排队”的 UI 提示，但还不能完整追踪 taskModel 如何判断、提取了什么动作、写入是否成功、失败原因在哪里。
 
-### 6.3 后续处理原则
+### 6.3 工程原则
 
-Trace 系统后续应独立成模块，例如：
+Trace 系统已独立成模块：
 
 ```text
 agent_factory/trace_system/
@@ -989,9 +1128,11 @@ agent_factory/trace_system/
 
 - Factory 与生成 Agent 使用同一套 Trace 事件规范，但 trace 数据隔离。
 - Trace 不写业务 state，不影响图执行语义。
+- Trace 使用 JSONL append-only fact store。
 - Trace 可以记录摘要、计数、错误、耗时、引用，不默认记录完整敏感内容。
+- 工具大输出、artifact、知识块、checkpoint、scheduler report 都只记录引用。
 - 后台任务必须能关联到触发它的 `run_id / session_id / thread_id / job_id`。
-- CLI/WebUI 只消费 trace projection，不解析 LangGraph 原始 patch。
+- CLI/WebUI 实时状态继续消费 runtime events；详情视图消费 trace projection，不解析 LangGraph 原始 patch。
 - 第十阶段 repair 读取 trace/report，而不是从 UI 文案反推失败原因。
 
 ---
@@ -1105,9 +1246,9 @@ agent_package/
 | --- | --- |
 | 工具系统 | 已完成系统底座，且已接入 builtin / package / MCP / Skill。 |
 | 记忆系统 | 已确定会话内/跨会话两类记忆，以及 read/write 四个标准端口。 |
-| 知识系统 | 有 RuntimeKernel 内部实现迹象，需要后续清理成正式系统。 |
+| 知识系统 | 已接入 KnowledgeSystem，Factory、SystemPackage 与生成 Agent 共用 contract/catalog/worker/tool/event 规范。 |
 | 定时任务系统 | 已接入 SchedulerSystem，Factory 与生成 Agent 共用 contract/store/worker/tool/event 规范。 |
-| Trace 系统 | 当前只有事件流和 render/debug 线索，后续需要独立模块化。 |
+| Trace 系统 | 已接入 JSONL Trace Fact Store 底座与 `trace` RuntimeContract，旧内存 trace 模型与前端快照链路已清理。 |
 | 上下文管理系统 | 已接入 ContextSystem，Factory 与生成 Agent 共用 schema、runtime、system wrapper 和事件协议。 |
 
 下一步不应继续抽象总能力系统，而应按系统逐个成熟：
@@ -1120,13 +1261,13 @@ agent_package/
   -> 围绕 SessionMemoryRead / SessionMemoryWrite / CrossSessionMemoryRead / CrossSessionMemoryWrite 清理实现
 
 知识系统
-  -> 清理现有 KnowledgeEngine / knowledge_retrieve
+  -> 继续完善知识管理 CLI 确认卡、更多解析器和后续知识库 UI
 
 定时任务系统
   -> 继续完善报表查询、错过执行策略和 CLI 操作体验
 
 Trace 系统
-  -> 从现有事件流、render wrapper、debug patch 中抽出统一 trace 规范
+  -> 按 JSONL fact store、reference-first、diagnostic layer 和 optional exporter 落地
 
 上下文管理系统
   -> 继续接入知识库、trace、工具输出压缩等后续 ContextSource

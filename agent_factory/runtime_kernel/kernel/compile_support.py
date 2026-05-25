@@ -14,8 +14,6 @@ def required_services_for_pattern(pattern: GraphPatternSpec) -> list[str]:
             required.add("policy_engine")
         elif node.impl.startswith("operational.tool_call"):
             required.add("tool_registry")
-        elif node.impl.startswith("operational.knowledge_retrieve"):
-            required.add("knowledge_engine")
         for wrapper in node.wrappers:
             if wrapper.id.startswith("context."):
                 required.add("context_engine")
@@ -27,7 +25,7 @@ def required_services_for_pattern(pattern: GraphPatternSpec) -> list[str]:
         if capability == "tools":
             required.add("tool_registry")
         elif capability == "knowledge":
-            required.add("knowledge_engine")
+            required.add("knowledge_runtime")
         elif capability == "context":
             required.add("context_engine")
         elif capability == "policy":

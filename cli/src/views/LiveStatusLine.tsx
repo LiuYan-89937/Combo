@@ -14,6 +14,7 @@ export function LiveStatusLine() {
 	const contextWindow = useStoreSelector(state => state.contextWindow);
 	const memoryActivity = useStoreSelector(state => state.memoryActivity);
 	const contextActivity = useStoreSelector(state => state.contextActivity);
+	const latestKnowledgeActivity = useStoreSelector(state => state.knowledgeActivities.at(-1) ?? null);
 	const statusColor = runStatus === 'failed' ? 'red' : runStatus === 'running' ? 'green' : runStatus === 'interrupted' ? 'yellow' : 'gray';
 	const parts = [
 		ready ? 'online' : 'starting',
@@ -28,6 +29,7 @@ export function LiveStatusLine() {
 	const activityParts = [
 		memoryActivity.status !== 'idle' ? `memory ${memoryActivity.label}` : null,
 		contextActivity.status !== 'idle' ? `context ${contextActivity.label}` : null,
+		latestKnowledgeActivity ? `knowledge ${knowledgeStatusLabel(latestKnowledgeActivity)}` : null,
 		contextWindow.updatedAt ? `ctx ${contextWindowSummary(contextWindow)}` : null
 	].filter((item): item is string => Boolean(item));
 	return (
@@ -135,4 +137,16 @@ function clamp(value: number, min: number, max: number): number {
 
 function truncate(value: string, limit: number): string {
 	return value.length > limit ? `${value.slice(0, limit)}...` : value;
+}
+
+function knowledgeStatusLabel(activity: {
+	sourceId: string | null;
+	status: string | null;
+	phase: string | null;
+}): string {
+	return [
+		activity.sourceId ? truncate(activity.sourceId, 18) : null,
+		activity.status ?? null,
+		activity.phase ?? null
+	].filter(Boolean).join(' ');
 }

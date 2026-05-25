@@ -4,6 +4,7 @@ from agent_factory.runtime_contracts.builtins.builders import (
     ArtifactContractBuilder,
     ContextContractBuilder,
     DependenciesContractBuilder,
+    KnowledgeContractBuilder,
     MemoryContractBuilder,
     ModelContractBuilder,
     NodeProviderContractBuilder,
@@ -14,11 +15,13 @@ from agent_factory.runtime_contracts.builtins.builders import (
     SessionContractBuilder,
     StateContractBuilder,
     ToolsContractBuilder,
+    TraceContractBuilder,
 )
 from agent_factory.runtime_contracts.builtins.defaults import (
     default_artifact_contract,
     default_context_contract,
     default_dependencies_contract,
+    default_knowledge_contract,
     default_memory_contract,
     default_model_contract,
     default_node_provider_contract,
@@ -29,12 +32,14 @@ from agent_factory.runtime_contracts.builtins.defaults import (
     default_session_contract,
     default_state_contract,
     default_tools_contract,
+    default_trace_contract,
 )
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
 from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
     DependenciesContract,
+    KnowledgeContract,
     MemoryContract,
     ModelContract,
     NodeProviderContract,
@@ -45,6 +50,7 @@ from agent_factory.runtime_contracts.schema import (
     SessionContract,
     StateContract,
     ToolsContract,
+    TraceContract,
 )
 from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
 
@@ -81,6 +87,18 @@ def default_runtime_contract_registry(
         version="context_contract.v0",
         model=ContextContract,
         builder=ContextContractBuilder(),
+    )
+    registry.register(
+        contract_type="trace",
+        version="trace_contract.v0",
+        model=TraceContract,
+        builder=TraceContractBuilder(),
+    )
+    registry.register(
+        contract_type="knowledge",
+        version="knowledge_contract.v0",
+        model=KnowledgeContract,
+        builder=KnowledgeContractBuilder(),
     )
     registry.register(
         contract_type="model",
@@ -143,6 +161,7 @@ __all__ = [
     "default_artifact_contract",
     "default_context_contract",
     "default_dependencies_contract",
+    "default_knowledge_contract",
     "default_memory_contract",
     "default_model_contract",
     "default_node_provider_contract",
@@ -154,4 +173,5 @@ __all__ = [
     "default_session_contract",
     "default_state_contract",
     "default_tools_contract",
+    "default_trace_contract",
 ]

@@ -18,7 +18,6 @@ from agent_factory.runtime_kernel.bookmarks import InMemoryBookmarkStore
 from agent_factory.runtime_kernel.context import ContextEngine
 from agent_factory.runtime_kernel.execution import ExecutionController
 from agent_factory.runtime_protocol.completion import runtime_completed
-from agent_factory.runtime_kernel.knowledge import KnowledgeEngine
 from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp, RuntimeKernelInstance
 from agent_factory.runtime_kernel.kernel.compile_support import (
     ensure_memory_runtime,
@@ -47,7 +46,6 @@ from agent_factory.runtime_kernel.nodes.standard import (
     GovernancePrecheckNode,
     GovernanceRefusalGateNode,
     IngressNode,
-    OperationalKnowledgeRetrieveNode,
     OperationalResourceProbeNode,
     OperationalToolCallNode,
     TerminalCloseNode,
@@ -69,7 +67,6 @@ from agent_factory.runtime_kernel.state import (
     ContextState,
     ConversationState,
     ExecutionState,
-    KnowledgeState,
     ObservabilityState,
     PolicyState,
     RunState,
@@ -107,7 +104,6 @@ class RuntimeKernelFacade:
             CognitiveAnswerNode(),
             CognitiveReviewNode(),
             OperationalToolCallNode(),
-            OperationalKnowledgeRetrieveNode(),
             OperationalResourceProbeNode(),
             TerminalCommitNode(),
             TerminalCloseNode(),
@@ -132,7 +128,16 @@ class RuntimeKernelFacade:
         )
         resolved_memory_store_config = memory_store_config or LangGraphStoreConfig(
             backend=memory_config.store.backend,
-            path=Path(memory_config.store.path) if memory_config.store.backend == "sqlite" else None,
+            path=(
+                Path(memory_config.store.path)
+                if memory_config.store.backend == "sqlite" and memory_config.store.path.strip()
+                else None
+            ),
+            connection_uri=memory_config.store.connection_uri,
+            database_name=memory_config.store.database_name,
+            collection_name=memory_config.store.collection_name,
+            setup=memory_config.store.setup,
+            provider_options=memory_config.store.provider_options,
             index=build_memory_store_index(memory_config),
         )
         memory_store = LangGraphStoreFactory().build(resolved_memory_store_config).store
@@ -155,7 +160,6 @@ class RuntimeKernelFacade:
             memory_store=memory_store,
             memory_system=memory_runtime,
             context_system=default_context_runtime(),
-            knowledge_engine=KnowledgeEngine(),
             context_engine=ContextEngine(),
             policy_engine=PolicyEngine(),
             observability_manager=ObservabilityManager(),
@@ -305,7 +309,6 @@ class RuntimeKernelFacade:
         )
         state.context = ContextState()
         state.tools = ToolState()
-        state.knowledge = KnowledgeState()
         state.policy = PolicyState()
         state.execution = ExecutionState()
         state.observability = ObservabilityState()
