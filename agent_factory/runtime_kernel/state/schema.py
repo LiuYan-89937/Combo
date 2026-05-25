@@ -37,6 +37,7 @@ class ContextState(BaseModel):
 
     source_refs: list[str] = Field(default_factory=list)
     model_context: dict[str, Any] = Field(default_factory=dict)
+    model_outputs: dict[str, Any] = Field(default_factory=dict)
     tool_context: dict[str, Any] = Field(default_factory=dict)
     hidden_context: dict[str, Any] = Field(default_factory=dict)
     compression_applied: bool = False

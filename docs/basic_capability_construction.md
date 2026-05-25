@@ -1105,7 +1105,7 @@ Exporter         = 可选 OpenTelemetry / Langfuse / Phoenix 等外部观测平�
 
 当前仍需继续完善的部分：
 
-- trace reader / projection 还需要给 WebUI 提供更方便的查询视图。
+- TraceReader / projection / diagnostics 已提供统一底座；WebUI 还需要基于 projection 实现详情页与可视化查询界面。
 - 后台 worker 与主对话 trace 的 parent/child 关联还需要进一步细化。
 - 第九、十阶段后续应读取 trace/report，而不是从 UI 文案反推失败原因。
 

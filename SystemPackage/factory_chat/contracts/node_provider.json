@@ -3,6 +3,6 @@
   "version": "node_provider_contract.v0",
   "enabled": true,
   "config": {
-    "provider_ids": []
+    "providers": []
   }
 }

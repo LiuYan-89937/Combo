@@ -28,6 +28,9 @@ class RuntimeServices(BaseModel):
     report_store: object | None = None
     bookmark_store: object | None = None
     trace_recorder: object | None = None
+    trace_reader: object | None = None
+    trace_projector: object | None = None
+    trace_diagnostics: object | None = None
     runtime_resources: dict[str, Any] = Field(default_factory=dict)
     tool_runtime_resources: dict[str, Any] = Field(default_factory=dict)
 

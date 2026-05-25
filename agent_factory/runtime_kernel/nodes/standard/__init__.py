@@ -12,6 +12,7 @@ from agent_factory.runtime_kernel.nodes.standard.refusal_gate import GovernanceR
 from agent_factory.runtime_kernel.nodes.standard.resource_probe import OperationalResourceProbeNode
 from agent_factory.runtime_kernel.nodes.standard.review import CognitiveReviewNode
 from agent_factory.runtime_kernel.nodes.standard.route import CognitiveRouteNode
+from agent_factory.runtime_kernel.nodes.standard.structured import CognitiveStructuredNode
 from agent_factory.runtime_kernel.nodes.standard.tool_call import OperationalToolCallNode
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "CognitivePlanNode",
     "CognitiveReviewNode",
     "CognitiveRouteNode",
+    "CognitiveStructuredNode",
     "CognitiveAnswerNode",
     "FinalizeNode",
     "GovernanceApprovalGateNode",

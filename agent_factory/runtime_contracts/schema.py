@@ -303,24 +303,35 @@ class StateContract(BaseModel):
     config: StateContractConfig = Field(default_factory=StateContractConfig)
 
 
+class NodeProviderReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider_id")
+    @classmethod
+    def _provider_id_is_not_empty(cls, value: str) -> str:
+        provider_id = str(value).strip()
+        if not provider_id:
+            raise ValueError("node provider provider_id must not be empty")
+        return provider_id
+
+
 class NodeProviderContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider_ids: list[str] = Field(default_factory=list)
+    providers: list[NodeProviderReference] = Field(default_factory=list)
 
-    @field_validator("provider_ids")
+    @field_validator("providers")
     @classmethod
-    def _provider_ids_are_non_empty(cls, value: list[str]) -> list[str]:
-        ids: list[str] = []
+    def _providers_are_unique(cls, value: list[NodeProviderReference]) -> list[NodeProviderReference]:
         seen: set[str] = set()
         for item in value:
-            provider_id = str(item).strip()
-            if not provider_id:
-                raise ValueError("provider_ids must not contain empty values")
-            if provider_id not in seen:
-                ids.append(provider_id)
-                seen.add(provider_id)
-        return ids
+            if item.provider_id in seen:
+                raise ValueError(f"duplicate node provider reference: {item.provider_id}")
+            seen.add(item.provider_id)
+        return value
 
 
 class NodeProviderContract(BaseModel):

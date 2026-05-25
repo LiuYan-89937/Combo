@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,7 +20,7 @@ from agent_factory.runtime_kernel.bindings import BindingSet
 from agent_factory.runtime_kernel.bookmarks import InMemoryBookmarkStore
 from agent_factory.runtime_kernel.kernel.facade import RuntimeKernelFacade
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
-from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry, StaticNodeProvider
+from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry, PackageNodeProviderFactory, StaticNodeProvider
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.patterns.schema import (
     GraphPatternSpec,
@@ -178,7 +179,7 @@ class RuntimeKernelCoreFoundationTest(unittest.TestCase):
             {
                 "type": "node_provider",
                 "version": "node_provider_contract.v0",
-                "config": {"provider_ids": ["missing_provider"]},
+                "config": {"providers": [{"provider_id": "missing_provider", "config": {}}]},
             }
         )
 
@@ -221,6 +222,93 @@ class RuntimeKernelCoreFoundationTest(unittest.TestCase):
             "model_call_started",
             "model_call_completed",
         ])
+
+    def test_model_operation_binding_rejects_invalid_payload(self) -> None:
+        with self.assertRaises(Exception):
+            BindingSet.model_validate(
+                {
+                    "node_bindings": [
+                        {
+                            "binding_id": "bad",
+                            "binding_type": "model_operation",
+                            "target": {"node_id": "structured", "impl": "cognitive.structured"},
+                            "payload": {
+                                "operation": "invalid",
+                                "output_schema": {"type": "object"},
+                                "write_target": {"section": "context"},
+                            },
+                        }
+                    ]
+                }
+            )
+
+    def test_cognitive_structured_node_writes_validated_package_state(self) -> None:
+        facade = _facade()
+        facade.instance.services.model_operation_service = ModelOperationService(model=_FakeModel())
+        facade.instance.pattern_registry.register(_structured_output_pattern())
+        spec = StateNamespaceSpec(
+            namespace="workflow",
+            schema={
+                "type": "object",
+                "properties": {
+                    "decision": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                        "additionalProperties": False,
+                    }
+                },
+                "required": ["decision"],
+                "additionalProperties": False,
+            },
+            initial_state={"decision": {"answer": "initial"}},
+            writable_node_ids=frozenset({"structured"}),
+        )
+        compiled = facade.compile(
+            pattern_id="structured_output_test",
+            bindings=_structured_output_bindings(),
+            state_contracts=[spec],
+        )
+
+        with tempfile.TemporaryDirectory() as session_root:
+            result = facade.run(compiled, user_input="decide", session_config={"session_root": session_root})
+
+        self.assertEqual(result.package_state["workflow"]["decision"], {"answer": "ok"})
+
+    def test_package_node_provider_loads_package_local_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            node_dir = root / "nodes" / "echo"
+            node_dir.mkdir(parents=True)
+            (node_dir / "node.py").write_text(
+                "def run(input, context):\n"
+                "    return {'package_state': {'workflow': {'value': context.package_state['workflow']['value'] + '-node'}}}\n",
+                encoding="utf-8",
+            )
+            (node_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "version": "package_node.v0",
+                        "impl_id": "package.echo",
+                        "node_type": "operational",
+                        "entrypoint": "node.py:run",
+                        "input_schema": {"type": "object", "additionalProperties": True},
+                        "output_schema": {"type": "object", "additionalProperties": True},
+                        "readable_sections": ["package_state"],
+                        "writable_sections": ["package_state"],
+                        "required_services": [],
+                        "tool_access": [],
+                        "description": "Echo package state.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            provider = PackageNodeProviderFactory().build(package_root=root, config={"roots": ["nodes"]})
+            implementation = provider.implementations()[0]
+
+        self.assertEqual(implementation.impl_id, "package.echo")
+        self.assertEqual(implementation.writable_sections, {"package_state"})
 
     def test_artifact_and_report_stores_write_index_records(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -351,6 +439,58 @@ def _package_state_counter_pattern() -> GraphPatternSpec:
         termination=PatternTerminationSpec(success_nodes=["counter"]),
         input_contract=PatternIOContractSpec(readable_sections=["package_state"], writable_sections=[]),
         output_contract=PatternIOContractSpec(readable_sections=[], writable_sections=["package_state"]),
+    )
+
+
+def _structured_output_pattern() -> GraphPatternSpec:
+    return GraphPatternSpec(
+        pattern_id="structured_output_test",
+        kind="main",
+        embeddable=False,
+        version=1,
+        name="Structured Output Test",
+        description="Test structured model output writes package state.",
+        entry_node="structured",
+        nodes=[
+            PatternNodeSpec(
+                id="structured",
+                type="cognitive",
+                impl="cognitive.structured",
+            )
+        ],
+        termination=PatternTerminationSpec(success_nodes=["structured"]),
+        input_contract=PatternIOContractSpec(readable_sections=["package_state"], writable_sections=[]),
+        output_contract=PatternIOContractSpec(readable_sections=[], writable_sections=["package_state"]),
+    )
+
+
+def _structured_output_bindings() -> BindingSet:
+    return BindingSet.model_validate(
+        {
+            "node_bindings": [
+                {
+                    "binding_id": "structured_model_operation",
+                    "binding_type": "model_operation",
+                    "target": {"node_id": "structured", "impl": "cognitive.structured"},
+                    "payload": {
+                        "operation": "structured_json",
+                        "model_role": "main",
+                        "output_schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                            "additionalProperties": False,
+                        },
+                        "write_target": {
+                            "section": "package_state",
+                            "namespace": "workflow",
+                            "path": ["decision"],
+                        },
+                        "max_attempts": 1,
+                    },
+                }
+            ]
+        }
     )
 
 

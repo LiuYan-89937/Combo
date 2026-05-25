@@ -3,8 +3,11 @@
   "version": "node_provider_contract.v0",
   "enabled": true,
   "config": {
-    "provider_ids": [
-      "builtin.factory_manufacturing_nodes"
+    "providers": [
+      {
+        "provider_id": "builtin.factory_manufacturing_nodes",
+        "config": {}
+      }
     ]
   }
 }

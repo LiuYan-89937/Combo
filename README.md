@@ -493,7 +493,7 @@ git diff --check
 - `/rerun <stage_id>` 需要基于持久 bookmark/checkpoint 完整恢复。
 - `graph_run` 当前只向主链路 Graph 投递消息；动态 GraphPattern 选择仍需补齐。
 - Web UI 还未实现；当前以 CLI-first 为准。
-- Trace reader / projection / 可视化分析层还需要继续完善。
+- Web UI 的 Trace 详情页还未实现；当前已提供 TraceReader、projection 与 diagnostics 底座。
 
 ## 参考文档
 

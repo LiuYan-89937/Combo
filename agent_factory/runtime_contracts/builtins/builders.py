@@ -52,7 +52,7 @@ from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolO
 from agent_factory.tooling.providers import BuiltinToolProvider, PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.registry import ToolRegistry
 from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
-from agent_factory.trace_system import JSONLTraceStore, TraceRecorder
+from agent_factory.trace_system import JSONLTraceStore, TraceDiagnostics, TraceProjector, TraceReader, TraceRecorder
 
 
 class SessionContractBuilder:
@@ -249,8 +249,16 @@ class TraceContractBuilder:
             producer_type=producer_type,
             max_inline_payload_chars=config.max_inline_payload_chars,
         )
+        reader = TraceReader(config.root)
+        projector = TraceProjector(reader)
+        diagnostics = TraceDiagnostics(projector)
         return RuntimeContribution(
-            services={"trace_recorder": recorder},
+            services={
+                "trace_recorder": recorder,
+                "trace_reader": reader,
+                "trace_projector": projector,
+                "trace_diagnostics": diagnostics,
+            },
             diagnostics=[
                 RuntimeDiagnostic(
                     where="trace.runtime",
@@ -364,8 +372,12 @@ class NodeProviderContractBuilder:
         self.provider_registry = provider_registry or NodeProviderRegistry()
 
     def build(self, contract: NodeProviderContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        package_root = context.package_root if context is not None else Path.cwd()
         return RuntimeContribution(
-            node_providers=self.provider_registry.resolve_many(contract.config.provider_ids)
+            node_providers=self.provider_registry.resolve_references(
+                [item.model_dump(mode="json") for item in contract.config.providers],
+                package_root=package_root,
+            )
         )
 
 

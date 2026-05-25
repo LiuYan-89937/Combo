@@ -172,6 +172,9 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "report_store": None,
         "bookmark_store": services.bookmark_store,
         "trace_recorder": services.trace_recorder,
+        "trace_reader": services.trace_reader,
+        "trace_projector": services.trace_projector,
+        "trace_diagnostics": services.trace_diagnostics,
         "runtime_resources": dict(services.runtime_resources),
         "tool_runtime_resources": dict(services.tool_runtime_resources),
     }

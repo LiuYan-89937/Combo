@@ -52,7 +52,7 @@ from agent_factory.runtime_contracts.schema import (
     ToolsContract,
     TraceContract,
 )
-from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
+from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry, PackageNodeProviderFactory
 
 
 def default_runtime_contract_registry(
@@ -63,6 +63,8 @@ def default_runtime_contract_registry(
         from agent_factory.factory_package import factory_manufacturing_node_provider
 
         node_provider_registry = NodeProviderRegistry([factory_manufacturing_node_provider()])
+    if not node_provider_registry.has_factory("builtin.package_nodes"):
+        node_provider_registry.register_factory(PackageNodeProviderFactory())
     registry = RuntimeContractRegistry()
     registry.register(
         contract_type="session",
