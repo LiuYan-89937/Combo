@@ -82,7 +82,6 @@ _COMMAND_HANDLERS: dict[str, str] = {
     "set_mode": "set_mode",
     "set_options": "set_options",
     "send_message": "send_message",
-    "rerun_from_stage": "rerun_from_stage",
     "scheduler_manage": "scheduler_manage",
     "list_agent_packages": "list_agent_packages",
     "select_agent_package": "select_agent_package",

@@ -7,7 +7,6 @@ import uuid
 
 from langchain_core.messages import BaseMessage, ToolMessage
 
-from agent_factory.factory_package.constants import STAGE_IDS
 from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendEvent,
     FactoryFrontendEventType,
@@ -302,7 +301,7 @@ class RuntimeEventNormalizer:
         node_id = str(payload.get("node_id") or "")
         if not node_id:
             return
-        stage_id = str(payload.get("stage_id") or "") or (node_id if node_id in STAGE_IDS else self.current_stage_id)
+        stage_id = str(payload.get("stage_id") or "") or self.current_stage_id
         span_id = self._node_span(node_id, stage_id)
         if stage_id:
             self._ensure_stage_started(stage_id)
@@ -687,11 +686,6 @@ class RuntimeEventNormalizer:
 
 
 def _stage_id_from_patch(patch: dict[str, Any]) -> str | None:
-    if patch.get("current_stage"):
-        return str(patch.get("current_stage"))
-    stage_log = patch.get("stage_log") or []
-    if stage_log:
-        return str(stage_log[-1].get("stage_id") or "")
     return None
 
 

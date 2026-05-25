@@ -1,8 +1,8 @@
 {
-  "status": "running",
+  "status": "cleared",
   "force_manufacture": true,
   "interaction_mode": "create_agent",
   "model_activity": [],
-  "stage_log": [],
+  "manufacturing_log": [],
   "errors": []
 }

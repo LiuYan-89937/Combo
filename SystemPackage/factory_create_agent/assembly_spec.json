@@ -3,7 +3,7 @@
   "agent": {
     "id": "factory_create_agent",
     "name": "Factory Create Agent",
-    "description": "FastAgentFactory manufacturing workflow packaged as a RuntimeKernel agent.",
+    "description": "FastAgentFactory create-agent shell after clearing the old manufacturing workflow.",
     "version": "0.1.0"
   },
   "runtime": {

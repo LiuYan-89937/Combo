@@ -277,7 +277,6 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
-                user_config={"stop_after_stage": self.options.stop_after_stage},
             )
             self._consume_agent_package_stream(
                 package_id=SYSTEM_CREATE_AGENT_PACKAGE_ID,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from agent_factory.factory_package.constants import STAGE_IDS
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
@@ -74,14 +73,7 @@ class RuntimeSessionCommandMixin:
         )
 
     def set_options(self, command: FactoryFrontendCommand) -> None:
-        stop_after_stage = command.options.get("stop_after_stage", self.options.stop_after_stage)
-        if stop_after_stage in {"", "off", "none"}:
-            stop_after_stage = None
-        if stop_after_stage is not None and stop_after_stage not in STAGE_IDS:
-            self._emit_error(command, f"unknown stage_id: {stop_after_stage}")
-            return
         self.options = FactoryBridgeOptions(
-            stop_after_stage=stop_after_stage,
             show_state=bool(command.options.get("show_state", self.options.show_state)),
             show_messages=bool(command.options.get("show_messages", self.options.show_messages)),
         )
@@ -117,20 +109,6 @@ class RuntimeSessionCommandMixin:
             self._emit_error(command, "no pending interrupt to resume")
             return
         self._resume_agent_package_interrupt(command)
-
-    def rerun_from_stage(self, command: FactoryFrontendCommand) -> None:
-        self._ensure_session(command)
-        stage_id = str(command.payload.get("stage_id") or "").strip()
-        if self.mode != "create_agent":
-            self._emit_error(command, "rerun_from_stage is only available in create_agent mode")
-            return
-        if self.pending_agent_package_run is not None:
-            self._emit_error(command, "cannot rerun while an interrupt is pending")
-            return
-        if stage_id not in STAGE_IDS:
-            self._emit_error(command, f"unknown stage_id: {stage_id}")
-            return
-        self._emit_error(command, f"RuntimeKernel bookmark rerun is not available for stage yet: {stage_id}")
 
     def _emit_session_event(self, request_id: str | None, *, session_event_type: str = "session_switched") -> None:
         self.emit(

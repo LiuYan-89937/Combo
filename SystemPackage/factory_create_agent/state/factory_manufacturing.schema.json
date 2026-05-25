@@ -5,7 +5,7 @@
     "factory_run_id": {
       "type": "string"
     },
-    "requirement": {
+    "input_intent": {
       "type": "string"
     },
     "force_manufacture": {
@@ -14,7 +14,7 @@
     "interaction_mode": {
       "type": "string"
     },
-    "current_stage": {
+    "current_node": {
       "type": "string"
     },
     "status": {
@@ -26,12 +26,18 @@
     "model_activity": {
       "type": "array"
     },
-    "stage_log": {
+    "manufacturing_log": {
       "type": "array"
+    },
+    "manufacturing_cleared": {
+      "type": "object"
+    },
+    "factory_response": {
+      "type": "object"
     },
     "errors": {
       "type": "array"
     }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

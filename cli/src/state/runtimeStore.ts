@@ -202,7 +202,6 @@ export type RuntimeState = {
 	showState: boolean;
 	showMessages: boolean;
 	toolGrep: string;
-	stopAfterStage: string | null;
 	lastError: string | null;
 	errors: string[];
 };
@@ -266,7 +265,6 @@ export function createInitialRuntimeState(): RuntimeState {
 		showState: false,
 		showMessages: true,
 		toolGrep: '',
-		stopAfterStage: 'assembly_spec_generation',
 		lastError: null,
 		errors: []
 	};
@@ -541,7 +539,6 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			const options = (event.payload?.options ?? {}) as Record<string, unknown>;
 			return {
 				...base,
-				stopAfterStage: (options.stop_after_stage as string | null | undefined) ?? base.stopAfterStage,
 				showState: Boolean(options.show_state ?? base.showState),
 				showMessages: Boolean(options.show_messages ?? base.showMessages),
 				logs: [...base.logs, 'runtime options updated']

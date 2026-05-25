@@ -2,89 +2,34 @@ pattern_id: factory_manufacturing
 kind: main
 embeddable: false
 version: 1
-name: Factory Manufacturing
-description: FastAgentFactory ten-stage manufacturing workflow.
+name: Factory Manufacturing Cleared
+description: FastAgentFactory manufacturing workflow placeholder after clearing the old manufacturing flow.
 metadata:
-  summary: Runs the production factory stages as RuntimeKernel package nodes.
+  summary: The old create-agent manufacturing workflow has been cleared. New manufacturing domains are intentionally not materialized yet.
   use_when:
-    - The user wants to create or refine an AgentPackage through the factory.
+    - The user enters create-agent mode before the new manufacturing domains are rebuilt.
   avoid_when: []
   selection_notes:
-    - This is a SystemPackage workflow and is not exposed as a generated-agent template.
+    - This SystemPackage is a compile-safe empty manufacturing entry, not a production workflow.
   tags:
     - factory
     - manufacturing
     - system-package
-entry_node: requirement_capture
+entry_node: manufacturing_cleared
 nodes:
-  - id: requirement_capture
+  - id: manufacturing_cleared
     type: cognitive
-    impl: builtin.factory.requirement_capture
-  - id: runtime_pattern_selection
-    type: cognitive
-    impl: builtin.factory.runtime_pattern_selection
-  - id: graph_behavior_planning
-    type: cognitive
-    impl: builtin.factory.graph_behavior_planning
-  - id: node_strategy_planning
-    type: cognitive
-    impl: builtin.factory.node_strategy_planning
-  - id: tool_capability_planning
-    type: cognitive
-    impl: builtin.factory.tool_capability_planning
-  - id: resource_and_condition_planning
-    type: cognitive
-    impl: builtin.factory.resource_and_condition_planning
-  - id: assembly_spec_generation
-    type: cognitive
-    impl: builtin.factory.assembly_spec_generation
-  - id: package_generation
-    type: cognitive
-    impl: builtin.factory.package_generation
-  - id: harness_generation_and_test
-    type: cognitive
-    impl: builtin.factory.harness_generation_and_test
-  - id: repair_or_finalize
-    type: cognitive
-    impl: builtin.factory.repair_or_finalize
-edges:
-  - from: requirement_capture
-    to: runtime_pattern_selection
-    when: always
-  - from: runtime_pattern_selection
-    to: graph_behavior_planning
-    when: always
-  - from: graph_behavior_planning
-    to: node_strategy_planning
-    when: always
-  - from: node_strategy_planning
-    to: tool_capability_planning
-    when: always
-  - from: tool_capability_planning
-    to: resource_and_condition_planning
-    when: always
-  - from: resource_and_condition_planning
-    to: assembly_spec_generation
-    when: always
-  - from: assembly_spec_generation
-    to: package_generation
-    when: always
-  - from: package_generation
-    to: harness_generation_and_test
-    when: always
-  - from: harness_generation_and_test
-    to: repair_or_finalize
-    when: always
+    impl: builtin.factory.manufacturing_cleared
+edges: []
 interrupt_points: []
 termination:
   success_nodes:
-    - repair_or_finalize
+    - manufacturing_cleared
   failure_nodes: []
 constraints:
   allowed_node_types:
     - cognitive
   required_capabilities:
-    - tools
     - context
 input_contract:
   readable_sections:

@@ -568,7 +568,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "- 如果 sandbox 执行 observation 显示依赖缺失、资源契约错误或测试计划错误，"
                     "只能修正第九阶段 contract 后重跑。\n"
                     "- 如果 observation 显示工具代码语法/业务逻辑错误，不要尝试修改 package，"
-                    "应让系统生成 harness report 交给第十阶段 repair。\n\n"
+                    "应让系统生成 harness report 交给返厂 repair。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
                     "当前阶段边界：\n{stage_operating_context}",
                 ),
@@ -609,7 +609,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "sandbox 执行 observation 修正规则：\n"
                     "- 依赖缺失时，补充 dependency_plan.python_requirements 或 system_packages。\n"
                     "- 资源/挂载/网络问题时，修正 host_interaction 或 runtime_environment。\n"
-                    "- 工具代码错误属于第十阶段 repair，不要在本阶段生成代码修改。\n\n"
+                    "- 工具代码错误属于返厂 repair，不要在当前验证环节生成代码修改。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
                     "当前阶段边界：\n{stage_operating_context}\n\n"
                     "Output JSON schema:\n{output_json_schema}",

@@ -1107,7 +1107,7 @@ Exporter         = 可选 OpenTelemetry / Langfuse / Phoenix 等外部观测平�
 
 - TraceReader / projection / diagnostics 已提供统一底座；WebUI 还需要基于 projection 实现详情页与可视化查询界面。
 - 后台 worker 与主对话 trace 的 parent/child 关联还需要进一步细化。
-- 第九、十阶段后续应读取 trace/report，而不是从 UI 文案反推失败原因。
+- 返厂升级流程后续应读取 trace/report，而不是从 UI 文案反推失败原因。
 
 跨会话记忆当前只发摘要事件，例如 `memory_write_queued`，但后台 worker 的完整执行过程还没有进入统一 trace。这意味着用户能看到“记忆写入已排队”的 UI 提示，但还不能完整追踪 taskModel 如何判断、提取了什么动作、写入是否成功、失败原因在哪里。
 
@@ -1133,7 +1133,7 @@ agent_factory/trace_system/
 - 工具大输出、artifact、知识块、checkpoint、scheduler report 都只记录引用。
 - 后台任务必须能关联到触发它的 `run_id / session_id / thread_id / job_id`。
 - CLI/WebUI 实时状态继续消费 runtime events；详情视图消费 trace projection，不解析 LangGraph 原始 patch。
-- 第十阶段 repair 读取 trace/report，而不是从 UI 文案反推失败原因。
+- 返厂 repair 读取 trace/report，而不是从 UI 文案反推失败原因。
 
 ---
 

@@ -15,7 +15,6 @@ FactoryFrontendCommandType = Literal[
     "new_session",
     "set_mode",
     "send_message",
-    "rerun_from_stage",
     "scheduler_manage",
     "list_agent_packages",
     "select_agent_package",

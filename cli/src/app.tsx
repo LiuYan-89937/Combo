@@ -1,7 +1,7 @@
 import React, {useEffect, useMemo} from 'react';
 import {useApp} from 'ink';
 import {PythonBridge} from './bridge/PythonBridge.js';
-import {commandSuggestions, factoryStages, factoryToolGroups} from './commands.js';
+import {commandSuggestions, factoryToolGroups} from './commands.js';
 import {buildResumePayload} from './interrupts.js';
 import {command, type FactoryCommand, type FactoryEvent, type FactoryMode} from './protocol.js';
 import {createRuntimeStore} from './state/runtimeStore.js';
@@ -124,10 +124,6 @@ export function App() {
 			send(command('switch_session', {session_id: value.slice('/resume '.length).trim()}));
 			return;
 		}
-		if (value.startsWith('/rerun ')) {
-			send(command('rerun_from_stage', {payload: {stage_id: value.slice('/rerun '.length).trim()}}));
-			return;
-		}
 		if (value === '/scheduler' || value.startsWith('/scheduler ')) {
 			const schedulerPayload = parseSchedulerCommand(value);
 			if ('error' in schedulerPayload) {
@@ -135,11 +131,6 @@ export function App() {
 				return;
 			}
 			send(command('scheduler_manage', {payload: schedulerPayload}));
-			return;
-		}
-		if (value.startsWith('/stop ')) {
-			const stop_after_stage = value.slice('/stop '.length).trim();
-			send(command('set_options', {options: {stop_after_stage}}));
 			return;
 		}
 		if (value.startsWith('/state ')) {
@@ -172,10 +163,6 @@ export function App() {
 		}
 		if (value === '/tools') {
 			store.dispatch({ui_type: 'notice', message: `tools ${factoryToolGroups.join(' | ')}`});
-			return;
-		}
-		if (value === '/stages') {
-			store.dispatch({ui_type: 'notice', message: `stages ${factoryStages.join(' -> ')}`});
 			return;
 		}
 		if (state.mode === 'agent_package') {

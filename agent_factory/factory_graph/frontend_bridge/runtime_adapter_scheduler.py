@@ -186,7 +186,6 @@ class RuntimeSchedulerCommandMixin:
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=None,
-                user_config={"stop_after_stage": self.options.stop_after_stage} if mode == "create_agent" else None,
             )
             self._consume_agent_package_stream(
                 package_id=package_id,

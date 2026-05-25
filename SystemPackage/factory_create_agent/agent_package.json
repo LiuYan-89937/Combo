@@ -4,7 +4,7 @@
   "agent": {
     "id": "factory_create_agent",
     "name": "Factory Create Agent",
-    "description": "System package that runs the FastAgentFactory ten-stage manufacturing workflow."
+    "description": "System package shell for create-agent after clearing the old manufacturing workflow."
   },
   "runtime": {
     "system_package": true,

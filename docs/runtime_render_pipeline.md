@@ -92,7 +92,7 @@
 | `message` | 面向人的简短摘要。 |
 | `payload` | 事件类型对应的结构化数据。 |
 
-`stage_id` 是可选字段。Factory 使用它展示十阶段进度；生成 Agent 不强制拥有阶段。
+`stage_id` 是可选字段。Factory 可以使用它展示制造流程进度；生成 Agent 不强制拥有阶段。
 
 ---
 
@@ -182,12 +182,12 @@ debug_patch
 
 ```json
 {
-  "node_id": "requirement_capture",
-  "label": "需求捕获",
-  "kind": "llm_subgraph",
-  "purpose": "澄清用户要制造什么 Agent",
-  "doing": "判断需求是否清晰，必要时向用户追问并整理答案",
-  "expected_output": "经过澄清的 Agent 需求和初步制造计划",
+  "node_id": "manufacturing_cleared",
+  "label": "制造流程已清空",
+  "kind": "factory_manufacturing_shell",
+  "purpose": "明确旧制造流程已从 create-agent 执行路径移除",
+  "doing": "返回清空状态，等待新的制造域设计",
+  "expected_output": "说明当前制造流程尚未重建",
   "visible_to_user": true
 }
 ```
@@ -239,13 +239,13 @@ on_error -> 发 node_failed
 ```json
 {
   "event_type": "node_started",
-  "node_id": "requirement_capture",
-  "node_label": "需求捕获",
-  "node_kind": "llm_subgraph",
+  "node_id": "manufacturing_cleared",
+  "node_label": "制造流程已清空",
+  "node_kind": "factory_manufacturing_shell",
   "payload": {
-    "purpose": "澄清用户要制造什么 Agent",
-    "doing": "判断需求是否清晰，必要时向用户追问并整理答案",
-    "expected_output": "经过澄清的 Agent 需求和初步制造计划"
+    "purpose": "明确旧制造流程已从 create-agent 执行路径移除",
+    "doing": "返回清空状态，等待新的制造域设计",
+    "expected_output": "说明当前制造流程尚未重建"
   }
 }
 ```
@@ -255,10 +255,10 @@ on_error -> 发 node_failed
 ```json
 {
   "event_type": "node_completed",
-  "node_id": "requirement_capture",
-  "node_label": "需求捕获",
+  "node_id": "manufacturing_cleared",
+  "node_label": "制造流程已清空",
   "payload": {
-    "output_summary": "需求已澄清，已形成初步制造计划"
+    "output_summary": "旧制造流程已清空"
   }
 }
 ```
@@ -268,11 +268,11 @@ on_error -> 发 node_failed
 ```json
 {
   "event_type": "node_failed",
-  "node_id": "resource_and_condition_planning",
-  "node_label": "资源与条件规划",
+  "node_id": "manufacturing_cleared",
+  "node_label": "制造流程已清空",
   "severity": "error",
   "payload": {
-    "error_summary": "资源准备失败，缺少可验证的运行资源"
+    "error_summary": "制造入口执行失败"
   }
 }
 ```
@@ -319,13 +319,13 @@ agent_factory/factory_graph/render_manifest.py
 
 ```python
 FACTORY_NODE_RENDER_SPECS = {
-    "requirement_capture": {
-        "node_id": "requirement_capture",
-        "label": "需求捕获",
-        "kind": "llm_subgraph",
-        "purpose": "澄清用户要制造什么 Agent",
-        "doing": "判断需求是否清晰，必要时向用户追问并整理答案",
-        "expected_output": "经过澄清的 Agent 需求和初步制造计划",
+    "manufacturing_cleared": {
+        "node_id": "manufacturing_cleared",
+        "label": "制造流程已清空",
+        "kind": "factory_manufacturing_shell",
+        "purpose": "明确旧制造流程已从 create-agent 执行路径移除",
+        "doing": "返回清空状态，等待新的制造域设计",
+        "expected_output": "说明当前制造流程尚未重建",
         "visible_to_user": True,
     }
 }
@@ -356,16 +356,13 @@ Factory 的 `event_normalizer` 只负责：
 来源链路：
 
 ```text
-graph_behavior_planning
-  -> 生成节点业务说明初稿
+Runtime Design
+  -> 生成节点业务说明初稿并补充节点运行方式说明
 
-node_strategy_planning
-  -> 补充节点运行方式说明
-
-assembly_spec_generation
+Capability Contract / Package Build
   -> 冻结 NodeRenderSpec
 
-package_generation
+Package Build
   -> 物化 render_manifest.json
 
 RuntimeKernel compile
