@@ -188,6 +188,7 @@ class PackageRuntimeCore:
             first_user_input=run_context.first_user_input,
         )
         normalizer.complete_open_model_streams(reason="run_completed")
+        normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
         normalizer.emit_run_completed(
             {
                 "status": final_state.execution.finish_status,
@@ -239,6 +240,7 @@ class PackageRuntimeCore:
             return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
         agent_session = run_context.session_manager.touch_turn(session_id)
         normalizer.complete_open_model_streams(reason="run_completed")
+        normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
         normalizer.emit_run_completed(
             {
                 "status": "completed",
@@ -345,6 +347,7 @@ class PackageRuntimeCore:
                 first_user_input=run_context.first_user_input,
             )
             normalizer.complete_open_model_streams(reason="run_completed")
+            normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
             normalizer.emit_run_completed(
                 {
                     "status": final_state.execution.finish_status,

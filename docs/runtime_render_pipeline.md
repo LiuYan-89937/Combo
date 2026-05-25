@@ -182,12 +182,12 @@ debug_patch
 
 ```json
 {
-  "node_id": "manufacturing_cleared",
-  "label": "制造流程已清空",
-  "kind": "factory_manufacturing_shell",
-  "purpose": "明确旧制造流程已从 create-agent 执行路径移除",
-  "doing": "返回清空状态，等待新的制造域设计",
-  "expected_output": "说明当前制造流程尚未重建",
+  "node_id": "product_brief",
+  "label": "Product Brief",
+  "kind": "factory_manufacturing_domain",
+  "purpose": "把用户意图整理成第一版 Agent 的业务目标、边界和制造计划",
+  "doing": "先生成制造草案，只保留真正阻塞制造的业务问题",
+  "expected_output": "写出 product_brief.v0；如果没有阻塞问题，则进入 Runtime Design",
   "visible_to_user": true
 }
 ```
@@ -239,13 +239,13 @@ on_error -> 发 node_failed
 ```json
 {
   "event_type": "node_started",
-  "node_id": "manufacturing_cleared",
-  "node_label": "制造流程已清空",
-  "node_kind": "factory_manufacturing_shell",
+  "node_id": "product_brief",
+  "node_label": "Product Brief",
+  "node_kind": "factory_manufacturing_domain",
   "payload": {
-    "purpose": "明确旧制造流程已从 create-agent 执行路径移除",
-    "doing": "返回清空状态，等待新的制造域设计",
-    "expected_output": "说明当前制造流程尚未重建"
+    "purpose": "把用户意图整理成第一版 Agent 的业务目标、边界和制造计划",
+    "doing": "先生成制造草案，只保留真正阻塞制造的业务问题",
+    "expected_output": "写出 product_brief.v0；如果没有阻塞问题，则进入 Runtime Design"
   }
 }
 ```
@@ -255,10 +255,10 @@ on_error -> 发 node_failed
 ```json
 {
   "event_type": "node_completed",
-  "node_id": "manufacturing_cleared",
-  "node_label": "制造流程已清空",
+  "node_id": "product_brief",
+  "node_label": "Product Brief",
   "payload": {
-    "output_summary": "旧制造流程已清空"
+    "output_summary": "Product Brief 已生成"
   }
 }
 ```
@@ -268,11 +268,11 @@ on_error -> 发 node_failed
 ```json
 {
   "event_type": "node_failed",
-  "node_id": "manufacturing_cleared",
-  "node_label": "制造流程已清空",
+  "node_id": "product_brief",
+  "node_label": "Product Brief",
   "severity": "error",
   "payload": {
-    "error_summary": "制造入口执行失败"
+    "error_summary": "Product Brief 生成失败"
   }
 }
 ```
@@ -319,15 +319,33 @@ agent_factory/factory_graph/render_manifest.py
 
 ```python
 FACTORY_NODE_RENDER_SPECS = {
-    "manufacturing_cleared": {
-        "node_id": "manufacturing_cleared",
-        "label": "制造流程已清空",
-        "kind": "factory_manufacturing_shell",
-        "purpose": "明确旧制造流程已从 create-agent 执行路径移除",
-        "doing": "返回清空状态，等待新的制造域设计",
-        "expected_output": "说明当前制造流程尚未重建",
+    "product_brief": {
+        "node_id": "product_brief",
+        "label": "Product Brief",
+        "kind": "factory_manufacturing_domain",
+        "purpose": "把用户意图整理成第一版 Agent 的业务目标、边界和制造计划",
+        "doing": "先生成制造草案，只保留真正阻塞制造的业务问题",
+        "expected_output": "写出 product_brief.v0；如果没有阻塞问题，则进入 Runtime Design",
         "visible_to_user": True,
-    }
+    },
+    "runtime_design": {
+        "node_id": "runtime_design",
+        "label": "Runtime Design",
+        "kind": "factory_manufacturing_domain",
+        "purpose": "把 Product Brief 映射成 RuntimeKernel 可编译的运行蓝图",
+        "doing": "读取 Kernel pattern、node、edge、contract catalog，生成 Runtime Design 并做 Kernel 预校验",
+        "expected_output": "写出 runtime_design.v0；如果通过 Kernel 预校验，则进入 Capability Contract",
+        "visible_to_user": True,
+    },
+    "capability_contract": {
+        "node_id": "capability_contract",
+        "label": "Capability Contract",
+        "kind": "factory_manufacturing_domain",
+        "purpose": "把 Runtime Design 转换成基础能力接入策略和 RuntimeContract 草案",
+        "doing": "为每个基础系统明确是否启用、接入内容、运行策略和后续生成任务，并做 contract registry 校验",
+        "expected_output": "写出 capability_contract.v0，并停在这里等待测试和精修",
+        "visible_to_user": True,
+    },
 }
 ```
 

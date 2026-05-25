@@ -158,7 +158,7 @@ class ContextSystemTest(unittest.TestCase):
         )
 
         values = runtime.prepare_factory_values(
-            stage_id="requirement_capture",
+            stage_id="product_brief",
             values={"user_input": "build a local agent"},
             services=FactoryContextServices(context_event_sink=events.append),
         )

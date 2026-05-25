@@ -60,6 +60,34 @@ class PatternIOContractSpec(BaseModel):
     writable_sections: list[str] = Field(default_factory=list)
 
 
+PatternSlotType = Literal[
+    "prompt",
+    "tool",
+    "resource",
+    "state",
+    "scheduler",
+    "structured_output",
+    "package_node",
+    "artifact",
+    "knowledge",
+    "memory",
+    "context",
+]
+
+
+class PatternSlotSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slot_id: str
+    slot_type: PatternSlotType
+    node_id: str | None = None
+    required: bool = True
+    purpose: str
+    expected_binding: str = ""
+    output_target: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
 class PatternMetadataSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +143,7 @@ class PatternStructureSummary(BaseModel):
     entry_node: str
     nodes: list[PatternStructureNodeSummary] = Field(default_factory=list)
     routes: list[PatternStructureRouteSummary] = Field(default_factory=list)
+    slots: list[PatternSlotSpec] = Field(default_factory=list)
     interrupt_points: list[str] = Field(default_factory=list)
     termination: PatternStructureTerminationSummary
 
@@ -137,5 +166,6 @@ class GraphPatternSpec(BaseModel):
     constraints: PatternConstraintsSpec = Field(default_factory=PatternConstraintsSpec)
     input_contract: PatternIOContractSpec = Field(default_factory=PatternIOContractSpec)
     output_contract: PatternIOContractSpec = Field(default_factory=PatternIOContractSpec)
+    slots: list[PatternSlotSpec] = Field(default_factory=list)
     exit_routes: list[str] = Field(default_factory=list)
     state_mode: StateMode = "shared"

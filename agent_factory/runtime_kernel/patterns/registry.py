@@ -106,6 +106,7 @@ class PatternRegistry:
                 }
                 for edge in pattern.edges
             ],
+            slots=pattern.slots,
             interrupt_points=pattern.interrupt_points,
             termination={
                 "success_nodes": pattern.termination.success_nodes,

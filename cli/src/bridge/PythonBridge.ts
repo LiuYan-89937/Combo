@@ -199,5 +199,5 @@ function truncateDiagnosticLine(line: string): string {
 }
 
 function isPythonWarning(message: string): boolean {
-	return /\b(?:UserWarning|DeprecationWarning|RuntimeWarning|FutureWarning|ResourceWarning):/.test(message);
+	return /\b[A-Za-z_][A-Za-z0-9_]*Warning:/.test(message);
 }

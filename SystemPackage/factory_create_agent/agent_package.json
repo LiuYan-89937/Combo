@@ -4,7 +4,7 @@
   "agent": {
     "id": "factory_create_agent",
     "name": "Factory Create Agent",
-    "description": "System package shell for create-agent after clearing the old manufacturing workflow."
+    "description": "System package for create-agent. Current test breakpoint materializes an AgentPackage after Package Build."
   },
   "runtime": {
     "system_package": true,

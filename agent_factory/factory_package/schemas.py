@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from packaging.requirements import InvalidRequirement, Requirement
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.assembly.schema import (
     AgentSpec,
@@ -24,6 +25,596 @@ class CaptureIntentOutput(BaseModel):
     reply_hint: str | None = None
     entry_stage: str | None = None
     should_run_graph: bool
+
+
+class ProductBriefOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["product_brief.v0"] = "product_brief.v0"
+    working_title: str = ""
+    agent_goal: str = ""
+    target_user: str = ""
+    first_version_scope: str = ""
+    primary_workflow: str = ""
+    autonomy_boundary: str = ""
+    human_review_boundary: str = ""
+    resource_boundary: str = ""
+    expected_outputs: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+    manufacturing_assumptions: list[str] = Field(default_factory=list)
+    blocking_questions: list[str] = Field(default_factory=list, max_length=2)
+    business_plan_text: str = ""
+    ready_for_runtime_design: bool = False
+
+
+RuntimeDesignMode = Literal["reuse_pattern"]
+RuntimeDesignModelOperation = Literal["none", "text", "tool_bound_chat", "structured_json"]
+RuntimeDesignNodeType = Literal["reserved", "cognitive", "operational", "governance", "terminal", "sub_graph"]
+RuntimeDesignSlotType = Literal[
+    "prompt",
+    "tool",
+    "resource",
+    "state",
+    "scheduler",
+    "structured_output",
+    "package_node",
+    "artifact",
+    "knowledge",
+    "memory",
+    "context",
+]
+
+
+class RuntimeDesignNodePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    node_type: RuntimeDesignNodeType
+    impl: str
+    purpose: str
+    model_operation: RuntimeDesignModelOperation = "none"
+    pattern_ref: str | None = None
+    requires_tools: bool = False
+    tool_access_required: list[str] = Field(default_factory=list)
+    requires_structured_output: bool = False
+    structured_output_id: str | None = None
+    requires_package_node: bool = False
+    package_node_impl_id: str | None = None
+    reads_state: list[str] = Field(default_factory=list)
+    writes_state: list[str] = Field(default_factory=list)
+    visible_to_user: bool = True
+    notes: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("node_id")
+    @classmethod
+    def _node_id_is_simple(cls, value: str) -> str:
+        node_id = value.strip()
+        if not node_id:
+            raise ValueError("node_id must not be empty")
+        return node_id
+
+    @model_validator(mode="after")
+    def _package_node_shape(self) -> "RuntimeDesignNodePlan":
+        if self.requires_package_node:
+            if not self.package_node_impl_id:
+                raise ValueError("requires_package_node=true requires package_node_impl_id")
+            if not self.package_node_impl_id.startswith("package."):
+                raise ValueError("package_node_impl_id must start with package.")
+        if self.node_type == "sub_graph" and not self.pattern_ref:
+            raise ValueError("sub_graph nodes require pattern_ref")
+        if self.node_type != "sub_graph" and self.pattern_ref:
+            raise ValueError("pattern_ref is only valid for sub_graph nodes")
+        if self.requires_structured_output and self.model_operation != "structured_json":
+            raise ValueError("requires_structured_output requires model_operation=structured_json")
+        return self
+
+
+class RuntimeDesignEdgePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    from_node: str
+    to_node: str
+    when: str
+    business_meaning: str = ""
+
+
+class RuntimeDesignInterruptPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    reason: str
+    user_visible_reason: str
+
+
+class RuntimeDesignTerminationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    success_nodes: list[str] = Field(default_factory=list)
+    failure_nodes: list[str] = Field(default_factory=list)
+    success_meaning: str = ""
+    failure_meaning: str = ""
+
+
+class RuntimeDesignStateNamespacePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    namespace: str
+    purpose: str
+    owned_by_nodes: list[str] = Field(default_factory=list)
+    initial_shape: dict[str, object] = Field(default_factory=dict)
+
+
+class RuntimeDesignStructuredOutputPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_id: str
+    produced_by_node: str
+    purpose: str
+    write_target: dict[str, object] = Field(default_factory=dict)
+    schema_summary: str
+
+
+class RuntimeDesignPackageNodePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    impl_id: str
+    node_id: str
+    purpose: str
+    why_standard_nodes_are_not_enough: str
+    required_services: list[str] = Field(default_factory=list)
+    tool_access: list[str] = Field(default_factory=list)
+
+    @field_validator("impl_id")
+    @classmethod
+    def _impl_id_is_package_scoped(cls, value: str) -> str:
+        impl_id = value.strip()
+        if not impl_id.startswith("package."):
+            raise ValueError("package node impl_id must start with package.")
+        return impl_id
+
+
+class RuntimeDesignSlotPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slot_id: str
+    slot_type: RuntimeDesignSlotType
+    required_by_nodes: list[str] = Field(default_factory=list)
+    purpose: str
+    source: Literal[
+        "builtin",
+        "package_generated",
+        "system",
+        "runtime_config",
+        "user_config",
+        "mcp",
+        "skill",
+        "knowledge",
+        "scheduler",
+        "artifact",
+        "none",
+    ] = "system"
+    binding_strategy: str
+    state_path: list[str] = Field(default_factory=list)
+    tool_id: str | None = None
+    resource_id: str | None = None
+    prompt_id: str | None = None
+
+    @field_validator("slot_id", "purpose", "binding_strategy")
+    @classmethod
+    def _slot_text_is_not_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("slot_id, purpose, and binding_strategy must not be empty")
+        return text
+
+    @field_validator("required_by_nodes", "state_path")
+    @classmethod
+    def _string_list_is_clean(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = str(raw).strip()
+            if not item:
+                raise ValueError("slot list fields must not contain empty values")
+            if item not in seen:
+                result.append(item)
+                seen.add(item)
+        return result
+
+
+class RuntimeDesignOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["runtime_design.v0"] = "runtime_design.v0"
+    design_mode: RuntimeDesignMode = "reuse_pattern"
+    selected_pattern_id: str
+    graph_intent: str
+    nodes: list[RuntimeDesignNodePlan] = Field(default_factory=list)
+    edges: list[RuntimeDesignEdgePlan] = Field(default_factory=list)
+    interrupts: list[RuntimeDesignInterruptPlan] = Field(default_factory=list)
+    termination: RuntimeDesignTerminationPlan = Field(default_factory=RuntimeDesignTerminationPlan)
+    state_namespaces: list[RuntimeDesignStateNamespacePlan] = Field(default_factory=list)
+    required_contracts: list[str] = Field(default_factory=list)
+    pattern_slots: list[RuntimeDesignSlotPlan] = Field(default_factory=list)
+    package_nodes_to_generate: list[RuntimeDesignPackageNodePlan] = Field(default_factory=list)
+    structured_outputs: list[RuntimeDesignStructuredOutputPlan] = Field(default_factory=list)
+    runtime_assumptions: list[str] = Field(default_factory=list, max_length=10)
+    blocking_questions: list[str] = Field(default_factory=list, max_length=2)
+    design_summary_text: str = ""
+
+    @model_validator(mode="after")
+    def _mode_shape(self) -> "RuntimeDesignOutput":
+        if not self.selected_pattern_id.strip():
+            raise ValueError("reuse_pattern requires selected_pattern_id")
+        if self.edges:
+            raise ValueError("Runtime Design must not emit custom edges; choose a preset pattern instead")
+        if self.termination.success_nodes or self.termination.failure_nodes:
+            raise ValueError("Runtime Design must not emit custom termination; preset pattern owns termination")
+        return self
+
+
+class RuntimeDesignValidationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["valid", "invalid"]
+    design_mode: RuntimeDesignMode
+    selected_pattern_id: str | None = None
+    candidate_pattern_id: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    validated_pattern_summary: dict[str, object] = Field(default_factory=dict)
+
+
+class CapabilityPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    why: str
+    what: dict[str, Any] = Field(default_factory=dict)
+    strategy: dict[str, Any] = Field(default_factory=dict)
+    risks: list[str] = Field(default_factory=list)
+    deferred_decisions: list[str] = Field(default_factory=list)
+
+
+class CapabilityContractDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    version: str
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class CapabilityToolGenerationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    purpose: str
+    source: Literal["package_generated", "builtin", "mcp", "skill", "knowledge", "scheduler"]
+    required_by_nodes: list[str] = Field(default_factory=list)
+    risk_level: Literal["low", "medium", "high"] = "medium"
+    input_summary: str = ""
+    output_summary: str = ""
+
+
+class CapabilityPackageNodeGenerationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    impl_id: str
+    node_id: str
+    purpose: str
+    required_services: list[str] = Field(default_factory=list)
+    tool_access: list[str] = Field(default_factory=list)
+    state_reads: list[str] = Field(default_factory=list)
+    state_writes: list[str] = Field(default_factory=list)
+
+    @field_validator("impl_id")
+    @classmethod
+    def _impl_id_is_package_scoped(cls, value: str) -> str:
+        impl_id = value.strip()
+        if not impl_id.startswith("package."):
+            raise ValueError("package node impl_id must start with package.")
+        return impl_id
+
+
+class CapabilityPromptGenerationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_id: str
+    used_by_node: str
+    purpose: str
+    output_mode: Literal["text", "structured_json", "tool_bound_chat"] = "text"
+
+
+class CapabilityBindingGenerationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    binding_id: str
+    node_id: str
+    binding_type: str
+    purpose: str
+    payload_summary: str = ""
+
+
+class CapabilityResourceRequirementPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    description: str
+    required: bool = True
+    expected_shape: str = ""
+    sandbox_access_expectation: str = ""
+    used_by: list[str] = Field(default_factory=list)
+
+
+class CapabilitySandboxRequirementPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requirement_id: str
+    description: str
+    network_required: bool = False
+    mounts_required: list[str] = Field(default_factory=list)
+    secrets_required: list[str] = Field(default_factory=list)
+    services_required: list[str] = Field(default_factory=list)
+
+
+class CapabilityContractOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["capability_contract.v0"] = "capability_contract.v0"
+    contract_drafts: dict[str, CapabilityContractDraft] = Field(default_factory=dict)
+    capability_plans: dict[str, CapabilityPlan] = Field(default_factory=dict)
+    tool_specs_to_generate: list[CapabilityToolGenerationPlan] = Field(default_factory=list)
+    package_nodes_to_generate: list[CapabilityPackageNodeGenerationPlan] = Field(default_factory=list)
+    prompts_to_generate: list[CapabilityPromptGenerationPlan] = Field(default_factory=list)
+    bindings_to_generate: list[CapabilityBindingGenerationPlan] = Field(default_factory=list)
+    resources_required: list[CapabilityResourceRequirementPlan] = Field(default_factory=list)
+    sandbox_requirements: list[CapabilitySandboxRequirementPlan] = Field(default_factory=list)
+    capability_summary_text: str = ""
+    risks: list[str] = Field(default_factory=list, max_length=10)
+    deferred_decisions: list[str] = Field(default_factory=list, max_length=10)
+
+
+class CapabilityContractValidationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["valid", "invalid"]
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    enabled_contracts: list[str] = Field(default_factory=list)
+    disabled_contracts: list[str] = Field(default_factory=list)
+    generation_task_summary: dict[str, int] = Field(default_factory=dict)
+
+
+class PackagePromptBuildPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_id: str
+    node_id: str
+    template: str
+    variables: list[str] = Field(default_factory=list)
+
+    @field_validator("prompt_id", "node_id", "template")
+    @classmethod
+    def _non_empty_string(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("prompt build fields must not be empty")
+        return text
+
+
+class PackageStructuredOutputBuildPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_id: str
+    node_id: str
+    output_schema: dict[str, Any]
+    write_target: dict[str, Any]
+    prompt_id: str | None = None
+    max_attempts: int = Field(default=5, ge=1)
+    structured_method: str | None = "json_mode"
+
+    @field_validator("output_id", "node_id")
+    @classmethod
+    def _ids_are_non_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("structured output fields must not be empty")
+        return text
+
+    @field_validator("output_schema", "write_target")
+    @classmethod
+    def _objects_are_non_empty(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, dict) or not value:
+            raise ValueError("structured output schema and write_target must be non-empty objects")
+        return value
+
+
+class PackageNodeBuildPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    impl_id: str
+    node_id: str
+    description: str
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "additionalProperties": True})
+    output_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "additionalProperties": True})
+    readable_sections: list[str] = Field(default_factory=list)
+    writable_sections: list[str] = Field(default_factory=list)
+    required_services: list[str] = Field(default_factory=list)
+    tool_access: list[str] = Field(default_factory=list)
+    python_requirements: list[str] = Field(default_factory=list)
+    system_packages: list[str] = Field(default_factory=list)
+    system_binaries: list[str] = Field(default_factory=list)
+    code: str
+
+    @field_validator("impl_id")
+    @classmethod
+    def _impl_id_is_package_scoped(cls, value: str) -> str:
+        impl_id = value.strip()
+        if not impl_id.startswith("package."):
+            raise ValueError("package node impl_id must start with package.")
+        return impl_id
+
+    @field_validator("node_id", "description", "code")
+    @classmethod
+    def _node_fields_are_non_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("package node build fields must not be empty")
+        return text
+
+    @field_validator("python_requirements")
+    @classmethod
+    def _python_requirements_are_valid(cls, value: list[str]) -> list[str]:
+        return _validate_python_requirements(value)
+
+    @field_validator("system_packages", "system_binaries")
+    @classmethod
+    def _system_dependencies_are_valid(cls, value: list[str]) -> list[str]:
+        return _validate_dependency_names(value)
+
+
+class PackageToolBuildPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    description: str
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "additionalProperties": True})
+    output_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "additionalProperties": True})
+    resources: dict[str, str] = Field(default_factory=dict)
+    risk_level: Literal["low", "medium", "high"] = "medium"
+    concurrent: bool = True
+    python_requirements: list[str] = Field(default_factory=list)
+    system_packages: list[str] = Field(default_factory=list)
+    system_binaries: list[str] = Field(default_factory=list)
+    code: str
+
+    @field_validator("tool_id")
+    @classmethod
+    def _tool_id_is_snake_case(cls, value: str) -> str:
+        tool_id = str(value).strip()
+        if not tool_id or not tool_id.replace("_", "").isalnum() or tool_id[0].isdigit() or tool_id.lower() != tool_id:
+            raise ValueError("tool_id must be lowercase snake_case")
+        return tool_id
+
+    @field_validator("description", "code")
+    @classmethod
+    def _tool_fields_are_non_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("package tool build fields must not be empty")
+        return text
+
+    @field_validator("python_requirements")
+    @classmethod
+    def _python_requirements_are_valid(cls, value: list[str]) -> list[str]:
+        return _validate_python_requirements(value)
+
+    @field_validator("system_packages", "system_binaries")
+    @classmethod
+    def _system_dependencies_are_valid(cls, value: list[str]) -> list[str]:
+        return _validate_dependency_names(value)
+
+
+def _validate_python_requirements(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        requirement = str(raw).strip()
+        if not requirement:
+            raise ValueError("python requirements must not contain empty values")
+        try:
+            Requirement(requirement)
+        except InvalidRequirement as exc:
+            raise ValueError(f"invalid Python requirement: {requirement}") from exc
+        if requirement not in seen:
+            result.append(requirement)
+            seen.add(requirement)
+    return result
+
+
+def _validate_dependency_names(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = str(raw).strip()
+        if not value:
+            raise ValueError("dependency names must not contain empty values")
+        if any(character.isspace() for character in value):
+            raise ValueError(f"dependency names must not contain whitespace: {value}")
+        if value not in seen:
+            result.append(value)
+            seen.add(value)
+    return result
+
+
+class PackageBuildPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["package_build_plan.v0"] = "package_build_plan.v0"
+    package_id: str
+    agent_id: str
+    agent_name: str
+    agent_description: str
+    prompt_templates: list[PackagePromptBuildPlan] = Field(default_factory=list)
+    structured_outputs: list[PackageStructuredOutputBuildPlan] = Field(default_factory=list)
+    package_nodes: list[PackageNodeBuildPlan] = Field(default_factory=list)
+    package_tools: list[PackageToolBuildPlan] = Field(default_factory=list)
+    build_summary_text: str = ""
+    warnings: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("package_id", "agent_id")
+    @classmethod
+    def _ids_are_package_safe(cls, value: str) -> str:
+        item = str(value).strip()
+        if not item:
+            raise ValueError("package_id and agent_id must not be empty")
+        if any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in item):
+            raise ValueError("package_id and agent_id must use lowercase letters, numbers, underscore, or dash")
+        if item[0].isdigit():
+            item = f"agent_{item}"
+        return item
+
+    @field_validator("agent_name", "agent_description")
+    @classmethod
+    def _agent_text_is_not_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("agent_name and agent_description must not be empty")
+        return text
+
+
+class PackageBuildMaterializedFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    file_type: Literal["json", "yaml", "markdown", "python", "text"]
+    generation_mode: Literal["system_generated", "model_generated"]
+    source: str
+    bytes: int
+    sha256: str
+
+
+class PackageBuildStaticCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    status: Literal["passed", "failed"]
+    message: str = ""
+
+
+class PackageBuildReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["package_build_report.v0"] = "package_build_report.v0"
+    status: Literal["valid", "invalid", "failed"]
+    package_root: str
+    manifest_path: str = ""
+    materialized_files: list[PackageBuildMaterializedFile] = Field(default_factory=list)
+    static_checks: list[PackageBuildStaticCheck] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class RequirementClarityOutput(BaseModel):

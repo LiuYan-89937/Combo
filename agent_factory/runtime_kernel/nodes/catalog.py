@@ -21,6 +21,7 @@ NODE_IMPLEMENTATION_IDS = {
     "cognitive.clarify",
     "cognitive.plan",
     "cognitive.route",
+    "cognitive.structured",
     "cognitive.answer",
     "cognitive.review",
     "operational.tool_call",

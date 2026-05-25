@@ -2,29 +2,47 @@ pattern_id: factory_manufacturing
 kind: main
 embeddable: false
 version: 1
-name: Factory Manufacturing Cleared
-description: FastAgentFactory manufacturing workflow placeholder after clearing the old manufacturing flow.
+name: Factory Manufacturing Product Brief Runtime Design Capability Contract and Package Build
+description: FastAgentFactory create-agent workflow currently materializes an AgentPackage after Package Build.
 metadata:
-  summary: The old create-agent manufacturing workflow has been cleared. New manufacturing domains are intentionally not materialized yet.
+  summary: Runs Product Brief, maps it into a Kernel-valid Runtime Design, freezes capability contracts, materializes AgentPackage files, and stops before sandbox validation.
   use_when:
-    - The user enters create-agent mode before the new manufacturing domains are rebuilt.
+    - The user wants to create or refine an AgentPackage through the factory.
   avoid_when: []
   selection_notes:
-    - This SystemPackage is a compile-safe empty manufacturing entry, not a production workflow.
+    - This SystemPackage intentionally stops after Package Build until runtime validation is designed.
   tags:
     - factory
     - manufacturing
     - system-package
-entry_node: manufacturing_cleared
+entry_node: product_brief
 nodes:
-  - id: manufacturing_cleared
+  - id: product_brief
     type: cognitive
-    impl: builtin.factory.manufacturing_cleared
-edges: []
+    impl: builtin.factory.product_brief
+  - id: runtime_design
+    type: cognitive
+    impl: builtin.factory.runtime_design
+  - id: capability_contract
+    type: cognitive
+    impl: builtin.factory.capability_contract
+  - id: package_build
+    type: cognitive
+    impl: builtin.factory.package_build
+edges:
+  - from: product_brief
+    to: runtime_design
+    when: always
+  - from: runtime_design
+    to: capability_contract
+    when: always
+  - from: capability_contract
+    to: package_build
+    when: always
 interrupt_points: []
 termination:
   success_nodes:
-    - manufacturing_cleared
+    - package_build
   failure_nodes: []
 constraints:
   allowed_node_types:

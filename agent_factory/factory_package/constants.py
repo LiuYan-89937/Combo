@@ -1,5 +1,7 @@
 from __future__ import annotations
 
 
-MANUFACTURING_CLEARED_NODE_ID = "manufacturing_cleared"
-MANUFACTURING_CLEARED_MESSAGE = "旧制造流程已清空，等待新的制造域设计。"
+PRODUCT_BRIEF_NODE_ID = "product_brief"
+RUNTIME_DESIGN_NODE_ID = "runtime_design"
+CAPABILITY_CONTRACT_NODE_ID = "capability_contract"
+PACKAGE_BUILD_NODE_ID = "package_build"

@@ -666,6 +666,9 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				logs: [...base.logs, `node started: ${event.node_label ?? event.node_id ?? '-'}`]
 			};
 		case 'node_progress':
+			if (isRuntimeRequestHeartbeat(event)) {
+				return updateNodeStatus(base, event, 'running');
+			}
 			return {
 				...updateNodeStatus(updateCurrentNode(base, event), event, 'running'),
 				recentActivities: appendRunActivity(base.recentActivities, event)
@@ -1161,11 +1164,18 @@ function payloadToolCallId(payload: Record<string, unknown>): string {
 }
 
 function appendRunActivity(current: RunActivity[], event: FactoryEvent): RunActivity[] {
+	if (isRuntimeRequestHeartbeat(event)) {
+		return current;
+	}
 	const activity = runActivity(event);
 	if (!activity) {
 		return current;
 	}
 	return [...current.slice(-39), activity];
+}
+
+function isRuntimeRequestHeartbeat(event: FactoryEvent): boolean {
+	return event.event_type === 'node_progress' && event.node_id === 'runtime_request';
 }
 
 function runActivity(event: FactoryEvent): RunActivity | null {

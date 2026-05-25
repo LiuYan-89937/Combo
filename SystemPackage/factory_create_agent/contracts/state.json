@@ -7,7 +7,10 @@
     "schema_path": "state/factory_manufacturing.schema.json",
     "initial_state_path": "state/factory_manufacturing.initial.json",
     "writable_node_ids": [
-      "manufacturing_cleared"
+      "product_brief",
+      "runtime_design",
+      "capability_contract",
+      "package_build"
     ]
   }
 }

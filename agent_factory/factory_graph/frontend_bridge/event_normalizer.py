@@ -477,6 +477,33 @@ class RuntimeEventNormalizer:
         for stream in list(self.model_streams.values()):
             self._complete_model_stream(stream, reason=reason)
 
+    def emit_final_answer_if_needed(self, final_state: Any, *, reason: str) -> None:
+        conversation = getattr(final_state, "conversation", None)
+        text = str(
+            getattr(conversation, "final_answer", None)
+            or getattr(conversation, "assistant_draft", None)
+            or ""
+        ).strip()
+        if not text:
+            return
+        if any((stream.content or "").strip() for stream in self.model_streams.values()):
+            return
+        node_id = _optional_str(getattr(getattr(final_state, "execution", None), "current_node", None)) or "final_answer"
+        stream_id = uuid.uuid4().hex
+        self.runtime_event(
+            "model_message_completed",
+            node_id=node_id,
+            stage_id=self.current_stage_id,
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self._node_span(node_id, self.current_stage_id),
+            payload={
+                "stream_id": stream_id,
+                "content": text,
+                "completion_reason": reason,
+                "completion_inferred": True,
+            },
+        )
+
     def _complete_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
         stream = self.model_streams.get(node_id)
         if stream is None:

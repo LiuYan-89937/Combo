@@ -3,7 +3,7 @@
   "agent": {
     "id": "factory_create_agent",
     "name": "Factory Create Agent",
-    "description": "FastAgentFactory create-agent shell after clearing the old manufacturing workflow.",
+    "description": "FastAgentFactory create-agent package. Current test breakpoint materializes an AgentPackage after Package Build.",
     "version": "0.1.0"
   },
   "runtime": {

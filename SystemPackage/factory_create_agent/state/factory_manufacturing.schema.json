@@ -29,7 +29,25 @@
     "manufacturing_log": {
       "type": "array"
     },
-    "manufacturing_cleared": {
+    "product_brief": {
+      "type": "object"
+    },
+    "runtime_design": {
+      "type": "object"
+    },
+    "runtime_design_validation": {
+      "type": "object"
+    },
+    "capability_contract": {
+      "type": "object"
+    },
+    "capability_contract_validation": {
+      "type": "object"
+    },
+    "package_build_plan": {
+      "type": "object"
+    },
+    "package_build_report": {
       "type": "object"
     },
     "factory_response": {

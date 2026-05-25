@@ -409,6 +409,7 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
         first_user_input=run_context.first_user_input,
     )
     normalizer.complete_open_model_streams(reason="run_completed")
+    normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
     normalizer.emit_run_completed(
         {
             "status": final_state.execution.finish_status,
@@ -483,6 +484,7 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
     if not runtime_completed(final_state):
         return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
     normalizer.complete_open_model_streams(reason="run_completed")
+    normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
     agent_session = run_context.session_manager.touch_turn(session_id)
     normalizer.emit_run_completed(
         {

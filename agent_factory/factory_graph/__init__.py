@@ -1,6 +1,9 @@
-from agent_factory.factory_package.constants import EMPTY_STAGE_MESSAGE, STAGE_IDS
+from __future__ import annotations
 
-__all__ = [
-    "EMPTY_STAGE_MESSAGE",
-    "STAGE_IDS",
-]
+from agent_factory.warnings import configure_warning_filters
+
+
+configure_warning_filters()
+
+
+__all__: list[str] = []
