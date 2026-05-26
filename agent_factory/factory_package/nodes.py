@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from langgraph.types import interrupt
+
 from agent_factory.factory_package.capability_contract import (
     capability_contract_catalog_payload,
     capability_contract_message,
@@ -366,7 +368,7 @@ class FactoryCapabilityContractNode:
 @dataclass(frozen=True, slots=True)
 class FactoryToolManufacturingNode:
     node_type = "cognitive"
-    supports_interrupt = False
+    supports_interrupt = True
     supports_subgraph_slot = False
     writable_sections = {"package_state", "conversation", "execution", "observability"}
 
@@ -399,32 +401,18 @@ class FactoryToolManufacturingNode:
                 message=f"Capability Contract payload is invalid: {exc}",
             )
         resource_request = _external_resource_request(capability_contract)
-        if resource_request and not namespace_state.get("user_external_resource_answers"):
-            question = _external_resource_question(resource_request)
-            next_state = {
+        user_external_resources = list(namespace_state.get("user_external_resource_answers") or [])
+        if resource_request and not user_external_resources:
+            resume_payload = interrupt(_external_resource_form_payload(resource_request))
+            try:
+                user_external_resources = [_normalize_external_resource_resume(resource_request, resume_payload)]
+            except FactoryModelCallError as exc:
+                return _tool_manufacturing_failed_patch(namespace_state=namespace_state, message=str(exc))
+            namespace_state = {
                 **namespace_state,
-                "current_node": TOOL_MANUFACTURING_NODE_ID,
-                "status": "tool_resource_input_required",
+                "status": "tool_resource_input_received",
                 "external_resource_request": resource_request,
-                "factory_response": {"message": question},
-                "manufacturing_log": [
-                    *list(namespace_state.get("manufacturing_log") or []),
-                    {
-                        "node_id": TOOL_MANUFACTURING_NODE_ID,
-                        "status": "waiting_for_user",
-                        "message": "Tool Manufacturing requires user-provided external resources before tool trial.",
-                    },
-                ],
-            }
-            return {
-                "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
-                "conversation": {"final_answer": question},
-                "execution": {
-                    "current_node": TOOL_MANUFACTURING_NODE_ID,
-                    "finished": True,
-                    "finish_status": "completed",
-                    "route_decision": "execution.finished",
-                },
+                "user_external_resource_answers": user_external_resources,
             }
 
         output: ToolManufacturingOutput | None = None
@@ -438,7 +426,7 @@ class FactoryToolManufacturingNode:
                     runtime_design_payload=runtime_design_payload,
                     capability_contract_payload=capability_contract_payload,
                     capability_contract=capability_contract,
-                    user_external_resources=list(namespace_state.get("user_external_resource_answers") or []),
+                    user_external_resources=user_external_resources,
                 )
                 output = finalize_tool_manufacturing_output(
                     factory_run_id=str(namespace_state.get("factory_run_id") or ""),
@@ -881,13 +869,7 @@ def _initial_state(state: RuntimeState) -> dict[str, Any]:
     if not existing.get("factory_run_id"):
         existing["factory_run_id"] = uuid4().hex
     current_input = (state.conversation.current_user_input or "").strip()
-    if current_input and existing.get("status") == "tool_resource_input_required":
-        answers = list(existing.get("user_external_resource_answers") or [])
-        if not answers or answers[-1].get("content") != current_input:
-            answers.append({"content": current_input})
-        existing["user_external_resource_answers"] = answers
-        existing["status"] = "tool_resource_input_received"
-    elif current_input:
+    if current_input:
         existing["input_intent"] = current_input
     if current_input and not existing.get("interaction_mode"):
         existing["interaction_mode"] = "create_agent"
@@ -1035,40 +1017,262 @@ def _external_resource_request(capability_contract: CapabilityContractOutput) ->
     }
 
 
-def _external_resource_question(request: dict[str, Any]) -> str:
-    lines = [
-        "工具制造需要你先提供外部资源，我不会替你猜新闻源、行情 API、SMTP 或 secret。",
-        "",
-        "请按你希望这个 Agent 使用的真实资源回复；如果某项暂时不提供，也请明确写“暂不提供”。",
-    ]
-    resources = list(request.get("resources") or [])
-    if resources:
-        lines.extend(["", "需要确认的资源："])
-        for item in resources:
-            resource_id = item.get("resource_id") or "resource"
-            description = item.get("description") or "未描述"
-            expected_shape = item.get("expected_shape") or ""
-            secret_fields = item.get("secret_fields") or []
-            suffix = f"；secret 字段：{', '.join(secret_fields)}" if secret_fields else ""
-            shape = f"；期望结构：{expected_shape}" if expected_shape else ""
-            lines.append(f"- {resource_id}: {description}{shape}{suffix}")
-    sandbox_requirements = list(request.get("sandbox_requirements") or [])
-    if sandbox_requirements:
-        lines.extend(["", "外部连通性需求："])
-        for item in sandbox_requirements:
-            requirement_id = item.get("requirement_id") or "sandbox"
-            description = item.get("description") or "未描述"
-            lines.append(f"- {requirement_id}: {description}")
-    lines.extend(
-        [
-            "",
-            "回复示例：",
-            "news_sources: https://example.com/rss.xml",
-            "market_data_api: <你想使用的 API 或说明>",
-            "smtp: host/port/username/password 或 暂不提供",
-        ]
-    )
-    return "\n".join(lines).strip()
+def _external_resource_form_payload(request: dict[str, Any]) -> dict[str, Any]:
+    fields = _external_resource_form_fields(request)
+    return {
+        "type": "resource_form",
+        "node_id": TOOL_MANUFACTURING_NODE_ID,
+        "title": "Tool Manufacturing Resources",
+        "message": "工具制造需要外部资源表单。请提交你允许该 Agent 使用的真实资源；未提供的资源不会被模型猜测。",
+        "form": {
+            "form_id": "tool_manufacturing_external_resources",
+            "submit_label": "提交资源并继续",
+            "skip_label": "暂不提供，交给模型调整方案",
+            "fields": fields,
+        },
+        "resource_request": request,
+    }
+
+
+def _external_resource_form_fields(request: dict[str, Any]) -> list[dict[str, Any]]:
+    fields: list[dict[str, Any]] = []
+    for item in list(request.get("resources") or []):
+        resource_id = str(item.get("resource_id") or "").strip()
+        if not resource_id:
+            continue
+        value_schema = item.get("value_schema") if isinstance(item.get("value_schema"), dict) else {}
+        default_value = item.get("default_value") if isinstance(item.get("default_value"), dict) else {}
+        secret_fields = [str(value) for value in list(item.get("secret_fields") or [])]
+        properties = value_schema.get("properties") if isinstance(value_schema.get("properties"), dict) else {}
+        required_props = {str(value) for value in list(value_schema.get("required") or [])}
+        if properties:
+            for prop_name, prop_schema in properties.items():
+                prop = str(prop_name)
+                schema = prop_schema if isinstance(prop_schema, dict) else {}
+                fields.append(
+                    {
+                        "key": f"{resource_id}.{prop}",
+                        "resource_id": resource_id,
+                        "path": [prop],
+                        "label": prop,
+                        "type": _form_field_type(schema, key=f"{resource_id}.{prop}", secret_fields=secret_fields),
+                        "required": bool(item.get("required", True)) and prop in required_props,
+                        "description": schema.get("description") or item.get("description") or "",
+                        "default": default_value.get(prop),
+                        "secret": _field_is_secret(f"{resource_id}.{prop}", secret_fields),
+                    }
+                )
+            for secret_path in secret_fields:
+                key = f"{resource_id}.{secret_path}"
+                if any(field.get("key") == key for field in fields):
+                    continue
+                fields.append(
+                    {
+                        "key": key,
+                        "resource_id": resource_id,
+                        "path": secret_path.split("."),
+                        "label": secret_path,
+                        "type": "secret",
+                        "required": bool(item.get("required", True)),
+                        "description": item.get("description") or "",
+                        "secret": True,
+                    }
+                )
+            continue
+        fields.append(
+            {
+                "key": resource_id,
+                "resource_id": resource_id,
+                "path": [],
+                "label": resource_id,
+                "type": "json",
+                "required": bool(item.get("required", True)),
+                "description": item.get("description") or item.get("expected_shape") or "",
+                "default": default_value or None,
+                "secret": False,
+            }
+        )
+    for item in list(request.get("sandbox_requirements") or []):
+        requirement_id = str(item.get("requirement_id") or "sandbox").strip() or "sandbox"
+        if item.get("network_required"):
+            fields.append(
+                {
+                    "key": f"sandbox.{requirement_id}",
+                    "sandbox_requirement_id": requirement_id,
+                    "path": ["network_access"],
+                    "label": "network_access",
+                    "type": "boolean",
+                    "required": True,
+                    "default": True,
+                    "description": item.get("description") or "允许工具制造进行 HTTP/HTTPS 连通性试跑。",
+                    "secret": False,
+                }
+            )
+        for secret_id in list(item.get("secrets_required") or []):
+            fields.append(
+                {
+                    "key": f"sandbox.{requirement_id}.secret.{secret_id}",
+                    "sandbox_requirement_id": requirement_id,
+                    "path": ["secrets", str(secret_id)],
+                    "label": str(secret_id),
+                    "type": "secret",
+                    "required": True,
+                    "description": item.get("description") or "",
+                    "secret": True,
+                }
+            )
+        for service_id in list(item.get("services_required") or []):
+            fields.append(
+                {
+                    "key": f"sandbox.{requirement_id}.service.{service_id}",
+                    "sandbox_requirement_id": requirement_id,
+                    "path": ["services", str(service_id)],
+                    "label": str(service_id),
+                    "type": "string",
+                    "required": True,
+                    "description": item.get("description") or "",
+                    "secret": False,
+                }
+            )
+    return fields
+
+
+def _normalize_external_resource_resume(request: dict[str, Any], resume_payload: Any) -> dict[str, Any]:
+    if not isinstance(resume_payload, dict):
+        raise FactoryModelCallError("resource form resume payload must be an object")
+    decision = str(resume_payload.get("decision") or "submit")
+    if decision in {"skip", "cancel"}:
+        return {
+            "type": "resource_form_result",
+            "decision": decision,
+            "resources": {},
+            "sandbox": {},
+            "note": str(resume_payload.get("note") or "user did not provide external resources"),
+        }
+    if str(resume_payload.get("type") or "") != "resource_form_result":
+        raise FactoryModelCallError("resource form resume payload must have type=resource_form_result")
+    values = resume_payload.get("values")
+    if not isinstance(values, dict):
+        raise FactoryModelCallError("resource form resume payload must include values object")
+    fields = _external_resource_form_fields(request)
+    resources: dict[str, Any] = {}
+    sandbox: dict[str, Any] = {}
+    missing: list[str] = []
+    for field in fields:
+        key = str(field.get("key") or "")
+        has_value = key in values and _has_resource_form_value(values.get(key))
+        if not has_value:
+            if field.get("required"):
+                missing.append(key)
+            continue
+        value = _coerce_resource_form_value(values.get(key), str(field.get("type") or "string"))
+        resource_id = str(field.get("resource_id") or "")
+        if resource_id:
+            target = resources.setdefault(resource_id, {})
+            path = [str(item) for item in list(field.get("path") or []) if str(item)]
+            if path:
+                _assign_nested_value(target, path, value)
+            elif isinstance(value, dict):
+                resources[resource_id] = value
+            else:
+                resources[resource_id] = {"value": value}
+            continue
+        requirement_id = str(field.get("sandbox_requirement_id") or "sandbox")
+        target = sandbox.setdefault(requirement_id, {})
+        _assign_nested_value(target, [str(item) for item in list(field.get("path") or []) if str(item)], value)
+    if missing:
+        raise FactoryModelCallError(f"resource form is missing required value(s): {', '.join(missing)}")
+    return {
+        "type": "resource_form_result",
+        "decision": "submit",
+        "resources": resources,
+        "sandbox": sandbox,
+        "raw_values": values,
+    }
+
+
+def _has_resource_form_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _form_field_type(schema: dict[str, Any], *, key: str, secret_fields: list[str]) -> str:
+    if _field_is_secret(key, secret_fields):
+        return "secret"
+    schema_type = schema.get("type")
+    if schema_type == "boolean":
+        return "boolean"
+    if schema_type in {"integer", "number"}:
+        return "number"
+    if schema_type == "array":
+        item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else {}
+        if item_schema.get("format") == "uri" or any(token in key.lower() for token in ("url", "source", "endpoint")):
+            return "url_array"
+        return "string_array"
+    if schema_type == "object":
+        return "json"
+    if schema.get("format") in {"password", "secret"}:
+        return "secret"
+    return "string"
+
+
+def _field_is_secret(key: str, secret_fields: list[str]) -> bool:
+    normalized = key.lower()
+    return any(normalized.endswith(str(item).lower()) for item in secret_fields)
+
+
+def _coerce_resource_form_value(value: Any, field_type: str) -> Any:
+    if field_type in {"string_array", "url_array"}:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        text = str(value).strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+        return [item.strip() for item in text.replace("\n", ",").split(",") if item.strip()]
+    if field_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "允许", "是"}
+    if field_type == "number":
+        if isinstance(value, int | float):
+            return value
+        text = str(value).strip()
+        try:
+            return int(text) if text.isdigit() else float(text)
+        except ValueError:
+            raise FactoryModelCallError(f"resource form value must be numeric: {text}") from None
+    if field_type == "json":
+        if isinstance(value, dict | list):
+            return value
+        text = str(value).strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            raise FactoryModelCallError("resource form JSON field contains invalid JSON") from None
+    return str(value)
+
+
+def _assign_nested_value(target: dict[str, Any], path: list[str], value: Any) -> None:
+    if not path:
+        target["value"] = value
+        return
+    current = target
+    for part in path[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[path[-1]] = value
 
 
 def _tool_manufacturing_failed_patch(

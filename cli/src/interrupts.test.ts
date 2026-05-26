@@ -17,6 +17,17 @@ describe('interrupt resume payloads', () => {
 			revision_guidance: 'cwd 参数不对，改到项目根目录'
 		});
 	});
+
+	it('maps resource form key-value text to structured resume payload', () => {
+		expect(buildResumePayload(resourceFormEvent(), 'user_report_config.symbols: AAPL, MSFT; sandbox.network_access=true')).toEqual({
+			type: 'resource_form_result',
+			decision: 'submit',
+			values: {
+				'user_report_config.symbols': ['AAPL', 'MSFT'],
+				'sandbox.network_access': true
+			}
+		});
+	});
 });
 
 function toolApprovalEvent(): FactoryEvent {
@@ -42,5 +53,14 @@ function toolApprovalEvent(): FactoryEvent {
 		severity: null,
 		message: null,
 		payload: {type: 'tool_approval'}
+	};
+}
+
+function resourceFormEvent(): FactoryEvent {
+	return {
+		...toolApprovalEvent(),
+		event_id: 'resource-form',
+		event_type: 'interrupt_requested',
+		payload: {type: 'resource_form', title: 'Resource Form'}
 	};
 }

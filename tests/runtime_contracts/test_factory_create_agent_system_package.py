@@ -34,7 +34,11 @@ from agent_factory.factory_package.schemas import (
     ToolSourceDecision,
     ToolTrialPlan,
 )
-from agent_factory.factory_package.nodes import factory_manufacturing_node_provider
+from agent_factory.factory_package.nodes import (
+    _external_resource_form_payload,
+    _normalize_external_resource_resume,
+    factory_manufacturing_node_provider,
+)
 from agent_factory.factory_package.tool_manufacturing import (
     approved_package_tool_plans,
     default_tool_manufacturing_output,
@@ -313,6 +317,63 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
         self.assertEqual(plan.scenarios[0].expected_tool_id, "fetch_market_data")
         self.assertEqual(plan.scenarios[0].expected_output_keys, ["status"])
         self.assertEqual(plan.scenarios[0].expected_output_subset, {"status": "error", "retryable": True})
+
+    def test_external_resource_form_round_trips_to_structured_resume_payload(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "user_report_config",
+                    "description": "Report configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "symbols": {"type": "array", "items": {"type": "string"}},
+                            "news_sources": {"type": "array", "items": {"type": "string", "format": "uri"}},
+                            "risk_preference": {"type": "string"},
+                        },
+                        "required": ["symbols", "news_sources"],
+                    },
+                    "secret_fields": [],
+                }
+            ],
+            "sandbox_requirements": [
+                {
+                    "requirement_id": "network_access",
+                    "description": "Allow HTTP/HTTPS connectivity.",
+                    "network_required": True,
+                }
+            ],
+        }
+
+        payload = _external_resource_form_payload(request)
+        fields = payload["form"]["fields"]
+        self.assertEqual([field["key"] for field in fields], [
+            "user_report_config.symbols",
+            "user_report_config.news_sources",
+            "user_report_config.risk_preference",
+            "sandbox.network_access",
+        ])
+
+        normalized = _normalize_external_resource_resume(
+            request,
+            {
+                "type": "resource_form_result",
+                "decision": "submit",
+                "values": {
+                    "user_report_config.symbols": ["AAPL", "MSFT"],
+                    "user_report_config.news_sources": ["https://example.com/rss.xml"],
+                    "sandbox.network_access": True,
+                },
+            },
+        )
+
+        self.assertEqual(normalized["resources"]["user_report_config"]["symbols"], ["AAPL", "MSFT"])
+        self.assertEqual(
+            normalized["resources"]["user_report_config"]["news_sources"],
+            ["https://example.com/rss.xml"],
+        )
+        self.assertEqual(normalized["sandbox"]["network_access"]["network_access"], True)
 
     def test_tool_manufacturing_resolves_enabled_factory_skill_for_inheritance(self) -> None:
         with TemporaryDirectory() as temp_dir:
