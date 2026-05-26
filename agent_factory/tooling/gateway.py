@@ -238,14 +238,23 @@ class ToolExecutionGateway:
     def _resolve_resources(self) -> dict[str, Any]:
         resources: dict[str, Any] = {}
         missing: list[str] = []
-        for local_name, global_key in self.spec.resources.items():
-            if global_key not in self.global_resources:
-                missing.append(global_key)
+        for local_name, selector in self.spec.resources.items():
+            try:
+                resources[local_name] = self._resolve_resource_selector(selector)
+            except KeyError:
+                missing.append(selector)
                 continue
-            resources[local_name] = self.global_resources[global_key]
         if missing:
             raise KeyError(f"missing required resources: {', '.join(sorted(missing))}")
         return resources
+
+    def _resolve_resource_selector(self, selector: str) -> Any:
+        current: Any = self.global_resources
+        for part in selector.split("."):
+            if not isinstance(current, Mapping) or part not in current:
+                raise KeyError(selector)
+            current = current[part]
+        return current
 
     def _emit_execution_started(
         self,

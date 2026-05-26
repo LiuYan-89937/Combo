@@ -11,6 +11,13 @@ class PromptId(str, Enum):
     PRODUCT_BRIEF_DRAFT = "factory.product_brief.draft"
     RUNTIME_DESIGN_DRAFT = "factory.runtime_design.draft"
     CAPABILITY_CONTRACT_DRAFT = "factory.capability_contract.draft"
+    TOOL_MANUFACTURING_DRAFT = "factory.tool_manufacturing.draft"
+    TOOL_SOURCE_DECISIONS_DRAFT = "factory.tool_manufacturing.source_decisions"
+    TOOL_DESIGN_DRAFT = "factory.tool_manufacturing.design"
+    TOOL_SPEC_DRAFT = "factory.tool_manufacturing.spec"
+    TOOL_IMPLEMENTATION_DRAFT = "factory.tool_manufacturing.implementation"
+    TOOL_UNIT_TEST_DRAFT = "factory.tool_manufacturing.unit_test"
+    TOOL_BINDING_SMOKE_DRAFT = "factory.tool_manufacturing.binding_smoke"
     PACKAGE_BUILD_DRAFT = "factory.package_build.draft"
     SCHEDULER_FEEDBACK_SUMMARY = "scheduler.feedback.summary"
 
@@ -54,9 +61,12 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "你的任务是把 Product Brief 映射成 RuntimeKernel 可编译的运行蓝图。\n"
                     "所有设计必须服从 RuntimeKernel catalog；不能凭空发明 node_type、node impl、edge condition、contract 或 pattern_id。\n"
                     "必须使用 design_mode=reuse_pattern，并且只能选择 RuntimeKernel catalog 中的非 embeddable preset pattern。\n"
-                    "禁止输出自定义 edges、termination 或 package-local pattern；preset pattern 拥有完整图拓扑和节点语义。\n"
+                    "Runtime Design JSON schema 不包含 edges、interrupts、termination；不要描述自定义拓扑或 package-local pattern，preset pattern 拥有完整图拓扑和节点语义。\n"
                     "nodes 只用于描述所选 pattern 中已有节点的业务职责和能力策略；node_id、node_type、impl 必须与所选 pattern 完全一致。\n"
-                    "pattern_slots 用于说明所选 pattern 的槽位如何绑定到 prompt、tool、resource、scheduler、state、artifact、context 等能力。\n"
+                    "pattern_slots 必须逐项覆盖所选 pattern catalog 的 required slots，slot_id 与 slot_type 必须完全一致，并通过 binding 字段表达类型化绑定。\n"
+                    "resource slot 的 binding 要同时给出 resource_id、value_schema、default_value、secret_fields；description 只解释资源用途，运行值必须落到 resources.json。\n"
+                    "state_namespaces 只描述业务状态，不保存 runtime 配置值；如果字段属于 resource slot，就不要再放进 state initial_shape。\n"
+                    "不要把 messages、resources、artifact、memory、knowledge、scheduler、trace、context 等 RuntimeKernel 服务写成 package_state namespace。\n"
                     "不要把 operational.tool_call 设计成主动执行工具；它只执行 cognitive 节点生成的 tool_calls。\n"
                     "如果业务需要定时报告，优先选择 scheduled_react_report，让 scheduler 以 graph_run message 触发 ReAct 工具循环。\n"
                     "严格结构化模型输出只有在所选 pattern 已包含 cognitive.structured 节点时才能写入 structured_outputs。\n"
@@ -86,6 +96,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "你的任务是把 Product Brief 与 Runtime Design 转换成 AgentPackage 的基础能力装配契约。\n"
                     "这一步必须讲清楚每个系统具体接入什么、为什么接入、后续使用什么策略。\n"
                     "必须逐项消费 Runtime Design 的 pattern_slots：每个 slot 应当映射为 contract、资源需求、工具生成任务、prompt 生成任务、scheduler 策略或 artifact 策略。\n"
+                    "resources_required 必须保留资源描述，同时提供工具可读取的 value_schema/default_value/secret_fields；不要把资源描述当成 resources.json 的运行值。\n"
+                    "resources 是运行配置的唯一事实源；package_state 不允许复制 watchlist、news_sources、api_key、输出路径等资源字段，只能保存确认状态、进度、派生结果等业务状态。\n"
                     "不要生成工具代码、node.py、pattern yaml、package 文件或真实资源值。\n"
                     "不要声明任何 Python builder import path；RuntimeContract builder 只能由系统注册。\n"
                     "contract_drafts 必须包含所有 required_agent_package_contracts 与 Runtime Design 明确需要的 contract。\n"
@@ -93,7 +105,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "工具、知识、定时、记忆、上下文、trace、sandbox、resources、artifact、node_provider 等策略必须具体，不要只写 enabled=true。\n"
                     "如果 Runtime Design 需要 package-local node，必须在 package_nodes_to_generate 中列出。\n"
                     "如果 Runtime Design 需要结构化输出，必须在 bindings_to_generate 中列出 model_operation binding，并在 prompts_to_generate 中列出对应 prompt。\n"
-                    "如果 Runtime Design 需要工具，必须明确 builtin/system/package/mcp/skill 工具来源策略。\n"
+                    "如果 Runtime Design 需要工具，只描述工具需求和可选来源提示；最终来源由 Tool Manufacturing 唯一决定。\n"
                     "如果 Runtime Design 有多个 state_namespaces，不要让 contract 失败；state contract 使用一个物理 namespace，"
                     "并在 capability_plans.state.what.logical_namespaces 中记录所有逻辑 namespace。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
@@ -112,6 +124,192 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
+    if prompt_id == PromptId.TOOL_MANUFACTURING_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的 Tool Manufacturing 制造器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "你的任务是把 Capability Contract 中的工具需求变成可验证的工具制造资产。\n"
+                    "这个 prompt 只用于兼容旧调用；新制造链路会分步生成 source decision、design、spec、implementation、unit test 和 binding smoke。\n"
+                    "必须先做来源决策：builtin、mcp、skill、knowledge、scheduler、package_generated。\n"
+                    "已有系统能力能满足时禁止重复生成 package tool；package_generated 只用于当前 Agent 独有的确定性业务能力。\n"
+                    "source 不是 package_generated 的工具，只输出 source_decision 和 binding_notes，不生成 ToolDesign、ToolSpecDraft、tool.py 或 pytest。\n"
+                    "如果 source 是 mcp 或 skill，且 Factory 当前 extensions 中已有可复用配置，必须在 source_decision.inherited_extensions 写明要继承的 server_id 或 skill_id。\n"
+                    "MCP 继承 extension_id 使用 mcp_servers.json 里的 server_id；Skill 继承 extension_id 使用 enabled_skills.json 里的 skill_id。\n"
+                    "继承 MCP/Skill 时不要复制实现内容到模型输出；系统会从 Factory extensions 解析并写入子 Agent 的 extensions 目录。\n"
+                    "source 是 package_generated 的工具，必须提供 ToolDesign、ToolSpecDraft、ToolImplementationDraft、ToolUnitTestPlan、ToolBindingSmokePlan。\n"
+                    "ToolSpecDraft 必须能转换为 RuntimeKernel ToolSpec；input_schema/output_schema 必须是严格 JSON Schema object。\n"
+                    "资源绑定使用 resource_bindings 的 local_name -> selector 语义；selector 只能是点路径，例如 report_config.news_api_key，禁止 resources://...、{{resources...}} 或绝对路径。\n"
+                    "tool.py 必须提供名为 run 的入口函数，参数必须依次为 arguments 与 resources，并返回 dict。\n"
+                    "工具代码不能裸执行 shell，不能访问沙箱外路径，不能绕过 ToolExecutionGateway，不能把 secret 写入输出。\n"
+                    "如果工具需要外部 Python 包，必须写入 ToolDesign.python_requirements；系统包和命令分别写入 system_packages/system_binaries。\n"
+                    "单元测试必须是 pytest 代码，必须使用 mock/fixture，不允许访问真实外部网络或真实业务服务。\n"
+                    "binding smoke 必须给出用户提示、期望工具 id、可安全执行的 arguments 和 mock resources，用于测试真实 tool-bound chat + ToolNode + Gateway 链路。\n"
+                    "approved_package_tools 可以留空；系统会在静态检查、依赖收敛、pytest 和 binding smoke 通过后生成最终 approved artifact。\n"
+                    "不要生成 package 文件、manifest 路径、Docker 配置、RuntimeContract 文件或 PackageBuildPlan。\n\n"
+                    "Factory 运行边界：\n{factory_operating_context}\n\n"
+                    "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
+                    "现有工具 catalog JSON：\n{tool_catalog}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "Product Brief JSON：\n{product_brief}\n\n"
+                    "Runtime Design JSON：\n{runtime_design}\n\n"
+                    "Capability Contract JSON：\n{capability_contract}\n\n"
+                    "请生成 ToolManufacturingOutput JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.TOOL_SOURCE_DECISIONS_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的 Tool Manufacturing 来源决策器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "你的任务只做工具来源决策，不生成 ToolDesign、ToolSpec、代码、测试或 smoke。\n"
+                    "Capability Contract 中的 tool source 只是来源提示，不是锁定值；最终来源由你在 source_decisions 中决定。\n"
+                    "来源只能是 builtin、mcp、skill、knowledge、scheduler、package_generated。\n"
+                    "已有 builtin/MCP/Skill/knowledge/scheduler 能满足时，禁止重复生成 package tool。\n"
+                    "如果选择 mcp 或 skill，必须在 inherited_extensions 中写明要继承的 server_id 或 skill_id。\n"
+                    "如果选择 package_generated，必须说明为什么现有能力无法满足。\n"
+                    "不要输出任何实现内容。\n\n"
+                    "现有工具 catalog JSON：\n{tool_catalog}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "Product Brief JSON：\n{product_brief}\n\n"
+                    "Runtime Design JSON：\n{runtime_design}\n\n"
+                    "Capability Contract JSON：\n{capability_contract}\n\n"
+                    "请生成 ToolSourceDecisionOutput JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.TOOL_DESIGN_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的单工具 ToolDesign 制造器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "只为当前这一个 package_generated 工具生成 ToolDesign，不生成 spec、代码、测试或 smoke。\n"
+                    "资源绑定只能写 resource_bindings 列表，每项必须是 {{local_name, selector, purpose}}。\n"
+                    "local_name 是工具代码里使用的本地资源名，例如 news_sources 或 news_api_key；selector 是资源点路径，例如 report_config.news_sources。\n"
+                    "禁止输出 resource_selectors 字段；禁止 selector 使用 resources://...、{{resources...}}、描述文字或绝对路径。\n"
+                    "如果需要外部 Python 包，写入 python_requirements；系统包和命令分别写入 system_packages/system_binaries。\n"
+                    "禁止设计裸 shell、沙箱外路径、绕过 ToolExecutionGateway 或 secret 输出。\n\n"
+                    "上一轮制造校验反馈：\n{validation_feedback}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "Product Brief JSON：\n{product_brief}\n\n"
+                    "Runtime Design JSON：\n{runtime_design}\n\n"
+                    "Tool Requirement JSON：\n{tool_requirement}\n\n"
+                    "Source Decision JSON：\n{source_decision}\n\n"
+                    "Resource Requirements JSON：\n{resource_requirements}\n\n"
+                    "请生成 ToolDesign JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.TOOL_SPEC_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的单工具 ToolSpecDraft 制造器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "只为当前这一个 package_generated 工具生成 ToolSpecDraft，不生成代码、测试或 smoke。\n"
+                    "input_schema/output_schema 必须是严格 JSON Schema object，默认 additionalProperties=false。\n"
+                    "resources 是 ToolSpec 的实际资源映射，格式固定为 local_resource_name -> dot_path_selector。\n"
+                    "示例：{{\"news_sources\":\"report_config.news_sources\",\"news_api_key\":\"report_config.api_keys.news_api_key\"}}。\n"
+                    "key 必须是本地资源名，value 必须是点路径 selector；禁止反写成 selector -> 描述，禁止 resources://...、{{resources...}} 或绝对路径。\n\n"
+                    "上一轮制造校验反馈：\n{validation_feedback}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "Tool Requirement JSON：\n{tool_requirement}\n\n"
+                    "Source Decision JSON：\n{source_decision}\n\n"
+                    "ToolDesign JSON：\n{tool_design}\n\n"
+                    "Resource Requirements JSON：\n{resource_requirements}\n\n"
+                    "请生成 ToolSpecDraft JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.TOOL_IMPLEMENTATION_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的单工具 tool.py 实现制造器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object。\n\n"
+                    "只生成 ToolImplementationDraft，不生成测试或 smoke。\n"
+                    "代码必须定义 def run(arguments: dict, resources: dict) -> dict。\n"
+                    "只能使用 Python 标准库、ToolDesign.python_requirements 声明的依赖，以及 resources 中显式传入的值。\n"
+                    "禁止裸 shell、沙箱外路径、真实 secret 输出、全局副作用和绕过 ToolExecutionGateway。\n"
+                    "外部网络逻辑必须有超时和结构化失败返回。\n\n"
+                    "上一轮制造校验反馈：\n{validation_feedback}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "ToolDesign JSON：\n{tool_design}\n\n"
+                    "ToolSpecDraft JSON：\n{tool_spec}\n\n"
+                    "请生成 ToolImplementationDraft JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.TOOL_UNIT_TEST_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的单工具 pytest 测试制造器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "只生成 ToolUnitTestPlan。pytest_code 只写测试逻辑，不要写工具导入/路径加载逻辑。\n"
+                    "系统会提供固定 harness：run_tool(arguments, resources) 用于调用当前工具，tool_module 用于 monkeypatch 工具模块内部依赖。\n"
+                    "pytest_code 必须至少使用 run_tool(...) 或 tool_module；禁止 import 当前工具名、tools 包、importlib、subprocess，禁止修改 sys.path。\n"
+                    "pytest 必须使用 mock/fixture，不允许访问真实外部网络或真实业务服务。\n"
+                    "覆盖成功路径、参数错误、资源缺失、外部失败和输出 schema 关键路径。\n\n"
+                    "上一轮制造校验反馈：\n{validation_feedback}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "ToolDesign JSON：\n{tool_design}\n\n"
+                    "ToolSpecDraft JSON：\n{tool_spec}\n\n"
+                    "ToolImplementationDraft JSON：\n{tool_implementation}\n\n"
+                    "请生成 ToolUnitTestPlan JSON。",
+                ),
+            ]
+        )
+    if prompt_id == PromptId.TOOL_BINDING_SMOKE_DRAFT:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的单工具 binding smoke 计划制造器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "只生成 ToolBindingSmokePlan。user_prompt 要让 task model 明确调用当前工具。\n"
+                    "arguments 和 resources 必须安全、短小、可在制造测试环境执行，不访问真实业务服务。\n"
+                    "expected_tool_id 必须等于当前 tool_id。\n\n"
+                    "上一轮制造校验反馈：\n{validation_feedback}\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "ToolDesign JSON：\n{tool_design}\n\n"
+                    "ToolSpecDraft JSON：\n{tool_spec}\n\n"
+                    "ToolImplementationDraft JSON：\n{tool_implementation}\n\n"
+                    "请生成 ToolBindingSmokePlan JSON。",
+                ),
+            ]
+        )
     if prompt_id == PromptId.PACKAGE_BUILD_DRAFT:
         return ChatPromptTemplate.from_messages(
             [
@@ -121,19 +319,21 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
                     "你的任务是补齐系统 Materializer 无法确定的模型生成内容，而不是直接写文件。\n"
                     "Package Build 会由系统负责落盘、路径安全、原子提交和静态校验。\n"
-                    "你只能输出 PackageBuildPlan JSON 中允许的内容：prompt 模板、结构化输出 schema、package-local node 代码、package tool 代码和构建摘要。\n"
+                    "你只能输出 PackageBuildModelPlan JSON 中允许的内容：prompt 模板、结构化输出 schema、package-local node 代码和构建摘要。\n"
                     "Package Build 不允许重新设计 graph；必须服从 Runtime Design 已选择的 preset pattern。\n"
                     "不要输出绝对路径、不要输出 package_root、不要改写 system-generated 文件、不要声明 builder import path。\n"
                     "package-local node 代码必须定义：def run(input: dict, context) -> dict。\n"
-                    "package tool 代码必须定义：def run(arguments: dict, resources: dict) -> dict。\n"
-                    "代码只能使用 Python 标准库、已声明依赖和通过 context/tool resources 明确提供的能力；不要裸执行 shell、不要直接读写沙箱外路径、不要绕过 ToolExecutionGateway。\n"
-                    "如果 package-local node 或 package tool 代码 import 任何非标准库 Python 包，必须在对应条目的 python_requirements 中声明可安装 requirement；"
+                    "Package Build 禁止生成 package tool 代码；所有生成工具只能来自 Tool Manufacturing 的 approved_package_tools。\n"
+                    "代码只能使用 Python 标准库、已声明依赖和通过 context 明确提供的能力；不要裸执行 shell、不要直接读写沙箱外路径、不要绕过 ToolExecutionGateway。\n"
+                    "如果 package-local node 代码 import 任何非标准库 Python 包，必须在对应条目的 python_requirements 中声明可安装 requirement；"
                     "如果依赖系统包或系统命令，必须在 system_packages 或 system_binaries 中声明。"
                     "这些依赖会由系统合并进 contracts/dependencies.json 并在 sandbox_init 阶段安装/检测。\n"
-                    "如果 Runtime Design 不需要 package-local node 或 package-generated tool，对应列表必须为空。\n"
+                    "不要把 Python 包、系统包或命令写进 sandbox services；sandbox services 只表示真实外部服务 endpoint。\n"
+                    "如果 Runtime Design 不需要 package-local node，对应列表必须为空。\n"
                     "如果有 cognitive.structured 节点，必须提供可执行的 JSON Schema 和 write_target。\n"
                     "prompt 模板变量只能使用 Kernel 已提供的数据源：messages、runtime_context、context、model_context、package_state、resources、current_user_input。"
                     "不要声明 raw_news、raw_quotes 这类没有 binding 来源的变量；如果需要数据，让 cognitive.answer 通过工具调用拿到 observation。\n"
+                    "package tool 的 resources 映射值必须是资源选择器，例如 report_config.news_api_key，不要使用 {{resources...}} 模板表达式。\n"
                     "prompt 模板要面向生成 Agent 的运行时模型，不要提 FastAgentFactory 内部制造流程。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
                     "Factory 默认实现：\n{factory_default_implementation_context}\n\n"
@@ -144,7 +344,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Product Brief JSON：\n{product_brief}\n\n"
                     "Runtime Design JSON：\n{runtime_design}\n\n"
                     "Capability Contract JSON：\n{capability_contract}\n\n"
-                    "请生成 PackageBuildPlan JSON。",
+                    "Tool Manufacturing JSON：\n{tool_manufacturing}\n\n"
+                    "请生成 PackageBuildModelPlan JSON。",
                 ),
             ]
         )

@@ -44,6 +44,12 @@
     "capability_contract_validation": {
       "type": "object"
     },
+    "tool_manufacturing": {
+      "type": "object"
+    },
+    "tool_manufacturing_report": {
+      "type": "object"
+    },
     "package_build_plan": {
       "type": "object"
     },

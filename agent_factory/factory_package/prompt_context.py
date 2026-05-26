@@ -5,7 +5,7 @@ FACTORY_OPERATING_CONTEXT = """Factory 运行边界：
 - FastAgentFactory 是 CLI-first Agent Factory，当前交互以 shell/CLI 为主。
 - Factory 的目标产物是 RuntimeKernel AgentPackage。
 - mainModel/taskModel/API key/base URL/thinking 参数都属于 Factory 自身运行配置，不是生成 Agent 的业务资源。
-- 当前已落地 Product Brief、Runtime Design、Capability Contract 与 Package Build 制造域；后续制造域等待设计。
+- 当前已落地 Product Brief、Runtime Design、Capability Contract、Tool Manufacturing 与 Package Build 制造域。
 """
 
 
@@ -24,5 +24,5 @@ def prompt_context_values(_node_id: str) -> dict[str, str]:
     return {
         "factory_operating_context": FACTORY_OPERATING_CONTEXT,
         "factory_default_implementation_context": FACTORY_DEFAULT_IMPLEMENTATION_CONTEXT,
-        "manufacturing_status_context": "当前执行 Product Brief、Runtime Design、Capability Contract、Package Build，并在 AgentPackage 静态物化后结束，便于测试和精修。",
+        "manufacturing_status_context": "当前执行 Product Brief、Runtime Design、Capability Contract、Tool Manufacturing、Package Build，并在 AgentPackage 静态物化后结束，便于测试和精修。",
     }

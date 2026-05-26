@@ -27,7 +27,16 @@
       "kind": "factory_manufacturing_domain",
       "purpose": "把 Runtime Design 转换成基础能力接入策略和 RuntimeContract 草案。",
       "doing": "为每个基础系统明确是否启用、接入内容、运行策略和后续生成任务，并做 contract registry 校验。",
-      "expected_output": "写出 capability_contract.v0；如果通过校验，则进入 Package Build。",
+      "expected_output": "写出 capability_contract.v0；如果通过校验，则进入 Tool Manufacturing。",
+      "visible_to_user": true
+    },
+    "tool_manufacturing": {
+      "node_id": "tool_manufacturing",
+      "label": "Tool Manufacturing",
+      "kind": "factory_manufacturing_domain",
+      "purpose": "把工具需求转换成来源决策、ToolSpec、实现、测试与真实绑定 smoke 结果。",
+      "doing": "优先复用 builtin/MCP/Skill/knowledge/scheduler，只有必要时生成 package tool，并通过共享测试环境验证。",
+      "expected_output": "写出 tool_manufacturing.v0；只有通过 ToolSpec、pytest 与 binding smoke 的 package 工具才进入 Package Build。",
       "visible_to_user": true
     },
     "package_build": {

@@ -383,6 +383,8 @@ class AgentPackageRuntimeManager:
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
+        _seed_package_extensions(package=package, extension_root=extension_root)
+        fingerprint = _package_fingerprint(package)
         mcp_gateway = self._mcp_gateways.ensure_gateway(
             AgentInstanceExtensionConfigLoader(extension_root).load().mcp_servers
         )
@@ -600,6 +602,81 @@ def _extension_root_for_package(package_id: str, package: LoadedAgentPackage) ->
     if _is_system_package(package):
         return package.package_root.parent / "extensions"
     return _host_runtime_root(package_id) / "extensions"
+
+
+def _seed_package_extensions(*, package: LoadedAgentPackage, extension_root: Path) -> None:
+    package_extensions = package.package_root / "extensions"
+    if not package_extensions.is_dir():
+        return
+    extension_root.mkdir(parents=True, exist_ok=True)
+    _merge_extension_config(
+        source_path=package_extensions / "mcp_servers.json",
+        target_path=extension_root / "mcp_servers.json",
+        list_key="servers",
+        id_key="server_id",
+        default_version="mcp_servers.v0",
+    )
+    _merge_extension_config(
+        source_path=package_extensions / "enabled_skills.json",
+        target_path=extension_root / "enabled_skills.json",
+        list_key="skills",
+        id_key="skill_id",
+        default_version="enabled_skills.v0",
+    )
+    source_skills = package_extensions / "skills"
+    if source_skills.is_dir():
+        target_skills = extension_root / "skills"
+        target_skills.mkdir(parents=True, exist_ok=True)
+        for source_skill in sorted(item for item in source_skills.iterdir() if item.is_dir()):
+            target_skill = target_skills / source_skill.name
+            if target_skill.exists():
+                continue
+            shutil.copytree(source_skill, target_skill)
+
+
+def _merge_extension_config(
+    *,
+    source_path: Path,
+    target_path: Path,
+    list_key: str,
+    id_key: str,
+    default_version: str,
+) -> None:
+    source_payload = _read_json_object(source_path)
+    source_items = source_payload.get(list_key)
+    if not isinstance(source_items, list) or not source_items:
+        return
+    target_payload = _read_json_object(target_path)
+    target_items = target_payload.get(list_key)
+    if not isinstance(target_items, list):
+        target_items = []
+    existing = {
+        str(item.get(id_key) or "")
+        for item in target_items
+        if isinstance(item, dict) and str(item.get(id_key) or "")
+    }
+    merged = list(target_items)
+    for item in source_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get(id_key) or "")
+        if not item_id or item_id in existing:
+            continue
+        merged.append(item)
+        existing.add(item_id)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(
+        json.dumps(
+            {
+                "version": str(target_payload.get("version") or source_payload.get("version") or default_version),
+                list_key: merged,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _is_system_package(package: LoadedAgentPackage) -> bool:

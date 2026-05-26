@@ -17,12 +17,16 @@ from ruamel.yaml import YAML
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.factory_package.schemas import (
     CapabilityContractOutput,
+    InheritedExtensionArtifact,
     PackageBuildMaterializedFile,
+    PackageBuildModelPlan,
     PackageBuildPlan,
     PackageBuildReport,
     PackageBuildStaticCheck,
+    PackageToolBuildPlan,
     ProductBriefOutput,
     RuntimeDesignOutput,
+    ToolManufacturingOutput,
 )
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_contracts.loader import AgentPackageLoader
@@ -73,6 +77,7 @@ def default_package_build_plan(
     product_brief: ProductBriefOutput,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
+    approved_package_tools: list[PackageToolBuildPlan] | None = None,
 ) -> PackageBuildPlan:
     agent_id = _safe_id(product_brief.working_title or product_brief.agent_goal or "generated_agent")
     if factory_run_id:
@@ -109,7 +114,7 @@ def default_package_build_plan(
             "prompt_templates": prompt_templates,
             "structured_outputs": [],
             "package_nodes": [],
-            "package_tools": [],
+            "package_tools": [item.model_dump(mode="json") for item in approved_package_tools or []],
             "build_summary_text": "Package Build plan initialized from validated Product Brief, Runtime Design, and Capability Contract.",
             "warnings": list(capability_contract.deferred_decisions),
         }
@@ -119,22 +124,28 @@ def default_package_build_plan(
 def merge_package_build_plan(
     *,
     base: PackageBuildPlan,
-    model_plan: PackageBuildPlan | None,
+    model_plan: PackageBuildModelPlan | PackageBuildPlan | None,
+    approved_package_tools: list[PackageToolBuildPlan] | None = None,
 ) -> PackageBuildPlan:
     if model_plan is None:
         return base
     base_prompts = {item.node_id: item for item in base.prompt_templates}
-    merged_prompts = list(model_plan.prompt_templates)
+    if isinstance(model_plan, PackageBuildModelPlan):
+        merged_plan = model_plan.to_package_build_plan(package_tools=approved_package_tools or base.package_tools)
+    else:
+        merged_plan = model_plan.model_copy(update={"package_tools": approved_package_tools or base.package_tools}, deep=True)
+    merged_prompts = list(merged_plan.prompt_templates)
     for node_id, prompt in base_prompts.items():
         if node_id not in {item.node_id for item in merged_prompts}:
             merged_prompts.append(prompt)
-    return model_plan.model_copy(
+    return merged_plan.model_copy(
         update={
             "package_id": base.package_id,
             "agent_id": base.agent_id,
-            "agent_name": model_plan.agent_name or base.agent_name,
-            "agent_description": model_plan.agent_description or base.agent_description,
+            "agent_name": merged_plan.agent_name or base.agent_name,
+            "agent_description": merged_plan.agent_description or base.agent_description,
             "prompt_templates": merged_prompts,
+            "package_tools": approved_package_tools or base.package_tools,
         },
         deep=True,
     )
@@ -146,12 +157,14 @@ def build_agent_package(
     product_brief: ProductBriefOutput,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
+    tool_manufacturing: ToolManufacturingOutput | None = None,
     output_root: Path = PACKAGE_OUTPUT_ROOT,
 ) -> PackageBuildResult:
     errors = _validate_plan_alignment(
         plan=plan,
         runtime_design=runtime_design,
         capability_contract=capability_contract,
+        tool_manufacturing=tool_manufacturing,
     )
     package_root = (Path.cwd() / output_root / plan.package_id).resolve()
     if errors:
@@ -176,6 +189,7 @@ def build_agent_package(
             product_brief=product_brief,
             runtime_design=runtime_design,
             capability_contract=capability_contract,
+            inherited_extensions=tool_manufacturing.inherited_extensions if tool_manufacturing is not None else [],
         )
         static_checks.extend(_validate_temp_package(temp_root))
         failed = [item for item in static_checks if item.status == "failed"]
@@ -254,11 +268,16 @@ def _materialize_to_temp_root(
     product_brief: ProductBriefOutput,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
+    inherited_extensions: list[InheritedExtensionArtifact] | None = None,
 ) -> None:
     pattern = _package_pattern(runtime_design)
     contracts = _merge_generated_dependencies(
         contracts=_contract_payloads(capability_contract),
         plan=plan,
+    )
+    contracts = _merge_resource_descriptors(
+        contracts=contracts,
+        capability_contract=capability_contract,
     )
     state_contract = contracts.get("state") or {}
     state_enabled = bool(state_contract.get("enabled", True))
@@ -414,6 +433,11 @@ def _materialize_to_temp_root(
             source=f"package_tool:{tool.tool_id}",
             materialized=materialized,
         )
+    _materialize_inherited_extensions(
+        temp_root=temp_root,
+        materialized=materialized,
+        inherited_extensions=list(inherited_extensions or []),
+    )
 
 
 def _validate_temp_package(temp_root: Path) -> list[PackageBuildStaticCheck]:
@@ -461,6 +485,21 @@ def _validate_temp_package(temp_root: Path) -> list[PackageBuildStaticCheck]:
         Draft202012Validator(schema).validate(initial)
 
     record("state_contract_files", validate_state)
+
+    def validate_resources() -> None:
+        package = loaded_package or AgentPackageLoader().load_path(temp_root / "agent_package.json")
+        _validate_materialized_resource_files(package.resources, package.contracts.get("resources") or {})
+
+    record("resource_contract_files", validate_resources)
+
+    def validate_sandbox_semantics() -> None:
+        package = loaded_package or AgentPackageLoader().load_path(temp_root / "agent_package.json")
+        _validate_materialized_sandbox_dependency_boundary(
+            package.sandbox_contract,
+            package.contracts.get("dependencies") or {},
+        )
+
+    record("sandbox_dependency_boundary", validate_sandbox_semantics)
 
     def validate_python() -> None:
         for path in sorted([*temp_root.glob("nodes/*/*.py"), *temp_root.glob("tools/*/*.py")]):
@@ -586,6 +625,7 @@ def _validate_plan_alignment(
     plan: PackageBuildPlan,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
+    tool_manufacturing: ToolManufacturingOutput | None = None,
 ) -> list[str]:
     errors: list[str] = []
     pattern = _package_pattern(runtime_design)
@@ -596,17 +636,27 @@ def _validate_plan_alignment(
         if node.impl in {"cognitive.answer", "cognitive.structured"}
     }
     structured_node_ids = {node.id for node in pattern.nodes if node.impl == "cognitive.structured"}
+    errors.extend(_validate_resource_contract_semantics(capability_contract))
+    errors.extend(_validate_state_resource_separation(runtime_design, capability_contract))
+    errors.extend(_validate_sandbox_dependency_separation(plan, capability_contract))
     expected_nodes = {item.impl_id for item in capability_contract.package_nodes_to_generate}
     expected_nodes.update(item.impl_id for item in runtime_design.package_nodes_to_generate)
     actual_nodes = {item.impl_id for item in plan.package_nodes}
     missing_nodes = sorted(expected_nodes.difference(actual_nodes))
     if missing_nodes:
         errors.append("package build plan missing package node implementations: " + ", ".join(missing_nodes))
-    expected_tools = {
-        item.tool_id
-        for item in capability_contract.tool_specs_to_generate
-        if item.source == "package_generated"
-    }
+    if tool_manufacturing is not None:
+        expected_tools = {
+            item.tool_id
+            for item in tool_manufacturing.source_decisions
+            if item.source == "package_generated"
+        }
+    else:
+        expected_tools = {
+            item.tool_id
+            for item in capability_contract.tool_specs_to_generate
+            if item.source == "package_generated"
+        }
     actual_tools = {item.tool_id for item in plan.package_tools}
     missing_tools = sorted(expected_tools.difference(actual_tools))
     if missing_tools:
@@ -622,6 +672,16 @@ def _validate_plan_alignment(
                 f"prompt template {prompt.prompt_id} declares variables without a Kernel data source: "
                 + ", ".join(unknown_variables)
             )
+    resource_values = _resource_values(capability_contract)
+    for tool in plan.package_tools:
+        for local_name, selector in tool.resources.items():
+            try:
+                _resolve_resource_selector(resource_values, selector)
+            except KeyError:
+                errors.append(
+                    f"package tool {tool.tool_id} resource mapping {local_name} references unknown resource selector: "
+                    f"{selector}"
+                )
     expected_structured_nodes = {item.produced_by_node for item in runtime_design.structured_outputs}
     actual_structured_nodes = {item.node_id for item in plan.structured_outputs}
     missing_structured = sorted(expected_structured_nodes.difference(actual_structured_nodes))
@@ -907,6 +967,37 @@ def _merge_generated_dependencies(
     return merged
 
 
+def _merge_resource_descriptors(
+    *,
+    contracts: dict[str, dict[str, Any]],
+    capability_contract: CapabilityContractOutput,
+) -> dict[str, dict[str, Any]]:
+    merged = json.loads(json.dumps(contracts, ensure_ascii=False))
+    resources_contract = merged.get("resources")
+    if not isinstance(resources_contract, dict):
+        raise PackageBuildError("resources contract is required before package materialization")
+    config = resources_contract.get("config")
+    if not isinstance(config, dict):
+        config = {}
+        resources_contract["config"] = config
+    descriptors = [
+        {
+            "resource_id": item.resource_id,
+            "description": item.description,
+            "required": item.required,
+            "value_schema": item.value_schema,
+            "default_value": item.default_value,
+            "secret_fields": item.secret_fields,
+            "used_by": item.used_by,
+            "sandbox_access_expectation": item.sandbox_access_expectation,
+        }
+        for item in capability_contract.resources_required
+    ]
+    config["resource_descriptors"] = descriptors
+    config.setdefault("resources_path", "resources.json")
+    return merged
+
+
 def _contract_dependency_list(config: dict[str, Any], key: str) -> list[str]:
     raw = config.get(key, [])
     if raw is None:
@@ -953,16 +1044,265 @@ def _normalized_write_target(
 
 
 def _resource_values(capability_contract: CapabilityContractOutput) -> dict[str, Any]:
-    return {
-        item.resource_id: {
-            "description": item.description,
-            "required": item.required,
-            "expected_shape": item.expected_shape,
-            "sandbox_access_expectation": item.sandbox_access_expectation,
-            "used_by": item.used_by,
+    values: dict[str, Any] = {}
+    for item in capability_contract.resources_required:
+        values[item.resource_id] = _resource_default_value(item)
+    return values
+
+
+def _resource_default_value(item) -> Any:
+    if item.value_schema:
+        value = _empty_value_from_json_schema(item.value_schema)
+        if item.default_value:
+            value = _deep_merge_json_values(value, item.default_value)
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    if item.default_value:
+        return json.loads(json.dumps(item.default_value, ensure_ascii=False))
+    return {}
+
+
+def _deep_merge_json_values(base: Any, override: Any) -> Any:
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[str(key)] = _deep_merge_json_values(merged.get(str(key)), value)
+        return merged
+    return json.loads(json.dumps(override, ensure_ascii=False))
+
+
+def _validate_resource_contract_semantics(capability_contract: CapabilityContractOutput) -> list[str]:
+    errors: list[str] = []
+    seen: set[str] = set()
+    for item in capability_contract.resources_required:
+        if item.resource_id in seen:
+            errors.append(f"resource requirement duplicated resource_id: {item.resource_id}")
+            continue
+        seen.add(item.resource_id)
+        if item.value_schema:
+            try:
+                Draft202012Validator.check_schema(item.value_schema)
+            except Exception as exc:
+                errors.append(f"resource {item.resource_id} value_schema is not a valid JSON Schema: {exc}")
+                continue
+            value = _resource_default_value(item)
+            try:
+                Draft202012Validator(item.value_schema).validate(value)
+            except Exception as exc:
+                errors.append(
+                    f"resource {item.resource_id} default/runtime value does not satisfy value_schema: {exc.message}"
+                )
+        for field in item.secret_fields:
+            if not _resource_schema_contains_path(item.value_schema, field):
+                errors.append(
+                    f"resource {item.resource_id} secret field is not declared in value_schema: {field}"
+                )
+    return errors
+
+
+def _validate_materialized_resource_files(resources_payload: dict[str, Any], resources_contract: dict[str, Any]) -> None:
+    values = resources_payload.get("resources")
+    if not isinstance(values, dict):
+        raise ValueError("resources.json must contain object field resources")
+    config = resources_contract.get("config") if isinstance(resources_contract.get("config"), dict) else {}
+    descriptors = config.get("resource_descriptors") if isinstance(config, dict) else []
+    if not isinstance(descriptors, list):
+        raise ValueError("resources contract config.resource_descriptors must be a list")
+    descriptor_ids: set[str] = set()
+    for descriptor in descriptors:
+        if not isinstance(descriptor, dict):
+            raise ValueError("resources contract descriptors must be objects")
+        resource_id = str(descriptor.get("resource_id") or "").strip()
+        if not resource_id:
+            raise ValueError("resources contract descriptor resource_id must not be empty")
+        descriptor_ids.add(resource_id)
+        if resource_id not in values:
+            raise ValueError(f"resources.json missing value for descriptor: {resource_id}")
+        value_schema = descriptor.get("value_schema")
+        if isinstance(value_schema, dict) and value_schema:
+            Draft202012Validator.check_schema(value_schema)
+            Draft202012Validator(value_schema).validate(values[resource_id])
+    extra_values = sorted(set(values).difference(descriptor_ids))
+    if extra_values:
+        raise ValueError("resources.json contains values without descriptors: " + ", ".join(extra_values))
+
+
+def _resource_schema_contains_path(schema: dict[str, Any], selector: str) -> bool:
+    if not selector:
+        return False
+    current: Any = schema
+    for part in selector.split("."):
+        if not isinstance(current, dict):
+            return False
+        properties = current.get("properties")
+        if not isinstance(properties, dict) or part not in properties:
+            return False
+        current = properties[part]
+    return True
+
+
+def _validate_state_resource_separation(
+    runtime_design: RuntimeDesignOutput,
+    capability_contract: CapabilityContractOutput,
+) -> list[str]:
+    resource_fields = _resource_top_level_fields(capability_contract)
+    if not resource_fields:
+        return []
+    errors: list[str] = []
+    for namespace in runtime_design.state_namespaces:
+        overlapping = sorted(set(namespace.initial_shape).intersection(resource_fields))
+        if overlapping:
+            errors.append(
+                "package_state namespace "
+                f"{namespace.namespace} duplicates runtime resource fields: {', '.join(overlapping)}. "
+                "Runtime configuration must stay in resources.json/resources contract; package_state should store "
+                "business state such as confirmations, progress, and derived results."
+            )
+    return errors
+
+
+def _resource_top_level_fields(capability_contract: CapabilityContractOutput) -> set[str]:
+    fields: set[str] = set()
+    for item in capability_contract.resources_required:
+        schema_properties = item.value_schema.get("properties") if isinstance(item.value_schema, dict) else None
+        if isinstance(schema_properties, dict):
+            fields.update(str(key) for key in schema_properties)
+        if isinstance(item.default_value, dict):
+            fields.update(str(key) for key in item.default_value)
+    return fields
+
+
+def _validate_sandbox_dependency_separation(
+    plan: PackageBuildPlan,
+    capability_contract: CapabilityContractOutput,
+) -> list[str]:
+    dependency_aliases = _declared_dependency_aliases(plan, capability_contract)
+    if not dependency_aliases:
+        return []
+    errors: list[str] = []
+    for item in capability_contract.sandbox_requirements:
+        for service in item.services_required:
+            normalized = _dependency_alias(service)
+            if normalized in dependency_aliases:
+                errors.append(
+                    f"sandbox requirement {item.requirement_id} lists dependency-like service {service}; "
+                    "Python packages, system packages, and binaries must be declared only in "
+                    "contracts/dependencies.json, not sandbox services."
+                )
+    return errors
+
+
+def _validate_materialized_sandbox_dependency_boundary(
+    sandbox_contract: dict[str, Any],
+    dependencies_contract: dict[str, Any],
+) -> None:
+    config = dependencies_contract.get("config") if isinstance(dependencies_contract.get("config"), dict) else {}
+    dependency_aliases: set[str] = set()
+    if isinstance(config, dict):
+        for requirement in _contract_dependency_list(config, "python_requirements"):
+            dependency_aliases.update(_python_requirement_aliases(requirement))
+        for key in ("system_packages", "system_binaries"):
+            for dependency in _contract_dependency_list(config, key):
+                dependency_aliases.update(_dependency_aliases(dependency))
+    if not dependency_aliases:
+        return
+    services = sandbox_contract.get("services", [])
+    if not isinstance(services, list):
+        raise ValueError("sandbox_contract.services must be a list")
+    for service in services:
+        if not isinstance(service, dict):
+            raise ValueError("sandbox_contract.services items must be objects")
+        service_id = str(service.get("service_id") or "").strip()
+        endpoint = str(service.get("endpoint") or "").strip()
+        for value in (service_id, endpoint):
+            if _dependency_alias(value) in dependency_aliases:
+                raise ValueError(
+                    f"sandbox service {service_id or endpoint} duplicates a declared dependency; "
+                    "dependencies belong in contracts/dependencies.json, while sandbox services are external endpoints"
+                )
+
+
+def _declared_dependency_aliases(
+    plan: PackageBuildPlan,
+    capability_contract: CapabilityContractOutput,
+) -> set[str]:
+    aliases: set[str] = set()
+    dependencies = capability_contract.contract_drafts.get("dependencies")
+    if dependencies is not None and isinstance(dependencies.config, dict):
+        for requirement in _contract_dependency_list(dependencies.config, "python_requirements"):
+            aliases.update(_python_requirement_aliases(requirement))
+        for key in ("system_packages", "system_binaries"):
+            for dependency in _contract_dependency_list(dependencies.config, key):
+                aliases.update(_dependency_aliases(dependency))
+    for requirement in [
+        *[item for node in plan.package_nodes for item in node.python_requirements],
+        *[item for tool in plan.package_tools for item in tool.python_requirements],
+    ]:
+        aliases.update(_python_requirement_aliases(requirement))
+    for dependency in [
+        *[item for node in plan.package_nodes for item in node.system_packages],
+        *[item for node in plan.package_nodes for item in node.system_binaries],
+        *[item for tool in plan.package_tools for item in tool.system_packages],
+        *[item for tool in plan.package_tools for item in tool.system_binaries],
+    ]:
+        aliases.update(_dependency_aliases(dependency))
+    return aliases
+
+
+def _python_requirement_aliases(requirement: str) -> set[str]:
+    try:
+        from packaging.requirements import Requirement
+
+        name = Requirement(requirement).name
+    except Exception:
+        name = requirement
+    return _dependency_aliases(name)
+
+
+def _dependency_aliases(value: str) -> set[str]:
+    alias = _dependency_alias(value)
+    aliases = {alias}
+    for prefix in ("python", "py", "pip", "apt", "bin", "binary", "system"):
+        aliases.add(f"{prefix}_{alias}")
+    return aliases
+
+
+def _dependency_alias(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+
+
+def _empty_value_from_json_schema(schema: dict[str, Any]) -> Any:
+    if not isinstance(schema, dict):
+        return {}
+    if "default" in schema:
+        return json.loads(json.dumps(schema["default"], ensure_ascii=False))
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        schema_type = next((item for item in schema_type if item != "null"), schema_type[0] if schema_type else None)
+    if schema_type == "object":
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        return {
+            str(key): _empty_value_from_json_schema(value)
+            for key, value in properties.items()
+            if isinstance(value, dict)
         }
-        for item in capability_contract.resources_required
-    }
+    if schema_type == "array":
+        return []
+    if schema_type == "string":
+        return ""
+    if schema_type in {"integer", "number"}:
+        return 0
+    if schema_type == "boolean":
+        return False
+    return {}
+
+
+def _resolve_resource_selector(resources: dict[str, Any], selector: str) -> Any:
+    current: Any = resources
+    for part in selector.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(selector)
+        current = current[part]
+    return current
 
 
 def _sandbox_contract(capability_contract: CapabilityContractOutput) -> dict[str, Any]:
@@ -1006,13 +1346,17 @@ def _state_schema(runtime_design: RuntimeDesignOutput, *, physical_namespace: st
         return {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "additionalProperties": True,
+            "additionalProperties": False,
         }
     if len(logical) == 1 and logical[0].namespace == physical_namespace:
         return {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "additionalProperties": True,
+            "properties": {
+                key: _json_schema_for_value(value)
+                for key, value in logical[0].initial_shape.items()
+            },
+            "additionalProperties": False,
             "description": logical[0].purpose,
         }
     return {
@@ -1021,12 +1365,16 @@ def _state_schema(runtime_design: RuntimeDesignOutput, *, physical_namespace: st
         "properties": {
             item.namespace: {
                 "type": "object",
-                "additionalProperties": True,
+                "properties": {
+                    key: _json_schema_for_value(value)
+                    for key, value in item.initial_shape.items()
+                },
+                "additionalProperties": False,
                 "description": item.purpose,
             }
             for item in logical
         },
-        "additionalProperties": True,
+        "additionalProperties": False,
     }
 
 
@@ -1037,6 +1385,27 @@ def _state_initial(runtime_design: RuntimeDesignOutput, *, physical_namespace: s
     if len(logical) == 1 and logical[0].namespace == physical_namespace:
         return dict(logical[0].initial_shape)
     return {item.namespace: dict(item.initial_shape) for item in logical}
+
+
+def _json_schema_for_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {
+            "type": "object",
+            "properties": {str(key): _json_schema_for_value(item) for key, item in value.items()},
+            "additionalProperties": False,
+        }
+    if isinstance(value, list):
+        item_schema = _json_schema_for_value(value[0]) if value else {}
+        return {"type": "array", "items": item_schema}
+    if isinstance(value, bool):
+        return {"type": "boolean"}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"type": "integer"}
+    if isinstance(value, float):
+        return {"type": "number"}
+    if value is None:
+        return {"type": ["null", "string", "number", "boolean", "object", "array"]}
+    return {"type": "string"}
 
 
 def _package_node_manifest(node) -> dict[str, Any]:
@@ -1067,6 +1436,86 @@ def _tool_spec(tool) -> ToolSpec:
         risk_evaluator=ToolRiskEvaluatorConfig(),
         concurrent=tool.concurrent,
     )
+
+
+def _materialize_inherited_extensions(
+    *,
+    temp_root: Path,
+    materialized: list[PackageBuildMaterializedFile],
+    inherited_extensions: list[InheritedExtensionArtifact],
+) -> None:
+    if not inherited_extensions:
+        return
+    mcp_servers = [item.config for item in inherited_extensions if item.source == "mcp"]
+    skills = [item for item in inherited_extensions if item.source == "skill"]
+    if mcp_servers:
+        _write_json_file(
+            temp_root=temp_root,
+            relative_path="extensions/mcp_servers.json",
+            payload={"version": "mcp_servers.v0", "servers": _dedupe_extension_configs(mcp_servers, key="server_id")},
+            generation_mode="system_generated",
+            source="inherited_mcp_extensions",
+            materialized=materialized,
+        )
+    if skills:
+        skill_configs = []
+        for item in skills:
+            skill_configs.append(dict(item.config))
+            source_path = Path(str(item.source_path or "")).expanduser()
+            if not source_path.is_dir():
+                raise PackageBuildError(f"inherited skill source path does not exist: {item.extension_id}")
+            _copy_extension_tree(
+                temp_root=temp_root,
+                source_root=source_path.resolve(),
+                relative_target=f"extensions/skills/{_safe_file_id(item.extension_id)}",
+                source=f"inherited_skill:{item.extension_id}",
+                materialized=materialized,
+            )
+        _write_json_file(
+            temp_root=temp_root,
+            relative_path="extensions/enabled_skills.json",
+            payload={"version": "enabled_skills.v0", "skills": _dedupe_extension_configs(skill_configs, key="skill_id")},
+            generation_mode="system_generated",
+            source="inherited_skill_extensions",
+            materialized=materialized,
+        )
+
+
+def _dedupe_extension_configs(configs: list[dict[str, Any]], *, key: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for config in configs:
+        item_id = str(config.get(key) or "").strip()
+        if not item_id or item_id in seen:
+            continue
+        result.append(config)
+        seen.add(item_id)
+    return result
+
+
+def _copy_extension_tree(
+    *,
+    temp_root: Path,
+    source_root: Path,
+    relative_target: str,
+    source: str,
+    materialized: list[PackageBuildMaterializedFile],
+) -> None:
+    for path in sorted(item for item in source_root.rglob("*") if item.is_file()):
+        relative = path.relative_to(source_root)
+        target = _safe_target(temp_root, str(Path(relative_target) / relative))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+        suffix = target.suffix.lower()
+        file_type = "json" if suffix == ".json" else "markdown" if suffix == ".md" else "python" if suffix == ".py" else "text"
+        _record_file(
+            temp_root=temp_root,
+            target=target,
+            file_type=file_type,
+            generation_mode="system_generated",
+            source=source,
+            materialized=materialized,
+        )
 
 
 def _write_json_file(

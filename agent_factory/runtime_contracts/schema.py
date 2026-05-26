@@ -411,10 +411,32 @@ class RenderContract(BaseModel):
     config: RenderContractConfig = Field(default_factory=RenderContractConfig)
 
 
+class ResourceDescriptor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    description: str = ""
+    required: bool = True
+    value_schema: dict[str, Any] = Field(default_factory=dict)
+    default_value: dict[str, Any] = Field(default_factory=dict)
+    secret_fields: list[str] = Field(default_factory=list)
+    used_by: list[str] = Field(default_factory=list)
+    sandbox_access_expectation: str = ""
+
+    @field_validator("resource_id")
+    @classmethod
+    def _resource_id_is_clean(cls, value: str) -> str:
+        resource_id = value.strip()
+        if not resource_id:
+            raise ValueError("resource_id must not be empty")
+        return resource_id
+
+
 class ResourcesContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resources_path: str = "resources.json"
+    resource_descriptors: list[ResourceDescriptor] = Field(default_factory=list)
 
     @field_validator("resources_path")
     @classmethod

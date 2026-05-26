@@ -68,6 +68,8 @@ def capability_contract_catalog_payload(runtime_design: RuntimeDesignOutput) -> 
             "scheduler": "Scheduled script/tool execution uses scheduler runtime and ToolExecutionGateway.",
             "state": "State contract must match runtime_design state_namespaces and writable nodes.",
             "state_namespace_merge": "If Runtime Design declares multiple logical state namespaces, Capability Contract maps them into one physical state contract namespace and records the logical sections in capability_plans.state.what.",
+            "resource_state_separation": "Runtime resources are the only source of runtime configuration values. Package state must not duplicate resource fields; it stores confirmations, progress, derived results, and other business state.",
+            "sandbox_dependency_separation": "Sandbox services are external endpoints only. Python packages, system packages, and binaries belong exclusively in the dependencies contract.",
         },
     }
 
@@ -284,22 +286,27 @@ def _validate_pattern_slot_alignment(
         if draft.enabled
     }
     for slot in runtime_design.pattern_slots:
+        binding = slot.binding
         if slot.slot_type == "tool":
             if "tools" not in enabled_contracts:
                 errors.append(f"pattern slot {slot.slot_id} requires tools contract")
             if slot.source == "package_generated":
-                if not slot.tool_id:
+                expected_tool_ids = list(getattr(binding, "generated_tool_ids", []) or getattr(binding, "tool_ids", []))
+                if not expected_tool_ids:
                     errors.append(f"package_generated tool slot {slot.slot_id} must set tool_id")
-                elif slot.tool_id not in generated_tools:
-                    errors.append(f"tool slot {slot.slot_id} missing generated tool plan: {slot.tool_id}")
+                for tool_id in expected_tool_ids:
+                    if tool_id not in generated_tools:
+                        errors.append(f"tool slot {slot.slot_id} missing generated tool plan: {tool_id}")
         if slot.slot_type == "resource":
             if "resources" not in enabled_contracts:
                 errors.append(f"pattern slot {slot.slot_id} requires resources contract")
-            if slot.resource_id and slot.resource_id not in resources:
-                errors.append(f"resource slot {slot.slot_id} missing resource requirement: {slot.resource_id}")
+            resource_id = str(getattr(binding, "resource_id", "") or "")
+            if resource_id and resource_id not in resources:
+                errors.append(f"resource slot {slot.slot_id} missing resource requirement: {resource_id}")
         if slot.slot_type == "prompt":
-            if slot.prompt_id and slot.prompt_id not in prompts:
-                errors.append(f"prompt slot {slot.slot_id} missing prompt generation plan: {slot.prompt_id}")
+            prompt_id = str(getattr(binding, "prompt_id", "") or "")
+            if prompt_id and prompt_id not in prompts:
+                errors.append(f"prompt slot {slot.slot_id} missing prompt generation plan: {prompt_id}")
         if slot.slot_type == "scheduler" and "scheduler" not in enabled_contracts:
             errors.append(f"scheduler slot {slot.slot_id} requires scheduler contract")
         if slot.slot_type == "artifact" and "artifact" not in enabled_contracts:

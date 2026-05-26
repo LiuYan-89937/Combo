@@ -44,9 +44,9 @@ def runtime_kernel_catalog_payload() -> dict[str, Any]:
         ],
         "pattern_selection_contract": {
             "design_mode": "Always reuse_pattern.",
-            "topology": "Do not output edges, termination, or custom pattern YAML. Preset pattern owns graph semantics.",
+            "topology": "Runtime Design schema does not include edges, interrupts, termination, or custom pattern YAML. Preset pattern owns graph semantics.",
             "nodes": "Only describe existing selected pattern nodes that need prompt/tool/state/context strategy.",
-            "slots": "Use pattern_slots to bind catalog slots to tools, resources, prompts, scheduler, state, artifacts, or package-generated code.",
+            "slots": "Use pattern_slots with typed binding objects. Slot ids and slot types must match the selected pattern catalog exactly.",
         },
         "allowed_node_types": sorted(NODE_TYPES),
         "allowed_node_impls": sorted(NODE_IMPLEMENTATION_IDS),
@@ -73,6 +73,7 @@ def validate_runtime_design(design: RuntimeDesignOutput) -> RuntimeDesignValidat
 
     selected_pattern_summary: dict[str, object] = {}
     selected_pattern_nodes: dict[str, Any] = {}
+    selected_pattern_slots: dict[str, Any] = {}
     reference_node_ids: set[str] = set()
     try:
         selected = registry.get(design.selected_pattern_id)
@@ -80,14 +81,10 @@ def validate_runtime_design(design: RuntimeDesignOutput) -> RuntimeDesignValidat
             errors.append(f"selected_pattern_id must reference a top-level pattern: {selected.pattern_id}")
         selected_pattern_summary = registry.get_structure_summary(selected.pattern_id).model_dump(mode="json")
         selected_pattern_nodes = {node.id: node for node in selected.nodes}
+        selected_pattern_slots = {slot.slot_id: slot for slot in selected.slots}
         reference_node_ids = set(selected_pattern_nodes)
     except Exception as exc:
         errors.append(f"unknown selected_pattern_id: {design.selected_pattern_id} ({exc})")
-
-    if design.edges:
-        errors.append("runtime design must not output edges; selected preset pattern owns graph topology")
-    if design.termination.success_nodes or design.termination.failure_nodes:
-        errors.append("runtime design must not output termination; selected preset pattern owns termination")
 
     package_impl_ids = {item.impl_id for item in design.package_nodes_to_generate}
     package_impl_ids.update(
@@ -140,19 +137,36 @@ def validate_runtime_design(design: RuntimeDesignOutput) -> RuntimeDesignValidat
     ):
         errors.append(f"selected pattern {design.selected_pattern_id} has no operational.tool_call node")
 
+    emitted_slot_ids = {slot.slot_id for slot in design.pattern_slots}
+    for slot_id, catalog_slot in selected_pattern_slots.items():
+        if bool(catalog_slot.required) and slot_id not in emitted_slot_ids:
+            errors.append(f"required pattern slot is missing from runtime design: {slot_id}")
+    unknown_slot_ids = sorted(emitted_slot_ids.difference(selected_pattern_slots))
+    if unknown_slot_ids:
+        errors.append("runtime design emitted slots outside selected pattern: " + ", ".join(unknown_slot_ids))
+
     for slot in design.pattern_slots:
+        catalog_slot = selected_pattern_slots.get(slot.slot_id)
+        if catalog_slot is not None and slot.slot_type != catalog_slot.slot_type:
+            errors.append(
+                f"pattern slot {slot.slot_id} type must match selected pattern: "
+                f"{catalog_slot.slot_type}, got {slot.slot_type}"
+            )
         unknown_nodes = sorted(set(slot.required_by_nodes).difference(reference_node_ids))
         if unknown_nodes:
             errors.append(f"pattern slot {slot.slot_id} references unknown nodes: " + ", ".join(unknown_nodes))
-        if slot.tool_id and slot.slot_type != "tool":
-            errors.append(f"pattern slot {slot.slot_id} sets tool_id but slot_type is not tool")
-        if slot.resource_id and slot.slot_type != "resource":
-            errors.append(f"pattern slot {slot.slot_id} sets resource_id but slot_type is not resource")
-        if slot.prompt_id and slot.slot_type != "prompt":
-            errors.append(f"pattern slot {slot.slot_id} sets prompt_id but slot_type is not prompt")
+        catalog_node_id = getattr(catalog_slot, "node_id", None) if catalog_slot is not None else None
+        if catalog_node_id and slot.required_by_nodes and catalog_node_id not in slot.required_by_nodes:
+            errors.append(f"pattern slot {slot.slot_id} must include catalog node {catalog_node_id}")
 
     if design.state_namespaces and "state" not in design.required_contracts:
         errors.append("state_namespaces requires state contract")
+    namespace_counts: dict[str, int] = {}
+    for namespace in design.state_namespaces:
+        namespace_counts[namespace.namespace] = namespace_counts.get(namespace.namespace, 0) + 1
+    duplicate_namespaces = sorted(namespace for namespace, count in namespace_counts.items() if count > 1)
+    if duplicate_namespaces:
+        errors.append("duplicate state namespaces: " + ", ".join(duplicate_namespaces))
     if design.package_nodes_to_generate and "node_provider" not in design.required_contracts:
         errors.append("package_nodes_to_generate requires node_provider contract")
     if design.structured_outputs and "model" not in design.required_contracts:

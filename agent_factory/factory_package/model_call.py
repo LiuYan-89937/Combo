@@ -8,7 +8,7 @@ from langgraph.config import get_stream_writer
 
 from agent_factory.context_system.factory import inject_factory_prompt_context
 from agent_factory.factory_package.prompt_context import prompt_context_values
-from agent_factory.models import get_main_model, get_main_model_settings
+from agent_factory.models import get_main_model
 from agent_factory.prompts import PromptId, get_prompt
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 
@@ -41,15 +41,11 @@ def call_structured_model(
     if "output_json_schema" not in values:
         raise FactoryModelCallError("structured model calls must include output_json_schema")
     model = get_main_model()
-    settings = get_main_model_settings()
     if model is None:
         raise FactoryModelCallError("main model is not configured")
     prompt_value = get_prompt(prompt_id).invoke(prompt_values(stage_id, values))
     messages = prompt_value.to_messages()
-    configured_model = model
-    if settings.max_tokens is not None:
-        configured_model = configured_model.bind(max_tokens=settings.max_tokens)
-    service = ModelOperationService(role="main", model=configured_model)
+    service = ModelOperationService(role="main", model=model)
     try:
         result = service.structured_json(
             output_model=output_model,
@@ -79,16 +75,12 @@ def call_text_model(
 ) -> str:
     span_id = uuid.uuid4().hex
     model = get_main_model()
-    settings = get_main_model_settings()
     if model is None:
         raise FactoryModelCallError("main model is not configured")
     try:
         emit_model_activity(model_activity_started(prompt_id=prompt_id, call_kind="text", span_id=span_id))
         prompt_value = get_prompt(prompt_id).invoke(prompt_values(stage_id, values))
-        configured_model = model
-        if settings.max_tokens is not None:
-            configured_model = configured_model.bind(max_tokens=settings.max_tokens)
-        response = configured_model.invoke(prompt_value)
+        response = model.invoke(prompt_value)
         content = getattr(response, "content", "")
         text = content if isinstance(content, str) else str(content)
         if not text.strip():
