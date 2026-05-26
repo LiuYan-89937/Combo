@@ -24,6 +24,8 @@ class FactoryPackageState(TypedDict, total=False):
     runtime_design_validation: dict[str, Any]
     capability_contract: dict[str, Any]
     capability_contract_validation: dict[str, Any]
+    external_resource_request: dict[str, Any]
+    user_external_resource_answers: list[dict[str, Any]]
     package_build_plan: dict[str, Any]
     package_build_report: dict[str, Any]
     errors: Annotated[list[dict[str, Any]], operator.add]

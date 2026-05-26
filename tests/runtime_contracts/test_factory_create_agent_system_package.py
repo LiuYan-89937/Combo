@@ -30,19 +30,15 @@ from agent_factory.factory_package.schemas import (
     ProductBriefOutput,
     RuntimeDesignOutput,
     ToolDesign,
-    ToolBindingSmokePlan,
-    ToolImplementationDraft,
     ToolManufacturingOutput,
     ToolSourceDecision,
-    ToolSpecDraft,
-    ToolUnitTestPlan,
+    ToolTrialPlan,
 )
 from agent_factory.factory_package.nodes import factory_manufacturing_node_provider
 from agent_factory.factory_package.tool_manufacturing import (
     approved_package_tool_plans,
     default_tool_manufacturing_output,
     resolve_inherited_extensions,
-    run_generated_tool_pipeline,
     validate_tool_manufacturing_output,
 )
 from agent_factory.factory_package import tool_manufacturing as tool_manufacturing_module
@@ -228,18 +224,20 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                         "code": "def run(arguments: dict, resources: dict) -> dict:\n    return {'status': 'delivered'}\n",
                     }
                 ],
-                "unit_tests": [
+                "trial_plans": [
                     {
                         "tool_id": "deliver_report",
-                        "pytest_code": "def test_placeholder():\n    assert True\n",
-                    }
-                ],
-                "binding_smokes": [
-                    {
-                        "tool_id": "deliver_report",
-                        "user_prompt": "Call deliver_report with a short report.",
-                        "expected_tool_id": "deliver_report",
-                        "arguments": {"report": "ok"},
+                        "scenarios": [
+                            {
+                                "scenario_id": "success",
+                                "user_prompt": "Call deliver_report with report='ok'.",
+                                "expected_tool_id": "deliver_report",
+                                "arguments": {"report": "ok"},
+                                "resources": {},
+                                "expected_observation_status": "completed",
+                                "expected_output_keys": ["status"],
+                            }
+                        ],
                     }
                 ],
                 "approved_package_tools": [
@@ -283,69 +281,38 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
 
         self.assertEqual([item.tool_id for item in merged.package_tools], ["deliver_report"])
 
-    def test_tool_manufacturing_rejects_model_owned_tool_imports_in_pytest(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            checks, artifact = run_generated_tool_pipeline(
-                factory_run_id="unit_harness_run",
-                tool_id="deliver_report",
-                design=ToolDesign.model_validate(
-                    {
-                        "tool_id": "deliver_report",
-                        "purpose": "Return report delivery status.",
-                        "input_semantics": "Receives report text.",
-                        "output_semantics": "Returns delivery status.",
-                        "failure_semantics": "Returns schema-valid failure details.",
-                    }
-                ),
-                spec=ToolSpecDraft.model_validate(
-                    {
-                        "tool_id": "deliver_report",
-                        "description": "Return report delivery status.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"report": {"type": "string"}},
-                            "required": ["report"],
-                            "additionalProperties": False,
-                        },
-                        "output_schema": {
-                            "type": "object",
-                            "properties": {"status": {"type": "string"}},
-                            "required": ["status"],
-                            "additionalProperties": False,
-                        },
-                        "risk_level": "low",
-                    }
-                ),
-                implementation=ToolImplementationDraft.model_validate(
-                    {
-                        "tool_id": "deliver_report",
-                        "code": "def run(arguments: dict, resources: dict) -> dict:\n    return {'status': 'delivered'}\n",
-                    }
-                ),
-                unit_test=ToolUnitTestPlan.model_validate(
-                    {
-                        "tool_id": "deliver_report",
-                        "pytest_code": "from deliver_report import run\n\ndef test_bad_import():\n    assert run({'report': 'x'}, {})['status'] == 'delivered'\n",
-                    }
-                ),
-                binding_smoke=ToolBindingSmokePlan.model_validate(
-                    {
-                        "tool_id": "deliver_report",
-                        "user_prompt": "Call deliver_report with a short report.",
-                        "expected_tool_id": "deliver_report",
-                        "arguments": {"report": "ok"},
-                    }
-                ),
-                test_env_root=Path(temp_dir) / "tool_test_env",
+    def test_tool_trial_plan_rejects_model_owned_test_code(self) -> None:
+        with self.assertRaises(Exception):
+            ToolTrialPlan.model_validate(
+                {
+                    "tool_id": "deliver_report",
+                    "pytest_code": "from deliver_report import run\n",
+                }
             )
 
-        self.assertIsNone(artifact)
-        failed = [item for item in checks if item.status == "failed"]
-        self.assertEqual(len(failed), 1)
-        self.assertEqual(failed[0].name, "deliver_report.unit_test_harness")
-        self.assertIsNotNone(failed[0].failure_summary)
-        self.assertEqual(failed[0].failure_summary.category, "test_harness_violation")
-        self.assertIn("run_tool", failed[0].message)
+    def test_tool_trial_plan_accepts_model_bound_scenario(self) -> None:
+        plan = ToolTrialPlan.model_validate(
+            {
+                "tool_id": "fetch_market_data",
+                "scenarios": [
+                    {
+                        "scenario_id": "timeout",
+                        "user_prompt": "Call fetch_market_data for 000001.SS and summarize the result.",
+                        "expected_tool_id": "fetch_market_data",
+                        "arguments": {"symbols": ["000001.SS"]},
+                        "resources": {"market_data_api_key": "test"},
+                        "expected_observation_status": "completed",
+                        "expected_output_keys": ["status"],
+                        "expected_output_subset": {"status": "error", "retryable": True},
+                        "success_criteria": ["The model emits fetch_market_data as a tool call."],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(plan.scenarios[0].expected_tool_id, "fetch_market_data")
+        self.assertEqual(plan.scenarios[0].expected_output_keys, ["status"])
+        self.assertEqual(plan.scenarios[0].expected_output_subset, {"status": "error", "retryable": True})
 
     def test_tool_manufacturing_resolves_enabled_factory_skill_for_inheritance(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -589,6 +556,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 "tool_requirement",
                 "source_decision",
                 "resource_requirements",
+                "user_external_resources",
                 "validation_feedback",
                 "output_json_schema",
             },
@@ -597,6 +565,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 "source_decision",
                 "tool_design",
                 "resource_requirements",
+                "user_external_resources",
                 "validation_feedback",
                 "output_json_schema",
             },

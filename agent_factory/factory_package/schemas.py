@@ -821,12 +821,46 @@ class ToolImplementationDraft(BaseModel):
         return text
 
 
-class ToolUnitTestPlan(BaseModel):
+class ToolTrialScenario(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: str
+    user_prompt: str
+    expected_tool_id: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    resources: dict[str, Any] = Field(default_factory=dict)
+    expected_observation_status: Literal[
+        "completed",
+        "invalid_arguments",
+        "invalid_output",
+        "execution_failed",
+        "denied",
+        "revision_requested",
+    ] = "completed"
+    expected_output_keys: list[str] = Field(default_factory=list)
+    expected_output_subset: dict[str, Any] = Field(default_factory=dict)
+    expected_final_answer_contains: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+
+    @field_validator("expected_tool_id")
+    @classmethod
+    def _tool_id_is_snake_case(cls, value: str) -> str:
+        return PackageToolBuildPlan._tool_id_is_snake_case(value)
+
+    @field_validator("scenario_id", "user_prompt")
+    @classmethod
+    def _scenario_text_is_non_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("scenario_id and user_prompt must not be empty")
+        return text
+
+
+class ToolTrialPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tool_id: str
-    pytest_code: str
-    fixtures: dict[str, Any] = Field(default_factory=dict)
+    scenarios: list[ToolTrialScenario] = Field(default_factory=list, min_length=1)
     expected_coverage: list[str] = Field(default_factory=list)
 
     @field_validator("tool_id")
@@ -834,36 +868,12 @@ class ToolUnitTestPlan(BaseModel):
     def _tool_id_is_snake_case(cls, value: str) -> str:
         return PackageToolBuildPlan._tool_id_is_snake_case(value)
 
-    @field_validator("pytest_code")
-    @classmethod
-    def _pytest_code_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("tool unit test pytest_code must not be empty")
-        return text
-
-
-class ToolBindingSmokePlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    user_prompt: str
-    expected_tool_id: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    resources: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("tool_id", "expected_tool_id")
-    @classmethod
-    def _tool_id_is_snake_case(cls, value: str) -> str:
-        return PackageToolBuildPlan._tool_id_is_snake_case(value)
-
-    @field_validator("user_prompt")
-    @classmethod
-    def _prompt_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("binding smoke prompt must not be empty")
-        return text
+    @model_validator(mode="after")
+    def _scenarios_target_this_tool(self) -> "ToolTrialPlan":
+        for scenario in self.scenarios:
+            if scenario.expected_tool_id != self.tool_id:
+                raise ValueError("each trial scenario expected_tool_id must match ToolTrialPlan.tool_id")
+        return self
 
 
 class ToolManufacturingFailureSummary(BaseModel):
@@ -877,9 +887,8 @@ class ToolManufacturingFailureSummary(BaseModel):
         "entrypoint_signature",
         "tool_spec",
         "dependency_convergence",
-        "unit_test_harness",
-        "unit_tests",
-        "binding_smoke",
+        "contract_smoke",
+        "model_trial",
         "manufacturing_alignment",
     ]
     category: str
@@ -926,8 +935,7 @@ class ToolManufacturingOutput(BaseModel):
     tool_designs: list[ToolDesign] = Field(default_factory=list)
     tool_specs: list[ToolSpecDraft] = Field(default_factory=list)
     implementations: list[ToolImplementationDraft] = Field(default_factory=list)
-    unit_tests: list[ToolUnitTestPlan] = Field(default_factory=list)
-    binding_smokes: list[ToolBindingSmokePlan] = Field(default_factory=list)
+    trial_plans: list[ToolTrialPlan] = Field(default_factory=list)
     approved_package_tools: list[ApprovedPackageToolArtifact] = Field(default_factory=list)
     inherited_extensions: list[InheritedExtensionArtifact] = Field(default_factory=list)
     report: ToolManufacturingReport = Field(default_factory=lambda: ToolManufacturingReport(status="valid"))

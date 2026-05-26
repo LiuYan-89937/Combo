@@ -40,7 +40,6 @@ from agent_factory.factory_package.schemas import (
     ProductBriefOutput,
     RuntimeDesignOutput,
     RuntimeDesignValidationReport,
-    ToolBindingSmokePlan,
     ToolDesign,
     ToolImplementationDraft,
     ToolManufacturingCheck,
@@ -48,7 +47,7 @@ from agent_factory.factory_package.schemas import (
     ToolManufacturingReport,
     ToolSourceDecisionOutput,
     ToolSpecDraft,
-    ToolUnitTestPlan,
+    ToolTrialPlan,
 )
 from agent_factory.factory_package.tool_manufacturing import (
     approved_package_tool_plans,
@@ -58,6 +57,7 @@ from agent_factory.factory_package.tool_manufacturing import (
     run_generated_tool_pipeline,
     tool_manufacturing_catalog_payload,
     tool_manufacturing_message,
+    unique_tool_manufacturing_errors,
 )
 from agent_factory.prompts import PromptId, output_json_schema
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
@@ -84,6 +84,8 @@ _STATE_KEYS = {
     "capability_contract_validation",
     "tool_manufacturing",
     "tool_manufacturing_report",
+    "external_resource_request",
+    "user_external_resource_answers",
     "package_build_plan",
     "package_build_report",
     "factory_response",
@@ -396,6 +398,34 @@ class FactoryToolManufacturingNode:
                 namespace_state=namespace_state,
                 message=f"Capability Contract payload is invalid: {exc}",
             )
+        resource_request = _external_resource_request(capability_contract)
+        if resource_request and not namespace_state.get("user_external_resource_answers"):
+            question = _external_resource_question(resource_request)
+            next_state = {
+                **namespace_state,
+                "current_node": TOOL_MANUFACTURING_NODE_ID,
+                "status": "tool_resource_input_required",
+                "external_resource_request": resource_request,
+                "factory_response": {"message": question},
+                "manufacturing_log": [
+                    *list(namespace_state.get("manufacturing_log") or []),
+                    {
+                        "node_id": TOOL_MANUFACTURING_NODE_ID,
+                        "status": "waiting_for_user",
+                        "message": "Tool Manufacturing requires user-provided external resources before tool trial.",
+                    },
+                ],
+            }
+            return {
+                "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
+                "conversation": {"final_answer": question},
+                "execution": {
+                    "current_node": TOOL_MANUFACTURING_NODE_ID,
+                    "finished": True,
+                    "finish_status": "completed",
+                    "route_decision": "execution.finished",
+                },
+            }
 
         output: ToolManufacturingOutput | None = None
         if not capability_contract.tool_specs_to_generate:
@@ -408,6 +438,7 @@ class FactoryToolManufacturingNode:
                     runtime_design_payload=runtime_design_payload,
                     capability_contract_payload=capability_contract_payload,
                     capability_contract=capability_contract,
+                    user_external_resources=list(namespace_state.get("user_external_resource_answers") or []),
                 )
                 output = finalize_tool_manufacturing_output(
                     factory_run_id=str(namespace_state.get("factory_run_id") or ""),
@@ -450,21 +481,22 @@ class FactoryToolManufacturingNode:
                         **check.details,
                     }
                 )
-            elif check.name.endswith(".unit_test_harness") or check.name.endswith(".unit_tests"):
+            elif check.name.endswith(".contract_smoke"):
                 context.emit_event(
                     {
-                        "event_type": "tool_unit_tests_completed",
+                        "event_type": "tool_contract_smoke_completed",
                         "status": check.status,
                         "message": check.message,
                         **check.details,
                     }
                 )
-            elif check.name.endswith(".binding_smoke"):
+            elif check.name.endswith(".model_trial"):
                 context.emit_event(
                     {
-                        "event_type": "tool_binding_smoke_completed",
+                        "event_type": "tool_model_trial_completed",
                         "status": check.status,
                         "message": check.message,
+                        **check.details,
                     }
                 )
         for tool_id in output.report.approved_tool_ids:
@@ -521,7 +553,9 @@ def _draft_tool_manufacturing_output(
     runtime_design_payload: dict[str, Any],
     capability_contract_payload: dict[str, Any],
     capability_contract: CapabilityContractOutput,
+    user_external_resources: list[dict[str, Any]],
 ) -> ToolManufacturingOutput:
+    user_external_resources_json = json.dumps(user_external_resources, ensure_ascii=False, indent=2)
     source_decisions = call_structured_model(
         stage_id=TOOL_MANUFACTURING_NODE_ID,
         prompt_id=PromptId.TOOL_SOURCE_DECISIONS_DRAFT,
@@ -530,6 +564,7 @@ def _draft_tool_manufacturing_output(
             "product_brief": json.dumps(product_brief_payload, ensure_ascii=False, indent=2),
             "runtime_design": json.dumps(runtime_design_payload, ensure_ascii=False, indent=2),
             "capability_contract": json.dumps(capability_contract_payload, ensure_ascii=False, indent=2),
+            "user_external_resources": user_external_resources_json,
             "tool_catalog": json.dumps(
                 tool_manufacturing_catalog_payload(),
                 ensure_ascii=False,
@@ -542,8 +577,7 @@ def _draft_tool_manufacturing_output(
     tool_designs: list[ToolDesign] = []
     tool_specs: list[ToolSpecDraft] = []
     implementations: list[ToolImplementationDraft] = []
-    unit_tests: list[ToolUnitTestPlan] = []
-    binding_smokes: list[ToolBindingSmokePlan] = []
+    trial_plans: list[ToolTrialPlan] = []
     approved_tools = []
     pipeline_checks: list[ToolManufacturingCheck] = []
     blocked_tool_ids: list[str] = []
@@ -558,7 +592,7 @@ def _draft_tool_manufacturing_output(
         if decision is None or decision.source != "package_generated":
             continue
         validation_feedback = "No prior validation feedback."
-        latest_parts: tuple[ToolDesign, ToolSpecDraft, ToolImplementationDraft, ToolUnitTestPlan, ToolBindingSmokePlan] | None = None
+        latest_parts: tuple[ToolDesign, ToolSpecDraft, ToolImplementationDraft, ToolTrialPlan] | None = None
         for _attempt in range(1, TOOL_MANUFACTURING_TOOL_REPAIR_ATTEMPTS + 1):
             parts = _draft_package_generated_tool_parts(
                 product_brief_payload=product_brief_payload,
@@ -568,6 +602,7 @@ def _draft_tool_manufacturing_output(
                 ),
                 decision=json.dumps(decision.model_dump(mode="json"), ensure_ascii=False, indent=2),
                 resource_requirements=resource_requirements,
+                user_external_resources=user_external_resources_json,
                 validation_feedback=validation_feedback,
             )
             latest_parts = parts
@@ -577,8 +612,7 @@ def _draft_tool_manufacturing_output(
                 design=parts[0],
                 spec=parts[1],
                 implementation=parts[2],
-                unit_test=parts[3],
-                binding_smoke=parts[4],
+                trial_plan=parts[3],
             )
             pipeline_checks.extend(checks)
             if artifact is not None:
@@ -586,12 +620,11 @@ def _draft_tool_manufacturing_output(
                 break
             validation_feedback = _tool_manufacturing_feedback_text(checks)
         if latest_parts is not None:
-            design, spec, implementation, unit_test, binding_smoke = latest_parts
+            design, spec, implementation, trial_plan = latest_parts
             tool_designs.append(design)
             tool_specs.append(spec)
             implementations.append(implementation)
-            unit_tests.append(unit_test)
-            binding_smokes.append(binding_smoke)
+            trial_plans.append(trial_plan)
         if not any(item.tool_id == requirement.tool_id for item in approved_tools):
             blocked_tool_ids.append(requirement.tool_id)
 
@@ -600,8 +633,7 @@ def _draft_tool_manufacturing_output(
         tool_designs=tool_designs,
         tool_specs=tool_specs,
         implementations=implementations,
-        unit_tests=unit_tests,
-        binding_smokes=binding_smokes,
+        trial_plans=trial_plans,
         approved_package_tools=approved_tools,
         report=ToolManufacturingReport(
             status="valid" if not blocked_tool_ids else "invalid",
@@ -609,7 +641,7 @@ def _draft_tool_manufacturing_output(
             checks=pipeline_checks,
             approved_tool_ids=[item.tool_id for item in approved_tools],
             blocked_tool_ids=blocked_tool_ids,
-            errors=[item.message for item in pipeline_checks if item.status == "failed" and item.message] if blocked_tool_ids else [],
+            errors=unique_tool_manufacturing_errors(pipeline_checks) if blocked_tool_ids else [],
         ),
         manufacturing_summary_text=source_decisions.manufacturing_summary_text,
     )
@@ -622,14 +654,16 @@ def _draft_package_generated_tool_parts(
     requirement: str,
     decision: str,
     resource_requirements: str,
+    user_external_resources: str,
     validation_feedback: str,
-) -> tuple[ToolDesign, ToolSpecDraft, ToolImplementationDraft, ToolUnitTestPlan, ToolBindingSmokePlan]:
+) -> tuple[ToolDesign, ToolSpecDraft, ToolImplementationDraft, ToolTrialPlan]:
     common = {
         "product_brief": json.dumps(product_brief_payload, ensure_ascii=False, indent=2),
         "runtime_design": json.dumps(runtime_design_payload, ensure_ascii=False, indent=2),
         "tool_requirement": requirement,
         "source_decision": decision,
         "resource_requirements": resource_requirements,
+        "user_external_resources": user_external_resources,
         "validation_feedback": validation_feedback,
     }
     design = call_structured_model(
@@ -655,35 +689,25 @@ def _draft_package_generated_tool_parts(
         values={
             "tool_design": json.dumps(design.model_dump(mode="json"), ensure_ascii=False, indent=2),
             "tool_spec": json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            "user_external_resources": user_external_resources,
             "validation_feedback": validation_feedback,
             "output_json_schema": output_json_schema(ToolImplementationDraft),
         },
     )
-    unit_test = call_structured_model(
+    trial_plan = call_structured_model(
         stage_id=TOOL_MANUFACTURING_NODE_ID,
-        prompt_id=PromptId.TOOL_UNIT_TEST_DRAFT,
-        output_model=ToolUnitTestPlan,
+        prompt_id=PromptId.TOOL_TRIAL_PLAN_DRAFT,
+        output_model=ToolTrialPlan,
         values={
             "tool_design": json.dumps(design.model_dump(mode="json"), ensure_ascii=False, indent=2),
             "tool_spec": json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2),
             "tool_implementation": json.dumps(implementation.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            "user_external_resources": user_external_resources,
             "validation_feedback": validation_feedback,
-            "output_json_schema": output_json_schema(ToolUnitTestPlan),
+            "output_json_schema": output_json_schema(ToolTrialPlan),
         },
     )
-    binding_smoke = call_structured_model(
-        stage_id=TOOL_MANUFACTURING_NODE_ID,
-        prompt_id=PromptId.TOOL_BINDING_SMOKE_DRAFT,
-        output_model=ToolBindingSmokePlan,
-        values={
-            "tool_design": json.dumps(design.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            "tool_spec": json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            "tool_implementation": json.dumps(implementation.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            "validation_feedback": validation_feedback,
-            "output_json_schema": output_json_schema(ToolBindingSmokePlan),
-        },
-    )
-    return design, spec, implementation, unit_test, binding_smoke
+    return design, spec, implementation, trial_plan
 
 
 def _tool_manufacturing_feedback_text(checks: list[ToolManufacturingCheck]) -> str:
@@ -699,7 +723,7 @@ def _tool_manufacturing_feedback_text(checks: list[ToolManufacturingCheck]) -> s
             preview = _read_validation_report_preview(report_path)
             if preview:
                 lines.append(preview)
-    return "\n".join(lines).strip() or "Previous attempt did not pass validation; regenerate a consistent tool design, implementation, tests, and smoke plan."
+    return "\n".join(lines).strip() or "Previous attempt did not pass validation; regenerate a consistent tool design, implementation, and trial plan."
 
 
 def _read_validation_report_preview(path_text: str) -> str:
@@ -857,7 +881,13 @@ def _initial_state(state: RuntimeState) -> dict[str, Any]:
     if not existing.get("factory_run_id"):
         existing["factory_run_id"] = uuid4().hex
     current_input = (state.conversation.current_user_input or "").strip()
-    if current_input:
+    if current_input and existing.get("status") == "tool_resource_input_required":
+        answers = list(existing.get("user_external_resource_answers") or [])
+        if not answers or answers[-1].get("content") != current_input:
+            answers.append({"content": current_input})
+        existing["user_external_resource_answers"] = answers
+        existing["status"] = "tool_resource_input_received"
+    elif current_input:
         existing["input_intent"] = current_input
     if current_input and not existing.get("interaction_mode"):
         existing["interaction_mode"] = "create_agent"
@@ -975,6 +1005,70 @@ def _capability_contract_log_message(report: CapabilityContractValidationReport)
         "Capability Contract passed registry validation with "
         f"{len(report.enabled_contracts)} enabled contract(s)."
     )
+
+
+def _external_resource_request(capability_contract: CapabilityContractOutput) -> dict[str, Any]:
+    requirements = []
+    for item in capability_contract.resources_required:
+        if not item.required:
+            continue
+        requirements.append(
+            {
+                "resource_id": item.resource_id,
+                "description": item.description,
+                "expected_shape": item.expected_shape,
+                "value_schema": item.value_schema,
+                "secret_fields": item.secret_fields,
+                "used_by": item.used_by,
+            }
+        )
+    sandbox_requirements = [
+        item.model_dump(mode="json")
+        for item in capability_contract.sandbox_requirements
+        if item.network_required or item.secrets_required or item.services_required
+    ]
+    if not requirements and not sandbox_requirements:
+        return {}
+    return {
+        "resources": requirements,
+        "sandbox_requirements": sandbox_requirements,
+    }
+
+
+def _external_resource_question(request: dict[str, Any]) -> str:
+    lines = [
+        "工具制造需要你先提供外部资源，我不会替你猜新闻源、行情 API、SMTP 或 secret。",
+        "",
+        "请按你希望这个 Agent 使用的真实资源回复；如果某项暂时不提供，也请明确写“暂不提供”。",
+    ]
+    resources = list(request.get("resources") or [])
+    if resources:
+        lines.extend(["", "需要确认的资源："])
+        for item in resources:
+            resource_id = item.get("resource_id") or "resource"
+            description = item.get("description") or "未描述"
+            expected_shape = item.get("expected_shape") or ""
+            secret_fields = item.get("secret_fields") or []
+            suffix = f"；secret 字段：{', '.join(secret_fields)}" if secret_fields else ""
+            shape = f"；期望结构：{expected_shape}" if expected_shape else ""
+            lines.append(f"- {resource_id}: {description}{shape}{suffix}")
+    sandbox_requirements = list(request.get("sandbox_requirements") or [])
+    if sandbox_requirements:
+        lines.extend(["", "外部连通性需求："])
+        for item in sandbox_requirements:
+            requirement_id = item.get("requirement_id") or "sandbox"
+            description = item.get("description") or "未描述"
+            lines.append(f"- {requirement_id}: {description}")
+    lines.extend(
+        [
+            "",
+            "回复示例：",
+            "news_sources: https://example.com/rss.xml",
+            "market_data_api: <你想使用的 API 或说明>",
+            "smtp: host/port/username/password 或 暂不提供",
+        ]
+    )
+    return "\n".join(lines).strip()
 
 
 def _tool_manufacturing_failed_patch(

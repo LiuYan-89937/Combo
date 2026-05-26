@@ -50,6 +50,12 @@
     "tool_manufacturing_report": {
       "type": "object"
     },
+    "external_resource_request": {
+      "type": "object"
+    },
+    "user_external_resource_answers": {
+      "type": "array"
+    },
     "package_build_plan": {
       "type": "object"
     },

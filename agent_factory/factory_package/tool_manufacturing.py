@@ -20,7 +20,6 @@ from agent_factory.factory_package.schemas import (
     CapabilityContractOutput,
     InheritedExtensionArtifact,
     PackageToolBuildPlan,
-    ToolBindingSmokePlan,
     ToolDesign,
     ToolInheritedExtensionRef,
     ToolImplementationDraft,
@@ -30,7 +29,7 @@ from agent_factory.factory_package.schemas import (
     ToolManufacturingReport,
     ToolSourceDecision,
     ToolSpecDraft,
-    ToolUnitTestPlan,
+    ToolTrialPlan,
 )
 from agent_factory.models import get_task_model
 from agent_factory.paths import project_root
@@ -48,8 +47,8 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
 TOOL_MANUFACTURING_REPORT_PATH = "reports/tool_manufacturing_report.json"
-TOOL_TEST_REPORT_PATH = "reports/tool_test_report.json"
-TOOL_BINDING_SMOKE_REPORT_PATH = "reports/tool_binding_smoke_report.json"
+TOOL_CONTRACT_SMOKE_REPORT_PATH = "reports/tool_contract_smoke_report.json"
+TOOL_MODEL_TRIAL_REPORT_PATH = "reports/tool_model_trial_report.json"
 TOOL_DEPENDENCY_REPORT_PATH = "reports/dependency_install_report.json"
 TOOL_TEST_ENV_ROOT = Path(".agentfactory/tool_test_env")
 TOOL_MANUFACTURING_ARTIFACT_ROOT = Path(".agentfactory/tool_manufacturing")
@@ -124,7 +123,7 @@ def finalize_tool_manufacturing_output(
     errors = validate_tool_manufacturing_output(output=output, capability_contract=capability_contract)
     checks: list[ToolManufacturingCheck] = list(output.report.checks)
     approved: list[ApprovedPackageToolArtifact] = []
-    blocked_tool_ids: list[str] = list(output.report.blocked_tool_ids)
+    blocked_tool_ids: list[str] = _unique_strings(list(output.report.blocked_tool_ids))
     inherited_extensions: list[InheritedExtensionArtifact] = []
     if not errors:
         try:
@@ -163,8 +162,7 @@ def finalize_tool_manufacturing_output(
     designs_by_id = {item.tool_id: item for item in output.tool_designs}
     specs_by_id = {item.tool_id: item for item in output.tool_specs}
     impls_by_id = {item.tool_id: item for item in output.implementations}
-    tests_by_id = {item.tool_id: item for item in output.unit_tests}
-    smokes_by_id = {item.tool_id: item for item in output.binding_smokes}
+    trials_by_id = {item.tool_id: item for item in output.trial_plans}
     approved_by_id = {item.tool_id: item for item in output.approved_package_tools}
     blocked_set = set(blocked_tool_ids)
 
@@ -196,13 +194,12 @@ def finalize_tool_manufacturing_output(
             design=designs_by_id.get(tool_id),
             spec=specs_by_id.get(tool_id),
             implementation=impls_by_id.get(tool_id),
-            unit_test=tests_by_id.get(tool_id),
-            binding_smoke=smokes_by_id.get(tool_id),
+            trial_plan=trials_by_id.get(tool_id),
             test_env_root=test_env_root,
         )
         checks.extend(tool_checks)
         if artifact is None:
-            blocked_tool_ids.append(tool_id)
+            blocked_tool_ids = _append_unique(blocked_tool_ids, tool_id)
             continue
         approved.append(artifact)
 
@@ -211,7 +208,7 @@ def finalize_tool_manufacturing_output(
     approved_ids = {item.tool_id for item in approved}
     missing_approved = sorted(generated_ids.difference(approved_ids).difference(blocked_tool_ids))
     if missing_approved:
-        blocked_tool_ids.extend(missing_approved)
+        blocked_tool_ids = _append_many_unique(blocked_tool_ids, missing_approved)
         checks.append(
             ToolManufacturingCheck(
                 name="approved_package_tools",
@@ -225,8 +222,8 @@ def finalize_tool_manufacturing_output(
         source_decisions=output.source_decisions,
         checks=checks,
         approved_tool_ids=[item.tool_id for item in approved],
-        blocked_tool_ids=blocked_tool_ids,
-        errors=[_check_error_text(item) for item in checks if item.status == "failed"] if status != "valid" else [],
+        blocked_tool_ids=_unique_strings(blocked_tool_ids),
+        errors=unique_tool_manufacturing_errors(checks) if status != "valid" else [],
         warnings=list(output.report.warnings),
     )
     return output.model_copy(
@@ -246,8 +243,7 @@ def run_generated_tool_pipeline(
     design: ToolDesign | None,
     spec: ToolSpecDraft | None,
     implementation: ToolImplementationDraft | None,
-    unit_test: ToolUnitTestPlan | None,
-    binding_smoke: ToolBindingSmokePlan | None,
+    trial_plan: ToolTrialPlan | None,
     test_env_root: Path = TOOL_TEST_ENV_ROOT,
 ) -> tuple[list[ToolManufacturingCheck], ApprovedPackageToolArtifact | None]:
     checks = _run_generated_tool_pipeline(
@@ -256,8 +252,7 @@ def run_generated_tool_pipeline(
         design=design,
         spec=spec,
         implementation=implementation,
-        unit_test=unit_test,
-        binding_smoke=binding_smoke,
+        trial_plan=trial_plan,
         test_env_root=test_env_root,
     )
     if any(item.status == "failed" for item in checks):
@@ -300,8 +295,7 @@ def validate_tool_manufacturing_output(
         "ToolDesign": {item.tool_id for item in output.tool_designs},
         "ToolSpecDraft": {item.tool_id for item in output.tool_specs},
         "ToolImplementationDraft": {item.tool_id for item in output.implementations},
-        "ToolUnitTestPlan": {item.tool_id for item in output.unit_tests},
-        "ToolBindingSmokePlan": {item.tool_id for item in output.binding_smokes},
+        "ToolTrialPlan": {item.tool_id for item in output.trial_plans},
         "ApprovedPackageToolArtifact": {item.tool_id for item in output.approved_package_tools},
     }
     for artifact_name, tool_ids in artifact_sets.items():
@@ -315,8 +309,7 @@ def validate_tool_manufacturing_output(
         "ToolDesign": artifact_sets["ToolDesign"],
         "ToolSpecDraft": artifact_sets["ToolSpecDraft"],
         "ToolImplementationDraft": artifact_sets["ToolImplementationDraft"],
-        "ToolUnitTestPlan": artifact_sets["ToolUnitTestPlan"],
-        "ToolBindingSmokePlan": artifact_sets["ToolBindingSmokePlan"],
+        "ToolTrialPlan": artifact_sets["ToolTrialPlan"],
     }
     for tool_id in sorted(generated_ids):
         missing = [artifact_name for artifact_name, tool_ids in required_artifacts.items() if tool_id not in tool_ids]
@@ -367,32 +360,27 @@ def persist_tool_manufacturing_report(
     report_root = (Path.cwd() / artifact_root / run_id / "reports").resolve()
     report_root.mkdir(parents=True, exist_ok=True)
     paths = {
-        "tool_manufacturing_report": report_root / "tool_manufacturing_report.json",
-        "tool_test_report": report_root / "tool_test_report.json",
-        "tool_binding_smoke_report": report_root / "tool_binding_smoke_report.json",
-        "dependency_install_report": report_root / "dependency_install_report.json",
+        "tool_manufacturing_report": report_root / Path(TOOL_MANUFACTURING_REPORT_PATH).name,
+        "tool_contract_smoke_report": report_root / Path(TOOL_CONTRACT_SMOKE_REPORT_PATH).name,
+        "tool_model_trial_report": report_root / Path(TOOL_MODEL_TRIAL_REPORT_PATH).name,
+        "dependency_install_report": report_root / Path(TOOL_DEPENDENCY_REPORT_PATH).name,
     }
     paths["tool_manufacturing_report"].write_text(
         json.dumps(output.report.model_dump(mode="json"), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     checks_payload = [item.model_dump(mode="json") for item in output.report.checks]
-    paths["tool_test_report"].write_text(
+    paths["tool_contract_smoke_report"].write_text(
         json.dumps(
-            [
-                item
-                for item in checks_payload
-                if str(item.get("name") or "").endswith(".unit_test_harness")
-                or str(item.get("name") or "").endswith(".unit_tests")
-            ],
+            [item for item in checks_payload if str(item.get("name") or "").endswith(".contract_smoke")],
             ensure_ascii=False,
             indent=2,
         ),
         encoding="utf-8",
     )
-    paths["tool_binding_smoke_report"].write_text(
+    paths["tool_model_trial_report"].write_text(
         json.dumps(
-            [item for item in checks_payload if str(item.get("name") or "").endswith(".binding_smoke")],
+            [item for item in checks_payload if str(item.get("name") or "").endswith(".model_trial")],
             ensure_ascii=False,
             indent=2,
         ),
@@ -447,20 +435,18 @@ def _run_generated_tool_pipeline(
     design: ToolDesign | None,
     spec: ToolSpecDraft | None,
     implementation: ToolImplementationDraft | None,
-    unit_test: ToolUnitTestPlan | None,
-    binding_smoke: ToolBindingSmokePlan | None,
+    trial_plan: ToolTrialPlan | None,
     test_env_root: Path,
 ) -> list[ToolManufacturingCheck]:
     checks: list[ToolManufacturingCheck] = []
-    if design is None or spec is None or implementation is None or unit_test is None or binding_smoke is None:
+    if design is None or spec is None or implementation is None or trial_plan is None:
         missing = [
             name
             for name, value in {
                 "ToolDesign": design,
                 "ToolSpecDraft": spec,
                 "ToolImplementationDraft": implementation,
-                "ToolUnitTestPlan": unit_test,
-                "ToolBindingSmokePlan": binding_smoke,
+                "ToolTrialPlan": trial_plan,
             }.items()
             if value is None
         ]
@@ -473,7 +459,7 @@ def _run_generated_tool_pipeline(
                 suggested_action="Regenerate all required manufacturing artifacts for this package-generated tool.",
             )
         ]
-    if not (design.tool_id == spec.tool_id == implementation.tool_id == unit_test.tool_id == binding_smoke.tool_id == tool_id):
+    if not (design.tool_id == spec.tool_id == implementation.tool_id == trial_plan.tool_id == tool_id):
         return [
             _failed_check(
                 tool_id=tool_id,
@@ -494,34 +480,24 @@ def _run_generated_tool_pipeline(
         json.dumps(tool_spec.model_dump(mode="json"), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    test_root = run_root / "tests"
-    test_root.mkdir(parents=True, exist_ok=True)
-    (test_root / f"test_{tool_id}.py").write_text(
-        _render_pytest_harness(unit_test.pytest_code, tool_id=tool_id),
-        encoding="utf-8",
-    )
     checks.append(_check_python_compile(tool_root / "tool.py", tool_id=tool_id))
     checks.append(_check_entrypoint_signature(tool_root / "tool.py", tool_id=tool_id))
     checks.append(_check_tool_spec(tool_spec, tool_id=tool_id))
-    checks.append(_check_unit_test_harness(unit_test, run_root=run_root, tool_id=tool_id))
     if any(item.status == "failed" for item in checks):
         return checks
     checks.extend(_converge_test_environment(
         test_env_root=test_env_root,
-        requirements=[*design.python_requirements, "pytest"],
+        requirements=design.python_requirements,
         tool_id=tool_id,
     ))
     if any(item.status == "failed" for item in checks):
         return checks
-    checks.append(_run_pytest(test_env_root=test_env_root, run_root=run_root, tool_id=tool_id))
-    if checks[-1].status == "failed":
-        return checks
-    checks.append(_run_binding_smoke(
-        package_root=package_root,
-        spec=tool_spec,
-        binding_smoke=binding_smoke,
-        tool_id=tool_id,
-    ))
+    import_paths = _venv_import_paths((Path.cwd() / test_env_root).resolve())
+    with _temporary_sys_path(import_paths):
+        checks.append(_run_contract_smoke(package_root=package_root, spec=tool_spec, trial_plan=trial_plan, tool_id=tool_id))
+        if checks[-1].status == "failed":
+            return checks
+        checks.append(_run_model_trial(package_root=package_root, spec=tool_spec, trial_plan=trial_plan, tool_id=tool_id))
     return checks
 
 
@@ -708,22 +684,89 @@ def _check_tool_spec(spec: ToolSpec, *, tool_id: str) -> ToolManufacturingCheck:
         )
 
 
-def _check_unit_test_harness(unit_test: ToolUnitTestPlan, *, run_root: Path, tool_id: str) -> ToolManufacturingCheck:
-    report_path = run_root / "tool_test_report.json"
+def _run_contract_smoke(
+    *,
+    package_root: Path,
+    spec: ToolSpec,
+    trial_plan: ToolTrialPlan,
+    tool_id: str,
+) -> ToolManufacturingCheck:
+    report_path = package_root.parent / Path(TOOL_CONTRACT_SMOKE_REPORT_PATH).name
+    scenario_reports: list[dict[str, Any]] = []
     try:
-        module = ast.parse(unit_test.pytest_code, filename=f"generated_{tool_id}_tests.py")
-        _validate_test_harness_ast(module, tool_id=tool_id)
-        return ToolManufacturingCheck(name=f"{tool_id}.unit_test_harness", status="passed")
+        if not trial_plan.scenarios:
+            raise ToolManufacturingError("ToolTrialPlan must include at least one scenario")
+        for scenario in trial_plan.scenarios:
+            trial_resources = _trial_resources_for_spec(
+                spec=spec,
+                scenario_resources=scenario.resources,
+                scenario_arguments=scenario.arguments,
+            )
+            compiler = ToolCompiler(
+                package_root=package_root,
+                resources=trial_resources,
+                approval_handler=lambda _spec, _arguments, _risk: ToolApprovalDecision(action="approve"),
+            )
+            tool = compiler.compile(spec)
+            observation = _normalize_tool_observation(tool.invoke(dict(scenario.arguments)))
+            output = observation.get("output") or {}
+            scenario_report = _contract_smoke_scenario_report(
+                scenario_id=scenario.scenario_id,
+                observation=observation,
+                resources=trial_resources,
+                output=output,
+            )
+            status = str(observation.get("status") or "")
+            if status != scenario.expected_observation_status:
+                scenario_reports.append({**scenario_report, "status": "failed"})
+                raise ToolManufacturingError(
+                    f"{scenario.scenario_id}: expected observation status "
+                    f"{scenario.expected_observation_status}, got {status or '<empty>'}; "
+                    f"{observation.get('message') or 'no observation message'}"
+                )
+            if scenario.expected_output_keys and not isinstance(output, dict):
+                scenario_reports.append({**scenario_report, "status": "failed"})
+                raise ToolManufacturingError(f"{scenario.scenario_id}: output must be an object")
+            for key in scenario.expected_output_keys:
+                if key not in output:
+                    scenario_reports.append({**scenario_report, "status": "failed"})
+                    raise ToolManufacturingError(f"{scenario.scenario_id}: output.{key} is missing")
+            if scenario.expected_output_subset:
+                mismatch = _output_subset_mismatch(output, scenario.expected_output_subset)
+                if mismatch:
+                    scenario_reports.append({**scenario_report, "status": "failed"})
+                    raise ToolManufacturingError(f"{scenario.scenario_id}: {mismatch}")
+            scenario_reports.append({**scenario_report, "status": "passed"})
+        report_path.write_text(
+            json.dumps(
+                {
+                    "tool_id": tool_id,
+                    "phase": "contract_smoke",
+                    "status": "passed",
+                    "scenarios": scenario_reports,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return ToolManufacturingCheck(
+            name=f"{tool_id}.contract_smoke",
+            status="passed",
+            message="contract smoke passed through ToolCompiler and ToolExecutionGateway",
+            details={"report_path": str(report_path), "scenario_count": len(trial_plan.scenarios)},
+        )
     except Exception as exc:
         primary_error = f"{type(exc).__name__}: {exc}"
         report_path.write_text(
             json.dumps(
                 {
                     "tool_id": tool_id,
-                    "phase": "unit_test_harness",
-                    "category": "test_harness_violation",
+                    "phase": "contract_smoke",
+                    "status": "failed",
+                    "category": "contract_smoke_error",
                     "primary_error": primary_error,
-                    "pytest_code_preview": unit_test.pytest_code[-4000:],
+                    "scenarios": scenario_reports,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -732,60 +775,247 @@ def _check_unit_test_harness(unit_test: ToolUnitTestPlan, *, run_root: Path, too
         )
         return _failed_check(
             tool_id=tool_id,
-            phase="unit_test_harness",
-            category="test_harness_violation",
+            phase="contract_smoke",
+            category="contract_smoke_error",
             primary_error=primary_error,
             report_path=report_path,
-            suggested_action="Regenerate pytest logic to call the system-provided run_tool(...) helper or patch tool_module; do not import the generated tool by name.",
+            suggested_action="Repair ToolSpec, resource selectors, or implementation so scenario arguments execute through ToolCompiler and Gateway.",
         )
 
 
-def _validate_test_harness_ast(module: ast.Module, *, tool_id: str) -> None:
-    forbidden_import_roots = {tool_id, "tools", "importlib", "subprocess"}
-    uses_runtime_helper = False
-    for node in ast.walk(module):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = alias.name.split(".", 1)[0]
-                if root in forbidden_import_roots:
-                    raise ValueError(f"pytest must not import {alias.name}; use run_tool(...) or tool_module from the system harness")
-        elif isinstance(node, ast.ImportFrom):
-            root = (node.module or "").split(".", 1)[0]
-            if root in forbidden_import_roots:
-                raise ValueError(f"pytest must not import from {node.module}; use run_tool(...) or tool_module from the system harness")
-        elif isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id == "sys" and node.attr == "path":
-                raise ValueError("pytest must not mutate sys.path; the system harness owns tool loading")
-        elif isinstance(node, ast.Name) and node.id in {"run_tool", "tool_module"}:
-            uses_runtime_helper = True
-    if not uses_runtime_helper:
-        raise ValueError("pytest must exercise the generated tool through run_tool(...) or tool_module")
+def _normalize_tool_observation(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except Exception as exc:
+            raise ToolManufacturingError("tool observation string is not valid JSON") from exc
+        if isinstance(payload, dict):
+            return payload
+    raise ToolManufacturingError(f"tool observation must be an object, got {type(value).__name__}")
 
 
-def _render_pytest_harness(pytest_code: str, *, tool_id: str) -> str:
-    module_name = "tool_under_test_" + _safe_path_id(tool_id).replace("-", "_")
-    return (
-        "from __future__ import annotations\n\n"
-        "import importlib.util\n"
-        "from pathlib import Path\n"
-        "from types import SimpleNamespace\n"
-        "from unittest.mock import Mock, patch\n\n"
-        "import pytest\n\n"
-        f"_TOOL_ID = {tool_id!r}\n"
-        "_TOOL_FILE = Path(__file__).resolve().parents[1] / \"package\" / \"tools\" / _TOOL_ID / \"tool.py\"\n"
-        f"_SPEC = importlib.util.spec_from_file_location({module_name!r}, _TOOL_FILE)\n"
-        "if _SPEC is None or _SPEC.loader is None:\n"
-        "    raise RuntimeError(f\"cannot load generated tool from {_TOOL_FILE}\")\n"
-        "tool_module = importlib.util.module_from_spec(_SPEC)\n"
-        "_SPEC.loader.exec_module(tool_module)\n\n"
-        "def run_tool(arguments: dict | None = None, resources: dict | None = None) -> dict:\n"
-        "    result = tool_module.run(arguments or {}, resources or {})\n"
-        "    assert isinstance(result, dict), \"tool run(...) must return a dict\"\n"
-        "    return result\n\n\n"
-        "# Model-authored pytest logic starts here. It must use run_tool(...) or tool_module.\n"
-        + pytest_code.strip()
-        + "\n"
-    )
+def _trial_resources_for_spec(
+    *,
+    spec: ToolSpec,
+    scenario_resources: dict[str, Any],
+    scenario_arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the runtime resource tree expected by ToolSpec selectors.
+
+    ToolTrialPlan is authored around a single tool, so models naturally provide
+    local resource names such as ``news_sources``. Runtime execution resolves
+    ToolSpec selectors such as ``report_config.news_sources``. This adapter is
+    the stable boundary between those two representations.
+    """
+
+    resources = _deep_json_copy(scenario_resources)
+    for local_name, selector in spec.resources.items():
+        if _has_resource_path(resources, selector):
+            continue
+        if local_name in scenario_resources:
+            _set_resource_path(resources, selector, scenario_resources[local_name])
+            continue
+        if local_name in scenario_arguments:
+            _set_resource_path(resources, selector, scenario_arguments[local_name])
+    return resources
+
+
+def _contract_smoke_scenario_report(
+    *,
+    scenario_id: str,
+    observation: dict[str, Any],
+    resources: dict[str, Any],
+    output: Any,
+) -> dict[str, Any]:
+    return {
+        "scenario_id": scenario_id,
+        "observation_status": str(observation.get("status") or ""),
+        "message": str(observation.get("message") or "")[:1000],
+        "errors": [str(item)[:1000] for item in list(observation.get("errors") or [])[:5]],
+        "resource_paths": sorted(_flatten_resource_paths(resources)),
+        "output_keys": sorted(output.keys()) if isinstance(output, dict) else [],
+    }
+
+
+def _output_subset_mismatch(output: Any, expected: dict[str, Any], path: str = "output") -> str:
+    if not isinstance(output, dict):
+        return f"{path} must be an object for expected_output_subset"
+    for key, expected_value in expected.items():
+        next_path = f"{path}.{key}"
+        if key not in output:
+            return f"{next_path} is missing"
+        actual_value = output[key]
+        if isinstance(expected_value, dict):
+            mismatch = _output_subset_mismatch(actual_value, expected_value, next_path)
+            if mismatch:
+                return mismatch
+        elif actual_value != expected_value:
+            return f"{next_path} expected {expected_value!r}, got {actual_value!r}"
+    return ""
+
+
+def _deep_json_copy(value: dict[str, Any]) -> dict[str, Any]:
+    try:
+        copied = json.loads(json.dumps(value, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return dict(value)
+    return copied if isinstance(copied, dict) else {}
+
+
+def _has_resource_path(resources: dict[str, Any], selector: str) -> bool:
+    current: Any = resources
+    for part in selector.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
+def _set_resource_path(resources: dict[str, Any], selector: str, value: Any) -> None:
+    current: dict[str, Any] = resources
+    parts = selector.split(".")
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = value
+
+
+def _flatten_resource_paths(resources: dict[str, Any], prefix: str = "") -> list[str]:
+    paths: list[str] = []
+    for key, value in resources.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            paths.extend(_flatten_resource_paths(value, path))
+        else:
+            paths.append(path)
+    return paths
+
+
+def _run_model_trial(
+    *,
+    package_root: Path,
+    spec: ToolSpec,
+    trial_plan: ToolTrialPlan,
+    tool_id: str,
+) -> ToolManufacturingCheck:
+    report_path = package_root.parent / Path(TOOL_MODEL_TRIAL_REPORT_PATH).name
+    scenario_reports: list[dict[str, Any]] = []
+    try:
+        task_model = get_task_model()
+        if task_model is None:
+            raise ToolManufacturingError("task model is not configured for model-bound tool trial")
+        operation = ModelOperationService(role="task", model=task_model)
+        for scenario in trial_plan.scenarios:
+            trial_resources = _trial_resources_for_spec(
+                spec=spec,
+                scenario_resources=scenario.resources,
+                scenario_arguments=scenario.arguments,
+            )
+            compiler = ToolCompiler(
+                package_root=package_root,
+                resources=trial_resources,
+                approval_handler=lambda _spec, _arguments, _risk: ToolApprovalDecision(action="approve"),
+            )
+            tool = compiler.compile(spec)
+            model_result = operation.tool_bound_chat(
+                state=None,
+                messages=[HumanMessage(content=scenario.user_prompt)],
+                tools=[tool],
+            )
+            ai_message = model_result.ai_message
+            if ai_message is None or not getattr(ai_message, "tool_calls", None):
+                raise ToolManufacturingError(f"{scenario.scenario_id}: task model did not emit a tool call")
+            _ai, tool_calls = latest_ai_tool_calls([ai_message])
+            if not any(str(call.get("name") or "") == scenario.expected_tool_id for call in tool_calls):
+                emitted = ", ".join(str(call.get("name") or "") for call in tool_calls)
+                raise ToolManufacturingError(
+                    f"{scenario.scenario_id}: task model emitted unexpected tool ids: {emitted or '<none>'}"
+                )
+            runner = build_tool_node_runner([tool], node_id="tool_manufacturing_model_trial")
+            output = runner.invoke({"messages": [ai_message]})
+            tool_messages = output.get("messages") or []
+            results, failures, _policy, _route = tool_messages_to_runtime_patch(tool_messages)
+            if failures:
+                raise ToolManufacturingError(
+                    f"{scenario.scenario_id}: "
+                    + "; ".join(str(item.get("message") or item) for item in failures)
+                )
+            if not results:
+                raise ToolManufacturingError(f"{scenario.scenario_id}: ToolNode did not return a completed observation")
+            final = operation.tool_bound_chat(
+                state=None,
+                messages=[
+                    HumanMessage(content=scenario.user_prompt),
+                    ai_message if isinstance(ai_message, AIMessage) else AIMessage(content=""),
+                    *tool_messages,
+                ],
+                tools=[tool],
+            )
+            final_text = str(final.final_answer or final.assistant_draft or "")
+            if not final_text.strip():
+                raise ToolManufacturingError(f"{scenario.scenario_id}: task model did not produce a final answer")
+            for expected_text in scenario.expected_final_answer_contains:
+                if expected_text not in final_text:
+                    raise ToolManufacturingError(
+                        f"{scenario.scenario_id}: final answer is missing expected text {expected_text!r}"
+                    )
+            scenario_reports.append(
+                {
+                    "scenario_id": scenario.scenario_id,
+                    "status": "passed",
+                    "tool_call_count": len(tool_calls),
+                    "final_answer_preview": final_text[:500],
+                }
+            )
+        report_path.write_text(
+            json.dumps(
+                {
+                    "tool_id": tool_id,
+                    "phase": "model_trial",
+                    "status": "passed",
+                    "scenarios": scenario_reports,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return ToolManufacturingCheck(
+            name=f"{tool_id}.model_trial",
+            status="passed",
+            message="model-bound trial passed through task model, ToolNode, Gateway, ToolMessage, and final answer",
+            details={"report_path": str(report_path), "scenario_count": len(trial_plan.scenarios)},
+        )
+    except Exception as exc:
+        primary_error = f"{type(exc).__name__}: {exc}"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "tool_id": tool_id,
+                    "phase": "model_trial",
+                    "status": "failed",
+                    "category": "model_trial_error",
+                    "primary_error": primary_error,
+                    "scenarios": scenario_reports,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return _failed_check(
+            tool_id=tool_id,
+            phase="model_trial",
+            category="model_trial_error",
+            primary_error=primary_error,
+            report_path=report_path,
+            suggested_action="Repair tool name, description, schema, implementation, or trial prompt so the task model can call the tool and answer from the observation.",
+        )
 
 
 def _converge_test_environment(
@@ -843,128 +1073,6 @@ def _converge_test_environment(
         ]
 
 
-def _run_pytest(*, test_env_root: Path, run_root: Path, tool_id: str) -> ToolManufacturingCheck:
-    venv_python = _venv_python((Path.cwd() / test_env_root / "venv").resolve())
-    started = perf_counter()
-    result = subprocess.run(
-        [str(venv_python), "-m", "pytest", "-q", str(run_root / "tests")],
-        cwd=str(run_root / "package"),
-        capture_output=True,
-        text=True,
-        timeout=300,
-        env={**os.environ, "PYTHONPATH": str(run_root / "package")},
-    )
-    report_path = run_root / "tool_test_report.json"
-    category = _classify_pytest_failure(result.stdout, result.stderr) if result.returncode != 0 else ""
-    primary_error = _extract_primary_error(result.stdout, result.stderr) if result.returncode != 0 else ""
-    report_path.write_text(
-        json.dumps(
-            {
-                "tool_id": tool_id,
-                "returncode": result.returncode,
-                "duration_ms": int((perf_counter() - started) * 1000),
-                "category": category,
-                "primary_error": primary_error,
-                "stdout_preview": result.stdout[-6000:],
-                "stderr_preview": result.stderr[-6000:],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    if result.returncode != 0:
-        primary_error = primary_error or "pytest failed"
-        return ToolManufacturingCheck(
-            name=f"{tool_id}.unit_tests",
-            status="failed",
-            message=f"pytest failed: {primary_error}",
-            details={
-                "report_path": str(report_path),
-                "returncode": result.returncode,
-                "category": category,
-                "primary_error": primary_error,
-                "suggested_action": _pytest_suggested_action(category),
-            },
-            failure_summary=ToolManufacturingFailureSummary(
-                tool_id=tool_id,
-                phase="unit_tests",
-                category=category,
-                primary_error=primary_error,
-                report_path=str(report_path),
-                suggested_action=_pytest_suggested_action(category),
-            ),
-        )
-    return ToolManufacturingCheck(
-        name=f"{tool_id}.unit_tests",
-        status="passed",
-        message="pytest passed",
-        details={"report_path": str(report_path)},
-    )
-
-
-def _run_binding_smoke(
-    *,
-    package_root: Path,
-    spec: ToolSpec,
-    binding_smoke: ToolBindingSmokePlan,
-    tool_id: str,
-) -> ToolManufacturingCheck:
-    try:
-        compiler = ToolCompiler(
-            package_root=package_root,
-            resources=binding_smoke.resources,
-            approval_handler=lambda _spec, _arguments, _risk: ToolApprovalDecision(action="approve"),
-        )
-        tool = compiler.compile(spec)
-        task_model = get_task_model()
-        if task_model is None:
-            raise ToolManufacturingError("task model is not configured for binding smoke")
-        model_result = ModelOperationService(role="task", model=task_model).tool_bound_chat(
-            state=None,
-            messages=[HumanMessage(content=binding_smoke.user_prompt)],
-            tools=[tool],
-        )
-        ai_message = model_result.ai_message
-        if ai_message is None or not getattr(ai_message, "tool_calls", None):
-            raise ToolManufacturingError("task model did not emit a tool call")
-        _ai, tool_calls = latest_ai_tool_calls([ai_message])
-        if not any(str(call.get("name") or "") == binding_smoke.expected_tool_id for call in tool_calls):
-            raise ToolManufacturingError("task model emitted an unexpected tool id")
-        runner = build_tool_node_runner([tool], node_id="tool_manufacturing_binding_smoke")
-        output = runner.invoke({"messages": [ai_message]})
-        tool_messages = output.get("messages") or []
-        results, failures, _policy, _route = tool_messages_to_runtime_patch(tool_messages)
-        if failures:
-            raise ToolManufacturingError("; ".join(str(item.get("message") or item) for item in failures))
-        if not results:
-            raise ToolManufacturingError("ToolNode did not return a completed observation")
-        final = ModelOperationService(role="task", model=task_model).tool_bound_chat(
-            state=None,
-            messages=[
-                HumanMessage(content=binding_smoke.user_prompt),
-                ai_message if isinstance(ai_message, AIMessage) else AIMessage(content=""),
-                *tool_messages,
-            ],
-            tools=[tool],
-        )
-        if not (final.final_answer or final.assistant_draft):
-            raise ToolManufacturingError("task model did not produce a final answer after tool observation")
-        return ToolManufacturingCheck(
-            name=f"{tool_id}.binding_smoke",
-            status="passed",
-            message="tool-bound smoke passed through model, ToolNode, Gateway, ToolMessage, and final answer",
-        )
-    except Exception as exc:
-        return _failed_check(
-            tool_id=tool_id,
-            phase="binding_smoke",
-            category="binding_smoke_error",
-            primary_error=f"{type(exc).__name__}: {exc}",
-            suggested_action="Regenerate the smoke plan, ToolSpec, or implementation so the tool can pass ToolCompiler, Gateway, ToolNode, and final-answer synthesis.",
-        )
-
-
 def _failed_check(
     *,
     tool_id: str,
@@ -1006,6 +1114,10 @@ def _check_error_text(check: ToolManufacturingCheck) -> str:
     return check.message or check.name
 
 
+def unique_tool_manufacturing_errors(checks: list[ToolManufacturingCheck]) -> list[str]:
+    return _unique_strings([_check_error_text(item) for item in checks if item.status == "failed"])
+
+
 def _format_failure_summary(summary: ToolManufacturingFailureSummary) -> str:
     text = f"{summary.tool_id}/{summary.phase}[{summary.category}]: {summary.primary_error}"
     if summary.report_path:
@@ -1033,31 +1145,60 @@ def _extract_primary_error(stdout: str, stderr: str) -> str:
     return ""
 
 
-def _classify_pytest_failure(stdout: str, stderr: str) -> str:
-    text = "\n".join([stdout, stderr])
-    if "ModuleNotFoundError" in text or "ImportError while importing test module" in text:
-        return "test_import_error"
-    if "AssertionError" in text or " assert " in text:
-        return "assertion_failed"
-    if "ValidationError" in text or "schema" in text.lower():
-        return "schema_mismatch"
-    if "Timeout" in text or "timed out" in text:
-        return "test_timeout"
-    if "requests." in text or "HTTP" in text:
-        return "external_dependency_not_mocked"
-    return "pytest_failure"
+def _append_unique(values: list[str], value: str) -> list[str]:
+    return _append_many_unique(values, [value])
 
 
-def _pytest_suggested_action(category: str) -> str:
-    if category == "test_import_error":
-        return "Regenerate tests to use the system-provided run_tool(...) helper and tool_module instead of importing the generated tool by module name."
-    if category == "assertion_failed":
-        return "Compare the ToolSpec output schema with implementation behavior; repair either the expected assertion or the implementation."
-    if category == "schema_mismatch":
-        return "Repair ToolSpec output_schema or implementation output so pytest expectations and runtime schema agree."
-    if category == "external_dependency_not_mocked":
-        return "Mock network, time, file, and external service calls in pytest; unit tests must not call real services."
-    return "Inspect the tool_test_report and regenerate a consistent ToolDesign, implementation, and unit test plan."
+def _append_many_unique(values: list[str], additions: list[str]) -> list[str]:
+    return _unique_strings([*values, *additions])
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw).strip()
+        if not text or text in seen:
+            continue
+        result.append(text)
+        seen.add(text)
+    return result
+
+
+def _venv_import_paths(test_env_root: Path) -> list[str]:
+    venv_python = _venv_python(test_env_root / "venv")
+    if not venv_python.exists():
+        return []
+    script = (
+        "import json, site\n"
+        "paths = []\n"
+        "for value in site.getsitepackages():\n"
+        "    paths.append(value)\n"
+        "user = site.getusersitepackages()\n"
+        "if user:\n"
+        "    paths.append(user)\n"
+        "print(json.dumps(paths))\n"
+    )
+    try:
+        result = subprocess.run([str(venv_python), "-c", script], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return []
+        payload = json.loads(result.stdout.strip() or "[]")
+    except Exception:
+        return []
+    return [str(item) for item in payload if isinstance(item, str) and item]
+
+
+@contextmanager
+def _temporary_sys_path(paths: list[str]) -> Iterator[None]:
+    original = list(sys.path)
+    for path in reversed(paths):
+        if path and path not in sys.path:
+            sys.path.insert(0, path)
+    try:
+        yield
+    finally:
+        sys.path[:] = original
 
 
 def _ensure_venv(venv_root: Path) -> Path:
