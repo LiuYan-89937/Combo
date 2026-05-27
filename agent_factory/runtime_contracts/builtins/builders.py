@@ -27,6 +27,7 @@ from agent_factory.runtime_contracts.schema import (
     ResourcesContract,
     SandboxRuntimeContract,
     SchedulerContract,
+    SchedulerSeedContract,
     SessionContract,
     StateContract,
     ToolsContract,
@@ -456,6 +457,15 @@ class SchedulerContractBuilder:
                 )
             ],
         )
+
+
+class SchedulerSeedContractBuilder:
+    contract_type = "scheduler_seed"
+    contract_version = "scheduler_seed_contract.v0"
+
+    def build(self, contract: SchedulerSeedContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        del contract, context
+        return RuntimeContribution()
 
 
 class DependenciesContractBuilder:

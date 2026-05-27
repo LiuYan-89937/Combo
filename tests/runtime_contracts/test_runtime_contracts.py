@@ -17,7 +17,7 @@ from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_render import RenderManifest
-from agent_factory.tooling.builtins import get_builtin_tool_ids
+from agent_factory.tooling.builtins import get_always_available_system_tool_ids, get_builtin_tool_ids
 
 
 class RuntimeContractsTest(unittest.TestCase):
@@ -203,8 +203,9 @@ class RuntimeContractsTest(unittest.TestCase):
                 base_services=_base_services(),
             )
 
-            self.assertEqual(result.services.tool_registry.list_tool_ids(), ["ls", "read"])
-            self.assertEqual(result.services.tool_registry.system_tool_ids(), ["ls", "read"])
+            expected_tools = sorted(["ls", "read", *get_always_available_system_tool_ids()])
+            self.assertEqual(result.services.tool_registry.list_tool_ids(), expected_tools)
+            self.assertEqual(result.services.tool_registry.system_tool_ids(), expected_tools)
 
     def test_tools_contract_rejects_unknown_builtin_tool_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

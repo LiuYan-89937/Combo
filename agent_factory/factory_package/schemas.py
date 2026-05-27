@@ -7,6 +7,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.assembly.schema import ToolSpec
+from agent_factory.scheduler_system.schema import SchedulerSeedPlan
 
 
 class ProductBriefOutput(BaseModel):
@@ -830,7 +831,6 @@ class ToolTrialScenario(BaseModel):
         "revision_requested",
     ] = "completed"
     expected_output_keys: list[str] = Field(default_factory=list)
-    expected_output_subset: dict[str, Any] = Field(default_factory=dict)
     expected_final_answer_contains: list[str] = Field(default_factory=list)
     success_criteria: list[str] = Field(default_factory=list)
 
@@ -880,6 +880,7 @@ class ToolManufacturingFailureSummary(BaseModel):
         "tool_spec",
         "dependency_convergence",
         "contract_smoke",
+        "resource_probe",
         "model_trial",
         "manufacturing_alignment",
     ]
@@ -932,6 +933,45 @@ class ToolManufacturingOutput(BaseModel):
     inherited_extensions: list[InheritedExtensionArtifact] = Field(default_factory=list)
     report: ToolManufacturingReport = Field(default_factory=lambda: ToolManufacturingReport(status="valid"))
     manufacturing_summary_text: str = ""
+
+
+class SchedulerSeedValidationReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["valid", "invalid"]
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SchedulerPreparationOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["scheduler_preparation.v0"] = "scheduler_preparation.v0"
+    approved_seeds: list[SchedulerSeedPlan] = Field(default_factory=list)
+    display_summary: str = ""
+    warnings: list[str] = Field(default_factory=list, max_length=10)
+    validation_report: SchedulerSeedValidationReport = Field(
+        default_factory=lambda: SchedulerSeedValidationReport(status="valid")
+    )
+
+    @field_validator("approved_seeds")
+    @classmethod
+    def _seed_ids_are_unique(cls, values: list[SchedulerSeedPlan]) -> list[SchedulerSeedPlan]:
+        seen: set[str] = set()
+        for item in values:
+            if item.seed_id in seen:
+                raise ValueError(f"duplicate scheduler seed_id: {item.seed_id}")
+            seen.add(item.seed_id)
+        return values
+
+
+class SchedulerSeedRevisionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "revise", "skip"]
+    seeds: list[SchedulerSeedPlan] = Field(default_factory=list)
+    display_summary: str = ""
+    warnings: list[str] = Field(default_factory=list, max_length=10)
 
 
 class ToolSourceDecisionOutput(BaseModel):
@@ -1073,3 +1113,4 @@ class PackageBuildReport(BaseModel):
     static_checks: list[PackageBuildStaticCheck] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    scheduler_seed_count: int = Field(default=0, ge=0)

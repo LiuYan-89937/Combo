@@ -19,6 +19,7 @@ from agent_factory.factory_package.constants import (
     PACKAGE_BUILD_NODE_ID,
     PRODUCT_BRIEF_NODE_ID,
     RUNTIME_DESIGN_NODE_ID,
+    SCHEDULER_PREPARATION_NODE_ID,
     TOOL_MANUFACTURING_NODE_ID,
 )
 from agent_factory.factory_package.package_build import build_agent_package, default_package_build_plan, merge_package_build_plan
@@ -30,12 +31,19 @@ from agent_factory.factory_package.schemas import (
     PackageBuildModelPlan,
     ProductBriefOutput,
     RuntimeDesignOutput,
+    SchedulerPreparationOutput,
     ToolDesign,
     ToolManufacturingOutput,
     ToolSourceDecision,
     ToolTrialPlan,
 )
+from agent_factory.factory_package.scheduler_preparation import (
+    _normalize_scheduler_seed_review_resume,
+    _scheduler_seed_candidates,
+    prepare_scheduler_seeds,
+)
 from agent_factory.factory_package.external_resources import (
+    _external_resource_request,
     _external_resource_collection_payload,
     _external_resource_confirmation_payload,
     _normalize_external_resource_collection_resume,
@@ -59,6 +67,8 @@ from agent_factory.runtime_contracts.builtins import default_runtime_contract_re
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import _seed_package_extensions
+from agent_factory.scheduler_system import SchedulerContractConfig, SchedulerRuntime
+from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 
 
 class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
@@ -76,6 +86,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 RUNTIME_DESIGN_NODE_ID,
                 CAPABILITY_CONTRACT_NODE_ID,
                 TOOL_MANUFACTURING_NODE_ID,
+                SCHEDULER_PREPARATION_NODE_ID,
                 PACKAGE_BUILD_NODE_ID,
             ],
         )
@@ -108,6 +119,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 f"builtin.factory.{RUNTIME_DESIGN_NODE_ID}",
                 f"builtin.factory.{CAPABILITY_CONTRACT_NODE_ID}",
                 f"builtin.factory.{TOOL_MANUFACTURING_NODE_ID}",
+                f"builtin.factory.{SCHEDULER_PREPARATION_NODE_ID}",
                 f"builtin.factory.{PACKAGE_BUILD_NODE_ID}",
             ],
         )
@@ -146,6 +158,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                     RUNTIME_DESIGN_NODE_ID,
                     CAPABILITY_CONTRACT_NODE_ID,
                     TOOL_MANUFACTURING_NODE_ID,
+                    SCHEDULER_PREPARATION_NODE_ID,
                     PACKAGE_BUILD_NODE_ID,
                 ],
             )
@@ -313,7 +326,6 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                         "resources": {"market_data_api_key": "test"},
                         "expected_observation_status": "completed",
                         "expected_output_keys": ["status"],
-                        "expected_output_subset": {"status": "error", "retryable": True},
                         "success_criteria": ["The model emits fetch_market_data as a tool call."],
                     }
                 ],
@@ -322,7 +334,6 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
 
         self.assertEqual(plan.scenarios[0].expected_tool_id, "fetch_market_data")
         self.assertEqual(plan.scenarios[0].expected_output_keys, ["status"])
-        self.assertEqual(plan.scenarios[0].expected_output_subset, {"status": "error", "retryable": True})
 
     def test_external_resource_collection_uses_questions_and_confirmation(self) -> None:
         request = {
@@ -365,7 +376,13 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
         collection = _external_resource_collection_payload(request)
         self.assertEqual(collection["type"], "resource_collection")
         self.assertIn("它应该访问哪个服务地址？", collection["questions"])
-        self.assertIn("是否允许制造阶段联网测试？", collection["questions"])
+        self.assertIn("是否允许制造阶段访问外部网络？", collection["questions"])
+        fields_by_key = {field["key"]: field for field in collection["fields"]}
+        self.assertEqual(fields_by_key["service_config.endpoint"]["title"], "服务地址")
+        self.assertEqual(fields_by_key["service_config.endpoint"]["question"], "它应该访问哪个服务地址？")
+        self.assertFalse(fields_by_key["service_config.endpoint"]["secret"])
+        self.assertTrue(fields_by_key["service_config.api_token"]["secret"])
+        self.assertEqual(fields_by_key["sandbox.network"]["title"], "允许外部网络访问")
         self.assertEqual(
             _normalize_external_resource_collection_resume(
                 {"type": "resource_collection_answer", "decision": "submit", "answer": "用 https://api.example.com"}
@@ -401,6 +418,74 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
             )["decision"],
             "approve",
         )
+
+    def test_external_resource_collection_keeps_failure_reasons_out_of_questions(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "title": "服务地址",
+                                "x-agentfactory-ui": {"question": "它应该访问哪个服务地址？"},
+                            }
+                        },
+                        "required": ["endpoint"],
+                    },
+                }
+            ]
+        }
+
+        collection = _external_resource_collection_payload(
+            request,
+            reason_notes=["fetch_data 需要外部来源，但生成结果包含未由你提供或继承的地址。"],
+        )
+
+        self.assertEqual(collection["questions"], ["它应该访问哪个服务地址？"])
+        self.assertEqual(
+            collection["reason_notes"],
+            ["fetch_data 需要外部来源，但生成结果包含未由你提供或继承的地址。"],
+        )
+
+    def test_external_resource_request_strips_generated_defaults_and_examples(self) -> None:
+        capability = CapabilityContractOutput.model_validate(
+            {
+                "resources_required": [
+                    {
+                        "resource_id": "service_config",
+                        "description": "External service configuration.",
+                        "required": True,
+                        "expected_shape": "object",
+                        "value_schema": {
+                            "type": "object",
+                            "default": {"endpoint": "https://model-guessed.example.com"},
+                            "properties": {
+                                "endpoint": {
+                                    "type": "string",
+                                    "title": "服务地址",
+                                    "examples": ["https://model-guessed.example.com"],
+                                    "default": "https://model-guessed.example.com",
+                                }
+                            },
+                        },
+                        "default_value": {"endpoint": "https://model-guessed.example.com"},
+                    }
+                ]
+            }
+        )
+
+        request = _external_resource_request(capability)
+        resource = request["resources"][0]
+        endpoint_schema = resource["value_schema"]["properties"]["endpoint"]
+        self.assertIsNone(resource["default_value"])
+        self.assertNotIn("default", resource["value_schema"])
+        self.assertNotIn("default", endpoint_schema)
+        self.assertNotIn("examples", endpoint_schema)
 
     def test_external_resource_validation_turns_missing_schema_fields_into_questions(self) -> None:
         request = {
@@ -688,6 +773,52 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 }
             )
 
+    def test_tool_manufacturing_rejects_unprovenanced_external_hosts(self) -> None:
+        check = tool_manufacturing_module._check_external_source_provenance(
+            code=(
+                "SINA_API_URL = 'http://hq.sinajs.cn/list={}'\n"
+                "def run(arguments: dict, resources: dict) -> dict:\n"
+                "    return {'status': 'ok'}\n"
+            ),
+            tool_id="fetch_market_data",
+        )
+
+        self.assertEqual(check.status, "failed")
+        self.assertIsNotNone(check.failure_summary)
+        self.assertEqual(check.failure_summary.category, "unprovenanced_external_source")
+
+    def test_tool_manufacturing_allows_user_provided_external_hosts_in_trials(self) -> None:
+        plan = ToolTrialPlan.model_validate(
+            {
+                "tool_id": "fetch_market_data",
+                "scenarios": [
+                    {
+                        "scenario_id": "probe",
+                        "user_prompt": "Fetch the configured market data.",
+                        "expected_tool_id": "fetch_market_data",
+                        "arguments": {"endpoint": "http://hq.sinajs.cn/list=sz000001"},
+                        "expected_observation_status": "completed",
+                    }
+                ],
+            }
+        )
+        check = tool_manufacturing_module._check_trial_external_resource_provenance(
+            trial_plan=plan,
+            tool_id="fetch_market_data",
+            user_external_resources=[
+                {
+                    "type": "resource_collection_result",
+                    "resources": {
+                        "market_config": {
+                            "endpoint": "http://hq.sinajs.cn/list=sz000001",
+                        }
+                    },
+                }
+            ],
+        )
+
+        self.assertEqual(check.status, "passed")
+
     def test_tool_manufacturing_prompts_do_not_expose_literal_examples_as_variables(self) -> None:
         expected_variables = {
             PromptId.TOOL_DESIGN_DRAFT: {
@@ -714,6 +845,95 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
         for prompt_id, variables in expected_variables.items():
             with self.subTest(prompt_id=prompt_id):
                 self.assertEqual(set(get_prompt(prompt_id).input_variables), variables)
+
+    def test_scheduler_preparation_builds_seed_after_review_confirmation(self) -> None:
+        runtime_design = _scheduled_runtime_design_fixture(schedule_intent="每天 09:00")
+        contract = _valid_capability_contract(
+            runtime_design,
+            capability_contract_catalog_payload(runtime_design)["default_contract_drafts"],
+        )
+        with patch("agent_factory.factory_package.scheduler_preparation.interrupt", return_value="确认"):
+            output = prepare_scheduler_seeds(
+                product_brief=_product_brief_fixture(),
+                runtime_design=runtime_design,
+                capability_contract=contract,
+                tool_manufacturing={},
+            )
+
+        self.assertEqual(output.validation_report.status, "valid")
+        self.assertEqual(len(output.approved_seeds), 1)
+        self.assertEqual(output.approved_seeds[0].schedule_type, "cron")
+        self.assertEqual(output.approved_seeds[0].schedule_expr, "0 9 * * *")
+
+    def test_scheduler_preparation_requires_user_time_when_schedule_is_ambiguous(self) -> None:
+        runtime_design = _scheduled_runtime_design_fixture(schedule_intent="每天定时")
+        candidates = _scheduler_seed_candidates(
+            product_brief=_product_brief_fixture(),
+            runtime_design=runtime_design,
+        )
+
+        self.assertIn("missing_questions", candidates[0])
+        self.assertIn("具体执行时间", candidates[0]["missing_questions"][0])
+        self.assertEqual(
+            _normalize_scheduler_seed_review_resume("改成工作日 17:00")["decision"],
+            "revise",
+        )
+
+    def test_package_build_materializes_scheduler_seed_contract(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            product_brief = _product_brief_fixture()
+            runtime_design = _scheduled_runtime_design_fixture(schedule_intent="每天 09:00")
+            drafts = capability_contract_catalog_payload(runtime_design)["default_contract_drafts"]
+            contract = _valid_capability_contract(runtime_design, drafts)
+            seed = _scheduler_seed_fixture()
+            scheduler_preparation = SchedulerPreparationOutput(approved_seeds=[seed])
+            plan = default_package_build_plan(
+                factory_run_id="scheduler_seed_run",
+                product_brief=product_brief,
+                runtime_design=runtime_design,
+                capability_contract=contract,
+            )
+
+            result = build_agent_package(
+                plan=plan,
+                product_brief=product_brief,
+                runtime_design=runtime_design,
+                capability_contract=contract,
+                scheduler_preparation=scheduler_preparation,
+                output_root=Path(temp_dir) / "packages",
+            )
+
+            self.assertEqual(result.report.status, "valid", result.report.errors)
+            self.assertEqual(result.report.scheduler_seed_count, 1)
+            package = AgentPackageLoader().load_path(Path(result.report.package_root) / "agent_package.json")
+            self.assertIn("scheduler_seed", package.contracts)
+            self.assertEqual(package.contracts["scheduler_seed"]["config"]["seeds"][0]["seed_id"], seed.seed_id)
+
+    def test_scheduler_seed_runtime_apply_is_idempotent(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            events = []
+            runtime = SchedulerRuntime(
+                config=SchedulerContractConfig(store_path=str(Path(temp_dir) / "scheduler.sqlite")),
+                owner_type="agent",
+                owner_id="agent-1",
+                event_sink=events.append,
+            )
+            contract = {
+                "type": "scheduler_seed",
+                "version": "scheduler_seed_contract.v0",
+                "enabled": True,
+                "config": {"seeds": [_scheduler_seed_fixture().model_dump(mode="json")]},
+            }
+
+            first = apply_scheduler_seed_contract(runtime=runtime, contract_payload=contract, package_id="pkg-1")
+            second = apply_scheduler_seed_contract(runtime=runtime, contract_payload=contract, package_id="pkg-1")
+
+            self.assertEqual(len(first), 1)
+            self.assertEqual(len(second), 1)
+            self.assertEqual(len(runtime.list_jobs()), 1)
+            event_types = [event.event_type for event in events]
+            self.assertIn("scheduler_seed_applied", event_types)
+            self.assertIn("scheduler_seed_unchanged", event_types)
 
     def test_package_build_materializes_loader_valid_agent_package(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1649,6 +1869,78 @@ def _runtime_design_fixture() -> RuntimeDesignOutput:
             "runtime_assumptions": [],
             "blocking_questions": [],
             "design_summary_text": "Use the built-in ReAct pattern.",
+        }
+    )
+
+
+def _scheduled_runtime_design_fixture(*, schedule_intent: str) -> RuntimeDesignOutput:
+    return RuntimeDesignOutput.model_validate(
+        {
+            "version": "runtime_design.v0",
+            "design_mode": "reuse_pattern",
+            "selected_pattern_id": "scheduled_react_report",
+            "graph_intent": "Build a scheduled report agent.",
+            "nodes": [
+                {
+                    "node_id": "answer",
+                    "node_type": "cognitive",
+                    "impl": "cognitive.answer",
+                    "purpose": "Generate the scheduled report and request tools when needed.",
+                    "model_operation": "tool_bound_chat",
+                    "requires_tools": True,
+                },
+                {
+                    "node_id": "tool_exec",
+                    "node_type": "operational",
+                    "impl": "operational.tool_call",
+                    "purpose": "Execute requested tools through ToolExecutionGateway.",
+                },
+            ],
+            "state_namespaces": [],
+            "required_contracts": ["model", "tools", "resources", "scheduler", "context", "trace"],
+            "pattern_slots": [
+                {
+                    "slot_id": "recurring_report_request",
+                    "slot_type": "scheduler",
+                    "required_by_nodes": ["ingress"],
+                    "purpose": "Run the graph on the user-confirmed schedule.",
+                    "source": "scheduler",
+                    "binding_strategy": "Create a package scheduler seed after tool manufacturing.",
+                    "binding": {
+                        "kind": "scheduler",
+                        "target_type": "graph_run",
+                        "schedule_intent": schedule_intent,
+                        "target_message": "请生成今日报告",
+                    },
+                }
+            ],
+            "package_nodes_to_generate": [],
+            "structured_outputs": [],
+            "runtime_assumptions": [],
+            "blocking_questions": [],
+            "design_summary_text": "Use the scheduled report preset.",
+        }
+    )
+
+
+def _scheduler_seed_fixture():
+    from agent_factory.scheduler_system.schema import SchedulerSeedPlan
+
+    return SchedulerSeedPlan.model_validate(
+        {
+            "seed_id": "recurring_report_request",
+            "title": "每日报告",
+            "human_schedule": "每天 09:00，北京时间",
+            "schedule_type": "cron",
+            "schedule_expr": "0 9 * * *",
+            "timezone": "Asia/Shanghai",
+            "target": {
+                "target_type": "graph_run",
+                "payload": {"message": "请生成今日报告", "thread_policy": "new_thread_per_run"},
+            },
+            "task_content": "请生成今日报告",
+            "enabled_on_apply": True,
+            "source_slot_id": "recurring_report_request",
         }
     )
 

@@ -34,6 +34,23 @@ describe('interrupt resume payloads', () => {
 			revision_text: '这个地址换成 https://api2.example.com'
 		});
 	});
+
+	it('maps scheduler seed review text to resume payloads', () => {
+		expect(buildResumePayload(schedulerSeedReviewEvent(), '确认')).toEqual({
+			type: 'scheduler_seed_review_result',
+			decision: 'approve'
+		});
+		expect(buildResumePayload(schedulerSeedReviewEvent(), '改成工作日下午五点')).toEqual({
+			type: 'scheduler_seed_review_result',
+			decision: 'revise',
+			revision_text: '改成工作日下午五点'
+		});
+		expect(buildResumePayload(schedulerSeedReviewEvent(), '暂不定时')).toEqual({
+			type: 'scheduler_seed_review_result',
+			decision: 'skip',
+			note: '暂不定时'
+		});
+	});
 });
 
 function toolApprovalEvent(): FactoryEvent {
@@ -77,5 +94,14 @@ function resourceConfirmationEvent(): FactoryEvent {
 		event_id: 'resource-confirmation',
 		event_type: 'interrupt_requested',
 		payload: {type: 'resource_confirmation', title: 'Resource Confirmation'}
+	};
+}
+
+function schedulerSeedReviewEvent(): FactoryEvent {
+	return {
+		...toolApprovalEvent(),
+		event_id: 'scheduler-seed-review',
+		event_type: 'interrupt_requested',
+		payload: {type: 'scheduler_seed_review', title: 'Scheduler Seed Review'}
 	};
 }

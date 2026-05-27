@@ -252,6 +252,10 @@ class RuntimeEventNormalizer:
             "scheduler_run_cancelled",
             "scheduler_feedback_completed",
             "scheduler_feedback_failed",
+            "scheduler_seed_detected",
+            "scheduler_seed_applied",
+            "scheduler_seed_unchanged",
+            "scheduler_seed_failed",
         }:
             return
         self.runtime_event(

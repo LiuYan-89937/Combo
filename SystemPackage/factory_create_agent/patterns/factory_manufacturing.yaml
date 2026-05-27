@@ -2,10 +2,10 @@ pattern_id: factory_manufacturing
 kind: main
 embeddable: false
 version: 1
-name: Factory Manufacturing Product Brief Runtime Design Capability Contract Tool Manufacturing and Package Build
-description: FastAgentFactory create-agent workflow materializes an AgentPackage after tool manufacturing and package build.
+name: Factory Manufacturing Product Brief Runtime Design Capability Contract Tool Manufacturing Scheduler Preparation and Package Build
+description: FastAgentFactory create-agent workflow materializes an AgentPackage after tool manufacturing, scheduler seed preparation, and package build.
 metadata:
-  summary: Runs Product Brief, maps it into a Kernel-valid Runtime Design, freezes capability contracts, manufactures tools through the shared tool chain, materializes AgentPackage files, and stops before sandbox validation.
+  summary: Runs Product Brief, maps it into a Kernel-valid Runtime Design, freezes capability contracts, manufactures tools through the shared tool chain, prepares confirmed scheduler seeds, materializes AgentPackage files, and stops before sandbox validation.
   use_when:
     - The user wants to create or refine an AgentPackage through the factory.
   avoid_when: []
@@ -29,6 +29,9 @@ nodes:
   - id: tool_manufacturing
     type: cognitive
     impl: builtin.factory.tool_manufacturing
+  - id: scheduler_preparation
+    type: cognitive
+    impl: builtin.factory.scheduler_preparation
   - id: package_build
     type: cognitive
     impl: builtin.factory.package_build
@@ -43,6 +46,9 @@ edges:
     to: tool_manufacturing
     when: always
   - from: tool_manufacturing
+    to: scheduler_preparation
+    when: always
+  - from: scheduler_preparation
     to: package_build
     when: always
 interrupt_points: []

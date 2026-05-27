@@ -25,6 +25,7 @@ from agent_factory.factory_package.schemas import (
     PackageToolBuildPlan,
     ProductBriefOutput,
     RuntimeDesignOutput,
+    SchedulerPreparationOutput,
     ToolManufacturingOutput,
 )
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
@@ -157,6 +158,7 @@ def build_agent_package(
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
     tool_manufacturing: ToolManufacturingOutput | None = None,
+    scheduler_preparation: SchedulerPreparationOutput | None = None,
     output_root: Path = PACKAGE_OUTPUT_ROOT,
 ) -> PackageBuildResult:
     errors = _validate_plan_alignment(
@@ -174,6 +176,7 @@ def build_agent_package(
                 package_root=str(package_root),
                 errors=errors,
                 warnings=list(plan.warnings),
+                scheduler_seed_count=len(scheduler_preparation.approved_seeds) if scheduler_preparation is not None else 0,
             ),
         )
     package_root.parent.mkdir(parents=True, exist_ok=True)
@@ -189,9 +192,11 @@ def build_agent_package(
             runtime_design=runtime_design,
             capability_contract=capability_contract,
             inherited_extensions=tool_manufacturing.inherited_extensions if tool_manufacturing is not None else [],
+            scheduler_preparation=scheduler_preparation,
         )
         static_checks.extend(_validate_temp_package(temp_root))
         failed = [item for item in static_checks if item.status == "failed"]
+        scheduler_seed_count = len(scheduler_preparation.approved_seeds) if scheduler_preparation is not None else 0
         report = PackageBuildReport(
             status="invalid" if failed else "valid",
             package_root=str(package_root),
@@ -200,6 +205,7 @@ def build_agent_package(
             static_checks=static_checks,
             errors=[item.message for item in failed if item.message],
             warnings=list(plan.warnings),
+            scheduler_seed_count=scheduler_seed_count,
         )
         _write_json_file(
             temp_root=temp_root,
@@ -236,6 +242,7 @@ def build_agent_package(
                 warnings=list(plan.warnings),
                 materialized_files=materialized,
                 static_checks=static_checks,
+                scheduler_seed_count=len(scheduler_preparation.approved_seeds) if scheduler_preparation is not None else 0,
             ),
         )
 
@@ -250,6 +257,8 @@ def package_build_message(plan: PackageBuildPlan, report: PackageBuildReport) ->
     ]
     if report.materialized_files:
         lines.extend(["", f"已物化文件：{len(report.materialized_files)} 个"])
+    if report.scheduler_seed_count:
+        lines.append(f"已准备定时任务：{report.scheduler_seed_count} 个，将在 Agent 首次运行时自动启用。")
     if report.errors:
         lines.extend(["", "错误：", *[f"- {item}" for item in report.errors]])
     if report.warnings:
@@ -268,6 +277,7 @@ def _materialize_to_temp_root(
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
     inherited_extensions: list[InheritedExtensionArtifact] | None = None,
+    scheduler_preparation: SchedulerPreparationOutput | None = None,
 ) -> None:
     pattern = _package_pattern(runtime_design)
     contracts = _merge_generated_dependencies(
@@ -277,6 +287,10 @@ def _materialize_to_temp_root(
     contracts = _merge_resource_descriptors(
         contracts=contracts,
         capability_contract=capability_contract,
+    )
+    contracts = _merge_scheduler_seed_contract(
+        contracts=contracts,
+        scheduler_preparation=scheduler_preparation,
     )
     state_contract = contracts.get("state") or {}
     state_enabled = bool(state_contract.get("enabled", True))
@@ -920,6 +934,30 @@ def _contract_payloads(capability_contract: CapabilityContractOutput) -> dict[st
     if missing:
         raise PackageBuildError("capability contract missing required contract drafts: " + ", ".join(missing))
     return payloads
+
+
+def _merge_scheduler_seed_contract(
+    *,
+    contracts: dict[str, dict[str, Any]],
+    scheduler_preparation: SchedulerPreparationOutput | None,
+) -> dict[str, dict[str, Any]]:
+    merged = json.loads(json.dumps(contracts, ensure_ascii=False))
+    seeds = list(scheduler_preparation.approved_seeds if scheduler_preparation is not None else [])
+    if not seeds:
+        return merged
+    scheduler_contract = merged.get("scheduler")
+    if not isinstance(scheduler_contract, dict):
+        raise PackageBuildError("scheduler seed requires scheduler contract")
+    scheduler_contract["enabled"] = True
+    merged["scheduler_seed"] = {
+        "type": "scheduler_seed",
+        "version": "scheduler_seed_contract.v0",
+        "enabled": True,
+        "config": {
+            "seeds": [seed.model_dump(mode="json") for seed in seeds],
+        },
+    }
+    return merged
 
 
 def _merge_generated_dependencies(

@@ -39,6 +39,15 @@
       "expected_output": "写出 tool_manufacturing.v0；只有通过 ToolSpec、contract smoke 与 model-bound trial 的 package 工具才进入 Package Build。",
       "visible_to_user": true
     },
+    "scheduler_preparation": {
+      "node_id": "scheduler_preparation",
+      "label": "Scheduler Preparation",
+      "kind": "factory_manufacturing_domain",
+      "purpose": "把定时需求转换成可确认、可部署的 scheduler seed。",
+      "doing": "基于 Runtime Design 的 scheduler slot 生成定时方案，展示给用户确认或修改。",
+      "expected_output": "写出 scheduler_preparation.v0；确认后的 seed 会在 Package Build 中物化为 scheduler_seed contract。",
+      "visible_to_user": true
+    },
     "package_build": {
       "node_id": "package_build",
       "label": "Package Build",

@@ -9,6 +9,7 @@ export type InterruptDescriptor = {
 		| 'requirement_clarification'
 		| 'resource_collection'
 		| 'resource_confirmation'
+		| 'scheduler_seed_review'
 		| 'generic';
 };
 
@@ -32,6 +33,9 @@ export function describeInterrupt(event: FactoryEvent | null): InterruptDescript
 	}
 	if (type === 'resource_confirmation') {
 		return {type, title: String(payload.title ?? 'Resource Confirmation'), resumeKind: 'resource_confirmation'};
+	}
+	if (type === 'scheduler_seed_review') {
+		return {type, title: String(payload.title ?? 'Scheduler Seed Review'), resumeKind: 'scheduler_seed_review'};
 	}
 	return {type, title: `Interrupt: ${type}`, resumeKind: 'generic'};
 }
@@ -80,6 +84,16 @@ export function buildResumePayload(event: FactoryEvent, value: string): Record<s
 				return buildResourceConfirmationSkipPayload(value);
 			}
 			return buildResourceConfirmationRevisePayload(value);
+		}
+		case 'scheduler_seed_review': {
+			const normalized = value.trim().toLowerCase();
+			if (['继续', '确认', 'approve', 'approved', 'yes', 'y'].includes(normalized)) {
+				return buildSchedulerSeedReviewApprovePayload();
+			}
+			if (['暂不定时', '不启用', 'skip', 'no', 'n'].includes(normalized)) {
+				return buildSchedulerSeedReviewSkipPayload(value);
+			}
+			return buildSchedulerSeedReviewRevisePayload(value);
 		}
 		default:
 			return {input_text: value};
@@ -137,4 +151,16 @@ export function buildResourceConfirmationRevisePayload(revisionText: string): Re
 
 export function buildResourceConfirmationSkipPayload(note = '暂不提供'): Record<string, unknown> {
 	return {type: 'resource_confirmation_result', decision: 'skip', note};
+}
+
+export function buildSchedulerSeedReviewApprovePayload(): Record<string, unknown> {
+	return {type: 'scheduler_seed_review_result', decision: 'approve'};
+}
+
+export function buildSchedulerSeedReviewRevisePayload(revisionText: string): Record<string, unknown> {
+	return {type: 'scheduler_seed_review_result', decision: 'revise', revision_text: revisionText};
+}
+
+export function buildSchedulerSeedReviewSkipPayload(note = '暂不定时'): Record<string, unknown> {
+	return {type: 'scheduler_seed_review_result', decision: 'skip', note};
 }

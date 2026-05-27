@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from agent_factory.context_system import ContextContractConfig
 from agent_factory.knowledge_system import KnowledgeContractConfig
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
-from agent_factory.scheduler_system.schema import SchedulerContractConfig
+from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 
 
@@ -23,6 +23,7 @@ ContractType = Literal[
     "model",
     "knowledge",
     "scheduler",
+    "scheduler_seed",
     "context",
     "trace",
     "state",
@@ -40,6 +41,7 @@ ContractVersion = Literal[
     "model_contract.v0",
     "knowledge_contract.v0",
     "scheduler_contract.v0",
+    "scheduler_seed_contract.v0",
     "context_contract.v0",
     "trace_contract.v0",
     "state_contract.v0",
@@ -500,6 +502,15 @@ class SchedulerContract(BaseModel):
     config: SchedulerContractConfig = Field(default_factory=SchedulerContractConfig)
 
 
+class SchedulerSeedContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["scheduler_seed"] = "scheduler_seed"
+    version: Literal["scheduler_seed_contract.v0"] = "scheduler_seed_contract.v0"
+    enabled: bool = True
+    config: SchedulerSeedContractConfig = Field(default_factory=SchedulerSeedContractConfig)
+
+
 RuntimeContract = (
     SessionContract
     | ToolsContract
@@ -513,6 +524,7 @@ RuntimeContract = (
     | DependenciesContract
     | ModelContract
     | SchedulerContract
+    | SchedulerSeedContract
     | StateContract
     | NodeProviderContract
     | ArtifactContract

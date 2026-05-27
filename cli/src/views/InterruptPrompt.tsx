@@ -14,6 +14,7 @@ export function InterruptPrompt() {
 		payload.type === 'tool_approval'
 		|| payload.type === 'resource_collection'
 		|| payload.type === 'resource_confirmation'
+		|| payload.type === 'scheduler_seed_review'
 	) {
 		return null;
 	}

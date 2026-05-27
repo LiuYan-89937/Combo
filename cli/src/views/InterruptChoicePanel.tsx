@@ -9,6 +9,9 @@ import {
 	buildResourceConfirmationApprovePayload,
 	buildResourceConfirmationRevisePayload,
 	buildResourceConfirmationSkipPayload,
+	buildSchedulerSeedReviewApprovePayload,
+	buildSchedulerSeedReviewRevisePayload,
+	buildSchedulerSeedReviewSkipPayload,
 	buildToolApprovalPayload,
 	buildToolApprovalRevisionPayload,
 	buildToolTrustPayload,
@@ -72,7 +75,7 @@ export function InterruptChoicePanel({
 }) {
 	const event = useStoreSelector(state => state.pendingInterrupt);
 	const interruptType = String(event?.payload?.type ?? event?.event_type ?? '');
-	if (!event || !['requirement_clarification', 'plan_review', 'tool_approval', 'resource_collection', 'resource_confirmation'].includes(interruptType)) {
+	if (!event || !['requirement_clarification', 'plan_review', 'tool_approval', 'resource_collection', 'resource_confirmation', 'scheduler_seed_review'].includes(interruptType)) {
 		return null;
 	}
 	if (interruptType === 'requirement_clarification') {
@@ -87,12 +90,15 @@ export function InterruptChoicePanel({
 	if (interruptType === 'resource_confirmation') {
 		return <ResourceConfirmationPanel event={event} onSubmit={onSubmit} />;
 	}
+	if (interruptType === 'scheduler_seed_review') {
+		return <SchedulerSeedReviewPanel event={event} onSubmit={onSubmit} />;
+	}
 	return <ToolApprovalTabs event={event} onSubmit={onSubmit} />;
 }
 
 export function isChoiceInterrupt(event: FactoryEvent | null): boolean {
 	const interruptType = String(event?.payload?.type ?? event?.event_type ?? '');
-	return ['requirement_clarification', 'plan_review', 'tool_approval', 'resource_collection', 'resource_confirmation'].includes(interruptType);
+	return ['requirement_clarification', 'plan_review', 'tool_approval', 'resource_collection', 'resource_confirmation', 'scheduler_seed_review'].includes(interruptType);
 }
 
 function RequirementClarificationTabs({
@@ -423,6 +429,8 @@ function ResourceCollectionPanel({
 	onSubmit: (payload: Record<string, unknown>) => void;
 }) {
 	const questions = useMemo(() => resourceCollectionQuestions(event), [event]);
+	const fields = useMemo(() => resourceCollectionFields(event), [event]);
+	const reasonNotes = useMemo(() => resourceCollectionReasonNotes(event), [event]);
 	const [answer, setAnswer] = useState('');
 
 	useEffect(() => {
@@ -453,7 +461,22 @@ function ResourceCollectionPanel({
 		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
 			<Text bold color="yellow">{String(event.payload?.title ?? '补充外部资源')}</Text>
 			<Text color="gray">{String(event.payload?.message ?? '请直接用一句话说明可以使用的外部资源。')}</Text>
-			{questions.map((question, index) => (
+			{reasonNotes.map(note => (
+				<Text key={note} color="gray">原因: {note}</Text>
+			))}
+			{fields.length > 0 ? fields.map((field, index) => (
+				<Box key={field.key} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+					<Text>
+						<Text color="yellow">{index === 0 ? '> ' : '  '}</Text>
+						<Text bold>{field.title}</Text>
+						<Text color={field.required ? 'red' : 'gray'}> {field.required ? '必填' : '可选'}</Text>
+						{field.secret ? <Text color="gray"> 密文</Text> : null}
+					</Text>
+					<Text color="gray">  {field.question}</Text>
+					{field.description ? <Text color="gray">  {field.description}</Text> : null}
+					{field.placeholder ? <Text color="gray">  示例: {field.placeholder}</Text> : null}
+				</Box>
+			)) : questions.map((question, index) => (
 				<Text key={`${question}-${index}`}>
 					<Text color="yellow">{index === 0 ? '> ' : '  '}</Text>
 					{question}
@@ -541,6 +564,70 @@ function ResourceConfirmationPanel({
 	);
 }
 
+function SchedulerSeedReviewPanel({
+	event,
+	onSubmit
+}: {
+	event: FactoryEvent;
+	onSubmit: (payload: Record<string, unknown>) => void;
+}) {
+	const seeds = useMemo(() => schedulerSeedReviewItems(event), [event]);
+	const missingQuestions = useMemo(() => schedulerSeedMissingQuestions(event), [event]);
+	const [revisionText, setRevisionText] = useState('');
+
+	useEffect(() => {
+		setRevisionText('');
+	}, [event.event_id]);
+
+	useInput((input, key) => {
+		if (key.return) {
+			if (revisionText.trim()) {
+				onSubmit(buildSchedulerSeedReviewRevisePayload(revisionText.trim()));
+			} else {
+				onSubmit(buildSchedulerSeedReviewApprovePayload());
+			}
+			return;
+		}
+		if (key.escape) {
+			onSubmit(buildSchedulerSeedReviewSkipPayload());
+			return;
+		}
+		if (key.backspace || key.delete) {
+			setRevisionText(current => current.slice(0, -1));
+			return;
+		}
+		if (input && !key.ctrl && !key.meta) {
+			setRevisionText(current => current + input);
+		}
+	});
+
+	return (
+		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+			<Text bold color="yellow">{String(event.payload?.title ?? '确认定时任务')}</Text>
+			<Text color="gray">{String(event.payload?.message ?? '请确认或修改定时任务。')}</Text>
+			{seeds.map(seed => (
+				<Box key={seed.seedId} flexDirection="column" marginTop={1}>
+					<Text><Text color="yellow">{'> '}</Text><Text bold>{seed.title}</Text></Text>
+					<Text color="gray">  时间：{seed.humanSchedule || '需要补充'}</Text>
+					<Text color="gray">  动作：{seed.taskContent || '运行 Agent'}</Text>
+					<Text color="gray">  失败治理：连续失败 {seed.maxConsecutiveFailures} 次后自动暂停</Text>
+					<Text color="gray">  完成反馈：{seed.feedbackEnabled ? '开启' : '关闭'}</Text>
+					<Text color="gray">  高级：{seed.scheduleType || '-'} {seed.scheduleExpr || '-'} / {seed.timezone || '-'}</Text>
+				</Box>
+			))}
+			{missingQuestions.map(question => (
+				<Text key={question} color="red">还需确认：{question}</Text>
+			))}
+			<Text>
+				<Text color="gray">修改: </Text>
+				{revisionText}
+				<Text inverse>{' '}</Text>
+			</Text>
+			<Text color="gray">直接 Enter 确认；输入一句话修改后 Enter；Esc 暂不定时。</Text>
+		</Box>
+	);
+}
+
 function actionIndex(actionId: ToolApprovalActionId): number {
 	return Math.max(0, TOOL_APPROVAL_ACTIONS.findIndex(action => action.id === actionId));
 }
@@ -615,6 +702,44 @@ function resourceCollectionQuestions(event: FactoryEvent): string[] {
 	return questions.map(item => String(item).trim()).filter(Boolean).slice(0, 6);
 }
 
+type ResourceCollectionField = {
+	key: string;
+	title: string;
+	question: string;
+	description: string;
+	placeholder: string;
+	required: boolean;
+	secret: boolean;
+};
+
+function resourceCollectionFields(event: FactoryEvent): ResourceCollectionField[] {
+	const fields = event.payload?.fields;
+	if (!Array.isArray(fields)) {
+		return [];
+	}
+	return fields.map((item, index) => {
+		const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+		const key = String(record.key ?? `field_${index + 1}`);
+		return {
+			key,
+			title: String(record.title ?? key),
+			question: String(record.question ?? '请补充这个配置。'),
+			description: String(record.description ?? ''),
+			placeholder: String(record.placeholder ?? ''),
+			required: Boolean(record.required),
+			secret: Boolean(record.secret)
+		};
+	}).filter(field => field.title.trim()).slice(0, 10);
+}
+
+function resourceCollectionReasonNotes(event: FactoryEvent): string[] {
+	const notes = event.payload?.reason_notes;
+	if (!Array.isArray(notes)) {
+		return [];
+	}
+	return notes.map(item => String(item).trim()).filter(Boolean).slice(0, 3);
+}
+
 type ResourceConfirmationItem = {
 	key: string;
 	title: string;
@@ -637,6 +762,51 @@ function resourceConfirmationItems(event: FactoryEvent): ResourceConfirmationIte
 			required: Boolean(record.required)
 		};
 	});
+}
+
+type SchedulerSeedReviewItem = {
+	seedId: string;
+	title: string;
+	humanSchedule: string;
+	taskContent: string;
+	maxConsecutiveFailures: number;
+	feedbackEnabled: boolean;
+	scheduleType: string;
+	scheduleExpr: string;
+	timezone: string;
+};
+
+function schedulerSeedReviewItems(event: FactoryEvent): SchedulerSeedReviewItem[] {
+	const seeds = event.payload?.seeds;
+	if (!Array.isArray(seeds)) {
+		return [];
+	}
+	return seeds.map((item, index) => {
+		const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+		const advanced = record.advanced && typeof record.advanced === 'object' ? record.advanced as Record<string, unknown> : {};
+		const failure = record.failure_policy && typeof record.failure_policy === 'object'
+			? record.failure_policy as Record<string, unknown>
+			: {};
+		return {
+			seedId: String(record.seed_id ?? `seed_${index + 1}`),
+			title: String(record.title ?? `定时任务 ${index + 1}`),
+			humanSchedule: String(record.human_schedule ?? ''),
+			taskContent: String(record.task_content ?? ''),
+			maxConsecutiveFailures: Number(failure.max_consecutive_failures ?? 3),
+			feedbackEnabled: Boolean(record.feedback_enabled ?? true),
+			scheduleType: String(advanced.schedule_type ?? ''),
+			scheduleExpr: String(advanced.schedule_expr ?? ''),
+			timezone: String(advanced.timezone ?? '')
+		};
+	});
+}
+
+function schedulerSeedMissingQuestions(event: FactoryEvent): string[] {
+	const questions = event.payload?.missing_questions;
+	if (!Array.isArray(questions)) {
+		return [];
+	}
+	return questions.map(item => String(item).trim()).filter(Boolean).slice(0, 4);
 }
 
 function trimOneLine(value: string, limit: number): string {

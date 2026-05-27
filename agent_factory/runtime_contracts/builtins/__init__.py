@@ -12,6 +12,7 @@ from agent_factory.runtime_contracts.builtins.builders import (
     ResourcesContractBuilder,
     SandboxContractBuilder,
     SchedulerContractBuilder,
+    SchedulerSeedContractBuilder,
     SessionContractBuilder,
     StateContractBuilder,
     ToolsContractBuilder,
@@ -47,6 +48,7 @@ from agent_factory.runtime_contracts.schema import (
     ResourcesContract,
     SandboxRuntimeContract,
     SchedulerContract,
+    SchedulerSeedContract,
     SessionContract,
     StateContract,
     ToolsContract,
@@ -149,6 +151,12 @@ def default_runtime_contract_registry(
         version="scheduler_contract.v0",
         model=SchedulerContract,
         builder=SchedulerContractBuilder(),
+    )
+    registry.register(
+        contract_type="scheduler_seed",
+        version="scheduler_seed_contract.v0",
+        model=SchedulerSeedContract,
+        builder=SchedulerSeedContractBuilder(),
     )
     registry.register(
         contract_type="dependencies",

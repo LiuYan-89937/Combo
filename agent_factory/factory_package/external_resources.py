@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -13,6 +14,7 @@ from agent_factory.prompts import PromptId, output_json_schema
 
 
 RESOURCE_FIELD_UI_EXTENSION = "x-agentfactory-ui"
+_SCHEMA_HINT_KEYS = {"default", "examples"}
 
 
 def _external_resource_request(capability_contract: CapabilityContractOutput) -> dict[str, Any]:
@@ -20,14 +22,15 @@ def _external_resource_request(capability_contract: CapabilityContractOutput) ->
     for item in capability_contract.resources_required:
         if not item.required:
             continue
+        value_schema = item.value_schema if isinstance(item.value_schema, dict) else {}
         requirements.append(
             {
                 "resource_id": item.resource_id,
                 "description": item.description,
                 "required": item.required,
                 "expected_shape": item.expected_shape,
-                "value_schema": item.value_schema,
-                "default_value": item.default_value,
+                "value_schema": _sanitize_resource_value_schema(value_schema),
+                "default_value": None,
                 "secret_fields": item.secret_fields,
                 "used_by": item.used_by,
             }
@@ -56,9 +59,17 @@ def _collect_external_resource_submission(
     *,
     resource_request: dict[str, Any],
     namespace_state: dict[str, Any],
+    missing_questions: list[str] | None = None,
+    reason_notes: list[str] | None = None,
 ) -> dict[str, Any]:
     raw_answer = _normalize_external_resource_collection_resume(
-        interrupt(_external_resource_collection_payload(resource_request))
+        interrupt(
+            _external_resource_collection_payload(
+                resource_request,
+                missing_questions=missing_questions,
+                reason_notes=reason_notes,
+            )
+        )
     )
     if raw_answer["decision"] in {"skip", "cancel"}:
         return _resource_submission_skipped(raw_answer.get("answer") or "user skipped external resources")
@@ -168,15 +179,19 @@ def _external_resource_collection_payload(
     request: dict[str, Any],
     *,
     missing_questions: list[str] | None = None,
+    reason_notes: list[str] | None = None,
     prior_answer: str = "",
 ) -> dict[str, Any]:
+    fields = _external_resource_fields(request)
     questions = _dedupe_resource_questions(missing_questions or _external_resource_questions(request))
     return {
         "type": "resource_collection",
         "node_id": TOOL_MANUFACTURING_NODE_ID,
         "title": "补充外部资源",
-        "message": "还差几项外部资源，补上后我继续制造工具。可以直接一句话回答；不想提供的就说暂不提供。",
+        "message": "请补充这个 Agent 可以使用的外部来源、账号或运行配置；未填写的内容会按暂不提供处理。",
         "questions": questions,
+        "fields": [_resource_collection_field_payload(field) for field in fields],
+        "reason_notes": _dedupe_resource_questions(reason_notes or []),
         "prior_answer": prior_answer,
         "resource_request": request,
     }
@@ -362,7 +377,7 @@ def _validate_external_resource_resolution(
                         fields,
                         sandbox_requirement_id=requirement_id,
                         path=["network_access"],
-                        fallback="是否允许制造阶段联网测试？",
+                        fallback="是否允许制造阶段访问外部网络？",
                     )
                 )
         for mount_id in list(item.get("mounts_required") or []):
@@ -495,6 +510,9 @@ def _external_resource_fields(request: dict[str, Any]) -> list[dict[str, Any]]:
                         "path": [prop],
                         "title": title,
                         "question": _field_question(schema, title=title),
+                        "description": _field_description(schema, fallback=str(item.get("description") or "")),
+                        "placeholder": _field_placeholder(schema),
+                        "input_kind": _field_input_kind(schema),
                         "required": bool(item.get("required", True)) and prop in required_props,
                         "secret": _field_is_secret(key, secret_fields, schema=schema),
                     }
@@ -511,6 +529,9 @@ def _external_resource_fields(request: dict[str, Any]) -> list[dict[str, Any]]:
                         "path": secret_path.split("."),
                         "title": title,
                         "question": f"请提供{title}。",
+                        "description": str(item.get("description") or ""),
+                        "placeholder": "",
+                        "input_kind": "secret",
                         "required": bool(item.get("required", True)),
                         "secret": True,
                     }
@@ -524,6 +545,9 @@ def _external_resource_fields(request: dict[str, Any]) -> list[dict[str, Any]]:
                 "path": [],
                 "title": title,
                 "question": _field_question(value_schema, title=title),
+                "description": _field_description(value_schema, fallback=str(item.get("description") or "")),
+                "placeholder": _field_placeholder(value_schema),
+                "input_kind": _field_input_kind(value_schema),
                 "required": bool(item.get("required", True)),
                 "secret": False,
             }
@@ -537,7 +561,10 @@ def _external_resource_fields(request: dict[str, Any]) -> list[dict[str, Any]]:
                     "sandbox_requirement_id": requirement_id,
                     "path": ["network_access"],
                     "title": "允许外部网络访问",
-                    "question": "是否允许制造阶段联网测试？",
+                    "question": "是否允许制造阶段访问外部网络？",
+                    "description": "允许后，工具制造可以用你提供的来源做连通性探测。",
+                    "placeholder": "是 / 否",
+                    "input_kind": "boolean",
                     "required": True,
                     "secret": False,
                 }
@@ -554,6 +581,9 @@ def _external_resource_fields(request: dict[str, Any]) -> list[dict[str, Any]]:
                     "path": ["mounts", mount_key],
                     "title": title,
                     "question": f"请提供{title}。",
+                    "description": "需要在制造或运行时读取的本地路径。",
+                    "placeholder": "",
+                    "input_kind": "path",
                     "required": True,
                     "secret": False,
                 }
@@ -576,6 +606,24 @@ def _schema_ui(schema: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _sanitize_resource_value_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    sanitized = deepcopy(schema)
+    _strip_generated_schema_hints(sanitized)
+    return sanitized
+
+
+def _strip_generated_schema_hints(value: Any) -> None:
+    if isinstance(value, dict):
+        for key in list(value):
+            if key in _SCHEMA_HINT_KEYS:
+                value.pop(key, None)
+        for child in value.values():
+            _strip_generated_schema_hints(child)
+    elif isinstance(value, list):
+        for child in value:
+            _strip_generated_schema_hints(child)
+
+
 def _field_title(schema: dict[str, Any], *, fallback: str) -> str:
     ui = _schema_ui(schema)
     title = ui.get("title") or ui.get("label") or schema.get("title")
@@ -590,6 +638,51 @@ def _field_question(schema: dict[str, Any], *, title: str) -> str:
     if isinstance(question, str) and question.strip():
         return question.strip()
     return f"请提供{title}。"
+
+
+def _field_description(schema: dict[str, Any], *, fallback: str) -> str:
+    ui = _schema_ui(schema)
+    description = ui.get("help") or ui.get("description") or schema.get("description") or fallback
+    return description.strip() if isinstance(description, str) else ""
+
+
+def _field_placeholder(schema: dict[str, Any]) -> str:
+    ui = _schema_ui(schema)
+    placeholder = ui.get("placeholder")
+    return placeholder.strip() if isinstance(placeholder, str) else ""
+
+
+def _field_input_kind(schema: dict[str, Any]) -> str:
+    ui = _schema_ui(schema)
+    input_kind = ui.get("input_kind")
+    if isinstance(input_kind, str) and input_kind.strip():
+        return input_kind.strip()
+    schema_type = schema.get("type")
+    schema_format = schema.get("format")
+    if schema_format == "uri":
+        return "url"
+    if schema_format in {"password", "secret"} or schema.get("writeOnly"):
+        return "secret"
+    if schema_type == "array":
+        return "list"
+    if schema_type == "object":
+        return "object"
+    if schema_type == "boolean":
+        return "boolean"
+    return "text"
+
+
+def _resource_collection_field_payload(field: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "key": field.get("key"),
+        "title": field.get("title") or field.get("key"),
+        "question": field.get("question") or "",
+        "description": field.get("description") or "",
+        "placeholder": field.get("placeholder") or "",
+        "input_kind": field.get("input_kind") or "text",
+        "required": bool(field.get("required")),
+        "secret": bool(field.get("secret")),
+    }
 
 
 def _humanize_identifier(value: str) -> str:

@@ -11,6 +11,7 @@
       "runtime_design",
       "capability_contract",
       "tool_manufacturing",
+      "scheduler_preparation",
       "package_build"
     ]
   }

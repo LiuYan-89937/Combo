@@ -50,6 +50,12 @@
     "tool_manufacturing_report": {
       "type": "object"
     },
+    "scheduler_preparation": {
+      "type": "object"
+    },
+    "scheduler_preparation_report": {
+      "type": "object"
+    },
     "external_resource_request": {
       "type": "object"
     },

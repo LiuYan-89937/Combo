@@ -16,6 +16,7 @@ from agent_factory.runtime_protocol.completion import runtime_completed, runtime
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
@@ -112,6 +113,7 @@ class PackageRuntimeCore:
         )
         self._configure_scheduler_runtime(runtime=self.compiled_runtime)
         self._configure_knowledge_runtime(runtime=self.compiled_runtime)
+        self._apply_scheduler_seeds(runtime=self.compiled_runtime)
         self.background_workers.add_many(runtime_build.background_workers)
         for lifecycle_event in self.background_workers.start_all():
             if lifecycle_event.status == "failed":
@@ -286,6 +288,18 @@ class PackageRuntimeCore:
         if knowledge_runtime is None:
             return
         knowledge_runtime.event_sink = self._knowledge_event_sink
+
+    def _apply_scheduler_seeds(self, *, runtime: CompiledPackageRuntime) -> None:
+        scheduler_runtime = getattr(runtime.compiled.compiled_app.services, "scheduler_runtime", None)
+        if scheduler_runtime is None:
+            return
+        contract = runtime.package.contracts.get("scheduler_seed") if isinstance(runtime.package.contracts, dict) else None
+        package_id = runtime.package.manifest.factory_run_id or runtime.package.package_root.name
+        apply_scheduler_seed_contract(
+            runtime=scheduler_runtime,
+            contract_payload=contract if isinstance(contract, dict) else None,
+            package_id=package_id,
+        )
 
     def _scheduled_graph_runner(self, *, runtime: CompiledPackageRuntime):
         def run(job, run_record) -> dict[str, Any]:

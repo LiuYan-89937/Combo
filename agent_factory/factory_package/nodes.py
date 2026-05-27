@@ -17,6 +17,7 @@ from agent_factory.factory_package.constants import (
     PACKAGE_BUILD_NODE_ID,
     PRODUCT_BRIEF_NODE_ID,
     RUNTIME_DESIGN_NODE_ID,
+    SCHEDULER_PREPARATION_NODE_ID,
     TOOL_MANUFACTURING_NODE_ID,
 )
 from agent_factory.factory_package.external_resources import (
@@ -36,6 +37,10 @@ from agent_factory.factory_package.runtime_design import (
     validate_runtime_design,
     validation_feedback_text,
 )
+from agent_factory.factory_package.scheduler_preparation import (
+    prepare_scheduler_seeds,
+    scheduler_preparation_message,
+)
 from agent_factory.factory_package.schemas import (
     CapabilityContractOutput,
     CapabilityContractValidationReport,
@@ -44,6 +49,7 @@ from agent_factory.factory_package.schemas import (
     ProductBriefOutput,
     RuntimeDesignOutput,
     RuntimeDesignValidationReport,
+    SchedulerPreparationOutput,
     ToolDesign,
     ToolImplementationDraft,
     ToolManufacturingCheck,
@@ -60,7 +66,9 @@ from agent_factory.factory_package.tool_manufacturing import (
     persist_tool_manufacturing_report,
     run_generated_tool_pipeline,
     tool_manufacturing_catalog_payload,
+    tool_manufacturing_external_questions,
     tool_manufacturing_message,
+    tool_manufacturing_needs_external_input,
     unique_tool_manufacturing_errors,
 )
 from agent_factory.prompts import PromptId, output_json_schema
@@ -88,6 +96,8 @@ _STATE_KEYS = {
     "capability_contract_validation",
     "tool_manufacturing",
     "tool_manufacturing_report",
+    "scheduler_preparation",
+    "scheduler_preparation_report",
     "external_resource_request",
     "user_external_resource_answers",
     "package_build_plan",
@@ -108,6 +118,7 @@ def factory_manufacturing_node_provider() -> StaticNodeProvider:
             FactoryRuntimeDesignNode(),
             FactoryCapabilityContractNode(),
             FactoryToolManufacturingNode(),
+            FactorySchedulerPreparationNode(),
             FactoryPackageBuildNode(),
         ),
     )
@@ -425,25 +436,52 @@ class FactoryToolManufacturingNode:
         if not capability_contract.tool_specs_to_generate:
             output = default_tool_manufacturing_output(capability_contract)
         else:
-            try:
-                draft = _draft_tool_manufacturing_output(
-                    factory_run_id=str(namespace_state.get("factory_run_id") or ""),
-                    product_brief_payload=product_brief_payload,
-                    runtime_design_payload=runtime_design_payload,
-                    capability_contract_payload=capability_contract_payload,
-                    capability_contract=capability_contract,
-                    user_external_resources=user_external_resources,
-                )
-                output = finalize_tool_manufacturing_output(
-                    factory_run_id=str(namespace_state.get("factory_run_id") or ""),
-                    output=draft,
-                    capability_contract=capability_contract,
-                )
-                if output.report.status != "valid":
+            resource_followup_done = False
+            while True:
+                try:
+                    draft = _draft_tool_manufacturing_output(
+                        factory_run_id=str(namespace_state.get("factory_run_id") or ""),
+                        product_brief_payload=product_brief_payload,
+                        runtime_design_payload=runtime_design_payload,
+                        capability_contract_payload=capability_contract_payload,
+                        capability_contract=capability_contract,
+                        user_external_resources=user_external_resources,
+                    )
+                    output = finalize_tool_manufacturing_output(
+                        factory_run_id=str(namespace_state.get("factory_run_id") or ""),
+                        output=draft,
+                        capability_contract=capability_contract,
+                        user_external_resources=user_external_resources,
+                    )
+                    if output.report.status == "valid":
+                        break
+                    if (
+                        resource_request
+                        and not resource_followup_done
+                        and tool_manufacturing_needs_external_input(output.report)
+                    ):
+                        user_external_resources.append(
+                            _collect_external_resource_submission(
+                                resource_request=resource_request,
+                                namespace_state={
+                                    **namespace_state,
+                                    "user_external_resource_answers": user_external_resources,
+                                },
+                                reason_notes=tool_manufacturing_external_questions(output.report),
+                            )
+                        )
+                        resource_followup_done = True
+                        namespace_state = {
+                            **namespace_state,
+                            "status": "tool_resource_input_received",
+                            "external_resource_request": resource_request,
+                            "user_external_resource_answers": user_external_resources,
+                        }
+                        continue
                     raise FactoryModelCallError("; ".join(output.report.errors) or "tool manufacturing validation failed")
-            except FactoryModelCallError as exc:
-                report = output.report if output is not None else None
-                return _tool_manufacturing_failed_patch(namespace_state=namespace_state, message=str(exc), report=report)
+                except FactoryModelCallError as exc:
+                    report = output.report if output is not None else None
+                    return _tool_manufacturing_failed_patch(namespace_state=namespace_state, message=str(exc), report=report)
 
         output_payload = output.model_dump(mode="json")
         report_payload = output.report.model_dump(mode="json")
@@ -607,10 +645,17 @@ def _draft_tool_manufacturing_output(
                 spec=parts[1],
                 implementation=parts[2],
                 trial_plan=parts[3],
+                user_external_resources=user_external_resources if isinstance(user_external_resources, list) else [],
             )
             pipeline_checks.extend(checks)
             if artifact is not None:
                 approved_tools.append(artifact)
+                break
+            if any(
+                check.failure_summary is not None
+                and check.failure_summary.category in {"external_resource_unavailable", "unprovenanced_external_source"}
+                for check in checks
+            ):
                 break
             validation_feedback = _tool_manufacturing_feedback_text(checks)
         if latest_parts is not None:
@@ -746,6 +791,110 @@ def _read_validation_report_preview(path_text: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class FactorySchedulerPreparationNode:
+    node_type = "cognitive"
+    supports_interrupt = True
+    supports_subgraph_slot = False
+    writable_sections = {"package_state", "conversation", "execution", "observability"}
+
+    @property
+    def impl_id(self) -> str:
+        return f"builtin.factory.{SCHEDULER_PREPARATION_NODE_ID}"
+
+    def execute(self, state: RuntimeState, context: NodeExecutionContext) -> dict[str, Any]:
+        namespace_state = _initial_state(state)
+        context.emit_event({"event_type": "scheduler_preparation_started"})
+        product_brief_payload = dict(namespace_state.get("product_brief") or {})
+        runtime_design_payload = dict(namespace_state.get("runtime_design") or {})
+        capability_contract_payload = dict(namespace_state.get("capability_contract") or {})
+        tool_manufacturing_payload = dict(namespace_state.get("tool_manufacturing") or {})
+        tool_manufacturing_report = dict(namespace_state.get("tool_manufacturing_report") or {})
+        scheduler_preparation_payload = dict(namespace_state.get("scheduler_preparation") or {})
+        scheduler_preparation_report = dict(namespace_state.get("scheduler_preparation_report") or {})
+        if not product_brief_payload or not runtime_design_payload or not capability_contract_payload:
+            return _scheduler_preparation_failed_patch(
+                namespace_state=namespace_state,
+                message="Scheduler Preparation requires product_brief, runtime_design, and capability_contract.",
+            )
+        if not tool_manufacturing_payload or tool_manufacturing_report.get("status") != "valid":
+            return _scheduler_preparation_failed_patch(
+                namespace_state=namespace_state,
+                message="Scheduler Preparation requires valid Tool Manufacturing output.",
+            )
+        try:
+            product_brief = ProductBriefOutput.model_validate(product_brief_payload)
+            runtime_design = RuntimeDesignOutput.model_validate(runtime_design_payload)
+            capability_contract = CapabilityContractOutput.model_validate(capability_contract_payload)
+            output = prepare_scheduler_seeds(
+                product_brief=product_brief,
+                runtime_design=runtime_design,
+                capability_contract=capability_contract,
+                tool_manufacturing=tool_manufacturing_payload,
+            )
+        except FactoryModelCallError as exc:
+            return _scheduler_preparation_failed_patch(namespace_state=namespace_state, message=str(exc))
+        except Exception as exc:
+            return _scheduler_preparation_failed_patch(
+                namespace_state=namespace_state,
+                message=f"{type(exc).__name__}: {exc}",
+            )
+        if output.validation_report.status != "valid":
+            return _scheduler_preparation_failed_patch(
+                namespace_state={
+                    **namespace_state,
+                    "scheduler_preparation": output.model_dump(mode="json"),
+                    "scheduler_preparation_report": output.validation_report.model_dump(mode="json"),
+                },
+                message="; ".join(output.validation_report.errors) or "Scheduler Preparation validation failed.",
+            )
+
+        for seed in output.approved_seeds:
+            context.emit_event(
+                {
+                    "event_type": "scheduler_seed_confirmed",
+                    "seed_id": seed.seed_id,
+                    "title": seed.title,
+                    "schedule_type": seed.schedule_type,
+                    "schedule_expr": seed.schedule_expr,
+                    "timezone": seed.timezone,
+                }
+            )
+        context.emit_event(
+            {
+                "event_type": "scheduler_preparation_completed",
+                "seed_count": len(output.approved_seeds),
+            }
+        )
+        final_answer = scheduler_preparation_message(output)
+        next_state = {
+            **namespace_state,
+            "current_node": SCHEDULER_PREPARATION_NODE_ID,
+            "status": "scheduler_preparation_ready",
+            "scheduler_preparation": output.model_dump(mode="json"),
+            "scheduler_preparation_report": output.validation_report.model_dump(mode="json"),
+            "factory_response": {"message": final_answer},
+            "manufacturing_log": [
+                *list(namespace_state.get("manufacturing_log") or []),
+                {
+                    "node_id": SCHEDULER_PREPARATION_NODE_ID,
+                    "status": "completed",
+                    "message": f"Prepared {len(output.approved_seeds)} scheduler seed(s).",
+                },
+            ],
+        }
+        return {
+            "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
+            "conversation": {"final_answer": final_answer},
+            "execution": {
+                "current_node": SCHEDULER_PREPARATION_NODE_ID,
+                "finished": False,
+                "finish_status": "running",
+                "route_decision": "factory.next",
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class FactoryPackageBuildNode:
     node_type = "cognitive"
     supports_interrupt = False
@@ -784,11 +933,22 @@ class FactoryPackageBuildNode:
                 namespace_state=namespace_state,
                 message="Package Build requires valid Tool Manufacturing output.",
             )
+        if not scheduler_preparation_payload:
+            return _package_build_failed_patch(
+                namespace_state=namespace_state,
+                message="Package Build requires scheduler_preparation.v0 before it can run.",
+            )
+        if scheduler_preparation_report.get("status") != "valid":
+            return _package_build_failed_patch(
+                namespace_state=namespace_state,
+                message="Package Build requires valid Scheduler Preparation output.",
+            )
         try:
             product_brief = ProductBriefOutput.model_validate(product_brief_payload)
             runtime_design = RuntimeDesignOutput.model_validate(runtime_design_payload)
             capability_contract = CapabilityContractOutput.model_validate(capability_contract_payload)
             tool_manufacturing = ToolManufacturingOutput.model_validate(tool_manufacturing_payload)
+            scheduler_preparation = SchedulerPreparationOutput.model_validate(scheduler_preparation_payload)
         except Exception as exc:
             return _package_build_failed_patch(
                 namespace_state=namespace_state,
@@ -814,6 +974,7 @@ class FactoryPackageBuildNode:
                     "runtime_design": json.dumps(runtime_design_payload, ensure_ascii=False, indent=2),
                     "capability_contract": json.dumps(capability_contract_payload, ensure_ascii=False, indent=2),
                     "tool_manufacturing": json.dumps(tool_manufacturing_payload, ensure_ascii=False, indent=2),
+                    "scheduler_preparation": json.dumps(scheduler_preparation_payload, ensure_ascii=False, indent=2),
                     "output_json_schema": output_json_schema(PackageBuildModelPlan),
                 },
             )
@@ -827,6 +988,7 @@ class FactoryPackageBuildNode:
             runtime_design=runtime_design,
             capability_contract=capability_contract,
             tool_manufacturing=tool_manufacturing,
+            scheduler_preparation=scheduler_preparation,
         )
         final_answer = package_build_message(result.plan, result.report)
         if result.report.status != "valid":
@@ -1021,6 +1183,33 @@ def _tool_manufacturing_failed_patch(
             "route_decision": "execution.finished",
             "last_error": message,
             "last_error_location": TOOL_MANUFACTURING_NODE_ID,
+        },
+    }
+
+
+def _scheduler_preparation_failed_patch(
+    *,
+    namespace_state: dict[str, Any],
+    message: str,
+) -> dict[str, Any]:
+    next_state = {
+        **namespace_state,
+        "current_node": SCHEDULER_PREPARATION_NODE_ID,
+        "status": "failed",
+        "errors": [
+            *list(namespace_state.get("errors") or []),
+            {"where": SCHEDULER_PREPARATION_NODE_ID, "message": message},
+        ],
+    }
+    return {
+        "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
+        "execution": {
+            "current_node": SCHEDULER_PREPARATION_NODE_ID,
+            "finished": True,
+            "finish_status": "failed",
+            "route_decision": "execution.finished",
+            "last_error": message,
+            "last_error_location": SCHEDULER_PREPARATION_NODE_ID,
         },
     }
 

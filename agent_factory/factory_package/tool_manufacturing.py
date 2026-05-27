@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import py_compile
+import re
 import shutil
 import subprocess
 import sys
@@ -48,11 +49,18 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 TOOL_MANUFACTURING_REPORT_PATH = "reports/tool_manufacturing_report.json"
 TOOL_CONTRACT_SMOKE_REPORT_PATH = "reports/tool_contract_smoke_report.json"
+TOOL_RESOURCE_PROBE_REPORT_PATH = "reports/tool_resource_probe_report.json"
 TOOL_MODEL_TRIAL_REPORT_PATH = "reports/tool_model_trial_report.json"
 TOOL_DEPENDENCY_REPORT_PATH = "reports/dependency_install_report.json"
 TOOL_TEST_ENV_ROOT = Path(".agentfactory/tool_test_env")
 TOOL_MANUFACTURING_ARTIFACT_ROOT = Path(".agentfactory/tool_manufacturing")
 SYSTEM_PACKAGE_EXTENSION_ROOT = Path("SystemPackage/extensions")
+_EXTERNAL_HOST_PATTERN = re.compile(
+    r"(?i)(?:https?://)?"
+    r"((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"(?:com|cn|net|org|io|ai|co|dev|gov|edu|info|biz|top|xyz)(?:\.[a-z]{2})?)"
+)
+_RESOURCE_FAILURE_CATEGORIES = {"external_resource_unavailable", "unprovenanced_external_source"}
 
 
 class ToolManufacturingError(RuntimeError):
@@ -118,6 +126,7 @@ def finalize_tool_manufacturing_output(
     factory_run_id: str,
     output: ToolManufacturingOutput,
     capability_contract: CapabilityContractOutput,
+    user_external_resources: list[dict[str, Any]] | None = None,
     test_env_root: Path = TOOL_TEST_ENV_ROOT,
 ) -> ToolManufacturingOutput:
     errors = validate_tool_manufacturing_output(output=output, capability_contract=capability_contract)
@@ -195,6 +204,7 @@ def finalize_tool_manufacturing_output(
             spec=specs_by_id.get(tool_id),
             implementation=impls_by_id.get(tool_id),
             trial_plan=trials_by_id.get(tool_id),
+            user_external_resources=user_external_resources or [],
             test_env_root=test_env_root,
         )
         checks.extend(tool_checks)
@@ -244,6 +254,7 @@ def run_generated_tool_pipeline(
     spec: ToolSpecDraft | None,
     implementation: ToolImplementationDraft | None,
     trial_plan: ToolTrialPlan | None,
+    user_external_resources: list[dict[str, Any]] | None = None,
     test_env_root: Path = TOOL_TEST_ENV_ROOT,
 ) -> tuple[list[ToolManufacturingCheck], ApprovedPackageToolArtifact | None]:
     checks = _run_generated_tool_pipeline(
@@ -253,6 +264,7 @@ def run_generated_tool_pipeline(
         spec=spec,
         implementation=implementation,
         trial_plan=trial_plan,
+        user_external_resources=user_external_resources or [],
         test_env_root=test_env_root,
     )
     if any(item.status == "failed" for item in checks):
@@ -362,6 +374,7 @@ def persist_tool_manufacturing_report(
     paths = {
         "tool_manufacturing_report": report_root / Path(TOOL_MANUFACTURING_REPORT_PATH).name,
         "tool_contract_smoke_report": report_root / Path(TOOL_CONTRACT_SMOKE_REPORT_PATH).name,
+        "tool_resource_probe_report": report_root / Path(TOOL_RESOURCE_PROBE_REPORT_PATH).name,
         "tool_model_trial_report": report_root / Path(TOOL_MODEL_TRIAL_REPORT_PATH).name,
         "dependency_install_report": report_root / Path(TOOL_DEPENDENCY_REPORT_PATH).name,
     }
@@ -386,6 +399,14 @@ def persist_tool_manufacturing_report(
         ),
         encoding="utf-8",
     )
+    paths["tool_resource_probe_report"].write_text(
+        json.dumps(
+            [item for item in checks_payload if str(item.get("name") or "").endswith(".resource_probe")],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     paths["dependency_install_report"].write_text(
         json.dumps(
             [item for item in checks_payload if str(item.get("name") or "").endswith(".dependency_convergence")],
@@ -404,6 +425,36 @@ def approved_package_tool_plans(output: ToolManufacturingOutput | None) -> list[
         PackageToolBuildPlan.model_validate(item.model_dump(mode="json", exclude={"manufacturing_status", "manufacturing_report_ref"}))
         for item in output.approved_package_tools
     ]
+
+
+def tool_manufacturing_needs_external_input(report: ToolManufacturingReport | None) -> bool:
+    return bool(tool_manufacturing_external_questions(report))
+
+
+def tool_manufacturing_external_questions(report: ToolManufacturingReport | None) -> list[str]:
+    if report is None:
+        return []
+    questions: list[str] = []
+    seen: set[str] = set()
+    for check in report.checks:
+        summary = check.failure_summary
+        if summary is None or summary.category not in _RESOURCE_FAILURE_CATEGORIES:
+            continue
+        tool_id = summary.tool_id
+        if summary.category == "unprovenanced_external_source":
+            question = (
+                f"{tool_id} 需要外部来源，但生成结果包含未由你提供或继承的地址。"
+                "请提供你希望它使用的真实来源，或明确暂不提供。"
+            )
+        else:
+            question = (
+                f"{tool_id} 的外部资源连通性未通过。"
+                "请提供替代来源、账号或配置，或明确暂不提供。"
+            )
+        if question not in seen:
+            questions.append(question)
+            seen.add(question)
+    return questions[:4]
 
 
 def resolve_inherited_extensions(decisions: list[ToolSourceDecision]) -> list[InheritedExtensionArtifact]:
@@ -436,6 +487,7 @@ def _run_generated_tool_pipeline(
     spec: ToolSpecDraft | None,
     implementation: ToolImplementationDraft | None,
     trial_plan: ToolTrialPlan | None,
+    user_external_resources: list[dict[str, Any]],
     test_env_root: Path,
 ) -> list[ToolManufacturingCheck]:
     checks: list[ToolManufacturingCheck] = []
@@ -483,6 +535,19 @@ def _run_generated_tool_pipeline(
     checks.append(_check_python_compile(tool_root / "tool.py", tool_id=tool_id))
     checks.append(_check_entrypoint_signature(tool_root / "tool.py", tool_id=tool_id))
     checks.append(_check_tool_spec(tool_spec, tool_id=tool_id))
+    checks.append(
+        _check_external_source_provenance(
+            code=implementation.code,
+            tool_id=tool_id,
+        )
+    )
+    checks.append(
+        _check_trial_external_resource_provenance(
+            trial_plan=trial_plan,
+            tool_id=tool_id,
+            user_external_resources=user_external_resources,
+        )
+    )
     if any(item.status == "failed" for item in checks):
         return checks
     checks.extend(_converge_test_environment(
@@ -495,6 +560,16 @@ def _run_generated_tool_pipeline(
     import_paths = _venv_import_paths((Path.cwd() / test_env_root).resolve())
     with _temporary_sys_path(import_paths):
         checks.append(_run_contract_smoke(package_root=package_root, spec=tool_spec, trial_plan=trial_plan, tool_id=tool_id))
+        if checks[-1].status == "failed":
+            return checks
+        checks.append(
+            _run_resource_probe(
+                package_root=package_root,
+                spec=tool_spec,
+                trial_plan=trial_plan,
+                tool_id=tool_id,
+            )
+        )
         if checks[-1].status == "failed":
             return checks
         checks.append(_run_model_trial(package_root=package_root, spec=tool_spec, trial_plan=trial_plan, tool_id=tool_id))
@@ -684,6 +759,132 @@ def _check_tool_spec(spec: ToolSpec, *, tool_id: str) -> ToolManufacturingCheck:
         )
 
 
+def _check_external_source_provenance(
+    *,
+    code: str,
+    tool_id: str,
+) -> ToolManufacturingCheck:
+    hardcoded_hosts = sorted(_external_hosts_from_code(code))
+    if not hardcoded_hosts:
+        return ToolManufacturingCheck(
+            name=f"{tool_id}.external_source_provenance",
+            status="passed",
+            message="implementation does not hard-code external hosts",
+        )
+    return _failed_check(
+        tool_id=tool_id,
+        phase="resource_probe",
+        category="unprovenanced_external_source",
+        primary_error=(
+            "implementation hard-codes external host(s) instead of reading them from resources: "
+            + ", ".join(hardcoded_hosts)
+        ),
+        suggested_action=(
+            "Remove hard-coded external hosts. Read endpoints, URLs, accounts, and tokens from ToolSpec resources "
+            "or ask the user for the resource before manufacturing the tool."
+        ),
+    )
+
+
+def _check_trial_external_resource_provenance(
+    *,
+    trial_plan: ToolTrialPlan,
+    tool_id: str,
+    user_external_resources: list[dict[str, Any]],
+) -> ToolManufacturingCheck:
+    scenario_hosts = sorted(
+        {
+            host
+            for scenario in trial_plan.scenarios
+            for host in _external_hosts_from_value({"arguments": scenario.arguments, "resources": scenario.resources})
+        }
+    )
+    if not scenario_hosts:
+        return ToolManufacturingCheck(
+            name=f"{tool_id}.trial_external_source_provenance",
+            status="passed",
+            message="trial scenarios do not include explicit external hosts",
+        )
+    allowed_hosts = _external_hosts_from_value(user_external_resources)
+    unknown_hosts = [host for host in scenario_hosts if host not in allowed_hosts]
+    if not unknown_hosts:
+        return ToolManufacturingCheck(
+            name=f"{tool_id}.trial_external_source_provenance",
+            status="passed",
+            message="trial scenario external hosts are present in user-provided resources",
+            details={"hosts": scenario_hosts},
+        )
+    return _failed_check(
+        tool_id=tool_id,
+        phase="resource_probe",
+        category="unprovenanced_external_source",
+        primary_error=(
+            "trial scenarios use external host(s) without user, inherited extension, or system provenance: "
+            + ", ".join(unknown_hosts)
+        ),
+        suggested_action=(
+            "Do not invent trial URLs or endpoints. Ask the user for the real external resource, "
+            "or remove external values from manufacturing trials."
+        ),
+    )
+
+
+def _external_hosts_from_code(code: str) -> set[str]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    hosts: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            hosts.update(_external_hosts_from_text(node.value))
+    return hosts
+
+
+def _external_hosts_from_value(value: Any) -> set[str]:
+    hosts: set[str] = set()
+    if isinstance(value, dict):
+        for item in value.values():
+            hosts.update(_external_hosts_from_value(item))
+    elif isinstance(value, list):
+        for item in value:
+            hosts.update(_external_hosts_from_value(item))
+    elif isinstance(value, str):
+        hosts.update(_external_hosts_from_text(value))
+    return hosts
+
+
+def _external_hosts_from_text(text: str) -> set[str]:
+    hosts: set[str] = set()
+    for match in _EXTERNAL_HOST_PATTERN.finditer(text):
+        host = match.group(1).lower().strip(".")
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _has_external_value(value: Any) -> bool:
+    return bool(_external_hosts_from_value(value))
+
+
+def _resource_probe_failure_reason(*, observation: dict[str, Any], output: Any) -> str:
+    status = str(observation.get("status") or "")
+    if status and status != "completed":
+        return str(observation.get("message") or status)
+    if not isinstance(output, dict):
+        return ""
+    business_status = str(output.get("status") or output.get("state") or "").strip().lower()
+    if business_status in {"error", "failed", "failure", "unavailable"}:
+        return str(output.get("error") or output.get("message") or business_status)
+    for key in ("error", "errors"):
+        value = output.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, list) and value:
+            return "; ".join(str(item) for item in value[:3])
+    return ""
+
+
 def _run_contract_smoke(
     *,
     package_root: Path,
@@ -696,7 +897,38 @@ def _run_contract_smoke(
     try:
         if not trial_plan.scenarios:
             raise ToolManufacturingError("ToolTrialPlan must include at least one scenario")
-        for scenario in trial_plan.scenarios:
+        safe_scenarios = [
+            scenario
+            for scenario in trial_plan.scenarios
+            if not _has_external_value(scenario.arguments) and not _has_external_value(scenario.resources)
+        ]
+        if not safe_scenarios:
+            compiler = ToolCompiler(
+                package_root=package_root,
+                resources={},
+                approval_handler=lambda _spec, _arguments, _risk: ToolApprovalDecision(action="approve"),
+            )
+            tool = compiler.compile(spec)
+            observation = _normalize_tool_observation(tool.invoke({}))
+            status = str(observation.get("status") or "")
+            if status not in {"completed", "invalid_arguments"}:
+                raise ToolManufacturingError(
+                    "synthetic_contract_smoke: expected completed or invalid_arguments, "
+                    f"got {status or '<empty>'}; {observation.get('message') or 'no observation message'}"
+                )
+            scenario_reports.append(
+                {
+                    "scenario_id": "synthetic_contract_smoke",
+                    "observation_status": status,
+                    "message": str(observation.get("message") or "")[:1000],
+                    "errors": [str(item)[:1000] for item in list(observation.get("errors") or [])[:5]],
+                    "resource_paths": [],
+                    "output_keys": [],
+                    "status": "passed",
+                    "business_assertions": "not_evaluated_in_contract_smoke",
+                }
+            )
+        for scenario in safe_scenarios:
             trial_resources = _trial_resources_for_spec(
                 spec=spec,
                 scenario_resources=scenario.resources,
@@ -731,12 +963,13 @@ def _run_contract_smoke(
                 if key not in output:
                     scenario_reports.append({**scenario_report, "status": "failed"})
                     raise ToolManufacturingError(f"{scenario.scenario_id}: output.{key} is missing")
-            if scenario.expected_output_subset:
-                mismatch = _output_subset_mismatch(output, scenario.expected_output_subset)
-                if mismatch:
-                    scenario_reports.append({**scenario_report, "status": "failed"})
-                    raise ToolManufacturingError(f"{scenario.scenario_id}: {mismatch}")
-            scenario_reports.append({**scenario_report, "status": "passed"})
+            scenario_reports.append(
+                {
+                    **scenario_report,
+                    "status": "passed",
+                    "business_assertions": "not_evaluated_in_contract_smoke",
+                }
+            )
         report_path.write_text(
             json.dumps(
                 {
@@ -753,8 +986,12 @@ def _run_contract_smoke(
         return ToolManufacturingCheck(
             name=f"{tool_id}.contract_smoke",
             status="passed",
-            message="contract smoke passed through ToolCompiler and ToolExecutionGateway",
-            details={"report_path": str(report_path), "scenario_count": len(trial_plan.scenarios)},
+            message="contract smoke passed through ToolCompiler and ToolExecutionGateway without business content assertions",
+            details={
+                "report_path": str(report_path),
+                "scenario_count": len(safe_scenarios) if safe_scenarios else 1,
+                "assertion_scope": "schema_and_gateway_only",
+            },
         )
     except Exception as exc:
         primary_error = f"{type(exc).__name__}: {exc}"
@@ -780,6 +1017,117 @@ def _run_contract_smoke(
             primary_error=primary_error,
             report_path=report_path,
             suggested_action="Repair ToolSpec, resource selectors, or implementation so scenario arguments execute through ToolCompiler and Gateway.",
+        )
+
+
+def _run_resource_probe(
+    *,
+    package_root: Path,
+    spec: ToolSpec,
+    trial_plan: ToolTrialPlan,
+    tool_id: str,
+) -> ToolManufacturingCheck:
+    report_path = package_root.parent / Path(TOOL_RESOURCE_PROBE_REPORT_PATH).name
+    scenario_reports: list[dict[str, Any]] = []
+    probe_scenarios = [
+        scenario
+        for scenario in trial_plan.scenarios
+        if _has_external_value(scenario.arguments) or _has_external_value(scenario.resources)
+    ]
+    if not probe_scenarios:
+        report_path.write_text(
+            json.dumps(
+                {
+                    "tool_id": tool_id,
+                    "phase": "resource_probe",
+                    "status": "skipped",
+                    "reason": "no explicit external resource values in trial scenarios",
+                    "scenarios": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return ToolManufacturingCheck(
+            name=f"{tool_id}.resource_probe",
+            status="skipped",
+            message="resource probe skipped because no explicit external resource values were supplied",
+            details={"report_path": str(report_path), "scenario_count": 0},
+        )
+    try:
+        for scenario in probe_scenarios:
+            trial_resources = _trial_resources_for_spec(
+                spec=spec,
+                scenario_resources=scenario.resources,
+                scenario_arguments=scenario.arguments,
+            )
+            compiler = ToolCompiler(
+                package_root=package_root,
+                resources=trial_resources,
+                approval_handler=lambda _spec, _arguments, _risk: ToolApprovalDecision(action="approve"),
+            )
+            tool = compiler.compile(spec)
+            observation = _normalize_tool_observation(tool.invoke(dict(scenario.arguments)))
+            output = observation.get("output") or {}
+            scenario_report = _contract_smoke_scenario_report(
+                scenario_id=scenario.scenario_id,
+                observation=observation,
+                resources=trial_resources,
+                output=output,
+            )
+            status = str(observation.get("status") or "")
+            failure_reason = _resource_probe_failure_reason(observation=observation, output=output)
+            if status != "completed" or failure_reason:
+                scenario_reports.append({**scenario_report, "status": "failed", "failure_reason": failure_reason})
+                raise ToolManufacturingError(
+                    f"{scenario.scenario_id}: external resource probe failed: "
+                    f"{failure_reason or observation.get('message') or status or 'unknown failure'}"
+                )
+            scenario_reports.append({**scenario_report, "status": "passed"})
+        report_path.write_text(
+            json.dumps(
+                {
+                    "tool_id": tool_id,
+                    "phase": "resource_probe",
+                    "status": "passed",
+                    "scenarios": scenario_reports,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return ToolManufacturingCheck(
+            name=f"{tool_id}.resource_probe",
+            status="passed",
+            message="user-provided external resources passed probe scenarios",
+            details={"report_path": str(report_path), "scenario_count": len(probe_scenarios)},
+        )
+    except Exception as exc:
+        primary_error = f"{type(exc).__name__}: {exc}"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "tool_id": tool_id,
+                    "phase": "resource_probe",
+                    "status": "failed",
+                    "category": "external_resource_unavailable",
+                    "primary_error": primary_error,
+                    "scenarios": scenario_reports,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return _failed_check(
+            tool_id=tool_id,
+            phase="resource_probe",
+            category="external_resource_unavailable",
+            primary_error=primary_error,
+            report_path=report_path,
+            suggested_action="Ask the user for a replacement endpoint, account, token, or explicit skip before manufacturing continues.",
         )
 
 
@@ -837,23 +1185,6 @@ def _contract_smoke_scenario_report(
         "resource_paths": sorted(_flatten_resource_paths(resources)),
         "output_keys": sorted(output.keys()) if isinstance(output, dict) else [],
     }
-
-
-def _output_subset_mismatch(output: Any, expected: dict[str, Any], path: str = "output") -> str:
-    if not isinstance(output, dict):
-        return f"{path} must be an object for expected_output_subset"
-    for key, expected_value in expected.items():
-        next_path = f"{path}.{key}"
-        if key not in output:
-            return f"{next_path} is missing"
-        actual_value = output[key]
-        if isinstance(expected_value, dict):
-            mismatch = _output_subset_mismatch(actual_value, expected_value, next_path)
-            if mismatch:
-                return mismatch
-        elif actual_value != expected_value:
-            return f"{next_path} expected {expected_value!r}, got {actual_value!r}"
-    return ""
 
 
 def _deep_json_copy(value: dict[str, Any]) -> dict[str, Any]:

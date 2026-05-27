@@ -18,6 +18,7 @@ class PromptId(str, Enum):
     TOOL_IMPLEMENTATION_DRAFT = "factory.tool_manufacturing.implementation"
     TOOL_TRIAL_PLAN_DRAFT = "factory.tool_manufacturing.trial_plan"
     EXTERNAL_RESOURCE_RESOLUTION = "factory.tool_manufacturing.external_resource_resolution"
+    SCHEDULER_SEED_REVISION = "factory.scheduler_preparation.seed_revision"
     PACKAGE_BUILD_DRAFT = "factory.package_build.draft"
     SCHEDULER_FEEDBACK_SUMMARY = "scheduler.feedback.summary"
 
@@ -208,6 +209,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "如果需要外部 Python 包，写入 python_requirements；系统包和命令分别写入 system_packages/system_binaries。\n"
                     "禁止设计裸 shell、沙箱外路径、绕过 ToolExecutionGateway 或 secret 输出。\n\n"
                     "外部 URL、API endpoint、SMTP、token、账号和 secret 只能来自用户已提供外部资源；禁止自行编造真实外部服务地址。\n\n"
+                    "如果用户没有提供具体外部来源，只能设计资源槽和 selector，不能写新浪、NewsAPI、Alpha Vantage、SMTP host 或任何猜测的域名。\n"
+                    "实现应该从 resources/arguments 读取来源；外部来源不可用时返回 schema-valid 业务失败 payload。\n\n"
                     "上一轮制造校验反馈：\n{validation_feedback}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
@@ -264,6 +267,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "外部网络逻辑必须有超时和结构化失败返回。\n\n"
                     "外部服务不可达、HTTP 错误、认证失败、SMTP 失败、空结果等业务失败必须返回符合 ToolSpec output_schema 的失败 payload；不要直接 raise 让 Gateway 变成 execution_failed，除非这是不可恢复的编程错误。\n"
                     "外部 URL、API endpoint、SMTP、token、账号和 secret 只能读取 resources 或 arguments 中由用户提供的值；禁止硬编码或编造真实外部服务地址。\n\n"
+                    "不要在代码常量里写真实外部域名或 URL；如果需要默认值，也只能使用空值或从 resources 读取。\n"
+                    "如果没有用户提供的来源，工具要返回 schema-valid 的“缺少资源/未配置”结果，而不是替用户选择来源。\n\n"
                     "上一轮制造校验反馈：\n{validation_feedback}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
@@ -289,9 +294,10 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "2. model-bound trial：task model 读取 user_prompt，生成 tool_call，经 ToolNode/Gateway 得到 ToolMessage，再生成最终回答。\n"
                     "scenario 必须包含 scenario_id、user_prompt、expected_tool_id、arguments、resources、expected_observation_status。\n"
                     "arguments/resources 必须短小、安全、可在制造测试环境执行；不要依赖真实外部服务、真实 secret 或业务环境。\n"
-                    "如果用户提供了真实外部资源，允许 scenario 用这些资源做真实连通性测试；禁止使用用户未提供的 URL、API endpoint、SMTP 或 secret。\n"
-                    "如果外部服务返回业务失败，expected_observation_status 仍应为 completed，只通过 expected_output_keys / expected_output_subset 检查 output 里的业务状态和错误字段。\n"
-                    "expected_output_keys 只检查工具 output 的顶层键；expected_final_answer_contains 只写稳定短语，不能要求长文本逐字匹配。\n"
+                    "如果用户提供了真实外部资源，允许 scenario 用这些资源做真实连通性测试；禁止使用用户未提供的 URL、API endpoint、SMTP 或 secret，禁止用 example.com 之类占位域名冒充真实资源。\n"
+                    "contract smoke 只检查 ToolCompiler、ToolExecutionGateway、schema 与 ToolMessage 链路，不做业务内容精确断言。\n"
+                    "如果外部服务返回业务失败，expected_observation_status 仍应为 completed，并通过 success_criteria 描述业务状态评审。\n"
+                    "expected_output_keys 只检查工具 output 的顶层键；不要要求真实新闻标题、价格、时间或网页内容逐字匹配；expected_final_answer_contains 只写稳定短语，不能要求长文本逐字匹配。\n"
                     "success_criteria 用自然语言写模型试调用评审标准，例如“模型必须调用当前工具而不是直接回答”。\n\n"
                     "上一轮制造校验反馈：\n{validation_feedback}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
@@ -337,6 +343,35 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
+    if prompt_id == PromptId.SCHEDULER_SEED_REVISION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的 Scheduler Seed 修订器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "你的任务是把用户对定时任务卡片的口语化修改，落实成 scheduler seed。\n"
+                    "只能修改 seed_candidates 中已有的定时需求；不能凭空增加 Runtime Design 没声明的定时任务。\n"
+                    "如果用户表示暂不启用定时任务，decision=skip，seeds=[]。\n"
+                    "如果用户确认并补齐了时间，decision=approve，seeds 必须是完整 SchedulerSeedPlan。\n"
+                    "如果用户仍没有给出明确时间，不要猜测；decision=revise，seeds=[]，warnings 写出还缺什么。\n"
+                    "schedule_type 只能是 cron、interval、date。\n"
+                    "cron 使用五段 crontab；interval 使用正整数秒；date 使用 ISO datetime。\n"
+                    "timezone 默认 Asia/Shanghai，除非用户明确指定其他时区。\n"
+                    "默认 target 使用候选中的 graph_run message；不要把定时任务改成工具直调，除非候选已经是 tool_call 或用户明确要求。\n"
+                    "enabled_on_apply 必须为 true。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "Product Brief JSON：\n{product_brief}\n\n"
+                    "Runtime Design JSON：\n{runtime_design}\n\n"
+                    "Scheduler seed candidates JSON：\n{seed_candidates}\n\n"
+                    "用户修改/确认原文：\n{revision_text}\n\n"
+                    "请生成 SchedulerSeedRevisionOutput JSON。",
+                ),
+            ]
+        )
     if prompt_id == PromptId.PACKAGE_BUILD_DRAFT:
         return ChatPromptTemplate.from_messages(
             [
@@ -351,6 +386,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "不要输出绝对路径、不要输出 package_root、不要改写 system-generated 文件、不要声明 builder import path。\n"
                     "package-local node 代码必须定义：def run(input: dict, context) -> dict。\n"
                     "Package Build 禁止生成 package tool 代码；所有生成工具只能来自 Tool Manufacturing 的 approved_package_tools。\n"
+                    "Package Build 禁止生成或改写 scheduler seed；所有定时任务 seed 只能来自 Scheduler Preparation 的 approved_seeds。\n"
                     "代码只能使用 Python 标准库、已声明依赖和通过 context 明确提供的能力；不要裸执行 shell、不要直接读写沙箱外路径、不要绕过 ToolExecutionGateway。\n"
                     "如果 package-local node 代码 import 任何非标准库 Python 包，必须在对应条目的 python_requirements 中声明可安装 requirement；"
                     "如果依赖系统包或系统命令，必须在 system_packages 或 system_binaries 中声明。"
@@ -372,6 +408,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Runtime Design JSON：\n{runtime_design}\n\n"
                     "Capability Contract JSON：\n{capability_contract}\n\n"
                     "Tool Manufacturing JSON：\n{tool_manufacturing}\n\n"
+                    "Scheduler Preparation JSON：\n{scheduler_preparation}\n\n"
                     "请生成 PackageBuildModelPlan JSON。",
                 ),
             ]
