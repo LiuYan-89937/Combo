@@ -12,7 +12,6 @@ from tempfile import mkdtemp
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from ruamel.yaml import YAML
 
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.factory_package.schemas import (
@@ -1533,31 +1532,6 @@ def _write_json_file(
         relative_path=relative_path,
         content=content,
         file_type="json",
-        generation_mode=generation_mode,
-        source=source,
-        materialized=materialized,
-    )
-
-
-def _write_yaml_file(
-    *,
-    temp_root: Path,
-    relative_path: str,
-    payload: dict[str, Any],
-    generation_mode: str,
-    source: str,
-    materialized: list[PackageBuildMaterializedFile],
-) -> None:
-    target = _safe_target(temp_root, relative_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    yaml = YAML()
-    yaml.default_flow_style = False
-    with target.open("w", encoding="utf-8") as handle:
-        yaml.dump(payload, handle)
-    _record_file(
-        temp_root=temp_root,
-        target=target,
-        file_type="yaml",
         generation_mode=generation_mode,
         source=source,
         materialized=materialized,

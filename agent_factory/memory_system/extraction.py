@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_factory.memory_system.schema import MemoryContextPack, MemoryConversationSegment, MemoryExtractionDecision
-from agent_factory.models import get_task_model, get_task_model_settings
+from agent_factory.models import get_task_model
 
 
 MEMORY_EXTRACTION_MAX_ATTEMPTS = 5
@@ -38,12 +38,9 @@ def extract_memory_actions(
     task_model = model or get_task_model()
     if task_model is None:
         raise RuntimeError("task model is not configured")
-    settings = get_task_model_settings()
     structured = task_model.with_structured_output(MemoryExtractionDecision, method="json_mode").with_config(
         tags=["nostream"]
     )
-    if settings.max_tokens is not None:
-        structured = structured.bind(max_tokens=settings.max_tokens)
     messages = [
         SystemMessage(content=MEMORY_EXTRACTION_SYSTEM),
         HumanMessage(

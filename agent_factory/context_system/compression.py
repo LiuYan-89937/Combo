@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from agent_factory.context_system.schema import CompressionPolicy, ContextCompressionReport
 from agent_factory.context_system.token_counter import TokenCountResult
-from agent_factory.models import get_compression_model, get_compression_model_settings
+from agent_factory.models import get_compression_model
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 
 
@@ -86,7 +86,7 @@ def maybe_compress_messages(
                     duration_ms=int((perf_counter() - started) * 1000),
                 )
             )
-        summary = _summarize_messages(compressible, max_summary_tokens=policy.max_summary_tokens)
+        summary = _summarize_messages(compressible)
         summary_message = SystemMessage(
             content=summary,
             additional_kwargs={
@@ -185,15 +185,11 @@ def _is_tool_message(message: Any) -> bool:
     return isinstance(message, ToolMessage)
 
 
-def _summarize_messages(messages: list[Any], *, max_summary_tokens: int) -> str:
+def _summarize_messages(messages: list[Any]) -> str:
     model = get_compression_model()
-    settings = get_compression_model_settings()
     if model is None:
         raise RuntimeError("compression model is not configured")
     configured = model
-    max_tokens = settings.max_tokens or max_summary_tokens
-    if max_tokens is not None:
-        configured = configured.bind(max_tokens=max_tokens)
     prompt = [
         SystemMessage(
             content=(

@@ -13,7 +13,7 @@ from agent_factory.knowledge_system.schema import (
     MountMode,
     SourceType,
 )
-from agent_factory.models import get_task_model, get_task_model_settings
+from agent_factory.models import get_task_model
 
 
 KNOWLEDGE_PLANNER_MAX_ATTEMPTS = 3
@@ -53,12 +53,9 @@ def plan_knowledge_ingestion(
     if task_model is None:
         plan = _default_plan(limits=limits, rationale="task model is not configured; using deterministic default splitters.")
         return plan.model_copy(update={"warnings": ["task_model_not_configured"]})
-    settings = get_task_model_settings()
     structured = task_model.with_structured_output(KnowledgeIngestionPlan, method="json_mode").with_config(
         tags=["nostream"]
     )
-    if settings.max_tokens is not None:
-        structured = structured.bind(max_tokens=settings.max_tokens)
     messages = [
         SystemMessage(content=KNOWLEDGE_PLANNER_SYSTEM),
         HumanMessage(

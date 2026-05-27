@@ -25,6 +25,7 @@ from agent_factory.factory_package.package_build import build_agent_package, def
 from agent_factory.factory_package.runtime_design import validate_runtime_design
 from agent_factory.factory_package.schemas import (
     CapabilityContractOutput,
+    ExternalResourceResolutionDraft,
     InheritedExtensionArtifact,
     PackageBuildModelPlan,
     ProductBriefOutput,
@@ -34,9 +35,14 @@ from agent_factory.factory_package.schemas import (
     ToolSourceDecision,
     ToolTrialPlan,
 )
+from agent_factory.factory_package.external_resources import (
+    _external_resource_collection_payload,
+    _external_resource_confirmation_payload,
+    _normalize_external_resource_collection_resume,
+    _normalize_external_resource_confirmation_resume,
+    _validate_external_resource_resolution,
+)
 from agent_factory.factory_package.nodes import (
-    _external_resource_form_payload,
-    _normalize_external_resource_resume,
     factory_manufacturing_node_provider,
 )
 from agent_factory.factory_package.tool_manufacturing import (
@@ -318,62 +324,135 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
         self.assertEqual(plan.scenarios[0].expected_output_keys, ["status"])
         self.assertEqual(plan.scenarios[0].expected_output_subset, {"status": "error", "retryable": True})
 
-    def test_external_resource_form_round_trips_to_structured_resume_payload(self) -> None:
+    def test_external_resource_collection_uses_questions_and_confirmation(self) -> None:
         request = {
             "resources": [
                 {
-                    "resource_id": "user_report_config",
-                    "description": "Report configuration.",
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
                     "required": True,
                     "value_schema": {
                         "type": "object",
+                        "title": "外部服务配置",
                         "properties": {
-                            "symbols": {"type": "array", "items": {"type": "string"}},
-                            "news_sources": {"type": "array", "items": {"type": "string", "format": "uri"}},
-                            "risk_preference": {"type": "string"},
+                            "endpoint": {
+                                "type": "string",
+                                "format": "uri",
+                                "title": "服务地址",
+                                "x-agentfactory-ui": {"question": "它应该访问哪个服务地址？"},
+                            },
+                            "api_token": {
+                                "type": "string",
+                                "title": "访问密钥",
+                                "writeOnly": True,
+                                "x-agentfactory-ui": {"question": "这个服务需要访问密钥吗？"},
+                            },
                         },
-                        "required": ["symbols", "news_sources"],
+                        "required": ["endpoint"],
                     },
-                    "secret_fields": [],
+                    "secret_fields": ["api_token"],
                 }
             ],
             "sandbox_requirements": [
                 {
-                    "requirement_id": "network_access",
-                    "description": "Allow HTTP/HTTPS connectivity.",
+                    "requirement_id": "network",
+                    "description": "Allow external connectivity.",
                     "network_required": True,
                 }
             ],
         }
 
-        payload = _external_resource_form_payload(request)
-        fields = payload["form"]["fields"]
-        self.assertEqual([field["key"] for field in fields], [
-            "user_report_config.symbols",
-            "user_report_config.news_sources",
-            "user_report_config.risk_preference",
-            "sandbox.network_access",
-        ])
-
-        normalized = _normalize_external_resource_resume(
-            request,
-            {
-                "type": "resource_form_result",
-                "decision": "submit",
-                "values": {
-                    "user_report_config.symbols": ["AAPL", "MSFT"],
-                    "user_report_config.news_sources": ["https://example.com/rss.xml"],
-                    "sandbox.network_access": True,
-                },
-            },
-        )
-
-        self.assertEqual(normalized["resources"]["user_report_config"]["symbols"], ["AAPL", "MSFT"])
+        collection = _external_resource_collection_payload(request)
+        self.assertEqual(collection["type"], "resource_collection")
+        self.assertIn("它应该访问哪个服务地址？", collection["questions"])
+        self.assertIn("是否允许制造阶段联网测试？", collection["questions"])
         self.assertEqual(
-            normalized["resources"]["user_report_config"]["news_sources"],
-            ["https://example.com/rss.xml"],
+            _normalize_external_resource_collection_resume(
+                {"type": "resource_collection_answer", "decision": "submit", "answer": "用 https://api.example.com"}
+            )["answer"],
+            "用 https://api.example.com",
         )
-        self.assertEqual(normalized["sandbox"]["network_access"]["network_access"], True)
+
+        draft = ExternalResourceResolutionDraft(
+            resources={
+                "service_config": {
+                    "endpoint": "https://api.example.com",
+                    "api_token": "secret-value",
+                }
+            },
+            sandbox={"network": {"network_access": True}},
+        )
+        validation = _validate_external_resource_resolution(request, draft)
+        self.assertEqual(validation["errors"], [])
+        self.assertEqual(validation["missing_questions"], [])
+
+        confirmation = _external_resource_confirmation_payload(
+            resource_request=request,
+            draft=draft,
+            validation=validation,
+        )
+        by_key = {item["key"]: item for item in confirmation["items"]}
+        self.assertEqual(by_key["service_config.endpoint"]["value_summary"], "https://api.example.com")
+        self.assertEqual(by_key["service_config.api_token"]["value_summary"], "已提供")
+        self.assertEqual(by_key["sandbox.network"]["value_summary"], "是")
+        self.assertEqual(
+            _normalize_external_resource_confirmation_resume(
+                {"type": "resource_confirmation_result", "decision": "approve"}
+            )["decision"],
+            "approve",
+        )
+
+    def test_external_resource_validation_turns_missing_schema_fields_into_questions(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "title": "服务地址",
+                                "x-agentfactory-ui": {"question": "它应该访问哪个服务地址？"},
+                            },
+                            "token": {
+                                "type": "string",
+                                "title": "访问密钥",
+                                "writeOnly": True,
+                                "x-agentfactory-ui": {"question": "这个服务需要访问密钥吗？"},
+                            },
+                        },
+                        "required": ["endpoint", "token"],
+                    },
+                    "secret_fields": ["token"],
+                }
+            ],
+            "sandbox_requirements": [
+                {
+                    "requirement_id": "runtime_io",
+                    "description": "Needs a local input folder.",
+                    "network_required": False,
+                    "mounts_required": ["input_dir"],
+                }
+            ],
+        }
+
+        collection = _external_resource_collection_payload(request)
+        self.assertIn("它应该访问哪个服务地址？", collection["questions"])
+        self.assertIn("这个服务需要访问密钥吗？", collection["questions"])
+        self.assertIn("请提供input dir。", collection["questions"])
+
+        draft = ExternalResourceResolutionDraft(
+            resources={"service_config": {"endpoint": "https://api.example.com"}},
+            sandbox={"runtime_io": {}, "unknown_runtime": {"network_access": True}},
+        )
+        validation = _validate_external_resource_resolution(request, draft)
+
+        self.assertEqual(validation["errors"], ["unknown_runtime: sandbox requirement is not declared by resource_request"])
+        self.assertIn("这个服务需要访问密钥吗？", validation["missing_questions"])
+        self.assertIn("请提供input dir。", validation["missing_questions"])
 
     def test_tool_manufacturing_resolves_enabled_factory_skill_for_inheritance(self) -> None:
         with TemporaryDirectory() as temp_dir:

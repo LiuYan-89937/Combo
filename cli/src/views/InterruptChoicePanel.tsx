@@ -4,8 +4,11 @@ import {
 	buildPlanReviewContinuePayload,
 	buildPlanReviewRevisionPayload,
 	buildRequirementClarificationResumePayload,
-	buildResourceFormPayload,
-	buildResourceFormSkipPayload,
+	buildResourceCollectionPayload,
+	buildResourceCollectionSkipPayload,
+	buildResourceConfirmationApprovePayload,
+	buildResourceConfirmationRevisePayload,
+	buildResourceConfirmationSkipPayload,
 	buildToolApprovalPayload,
 	buildToolApprovalRevisionPayload,
 	buildToolTrustPayload,
@@ -69,7 +72,7 @@ export function InterruptChoicePanel({
 }) {
 	const event = useStoreSelector(state => state.pendingInterrupt);
 	const interruptType = String(event?.payload?.type ?? event?.event_type ?? '');
-	if (!event || !['requirement_clarification', 'plan_review', 'tool_approval', 'resource_form'].includes(interruptType)) {
+	if (!event || !['requirement_clarification', 'plan_review', 'tool_approval', 'resource_collection', 'resource_confirmation'].includes(interruptType)) {
 		return null;
 	}
 	if (interruptType === 'requirement_clarification') {
@@ -78,15 +81,18 @@ export function InterruptChoicePanel({
 	if (interruptType === 'plan_review') {
 		return <PlanReviewTabs event={event} onSubmit={onSubmit} />;
 	}
-	if (interruptType === 'resource_form') {
-		return <ResourceFormPanel event={event} onSubmit={onSubmit} />;
+	if (interruptType === 'resource_collection') {
+		return <ResourceCollectionPanel event={event} onSubmit={onSubmit} />;
+	}
+	if (interruptType === 'resource_confirmation') {
+		return <ResourceConfirmationPanel event={event} onSubmit={onSubmit} />;
 	}
 	return <ToolApprovalTabs event={event} onSubmit={onSubmit} />;
 }
 
 export function isChoiceInterrupt(event: FactoryEvent | null): boolean {
 	const interruptType = String(event?.payload?.type ?? event?.event_type ?? '');
-	return ['requirement_clarification', 'plan_review', 'tool_approval', 'resource_form'].includes(interruptType);
+	return ['requirement_clarification', 'plan_review', 'tool_approval', 'resource_collection', 'resource_confirmation'].includes(interruptType);
 }
 
 function RequirementClarificationTabs({
@@ -409,103 +415,128 @@ function ToolApprovalTabs({
 	);
 }
 
-type ResourceFormField = {
-	key: string;
-	label: string;
-	type: string;
-	required: boolean;
-	description?: string;
-	default?: unknown;
-	secret?: boolean;
-};
-
-function ResourceFormPanel({
+function ResourceCollectionPanel({
 	event,
 	onSubmit
 }: {
 	event: FactoryEvent;
 	onSubmit: (payload: Record<string, unknown>) => void;
 }) {
-	const fields = useMemo(() => resourceFormFields(event), [event]);
-	const [selected, setSelected] = useState(0);
-	const [values, setValues] = useState<Record<string, string | boolean>>({});
-	const [notice, setNotice] = useState('');
-	const selectedField = fields[selected] ?? fields[0];
+	const questions = useMemo(() => resourceCollectionQuestions(event), [event]);
+	const [answer, setAnswer] = useState('');
 
 	useEffect(() => {
-		setSelected(0);
-		setNotice('');
-		setValues(defaultResourceFormValues(fields));
-	}, [event.event_id, fields]);
+		setAnswer('');
+	}, [event.event_id]);
 
 	useInput((input, key) => {
-		if (!fields.length) {
-			return;
-		}
-		if (key.upArrow) {
-			setSelected(current => Math.max(0, current - 1));
-			setNotice('');
-			return;
-		}
-		if (key.downArrow) {
-			setSelected(current => Math.min(fields.length - 1, current + 1));
-			setNotice('');
+		if (key.return) {
+			if (answer.trim()) {
+				onSubmit(buildResourceCollectionPayload(answer.trim()));
+			}
 			return;
 		}
 		if (key.escape) {
-			onSubmit(buildResourceFormSkipPayload());
-			return;
-		}
-		if (key.return) {
-			const missing = fields.filter(field => field.required && !hasFormValue(values[field.key]));
-			if (missing.length) {
-				setNotice(`缺少必填项：${missing.map(field => field.key).join(', ')}`);
-				return;
-			}
-			onSubmit(buildResourceFormPayload(coerceResourceFormValues(fields, values)));
-			return;
-		}
-		if (!selectedField) {
-			return;
-		}
-			if (selectedField.type === 'boolean' && (input === ' ' || key.leftArrow || key.rightArrow)) {
-				setValues(current => ({...current, [selectedField.key]: !current[selectedField.key]}));
-			setNotice('');
+			onSubmit(buildResourceCollectionSkipPayload());
 			return;
 		}
 		if (key.backspace || key.delete) {
-			setValues(current => ({...current, [selectedField.key]: String(current[selectedField.key] ?? '').slice(0, -1)}));
-			setNotice('');
+			setAnswer(current => current.slice(0, -1));
 			return;
 		}
-		if (input && !key.ctrl && !key.meta && selectedField.type !== 'boolean') {
-			setValues(current => ({...current, [selectedField.key]: `${String(current[selectedField.key] ?? '')}${input}`}));
-			setNotice('');
+		if (input && !key.ctrl && !key.meta) {
+			setAnswer(current => current + input);
 		}
 	});
 
 	return (
 		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
-			<Text bold color="yellow">{String(event.payload?.title ?? 'Resource Form')}</Text>
-			<Text color="gray">{String(event.payload?.message ?? '提交外部资源后继续。')}</Text>
-			{fields.map((field, index) => (
-				<Box key={field.key} flexDirection="column" marginTop={index ? 1 : 0}>
-					<Text color={index === selected ? 'yellow' : field.required && !hasFormValue(values[field.key]) ? 'red' : 'white'}>
-						{index === selected ? '> ' : '  '}
-						{field.key}
-						{field.required ? ' *' : ''}
-						<Text color="gray">  {field.type}</Text>
-					</Text>
-					<Text>
-						<Text color="gray">value: </Text>
-						{formatResourceFieldValue(field, values[field.key])}
-						{index === selected && field.type !== 'boolean' ? <Text inverse>{' '}</Text> : null}
-					</Text>
-					{field.description ? <Text color="gray">{trimOneLine(field.description, 180)}</Text> : null}
-				</Box>
+			<Text bold color="yellow">{String(event.payload?.title ?? '补充外部资源')}</Text>
+			<Text color="gray">{String(event.payload?.message ?? '请直接用一句话说明可以使用的外部资源。')}</Text>
+			{questions.map((question, index) => (
+				<Text key={`${question}-${index}`}>
+					<Text color="yellow">{index === 0 ? '> ' : '  '}</Text>
+					{question}
+				</Text>
 			))}
-			{notice ? <Text color="red">{notice}</Text> : null}
-			<Text color="gray">Up/Down 选择字段，直接输入值，Backspace 删除；boolean 用 Space 切换；Enter 提交；Esc 暂不提供。</Text>
+			<Text>
+				<Text color="gray">回答: </Text>
+				{answer}
+				<Text inverse>{' '}</Text>
+			</Text>
+			<Text color="gray">可以一句话回答；Enter 提交；Esc 暂不提供。</Text>
+		</Box>
+	);
+}
+
+function ResourceConfirmationPanel({
+	event,
+	onSubmit
+}: {
+	event: FactoryEvent;
+	onSubmit: (payload: Record<string, unknown>) => void;
+}) {
+	const items = useMemo(() => resourceConfirmationItems(event), [event]);
+	const [mode, setMode] = useState<'review' | 'revise'>('review');
+	const [revisionText, setRevisionText] = useState('');
+
+	useEffect(() => {
+		setMode('review');
+		setRevisionText('');
+	}, [event.event_id]);
+
+	useInput((input, key) => {
+		if (mode === 'revise') {
+			if (key.return) {
+				if (revisionText.trim()) {
+					onSubmit(buildResourceConfirmationRevisePayload(revisionText.trim()));
+				}
+				return;
+			}
+			if (key.escape) {
+				setMode('review');
+				setRevisionText('');
+				return;
+			}
+			if (key.backspace || key.delete) {
+				setRevisionText(current => current.slice(0, -1));
+				return;
+			}
+			if (input && !key.ctrl && !key.meta) {
+				setRevisionText(current => current + input);
+			}
+			return;
+		}
+		if (input.toLowerCase() === 'y' || key.return) {
+			onSubmit(buildResourceConfirmationApprovePayload());
+			return;
+		}
+		if (input.toLowerCase() === 'r') {
+			setMode('revise');
+			return;
+		}
+		if (input.toLowerCase() === 'n' || key.escape) {
+			onSubmit(buildResourceConfirmationSkipPayload());
+		}
+	});
+
+	return (
+		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+			<Text bold color="yellow">{String(event.payload?.title ?? '确认外部资源')}</Text>
+			<Text color="gray">{String(event.payload?.message ?? '确认后继续制造工具。')}</Text>
+			{items.map(item => (
+				<Text key={item.key}>
+					<Text color={item.required ? 'yellow' : 'gray'}>{item.required ? '> ' : '  '}</Text>
+					{item.title}: {item.valueSummary}
+				</Text>
+			))}
+			{mode === 'revise' ? (
+				<Text color="cyan">
+					修改说明：{revisionText}
+					<Text inverse>{' '}</Text>
+				</Text>
+			) : null}
+			<Text color="gray">Enter/y 确认；r 修改；n/Esc 暂不提供。</Text>
 		</Box>
 	);
 }
@@ -576,111 +607,36 @@ function formatApprovalValue(value: unknown): string {
 	return trimOneLine(String(value), 240);
 }
 
-function resourceFormFields(event: FactoryEvent): ResourceFormField[] {
-	const form = event.payload?.form;
-	const fields = form && typeof form === 'object' ? (form as Record<string, unknown>).fields : [];
-	if (!Array.isArray(fields)) {
+function resourceCollectionQuestions(event: FactoryEvent): string[] {
+	const questions = event.payload?.questions;
+	if (!Array.isArray(questions)) {
 		return [];
 	}
-	return fields.map((item, index) => {
-		const field = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-		const key = String(field.key ?? `field_${index + 1}`);
+	return questions.map(item => String(item).trim()).filter(Boolean).slice(0, 6);
+}
+
+type ResourceConfirmationItem = {
+	key: string;
+	title: string;
+	valueSummary: string;
+	required: boolean;
+};
+
+function resourceConfirmationItems(event: FactoryEvent): ResourceConfirmationItem[] {
+	const items = event.payload?.items;
+	if (!Array.isArray(items)) {
+		return [];
+	}
+	return items.map((item, index) => {
+		const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+		const key = String(record.key ?? `item_${index + 1}`);
 		return {
 			key,
-			label: String(field.label ?? key),
-			type: String(field.type ?? 'string'),
-			required: Boolean(field.required),
-			description: field.description ? String(field.description) : undefined,
-			default: field.default,
-			secret: Boolean(field.secret)
+			title: String(record.title ?? key),
+			valueSummary: String(record.value_summary ?? record.valueSummary ?? '未提供'),
+			required: Boolean(record.required)
 		};
 	});
-}
-
-function defaultResourceFormValues(fields: ResourceFormField[]): Record<string, string | boolean> {
-	const values: Record<string, string | boolean> = {};
-	for (const field of fields) {
-		if (field.default === undefined || field.default === null) {
-			if (field.type === 'boolean') {
-				values[field.key] = false;
-			}
-			continue;
-		}
-		if (field.type === 'boolean') {
-			values[field.key] = Boolean(field.default);
-			continue;
-		}
-		if (typeof field.default === 'string' || typeof field.default === 'number' || typeof field.default === 'boolean') {
-			values[field.key] = String(field.default);
-			continue;
-		}
-		values[field.key] = JSON.stringify(field.default);
-	}
-	return values;
-}
-
-function hasFormValue(value: unknown): boolean {
-	if (value === undefined || value === null) {
-		return false;
-	}
-	if (typeof value === 'string') {
-		return value.trim().length > 0;
-	}
-	return true;
-}
-
-function coerceResourceFormValues(fields: ResourceFormField[], values: Record<string, string | boolean>): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	for (const field of fields) {
-		const value = values[field.key];
-		if (!hasFormValue(value)) {
-			continue;
-		}
-		result[field.key] = coerceResourceFieldValue(field, value);
-	}
-	return result;
-}
-
-function coerceResourceFieldValue(field: ResourceFormField, value: string | boolean): unknown {
-	if (field.type === 'boolean') {
-		return Boolean(value);
-	}
-	const text = String(value).trim();
-	if (field.type === 'string_array' || field.type === 'url_array') {
-		if (text.startsWith('[') && text.endsWith(']')) {
-			try {
-				const parsed = JSON.parse(text);
-				if (Array.isArray(parsed)) {
-					return parsed;
-				}
-			} catch {
-				return text.split(',').map(item => item.trim()).filter(Boolean);
-			}
-		}
-		return text.split(',').map(item => item.trim()).filter(Boolean);
-	}
-	if (field.type === 'number') {
-		const numberValue = Number(text);
-		return Number.isFinite(numberValue) ? numberValue : text;
-	}
-	if (field.type === 'json') {
-		try {
-			return JSON.parse(text);
-		} catch {
-			return text;
-		}
-	}
-	return text;
-}
-
-function formatResourceFieldValue(field: ResourceFormField, value: string | boolean | undefined): string {
-	if (field.type === 'boolean') {
-		return value ? 'true' : 'false';
-	}
-	if (field.secret && hasFormValue(value)) {
-		return '••••••';
-	}
-	return trimOneLine(String(value ?? ''), 180);
 }
 
 function trimOneLine(value: string, limit: number): string {

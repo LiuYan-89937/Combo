@@ -34,7 +34,6 @@ class CompressionPolicy(BaseModel):
     enabled: bool = True
     trigger_token_threshold: int = Field(default=8000, ge=1000)
     keep_recent_messages: int = Field(default=12, ge=2, le=128)
-    max_summary_tokens: int = Field(default=1600, ge=100)
 
 
 class RetrievalPolicy(BaseModel):

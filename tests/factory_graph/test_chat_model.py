@@ -33,17 +33,14 @@ class ChatModelTest(unittest.TestCase):
                 "AGENTFACTORY_OPENAI_API_KEY": "shared-key",
                 "AGENTFACTORY_OPENAI_BASE_URL": "https://openai-compatible.example/v1",
                 "AGENTFACTORY_LLM_TEMPERATURE": "0.2",
-                "AGENTFACTORY_LLM_MAX_OUTPUT_TOKENS": "2048",
                 "AGENTFACTORY_LLM_THINKING": "enabled",
                 "AGENTFACTORY_TASK_MODEL": "task-model",
                 "AGENTFACTORY_TASK_TEMPERATURE": "0",
-                "AGENTFACTORY_TASK_MAX_OUTPUT_TOKENS": "512",
                 "AGENTFACTORY_TASK_THINKING": "disabled",
                 "AGENTFACTORY_COMPRESSION_BASE_URL": "https://compression.example/v1",
                 "AGENTFACTORY_COMPRESSION_API_KEY": "compression-key",
                 "AGENTFACTORY_COMPRESSION_MODEL": "compression-model",
                 "AGENTFACTORY_COMPRESSION_TEMPERATURE": "0.1",
-                "AGENTFACTORY_COMPRESSION_MAX_OUTPUT_TOKENS": "1024",
                 "AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS": "120",
                 "AGENTFACTORY_COMPRESSION_THINKING": "disabled",
                 "UNRELATED_MODEL": "ignored-model",
@@ -64,24 +61,24 @@ class ChatModelTest(unittest.TestCase):
         self.assertEqual(main_settings.api_key, "shared-key")
         self.assertEqual(main_settings.base_url, "https://openai-compatible.example/v1")
         self.assertEqual(main_settings.temperature, 0.2)
-        self.assertEqual(main_settings.max_tokens, 2048)
         self.assertEqual(main_settings.thinking, "enabled")
         self.assertEqual(task_settings.model, "task-model")
         self.assertEqual(task_settings.api_key, "shared-key")
         self.assertEqual(task_settings.base_url, "https://openai-compatible.example/v1")
         self.assertEqual(task_settings.temperature, 0)
-        self.assertEqual(task_settings.max_tokens, 512)
         self.assertEqual(task_settings.thinking, "disabled")
         self.assertEqual(compression_settings.model, "compression-model")
         self.assertEqual(compression_settings.api_key, "compression-key")
         self.assertEqual(compression_settings.base_url, "https://compression.example/v1")
         self.assertEqual(compression_settings.temperature, 0.1)
-        self.assertEqual(compression_settings.max_tokens, 1024)
         self.assertEqual(compression_settings.timeout_seconds, 120)
         self.assertEqual(compression_settings.thinking, "disabled")
         self.assertIsInstance(main_model, ChatOpenAI)
         self.assertIsInstance(task_model, ChatOpenAI)
         self.assertIsInstance(compression_model, ChatOpenAI)
+        self.assertIsNone(main_model.max_tokens)
+        self.assertIsNone(task_model.max_tokens)
+        self.assertIsNone(compression_model.max_tokens)
         self.assertEqual(main_model.extra_body, {"thinking": {"type": "enabled"}})
         self.assertEqual(task_model.extra_body, {"thinking": {"type": "disabled"}})
         self.assertEqual(compression_model.extra_body, {"thinking": {"type": "disabled"}})

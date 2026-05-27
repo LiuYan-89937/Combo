@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from agent_factory.models import get_task_model, get_task_model_settings
+from agent_factory.models import get_task_model
 from agent_factory.prompts import PromptId, get_prompt, output_json_schema
 from agent_factory.scheduler_system.schema import (
     SchedulerExecutionReport,
@@ -30,14 +30,11 @@ def summarize_scheduler_feedback(
     completed_count: int,
 ) -> SchedulerFeedbackSummaryDecision:
     model = get_task_model()
-    settings = get_task_model_settings()
     if model is None:
         raise SchedulerFeedbackError("task model is not configured for scheduler feedback")
     structured_model = model.with_structured_output(SchedulerFeedbackSummaryDecision, method="json_mode").with_config(
         tags=["nostream", "scheduler-feedback"]
     )
-    if settings.max_tokens is not None:
-        structured_model = structured_model.bind(max_tokens=settings.max_tokens)
     prompt_value = get_prompt(PromptId.SCHEDULER_FEEDBACK_SUMMARY).invoke(
         {
             "output_json_schema": output_json_schema(SchedulerFeedbackSummaryDecision),

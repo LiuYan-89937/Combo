@@ -6,7 +6,7 @@ from typing import Any, Callable
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_factory.models import get_task_model, get_task_model_settings
+from agent_factory.models import get_task_model
 from agent_factory.tooling.spec import ToolRiskAction, ToolRiskLevel, ToolRiskResult
 
 
@@ -31,7 +31,6 @@ def call_llm_risk_evaluator(
     hard_result: ToolRiskResult | None = None,
 ) -> ToolRiskResult:
     model = get_task_model()
-    settings = get_task_model_settings()
     if model is None:
         return ToolRiskResult(
             action="uncertain",
@@ -41,8 +40,6 @@ def call_llm_risk_evaluator(
     structured_model = model.with_structured_output(LLMRiskDecision, method="json_mode").with_config(
         tags=["nostream", "tool-risk"]
     )
-    if settings.max_tokens is not None:
-        structured_model = structured_model.bind(max_tokens=settings.max_tokens)
     raw_decision = structured_model.invoke(
         [
             SystemMessage(

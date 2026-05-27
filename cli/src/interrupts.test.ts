@@ -18,14 +18,20 @@ describe('interrupt resume payloads', () => {
 		});
 	});
 
-	it('maps resource form key-value text to structured resume payload', () => {
-		expect(buildResumePayload(resourceFormEvent(), 'user_report_config.symbols: AAPL, MSFT; sandbox.network_access=true')).toEqual({
-			type: 'resource_form_result',
+	it('maps resource collection and confirmation text to resume payloads', () => {
+		expect(buildResumePayload(resourceCollectionEvent(), '用 https://api.example.com，token 是 abc')).toEqual({
+			type: 'resource_collection_answer',
 			decision: 'submit',
-			values: {
-				'user_report_config.symbols': ['AAPL', 'MSFT'],
-				'sandbox.network_access': true
-			}
+			answer: '用 https://api.example.com，token 是 abc'
+		});
+		expect(buildResumePayload(resourceConfirmationEvent(), '确认')).toEqual({
+			type: 'resource_confirmation_result',
+			decision: 'approve'
+		});
+		expect(buildResumePayload(resourceConfirmationEvent(), '这个地址换成 https://api2.example.com')).toEqual({
+			type: 'resource_confirmation_result',
+			decision: 'revise',
+			revision_text: '这个地址换成 https://api2.example.com'
 		});
 	});
 });
@@ -56,11 +62,20 @@ function toolApprovalEvent(): FactoryEvent {
 	};
 }
 
-function resourceFormEvent(): FactoryEvent {
+function resourceCollectionEvent(): FactoryEvent {
 	return {
 		...toolApprovalEvent(),
-		event_id: 'resource-form',
+		event_id: 'resource-collection',
 		event_type: 'interrupt_requested',
-		payload: {type: 'resource_form', title: 'Resource Form'}
+		payload: {type: 'resource_collection', title: 'Resource Collection'}
+	};
+}
+
+function resourceConfirmationEvent(): FactoryEvent {
+	return {
+		...toolApprovalEvent(),
+		event_id: 'resource-confirmation',
+		event_type: 'interrupt_requested',
+		payload: {type: 'resource_confirmation', title: 'Resource Confirmation'}
 	};
 }

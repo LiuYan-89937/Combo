@@ -10,7 +10,11 @@ export function InterruptPrompt() {
 	}
 	const payload = event.payload ?? {};
 	const descriptor = describeInterrupt(event);
-	if (payload.type === 'tool_approval' || payload.type === 'resource_form') {
+	if (
+		payload.type === 'tool_approval'
+		|| payload.type === 'resource_collection'
+		|| payload.type === 'resource_confirmation'
+	) {
 		return null;
 	}
 	return (

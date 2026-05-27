@@ -63,10 +63,7 @@ class ContextSystemTest(unittest.TestCase):
             AIMessage(content="answer" * 800),
             HumanMessage(content="latest"),
         ]
-        with patch("agent_factory.context_system.compression.get_compression_model", return_value=_FakeModel()), patch(
-            "agent_factory.context_system.compression.get_compression_model_settings",
-            return_value=_FakeSettings(),
-        ):
+        with patch("agent_factory.context_system.compression.get_compression_model", return_value=_FakeModel()):
             compressed, report = maybe_compress_messages(
                 messages=messages,
                 policy=CompressionPolicy(trigger_token_threshold=1000, keep_recent_messages=2),
@@ -171,14 +168,7 @@ class ContextSystemTest(unittest.TestCase):
         self.assertEqual(events[-1]["item_count"], 1)
 
 
-class _FakeSettings:
-    max_tokens = 512
-
-
 class _FakeModel:
-    def bind(self, **_kwargs):
-        return self
-
     def invoke(self, _messages):
         return AIMessage(content="summary of older conversation")
 

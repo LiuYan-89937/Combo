@@ -17,6 +17,7 @@ class PromptId(str, Enum):
     TOOL_SPEC_DRAFT = "factory.tool_manufacturing.spec"
     TOOL_IMPLEMENTATION_DRAFT = "factory.tool_manufacturing.implementation"
     TOOL_TRIAL_PLAN_DRAFT = "factory.tool_manufacturing.trial_plan"
+    EXTERNAL_RESOURCE_RESOLUTION = "factory.tool_manufacturing.external_resource_resolution"
     PACKAGE_BUILD_DRAFT = "factory.package_build.draft"
     SCHEDULER_FEEDBACK_SUMMARY = "scheduler.feedback.summary"
 
@@ -96,7 +97,10 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "这一步必须讲清楚每个系统具体接入什么、为什么接入、后续使用什么策略。\n"
                     "必须逐项消费 Runtime Design 的 pattern_slots：每个 slot 应当映射为 contract、资源需求、工具生成任务、prompt 生成任务、scheduler 策略或 artifact 策略。\n"
                     "resources_required 必须保留资源描述，同时提供工具可读取的 value_schema/default_value/secret_fields；不要把资源描述当成 resources.json 的运行值。\n"
-                    "resources 是运行配置的唯一事实源；package_state 不允许复制 watchlist、news_sources、api_key、输出路径等资源字段，只能保存确认状态、进度、派生结果等业务状态。\n"
+                    "resources_required.value_schema 必须使用 JSON Schema 标准注解描述用户表单：title 给普通用户看的字段名，description 解释为什么需要，examples 给可填写示例，default 给默认值。\n"
+                    "如需额外 UI 提示，只能使用通用扩展 x-agentfactory-ui，允许字段包括 input_kind、placeholder、help、examples、secret；不要依赖字段名让前端猜业务含义。\n"
+                    "x-agentfactory-ui.input_kind 只能是 text、text_list、url_list、number、boolean、secret、json 或 natural_language。\n"
+                    "resources 是运行配置的唯一事实源；package_state 不允许复制外部来源、凭据、账号、endpoint、输出路径等资源字段，只能保存确认状态、进度、派生结果等业务状态。\n"
                     "不要生成工具代码、node.py、pattern yaml、package 文件或真实资源值。\n"
                     "不要声明任何 Python builder import path；RuntimeContract builder 只能由系统注册。\n"
                     "contract_drafts 必须包含所有 required_agent_package_contracts 与 Runtime Design 明确需要的 contract。\n"
@@ -140,7 +144,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "继承 MCP/Skill 时不要复制实现内容到模型输出；系统会从 Factory extensions 解析并写入子 Agent 的 extensions 目录。\n"
                     "source 是 package_generated 的工具，必须提供 ToolDesign、ToolSpecDraft、ToolImplementationDraft、ToolTrialPlan。\n"
                     "ToolSpecDraft 必须能转换为 RuntimeKernel ToolSpec；input_schema/output_schema 必须是严格 JSON Schema object。\n"
-                    "资源绑定使用 resource_bindings 的 local_name -> selector 语义；selector 只能是点路径，例如 report_config.news_api_key，禁止 resources://...、{{resources...}} 或绝对路径。\n"
+                    "资源绑定使用 resource_bindings 的 local_name -> selector 语义；selector 只能是点路径，例如 service_config.api_token，禁止 resources://...、{{resources...}} 或绝对路径。\n"
                     "tool.py 必须提供名为 run 的入口函数，参数必须依次为 arguments 与 resources，并返回 dict。\n"
                     "工具代码不能裸执行 shell，不能访问沙箱外路径，不能绕过 ToolExecutionGateway，不能把 secret 写入输出。\n"
                     "如果工具需要外部 Python 包，必须写入 ToolDesign.python_requirements；系统包和命令分别写入 system_packages/system_binaries。\n"
@@ -199,7 +203,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
                     "只为当前这一个 package_generated 工具生成 ToolDesign，不生成 spec、代码、测试或 smoke。\n"
                     "资源绑定只能写 resource_bindings 列表，每项必须是 {{local_name, selector, purpose}}。\n"
-                    "local_name 是工具代码里使用的本地资源名，例如 news_sources 或 news_api_key；selector 是资源点路径，例如 report_config.news_sources。\n"
+                    "local_name 是工具代码里使用的本地资源名，例如 input_sources 或 api_token；selector 是资源点路径，例如 service_config.input_sources。\n"
                     "禁止输出 resource_selectors 字段；禁止 selector 使用 resources://...、{{resources...}}、描述文字或绝对路径。\n"
                     "如果需要外部 Python 包，写入 python_requirements；系统包和命令分别写入 system_packages/system_binaries。\n"
                     "禁止设计裸 shell、沙箱外路径、绕过 ToolExecutionGateway 或 secret 输出。\n\n"
@@ -229,7 +233,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "只为当前这一个 package_generated 工具生成 ToolSpecDraft，不生成代码、测试或 smoke。\n"
                     "input_schema/output_schema 必须是严格 JSON Schema object，默认 additionalProperties=false。\n"
                     "resources 是 ToolSpec 的实际资源映射，格式固定为 local_resource_name -> dot_path_selector。\n"
-                    "示例：{{\"news_sources\":\"report_config.news_sources\",\"news_api_key\":\"report_config.api_keys.news_api_key\"}}。\n"
+                    "示例：{{\"input_sources\":\"service_config.input_sources\",\"api_token\":\"service_config.credentials.api_token\"}}。\n"
                     "key 必须是本地资源名，value 必须是点路径 selector；禁止反写成 selector -> 描述，禁止 resources://...、{{resources...}} 或绝对路径。\n\n"
                     "如果工具会访问外部服务，output_schema 必须包含稳定失败输出，不能只定义成功路径。业务失败应作为 output 字段表达，例如 status/error/retryable，而不是依赖 Gateway invalid_output。\n\n"
                     "上一轮制造校验反馈：\n{validation_feedback}\n\n"
@@ -302,6 +306,37 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                 ),
             ]
         )
+    if prompt_id == PromptId.EXTERNAL_RESOURCE_RESOLUTION:
+        return ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是 FastAgentFactory 的外部资源解析器。\n"
+                    "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
+                    "你的任务是把用户的口语化回答映射到 resource_request 中声明的 resources 与 sandbox schema。\n"
+                    "只做理解和结构化，不生成工具设计、代码、测试或 package 文件。\n"
+                    "不要编造用户没有提供的 URL、账号、API key、token、连接串、文件路径或推送渠道。\n"
+                    "如果用户明确说暂不提供，decision=skip，resources 和 sandbox 置空。\n"
+                    "如果回答中缺少必填项或无法判断字段归属，decision=needs_clarification，并只在 missing_questions 中写最少追问。\n"
+                    "如果可以落实，decision=resolved，并把值写入 resources 或 sandbox。\n"
+                    "resources 的顶层 key 必须是 resource_request.resources[].resource_id；每个 value 必须符合该资源 value_schema。\n"
+                    "sandbox 的顶层 key 必须是 resource_request.sandbox_requirements[].requirement_id；联网权限写入 network_access boolean，挂载路径写入 mounts.<mount_id>。\n"
+                    "不要输出 resource_request 中没有声明的顶层资源或 sandbox requirement。\n"
+                    "secret 字段可以结构化到对应字段，但不要在 notes 中重复 secret 明文。\n\n"
+                    "Output JSON schema:\n{output_json_schema}",
+                ),
+                (
+                    "user",
+                    "Product Brief JSON：\n{product_brief}\n\n"
+                    "Runtime Design JSON：\n{runtime_design}\n\n"
+                    "Capability Contract JSON：\n{capability_contract}\n\n"
+                    "Resource Request JSON：\n{resource_request}\n\n"
+                    "系统向用户提出的问题：\n{resource_questions}\n\n"
+                    "用户回答原文：\n{user_answer}\n\n"
+                    "请生成 ExternalResourceResolutionDraft JSON。",
+                ),
+            ]
+        )
     if prompt_id == PromptId.PACKAGE_BUILD_DRAFT:
         return ChatPromptTemplate.from_messages(
             [
@@ -324,8 +359,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "如果 Runtime Design 不需要 package-local node，对应列表必须为空。\n"
                     "如果有 cognitive.structured 节点，必须提供可执行的 JSON Schema 和 write_target。\n"
                     "prompt 模板变量只能使用 Kernel 已提供的数据源：messages、runtime_context、context、model_context、package_state、resources、current_user_input。"
-                    "不要声明 raw_news、raw_quotes 这类没有 binding 来源的变量；如果需要数据，让 cognitive.answer 通过工具调用拿到 observation。\n"
-                    "package tool 的 resources 映射值必须是资源选择器，例如 report_config.news_api_key，不要使用 {{resources...}} 模板表达式。\n"
+                    "不要声明 raw_payload、external_records 这类没有 binding 来源的变量；如果需要数据，让 cognitive.answer 通过工具调用拿到 observation。\n"
+                    "package tool 的 resources 映射值必须是资源选择器，例如 service_config.api_token，不要使用 {{resources...}} 模板表达式。\n"
                     "prompt 模板要面向生成 Agent 的运行时模型，不要提 FastAgentFactory 内部制造流程。\n\n"
                     "Factory 运行边界：\n{factory_operating_context}\n\n"
                     "Factory 默认实现：\n{factory_default_implementation_context}\n\n"

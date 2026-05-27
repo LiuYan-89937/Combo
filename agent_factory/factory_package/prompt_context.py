@@ -16,10 +16,6 @@ FACTORY_DEFAULT_IMPLEMENTATION_CONTEXT = """Factory 已决定的默认实现：
 """
 
 
-def factory_operating_context() -> str:
-    return FACTORY_OPERATING_CONTEXT
-
-
 def prompt_context_values(_node_id: str) -> dict[str, str]:
     return {
         "factory_operating_context": FACTORY_OPERATING_CONTEXT,

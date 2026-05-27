@@ -10,8 +10,7 @@
       "compression": {
         "enabled": true,
         "trigger_token_threshold": 12000,
-        "keep_recent_messages": 16,
-        "max_summary_tokens": 2000
+        "keep_recent_messages": 16
       },
       "retrieval": {
         "enabled": true,
