@@ -33,6 +33,14 @@ class ProductBriefOutput(BaseModel):
 
 RuntimeDesignMode = Literal["reuse_pattern"]
 RuntimeDesignModelOperation = Literal["none", "text", "tool_bound_chat", "structured_json"]
+ResourceResolutionStrategy = Literal[
+    "ask_user",
+    "discoverable",
+    "secret",
+    "optional",
+    "runtime_config",
+    "defaultable",
+]
 RuntimeDesignNodeType = Literal["reserved", "cognitive", "operational", "governance", "terminal", "sub_graph"]
 RuntimeDesignSlotType = Literal[
     "prompt",
@@ -189,6 +197,7 @@ class RuntimeDesignResourceSlotBinding(BaseModel):
     value_schema: dict[str, Any] = Field(default_factory=dict)
     default_value: dict[str, Any] = Field(default_factory=dict)
     secret_fields: list[str] = Field(default_factory=list)
+    resolution_strategy: list[ResourceResolutionStrategy]
 
 
 class RuntimeDesignStateSlotBinding(BaseModel):
@@ -420,6 +429,7 @@ class CapabilityResourceRequirementPlan(BaseModel):
     value_schema: dict[str, Any] = Field(default_factory=dict)
     default_value: dict[str, Any] = Field(default_factory=dict)
     secret_fields: list[str] = Field(default_factory=list)
+    resolution_strategy: list[ResourceResolutionStrategy]
     sandbox_access_expectation: str = ""
     used_by: list[str] = Field(default_factory=list)
 
@@ -463,6 +473,68 @@ class CapabilityContractValidationReport(BaseModel):
     generation_task_summary: dict[str, int] = Field(default_factory=dict)
 
 
+class ExternalResourceDiscoveryQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    query: str
+    target_resource_id: str = ""
+    target_path: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+    @field_validator("question", "query")
+    @classmethod
+    def _discovery_text_is_non_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("discovery question and query must not be empty")
+        return text
+
+
+class ExternalResourceDiscoveryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: ExternalResourceDiscoveryQuery
+    status: Literal["completed", "unavailable", "failed"] = "completed"
+    tool_id: str = ""
+    summary: str = ""
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    error: str = ""
+
+
+class ResourceFact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    value: Any = None
+    secret: bool = False
+    status: Literal["confirmed", "discovered", "declined", "missing", "optional_empty"] = "confirmed"
+    source: Literal["user", "tool", "knowledge", "mcp", "skill", "default", "system"] = "user"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    required_by: list[str] = Field(default_factory=list)
+
+    @field_validator("key")
+    @classmethod
+    def _key_is_non_empty(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("resource fact key must not be empty")
+        return text
+
+
+class ResourceResolutionReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["resource_resolution_report.v0"] = "resource_resolution_report.v0"
+    status: Literal["valid", "needs_input", "skipped", "failed"] = "valid"
+    facts_count: int = 0
+    missing_questions: list[str] = Field(default_factory=list)
+    discovery_results: list[ExternalResourceDiscoveryResult] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ExternalResourceResolutionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -470,6 +542,9 @@ class ExternalResourceResolutionDraft(BaseModel):
     decision: Literal["resolved", "needs_clarification", "skip"] = "resolved"
     resources: dict[str, Any] = Field(default_factory=dict)
     sandbox: dict[str, Any] = Field(default_factory=dict)
+    discovery_queries: list[ExternalResourceDiscoveryQuery] = Field(default_factory=list, max_length=5)
+    discovery_results: list[ExternalResourceDiscoveryResult] = Field(default_factory=list, max_length=5)
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     missing_questions: list[str] = Field(default_factory=list, max_length=5)
     notes: list[str] = Field(default_factory=list, max_length=8)
 

@@ -44,6 +44,21 @@
     "capability_contract_validation": {
       "type": "object"
     },
+    "resource_resolution": {
+      "type": "object"
+    },
+    "resource_resolution_report": {
+      "type": "object"
+    },
+    "resource_facts": {
+      "type": "object"
+    },
+    "pending_resource_request": {
+      "type": "object"
+    },
+    "pending_resource_interaction": {
+      "type": "object"
+    },
     "tool_manufacturing": {
       "type": "object"
     },
@@ -55,12 +70,6 @@
     },
     "scheduler_preparation_report": {
       "type": "object"
-    },
-    "external_resource_request": {
-      "type": "object"
-    },
-    "user_external_resource_answers": {
-      "type": "array"
     },
     "package_build_plan": {
       "type": "object"

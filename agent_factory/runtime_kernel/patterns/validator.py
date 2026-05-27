@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+import re
 
 from agent_factory.runtime_kernel.errors import PatternValidationError
 from agent_factory.runtime_kernel.nodes.catalog import (
@@ -26,6 +27,8 @@ ALLOWED_EDGE_CONDITIONS = {
     "subgraph.blocked",
     "execution.finished",
 }
+
+PACKAGE_EDGE_CONDITION_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 ALLOWED_REQUIRED_CAPABILITIES = {
     "prompt",
@@ -88,7 +91,7 @@ class PatternValidator:
                 raise PatternValidationError(f"Edge from unknown node: {edge.from_}")
             if edge.to not in node_map:
                 raise PatternValidationError(f"Edge to unknown node: {edge.to}")
-            if edge.when not in ALLOWED_EDGE_CONDITIONS:
+            if not _is_allowed_edge_condition(edge.when):
                 raise PatternValidationError(f"Unsupported edge condition: {edge.when}")
             outgoing[edge.from_].append(edge.to)
         for node_id in spec.interrupt_points:
@@ -126,3 +129,9 @@ def _has_path(entry: str, targets: set[str], outgoing: dict[str, list[str]]) -> 
                 seen.add(nxt)
                 queue.append(nxt)
     return False
+
+
+def _is_allowed_edge_condition(condition: str) -> bool:
+    if condition in ALLOWED_EDGE_CONDITIONS:
+        return True
+    return bool(PACKAGE_EDGE_CONDITION_RE.fullmatch(condition))

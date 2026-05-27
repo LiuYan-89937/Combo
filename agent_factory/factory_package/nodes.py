@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from langgraph.types import interrupt
+
 from agent_factory.factory_package.capability_contract import (
     capability_contract_catalog_payload,
     capability_contract_message,
@@ -16,13 +18,24 @@ from agent_factory.factory_package.constants import (
     CAPABILITY_CONTRACT_NODE_ID,
     PACKAGE_BUILD_NODE_ID,
     PRODUCT_BRIEF_NODE_ID,
+    RESOURCE_RESOLUTION_NODE_ID,
     RUNTIME_DESIGN_NODE_ID,
     SCHEDULER_PREPARATION_NODE_ID,
     TOOL_MANUFACTURING_NODE_ID,
 )
 from agent_factory.factory_package.external_resources import (
-    _collect_external_resource_submission,
-    _external_resource_request,
+    build_external_resource_collection_payload,
+    build_external_resource_confirmation_payload,
+    build_resource_resolution_request,
+    commit_resource_facts_from_draft,
+    declined_resource_facts,
+    normalize_external_resource_collection_resume,
+    normalize_external_resource_confirmation_resume,
+    parse_external_resource_answer,
+    resource_answer_privacy_report,
+    resource_resolution_report,
+    run_external_resource_discovery_for_draft,
+    validate_external_resource_draft,
 )
 from agent_factory.factory_package.model_call import FactoryModelCallError, call_structured_model
 from agent_factory.factory_package.package_build import (
@@ -44,9 +57,11 @@ from agent_factory.factory_package.scheduler_preparation import (
 from agent_factory.factory_package.schemas import (
     CapabilityContractOutput,
     CapabilityContractValidationReport,
+    ExternalResourceResolutionDraft,
     PackageBuildModelPlan,
     PackageBuildPlan,
     ProductBriefOutput,
+    ResourceResolutionReport,
     RuntimeDesignOutput,
     RuntimeDesignValidationReport,
     SchedulerPreparationOutput,
@@ -94,12 +109,15 @@ _STATE_KEYS = {
     "runtime_design_validation",
     "capability_contract",
     "capability_contract_validation",
+    "resource_resolution",
+    "resource_resolution_report",
+    "resource_facts",
+    "pending_resource_request",
+    "pending_resource_interaction",
     "tool_manufacturing",
     "tool_manufacturing_report",
     "scheduler_preparation",
     "scheduler_preparation_report",
-    "external_resource_request",
-    "user_external_resource_answers",
     "package_build_plan",
     "package_build_report",
     "factory_response",
@@ -117,6 +135,7 @@ def factory_manufacturing_node_provider() -> StaticNodeProvider:
             FactoryProductBriefNode(),
             FactoryRuntimeDesignNode(),
             FactoryCapabilityContractNode(),
+            FactoryResourceResolutionNode(),
             FactoryToolManufacturingNode(),
             FactorySchedulerPreparationNode(),
             FactoryPackageBuildNode(),
@@ -379,6 +398,295 @@ class FactoryCapabilityContractNode:
 
 
 @dataclass(frozen=True, slots=True)
+class FactoryResourceResolutionNode:
+    node_type = "cognitive"
+    supports_interrupt = True
+    supports_subgraph_slot = False
+    writable_sections = {"package_state", "conversation", "execution", "observability"}
+
+    @property
+    def impl_id(self) -> str:
+        return f"builtin.factory.{RESOURCE_RESOLUTION_NODE_ID}"
+
+    def execute(self, state: RuntimeState, context: NodeExecutionContext) -> dict[str, Any]:
+        namespace_state = _initial_state(state)
+        context.emit_event({"event_type": "resource_resolution_started"})
+        capability_contract_payload = dict(namespace_state.get("capability_contract") or {})
+        capability_contract_validation = dict(namespace_state.get("capability_contract_validation") or {})
+        if not capability_contract_payload:
+            return _resource_resolution_failed_patch(
+                namespace_state=namespace_state,
+                message="Resource Resolution requires capability_contract.v0 before it can run.",
+                context=context,
+            )
+        if capability_contract_validation.get("status") != "valid":
+            return _resource_resolution_failed_patch(
+                namespace_state=namespace_state,
+                message="Resource Resolution requires a valid Capability Contract.",
+                context=context,
+            )
+        try:
+            capability_contract = CapabilityContractOutput.model_validate(capability_contract_payload)
+        except Exception as exc:
+            return _resource_resolution_failed_patch(
+                namespace_state=namespace_state,
+                message=f"Capability Contract payload is invalid: {exc}",
+                context=context,
+            )
+
+        existing_facts = dict(namespace_state.get("resource_facts") or {})
+        resource_state = dict(namespace_state.get("resource_resolution") or {})
+        pending_request_raw = dict(namespace_state.get("pending_resource_request") or {})
+        stored_request = resource_state.get("resource_request") if isinstance(resource_state.get("resource_request"), dict) else {}
+        default_request = build_resource_resolution_request(capability_contract)
+        request_source = pending_request_raw or stored_request or default_request
+        resource_request, reason_notes = _resource_request_and_notes(request_source)
+        phase = _resource_resolution_phase(
+            resource_state=resource_state,
+            pending_request=bool(pending_request_raw),
+            resource_request=resource_request,
+            existing_facts=existing_facts,
+        )
+        if not resource_request:
+            return _resource_resolution_ready_patch(
+                namespace_state=namespace_state,
+                facts=existing_facts,
+                report=resource_resolution_report(facts=existing_facts),
+                context=context,
+            )
+
+        if phase == "completed":
+            return _resource_resolution_ready_patch(
+                namespace_state=namespace_state,
+                facts=existing_facts,
+                report=resource_resolution_report(facts=existing_facts),
+                context=context,
+            )
+
+        if phase == "needs_collection":
+            payload = build_external_resource_collection_payload(
+                resource_request,
+                missing_questions=list(resource_state.get("missing_questions") or []),
+                reason_notes=reason_notes or list(resource_state.get("reason_notes") or []),
+                prior_answer=str(resource_state.get("answer_text") or ""),
+            )
+            context.emit_event({"event_type": "resource_collection_requested"})
+            resume_payload = interrupt(payload)
+            try:
+                answer = normalize_external_resource_collection_resume(resume_payload)
+            except FactoryModelCallError as exc:
+                return _resource_resolution_failed_patch(namespace_state=namespace_state, message=str(exc), context=context)
+            answer_text = str(answer.get("answer") or "")
+            context.emit_event(
+                {
+                    "event_type": "resource_answer_received",
+                    "decision": answer.get("decision"),
+                    **resource_answer_privacy_report(answer_text),
+                }
+            )
+            if answer.get("decision") in {"skip", "cancel"}:
+                facts = {
+                    **existing_facts,
+                    **declined_resource_facts(
+                        resource_request=resource_request,
+                        note=answer_text,
+                    ),
+                }
+                return _resource_resolution_ready_patch(
+                    namespace_state=namespace_state,
+                    facts=facts,
+                    report=resource_resolution_report(facts=facts, status="skipped"),
+                    context=context,
+                )
+            return _resource_resolution_continue_patch(
+                namespace_state=namespace_state,
+                resource_request=resource_request,
+                phase="parsing_answer",
+                answer_text=answer_text,
+                reason_notes=reason_notes,
+                pending_interaction={"type": "resource_answer_received"},
+            )
+
+        if phase == "parsing_answer":
+            answer_text = str(resource_state.get("answer_text") or "").strip()
+            if not answer_text:
+                return _resource_resolution_failed_patch(
+                    namespace_state=namespace_state,
+                    message="Resource Resolution cannot parse an empty resource answer.",
+                    context=context,
+                )
+            try:
+                draft = parse_external_resource_answer(
+                    resource_request=resource_request,
+                    answer_text=answer_text,
+                    namespace_state=namespace_state,
+                    confirmed_facts=existing_facts,
+                )
+            except FactoryModelCallError as exc:
+                return _resource_resolution_failed_patch(namespace_state=namespace_state, message=str(exc), context=context)
+            if draft.decision == "skip":
+                facts = {
+                    **existing_facts,
+                    **declined_resource_facts(resource_request=resource_request, note=answer_text),
+                }
+                return _resource_resolution_ready_patch(
+                    namespace_state=namespace_state,
+                    facts=facts,
+                    report=resource_resolution_report(draft=draft, facts=facts, status="skipped"),
+                    context=context,
+                )
+            if draft.discovery_queries:
+                return _resource_resolution_continue_patch(
+                    namespace_state=namespace_state,
+                    resource_request=resource_request,
+                    phase="discovering",
+                    draft=draft,
+                    answer_text=answer_text,
+                    reason_notes=reason_notes,
+                    pending_interaction={"type": "resource_discovery_pending"},
+                )
+            validation = validate_external_resource_draft(resource_request=resource_request, draft=draft)
+            if validation.get("errors"):
+                return _resource_resolution_failed_patch(
+                    namespace_state=namespace_state,
+                    message="external resource answer failed validation: " + "; ".join(validation["errors"]),
+                    context=context,
+                )
+            missing_questions = list(validation.get("missing_questions") or draft.missing_questions)
+            if missing_questions:
+                return _resource_resolution_continue_patch(
+                    namespace_state=namespace_state,
+                    resource_request=resource_request,
+                    phase="needs_collection",
+                    draft=draft,
+                    missing_questions=missing_questions,
+                    answer_text=answer_text,
+                    reason_notes=reason_notes,
+                    report=resource_resolution_report(
+                        draft=draft,
+                        facts=existing_facts,
+                        status="needs_input",
+                        missing_questions=missing_questions,
+                    ),
+                    pending_interaction={"type": "resource_collection_followup"},
+                )
+            return _resource_resolution_continue_patch(
+                namespace_state=namespace_state,
+                resource_request=resource_request,
+                phase="needs_confirmation",
+                draft=draft,
+                validation=validation,
+                answer_text=answer_text,
+                reason_notes=reason_notes,
+                pending_interaction={"type": "resource_confirmation_pending"},
+            )
+
+        if phase == "discovering":
+            try:
+                draft = ExternalResourceResolutionDraft.model_validate(dict(resource_state.get("draft") or {}))
+                discovered = run_external_resource_discovery_for_draft(
+                    draft=draft,
+                    resource_request=resource_request,
+                    answer_text=str(resource_state.get("answer_text") or ""),
+                    namespace_state=namespace_state,
+                    context=context,
+                    state=state,
+                )
+            except (FactoryModelCallError, ValueError) as exc:
+                return _resource_resolution_failed_patch(namespace_state=namespace_state, message=str(exc), context=context)
+            validation = validate_external_resource_draft(resource_request=resource_request, draft=discovered)
+            if validation.get("errors"):
+                return _resource_resolution_failed_patch(
+                    namespace_state=namespace_state,
+                    message="external resource discovery failed validation: " + "; ".join(validation["errors"]),
+                    context=context,
+                )
+            missing_questions = list(validation.get("missing_questions") or discovered.missing_questions)
+            if missing_questions:
+                return _resource_resolution_continue_patch(
+                    namespace_state=namespace_state,
+                    resource_request=resource_request,
+                    phase="needs_collection",
+                    draft=discovered,
+                    missing_questions=missing_questions,
+                    answer_text=str(resource_state.get("answer_text") or ""),
+                    reason_notes=reason_notes,
+                    report=resource_resolution_report(
+                        draft=discovered,
+                        facts=existing_facts,
+                        status="needs_input",
+                        missing_questions=missing_questions,
+                    ),
+                    pending_interaction={"type": "resource_collection_followup"},
+                )
+            return _resource_resolution_continue_patch(
+                namespace_state=namespace_state,
+                resource_request=resource_request,
+                phase="needs_confirmation",
+                draft=discovered,
+                validation=validation,
+                answer_text=str(resource_state.get("answer_text") or ""),
+                reason_notes=reason_notes,
+                pending_interaction={"type": "resource_confirmation_pending"},
+            )
+
+        if phase == "needs_confirmation":
+            try:
+                draft = ExternalResourceResolutionDraft.model_validate(dict(resource_state.get("draft") or {}))
+                validation = dict(resource_state.get("validation") or {})
+                payload = build_external_resource_confirmation_payload(
+                    resource_request=resource_request,
+                    draft=draft,
+                    validation=validation,
+                )
+                context.emit_event({"event_type": "resource_confirmation_requested"})
+                confirmation = normalize_external_resource_confirmation_resume(interrupt(payload))
+            except FactoryModelCallError as exc:
+                return _resource_resolution_failed_patch(namespace_state=namespace_state, message=str(exc), context=context)
+            decision = str(confirmation.get("decision") or "approve")
+            if decision == "approve":
+                facts = {
+                    **existing_facts,
+                    **commit_resource_facts_from_draft(resource_request=resource_request, draft=draft),
+                }
+                return _resource_resolution_ready_patch(
+                    namespace_state=namespace_state,
+                    facts=facts,
+                    report=resource_resolution_report(draft=draft, facts=facts),
+                    context=context,
+                )
+            if decision == "skip":
+                facts = {
+                    **existing_facts,
+                    **declined_resource_facts(
+                        resource_request=resource_request,
+                        note=str(confirmation.get("note") or ""),
+                    ),
+                }
+                return _resource_resolution_ready_patch(
+                    namespace_state=namespace_state,
+                    facts=facts,
+                    report=resource_resolution_report(draft=draft, facts=facts, status="skipped"),
+                    context=context,
+                )
+            return _resource_resolution_continue_patch(
+                namespace_state=namespace_state,
+                resource_request=resource_request,
+                phase="parsing_answer",
+                draft=draft,
+                answer_text=str(confirmation.get("revision_text") or ""),
+                reason_notes=reason_notes,
+                pending_interaction={"type": "resource_confirmation_revision"},
+            )
+
+        return _resource_resolution_failed_patch(
+            namespace_state=namespace_state,
+            message=f"Unsupported Resource Resolution phase: {phase}",
+            context=context,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class FactoryToolManufacturingNode:
     node_type = "cognitive"
     supports_interrupt = True
@@ -413,30 +721,19 @@ class FactoryToolManufacturingNode:
                 namespace_state=namespace_state,
                 message=f"Capability Contract payload is invalid: {exc}",
             )
-        resource_request = _external_resource_request(capability_contract)
-        user_external_resources = list(namespace_state.get("user_external_resource_answers") or [])
-        if resource_request and not user_external_resources:
-            try:
-                user_external_resources = [
-                    _collect_external_resource_submission(
-                        resource_request=resource_request,
-                        namespace_state=namespace_state,
-                    )
-                ]
-            except FactoryModelCallError as exc:
-                return _tool_manufacturing_failed_patch(namespace_state=namespace_state, message=str(exc))
-            namespace_state = {
-                **namespace_state,
-                "status": "tool_resource_input_received",
-                "external_resource_request": resource_request,
-                "user_external_resource_answers": user_external_resources,
-            }
+        resource_request = build_resource_resolution_request(capability_contract)
+        resource_facts = dict(namespace_state.get("resource_facts") or {})
+        if resource_request and not resource_facts:
+            return _tool_manufacturing_resource_resolution_patch(
+                namespace_state=namespace_state,
+                resource_request=resource_request,
+                reason_notes=["Tool Manufacturing requires confirmed resource facts before manufacturing tools."],
+            )
 
         output: ToolManufacturingOutput | None = None
         if not capability_contract.tool_specs_to_generate:
             output = default_tool_manufacturing_output(capability_contract)
         else:
-            resource_followup_done = False
             while True:
                 try:
                     draft = _draft_tool_manufacturing_output(
@@ -445,39 +742,28 @@ class FactoryToolManufacturingNode:
                         runtime_design_payload=runtime_design_payload,
                         capability_contract_payload=capability_contract_payload,
                         capability_contract=capability_contract,
-                        user_external_resources=user_external_resources,
+                        resource_facts=resource_facts,
                     )
                     output = finalize_tool_manufacturing_output(
                         factory_run_id=str(namespace_state.get("factory_run_id") or ""),
                         output=draft,
                         capability_contract=capability_contract,
-                        user_external_resources=user_external_resources,
+                        resource_facts=resource_facts,
                     )
                     if output.report.status == "valid":
                         break
                     if (
                         resource_request
-                        and not resource_followup_done
                         and tool_manufacturing_needs_external_input(output.report)
                     ):
-                        user_external_resources.append(
-                            _collect_external_resource_submission(
-                                resource_request=resource_request,
-                                namespace_state={
-                                    **namespace_state,
-                                    "user_external_resource_answers": user_external_resources,
-                                },
-                                reason_notes=tool_manufacturing_external_questions(output.report),
-                            )
+                        return _tool_manufacturing_resource_resolution_patch(
+                            namespace_state=namespace_state,
+                            resource_request={
+                                **resource_request,
+                                "reason_notes": tool_manufacturing_external_questions(output.report),
+                            },
+                            reason_notes=tool_manufacturing_external_questions(output.report),
                         )
-                        resource_followup_done = True
-                        namespace_state = {
-                            **namespace_state,
-                            "status": "tool_resource_input_received",
-                            "external_resource_request": resource_request,
-                            "user_external_resource_answers": user_external_resources,
-                        }
-                        continue
                     raise FactoryModelCallError("; ".join(output.report.errors) or "tool manufacturing validation failed")
                 except FactoryModelCallError as exc:
                     report = output.report if output is not None else None
@@ -585,9 +871,9 @@ def _draft_tool_manufacturing_output(
     runtime_design_payload: dict[str, Any],
     capability_contract_payload: dict[str, Any],
     capability_contract: CapabilityContractOutput,
-    user_external_resources: list[dict[str, Any]],
+    resource_facts: dict[str, Any],
 ) -> ToolManufacturingOutput:
-    user_external_resources_json = json.dumps(user_external_resources, ensure_ascii=False, indent=2)
+    resource_facts_json = json.dumps(resource_facts, ensure_ascii=False, indent=2)
     source_decisions = call_structured_model(
         stage_id=TOOL_MANUFACTURING_NODE_ID,
         prompt_id=PromptId.TOOL_SOURCE_DECISIONS_DRAFT,
@@ -596,7 +882,7 @@ def _draft_tool_manufacturing_output(
             "product_brief": json.dumps(product_brief_payload, ensure_ascii=False, indent=2),
             "runtime_design": json.dumps(runtime_design_payload, ensure_ascii=False, indent=2),
             "capability_contract": json.dumps(capability_contract_payload, ensure_ascii=False, indent=2),
-            "user_external_resources": user_external_resources_json,
+            "resource_facts": resource_facts_json,
             "tool_catalog": json.dumps(
                 tool_manufacturing_catalog_payload(),
                 ensure_ascii=False,
@@ -634,7 +920,7 @@ def _draft_tool_manufacturing_output(
                 ),
                 decision=json.dumps(decision.model_dump(mode="json"), ensure_ascii=False, indent=2),
                 resource_requirements=resource_requirements,
-                user_external_resources=user_external_resources_json,
+                resource_facts=resource_facts_json,
                 validation_feedback=validation_feedback,
             )
             latest_parts = parts
@@ -645,7 +931,7 @@ def _draft_tool_manufacturing_output(
                 spec=parts[1],
                 implementation=parts[2],
                 trial_plan=parts[3],
-                user_external_resources=user_external_resources if isinstance(user_external_resources, list) else [],
+                resource_facts=resource_facts,
             )
             pipeline_checks.extend(checks)
             if artifact is not None:
@@ -693,7 +979,7 @@ def _draft_package_generated_tool_parts(
     requirement: str,
     decision: str,
     resource_requirements: str,
-    user_external_resources: str,
+    resource_facts: str,
     validation_feedback: str,
 ) -> tuple[ToolDesign, ToolSpecDraft, ToolImplementationDraft, ToolTrialPlan]:
     common = {
@@ -702,7 +988,7 @@ def _draft_package_generated_tool_parts(
         "tool_requirement": requirement,
         "source_decision": decision,
         "resource_requirements": resource_requirements,
-        "user_external_resources": user_external_resources,
+        "resource_facts": resource_facts,
         "validation_feedback": validation_feedback,
     }
     design = call_structured_model(
@@ -728,7 +1014,7 @@ def _draft_package_generated_tool_parts(
         values={
             "tool_design": json.dumps(design.model_dump(mode="json"), ensure_ascii=False, indent=2),
             "tool_spec": json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            "user_external_resources": user_external_resources,
+            "resource_facts": resource_facts,
             "validation_feedback": validation_feedback,
             "output_json_schema": output_json_schema(ToolImplementationDraft),
         },
@@ -741,7 +1027,7 @@ def _draft_package_generated_tool_parts(
             "tool_design": json.dumps(design.model_dump(mode="json"), ensure_ascii=False, indent=2),
             "tool_spec": json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2),
             "tool_implementation": json.dumps(implementation.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            "user_external_resources": user_external_resources,
+            "resource_facts": resource_facts,
             "validation_feedback": validation_feedback,
             "output_json_schema": output_json_schema(ToolTrialPlan),
         },
@@ -1157,6 +1443,173 @@ def _capability_contract_log_message(report: CapabilityContractValidationReport)
     )
 
 
+def _resource_resolution_message(report: dict[str, Any]) -> str:
+    status = str(report.get("status") or "valid")
+    facts_count = int(report.get("facts_count") or 0)
+    if status == "skipped":
+        return "Resource Resolution 已跳过外部资源收集；后续工具只能基于已确认或可降级的资源制造。"
+    if facts_count <= 0:
+        return "Resource Resolution 已完成；当前没有需要固化的外部资源事实。"
+    return f"Resource Resolution 已确认 {facts_count} 条外部资源事实。"
+
+
+def _resource_resolution_failed_patch(
+    *,
+    namespace_state: dict[str, Any],
+    message: str,
+    context: NodeExecutionContext | None = None,
+) -> dict[str, Any]:
+    if context is not None:
+        context.emit_event({"event_type": "resource_resolution_failed", "error": message})
+    next_state = {
+        **namespace_state,
+        "current_node": RESOURCE_RESOLUTION_NODE_ID,
+        "status": "failed",
+        "resource_resolution_report": {
+            "version": "resource_resolution_report.v0",
+            "status": "failed",
+            "facts_count": len(dict(namespace_state.get("resource_facts") or {})),
+            "missing_questions": [],
+            "discovery_results": [],
+            "errors": [message],
+            "warnings": [],
+        },
+        "errors": [
+            *list(namespace_state.get("errors") or []),
+            {"where": RESOURCE_RESOLUTION_NODE_ID, "message": message},
+        ],
+    }
+    return {
+        "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
+        "execution": {
+            "current_node": RESOURCE_RESOLUTION_NODE_ID,
+            "finished": True,
+            "finish_status": "failed",
+            "route_decision": "execution.finished",
+            "last_error": message,
+            "last_error_location": RESOURCE_RESOLUTION_NODE_ID,
+        },
+    }
+
+
+def _resource_request_and_notes(raw_request: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    request = dict(raw_request or {})
+    notes = [str(item) for item in list(request.pop("reason_notes", []) or []) if str(item).strip()]
+    return request, notes
+
+
+def _resource_resolution_phase(
+    *,
+    resource_state: dict[str, Any],
+    pending_request: bool,
+    resource_request: dict[str, Any],
+    existing_facts: dict[str, Any],
+) -> str:
+    if not resource_request:
+        return "completed"
+    phase = str(resource_state.get("phase") or "").strip()
+    if phase in {"needs_collection", "parsing_answer", "discovering", "needs_confirmation", "completed"}:
+        if phase != "completed" or not pending_request:
+            return phase
+    if pending_request:
+        return "needs_collection"
+    if existing_facts:
+        return "completed"
+    return "needs_collection"
+
+
+def _resource_resolution_continue_patch(
+    *,
+    namespace_state: dict[str, Any],
+    resource_request: dict[str, Any],
+    phase: str,
+    draft: ExternalResourceResolutionDraft | None = None,
+    validation: dict[str, Any] | None = None,
+    answer_text: str = "",
+    missing_questions: list[str] | None = None,
+    reason_notes: list[str] | None = None,
+    report: ResourceResolutionReport | None = None,
+    pending_interaction: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolution_state: dict[str, Any] = {
+        "version": "resource_resolution.v0",
+        "phase": phase,
+        "resource_request": resource_request,
+        "resource_requests": [resource_request],
+        "answer_text": answer_text,
+        "missing_questions": list(missing_questions or []),
+        "reason_notes": list(reason_notes or []),
+    }
+    if draft is not None:
+        resolution_state["draft"] = draft.model_dump(mode="json")
+    if validation is not None:
+        resolution_state["validation"] = validation
+    next_state = {
+        **namespace_state,
+        "current_node": RESOURCE_RESOLUTION_NODE_ID,
+        "status": f"resource_resolution_{phase}",
+        "resource_resolution": resolution_state,
+        "pending_resource_interaction": dict(pending_interaction or {}),
+    }
+    if report is not None:
+        next_state["resource_resolution_report"] = report.model_dump(mode="json")
+    return {
+        "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
+        "execution": {
+            "current_node": RESOURCE_RESOLUTION_NODE_ID,
+            "finished": False,
+            "finish_status": None,
+            "route_decision": "factory.resource_resolution_continue",
+        },
+    }
+
+
+def _resource_resolution_ready_patch(
+    *,
+    namespace_state: dict[str, Any],
+    facts: dict[str, Any],
+    report: ResourceResolutionReport,
+    context: NodeExecutionContext,
+) -> dict[str, Any]:
+    report_payload = report.model_dump(mode="json")
+    final_answer = _resource_resolution_message(report_payload)
+    next_state = {
+        **namespace_state,
+        "current_node": RESOURCE_RESOLUTION_NODE_ID,
+        "status": "resource_resolution_ready",
+        "resource_resolution": {
+            "version": "resource_resolution.v0",
+            "phase": "completed",
+            "resource_requests": [],
+        },
+        "resource_resolution_report": report_payload,
+        "resource_facts": facts,
+        "pending_resource_request": {},
+        "pending_resource_interaction": {},
+        "factory_response": {"message": final_answer},
+        "manufacturing_log": [
+            *list(namespace_state.get("manufacturing_log") or []),
+            {
+                "node_id": RESOURCE_RESOLUTION_NODE_ID,
+                "status": report_payload.get("status", "valid"),
+                "message": final_answer,
+            },
+        ],
+    }
+    context.emit_event({"event_type": "resource_facts_confirmed", "facts_count": len(facts)})
+    context.emit_event({"event_type": "resource_resolution_completed", "facts_count": len(facts)})
+    return {
+        "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
+        "conversation": {"final_answer": final_answer},
+        "execution": {
+            "current_node": RESOURCE_RESOLUTION_NODE_ID,
+            "finished": False,
+            "finish_status": None,
+            "route_decision": None,
+        },
+    }
+
+
 
 def _tool_manufacturing_failed_patch(
     *,
@@ -1183,6 +1636,36 @@ def _tool_manufacturing_failed_patch(
             "route_decision": "execution.finished",
             "last_error": message,
             "last_error_location": TOOL_MANUFACTURING_NODE_ID,
+        },
+    }
+
+
+def _tool_manufacturing_resource_resolution_patch(
+    *,
+    namespace_state: dict[str, Any],
+    resource_request: dict[str, Any],
+    reason_notes: list[str],
+) -> dict[str, Any]:
+    next_state = {
+        **namespace_state,
+        "current_node": TOOL_MANUFACTURING_NODE_ID,
+        "status": "resource_resolution_required",
+        "pending_resource_request": {
+            **resource_request,
+            "reason_notes": [str(item) for item in reason_notes if str(item).strip()],
+        },
+        "pending_resource_interaction": {
+            "requested_by": TOOL_MANUFACTURING_NODE_ID,
+            "reason_notes": [str(item) for item in reason_notes if str(item).strip()],
+        },
+    }
+    return {
+        "package_state": {FACTORY_MANUFACTURING_NAMESPACE: next_state},
+        "execution": {
+            "current_node": TOOL_MANUFACTURING_NODE_ID,
+            "finished": False,
+            "finish_status": None,
+            "route_decision": "factory.resource_resolution_requested",
         },
     }
 

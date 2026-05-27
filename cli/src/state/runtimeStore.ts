@@ -1183,6 +1183,18 @@ function runActivity(event: FactoryEvent): RunActivity | null {
 	const eventType = event.event_type;
 	const toolPayload = normalizeToolPayload(payload);
 	const node = event.node_id ?? event.stage_id ?? '-';
+	if (eventType.startsWith('resource_') || eventType.startsWith('tool_manufacturing_') || eventType.startsWith('scheduler_preparation_') || eventType === 'scheduler_seed_confirmed') {
+		return {
+			activityKey: `${event.event_id}:activity`,
+			eventType,
+			timestamp: event.timestamp,
+			stageId: event.stage_id ?? null,
+			nodeId: event.node_id ?? null,
+			label: readableEventType(eventType),
+			detail: resourceLikeActivityDetail(event.payload ?? {}, event.message ?? String(payload.status ?? node)),
+			color: colorForEvent(eventType)
+		};
+	}
 	if (eventType.startsWith('tool_')) {
 		return {
 			activityKey: `${event.event_id}:activity`,
@@ -1234,6 +1246,31 @@ function runActivity(event: FactoryEvent): RunActivity | null {
 		};
 	}
 	return null;
+}
+
+function resourceLikeActivityDetail(payload: Record<string, unknown>, fallback: string): string {
+	const error = stringValue(payload.error);
+	const status = stringValue(payload.status);
+	const toolId = stringValue(payload.tool_id);
+	const question = stringValue(payload.question);
+	const query = stringValue(payload.query);
+	const count = numberValue(payload.facts_count) ?? numberValue(payload.redacted_value_count);
+	if (error) {
+		return firstLine(error);
+	}
+	if (toolId) {
+		return query ? `${toolId}: ${firstLine(query)}` : toolId;
+	}
+	if (question) {
+		return firstLine(question);
+	}
+	if (count !== null) {
+		return `${count}`;
+	}
+	if (status) {
+		return status;
+	}
+	return fallback;
 }
 
 function lifecycleForToolEvent(eventType: FactoryEvent['event_type']): ToolLifecycle {

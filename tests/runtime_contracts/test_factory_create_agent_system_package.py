@@ -18,6 +18,7 @@ from agent_factory.factory_package.constants import (
     CAPABILITY_CONTRACT_NODE_ID,
     PACKAGE_BUILD_NODE_ID,
     PRODUCT_BRIEF_NODE_ID,
+    RESOURCE_RESOLUTION_NODE_ID,
     RUNTIME_DESIGN_NODE_ID,
     SCHEDULER_PREPARATION_NODE_ID,
     TOOL_MANUFACTURING_NODE_ID,
@@ -26,11 +27,13 @@ from agent_factory.factory_package.package_build import build_agent_package, def
 from agent_factory.factory_package.runtime_design import validate_runtime_design
 from agent_factory.factory_package.schemas import (
     CapabilityContractOutput,
+    CapabilityResourceRequirementPlan,
     ExternalResourceResolutionDraft,
     InheritedExtensionArtifact,
     PackageBuildModelPlan,
     ProductBriefOutput,
     RuntimeDesignOutput,
+    RuntimeDesignResourceSlotBinding,
     SchedulerPreparationOutput,
     ToolDesign,
     ToolManufacturingOutput,
@@ -43,12 +46,16 @@ from agent_factory.factory_package.scheduler_preparation import (
     prepare_scheduler_seeds,
 )
 from agent_factory.factory_package.external_resources import (
-    _external_resource_request,
+    build_resource_resolution_request,
     _external_resource_collection_payload,
     _external_resource_confirmation_payload,
+    _merge_external_resource_resolution,
+    _normalize_external_resource_resolution,
     _normalize_external_resource_collection_resume,
     _normalize_external_resource_confirmation_resume,
     _validate_external_resource_resolution,
+    parse_external_resource_answer,
+    resource_facts_to_draft,
 )
 from agent_factory.factory_package.nodes import (
     factory_manufacturing_node_provider,
@@ -85,6 +92,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 PRODUCT_BRIEF_NODE_ID,
                 RUNTIME_DESIGN_NODE_ID,
                 CAPABILITY_CONTRACT_NODE_ID,
+                RESOURCE_RESOLUTION_NODE_ID,
                 TOOL_MANUFACTURING_NODE_ID,
                 SCHEDULER_PREPARATION_NODE_ID,
                 PACKAGE_BUILD_NODE_ID,
@@ -118,6 +126,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 f"builtin.factory.{PRODUCT_BRIEF_NODE_ID}",
                 f"builtin.factory.{RUNTIME_DESIGN_NODE_ID}",
                 f"builtin.factory.{CAPABILITY_CONTRACT_NODE_ID}",
+                f"builtin.factory.{RESOURCE_RESOLUTION_NODE_ID}",
                 f"builtin.factory.{TOOL_MANUFACTURING_NODE_ID}",
                 f"builtin.factory.{SCHEDULER_PREPARATION_NODE_ID}",
                 f"builtin.factory.{PACKAGE_BUILD_NODE_ID}",
@@ -157,6 +166,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                     PRODUCT_BRIEF_NODE_ID,
                     RUNTIME_DESIGN_NODE_ID,
                     CAPABILITY_CONTRACT_NODE_ID,
+                    RESOURCE_RESOLUTION_NODE_ID,
                     TOOL_MANUFACTURING_NODE_ID,
                     SCHEDULER_PREPARATION_NODE_ID,
                     PACKAGE_BUILD_NODE_ID,
@@ -362,6 +372,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                         "required": ["endpoint"],
                     },
                     "secret_fields": ["api_token"],
+                    "resolution_strategy": ["ask_user", "secret"],
                 }
             ],
             "sandbox_requirements": [
@@ -375,13 +386,16 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
 
         collection = _external_resource_collection_payload(request)
         self.assertEqual(collection["type"], "resource_collection")
+        self.assertEqual(collection["scope"], "full_request")
         self.assertIn("它应该访问哪个服务地址？", collection["questions"])
         self.assertIn("是否允许制造阶段访问外部网络？", collection["questions"])
         fields_by_key = {field["key"]: field for field in collection["fields"]}
         self.assertEqual(fields_by_key["service_config.endpoint"]["title"], "服务地址")
         self.assertEqual(fields_by_key["service_config.endpoint"]["question"], "它应该访问哪个服务地址？")
+        self.assertEqual(fields_by_key["service_config.endpoint"]["resolution_strategy"], ["ask_user", "secret"])
         self.assertFalse(fields_by_key["service_config.endpoint"]["secret"])
         self.assertTrue(fields_by_key["service_config.api_token"]["secret"])
+        self.assertEqual(fields_by_key["service_config.api_token"]["resolution_strategy"], ["ask_user", "secret"])
         self.assertEqual(fields_by_key["sandbox.network"]["title"], "允许外部网络访问")
         self.assertEqual(
             _normalize_external_resource_collection_resume(
@@ -452,7 +466,153 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
             ["fetch_data 需要外部来源，但生成结果包含未由你提供或继承的地址。"],
         )
 
-    def test_external_resource_request_strips_generated_defaults_and_examples(self) -> None:
+    def test_external_resource_followup_payload_only_shows_missing_fields(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "title": "服务地址",
+                                "x-agentfactory-ui": {"question": "它应该访问哪个服务地址？"},
+                            },
+                            "token": {
+                                "type": "string",
+                                "title": "访问密钥",
+                                "x-agentfactory-ui": {"question": "这个服务需要访问密钥吗？"},
+                            },
+                        },
+                        "required": ["endpoint", "token"],
+                    },
+                }
+            ],
+            "sandbox_requirements": [
+                {
+                    "requirement_id": "network",
+                    "description": "Allow external connectivity.",
+                    "network_required": True,
+                }
+            ],
+        }
+
+        collection = _external_resource_collection_payload(
+            request,
+            missing_questions=["这个服务需要访问密钥吗？"],
+        )
+
+        self.assertEqual(collection["scope"], "missing_fields")
+        self.assertEqual(collection["questions"], ["这个服务需要访问密钥吗？"])
+        self.assertEqual([field["key"] for field in collection["fields"]], ["service_config.token"])
+
+    def test_external_resource_followup_payload_uses_questions_when_no_field_matches(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {"type": "string", "title": "服务地址"},
+                        },
+                        "required": ["endpoint"],
+                    },
+                }
+            ]
+        }
+
+        collection = _external_resource_collection_payload(
+            request,
+            missing_questions=["请提供替代来源、账号或配置，或明确暂不提供。"],
+        )
+
+        self.assertEqual(collection["scope"], "missing_fields")
+        self.assertEqual(collection["fields"], [])
+        self.assertEqual(collection["questions"], ["请提供替代来源、账号或配置，或明确暂不提供。"])
+
+    def test_external_resource_collection_does_not_ask_optional_object_secrets_by_default(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "delivery_config",
+                    "description": "Delivery configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "channel": {
+                                "type": "string",
+                                "title": "推送渠道",
+                            },
+                            "email_config": {
+                                "type": "object",
+                                "title": "邮件配置",
+                                "properties": {
+                                    "smtp_password": {
+                                        "type": "string",
+                                        "title": "SMTP 密码",
+                                    }
+                                },
+                                "required": ["smtp_password"],
+                            },
+                        },
+                        "required": ["channel"],
+                    },
+                    "secret_fields": ["email_config.smtp_password"],
+                }
+            ]
+        }
+
+        collection = _external_resource_collection_payload(request)
+        fields = {field["key"]: field for field in collection["fields"]}
+
+        self.assertEqual(collection["questions"], ["请提供推送渠道。"])
+        self.assertFalse(fields["delivery_config.email_config"]["required"])
+        self.assertFalse(fields["delivery_config.email_config.smtp_password"]["required"])
+
+    def test_external_resource_normalization_omits_null_optional_objects(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "delivery_config",
+                    "description": "Delivery configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "channel": {"type": "string", "title": "推送渠道"},
+                            "email_config": {
+                                "type": "object",
+                                "title": "邮件配置",
+                                "properties": {
+                                    "smtp_password": {"type": "string", "title": "SMTP 密码"}
+                                },
+                                "required": ["smtp_password"],
+                            },
+                        },
+                        "required": ["channel"],
+                    },
+                }
+            ]
+        }
+        draft = ExternalResourceResolutionDraft(
+            resources={"delivery_config": {"channel": "cli", "email_config": None}},
+        )
+
+        normalized = _normalize_external_resource_resolution(request, draft)
+        validation = _validate_external_resource_resolution(request, normalized)
+
+        self.assertEqual(normalized.resources, {"delivery_config": {"channel": "cli"}})
+        self.assertEqual(validation["errors"], [])
+        self.assertEqual(validation["missing_questions"], [])
+
+    def test_resource_resolution_request_strips_generated_defaults_and_examples(self) -> None:
         capability = CapabilityContractOutput.model_validate(
             {
                 "resources_required": [
@@ -474,18 +634,133 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                             },
                         },
                         "default_value": {"endpoint": "https://model-guessed.example.com"},
+                        "resolution_strategy": ["ask_user", "discoverable"],
                     }
                 ]
             }
         )
 
-        request = _external_resource_request(capability)
+        request = build_resource_resolution_request(capability)
         resource = request["resources"][0]
         endpoint_schema = resource["value_schema"]["properties"]["endpoint"]
         self.assertIsNone(resource["default_value"])
+        self.assertEqual(resource["resolution_strategy"], ["ask_user", "discoverable"])
         self.assertNotIn("default", resource["value_schema"])
         self.assertNotIn("default", endpoint_schema)
         self.assertNotIn("examples", endpoint_schema)
+
+    def test_resource_strategy_is_required_in_factory_output_models(self) -> None:
+        with self.assertRaises(Exception):
+            CapabilityResourceRequirementPlan.model_validate(
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                }
+            )
+        with self.assertRaises(Exception):
+            RuntimeDesignResourceSlotBinding.model_validate(
+                {
+                    "resource_id": "service_config",
+                }
+            )
+
+    def test_external_resource_answer_redacts_and_restores_private_values(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {"type": "string", "format": "uri", "title": "服务地址"},
+                            "api_token": {"type": "string", "writeOnly": True, "title": "访问密钥"},
+                        },
+                        "required": ["endpoint", "api_token"],
+                    },
+                    "secret_fields": ["api_token"],
+                }
+            ]
+        }
+        captured_values: dict[str, object] = {}
+
+        def fake_call_structured_model(**kwargs: object) -> ExternalResourceResolutionDraft:
+            captured_values.update(kwargs.get("values") if isinstance(kwargs.get("values"), dict) else {})
+            return ExternalResourceResolutionDraft(
+                resources={
+                    "service_config": {
+                        "endpoint": "__AF_RESOURCE_VALUE_1__",
+                        "api_token": "__AF_RESOURCE_VALUE_2__",
+                    }
+                },
+                notes=["token __AF_RESOURCE_VALUE_2__ 已接收"],
+            )
+
+        with patch(
+            "agent_factory.factory_package.external_resources.call_structured_model",
+            side_effect=fake_call_structured_model,
+        ):
+            draft = parse_external_resource_answer(
+                resource_request=request,
+                answer_text="服务地址是 https://api.example.com ，api key 是 sk-test-token-123456",
+                namespace_state={},
+                confirmed_facts={},
+            )
+
+        self.assertEqual(draft.resources["service_config"]["endpoint"], "https://api.example.com")
+        self.assertEqual(draft.resources["service_config"]["api_token"], "sk-test-token-123456")
+        self.assertIn("__AF_RESOURCE_VALUE_1__", str(captured_values["user_answer"]))
+        self.assertIn("__AF_RESOURCE_VALUE_2__", str(captured_values["user_answer"]))
+        self.assertNotIn("https://api.example.com", str(captured_values["user_answer"]))
+        self.assertNotIn("sk-test-token-123456", str(captured_values["user_answer"]))
+        self.assertEqual(draft.notes, ["token [redacted] 已接收"])
+
+    def test_external_resource_discovery_rejects_secret_and_private_queries(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {"type": "string", "format": "uri", "title": "服务地址"},
+                            "api_token": {"type": "string", "writeOnly": True, "title": "访问密钥"},
+                        },
+                        "required": ["endpoint", "api_token"],
+                    },
+                    "secret_fields": ["api_token"],
+                }
+            ]
+        }
+        secret_target = ExternalResourceResolutionDraft(
+            discovery_queries=[
+                {
+                    "question": "查找访问密钥",
+                    "query": "find api token",
+                    "target_resource_id": "service_config",
+                    "target_path": ["api_token"],
+                }
+            ]
+        )
+        private_query = ExternalResourceResolutionDraft(
+            discovery_queries=[
+                {
+                    "question": "查找服务地址",
+                    "query": "lookup __AF_RESOURCE_VALUE_1__",
+                    "target_resource_id": "service_config",
+                    "target_path": ["endpoint"],
+                }
+            ]
+        )
+
+        secret_validation = _validate_external_resource_resolution(request, secret_target)
+        private_validation = _validate_external_resource_resolution(request, private_query)
+
+        self.assertTrue(any("secret resource fields" in error for error in secret_validation["errors"]))
+        self.assertTrue(any("redacted private value" in error for error in private_validation["errors"]))
 
     def test_external_resource_validation_turns_missing_schema_fields_into_questions(self) -> None:
         request = {
@@ -538,6 +813,72 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
         self.assertEqual(validation["errors"], ["unknown_runtime: sandbox requirement is not declared by resource_request"])
         self.assertIn("这个服务需要访问密钥吗？", validation["missing_questions"])
         self.assertIn("请提供input dir。", validation["missing_questions"])
+
+    def test_external_resource_followup_merges_confirmed_facts_before_validation(self) -> None:
+        request = {
+            "resources": [
+                {
+                    "resource_id": "service_config",
+                    "description": "External service configuration.",
+                    "required": True,
+                    "value_schema": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "title": "服务地址",
+                            },
+                            "schedule": {
+                                "type": "string",
+                                "title": "执行时间",
+                            },
+                        },
+                        "required": ["endpoint", "schedule"],
+                    },
+                }
+            ],
+            "sandbox_requirements": [
+                {
+                    "requirement_id": "network",
+                    "description": "Allow external connectivity.",
+                    "network_required": True,
+                }
+            ],
+        }
+        confirmed = resource_facts_to_draft(
+            {
+                "service_config.endpoint": {
+                    "key": "service_config.endpoint",
+                    "value": "https://api.example.com",
+                    "status": "confirmed",
+                    "source": "user",
+                },
+                "sandbox.network.network_access": {
+                    "key": "sandbox.network.network_access",
+                    "value": True,
+                    "status": "confirmed",
+                    "source": "user",
+                },
+            }
+        )
+        delta = ExternalResourceResolutionDraft(
+            decision="resolved",
+            resources={"service_config": {"schedule": "每天 09:00"}},
+            missing_questions=["请补充外部服务配置。"],
+        )
+
+        merged = _merge_external_resource_resolution(confirmed, delta)
+        validation = _validate_external_resource_resolution(request, merged)
+
+        self.assertEqual(merged.resources["service_config"]["endpoint"], "https://api.example.com")
+        self.assertEqual(merged.resources["service_config"]["schedule"], "每天 09:00")
+        self.assertEqual(validation["errors"], [])
+        self.assertEqual(validation["missing_questions"], [])
+
+    def test_external_resource_resolution_prompt_receives_confirmed_resource_facts(self) -> None:
+        prompt = get_prompt(PromptId.EXTERNAL_RESOURCE_RESOLUTION)
+
+        self.assertIn("confirmed_resources", prompt.input_variables)
 
     def test_tool_manufacturing_resolves_enabled_factory_skill_for_inheritance(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -805,16 +1146,14 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
         check = tool_manufacturing_module._check_trial_external_resource_provenance(
             trial_plan=plan,
             tool_id="fetch_market_data",
-            user_external_resources=[
-                {
-                    "type": "resource_collection_result",
-                    "resources": {
-                        "market_config": {
-                            "endpoint": "http://hq.sinajs.cn/list=sz000001",
-                        }
-                    },
+            resource_facts={
+                "market_config.endpoint": {
+                    "key": "market_config.endpoint",
+                    "value": "http://hq.sinajs.cn/list=sz000001",
+                    "status": "confirmed",
+                    "source": "user",
                 }
-            ],
+            },
         )
 
         self.assertEqual(check.status, "passed")
@@ -827,7 +1166,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 "tool_requirement",
                 "source_decision",
                 "resource_requirements",
-                "user_external_resources",
+                "resource_facts",
                 "validation_feedback",
                 "output_json_schema",
             },
@@ -836,7 +1175,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                 "source_decision",
                 "tool_design",
                 "resource_requirements",
-                "user_external_resources",
+                "resource_facts",
                 "validation_feedback",
                 "output_json_schema",
             },
@@ -1032,6 +1371,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                                 "report_output_dir": "/artifacts/reports",
                             },
                             "secret_fields": ["news_api_key"],
+                            "resolution_strategy": ["ask_user", "runtime_config", "secret"],
                             "sandbox_access_expectation": "Container-visible runtime configuration.",
                             "used_by": ["answer"],
                         }
@@ -1118,6 +1458,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                             },
                             "default_value": {"symbols": ["000001.SS"]},
                             "secret_fields": [],
+                            "resolution_strategy": ["ask_user", "runtime_config"],
                             "sandbox_access_expectation": "Container-visible runtime configuration.",
                             "used_by": ["answer"],
                         }
@@ -1200,6 +1541,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                             },
                             "default_value": {"watchlist": []},
                             "secret_fields": [],
+                            "resolution_strategy": ["ask_user", "runtime_config"],
                             "sandbox_access_expectation": "Container-visible runtime configuration.",
                             "used_by": ["answer"],
                         }
@@ -1625,6 +1967,7 @@ class FactoryCreateAgentSystemPackageTest(unittest.TestCase):
                             },
                             "default_value": {"news_api_key": "", "market_symbols": ["000001.SS"]},
                             "secret_fields": ["news_api_key"],
+                            "resolution_strategy": ["ask_user", "runtime_config", "secret"],
                         },
                     },
                 ],

@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
+from agent_factory.runtime_kernel.observability.node_events import emit_runtime_node_event
 from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from agent_factory.runtime_kernel.patterns.state_patches import (
     runtime_graph_patch,
@@ -100,6 +101,7 @@ def make_wrapped_runner(
                 payload=payload,
             )
             services.observability_manager.emit(event)
+            emit_runtime_node_event(event)
             emitted_events.append(event.model_dump(mode="json"))
             if trace_recorder is not None:
                 trace_recorder.record_event(

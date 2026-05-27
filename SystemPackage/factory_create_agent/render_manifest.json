@@ -27,7 +27,16 @@
       "kind": "factory_manufacturing_domain",
       "purpose": "把 Runtime Design 转换成基础能力接入策略和 RuntimeContract 草案。",
       "doing": "为每个基础系统明确是否启用、接入内容、运行策略和后续生成任务，并做 contract registry 校验。",
-      "expected_output": "写出 capability_contract.v0；如果通过校验，则进入 Tool Manufacturing。",
+      "expected_output": "写出 capability_contract.v0；如果通过校验，则进入 Resource Resolution。",
+      "visible_to_user": true
+    },
+    "resource_resolution": {
+      "node_id": "resource_resolution",
+      "label": "Resource Resolution",
+      "kind": "factory_manufacturing_domain",
+      "purpose": "把外部资源需求、用户回答和可发现的公开信息整理成已确认资源事实。",
+      "doing": "复用 RuntimeKernel 已注册的 builtin/MCP/Skill/knowledge 工具解析公开信息，只向用户索取必须由用户提供的资源。",
+      "expected_output": "写出 resource_resolution.v0 和 resource_facts；如果仍有缺口，则发起用户交互。",
       "visible_to_user": true
     },
     "tool_manufacturing": {

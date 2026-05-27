@@ -431,6 +431,7 @@ function ResourceCollectionPanel({
 	const questions = useMemo(() => resourceCollectionQuestions(event), [event]);
 	const fields = useMemo(() => resourceCollectionFields(event), [event]);
 	const reasonNotes = useMemo(() => resourceCollectionReasonNotes(event), [event]);
+	const scope = resourceCollectionScope(event);
 	const [answer, setAnswer] = useState('');
 
 	useEffect(() => {
@@ -461,6 +462,9 @@ function ResourceCollectionPanel({
 		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
 			<Text bold color="yellow">{String(event.payload?.title ?? '补充外部资源')}</Text>
 			<Text color="gray">{String(event.payload?.message ?? '请直接用一句话说明可以使用的外部资源。')}</Text>
+			<Text color={scope === 'missing_fields' ? 'cyan' : 'gray'}>
+				{scope === 'missing_fields' ? '只需补充下面缺口；已经确认的资源会继续沿用。' : '请提供这个 Agent 可使用的外部资源与运行配置。'}
+			</Text>
 			{reasonNotes.map(note => (
 				<Text key={note} color="gray">原因: {note}</Text>
 			))}
@@ -471,6 +475,7 @@ function ResourceCollectionPanel({
 						<Text bold>{field.title}</Text>
 						<Text color={field.required ? 'red' : 'gray'}> {field.required ? '必填' : '可选'}</Text>
 						{field.secret ? <Text color="gray"> 密文</Text> : null}
+						{field.strategyLabels.length > 0 ? <Text color="gray"> / {field.strategyLabels.join('、')}</Text> : null}
 					</Text>
 					<Text color="gray">  {field.question}</Text>
 					{field.description ? <Text color="gray">  {field.description}</Text> : null}
@@ -551,6 +556,13 @@ function ResourceConfirmationPanel({
 				<Text key={item.key}>
 					<Text color={item.required ? 'yellow' : 'gray'}>{item.required ? '> ' : '  '}</Text>
 					{item.title}: {item.valueSummary}
+					<Text color="gray">
+						{'  '}
+						{item.sourceLabel}
+						{item.statusLabel ? ` / ${item.statusLabel}` : ''}
+						{item.secret ? ' / 密文' : ''}
+						{item.evidenceCount > 0 ? ` / 证据 ${item.evidenceCount} 条` : ''}
+					</Text>
 				</Text>
 			))}
 			{mode === 'revise' ? (
@@ -702,6 +714,10 @@ function resourceCollectionQuestions(event: FactoryEvent): string[] {
 	return questions.map(item => String(item).trim()).filter(Boolean).slice(0, 6);
 }
 
+function resourceCollectionScope(event: FactoryEvent): 'full_request' | 'missing_fields' {
+	return event.payload?.scope === 'missing_fields' ? 'missing_fields' : 'full_request';
+}
+
 type ResourceCollectionField = {
 	key: string;
 	title: string;
@@ -710,6 +726,7 @@ type ResourceCollectionField = {
 	placeholder: string;
 	required: boolean;
 	secret: boolean;
+	strategyLabels: string[];
 };
 
 function resourceCollectionFields(event: FactoryEvent): ResourceCollectionField[] {
@@ -722,12 +739,13 @@ function resourceCollectionFields(event: FactoryEvent): ResourceCollectionField[
 		const key = String(record.key ?? `field_${index + 1}`);
 		return {
 			key,
-			title: String(record.title ?? key),
-			question: String(record.question ?? '请补充这个配置。'),
-			description: String(record.description ?? ''),
-			placeholder: String(record.placeholder ?? ''),
+			title: normalizeResourceTitle(String(record.title ?? key), key),
+			question: normalizeResourceSentence(String(record.question ?? '请补充这个配置。'), 120),
+			description: normalizeResourceSentence(String(record.description ?? ''), 160),
+			placeholder: normalizeResourceSentence(String(record.placeholder ?? ''), 100),
 			required: Boolean(record.required),
-			secret: Boolean(record.secret)
+			secret: Boolean(record.secret),
+			strategyLabels: resourceStrategyLabels(record.resolution_strategy)
 		};
 	}).filter(field => field.title.trim()).slice(0, 10);
 }
@@ -745,6 +763,10 @@ type ResourceConfirmationItem = {
 	title: string;
 	valueSummary: string;
 	required: boolean;
+	secret: boolean;
+	sourceLabel: string;
+	statusLabel: string;
+	evidenceCount: number;
 };
 
 function resourceConfirmationItems(event: FactoryEvent): ResourceConfirmationItem[] {
@@ -757,11 +779,84 @@ function resourceConfirmationItems(event: FactoryEvent): ResourceConfirmationIte
 		const key = String(record.key ?? `item_${index + 1}`);
 		return {
 			key,
-			title: String(record.title ?? key),
-			valueSummary: String(record.value_summary ?? record.valueSummary ?? '未提供'),
-			required: Boolean(record.required)
+			title: normalizeResourceTitle(String(record.title ?? key), key),
+			valueSummary: normalizeResourceSentence(String(record.value_summary ?? record.valueSummary ?? '未提供'), 220),
+			required: Boolean(record.required),
+			secret: Boolean(record.secret),
+			sourceLabel: resourceSourceLabel(String(record.source ?? '')),
+			statusLabel: resourceStatusLabel(String(record.status ?? '')),
+			evidenceCount: Array.isArray(record.evidence_refs) ? record.evidence_refs.length : 0
 		};
 	});
+}
+
+function normalizeResourceTitle(value: string, fallback: string): string {
+	const text = trimOneLine(value, 48);
+	if (text) {
+		return text;
+	}
+	return trimOneLine(fallback.replace(/[._-]+/g, ' '), 48);
+}
+
+function normalizeResourceSentence(value: string, limit: number): string {
+	return trimOneLine(value, limit);
+}
+
+function resourceStrategyLabels(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const labels: Record<string, string> = {
+		ask_user: '需你提供',
+		discoverable: '可查找',
+		secret: '密文',
+		optional: '可选',
+		runtime_config: '运行配置',
+		defaultable: '可默认'
+	};
+	const result: string[] = [];
+	for (const item of value) {
+		const label = labels[String(item)];
+		if (label && !result.includes(label)) {
+			result.push(label);
+		}
+	}
+	return result.slice(0, 3);
+}
+
+function resourceSourceLabel(source: string): string {
+	if (source === 'tool' || source === 'mcp' || source === 'knowledge' || source === 'skill') {
+		return '工具发现';
+	}
+	if (source === 'user') {
+		return '用户提供';
+	}
+	if (source === 'default') {
+		return '默认值';
+	}
+	if (source === 'system') {
+		return '系统';
+	}
+	return '来源待确认';
+}
+
+function resourceStatusLabel(status: string): string {
+	if (status === 'confirmed') {
+		return '已确认';
+	}
+	if (status === 'discovered') {
+		return '待确认发现结果';
+	}
+	if (status === 'declined') {
+		return '暂不提供';
+	}
+	if (status === 'optional_empty') {
+		return '可留空';
+	}
+	if (status === 'missing') {
+		return '缺失';
+	}
+	return '';
 }
 
 type SchedulerSeedReviewItem = {

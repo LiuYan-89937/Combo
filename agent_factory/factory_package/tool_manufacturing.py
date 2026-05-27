@@ -126,7 +126,7 @@ def finalize_tool_manufacturing_output(
     factory_run_id: str,
     output: ToolManufacturingOutput,
     capability_contract: CapabilityContractOutput,
-    user_external_resources: list[dict[str, Any]] | None = None,
+    resource_facts: dict[str, Any] | None = None,
     test_env_root: Path = TOOL_TEST_ENV_ROOT,
 ) -> ToolManufacturingOutput:
     errors = validate_tool_manufacturing_output(output=output, capability_contract=capability_contract)
@@ -204,7 +204,7 @@ def finalize_tool_manufacturing_output(
             spec=specs_by_id.get(tool_id),
             implementation=impls_by_id.get(tool_id),
             trial_plan=trials_by_id.get(tool_id),
-            user_external_resources=user_external_resources or [],
+            resource_facts=resource_facts or {},
             test_env_root=test_env_root,
         )
         checks.extend(tool_checks)
@@ -254,7 +254,7 @@ def run_generated_tool_pipeline(
     spec: ToolSpecDraft | None,
     implementation: ToolImplementationDraft | None,
     trial_plan: ToolTrialPlan | None,
-    user_external_resources: list[dict[str, Any]] | None = None,
+    resource_facts: dict[str, Any] | None = None,
     test_env_root: Path = TOOL_TEST_ENV_ROOT,
 ) -> tuple[list[ToolManufacturingCheck], ApprovedPackageToolArtifact | None]:
     checks = _run_generated_tool_pipeline(
@@ -264,7 +264,7 @@ def run_generated_tool_pipeline(
         spec=spec,
         implementation=implementation,
         trial_plan=trial_plan,
-        user_external_resources=user_external_resources or [],
+        resource_facts=resource_facts or {},
         test_env_root=test_env_root,
     )
     if any(item.status == "failed" for item in checks):
@@ -487,7 +487,7 @@ def _run_generated_tool_pipeline(
     spec: ToolSpecDraft | None,
     implementation: ToolImplementationDraft | None,
     trial_plan: ToolTrialPlan | None,
-    user_external_resources: list[dict[str, Any]],
+    resource_facts: dict[str, Any],
     test_env_root: Path,
 ) -> list[ToolManufacturingCheck]:
     checks: list[ToolManufacturingCheck] = []
@@ -545,7 +545,7 @@ def _run_generated_tool_pipeline(
         _check_trial_external_resource_provenance(
             trial_plan=trial_plan,
             tool_id=tool_id,
-            user_external_resources=user_external_resources,
+            resource_facts=resource_facts,
         )
     )
     if any(item.status == "failed" for item in checks):
@@ -790,7 +790,7 @@ def _check_trial_external_resource_provenance(
     *,
     trial_plan: ToolTrialPlan,
     tool_id: str,
-    user_external_resources: list[dict[str, Any]],
+    resource_facts: dict[str, Any],
 ) -> ToolManufacturingCheck:
     scenario_hosts = sorted(
         {
@@ -805,13 +805,13 @@ def _check_trial_external_resource_provenance(
             status="passed",
             message="trial scenarios do not include explicit external hosts",
         )
-    allowed_hosts = _external_hosts_from_value(user_external_resources)
+    allowed_hosts = _external_hosts_from_value(resource_facts)
     unknown_hosts = [host for host in scenario_hosts if host not in allowed_hosts]
     if not unknown_hosts:
         return ToolManufacturingCheck(
             name=f"{tool_id}.trial_external_source_provenance",
             status="passed",
-            message="trial scenario external hosts are present in user-provided resources",
+            message="trial scenario external hosts are present in confirmed resource facts",
             details={"hosts": scenario_hosts},
         )
     return _failed_check(

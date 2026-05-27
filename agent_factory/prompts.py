@@ -17,7 +17,7 @@ class PromptId(str, Enum):
     TOOL_SPEC_DRAFT = "factory.tool_manufacturing.spec"
     TOOL_IMPLEMENTATION_DRAFT = "factory.tool_manufacturing.implementation"
     TOOL_TRIAL_PLAN_DRAFT = "factory.tool_manufacturing.trial_plan"
-    EXTERNAL_RESOURCE_RESOLUTION = "factory.tool_manufacturing.external_resource_resolution"
+    EXTERNAL_RESOURCE_RESOLUTION = "factory.resource_resolution.parse_answer"
     SCHEDULER_SEED_REVISION = "factory.scheduler_preparation.seed_revision"
     PACKAGE_BUILD_DRAFT = "factory.package_build.draft"
     SCHEDULER_FEEDBACK_SUMMARY = "scheduler.feedback.summary"
@@ -65,7 +65,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Runtime Design JSON schema 不包含 edges、interrupts、termination；不要描述自定义拓扑或 package-local pattern，preset pattern 拥有完整图拓扑和节点语义。\n"
                     "nodes 只用于描述所选 pattern 中已有节点的业务职责和能力策略；node_id、node_type、impl 必须与所选 pattern 完全一致。\n"
                     "pattern_slots 必须逐项覆盖所选 pattern catalog 的 required slots，slot_id 与 slot_type 必须完全一致，并通过 binding 字段表达类型化绑定。\n"
-                    "resource slot 的 binding 要同时给出 resource_id、value_schema、default_value、secret_fields；description 只解释资源用途，运行值必须落到 resources.json。\n"
+                    "resource slot 的 binding 要同时给出 resource_id、value_schema、default_value、secret_fields、resolution_strategy；description 只解释资源用途，运行值必须落到 resources.json。\n"
                     "state_namespaces 只描述业务状态，不保存 runtime 配置值；如果字段属于 resource slot，就不要再放进 state initial_shape。\n"
                     "不要把 messages、resources、artifact、memory、knowledge、scheduler、trace、context 等 RuntimeKernel 服务写成 package_state namespace。\n"
                     "不要把 operational.tool_call 设计成主动执行工具；它只执行 cognitive 节点生成的 tool_calls。\n"
@@ -97,7 +97,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "你的任务是把 Product Brief 与 Runtime Design 转换成 AgentPackage 的基础能力装配契约。\n"
                     "这一步必须讲清楚每个系统具体接入什么、为什么接入、后续使用什么策略。\n"
                     "必须逐项消费 Runtime Design 的 pattern_slots：每个 slot 应当映射为 contract、资源需求、工具生成任务、prompt 生成任务、scheduler 策略或 artifact 策略。\n"
-                    "resources_required 必须保留资源描述，同时提供工具可读取的 value_schema/default_value/secret_fields；不要把资源描述当成 resources.json 的运行值。\n"
+                    "resources_required 必须保留资源描述，同时提供工具可读取的 value_schema/default_value/secret_fields/resolution_strategy；不要把资源描述当成 resources.json 的运行值。\n"
+                    "resolution_strategy 只能使用 ask_user、discoverable、secret、optional、runtime_config、defaultable；私密凭证必须包含 secret，公开可查资料必须包含 discoverable，不确定时包含 ask_user。\n"
                     "resources_required.value_schema 必须使用 JSON Schema 标准注解描述用户表单：title 给普通用户看的字段名，description 解释为什么需要，examples 给可填写示例，default 给默认值。\n"
                     "如需额外 UI 提示，只能使用通用扩展 x-agentfactory-ui，允许字段包括 input_kind、placeholder、help、examples、secret；不要依赖字段名让前端猜业务含义。\n"
                     "x-agentfactory-ui.input_kind 只能是 text、text_list、url_list、number、boolean、secret、json 或 natural_language。\n"
@@ -178,7 +179,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Capability Contract 中的 tool source 只是来源提示，不是锁定值；最终来源由你在 source_decisions 中决定。\n"
                     "来源只能是 builtin、mcp、skill、knowledge、scheduler、package_generated。\n"
                     "已有 builtin/MCP/Skill/knowledge/scheduler 能满足时，禁止重复生成 package tool。\n"
-                    "外部 URL、API endpoint、SMTP、token、账号和 secret 只能来自用户已提供外部资源；禁止自行编造真实外部服务地址。\n"
+                    "外部 URL、API endpoint、SMTP、token、账号、secret 和业务标识以已确认资源事实为准；公开信息查询以 builtin web_search/web_fetch、knowledge、MCP 或 Skill 为辅。\n"
+                    "不要把尚未通过用户输入或系统工具发现的公开信息写成固定资源或 package tool 常量。\n"
                     "如果选择 mcp 或 skill，必须在 inherited_extensions 中写明要继承的 server_id 或 skill_id。\n"
                     "如果选择 package_generated，必须说明为什么现有能力无法满足。\n"
                     "不要输出任何实现内容。\n\n"
@@ -190,7 +192,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Product Brief JSON：\n{product_brief}\n\n"
                     "Runtime Design JSON：\n{runtime_design}\n\n"
                     "Capability Contract JSON：\n{capability_contract}\n\n"
-                    "用户已提供外部资源：\n{user_external_resources}\n\n"
+                    "已确认资源事实：\n{resource_facts}\n\n"
                     "请生成 ToolSourceDecisionOutput JSON。",
                 ),
             ]
@@ -208,9 +210,10 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "禁止输出 resource_selectors 字段；禁止 selector 使用 resources://...、{{resources...}}、描述文字或绝对路径。\n"
                     "如果需要外部 Python 包，写入 python_requirements；系统包和命令分别写入 system_packages/system_binaries。\n"
                     "禁止设计裸 shell、沙箱外路径、绕过 ToolExecutionGateway 或 secret 输出。\n\n"
-                    "外部 URL、API endpoint、SMTP、token、账号和 secret 只能来自用户已提供外部资源；禁止自行编造真实外部服务地址。\n\n"
-                    "如果用户没有提供具体外部来源，只能设计资源槽和 selector，不能写新浪、NewsAPI、Alpha Vantage、SMTP host 或任何猜测的域名。\n"
-                    "实现应该从 resources/arguments 读取来源；外部来源不可用时返回 schema-valid 业务失败 payload。\n\n"
+                    "外部 URL、API endpoint、SMTP、token、账号、secret 和业务标识以已确认资源事实为准；公开信息查询以 builtin web_search/web_fetch、knowledge、MCP 或 Skill 为辅。\n"
+                    "如果需要运行时发现公开信息，只能把它设计为工具输入、资源槽或系统工具调用策略，不能把未确认结果写成固定值。\n"
+                    "如果 resource_facts 中没有具体外部来源，只能设计资源槽和 selector，不能写任何猜测域名、API、股票代码、账号或 host。\n"
+                    "实现应该从 resources/arguments 或系统工具结果读取来源；外部来源不可用时返回 schema-valid 业务失败 payload。\n\n"
                     "上一轮制造校验反馈：\n{validation_feedback}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
@@ -221,7 +224,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Tool Requirement JSON：\n{tool_requirement}\n\n"
                     "Source Decision JSON：\n{source_decision}\n\n"
                     "Resource Requirements JSON：\n{resource_requirements}\n\n"
-                    "用户已提供外部资源：\n{user_external_resources}\n\n"
+                    "已确认资源事实：\n{resource_facts}\n\n"
                     "请生成 ToolDesign JSON。",
                 ),
             ]
@@ -238,7 +241,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "resources 是 ToolSpec 的实际资源映射，格式固定为 local_resource_name -> dot_path_selector。\n"
                     "示例：{{\"input_sources\":\"service_config.input_sources\",\"api_token\":\"service_config.credentials.api_token\"}}。\n"
                     "key 必须是本地资源名，value 必须是点路径 selector；禁止反写成 selector -> 描述，禁止 resources://...、{{resources...}} 或绝对路径。\n\n"
-                    "如果工具会访问外部服务，output_schema 必须包含稳定失败输出，不能只定义成功路径。业务失败应作为 output 字段表达，例如 status/error/retryable，而不是依赖 Gateway invalid_output。\n\n"
+                    "如果工具会访问外部服务，output_schema 必须包含稳定失败输出，不能只定义成功路径。业务失败应作为 output 字段表达，例如 status/error/retryable，而不是依赖 Gateway invalid_output。\n"
+                    "外部资源 selector 只指向用户提供或运行时配置；公开信息发现应通过 builtin web_search/web_fetch、knowledge、MCP 或 Skill 的工具链表达，不要在 spec 里写死猜测值。\n\n"
                     "上一轮制造校验反馈：\n{validation_feedback}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
                 ),
@@ -248,7 +252,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Source Decision JSON：\n{source_decision}\n\n"
                     "ToolDesign JSON：\n{tool_design}\n\n"
                     "Resource Requirements JSON：\n{resource_requirements}\n\n"
-                    "用户已提供外部资源：\n{user_external_resources}\n\n"
+                    "已确认资源事实：\n{resource_facts}\n\n"
                     "请生成 ToolSpecDraft JSON。",
                 ),
             ]
@@ -266,8 +270,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "禁止裸 shell、沙箱外路径、真实 secret 输出、全局副作用和绕过 ToolExecutionGateway。\n"
                     "外部网络逻辑必须有超时和结构化失败返回。\n\n"
                     "外部服务不可达、HTTP 错误、认证失败、SMTP 失败、空结果等业务失败必须返回符合 ToolSpec output_schema 的失败 payload；不要直接 raise 让 Gateway 变成 execution_failed，除非这是不可恢复的编程错误。\n"
-                    "外部 URL、API endpoint、SMTP、token、账号和 secret 只能读取 resources 或 arguments 中由用户提供的值；禁止硬编码或编造真实外部服务地址。\n\n"
-                    "不要在代码常量里写真实外部域名或 URL；如果需要默认值，也只能使用空值或从 resources 读取。\n"
+                    "外部 URL、API endpoint、SMTP、token、账号、secret 和业务标识只能读取 resources/arguments 中由 resource_facts 确认的值，或来自运行时系统工具的返回；禁止硬编码或编造真实外部服务地址。\n\n"
+                    "不要在代码常量里写真实外部域名、URL、股票代码、账号或 API 名称；如果需要默认值，也只能使用空值或从 resources 读取。\n"
                     "如果没有用户提供的来源，工具要返回 schema-valid 的“缺少资源/未配置”结果，而不是替用户选择来源。\n\n"
                     "上一轮制造校验反馈：\n{validation_feedback}\n\n"
                     "Output JSON schema:\n{output_json_schema}",
@@ -276,7 +280,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "user",
                     "ToolDesign JSON：\n{tool_design}\n\n"
                     "ToolSpecDraft JSON：\n{tool_spec}\n\n"
-                    "用户已提供外部资源：\n{user_external_resources}\n\n"
+                    "已确认资源事实：\n{resource_facts}\n\n"
                     "请生成 ToolImplementationDraft JSON。",
                 ),
             ]
@@ -294,7 +298,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "2. model-bound trial：task model 读取 user_prompt，生成 tool_call，经 ToolNode/Gateway 得到 ToolMessage，再生成最终回答。\n"
                     "scenario 必须包含 scenario_id、user_prompt、expected_tool_id、arguments、resources、expected_observation_status。\n"
                     "arguments/resources 必须短小、安全、可在制造测试环境执行；不要依赖真实外部服务、真实 secret 或业务环境。\n"
-                    "如果用户提供了真实外部资源，允许 scenario 用这些资源做真实连通性测试；禁止使用用户未提供的 URL、API endpoint、SMTP 或 secret，禁止用 example.com 之类占位域名冒充真实资源。\n"
+                    "如果用户提供了真实外部资源，允许 scenario 用这些资源做真实连通性测试；公开信息可由系统工具搜索作为辅助，但 trial 中不得写入用户未提供或系统工具未发现的 URL、API endpoint、SMTP、secret 或业务标识。\n"
+                    "禁止用 example.com 之类占位域名冒充真实资源。\n"
                     "contract smoke 只检查 ToolCompiler、ToolExecutionGateway、schema 与 ToolMessage 链路，不做业务内容精确断言。\n"
                     "如果外部服务返回业务失败，expected_observation_status 仍应为 completed，并通过 success_criteria 描述业务状态评审。\n"
                     "expected_output_keys 只检查工具 output 的顶层键；不要要求真实新闻标题、价格、时间或网页内容逐字匹配；expected_final_answer_contains 只写稳定短语，不能要求长文本逐字匹配。\n"
@@ -307,7 +312,7 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "ToolDesign JSON：\n{tool_design}\n\n"
                     "ToolSpecDraft JSON：\n{tool_spec}\n\n"
                     "ToolImplementationDraft JSON：\n{tool_implementation}\n\n"
-                    "用户已提供外部资源：\n{user_external_resources}\n\n"
+                    "已确认资源事实：\n{resource_facts}\n\n"
                     "请生成 ToolTrialPlan JSON。",
                 ),
             ]
@@ -321,8 +326,17 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Return JSON only. The word JSON is required: output must be a valid JSON object.\n\n"
                     "你的任务是把用户的口语化回答映射到 resource_request 中声明的 resources 与 sandbox schema。\n"
                     "只做理解和结构化，不生成工具设计、代码、测试或 package 文件。\n"
-                    "不要编造用户没有提供的 URL、账号、API key、token、连接串、文件路径或推送渠道。\n"
+                    "你只输出本轮用户回答带来的增量；Existing Confirmed Resource Facts 已经是事实源，不要重复补写，也不要清空。\n"
+                    "用户回答中的 URL、邮箱、路径、token、连接串可能已被本地预处理替换为 __AF_RESOURCE_VALUE_N__ 占位符；如果它对应资源值，可以原样写入资源字段，系统会在校验后还原。\n"
+                    "不得把 secret 或 private-looking 占位符写入 discovery_queries；私密信息只能作为用户提供的资源值或暂不提供。\n"
+                    "不要编造用户没有明确提供的 URL、账号、API key、token、连接串、文件路径、推送渠道、股票代码、市场前缀或任何业务标识。\n"
+                    "如果用户说“不知道”“你去查”“自己搜索”等，且目标是公开信息，必须写入 discovery_queries；不要直接推断成资源事实。\n"
+                    "discovery_queries.query 应是面向搜索工具的短查询；target_resource_id 和 target_path 指向要补齐的资源字段。\n"
+                    "如果输入包含 system_discovery_results，只能把 evidence-backed 的公开结果写入 resources；无法由证据支持的仍放入 missing_questions。\n"
+                    "secret、API key、账号、密码、私有连接串、私有文件路径不得进入 discovery_queries，只能由用户提供或标记暂不提供。\n"
                     "如果用户明确说暂不提供，decision=skip，resources 和 sandbox 置空。\n"
+                    "如果用户说某个可选配置不需要，不要把该字段输出为 null；直接省略该字段。只有 schema 明确允许 null 时才可输出 null。\n"
+                    "不要为未选择的可选配置补全子字段，例如用户未选择某个渠道时，不要要求该渠道的账号或密码。\n"
                     "如果回答中缺少必填项或无法判断字段归属，decision=needs_clarification，并只在 missing_questions 中写最少追问。\n"
                     "如果可以落实，decision=resolved，并把值写入 resources 或 sandbox。\n"
                     "resources 的顶层 key 必须是 resource_request.resources[].resource_id；每个 value 必须符合该资源 value_schema。\n"
@@ -338,6 +352,8 @@ def get_prompt(prompt_id: PromptId) -> ChatPromptTemplate:
                     "Capability Contract JSON：\n{capability_contract}\n\n"
                     "Resource Request JSON：\n{resource_request}\n\n"
                     "系统向用户提出的问题：\n{resource_questions}\n\n"
+                    "Existing Confirmed Resource Facts JSON：\n{confirmed_resources}\n\n"
+                    "本地脱敏占位符清单 JSON：\n{resource_answer_placeholders}\n\n"
                     "用户回答原文：\n{user_answer}\n\n"
                     "请生成 ExternalResourceResolutionDraft JSON。",
                 ),

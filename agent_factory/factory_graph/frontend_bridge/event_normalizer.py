@@ -16,6 +16,29 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
+NODE_EVENT_TYPES = {
+    "resource_resolution_started",
+    "resource_collection_requested",
+    "resource_answer_received",
+    "resource_discovery_started",
+    "resource_discovery_completed",
+    "resource_confirmation_requested",
+    "resource_facts_confirmed",
+    "resource_resolution_completed",
+    "resource_resolution_failed",
+    "tool_manufacturing_started",
+    "tool_source_decision_completed",
+    "tool_design_completed",
+    "tool_implementation_completed",
+    "tool_dependency_converged",
+    "tool_contract_smoke_completed",
+    "tool_model_trial_completed",
+    "tool_manufacturing_completed",
+    "tool_manufacturing_failed",
+    "scheduler_preparation_started",
+    "scheduler_seed_confirmed",
+    "scheduler_preparation_completed",
+}
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -159,6 +182,9 @@ class RuntimeEventNormalizer:
         if chunk.get("type") == "knowledge_event":
             self._emit_knowledge_event(chunk.get("payload") or {})
             return
+        if chunk.get("type") == "node_event":
+            self._emit_node_event(chunk.get("payload") or {})
+            return
         if chunk.get("type") != "model_activity":
             self.runtime_event(
                 "debug_patch",
@@ -294,6 +320,24 @@ class RuntimeEventNormalizer:
             parent_span_id=self.run_span_id,
             severity="error" if event_type.endswith("failed") else None,
             payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        )
+
+    def _emit_node_event(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        event_type = str(payload.get("event_type") or "")
+        if event_type not in NODE_EVENT_TYPES:
+            return
+        event_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        self.runtime_event(
+            event_type,  # type: ignore[arg-type]
+            node_id=_optional_str(payload.get("node_id")),
+            stage_id=self.current_stage_id,
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self._stage_span_or_run(self.current_stage_id),
+            severity="error" if event_type.endswith("failed") else None,
+            message=_optional_str(payload.get("message")),
+            payload={key: value for key, value in json_safe(event_payload).items() if key != "event_type"},
         )
 
     def _emit_runtime_render_event(self, payload: Any) -> None:
