@@ -225,39 +225,5 @@ class FrontendEventNormalizerTest(unittest.TestCase):
         )
         self.assertEqual(events[-1].node_id, "answer")
 
-    def test_node_resource_events_are_forwarded(self) -> None:
-        events = []
-        normalizer = RuntimeEventNormalizer(
-            emit=events.append,
-            request_id="request-a",
-            session_id="session-a",
-            mode="create_agent",
-            graph_id="factory_create_agent",
-        )
-        normalizer.current_stage_id = "resource_resolution"
-
-        normalizer.emit_custom_event(
-            {
-                "type": "node_event",
-                "payload": {
-                    "event_type": "resource_answer_received",
-                    "node_id": "resource_resolution",
-                    "payload": {
-                        "event_type": "resource_answer_received",
-                        "redacted_value_count": 2,
-                        "secret_redacted_count": 1,
-                    },
-                },
-            }
-        )
-
-        resource_events = [event for event in events if event.event_type == "resource_answer_received"]
-        self.assertEqual(len(resource_events), 1)
-        self.assertEqual(resource_events[0].stage_id, "resource_resolution")
-        self.assertEqual(resource_events[0].node_id, "resource_resolution")
-        self.assertEqual(resource_events[0].payload["redacted_value_count"], 2)
-        self.assertNotIn("event_type", resource_events[0].payload)
-
-
 if __name__ == "__main__":
     unittest.main()

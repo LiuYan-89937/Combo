@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from langgraph.types import interrupt
@@ -25,9 +24,8 @@ def prepare_scheduler_seeds(
     product_brief: ProductBriefOutput,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
-    tool_manufacturing: dict[str, Any],
 ) -> SchedulerPreparationOutput:
-    del capability_contract, tool_manufacturing
+    del capability_contract
     candidates = _scheduler_seed_candidates(product_brief=product_brief, runtime_design=runtime_design)
     if not candidates:
         return SchedulerPreparationOutput(
@@ -35,6 +33,19 @@ def prepare_scheduler_seeds(
             display_summary="当前 Agent 没有声明需要自动准备的定时任务。",
             validation_report=SchedulerSeedValidationReport(status="valid"),
         )
+    draft = _resolve_scheduler_seed_draft(
+        product_brief=product_brief,
+        runtime_design=runtime_design,
+        candidates=candidates,
+    )
+    if draft.decision == "skip":
+        return SchedulerPreparationOutput(
+            approved_seeds=[],
+            display_summary=draft.display_summary or "当前 Agent 不启用自动准备的定时任务。",
+            warnings=list(draft.warnings),
+            validation_report=SchedulerSeedValidationReport(status="valid", warnings=list(draft.warnings)),
+        )
+    candidates = _seed_candidates_from_resolution(draft, candidates)
 
     review = _normalize_scheduler_seed_review_resume(interrupt(_scheduler_seed_review_payload(candidates)))
     if review["decision"] == "skip":
@@ -141,18 +152,18 @@ def _scheduler_seed_candidates(
         if slot.slot_type != "scheduler" or getattr(slot.binding, "kind", "") != "scheduler":
             continue
         binding = slot.binding
-        schedule = _parse_schedule_intent(getattr(binding, "schedule_intent", ""))
         target_message = str(getattr(binding, "target_message", "") or "").strip()
         if not target_message:
             target_message = f"请执行定时任务：{product_brief.agent_goal or runtime_design.graph_intent}"
         source_slot_id = str(slot.slot_id)
+        schedule_intent = str(getattr(binding, "schedule_intent", "") or "").strip()
         candidates.append(
             {
                 "seed_id": _safe_seed_id(source_slot_id),
                 "title": slot.purpose or "定时运行 Agent",
-                "human_schedule": str(getattr(binding, "schedule_intent", "") or "需要补充执行时间"),
-                "schedule_type": schedule.get("schedule_type") or "",
-                "schedule_expr": schedule.get("schedule_expr") or "",
+                "human_schedule": schedule_intent,
+                "schedule_type": "",
+                "schedule_expr": "",
                 "timezone": "Asia/Shanghai",
                 "target": {
                     "target_type": "graph_run",
@@ -164,7 +175,7 @@ def _scheduler_seed_candidates(
                 "task_content": target_message,
                 "enabled_on_apply": True,
                 "source_slot_id": source_slot_id,
-                "missing_questions": schedule.get("missing_questions") or [],
+                "missing_questions": [] if schedule_intent else ["请补充定时任务的执行时间。"],
             }
         )
     return candidates
@@ -194,7 +205,7 @@ def _scheduler_seed_review_payload(candidates: list[dict[str, Any]]) -> dict[str
         "type": "scheduler_seed_review",
         "node_id": SCHEDULER_PREPARATION_NODE_ID,
         "title": "确认定时任务",
-        "message": "工具已经准备好。请确认这个 Agent 需要自动启用的定时任务；也可以直接说怎么修改。",
+        "message": "请确认这个 Agent 需要自动启用的定时任务；也可以直接说怎么修改。",
         "seeds": [_review_seed_payload(candidate) for candidate in candidates],
         "missing_questions": _dedupe(missing_questions),
     }
@@ -266,27 +277,44 @@ def _resolve_scheduler_seed_revision(
     )
 
 
-def _parse_schedule_intent(value: str) -> dict[str, Any]:
-    text = value.strip()
-    if not text:
-        return {"missing_questions": ["请补充定时任务的执行时间。"]}
-    cron_match = re.fullmatch(r"\s*([0-5]?\d)\s+([01]?\d|2[0-3]|\*)\s+(\*|\d+)\s+(\*|\d+)\s+(\*|[0-7](?:-[0-7])?)\s*", text)
-    if cron_match:
-        return {"schedule_type": "cron", "schedule_expr": " ".join(cron_match.groups())}
-    minute_match = re.search(r"(?:每|every)\s*(\d+)?\s*(?:分钟|minute|minutes|min)", text, flags=re.IGNORECASE)
-    if minute_match:
-        minutes = int(minute_match.group(1) or "1")
-        return {"schedule_type": "interval", "schedule_expr": str(minutes * 60)}
-    second_match = re.search(r"(?:每|every)\s*(\d+)\s*(?:秒|second|seconds|sec)", text, flags=re.IGNORECASE)
-    if second_match:
-        return {"schedule_type": "interval", "schedule_expr": str(int(second_match.group(1)))}
-    time_match = re.search(r"([01]?\d|2[0-3])[:：]([0-5]\d)", text)
-    if time_match:
-        hour = int(time_match.group(1))
-        minute = int(time_match.group(2))
-        weekday = "1-5" if any(token in text for token in ["工作日", "交易日", "weekday", "weekdays", "周一到周五"]) else "*"
-        return {"schedule_type": "cron", "schedule_expr": f"{minute} {hour} * * {weekday}"}
-    return {"missing_questions": [f"请补充“{text}”对应的具体执行时间，例如每天 09:00 或工作日 17:00。"]}
+def _resolve_scheduler_seed_draft(
+    *,
+    product_brief: ProductBriefOutput,
+    runtime_design: RuntimeDesignOutput,
+    candidates: list[dict[str, Any]],
+) -> SchedulerSeedRevisionOutput:
+    return call_structured_model(
+        stage_id=SCHEDULER_PREPARATION_NODE_ID,
+        prompt_id=PromptId.SCHEDULER_SEED_DRAFT,
+        output_model=SchedulerSeedRevisionOutput,
+        values={
+            "product_brief": json.dumps(product_brief.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            "runtime_design": json.dumps(runtime_design.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            "seed_candidates": json.dumps(candidates, ensure_ascii=False, indent=2),
+            "output_json_schema": output_json_schema(SchedulerSeedRevisionOutput),
+        },
+    )
+
+
+def _seed_candidates_from_resolution(
+    resolved: SchedulerSeedRevisionOutput,
+    fallback_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    fallback_by_slot = {str(item.get("source_slot_id") or ""): item for item in fallback_candidates}
+    fallback_by_seed = {str(item.get("seed_id") or ""): item for item in fallback_candidates}
+    if resolved.decision != "approve":
+        questions = [str(item) for item in list(resolved.missing_questions) if str(item).strip()]
+        if not questions:
+            questions = [str(item) for item in list(resolved.warnings) if str(item).strip()]
+        if not questions:
+            questions = ["请补充定时任务的执行时间。"]
+        return [dict(item, missing_questions=questions) for item in fallback_candidates]
+    candidates: list[dict[str, Any]] = []
+    for seed in resolved.seeds:
+        payload = seed.model_dump(mode="json")
+        fallback = fallback_by_slot.get(seed.source_slot_id) or fallback_by_seed.get(seed.seed_id) or {}
+        candidates.append({**fallback, **payload, "missing_questions": []})
+    return candidates or fallback_candidates
 
 
 def _safe_seed_id(value: str) -> str:

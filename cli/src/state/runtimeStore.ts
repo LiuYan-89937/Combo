@@ -1183,7 +1183,7 @@ function runActivity(event: FactoryEvent): RunActivity | null {
 	const eventType = event.event_type;
 	const toolPayload = normalizeToolPayload(payload);
 	const node = event.node_id ?? event.stage_id ?? '-';
-	if (eventType.startsWith('resource_') || eventType.startsWith('tool_manufacturing_') || eventType.startsWith('scheduler_preparation_') || eventType === 'scheduler_seed_confirmed') {
+	if (eventType.startsWith('scheduler_preparation_') || eventType === 'scheduler_seed_confirmed') {
 		return {
 			activityKey: `${event.event_id}:activity`,
 			eventType,
@@ -1254,7 +1254,7 @@ function resourceLikeActivityDetail(payload: Record<string, unknown>, fallback: 
 	const toolId = stringValue(payload.tool_id);
 	const question = stringValue(payload.question);
 	const query = stringValue(payload.query);
-	const count = numberValue(payload.facts_count) ?? numberValue(payload.redacted_value_count);
+	const count = numberValue(payload.facts_count) ?? numberValue(payload.answer_length);
 	if (error) {
 		return firstLine(error);
 	}

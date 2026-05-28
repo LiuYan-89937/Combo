@@ -18,23 +18,6 @@ describe('interrupt resume payloads', () => {
 		});
 	});
 
-	it('maps resource collection and confirmation text to resume payloads', () => {
-		expect(buildResumePayload(resourceCollectionEvent(), '用 https://api.example.com，token 是 abc')).toEqual({
-			type: 'resource_collection_answer',
-			decision: 'submit',
-			answer: '用 https://api.example.com，token 是 abc'
-		});
-		expect(buildResumePayload(resourceConfirmationEvent(), '确认')).toEqual({
-			type: 'resource_confirmation_result',
-			decision: 'approve'
-		});
-		expect(buildResumePayload(resourceConfirmationEvent(), '这个地址换成 https://api2.example.com')).toEqual({
-			type: 'resource_confirmation_result',
-			decision: 'revise',
-			revision_text: '这个地址换成 https://api2.example.com'
-		});
-	});
-
 	it('maps scheduler seed review text to resume payloads', () => {
 		expect(buildResumePayload(schedulerSeedReviewEvent(), '确认')).toEqual({
 			type: 'scheduler_seed_review_result',
@@ -76,24 +59,6 @@ function toolApprovalEvent(): FactoryEvent {
 		severity: null,
 		message: null,
 		payload: {type: 'tool_approval'}
-	};
-}
-
-function resourceCollectionEvent(): FactoryEvent {
-	return {
-		...toolApprovalEvent(),
-		event_id: 'resource-collection',
-		event_type: 'interrupt_requested',
-		payload: {type: 'resource_collection', title: 'Resource Collection'}
-	};
-}
-
-function resourceConfirmationEvent(): FactoryEvent {
-	return {
-		...toolApprovalEvent(),
-		event_id: 'resource-confirmation',
-		event_type: 'interrupt_requested',
-		payload: {type: 'resource_confirmation', title: 'Resource Confirmation'}
 	};
 }
 

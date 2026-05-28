@@ -44,27 +44,6 @@
     "capability_contract_validation": {
       "type": "object"
     },
-    "resource_resolution": {
-      "type": "object"
-    },
-    "resource_resolution_report": {
-      "type": "object"
-    },
-    "resource_facts": {
-      "type": "object"
-    },
-    "pending_resource_request": {
-      "type": "object"
-    },
-    "pending_resource_interaction": {
-      "type": "object"
-    },
-    "tool_manufacturing": {
-      "type": "object"
-    },
-    "tool_manufacturing_report": {
-      "type": "object"
-    },
     "scheduler_preparation": {
       "type": "object"
     },

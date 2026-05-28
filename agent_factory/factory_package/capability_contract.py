@@ -61,7 +61,7 @@ def capability_contract_catalog_payload(runtime_design: RuntimeDesignOutput) -> 
         "contract_rules": {
             "contract_drafts": "Must include every required_agent_package_contract and every runtime_design_required_contract.",
             "capability_plans": "Must include every standard_capability_systems item, including disabled systems.",
-            "pattern_slots": "Every Runtime Design pattern slot must be mapped to the right contract, resource requirement, generated tool, prompt, scheduler strategy, artifact strategy, or state strategy.",
+            "pattern_slots": "Every Runtime Design pattern slot must be mapped to the right contract, resource requirement, prompt, scheduler strategy, artifact strategy, tool binding strategy, or state strategy.",
             "builder_paths": "Never include Python import paths or builder paths. Builders are system registered.",
             "tool_execution": "All generated or builtin tools execute through ToolExecutionGateway.",
             "knowledge": "Knowledge retrieval is exposed as the system knowledge tool; no automatic full recall per turn.",
@@ -134,7 +134,6 @@ def validate_capability_contract(
         enabled_contracts=enabled_contracts,
         disabled_contracts=disabled_contracts,
         generation_task_summary={
-            "tools": len(output.tool_specs_to_generate),
             "package_nodes": len(output.package_nodes_to_generate),
             "prompts": len(output.prompts_to_generate),
             "bindings": len(output.bindings_to_generate),
@@ -164,10 +163,6 @@ def capability_contract_message(
             continue
         status = "启用" if plan.enabled else "关闭"
         lines.append(f"- {key}：{status}。{plan.why}")
-    if output.tool_specs_to_generate:
-        lines.extend(["", "后续需要生成的工具："])
-        for item in output.tool_specs_to_generate:
-            lines.append(f"- {item.tool_id}：{item.purpose}")
     if output.package_nodes_to_generate:
         lines.extend(["", "后续需要生成的 package-local node："])
         for item in output.package_nodes_to_generate:
@@ -277,7 +272,6 @@ def _validate_pattern_slot_alignment(
     runtime_design: RuntimeDesignOutput,
     errors: list[str],
 ) -> None:
-    generated_tools = {item.tool_id for item in output.tool_specs_to_generate}
     resources = {item.resource_id for item in output.resources_required}
     prompts = {item.prompt_id for item in output.prompts_to_generate}
     enabled_contracts = {
@@ -290,13 +284,6 @@ def _validate_pattern_slot_alignment(
         if slot.slot_type == "tool":
             if "tools" not in enabled_contracts:
                 errors.append(f"pattern slot {slot.slot_id} requires tools contract")
-            if slot.source == "package_generated":
-                expected_tool_ids = list(getattr(binding, "generated_tool_ids", []) or getattr(binding, "tool_ids", []))
-                if not expected_tool_ids:
-                    errors.append(f"package_generated tool slot {slot.slot_id} must set tool_id")
-                for tool_id in expected_tool_ids:
-                    if tool_id not in generated_tools:
-                        errors.append(f"tool slot {slot.slot_id} missing generated tool plan: {tool_id}")
         if slot.slot_type == "resource":
             if "resources" not in enabled_contracts:
                 errors.append(f"pattern slot {slot.slot_id} requires resources contract")

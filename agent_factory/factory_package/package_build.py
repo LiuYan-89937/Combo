@@ -16,7 +16,6 @@ from jsonschema import Draft202012Validator
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.factory_package.schemas import (
     CapabilityContractOutput,
-    InheritedExtensionArtifact,
     PackageBuildMaterializedFile,
     PackageBuildModelPlan,
     PackageBuildPlan,
@@ -26,7 +25,6 @@ from agent_factory.factory_package.schemas import (
     ProductBriefOutput,
     RuntimeDesignOutput,
     SchedulerPreparationOutput,
-    ToolManufacturingOutput,
 )
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_contracts.loader import AgentPackageLoader
@@ -157,7 +155,6 @@ def build_agent_package(
     product_brief: ProductBriefOutput,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
-    tool_manufacturing: ToolManufacturingOutput | None = None,
     scheduler_preparation: SchedulerPreparationOutput | None = None,
     output_root: Path = PACKAGE_OUTPUT_ROOT,
 ) -> PackageBuildResult:
@@ -165,7 +162,6 @@ def build_agent_package(
         plan=plan,
         runtime_design=runtime_design,
         capability_contract=capability_contract,
-        tool_manufacturing=tool_manufacturing,
     )
     package_root = (Path.cwd() / output_root / plan.package_id).resolve()
     if errors:
@@ -191,7 +187,6 @@ def build_agent_package(
             product_brief=product_brief,
             runtime_design=runtime_design,
             capability_contract=capability_contract,
-            inherited_extensions=tool_manufacturing.inherited_extensions if tool_manufacturing is not None else [],
             scheduler_preparation=scheduler_preparation,
         )
         static_checks.extend(_validate_temp_package(temp_root))
@@ -276,7 +271,6 @@ def _materialize_to_temp_root(
     product_brief: ProductBriefOutput,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
-    inherited_extensions: list[InheritedExtensionArtifact] | None = None,
     scheduler_preparation: SchedulerPreparationOutput | None = None,
 ) -> None:
     pattern = _package_pattern(runtime_design)
@@ -446,12 +440,6 @@ def _materialize_to_temp_root(
             source=f"package_tool:{tool.tool_id}",
             materialized=materialized,
         )
-    _materialize_inherited_extensions(
-        temp_root=temp_root,
-        materialized=materialized,
-        inherited_extensions=list(inherited_extensions or []),
-    )
-
 
 def _validate_temp_package(temp_root: Path) -> list[PackageBuildStaticCheck]:
     checks: list[PackageBuildStaticCheck] = []
@@ -638,7 +626,6 @@ def _validate_plan_alignment(
     plan: PackageBuildPlan,
     runtime_design: RuntimeDesignOutput,
     capability_contract: CapabilityContractOutput,
-    tool_manufacturing: ToolManufacturingOutput | None = None,
 ) -> list[str]:
     errors: list[str] = []
     pattern = _package_pattern(runtime_design)
@@ -658,22 +645,6 @@ def _validate_plan_alignment(
     missing_nodes = sorted(expected_nodes.difference(actual_nodes))
     if missing_nodes:
         errors.append("package build plan missing package node implementations: " + ", ".join(missing_nodes))
-    if tool_manufacturing is not None:
-        expected_tools = {
-            item.tool_id
-            for item in tool_manufacturing.source_decisions
-            if item.source == "package_generated"
-        }
-    else:
-        expected_tools = {
-            item.tool_id
-            for item in capability_contract.tool_specs_to_generate
-            if item.source == "package_generated"
-        }
-    actual_tools = {item.tool_id for item in plan.package_tools}
-    missing_tools = sorted(expected_tools.difference(actual_tools))
-    if missing_tools:
-        errors.append("package build plan missing package tool implementations: " + ", ".join(missing_tools))
     for prompt in plan.prompt_templates:
         if prompt.node_id not in cognitive_node_ids:
             errors.append(f"prompt template references non-cognitive preset node: {prompt.node_id}")
@@ -1473,86 +1444,6 @@ def _tool_spec(tool) -> ToolSpec:
         risk_evaluator=ToolRiskEvaluatorConfig(),
         concurrent=tool.concurrent,
     )
-
-
-def _materialize_inherited_extensions(
-    *,
-    temp_root: Path,
-    materialized: list[PackageBuildMaterializedFile],
-    inherited_extensions: list[InheritedExtensionArtifact],
-) -> None:
-    if not inherited_extensions:
-        return
-    mcp_servers = [item.config for item in inherited_extensions if item.source == "mcp"]
-    skills = [item for item in inherited_extensions if item.source == "skill"]
-    if mcp_servers:
-        _write_json_file(
-            temp_root=temp_root,
-            relative_path="extensions/mcp_servers.json",
-            payload={"version": "mcp_servers.v0", "servers": _dedupe_extension_configs(mcp_servers, key="server_id")},
-            generation_mode="system_generated",
-            source="inherited_mcp_extensions",
-            materialized=materialized,
-        )
-    if skills:
-        skill_configs = []
-        for item in skills:
-            skill_configs.append(dict(item.config))
-            source_path = Path(str(item.source_path or "")).expanduser()
-            if not source_path.is_dir():
-                raise PackageBuildError(f"inherited skill source path does not exist: {item.extension_id}")
-            _copy_extension_tree(
-                temp_root=temp_root,
-                source_root=source_path.resolve(),
-                relative_target=f"extensions/skills/{_safe_file_id(item.extension_id)}",
-                source=f"inherited_skill:{item.extension_id}",
-                materialized=materialized,
-            )
-        _write_json_file(
-            temp_root=temp_root,
-            relative_path="extensions/enabled_skills.json",
-            payload={"version": "enabled_skills.v0", "skills": _dedupe_extension_configs(skill_configs, key="skill_id")},
-            generation_mode="system_generated",
-            source="inherited_skill_extensions",
-            materialized=materialized,
-        )
-
-
-def _dedupe_extension_configs(configs: list[dict[str, Any]], *, key: str) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for config in configs:
-        item_id = str(config.get(key) or "").strip()
-        if not item_id or item_id in seen:
-            continue
-        result.append(config)
-        seen.add(item_id)
-    return result
-
-
-def _copy_extension_tree(
-    *,
-    temp_root: Path,
-    source_root: Path,
-    relative_target: str,
-    source: str,
-    materialized: list[PackageBuildMaterializedFile],
-) -> None:
-    for path in sorted(item for item in source_root.rglob("*") if item.is_file()):
-        relative = path.relative_to(source_root)
-        target = _safe_target(temp_root, str(Path(relative_target) / relative))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-        suffix = target.suffix.lower()
-        file_type = "json" if suffix == ".json" else "markdown" if suffix == ".md" else "python" if suffix == ".py" else "text"
-        _record_file(
-            temp_root=temp_root,
-            target=target,
-            file_type=file_type,
-            generation_mode="system_generated",
-            source=source,
-            materialized=materialized,
-        )
 
 
 def _write_json_file(

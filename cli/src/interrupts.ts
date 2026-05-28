@@ -7,8 +7,6 @@ export type InterruptDescriptor = {
 		| 'tool_approval'
 		| 'plan_review'
 		| 'requirement_clarification'
-		| 'resource_collection'
-		| 'resource_confirmation'
 		| 'scheduler_seed_review'
 		| 'generic';
 };
@@ -27,12 +25,6 @@ export function describeInterrupt(event: FactoryEvent | null): InterruptDescript
 	}
 	if (type === 'requirement_clarification') {
 		return {type, title: 'Requirement Clarification', resumeKind: 'requirement_clarification'};
-	}
-	if (type === 'resource_collection') {
-		return {type, title: String(payload.title ?? 'Resource Collection'), resumeKind: 'resource_collection'};
-	}
-	if (type === 'resource_confirmation') {
-		return {type, title: String(payload.title ?? 'Resource Confirmation'), resumeKind: 'resource_confirmation'};
 	}
 	if (type === 'scheduler_seed_review') {
 		return {type, title: String(payload.title ?? 'Scheduler Seed Review'), resumeKind: 'scheduler_seed_review'};
@@ -72,18 +64,6 @@ export function buildResumePayload(event: FactoryEvent, value: string): Record<s
 				custom_text: value
 			}));
 			return {type: 'requirement_clarification_answer', answers};
-		}
-		case 'resource_collection':
-			return buildResourceCollectionPayload(value);
-		case 'resource_confirmation': {
-			const normalized = value.trim().toLowerCase();
-			if (['继续', '确认', 'approve', 'approved', 'yes', 'y'].includes(normalized)) {
-				return buildResourceConfirmationApprovePayload();
-			}
-			if (['暂不提供', 'skip', 'no', 'n'].includes(normalized)) {
-				return buildResourceConfirmationSkipPayload(value);
-			}
-			return buildResourceConfirmationRevisePayload(value);
 		}
 		case 'scheduler_seed_review': {
 			const normalized = value.trim().toLowerCase();
@@ -131,26 +111,6 @@ export function buildToolTrustPayload(): Record<string, unknown> {
 
 export function buildToolApprovalRevisionPayload(revisionGuidance: string): Record<string, unknown> {
 	return {action: 'revise', approved: false, revision_guidance: revisionGuidance};
-}
-
-export function buildResourceCollectionPayload(answer: string): Record<string, unknown> {
-	return {type: 'resource_collection_answer', decision: 'submit', answer};
-}
-
-export function buildResourceCollectionSkipPayload(note = '暂不提供'): Record<string, unknown> {
-	return {type: 'resource_collection_answer', decision: 'skip', note};
-}
-
-export function buildResourceConfirmationApprovePayload(): Record<string, unknown> {
-	return {type: 'resource_confirmation_result', decision: 'approve'};
-}
-
-export function buildResourceConfirmationRevisePayload(revisionText: string): Record<string, unknown> {
-	return {type: 'resource_confirmation_result', decision: 'revise', revision_text: revisionText};
-}
-
-export function buildResourceConfirmationSkipPayload(note = '暂不提供'): Record<string, unknown> {
-	return {type: 'resource_confirmation_result', decision: 'skip', note};
 }
 
 export function buildSchedulerSeedReviewApprovePayload(): Record<string, unknown> {

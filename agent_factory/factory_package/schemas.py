@@ -6,7 +6,6 @@ from typing import Annotated, Any, Literal
 from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from agent_factory.assembly.schema import ToolSpec
 from agent_factory.scheduler_system.schema import SchedulerSeedPlan
 
 
@@ -186,7 +185,6 @@ class RuntimeDesignToolSlotBinding(BaseModel):
 
     kind: Literal["tool"] = "tool"
     tool_ids: list[str] = Field(default_factory=list)
-    generated_tool_ids: list[str] = Field(default_factory=list)
 
 
 class RuntimeDesignResourceSlotBinding(BaseModel):
@@ -368,18 +366,6 @@ class CapabilityContractDraft(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
-class CapabilityToolGenerationPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    purpose: str
-    source: Literal["package_generated", "builtin", "mcp", "skill", "knowledge", "scheduler"] | None = None
-    required_by_nodes: list[str] = Field(default_factory=list)
-    risk_level: Literal["low", "medium", "high"] = "medium"
-    input_summary: str = ""
-    output_summary: str = ""
-
-
 class CapabilityPackageNodeGenerationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -451,7 +437,6 @@ class CapabilityContractOutput(BaseModel):
     version: Literal["capability_contract.v0"] = "capability_contract.v0"
     contract_drafts: dict[str, CapabilityContractDraft] = Field(default_factory=dict)
     capability_plans: dict[str, CapabilityPlan] = Field(default_factory=dict)
-    tool_specs_to_generate: list[CapabilityToolGenerationPlan] = Field(default_factory=list)
     package_nodes_to_generate: list[CapabilityPackageNodeGenerationPlan] = Field(default_factory=list)
     prompts_to_generate: list[CapabilityPromptGenerationPlan] = Field(default_factory=list)
     bindings_to_generate: list[CapabilityBindingGenerationPlan] = Field(default_factory=list)
@@ -471,82 +456,6 @@ class CapabilityContractValidationReport(BaseModel):
     enabled_contracts: list[str] = Field(default_factory=list)
     disabled_contracts: list[str] = Field(default_factory=list)
     generation_task_summary: dict[str, int] = Field(default_factory=dict)
-
-
-class ExternalResourceDiscoveryQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    question: str
-    query: str
-    target_resource_id: str = ""
-    target_path: list[str] = Field(default_factory=list)
-    reason: str = ""
-
-    @field_validator("question", "query")
-    @classmethod
-    def _discovery_text_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("discovery question and query must not be empty")
-        return text
-
-
-class ExternalResourceDiscoveryResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    query: ExternalResourceDiscoveryQuery
-    status: Literal["completed", "unavailable", "failed"] = "completed"
-    tool_id: str = ""
-    summary: str = ""
-    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
-    error: str = ""
-
-
-class ResourceFact(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    key: str
-    value: Any = None
-    secret: bool = False
-    status: Literal["confirmed", "discovered", "declined", "missing", "optional_empty"] = "confirmed"
-    source: Literal["user", "tool", "knowledge", "mcp", "skill", "default", "system"] = "user"
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
-    required_by: list[str] = Field(default_factory=list)
-
-    @field_validator("key")
-    @classmethod
-    def _key_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("resource fact key must not be empty")
-        return text
-
-
-class ResourceResolutionReport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["resource_resolution_report.v0"] = "resource_resolution_report.v0"
-    status: Literal["valid", "needs_input", "skipped", "failed"] = "valid"
-    facts_count: int = 0
-    missing_questions: list[str] = Field(default_factory=list)
-    discovery_results: list[ExternalResourceDiscoveryResult] = Field(default_factory=list)
-    errors: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class ExternalResourceResolutionDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["external_resource_resolution.v0"] = "external_resource_resolution.v0"
-    decision: Literal["resolved", "needs_clarification", "skip"] = "resolved"
-    resources: dict[str, Any] = Field(default_factory=dict)
-    sandbox: dict[str, Any] = Field(default_factory=dict)
-    discovery_queries: list[ExternalResourceDiscoveryQuery] = Field(default_factory=list, max_length=5)
-    discovery_results: list[ExternalResourceDiscoveryResult] = Field(default_factory=list, max_length=5)
-    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
-    missing_questions: list[str] = Field(default_factory=list, max_length=5)
-    notes: list[str] = Field(default_factory=list, max_length=8)
 
 
 class PackagePromptBuildPlan(BaseModel):
@@ -695,321 +604,6 @@ class PackageToolBuildPlan(BaseModel):
         return cleaned
 
 
-ToolManufacturingSource = Literal["package_generated", "builtin", "mcp", "skill", "knowledge", "scheduler"]
-
-
-class ToolInheritedExtensionRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: Literal["mcp", "skill"]
-    extension_id: str
-    required: bool = False
-    reason: str = ""
-
-    @field_validator("extension_id")
-    @classmethod
-    def _extension_id_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("extension_id must not be empty")
-        return text
-
-
-class InheritedExtensionArtifact(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: Literal["mcp", "skill"]
-    extension_id: str
-    config: dict[str, Any]
-    source_path: str | None = None
-    target_path: str | None = None
-
-    @field_validator("extension_id")
-    @classmethod
-    def _extension_id_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("extension_id must not be empty")
-        return text
-
-
-class ToolSourceDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    source: ToolManufacturingSource
-    selected_tool_id: str | None = None
-    inherited_extensions: list[ToolInheritedExtensionRef] = Field(default_factory=list)
-    rationale: str
-    required_by_nodes: list[str] = Field(default_factory=list)
-    binding_notes: str = ""
-
-    @field_validator("tool_id")
-    @classmethod
-    def _tool_id_is_snake_case(cls, value: str) -> str:
-        return PackageToolBuildPlan._tool_id_is_snake_case(value)
-
-    @field_validator("rationale")
-    @classmethod
-    def _rationale_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("tool source decision rationale must not be empty")
-        return text
-
-
-class ToolResourceBinding(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    local_name: str
-    selector: str
-    purpose: str = ""
-
-    @field_validator("local_name")
-    @classmethod
-    def _local_name_is_identifier(cls, value: str) -> str:
-        name = str(value).strip()
-        if not _RESOURCE_SELECTOR_PATTERN.fullmatch(name):
-            raise ValueError("local_name must be an identifier-style local resource name")
-        if "." in name:
-            raise ValueError("local_name must not contain dots; use selector for resource paths")
-        return name
-
-    @field_validator("selector")
-    @classmethod
-    def _selector_is_dot_path(cls, value: str) -> str:
-        selector = str(value).strip()
-        if "{{" in selector or "}}" in selector:
-            raise ValueError("resource selector must not be a template expression")
-        if not _RESOURCE_SELECTOR_PATTERN.fullmatch(selector):
-            raise ValueError(f"invalid tool resource selector: {selector}")
-        return selector
-
-
-class ToolDesign(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    purpose: str
-    input_semantics: str
-    output_semantics: str
-    failure_semantics: str
-    resource_bindings: list[ToolResourceBinding] = Field(
-        default_factory=list,
-        description="Explicit resource bindings. Each item is local_name -> selector; selector is a dot path such as report_config.news_api_key.",
-    )
-    risk_level: Literal["low", "medium", "high"] = "medium"
-    concurrent: bool = True
-    python_requirements: list[str] = Field(default_factory=list)
-    system_packages: list[str] = Field(default_factory=list)
-    system_binaries: list[str] = Field(default_factory=list)
-    implementation_constraints: list[str] = Field(default_factory=list)
-    test_resources: dict[str, Any] = Field(default_factory=dict)
-    test_arguments: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("tool_id")
-    @classmethod
-    def _tool_id_is_snake_case(cls, value: str) -> str:
-        return PackageToolBuildPlan._tool_id_is_snake_case(value)
-
-    @field_validator("purpose", "input_semantics", "output_semantics", "failure_semantics")
-    @classmethod
-    def _text_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("tool design text fields must not be empty")
-        return text
-
-    @field_validator("python_requirements")
-    @classmethod
-    def _python_requirements_are_valid(cls, value: list[str]) -> list[str]:
-        return _validate_python_requirements(value)
-
-    @field_validator("system_packages", "system_binaries")
-    @classmethod
-    def _system_dependencies_are_valid(cls, value: list[str]) -> list[str]:
-        return _validate_dependency_names(value)
-
-
-class ToolSpecDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    description: str
-    input_schema: dict[str, Any]
-    output_schema: dict[str, Any]
-    resources: dict[str, str] = Field(default_factory=dict)
-    risk_level: Literal["low", "medium", "high"] = "medium"
-    concurrent: bool = True
-
-    @field_validator("tool_id")
-    @classmethod
-    def _tool_id_is_snake_case(cls, value: str) -> str:
-        return PackageToolBuildPlan._tool_id_is_snake_case(value)
-
-    @field_validator("description")
-    @classmethod
-    def _description_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("tool spec description must not be empty")
-        return text
-
-    @field_validator("input_schema", "output_schema")
-    @classmethod
-    def _schema_is_object(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(value, dict) or not value:
-            raise ValueError("tool schemas must be non-empty JSON objects")
-        return value
-
-    @field_validator("resources")
-    @classmethod
-    def _resource_selectors_are_valid(cls, value: dict[str, str]) -> dict[str, str]:
-        return PackageToolBuildPlan._resource_selectors_are_valid(value)
-
-
-class ToolImplementationDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    code: str
-    notes: list[str] = Field(default_factory=list)
-
-    @field_validator("tool_id")
-    @classmethod
-    def _tool_id_is_snake_case(cls, value: str) -> str:
-        return PackageToolBuildPlan._tool_id_is_snake_case(value)
-
-    @field_validator("code")
-    @classmethod
-    def _code_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("tool implementation code must not be empty")
-        return text
-
-
-class ToolTrialScenario(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    scenario_id: str
-    user_prompt: str
-    expected_tool_id: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    resources: dict[str, Any] = Field(default_factory=dict)
-    expected_observation_status: Literal[
-        "completed",
-        "invalid_arguments",
-        "invalid_output",
-        "execution_failed",
-        "denied",
-        "revision_requested",
-    ] = "completed"
-    expected_output_keys: list[str] = Field(default_factory=list)
-    expected_final_answer_contains: list[str] = Field(default_factory=list)
-    success_criteria: list[str] = Field(default_factory=list)
-
-    @field_validator("expected_tool_id")
-    @classmethod
-    def _tool_id_is_snake_case(cls, value: str) -> str:
-        return PackageToolBuildPlan._tool_id_is_snake_case(value)
-
-    @field_validator("scenario_id", "user_prompt")
-    @classmethod
-    def _scenario_text_is_non_empty(cls, value: str) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("scenario_id and user_prompt must not be empty")
-        return text
-
-
-class ToolTrialPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    scenarios: list[ToolTrialScenario] = Field(default_factory=list, min_length=1)
-    expected_coverage: list[str] = Field(default_factory=list)
-
-    @field_validator("tool_id")
-    @classmethod
-    def _tool_id_is_snake_case(cls, value: str) -> str:
-        return PackageToolBuildPlan._tool_id_is_snake_case(value)
-
-    @model_validator(mode="after")
-    def _scenarios_target_this_tool(self) -> "ToolTrialPlan":
-        for scenario in self.scenarios:
-            if scenario.expected_tool_id != self.tool_id:
-                raise ValueError("each trial scenario expected_tool_id must match ToolTrialPlan.tool_id")
-        return self
-
-
-class ToolManufacturingFailureSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tool_id: str
-    phase: Literal[
-        "required_artifacts",
-        "artifact_ids",
-        "python_compile",
-        "entrypoint_signature",
-        "tool_spec",
-        "dependency_convergence",
-        "contract_smoke",
-        "resource_probe",
-        "model_trial",
-        "manufacturing_alignment",
-    ]
-    category: str
-    primary_error: str
-    report_path: str = ""
-    suggested_action: str = ""
-
-
-class ToolManufacturingCheck(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    status: Literal["passed", "failed", "skipped"]
-    message: str = ""
-    details: dict[str, Any] = Field(default_factory=dict)
-    failure_summary: ToolManufacturingFailureSummary | None = None
-
-
-class ToolManufacturingReport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["tool_manufacturing_report.v0"] = "tool_manufacturing_report.v0"
-    status: Literal["valid", "invalid", "failed"]
-    source_decisions: list[ToolSourceDecision] = Field(default_factory=list)
-    checks: list[ToolManufacturingCheck] = Field(default_factory=list)
-    approved_tool_ids: list[str] = Field(default_factory=list)
-    blocked_tool_ids: list[str] = Field(default_factory=list)
-    errors: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class ApprovedPackageToolArtifact(PackageToolBuildPlan):
-    model_config = ConfigDict(extra="forbid")
-
-    manufacturing_status: Literal["approved"] = "approved"
-    manufacturing_report_ref: str = ""
-
-
-class ToolManufacturingOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["tool_manufacturing.v0"] = "tool_manufacturing.v0"
-    source_decisions: list[ToolSourceDecision] = Field(default_factory=list)
-    tool_designs: list[ToolDesign] = Field(default_factory=list)
-    tool_specs: list[ToolSpecDraft] = Field(default_factory=list)
-    implementations: list[ToolImplementationDraft] = Field(default_factory=list)
-    trial_plans: list[ToolTrialPlan] = Field(default_factory=list)
-    approved_package_tools: list[ApprovedPackageToolArtifact] = Field(default_factory=list)
-    inherited_extensions: list[InheritedExtensionArtifact] = Field(default_factory=list)
-    report: ToolManufacturingReport = Field(default_factory=lambda: ToolManufacturingReport(status="valid"))
-    manufacturing_summary_text: str = ""
-
-
 class SchedulerSeedValidationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1047,14 +641,7 @@ class SchedulerSeedRevisionOutput(BaseModel):
     seeds: list[SchedulerSeedPlan] = Field(default_factory=list)
     display_summary: str = ""
     warnings: list[str] = Field(default_factory=list, max_length=10)
-
-
-class ToolSourceDecisionOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["tool_source_decisions.v0"] = "tool_source_decisions.v0"
-    source_decisions: list[ToolSourceDecision] = Field(default_factory=list)
-    manufacturing_summary_text: str = ""
+    missing_questions: list[str] = Field(default_factory=list, max_length=5)
 
 
 def _validate_python_requirements(values: list[str]) -> list[str]:
