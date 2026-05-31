@@ -420,7 +420,7 @@ class ResourceDescriptor(BaseModel):
     description: str = ""
     required: bool = True
     value_schema: dict[str, Any] = Field(default_factory=dict)
-    default_value: dict[str, Any] = Field(default_factory=dict)
+    default_value: Any = Field(default_factory=dict)
     secret_fields: list[str] = Field(default_factory=list)
     used_by: list[str] = Field(default_factory=list)
     sandbox_access_expectation: str = ""

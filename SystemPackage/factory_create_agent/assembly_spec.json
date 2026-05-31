@@ -3,11 +3,11 @@
   "agent": {
     "id": "factory_create_agent",
     "name": "Factory Create Agent",
-    "description": "FastAgentFactory create-agent package. Current test breakpoint materializes an AgentPackage after Package Build.",
+    "description": "FastAgentFactory create-agent CLI entry placeholder.",
     "version": "0.1.0"
   },
   "runtime": {
-    "pattern_id": "factory_manufacturing",
+    "pattern_id": "create_agent_entry",
     "compiled_pattern_id": null,
     "user_config": {},
     "agent_config": {

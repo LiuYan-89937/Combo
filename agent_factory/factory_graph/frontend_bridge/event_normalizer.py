@@ -16,11 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
-NODE_EVENT_TYPES = {
-    "scheduler_preparation_started",
-    "scheduler_seed_confirmed",
-    "scheduler_preparation_completed",
-}
+NODE_EVENT_TYPES: set[str] = set()
 
 
 Emit = Callable[[FactoryFrontendEvent], None]

@@ -17,7 +17,7 @@ class FrontendEventNormalizerTest(unittest.TestCase):
             mode="create_agent",
             graph_id="factory_graph",
         )
-        normalizer.current_stage_id = "product_brief"
+        normalizer.current_stage_id = "create_agent_entry"
 
         normalizer.emit_custom_event(
             {
@@ -42,7 +42,7 @@ class FrontendEventNormalizerTest(unittest.TestCase):
 
         tool_events = [event for event in events if event.event_type == "tool_call_completed"]
         self.assertEqual(len(tool_events), 1)
-        self.assertEqual(tool_events[0].stage_id, "product_brief")
+        self.assertEqual(tool_events[0].stage_id, "create_agent_entry")
         self.assertEqual(tool_events[0].payload["tool_call_id"], "call-a")
         self.assertEqual(tool_events[0].payload["tool_name"], "shell_cwd")
 
@@ -64,10 +64,10 @@ class FrontendEventNormalizerTest(unittest.TestCase):
                     "event_type": "node_started",
                     "producer_type": "factory",
                     "graph_id": "factory_graph",
-                    "stage_id": "product_brief",
-                    "node_id": "product_brief",
-                    "node_label": "Product Brief",
-                    "node_kind": "factory_manufacturing_domain",
+                    "stage_id": "create_agent_entry",
+                    "node_id": "create_agent_entry",
+                    "node_label": "Create Agent",
+                    "node_kind": "factory_entry",
                     "severity": "info",
                     "payload": {"doing": "整理需求"},
                 },
@@ -78,8 +78,8 @@ class FrontendEventNormalizerTest(unittest.TestCase):
         self.assertEqual(len(node_events), 1)
         self.assertEqual(node_events[0].protocol_version, "factory_frontend.v1")
         self.assertEqual(node_events[0].producer_type, "factory")
-        self.assertEqual(node_events[0].node_label, "Product Brief")
-        self.assertEqual(node_events[0].node_kind, "factory_manufacturing_domain")
+        self.assertEqual(node_events[0].node_label, "Create Agent")
+        self.assertEqual(node_events[0].node_kind, "factory_entry")
         self.assertEqual(node_events[0].payload["doing"], "整理需求")
         self.assertEqual(node_events[0].payload["source_protocol_version"], "runtime_render.v1")
 
@@ -102,16 +102,16 @@ class FrontendEventNormalizerTest(unittest.TestCase):
                         "event_type": event_type,
                         "producer_type": "factory",
                         "graph_id": "factory_graph",
-                        "stage_id": "product_brief",
-                        "node_id": "product_brief",
-                        "node_label": "Product Brief",
-                        "node_kind": "factory_manufacturing_domain",
+                        "stage_id": "create_agent_entry",
+                        "node_id": "create_agent_entry",
+                        "node_label": "Create Agent",
+                        "node_kind": "factory_entry",
                         "severity": "info",
                         "payload": {},
                     },
                 }
             )
-        normalizer.emit_update("product_brief", {})
+        normalizer.emit_update("create_agent_entry", {})
 
         self.assertEqual(len([event for event in events if event.event_type == "node_started"]), 1)
         self.assertEqual(len([event for event in events if event.event_type == "node_completed"]), 1)

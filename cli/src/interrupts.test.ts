@@ -18,20 +18,22 @@ describe('interrupt resume payloads', () => {
 		});
 	});
 
-	it('maps scheduler seed review text to resume payloads', () => {
-		expect(buildResumePayload(schedulerSeedReviewEvent(), '确认')).toEqual({
-			type: 'scheduler_seed_review_result',
-			decision: 'approve'
+	it('maps generic interrupt text to a freeform answer payload', () => {
+		expect(buildResumePayload(genericInterruptEvent(), '这是我的补充信息')).toEqual({
+			input_text: '这是我的补充信息'
 		});
-		expect(buildResumePayload(schedulerSeedReviewEvent(), '改成工作日下午五点')).toEqual({
-			type: 'scheduler_seed_review_result',
+	});
+
+	it('maps assistant dialogue confirmation shortcuts to approval payloads', () => {
+		expect(buildResumePayload(assistantDialogueConfirmationEvent(), '确认')).toEqual({
+			decision: 'approve',
+			answer: '确认',
+			input_text: '确认'
+		});
+		expect(buildResumePayload(assistantDialogueConfirmationEvent(), '这里要改')).toEqual({
 			decision: 'revise',
-			revision_text: '改成工作日下午五点'
-		});
-		expect(buildResumePayload(schedulerSeedReviewEvent(), '暂不定时')).toEqual({
-			type: 'scheduler_seed_review_result',
-			decision: 'skip',
-			note: '暂不定时'
+			answer: '这里要改',
+			input_text: '这里要改'
 		});
 	});
 });
@@ -62,11 +64,26 @@ function toolApprovalEvent(): FactoryEvent {
 	};
 }
 
-function schedulerSeedReviewEvent(): FactoryEvent {
+function genericInterruptEvent(): FactoryEvent {
 	return {
 		...toolApprovalEvent(),
-		event_id: 'scheduler-seed-review',
+		event_id: 'generic-interrupt',
 		event_type: 'interrupt_requested',
-		payload: {type: 'scheduler_seed_review', title: 'Scheduler Seed Review'}
+		payload: {type: 'runtime_question', title: 'Question', message: 'Need input'}
+	};
+}
+
+function assistantDialogueConfirmationEvent(): FactoryEvent {
+	return {
+		...toolApprovalEvent(),
+		event_id: 'assistant-dialogue-interrupt',
+		event_type: 'interrupt_requested',
+		payload: {
+			type: 'assistant_confirmation',
+			presentation: 'assistant_dialogue',
+			resume_kind: 'confirmation',
+			title: '确认资源事实',
+			message: '请确认这些资源事实是否正确。'
+		}
 	};
 }

@@ -157,31 +157,16 @@ python -m agent_factory.factory_graph.frontend_bridge.stdio_server
 说明：
 
 - `/chat`：进入工厂自由对话模式，可用于测试工具、记忆、知识库、定时任务等基础能力。
-- `/create-agent`：进入 Agent 生产流程。
+- `/create-agent`：进入 Agent 生产入口；当前后端制造实现已清空，等待重新设计。
 - `/run-agent-package`：扫描 `.agentfactory/packages`，选择已生产 AgentPackage 并运行。
 - `/agent-sessions`：选择当前 AgentPackage 的会话。
 - `/sessions`：选择工厂会话。
 - `/stop <stage_id|off>`：设置或关闭生产流程阶段断点。
 - `/tool-grep <query|off>`：过滤工具活动展示。
 
-## Agent 生产流程
+## Agent 生产入口
 
-`/create-agent` 会运行工厂的十阶段生产流程：
-
-| # | stage_id | 职责 |
-| --- | --- | --- |
-| 1 | `requirement_capture` | 捕获需求、澄清边界、形成用户确认过的制造计划。 |
-| 2 | `runtime_pattern_selection` | 选择 RuntimeKernel pattern。 |
-| 3 | `graph_behavior_planning` | 规划节点职责、路由和运行行为。 |
-| 4 | `node_strategy_planning` | 规划节点 wrapper、上下文、记忆、policy、tool visibility。 |
-| 5 | `tool_capability_planning` | 规划工具能力契约和节点工具可见性。 |
-| 6 | `resource_and_condition_planning` | 准备资源键值、sandbox contract 和资源报告。 |
-| 7 | `assembly_spec_generation` | 冻结 AssemblySpec、PackageMaterializationPlan、RenderManifest。 |
-| 8 | `package_generation` | 物化 AgentPackage、contracts、工具代码草稿和 package report。 |
-| 9 | `harness_generation_and_test` | 生成并执行 package validation harness。 |
-| 10 | `repair_or_finalize` | 返厂维修或最终出厂。 |
-
-默认阶段断点可通过 `/stop <stage_id|off>` 调整。
+`/create-agent` 的 CLI 入口仍然保留。后端制造流程已经清空为占位 SystemPackage，新的生产链路确定后再接入。
 
 ## AgentPackage 结构
 
@@ -489,7 +474,6 @@ git diff --check
 
 ## 未完成边界
 
-- 第十阶段 `repair_or_finalize` 还需要完成真实返厂维修与最终出厂流程。
 - `/rerun <stage_id>` 需要基于持久 bookmark/checkpoint 完整恢复。
 - `graph_run` 当前只向主链路 Graph 投递消息；动态 GraphPattern 选择仍需补齐。
 - Web UI 还未实现；当前以 CLI-first 为准。
@@ -500,4 +484,3 @@ git diff --check
 - [docs/basic_capability_construction.md](/Users/liuyan/Desktop/FastAgentFactory/docs/basic_capability_construction.md)：基础能力系统与 Contract/Builder 规范。
 - [docs/runtime_render_pipeline.md](/Users/liuyan/Desktop/FastAgentFactory/docs/runtime_render_pipeline.md)：Factory 与生成 Agent 共用渲染管线。
 - [docs/trace_system_engineering.md](/Users/liuyan/Desktop/FastAgentFactory/docs/trace_system_engineering.md)：Trace 系统工程设计。
-- [docs/factory_runtime_kernel_stages.md](/Users/liuyan/Desktop/FastAgentFactory/docs/factory_runtime_kernel_stages.md)：Factory 十阶段设计说明。

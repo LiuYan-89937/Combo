@@ -178,6 +178,28 @@ describe('RuntimeStore', () => {
 		expect(snapshot.transcript.some(item => item.title === 'Tool Approval Requested')).toBe(false);
 	});
 
+	it('renders capability realization interrupts as assistant dialogue', () => {
+		const store = createRuntimeStore();
+		store.dispatch(event('interrupt_requested', {
+			payload: {
+				type: 'assistant_question',
+				presentation: 'assistant_dialogue',
+				resume_kind: 'answer',
+				title: '补充制造信息',
+				message: '请告诉我这个 Agent 可以使用的外部资源。',
+				summary: '可以直接用自然语言回答。'
+			}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.runStatus).toBe('interrupted');
+		expect(snapshot.pendingInterrupt?.payload?.type).toBe('assistant_question');
+		expect(snapshot.transcript[0]?.role).toBe('assistant');
+		expect(snapshot.transcript[0]?.title).toBe('补充制造信息');
+		expect(snapshot.transcript[0]?.content).toContain('请告诉我这个 Agent 可以使用的外部资源。');
+		expect(snapshot.transcript[0]?.content).toContain('可以直接用自然语言回答。');
+	});
+
 	it('keeps timeline as stable store view state across unrelated ui changes', () => {
 		const store = createRuntimeStore();
 		store.dispatch({ui_type: 'local_user_message', message: 'hello'});

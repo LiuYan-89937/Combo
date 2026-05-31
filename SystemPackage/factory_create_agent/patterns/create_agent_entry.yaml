@@ -1,0 +1,45 @@
+pattern_id: create_agent_entry
+kind: main
+embeddable: false
+version: 1
+name: Create Agent Entry Placeholder
+description: CLI create-agent entrypoint placeholder. The manufacturing implementation is intentionally cleared.
+metadata:
+  summary: Stops immediately with a clear message while the create-agent backend is redesigned.
+  use_when:
+    - The user enters create-agent mode from the CLI.
+  avoid_when: []
+  selection_notes:
+    - This package intentionally contains no manufacturing workflow.
+  tags:
+    - factory
+    - create-agent
+    - placeholder
+entry_node: create_agent_entry
+nodes:
+  - id: create_agent_entry
+    type: terminal
+    impl: builtin.factory.create_agent_entry
+edges: []
+interrupt_points: []
+termination:
+  success_nodes:
+    - create_agent_entry
+  failure_nodes: []
+constraints:
+  allowed_node_types:
+    - terminal
+  required_capabilities: []
+input_contract:
+  readable_sections:
+    - package_state
+    - conversation
+  writable_sections: []
+output_contract:
+  readable_sections: []
+  writable_sections:
+    - package_state
+    - conversation
+    - execution
+exit_routes: []
+state_mode: shared

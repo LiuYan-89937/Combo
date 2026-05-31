@@ -7,7 +7,7 @@ export type InterruptDescriptor = {
 		| 'tool_approval'
 		| 'plan_review'
 		| 'requirement_clarification'
-		| 'scheduler_seed_review'
+		| 'assistant_dialogue'
 		| 'generic';
 };
 
@@ -26,8 +26,8 @@ export function describeInterrupt(event: FactoryEvent | null): InterruptDescript
 	if (type === 'requirement_clarification') {
 		return {type, title: 'Requirement Clarification', resumeKind: 'requirement_clarification'};
 	}
-	if (type === 'scheduler_seed_review') {
-		return {type, title: String(payload.title ?? 'Scheduler Seed Review'), resumeKind: 'scheduler_seed_review'};
+	if (payload.presentation === 'assistant_dialogue') {
+		return {type, title: String(payload.title ?? 'Assistant'), resumeKind: 'assistant_dialogue'};
 	}
 	return {type, title: `Interrupt: ${type}`, resumeKind: 'generic'};
 }
@@ -65,15 +65,8 @@ export function buildResumePayload(event: FactoryEvent, value: string): Record<s
 			}));
 			return {type: 'requirement_clarification_answer', answers};
 		}
-		case 'scheduler_seed_review': {
-			const normalized = value.trim().toLowerCase();
-			if (['继续', '确认', 'approve', 'approved', 'yes', 'y'].includes(normalized)) {
-				return buildSchedulerSeedReviewApprovePayload();
-			}
-			if (['暂不定时', '不启用', 'skip', 'no', 'n'].includes(normalized)) {
-				return buildSchedulerSeedReviewSkipPayload(value);
-			}
-			return buildSchedulerSeedReviewRevisePayload(value);
+		case 'assistant_dialogue': {
+			return buildAssistantDialoguePayload(payload, value);
 		}
 		default:
 			return {input_text: value};
@@ -113,14 +106,16 @@ export function buildToolApprovalRevisionPayload(revisionGuidance: string): Reco
 	return {action: 'revise', approved: false, revision_guidance: revisionGuidance};
 }
 
-export function buildSchedulerSeedReviewApprovePayload(): Record<string, unknown> {
-	return {type: 'scheduler_seed_review_result', decision: 'approve'};
-}
-
-export function buildSchedulerSeedReviewRevisePayload(revisionText: string): Record<string, unknown> {
-	return {type: 'scheduler_seed_review_result', decision: 'revise', revision_text: revisionText};
-}
-
-export function buildSchedulerSeedReviewSkipPayload(note = '暂不定时'): Record<string, unknown> {
-	return {type: 'scheduler_seed_review_result', decision: 'skip', note};
+export function buildAssistantDialoguePayload(payload: Record<string, unknown>, value: string): Record<string, unknown> {
+	const normalized = value.trim().toLowerCase();
+	const resumeKind = String(payload.resume_kind ?? 'answer');
+	if (resumeKind === 'confirmation') {
+		if (['继续', '确认', 'approve', 'approved', 'yes', 'y', 'ok'].includes(normalized)) {
+			return {decision: 'approve', answer: value, input_text: value};
+		}
+		if (['暂不提供', '跳过', 'skip', 'no', 'n'].includes(normalized)) {
+			return {decision: 'skip', answer: value, input_text: value};
+		}
+	}
+	return {decision: 'revise', answer: value, input_text: value};
 }

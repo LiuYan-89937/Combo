@@ -5,7 +5,7 @@
   "config": {
     "providers": [
       {
-        "provider_id": "builtin.factory_manufacturing_nodes",
+        "provider_id": "builtin.factory_create_agent_entry_nodes",
         "config": {}
       }
     ]

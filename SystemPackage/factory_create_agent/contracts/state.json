@@ -3,15 +3,11 @@
   "version": "state_contract.v0",
   "enabled": true,
   "config": {
-    "namespace": "factory_manufacturing",
-    "schema_path": "state/factory_manufacturing.schema.json",
-    "initial_state_path": "state/factory_manufacturing.initial.json",
+    "namespace": "create_agent_entry",
+    "schema_path": "state/create_agent_entry.schema.json",
+    "initial_state_path": "state/create_agent_entry.initial.json",
     "writable_node_ids": [
-      "product_brief",
-      "runtime_design",
-      "capability_contract",
-      "scheduler_preparation",
-      "package_build"
+      "create_agent_entry"
     ]
   }
 }

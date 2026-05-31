@@ -1183,18 +1183,6 @@ function runActivity(event: FactoryEvent): RunActivity | null {
 	const eventType = event.event_type;
 	const toolPayload = normalizeToolPayload(payload);
 	const node = event.node_id ?? event.stage_id ?? '-';
-	if (eventType.startsWith('scheduler_preparation_') || eventType === 'scheduler_seed_confirmed') {
-		return {
-			activityKey: `${event.event_id}:activity`,
-			eventType,
-			timestamp: event.timestamp,
-			stageId: event.stage_id ?? null,
-			nodeId: event.node_id ?? null,
-			label: readableEventType(eventType),
-			detail: resourceLikeActivityDetail(event.payload ?? {}, event.message ?? String(payload.status ?? node)),
-			color: colorForEvent(eventType)
-		};
-	}
 	if (eventType.startsWith('tool_')) {
 		return {
 			activityKey: `${event.event_id}:activity`,
@@ -1896,6 +1884,9 @@ function appendInterruptTranscript(state: RuntimeState, event: FactoryEvent): Ru
 	if (interruptType === 'tool_approval') {
 		return state;
 	}
+	if (isAssistantDialogueInterrupt(payload)) {
+		return appendAssistantInterruptTranscript(state, event, interruptType);
+	}
 	const requests = (payload.requests as Array<Record<string, unknown>> | undefined) ?? [];
 	const requestLines = requests.map((item, index) => {
 		const tool = String(item.tool_name ?? '-');
@@ -1912,6 +1903,26 @@ function appendInterruptTranscript(state: RuntimeState, event: FactoryEvent): Ru
 		eventType: event.event_type,
 		metadata: payload
 	});
+}
+
+function appendAssistantInterruptTranscript(state: RuntimeState, event: FactoryEvent, interruptType: string): RuntimeState {
+	const payload = event.payload ?? {};
+	const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
+	const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+	const content = [message, summary && summary !== message ? summary : null].filter((item): item is string => Boolean(item)).join('\n\n');
+	return appendTranscript(state, {
+		id: `assistant-interrupt-${event.event_id}`,
+		role: 'assistant',
+		timestamp: event.timestamp,
+		title: String(payload.title ?? 'Assistant question'),
+		content: content || compactValue(payload, 1200),
+		eventType: event.event_type,
+		metadata: {...payload, interrupt_type: interruptType}
+	});
+}
+
+function isAssistantDialogueInterrupt(payload: Record<string, unknown>): boolean {
+	return payload.presentation === 'assistant_dialogue';
 }
 
 function appendKnowledgeTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {

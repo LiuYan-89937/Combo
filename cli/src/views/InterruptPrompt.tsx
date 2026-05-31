@@ -12,7 +12,7 @@ export function InterruptPrompt() {
 	const descriptor = describeInterrupt(event);
 	if (
 		payload.type === 'tool_approval'
-		|| payload.type === 'scheduler_seed_review'
+		|| payload.presentation === 'assistant_dialogue'
 	) {
 		return null;
 	}
@@ -22,7 +22,7 @@ export function InterruptPrompt() {
 			{payload.type === 'requirement_clarification' && <RequirementClarification payload={payload} />}
 			{payload.type === 'plan_review' && <PlanReview payload={payload} />}
 			{payload.type !== 'requirement_clarification' && payload.type !== 'plan_review' && (
-				<Text>{JSON.stringify(payload, null, 2).slice(0, 1600)}</Text>
+				<GenericInterrupt payload={payload} />
 			)}
 			<Text color="yellow">输入你的回复后回车继续。</Text>
 		</Box>
@@ -56,6 +56,14 @@ function PlanReview({payload}: {payload: Record<string, unknown>}) {
 			<Text color="gray">输入 continue/y/继续 继续；或直接输入修改意见。</Text>
 		</>
 	);
+}
+
+function GenericInterrupt({payload}: {payload: Record<string, unknown>}) {
+	const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+	if (message) {
+		return <Text>{message.slice(0, 2200)}</Text>;
+	}
+	return <Text>{JSON.stringify(payload, null, 2).slice(0, 1600)}</Text>;
 }
 
 function title(payload: Record<string, unknown>): string {

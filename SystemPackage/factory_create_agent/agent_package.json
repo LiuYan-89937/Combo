@@ -4,7 +4,7 @@
   "agent": {
     "id": "factory_create_agent",
     "name": "Factory Create Agent",
-    "description": "System package for create-agent. Current test breakpoint materializes an AgentPackage after Package Build."
+    "description": "System package placeholder for the CLI create-agent entry."
   },
   "runtime": {
     "system_package": true,
@@ -33,7 +33,7 @@
   },
   "bindings": {},
   "patterns": [
-    "patterns/factory_manufacturing.yaml"
+    "patterns/create_agent_entry.yaml"
   ],
   "prompts": [],
   "tools": [],

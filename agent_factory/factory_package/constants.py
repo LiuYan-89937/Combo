@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 
-PRODUCT_BRIEF_NODE_ID = "product_brief"
-RUNTIME_DESIGN_NODE_ID = "runtime_design"
-CAPABILITY_CONTRACT_NODE_ID = "capability_contract"
-SCHEDULER_PREPARATION_NODE_ID = "scheduler_preparation"
-PACKAGE_BUILD_NODE_ID = "package_build"
+CREATE_AGENT_ENTRY_NODE_ID = "create_agent_entry"
+CREATE_AGENT_STATE_NAMESPACE = "create_agent_entry"
+CREATE_AGENT_NODE_PROVIDER_ID = "builtin.factory_create_agent_entry_nodes"
