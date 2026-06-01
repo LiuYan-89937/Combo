@@ -1147,8 +1147,7 @@ agent_factory/trace_system/
 
 | 位置 | 现状 |
 | --- | --- |
-| `agent_factory/factory_package/prompt_context.py` | Factory 阶段模型调用会注入统一运行边界与阶段边界。 |
-| `agent_factory/factory_package/model_call.py` | Factory 模型调用入口会统一调用 ContextSystem，跨会话记忆读取作为 ContextSource 进入上下文组装。 |
+| `agent_factory/create_agent/workflow.py` | `/create-agent` 宿主侧 ReAct 制造器通过系统提示注入制造边界、todo 状态和校验反馈。 |
 | `agent_factory/context_system/` | 统一实现压缩摘要、检索召回、组装注入、事件 payload 与 Factory adapter。 |
 | `agent_factory/runtime_contracts/` | `contracts/context.json` 通过 `ContextContractBuilder` 贡献 `services.context_system` 和 `system.context_prepare`。 |
 | `agent_factory/runtime_kernel/wrappers/system_context.py` | 生产子 Agent 在 `cognitive.*` 节点前同步执行 context prepare。 |

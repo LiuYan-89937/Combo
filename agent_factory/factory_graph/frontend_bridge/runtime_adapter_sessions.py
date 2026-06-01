@@ -7,7 +7,6 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     FactoryBridgeOptions,
     SYSTEM_CHAT_PACKAGE_ID,
-    SYSTEM_CREATE_AGENT_PACKAGE_ID,
 )
 
 
@@ -67,7 +66,7 @@ class RuntimeSessionCommandMixin:
                 payload={
                     "mode": self.mode,
                     **({"package_id": SYSTEM_CHAT_PACKAGE_ID} if self.mode == "chat" else {}),
-                    **({"package_id": SYSTEM_CREATE_AGENT_PACKAGE_ID} if self.mode == "create_agent" else {}),
+                    **({"graph_id": "create_agent_react"} if self.mode == "create_agent" else {}),
                 },
             )
         )
@@ -96,7 +95,7 @@ class RuntimeSessionCommandMixin:
         if not message:
             self._emit_error(command, "send_message requires message")
             return
-        if self.pending_agent_package_run is not None:
+        if self.pending_agent_package_run is not None or self.pending_create_agent_run is not None:
             self._emit_error(command, "cannot send a new message while an interrupt is pending")
             return
         if self.mode == "chat":
@@ -105,6 +104,9 @@ class RuntimeSessionCommandMixin:
             self._run_create_agent(command, message)
 
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
+        if self.pending_create_agent_run is not None:
+            self._resume_create_agent_interrupt(command)
+            return
         if self.pending_agent_package_run is None:
             self._emit_error(command, "no pending interrupt to resume")
             return

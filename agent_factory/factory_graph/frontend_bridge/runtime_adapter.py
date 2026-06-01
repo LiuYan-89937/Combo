@@ -5,6 +5,7 @@ from typing import Any
 
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.create_agent.runtime import CreateAgentRuntime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryMode, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_agent_packages import RuntimeAgentPackageCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_scheduler import RuntimeSchedulerCommandMixin
@@ -13,6 +14,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     Emit,
     FactoryBridgeOptions,
     PendingAgentPackageRun,
+    PendingCreateAgentRun,
 )
 from agent_factory.factory_graph.session import FactorySessionManager
 from agent_factory.memory_system.factory import shutdown_factory_memory_worker
@@ -34,7 +36,9 @@ class FactoryRuntimeAdapter(
     session_record: Any | None = None
     mode: FactoryMode | None = None
     pending_agent_package_run: PendingAgentPackageRun | None = None
+    pending_create_agent_run: PendingCreateAgentRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
+    create_agent_runtime: CreateAgentRuntime | None = None
     scheduler_runtime: SchedulerRuntime | None = None
     background_workers: RuntimeBackgroundWorkerManager | None = None
 
@@ -44,6 +48,8 @@ class FactoryRuntimeAdapter(
             self.session_manager = FactorySessionManager.from_env()
         if self.agent_package_runtime is None:
             self.agent_package_runtime = AgentPackageRuntimeManager()
+        if self.create_agent_runtime is None:
+            self.create_agent_runtime = CreateAgentRuntime()
         self.agent_package_runtime.set_emit(self.emit)
         if scheduler_enabled_from_env():
             self._start_factory_scheduler()

@@ -168,6 +168,7 @@ class AgentFactoryToolNode:
         return result
 
     def _emit(self, payload: dict[str, Any]) -> None:
+        payload = {"node_id": self.node_id, **payload}
         if self.emit_event is not None:
             self.emit_event(payload)
         if self.stream_events:

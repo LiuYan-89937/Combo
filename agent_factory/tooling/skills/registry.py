@@ -26,6 +26,42 @@ class SkillRegistry:
             for skill in sorted(self._skills.values(), key=lambda item: item.name)
         ]
 
+    def packages(self) -> list[SkillPackage]:
+        return sorted(self._skills.values(), key=lambda item: item.name)
+
+    def describe(self, name: str) -> dict[str, Any]:
+        skill = self.get(name)
+        return {
+            "metadata": skill.metadata.model_dump(mode="json"),
+            "resources": [item.model_dump(mode="json") for item in skill.resources],
+            "scripts": [item.model_dump(mode="json") for item in skill.scripts],
+            "loaded_content": False,
+        }
+
+    def search(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        terms = _query_terms(query)
+        if not terms:
+            return []
+        matches: list[tuple[int, SkillPackage, list[str]]] = []
+        for skill in self.packages():
+            fields = _search_fields(skill)
+            matched_fields = [
+                label
+                for label, value in fields
+                if all(term in value.casefold() for term in terms)
+            ]
+            if not matched_fields:
+                continue
+            matches.append((len(matched_fields), skill, matched_fields))
+        matches.sort(key=lambda item: (-item[0], item[1].name))
+        return [
+            {
+                **skill.metadata.model_dump(mode="json"),
+                "matched_fields": matched_fields,
+            }
+            for _score, skill, matched_fields in matches[: max(1, limit)]
+        ]
+
     def get(self, name: str) -> SkillPackage:
         try:
             return self._skills[name]
@@ -97,3 +133,22 @@ def _assert_inside(root: Path, path: Path) -> None:
         path.relative_to(root)
     except ValueError as exc:
         raise ValueError(f"Skill resource path escapes skill root: {path}") from exc
+
+
+def _query_terms(query: str) -> list[str]:
+    return [term.casefold() for term in query.strip().split() if term.strip()]
+
+
+def _search_fields(skill: SkillPackage) -> list[tuple[str, str]]:
+    fields: list[tuple[str, str]] = [
+        ("name", skill.name),
+        ("description", skill.metadata.description),
+    ]
+    for key, value in skill.metadata.metadata.items():
+        if isinstance(value, str):
+            fields.append((f"metadata.{key}", value))
+        elif isinstance(value, (int, float, bool)):
+            fields.append((f"metadata.{key}", str(value)))
+    fields.extend(("resource", item.path) for item in skill.resources)
+    fields.extend(("script", item.path) for item in skill.scripts)
+    return fields

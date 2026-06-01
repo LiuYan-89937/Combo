@@ -9,7 +9,6 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 
 Emit = Callable[[FactoryFrontendEvent], None]
 SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
-SYSTEM_CREATE_AGENT_PACKAGE_ID = "factory_create_agent"
 
 
 @dataclass(slots=True)
@@ -21,5 +20,11 @@ class FactoryBridgeOptions:
 @dataclass(slots=True)
 class PendingAgentPackageRun:
     package_id: str
+    session_id: str
+    normalizer: RuntimeEventNormalizer
+
+
+@dataclass(slots=True)
+class PendingCreateAgentRun:
     session_id: str
     normalizer: RuntimeEventNormalizer

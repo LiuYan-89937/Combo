@@ -1,8 +1,0 @@
-{
-  "type": "render",
-  "version": "render_contract.v0",
-  "enabled": true,
-  "config": {
-    "manifest_path": "render_manifest.json"
-  }
-}

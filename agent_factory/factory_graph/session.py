@@ -36,7 +36,7 @@ class FactorySessionRecord(BaseModel):
     display_title: str | None = None
     current_mode: FactorySessionMode | None = None
     chat_agent_package_session_id: str | None = None
-    create_agent_package_session_id: str | None = None
+    create_agent_session_id: str | None = None
     chat_turn_count: int = 0
     create_agent_turn_count: int = 0
 

@@ -16,7 +16,7 @@ FastAgentFactory 是一个 CLI-first 的 Agent 工厂。它把自然语言需求
 User
   -> TypeScript CLI
   -> Python JSONL Bridge
-  -> SystemPackage / AgentPackage
+  -> Factory Host Workflows / AgentPackage Runtime
   -> RuntimeContracts
   -> RuntimeKernel
   -> Tools / Memory / Knowledge / Scheduler / Context / Trace
@@ -24,14 +24,16 @@ User
   -> CLI Render
 ```
 
-工厂本身也是 SystemPackage：
+工厂内置两条宿主侧工作流：
 
 ```text
-SystemPackage/factory_chat
-SystemPackage/factory_create_agent
+/chat         -> factory_chat AgentPackage
+/create-agent -> host-side LangGraph ReAct manufacturing workflow
 ```
 
-生产出来的 Agent 是普通 AgentPackage，默认放在：
+`/create-agent` 不再作为 RuntimeKernel SystemPackage 运行。它在独立制造工作区内通过 ReAct + todo + package validation 落地 AgentPackage；工具调用仍统一经过 ToolExecutionGateway。
+
+生产出来的 AgentPackage 默认放在：
 
 ```text
 .agentfactory/packages/<factory_run_id>/

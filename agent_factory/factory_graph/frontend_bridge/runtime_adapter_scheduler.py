@@ -7,7 +7,6 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import bounded_int
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     SYSTEM_CHAT_PACKAGE_ID,
-    SYSTEM_CREATE_AGENT_PACKAGE_ID,
 )
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.scheduler_system import (
@@ -166,17 +165,15 @@ class RuntimeSchedulerCommandMixin:
         if mode not in {"chat", "create_agent"}:
             return {"status": "failed", "error": f"unsupported factory scheduler graph mode: {mode}"}
         self._ensure_session(FactoryFrontendCommand(type="start_session"))
-        package_id = SYSTEM_CHAT_PACKAGE_ID if mode == "chat" else SYSTEM_CREATE_AGENT_PACKAGE_ID
-        agent_session_id = (
-            self._ensure_system_chat_agent_session(message)
-            if mode == "chat"
-            else self._ensure_system_create_agent_session(message)
-        )
+        if mode == "create_agent":
+            return self._run_scheduled_create_agent(message)
+        package_id = SYSTEM_CHAT_PACKAGE_ID
+        agent_session_id = self._ensure_system_chat_agent_session(message)
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=None,
             session_id=self._session_id(),
-            mode=mode,  # type: ignore[arg-type]
+            mode="chat",
             graph_id=f"factory_{mode}_package_scheduler",
             producer_type="factory_runtime",
         )
@@ -198,6 +195,30 @@ class RuntimeSchedulerCommandMixin:
             normalizer.emit_run_failed(exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
         return {"status": "completed", "output_summary": f"factory scheduled {mode} run completed"}
+
+    def _run_scheduled_create_agent(self, message: str) -> dict[str, Any]:
+        agent_session_id = self._ensure_host_create_agent_session(message)
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=None,
+            session_id=self._session_id(),
+            mode="create_agent",
+            graph_id="create_agent_react_scheduler",
+            producer_type="factory_runtime",
+        )
+        try:
+            run = self.create_agent_runtime.stream(
+                user_input=message,
+                session_id=agent_session_id,
+                request_id=None,
+            )
+            self._consume_create_agent_stream(run=run, normalizer=normalizer)
+        except Exception as exc:
+            normalizer.emit_run_failed(exc)
+            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        if self.pending_create_agent_run is not None:
+            return {"status": "interrupted", "output_summary": "scheduled create-agent run requested user input"}
+        return {"status": "completed", "output_summary": "factory scheduled create_agent run completed"}
 
     def _factory_tools(self, tool_ids: list[str] | set[str] | tuple[str, ...] | None = None) -> list[Any]:
         return get_factory_tools(

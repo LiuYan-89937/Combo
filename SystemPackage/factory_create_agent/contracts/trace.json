@@ -1,9 +1,0 @@
-{
-  "type": "trace",
-  "version": "trace_contract.v0",
-  "enabled": true,
-  "config": {
-    "root": "/runtime/trace",
-    "max_inline_payload_chars": 12000
-  }
-}

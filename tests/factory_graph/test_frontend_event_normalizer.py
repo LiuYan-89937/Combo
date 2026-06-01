@@ -46,6 +46,47 @@ class FrontendEventNormalizerTest(unittest.TestCase):
         self.assertEqual(tool_events[0].payload["tool_call_id"], "call-a")
         self.assertEqual(tool_events[0].payload["tool_name"], "shell_cwd")
 
+    def test_custom_tool_activity_accepts_tool_node_internal_event_names(self) -> None:
+        events = []
+        normalizer = RuntimeEventNormalizer(
+            emit=events.append,
+            request_id="request-a",
+            session_id="session-a",
+            mode="create_agent",
+            graph_id="create_agent_react",
+        )
+
+        normalizer.emit_custom_event(
+            {
+                "type": "tool_activity",
+                "payload": {
+                    "events": [
+                        {
+                            "event_type": "tool_started",
+                            "node_id": "create_agent_tools",
+                            "tool_call_id": "call-a",
+                            "tool_id": "ls",
+                            "arguments": {"path": "."},
+                        },
+                        {
+                            "event_type": "tool_completed",
+                            "node_id": "create_agent_tools",
+                            "tool_call_id": "call-a",
+                            "tool_id": "ls",
+                            "observation": {"status": "completed", "tool_id": "ls"},
+                        },
+                    ]
+                },
+            }
+        )
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["tool_call_started", "tool_call_completed"],
+        )
+        self.assertEqual(events[0].node_id, "create_agent_tools")
+        self.assertEqual(events[1].payload["tool_id"], "ls")
+
     def test_runtime_render_event_preserves_node_render_fields(self) -> None:
         events = []
         normalizer = RuntimeEventNormalizer(

@@ -62,9 +62,7 @@ def default_runtime_contract_registry(
     node_provider_registry: NodeProviderRegistry | None = None,
 ) -> RuntimeContractRegistry:
     if node_provider_registry is None:
-        from agent_factory.factory_package import factory_create_agent_entry_node_provider
-
-        node_provider_registry = NodeProviderRegistry([factory_create_agent_entry_node_provider()])
+        node_provider_registry = NodeProviderRegistry([])
     if not node_provider_registry.has_factory("builtin.package_nodes"):
         node_provider_registry.register_factory(PackageNodeProviderFactory())
     registry = RuntimeContractRegistry()

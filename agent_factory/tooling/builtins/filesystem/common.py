@@ -87,6 +87,18 @@ def path_risk_result(
             reasons=[f"path is outside the configured filesystem boundary: {exc}"],
             facts={"path": path_value, "filesystem_root": str(root)},
         ).model_dump(mode="json")
+    protected = _is_protected_write_path(resolved, root=root, resources=tool_resources)
+    if protected:
+        return ToolRiskResult(
+            action="deny",
+            risk_level="high",
+            reasons=["path is managed by a dedicated control tool and cannot be modified through generic filesystem tools"],
+            facts={
+                "path": path_value,
+                "resolved_path": str(resolved),
+                "filesystem_root": str(root),
+            },
+        ).model_dump(mode="json")
     sensitive = _is_sensitive_path(resolved)
     reasons = []
     action = default_action
@@ -108,7 +120,27 @@ def path_risk_result(
     ).model_dump(mode="json")
 
 
+def assert_not_protected_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> None:
+    if _is_protected_write_path(path, root=root, resources=resources):
+        raise PermissionError(f"path is managed by a dedicated control tool: {path}")
+
+
 def _is_sensitive_path(path: Path) -> bool:
     if path.name in SENSITIVE_FILE_NAMES:
         return True
     return any(part in SENSITIVE_DIR_NAMES for part in path.parts)
+
+
+def _is_protected_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
+    config = resources.get("filesystem", {})
+    values = config.get("protected_write_paths", []) if isinstance(config, dict) else []
+    if not isinstance(values, list):
+        return False
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        requested = Path(value).expanduser()
+        candidate = requested if requested.is_absolute() else root / requested
+        if path == candidate.resolve(strict=False):
+            return True
+    return False

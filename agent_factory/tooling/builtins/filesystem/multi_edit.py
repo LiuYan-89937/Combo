@@ -4,7 +4,13 @@ from hashlib import sha256
 from tempfile import NamedTemporaryFile
 from typing import Any
 
-from agent_factory.tooling.builtins.filesystem.common import filesystem_boundary, path_risk_result, required_string, resolve_path
+from agent_factory.tooling.builtins.filesystem.common import (
+    assert_not_protected_write_path,
+    filesystem_boundary,
+    path_risk_result,
+    required_string,
+    resolve_path,
+)
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -18,6 +24,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("edits must be a non-empty list")
     root, allow_external = filesystem_boundary(resources)
     target = resolve_path(path=path, root=root, allow_external=allow_external)
+    assert_not_protected_write_path(target, root=root, resources=resources)
     if not target.exists():
         raise FileNotFoundError(str(target))
     if not target.is_file():

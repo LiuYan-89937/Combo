@@ -382,7 +382,7 @@ class RuntimeEventNormalizer:
         for item in events:
             if not isinstance(item, dict):
                 continue
-            event_type = str(item.get("event_type") or "")
+            event_type = _canonical_tool_event_type(str(item.get("event_type") or ""))
             if event_type not in {
                 "tool_call_proposed",
                 "tool_call_started",
@@ -740,6 +740,15 @@ class RuntimeEventNormalizer:
 
 def _stage_id_from_patch(patch: dict[str, Any]) -> str | None:
     return None
+
+
+def _canonical_tool_event_type(event_type: str) -> str:
+    return {
+        "tool_proposed": "tool_call_proposed",
+        "tool_started": "tool_call_started",
+        "tool_completed": "tool_call_completed",
+        "tool_failed": "tool_call_failed",
+    }.get(event_type, event_type)
 
 
 def _patch_has_ai_message(patch: dict[str, Any]) -> bool:
