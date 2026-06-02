@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import re
 from typing import Any, Literal
 
@@ -79,3 +80,56 @@ class SkillLoadResult(BaseModel):
     content: str
     resources: list[SkillResourceRef] = Field(default_factory=list)
     scripts: list[SkillScriptRef] = Field(default_factory=list)
+
+
+class SkillLoadRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    reason: str
+    loaded_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    primary: bool = False
+
+
+class SkillTodoLoadState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_todo: str
+    primary_skill: str = ""
+    described_skills: list[str] = Field(default_factory=list)
+    loaded_skills: list[SkillLoadRecord] = Field(default_factory=list)
+
+    def has_seen(self, name: str) -> bool:
+        return name in self.described_skills or any(item.name == name for item in self.loaded_skills)
+
+    def mark_described(self, name: str) -> None:
+        if name not in self.described_skills:
+            self.described_skills.append(name)
+            self.described_skills.sort()
+
+    def mark_loaded(self, name: str, *, reason: str) -> None:
+        if not self.primary_skill:
+            self.primary_skill = name
+        if any(item.name == name for item in self.loaded_skills):
+            return
+        self.loaded_skills.append(
+            SkillLoadRecord(
+                name=name,
+                reason=reason,
+                primary=name == self.primary_skill,
+            )
+        )
+
+
+class SkillGatewayState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["skill_gateway_state.v0"] = "skill_gateway_state.v0"
+    by_todo: dict[str, SkillTodoLoadState] = Field(default_factory=dict)
+
+    def todo_state(self, current_todo: str) -> SkillTodoLoadState:
+        state = self.by_todo.get(current_todo)
+        if state is None:
+            state = SkillTodoLoadState(current_todo=current_todo)
+            self.by_todo[current_todo] = state
+        return state

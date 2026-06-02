@@ -1,0 +1,61 @@
+{
+  "constraints": {
+    "allowed_node_types": [],
+    "required_capabilities": []
+  },
+  "description": "Minimal executable pattern.",
+  "edges": [
+    {
+      "from": "ingress",
+      "to": "finalize",
+      "when": "always"
+    }
+  ],
+  "embeddable": false,
+  "entry_node": "ingress",
+  "exit_routes": [],
+  "input_contract": {
+    "readable_sections": [],
+    "writable_sections": []
+  },
+  "interrupt_points": [],
+  "kind": "main",
+  "metadata": {
+    "avoid_when": [],
+    "selection_notes": [],
+    "summary": "",
+    "tags": [],
+    "use_when": []
+  },
+  "name": "Main",
+  "nodes": [
+    {
+      "config": {},
+      "id": "ingress",
+      "impl": "ingress",
+      "type": "reserved",
+      "wrappers": []
+    },
+    {
+      "config": {},
+      "id": "finalize",
+      "impl": "finalize",
+      "type": "terminal",
+      "wrappers": []
+    }
+  ],
+  "output_contract": {
+    "readable_sections": [],
+    "writable_sections": []
+  },
+  "pattern_id": "main",
+  "slots": [],
+  "state_mode": "shared",
+  "termination": {
+    "failure_nodes": [],
+    "success_nodes": [
+      "finalize"
+    ]
+  },
+  "version": 1
+}

@@ -37,7 +37,12 @@ class CreateAgentPackageValidator:
                 PackageValidationReport(
                 package_root=str(root),
                 summary="agent_package.json is missing.",
-                next_action=PackageValidationNextAction(kind="repair_files", target_files=["agent_package.json"]),
+                next_action=PackageValidationNextAction(
+                    kind="repair_files",
+                    target_files=["agent_package.json"],
+                    recommended_skill="01-package-manifest",
+                    recommended_resources=_recommended_resources("package.manifest", ["agent_package.json"]),
+                ),
                 issues=[
                     PackageValidationIssue(
                         where="package.manifest",
@@ -48,6 +53,8 @@ class CreateAgentPackageValidator:
                         actual="missing",
                         repair_hint="Create agent_package.json with package-relative contract and assembly references.",
                         target_files=["agent_package.json"],
+                        recommended_skill="01-package-manifest",
+                        recommended_resources=_recommended_resources("package.manifest", ["agent_package.json"]),
                     )
                 ],
                 ),
@@ -101,6 +108,8 @@ def _failed(
     scope: ValidationScope,
     changed_files: list[str],
 ) -> PackageValidationReport:
+    recommended_skill = _recommended_skill(where, target_files)
+    recommended_resources = _recommended_resources(where, target_files)
     return PackageValidationReport(
         package_root=str(root),
         validation_scope=scope,  # type: ignore[arg-type]
@@ -109,7 +118,8 @@ def _failed(
         next_action=PackageValidationNextAction(
             kind="repair_files",
             target_files=target_files,
-            recommended_skill=_recommended_skill(where, target_files),
+            recommended_skill=recommended_skill,
+            recommended_resources=recommended_resources,
         ),
         issues=[
             PackageValidationIssue(
@@ -121,6 +131,8 @@ def _failed(
                 actual=f"{type(exc).__name__}: {exc}",
                 repair_hint=_repair_hint(where),
                 target_files=target_files,
+                recommended_skill=recommended_skill,
+                recommended_resources=recommended_resources,
                 details=_exception_details(exc),
             )
         ],
@@ -146,7 +158,12 @@ def _workspace_hygiene(root: Path, changed_files: list[str]) -> PackageValidatio
             return PackageValidationReport(
                 package_root=str(root),
                 summary=f"{relative} is not parseable: {type(exc).__name__}: {exc}",
-                next_action=PackageValidationNextAction(kind="repair_files", target_files=[relative]),
+                next_action=PackageValidationNextAction(
+                    kind="repair_files",
+                    target_files=[relative],
+                    recommended_skill=_recommended_skill("workspace_hygiene.parse", [relative]),
+                    recommended_resources=_recommended_resources("workspace_hygiene.parse", [relative]),
+                ),
                 issues=[
                     PackageValidationIssue(
                         where="workspace_hygiene.parse",
@@ -157,6 +174,8 @@ def _workspace_hygiene(root: Path, changed_files: list[str]) -> PackageValidatio
                         actual=f"{type(exc).__name__}: {exc}",
                         repair_hint="Repair the file syntax before continuing package validation.",
                         target_files=[relative],
+                        recommended_skill=_recommended_skill("workspace_hygiene.parse", [relative]),
+                        recommended_resources=_recommended_resources("workspace_hygiene.parse", [relative]),
                         details=_exception_details(exc),
                     )
                 ],
@@ -177,10 +196,16 @@ def _python_syntax(root: Path, changed_files: list[str]) -> PackageValidationRep
             py_compile.compile(str(path), doraise=True)
         except Exception as exc:
             relative = _relative(root, path)
+            recommended_resources = _recommended_resources("python_syntax.compile", [relative])
             return PackageValidationReport(
                 package_root=str(root),
                 summary=f"{relative} failed Python syntax validation: {type(exc).__name__}: {exc}",
-                next_action=PackageValidationNextAction(kind="repair_files", target_files=[relative], recommended_skill="09-package-tools"),
+                next_action=PackageValidationNextAction(
+                    kind="repair_files",
+                    target_files=[relative],
+                    recommended_skill="09-package-tools",
+                    recommended_resources=recommended_resources,
+                ),
                 issues=[
                     PackageValidationIssue(
                         where="python_syntax.compile",
@@ -191,6 +216,8 @@ def _python_syntax(root: Path, changed_files: list[str]) -> PackageValidationRep
                         actual=f"{type(exc).__name__}: {exc}",
                         repair_hint="Fix the generated Python entrypoint syntax and keep dependencies declared in the package.",
                         target_files=[relative],
+                        recommended_skill="09-package-tools",
+                        recommended_resources=recommended_resources,
                         details=_exception_details(exc),
                     )
                 ],
@@ -232,6 +259,43 @@ def _recommended_skill(where: str, target_files: list[str]) -> str:
     if "nodes/" in targets:
         return "10-package-nodes"
     return "01-package-manifest"
+
+
+def _recommended_resources(where: str, target_files: list[str]) -> list[str]:
+    skill = _recommended_skill(where, target_files)
+    targets = " ".join(target_files)
+    if skill == "01-package-manifest":
+        return [
+            "references/agent_package.schema.json",
+            "examples/agent_package.minimal.json",
+            "references/agent_package.repair_hints.md",
+        ]
+    if skill == "02-runtime-contract-index":
+        return [
+            "references/runtime_contract_index.repair_hints.md",
+            "examples/runtime_contract_index.minimal.json",
+        ]
+    if skill == "09-package-tools":
+        artifact = "package_tool" if "tools/" in targets else "tool_contract"
+        return [
+            f"references/{artifact}.schema.json",
+            f"examples/{artifact}.minimal.json",
+            f"references/{artifact}.repair_hints.md",
+        ]
+    if skill == "10-package-nodes":
+        return [
+            "references/package_node.schema.json",
+            "examples/package_node.minimal.json",
+            "references/package_node.repair_hints.md",
+        ]
+    if skill == "13-assembly-and-patterns":
+        return [
+            "references/assembly_spec.schema.json",
+            "examples/assembly_spec.minimal.json",
+            "references/pattern.schema.json",
+            "references/assembly_spec.repair_hints.md",
+        ]
+    return ["references/contract.repair_hints.md"]
 
 
 def _exception_details(exc: Exception) -> dict[str, Any]:

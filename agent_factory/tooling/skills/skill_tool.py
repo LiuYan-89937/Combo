@@ -11,7 +11,7 @@ SKILL_TOOL_ID = "skill"
 
 
 def build_skill_tool_spec(registry: SkillRegistry) -> ToolSpec:
-    actions = ["list", "search", "describe", "load", "read_resource"]
+    actions = ["list", "search", "describe", "load", "list_loaded", "read_resource"]
     return ToolSpec(
         id=SKILL_TOOL_ID,
         description=_tool_description(registry),
@@ -24,16 +24,38 @@ def build_skill_tool_spec(registry: SkillRegistry) -> ToolSpec:
                     "enum": actions,
                     "description": (
                         "Skill Gateway action. list/search/describe expose metadata only. "
-                        "load returns SKILL.md. read_resource reads one referenced skill resource."
+                        "load returns SKILL.md for one active todo. list_loaded returns loaded state. "
+                        "read_resource reads one referenced skill resource."
                     ),
                 },
                 "name": {
                     "type": "string",
-                    "description": "Required for describe/load/read_resource. Do not pass this for list/search.",
+                    "description": "Required for describe/load/read_resource. Do not pass this for list/search/list_loaded.",
                 },
                 "path": {
                     "type": "string",
                     "description": "Required only for read_resource.",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["outline", "fragment", "content"],
+                    "default": "outline",
+                    "description": (
+                        "Optional for read_resource. outline returns a compact resource index; "
+                        "fragment returns one JSON pointer subtree; content returns truncated raw text."
+                    ),
+                },
+                "pointer": {
+                    "type": "string",
+                    "description": "JSON pointer required when read_resource mode is fragment, such as /properties/nodes.",
+                },
+                "current_todo": {
+                    "type": "string",
+                    "description": "Required for describe/load/list_loaded/read_resource. Use the active todo_id.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Required for load. Explain why this skill is needed for the active todo.",
                 },
                 "query": {
                     "type": "string",
@@ -50,9 +72,13 @@ def build_skill_tool_spec(registry: SkillRegistry) -> ToolSpec:
             "oneOf": [
                 {"properties": {"action": {"const": "list"}}, "required": ["action"]},
                 {"properties": {"action": {"const": "search"}}, "required": ["action", "query"]},
-                {"properties": {"action": {"const": "describe"}}, "required": ["action", "name"]},
-                {"properties": {"action": {"const": "load"}}, "required": ["action", "name"]},
-                {"properties": {"action": {"const": "read_resource"}}, "required": ["action", "name", "path"]},
+                {"properties": {"action": {"const": "describe"}}, "required": ["action", "name", "current_todo"]},
+                {"properties": {"action": {"const": "load"}}, "required": ["action", "name", "current_todo", "reason"]},
+                {"properties": {"action": {"const": "list_loaded"}}, "required": ["action", "current_todo"]},
+                {
+                    "properties": {"action": {"const": "read_resource"}},
+                    "required": ["action", "name", "path", "current_todo"],
+                },
             ],
             "additionalProperties": False,
         },
@@ -64,8 +90,9 @@ def build_skill_tool_spec(registry: SkillRegistry) -> ToolSpec:
                 "skills": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
                 "skill": {"type": ["object", "null"], "additionalProperties": True},
                 "resource": {"type": ["object", "null"], "additionalProperties": True},
+                "loaded_state": {"type": ["object", "null"], "additionalProperties": True},
             },
-            "required": ["action", "message", "skills", "skill", "resource"],
+            "required": ["action", "message", "skills", "skill", "resource", "loaded_state"],
             "additionalProperties": False,
         },
         resources={"skills": SKILL_RESOURCE_KEY},
@@ -85,6 +112,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "skills": registry.list_metadata(),
             "skill": None,
             "resource": None,
+            "loaded_state": None,
         }
     if action == "search":
         query = _required_string(arguments, "query")
@@ -95,35 +123,64 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "skills": registry.search(query, limit=limit),
             "skill": None,
             "resource": None,
+            "loaded_state": None,
+        }
+    if action == "list_loaded":
+        current_todo = _required_string(arguments, "current_todo")
+        return {
+            "action": action,
+            "message": f"Loaded skill state for todo: {current_todo}",
+            "skills": [],
+            "skill": None,
+            "resource": None,
+            "loaded_state": registry.list_loaded(current_todo=current_todo),
         }
     name = _required_string(arguments, "name")
     if action == "describe":
+        current_todo = _required_string(arguments, "current_todo")
+        described = registry.describe(name, current_todo=current_todo)
+        _persist_registry(resources, registry)
         return {
             "action": action,
             "message": f"Skill described: {name}",
             "skills": [],
-            "skill": registry.describe(name),
+            "skill": described,
             "resource": None,
+            "loaded_state": registry.list_loaded(current_todo=current_todo),
         }
     if action == "load":
-        loaded = registry.load(name)
+        current_todo = _required_string(arguments, "current_todo")
+        reason = _required_string(arguments, "reason")
+        loaded = registry.load(name, current_todo=current_todo, reason=reason)
+        _persist_registry(resources, registry)
         return {
             "action": action,
             "message": f"Skill loaded: {name}",
             "skills": [],
             "skill": loaded.model_dump(mode="json"),
             "resource": None,
+            "loaded_state": registry.list_loaded(current_todo=current_todo),
         }
     if action == "read_resource":
+        current_todo = _required_string(arguments, "current_todo")
         path = _required_string(arguments, "path")
+        mode = _resource_mode(arguments.get("mode"))
+        pointer = str(arguments.get("pointer") or "").strip()
         return {
             "action": action,
-            "message": f"Skill resource loaded: {name}/{path}",
+            "message": f"Skill resource loaded: {name}/{path} ({mode})",
             "skills": [],
             "skill": None,
-            "resource": registry.read_resource(name, path),
+            "resource": registry.read_resource(
+                name,
+                path,
+                current_todo=current_todo,
+                mode=mode,
+                pointer=pointer,
+            ),
+            "loaded_state": registry.list_loaded(current_todo=current_todo),
         }
-    raise ValueError("action must be one of: list, search, describe, load, read_resource")
+    raise ValueError("action must be one of: list, search, describe, load, list_loaded, read_resource")
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -140,35 +197,50 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
                 risk_level="low",
                 reasons=["skill search exposes enabled skill metadata only"],
             ).model_dump(mode="json")
+        if action == "list_loaded":
+            current_todo = _required_string(arguments, "current_todo")
+            return ToolRiskResult(
+                action="allow",
+                risk_level="low",
+                reasons=["skill loaded-state inspection exposes gateway state only"],
+                facts={"current_todo": current_todo},
+            ).model_dump(mode="json")
         name = _required_string(arguments, "name")
         registry.get(name)
         if action == "describe":
+            current_todo = _required_string(arguments, "current_todo")
             return ToolRiskResult(
                 action="allow",
                 risk_level="low",
                 reasons=["skill describe exposes metadata and resource index only"],
-                facts={"skill": name},
+                facts={"skill": name, "current_todo": current_todo},
             ).model_dump(mode="json")
         if action == "load":
+            current_todo = _required_string(arguments, "current_todo")
+            reason = _required_string(arguments, "reason")
+            registry.load(name, current_todo=current_todo, reason=reason)
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
-                reasons=["skill load exposes enabled SKILL.md content to the model"],
-                facts={"skill": name},
+                reasons=["skill load exposes one enabled SKILL.md body to the model for the active todo"],
+                facts={"skill": name, "current_todo": current_todo, "reason": reason},
             ).model_dump(mode="json")
         if action == "read_resource":
+            current_todo = _required_string(arguments, "current_todo")
             path = _required_string(arguments, "path")
-            registry.read_resource(name, path)
+            mode = _resource_mode(arguments.get("mode"))
+            pointer = str(arguments.get("pointer") or "").strip()
+            registry.read_resource(name, path, current_todo=current_todo, mode=mode, pointer=pointer)
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
                 reasons=["skill resource read is restricted to enabled skill resources"],
-                facts={"skill": name, "path": path},
+                facts={"skill": name, "path": path, "mode": mode, "current_todo": current_todo},
             ).model_dump(mode="json")
         return ToolRiskResult(
             action="deny",
             risk_level="medium",
-            reasons=["skill action must be one of: list, search, describe, load, read_resource"],
+            reasons=["skill action must be one of: list, search, describe, load, list_loaded, read_resource"],
         ).model_dump(mode="json")
     except Exception as exc:
         return ToolRiskResult(
@@ -183,6 +255,14 @@ def _registry(resources: dict[str, Any]) -> SkillRegistry:
     if not isinstance(payload, dict):
         raise ValueError("skills runtime resource is missing")
     return SkillRegistry.from_resource_payload(payload)
+
+
+def _persist_registry(resources: dict[str, Any], registry: SkillRegistry) -> None:
+    payload = resources.get("skills")
+    if not isinstance(payload, dict):
+        raise ValueError("skills runtime resource is missing")
+    payload.clear()
+    payload.update(registry.to_resource_payload())
 
 
 def _required_string(arguments: dict[str, Any], key: str) -> str:
@@ -200,28 +280,28 @@ def _limit(value: Any) -> int:
     return max(1, min(50, value))
 
 
+def _resource_mode(value: Any) -> str:
+    mode = str(value or "outline").strip()
+    if mode not in {"outline", "fragment", "content"}:
+        raise ValueError("mode must be one of: outline, fragment, content")
+    return mode
+
+
 def _tool_description(registry: SkillRegistry) -> str:
     lines = [
         "Skill Gateway for enabled skills using progressive disclosure.",
         (
             "Use action=list/search/describe to inspect metadata before loading content. "
-            "Use action=load only when the current task needs that SKILL.md body. "
-            "Use action=read_resource only for resources explicitly listed by describe/load."
+            "Use action=load with current_todo and reason only when the active todo needs that SKILL.md body. "
+            "Use action=list_loaded to inspect loaded state. "
+            "Use action=read_resource with current_todo only for resources explicitly listed by describe/load. "
+            "read_resource defaults to a compact outline; use mode=fragment for a JSON pointer subtree; "
+            "use mode=content only when raw text is necessary."
         ),
         (
             "This tool does not execute scripts. If a loaded skill exposes scripts, "
-            "execute them through bash so Gateway risk approval still applies."
+            "execute them through a dedicated allowed execution tool so Gateway risk approval still applies."
         ),
-        "<available_skills>",
     ]
-    for item in registry.list_metadata():
-        lines.extend(
-            [
-                "  <skill>",
-                f"    <name>{item.get('name', '')}</name>",
-                f"    <description>{item.get('description', '')}</description>",
-                "  </skill>",
-            ]
-        )
-    lines.append("</available_skills>")
+    lines.append("Call action=list or action=search to inspect available skills for the active todo.")
     return "\n".join(lines)

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
-from agent_factory.tooling.skills.schema import SkillLoadResult, SkillPackage
+from agent_factory.tooling.skills.schema import SkillGatewayState, SkillLoadResult, SkillPackage
 
 
-MAX_RESOURCE_READ_CHARS = 80000
+MAX_RESOURCE_READ_CHARS = 12000
+SKILL_REGISTRY_VERSION = "skill_registry.v1"
 
 
 class SkillRegistry:
-    def __init__(self, skills: list[SkillPackage] | None = None) -> None:
+    def __init__(self, skills: list[SkillPackage] | None = None, *, gateway_state: SkillGatewayState | None = None) -> None:
         self._skills: dict[str, SkillPackage] = {}
+        self.gateway_state = gateway_state or SkillGatewayState()
         for skill in skills or []:
             self.register(skill)
 
@@ -22,15 +25,16 @@ class SkillRegistry:
 
     def list_metadata(self) -> list[dict[str, Any]]:
         return [
-            skill.metadata.model_dump(mode="json")
+            _candidate_view(skill)
             for skill in sorted(self._skills.values(), key=lambda item: item.name)
         ]
 
     def packages(self) -> list[SkillPackage]:
         return sorted(self._skills.values(), key=lambda item: item.name)
 
-    def describe(self, name: str) -> dict[str, Any]:
+    def describe(self, name: str, *, current_todo: str) -> dict[str, Any]:
         skill = self.get(name)
+        self.gateway_state.todo_state(_require_todo(current_todo)).mark_described(name)
         return {
             "metadata": skill.metadata.model_dump(mode="json"),
             "resources": [item.model_dump(mode="json") for item in skill.resources],
@@ -56,7 +60,7 @@ class SkillRegistry:
         matches.sort(key=lambda item: (-item[0], item[1].name))
         return [
             {
-                **skill.metadata.model_dump(mode="json"),
+                **_candidate_view(skill),
                 "matched_fields": matched_fields,
             }
             for _score, skill, matched_fields in matches[: max(1, limit)]
@@ -68,8 +72,19 @@ class SkillRegistry:
         except KeyError as exc:
             raise KeyError(f"unknown skill: {name}") from exc
 
-    def load(self, name: str) -> SkillLoadResult:
+    def list_loaded(self, *, current_todo: str) -> dict[str, Any]:
+        state = self.gateway_state.todo_state(_require_todo(current_todo))
+        return state.model_dump(mode="json")
+
+    def load(self, name: str, *, current_todo: str, reason: str) -> SkillLoadResult:
         skill = self.get(name)
+        todo_state = self.gateway_state.todo_state(_require_todo(current_todo))
+        cleaned_reason = _require_reason(reason)
+        if todo_state.primary_skill and todo_state.primary_skill != name and not todo_state.has_seen(name):
+            raise PermissionError(
+                f"loading a second skill for todo {current_todo!r} requires describe(name={name!r}, current_todo=...) first"
+            )
+        todo_state.mark_loaded(name, reason=cleaned_reason)
         return SkillLoadResult(
             name=skill.name,
             metadata=skill.metadata,
@@ -78,8 +93,21 @@ class SkillRegistry:
             scripts=skill.scripts,
         )
 
-    def read_resource(self, name: str, path: str) -> dict[str, Any]:
+    def read_resource(
+        self,
+        name: str,
+        path: str,
+        *,
+        current_todo: str,
+        mode: str = "outline",
+        pointer: str = "",
+    ) -> dict[str, Any]:
         skill = self.get(name)
+        todo_state = self.gateway_state.todo_state(_require_todo(current_todo))
+        if not todo_state.has_seen(name):
+            raise PermissionError(
+                f"read_resource requires describe or load for skill {name!r} under todo {current_todo!r}"
+            )
         resource = next((item for item in skill.resources if item.path == path), None)
         if resource is None:
             raise KeyError(f"unknown skill resource: {name}/{path}")
@@ -97,11 +125,22 @@ class SkillRegistry:
             "readable": resource.readable,
             "truncated": False,
             "content": "",
+            "mode": mode,
+            "pointer": pointer,
         }
         if not resource.readable:
             payload["message"] = "Resource is not text-readable; returning metadata only."
             return payload
         content = target.read_text(encoding="utf-8")
+        if mode == "outline":
+            payload["outline"] = _resource_outline(resource.path, content)
+            return payload
+        if mode == "fragment":
+            fragment = _json_pointer_fragment(content, pointer)
+            payload["fragment"] = fragment
+            return payload
+        if mode != "content":
+            raise ValueError("resource read mode must be one of: outline, fragment, content")
         if len(content) > MAX_RESOURCE_READ_CHARS:
             payload["content"] = content[:MAX_RESOURCE_READ_CHARS]
             payload["truncated"] = True
@@ -111,21 +150,25 @@ class SkillRegistry:
 
     def to_resource_payload(self) -> dict[str, Any]:
         return {
-            "version": "skill_registry.v0",
+            "version": SKILL_REGISTRY_VERSION,
             "skills": [
                 skill.model_dump(mode="json")
                 for skill in sorted(self._skills.values(), key=lambda item: item.name)
             ],
+            "gateway_state": self.gateway_state.model_dump(mode="json"),
         }
 
     @classmethod
     def from_resource_payload(cls, payload: dict[str, Any]) -> "SkillRegistry":
+        if payload.get("version") != SKILL_REGISTRY_VERSION:
+            raise ValueError(f"unsupported skill registry payload version: {payload.get('version')!r}")
         skills = [
             SkillPackage.model_validate(item)
             for item in payload.get("skills", [])
             if isinstance(item, dict)
         ]
-        return cls(skills)
+        gateway_state = SkillGatewayState.model_validate(payload.get("gateway_state") or {})
+        return cls(skills, gateway_state=gateway_state)
 
 
 def _assert_inside(root: Path, path: Path) -> None:
@@ -152,3 +195,109 @@ def _search_fields(skill: SkillPackage) -> list[tuple[str, str]]:
     fields.extend(("resource", item.path) for item in skill.resources)
     fields.extend(("script", item.path) for item in skill.scripts)
     return fields
+
+
+def _candidate_view(skill: SkillPackage) -> dict[str, Any]:
+    load_when = skill.metadata.metadata.get("load_when")
+    return {
+        "name": skill.name,
+        "description": skill.metadata.description,
+        "loaded_content": False,
+        "applicable_todos": _applicable_todos(load_when),
+        "loading_cost": {
+            "skill_body_chars": len(skill.body),
+            "resource_count": len(skill.resources),
+            "script_count": len(skill.scripts),
+        },
+    }
+
+
+def _applicable_todos(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _require_todo(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ValueError("current_todo must be a non-empty string")
+    return cleaned
+
+
+def _require_reason(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise ValueError("reason must be a non-empty string")
+    return cleaned
+
+
+def _resource_outline(path: str, content: str) -> dict[str, Any]:
+    if not path.endswith(".json"):
+        return {
+            "format": "text",
+            "chars": len(content),
+            "preview": content[:600],
+        }
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return {
+            "format": "json",
+            "parseable": False,
+            "chars": len(content),
+            "preview": content[:600],
+        }
+    if not isinstance(payload, dict):
+        return {"format": "json", "json_type": type(payload).__name__, "chars": len(content)}
+    properties = payload.get("properties")
+    property_index = []
+    if isinstance(properties, dict):
+        for name, spec in sorted(properties.items()):
+            if isinstance(spec, dict):
+                property_index.append(
+                    {
+                        "name": name,
+                        "type": spec.get("type"),
+                        "ref": spec.get("$ref"),
+                        "title": spec.get("title"),
+                        "description": spec.get("description"),
+                    }
+                )
+            else:
+                property_index.append({"name": name, "type": type(spec).__name__})
+    defs = payload.get("$defs")
+    return {
+        "format": "json_schema" if "$schema" in payload or "properties" in payload else "json",
+        "title": payload.get("title"),
+        "type": payload.get("type"),
+        "required": payload.get("required", []),
+        "properties": property_index,
+        "defs": sorted(defs) if isinstance(defs, dict) else [],
+        "chars": len(content),
+        "hint": "Use mode=fragment with a JSON pointer for a specific subtree, or mode=content only when raw content is necessary.",
+    }
+
+
+def _json_pointer_fragment(content: str, pointer: str) -> Any:
+    if not pointer:
+        raise ValueError("pointer is required when mode=fragment")
+    try:
+        value: Any = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError("fragment mode requires a JSON resource") from exc
+    if pointer == "/":
+        return value
+    if not pointer.startswith("/"):
+        raise ValueError("JSON pointer must start with '/'")
+    for raw_part in pointer.lstrip("/").split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(value, dict):
+            value = value[part]
+        elif isinstance(value, list):
+            value = value[int(part)]
+        else:
+            raise KeyError(f"cannot descend into {type(value).__name__} at {part!r}")
+    return value

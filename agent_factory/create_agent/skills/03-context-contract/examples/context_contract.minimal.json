@@ -1,0 +1,44 @@
+{
+  "config": {
+    "default_policy": {
+      "assembly": {
+        "max_items_total": 8,
+        "max_tokens_total": 1200,
+        "per_source_limits": {
+          "artifacts": 3,
+          "cross_session_memory": 4,
+          "knowledge": 6,
+          "recent_messages": 4,
+          "resources": 4,
+          "scheduler": 3,
+          "tool_metadata": 4,
+          "trace": 3
+        }
+      },
+      "compression": {
+        "enabled": true,
+        "keep_recent_messages": 12,
+        "trigger_token_threshold": 8000
+      },
+      "retrieval": {
+        "enabled": true,
+        "max_candidates": 24,
+        "min_score": 0.0,
+        "source_ids": [
+          "recent_messages",
+          "cross_session_memory",
+          "resources",
+          "tool_metadata",
+          "scheduler"
+        ]
+      },
+      "version": "context_policy.v0"
+    },
+    "enabled": true,
+    "node_policies": {},
+    "version": "context_system.v0"
+  },
+  "enabled": true,
+  "type": "context",
+  "version": "context_contract.v0"
+}

@@ -55,6 +55,7 @@ def _cached_report(report: PackageValidationReport) -> PackageValidationReport:
                 kind="finalize_ready" if report.status == "passed" else "repair_files",
                 target_files=_target_files(report),
                 recommended_skill=report.next_action.recommended_skill,
+                recommended_resources=report.next_action.recommended_resources,
             ),
         }
     )

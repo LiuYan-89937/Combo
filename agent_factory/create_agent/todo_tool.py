@@ -65,10 +65,10 @@ def build_create_agent_todo_tool_spec() -> ToolSpec:
             "properties": {
                 "action": {"type": "string", "enum": ["list", "add", "update", "upsert"]},
                 "message": {"type": "string"},
-                "todo": {"type": "object", "additionalProperties": True},
+                "working_set": {"type": "object", "additionalProperties": True},
                 "item": {"type": ["object", "null"], "additionalProperties": True},
             },
-            "required": ["action", "message", "todo", "item"],
+            "required": ["action", "message", "working_set", "item"],
             "additionalProperties": False,
         },
         resources={"workspace": CREATE_AGENT_WORKSPACE_RESOURCE},
@@ -190,7 +190,7 @@ def _details_with_evidence(details: Any, evidence: Any) -> dict[str, Any]:
     existing = payload.get("evidence", [])
     if not isinstance(existing, list):
         existing = [str(existing)]
-    payload["evidence"] = [*existing, *[item.strip() for item in evidence]]
+    payload["evidence"] = [*_compact_evidence(existing), *_compact_evidence(evidence)][-12:]
     return payload
 
 
@@ -205,8 +205,8 @@ def _output(*, action: str, message: str, todo: TodoList, item: TodoItem | None)
     return {
         "action": action,
         "message": message,
-        "todo": todo.model_dump(mode="json"),
-        "item": item.model_dump(mode="json") if item is not None else None,
+        "working_set": todo.working_set().model_dump(mode="json"),
+        "item": item.to_digest().model_dump(mode="json") if item is not None else None,
     }
 
 
@@ -215,3 +215,13 @@ def _required_string(arguments: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} must be a non-empty string")
     return value.strip()
+
+
+def _compact_evidence(items: list[Any]) -> list[str]:
+    values: list[str] = []
+    for item in items:
+        text = " ".join(str(item).split())
+        if not text:
+            continue
+        values.append(text[:240])
+    return values

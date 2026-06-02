@@ -116,21 +116,30 @@ class CreateAgentWorkspace:
     def context_summary(self) -> str:
         todo = self.read_todo()
         action = self.read_action()
-        validation = _read_optional_json(self.validation_path)
+        validation = self.read_validation()
+        working_set = todo.working_set()
         lines = [
             f"Workspace: {self.root}",
             f"Todo file: {TODO_FILE} (managed by create_agent_todo; do not edit directly)",
             f"Action file: {ACTION_FILE} (managed by create_agent_control; do not edit directly)",
             f"Resources file: {RESOURCES_FILE}",
             f"Validation file: {VALIDATION_FILE}",
-            "Todos:",
+            f"Required remaining todos: {working_set.required_remaining}/{working_set.total_items}",
+            "Active todo working set:",
         ]
-        for item in todo.items:
+        for item in working_set.items:
             lines.append(f"- {item.todo_id}: {item.status.value} | {item.title}")
         lines.append(f"Current action: {action.action} {action.message}".strip())
         if validation:
-            lines.append("Latest validation:")
-            lines.append(json.dumps(validation, ensure_ascii=False, indent=2)[:4000])
+            digest = validation.to_digest()
+            lines.append(
+                "Latest validation digest: "
+                f"{digest.status} | scope={digest.validation_scope} | cached={digest.cached} | {digest.summary}"
+            )
+            for issue in digest.issues[:3]:
+                lines.append(
+                    f"- issue {issue.issue_id}: {issue.where} | files={issue.target_files} | {issue.repair_hint}"
+                )
         return "\n".join(lines)
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:

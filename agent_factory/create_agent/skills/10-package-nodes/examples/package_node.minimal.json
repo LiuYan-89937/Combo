@@ -1,0 +1,19 @@
+{
+  "description": "Package-local deterministic graph logic.",
+  "entrypoint": "nodes/example_node/node.py:run",
+  "impl_id": "package.example_node",
+  "input_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "node_type": "operational",
+  "output_schema": {
+    "additionalProperties": true,
+    "type": "object"
+  },
+  "readable_sections": [],
+  "required_services": [],
+  "tool_access": [],
+  "version": "package_node.v0",
+  "writable_sections": []
+}

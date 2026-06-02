@@ -1,0 +1,34 @@
+{
+  "config": {
+    "catalog_path": "/runtime/knowledge/catalog/knowledge.sqlite",
+    "default_mount_mode": "index_only",
+    "keyword_backend": "sqlite_fts5",
+    "limits": {
+      "chunk_overlap": 120,
+      "chunk_size": 800,
+      "max_file_bytes": 2000000,
+      "max_preview_files": 200,
+      "max_read_chars": 20000,
+      "max_search_results": 12,
+      "splitter_overrides": {}
+    },
+    "rag_store": {
+      "backend": "sqlite",
+      "index_fields": [
+        "content",
+        "title",
+        "summary"
+      ],
+      "namespace_prefix": [
+        "knowledge"
+      ],
+      "path": "/runtime/knowledge/catalog/knowledge_store.sqlite",
+      "provider_options": {},
+      "setup": true
+    },
+    "root": "/runtime/knowledge"
+  },
+  "enabled": true,
+  "type": "knowledge",
+  "version": "knowledge_contract.v0"
+}

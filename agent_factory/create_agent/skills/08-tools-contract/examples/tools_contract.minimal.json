@@ -1,0 +1,14 @@
+{
+  "config": {
+    "builtin_allow_external_paths": false,
+    "builtin_tool_ids": [],
+    "builtin_tools_enabled": true,
+    "builtin_workspace_root": "/workdir",
+    "instance_extension_root": "/runtime/extensions",
+    "instance_extensions_enabled": true,
+    "package_tools_enabled": true
+  },
+  "enabled": true,
+  "type": "tools",
+  "version": "tools_contract.v0"
+}

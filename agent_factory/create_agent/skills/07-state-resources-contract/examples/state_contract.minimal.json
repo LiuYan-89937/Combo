@@ -1,0 +1,11 @@
+{
+  "config": {
+    "initial_state_path": "state/package.initial.json",
+    "namespace": "package",
+    "schema_path": "state/package.schema.json",
+    "writable_node_ids": []
+  },
+  "enabled": false,
+  "type": "state",
+  "version": "state_contract.v0"
+}

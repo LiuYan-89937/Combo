@@ -1,0 +1,28 @@
+{
+  "concurrent": true,
+  "description": "Package-specific deterministic operation.",
+  "entrypoint": "tools/example_tool/tool.py:run",
+  "id": "example_tool",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "type": "object"
+  },
+  "resources": {},
+  "risk_evaluator": {
+    "llm_mode": "disabled"
+  },
+  "risk_level": "low"
+}

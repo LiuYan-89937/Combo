@@ -13,6 +13,7 @@ from agent_factory.create_agent.control_tool import (
 )
 from agent_factory.create_agent.models import ACTION_FILE, TODO_FILE
 from agent_factory.create_agent.todo_tool import CREATE_AGENT_TODO_TOOL_ID, build_create_agent_todo_tool_spec
+from agent_factory.create_agent.validate_tool import CREATE_AGENT_VALIDATE_TOOL_ID, build_create_agent_validate_tool_spec
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.factory_extensions import FactoryExtensionManager, default_factory_extension_root
@@ -35,9 +36,6 @@ CREATE_AGENT_BUILTIN_TOOL_IDS = {
     "glob",
     "grep",
     "ls",
-    "bash",
-    "bash_status",
-    "bash_stop",
     "tool_output",
 }
 
@@ -87,13 +85,21 @@ class CreateAgentToolEnvironmentBuilder:
         else:
             skill_specs = []
         provider_result.system_tool_ids = sorted(
-            set([*provider_result.system_tool_ids, CREATE_AGENT_CONTROL_TOOL_ID, CREATE_AGENT_TODO_TOOL_ID])
+            set(
+                [
+                    *provider_result.system_tool_ids,
+                    CREATE_AGENT_CONTROL_TOOL_ID,
+                    CREATE_AGENT_TODO_TOOL_ID,
+                    CREATE_AGENT_VALIDATE_TOOL_ID,
+                ]
+            )
         )
         specs = _unique_specs(
             provider_result,
             extra_specs=[
                 build_create_agent_control_tool_spec(),
                 build_create_agent_todo_tool_spec(),
+                build_create_agent_validate_tool_spec(),
                 *skill_specs,
             ],
         )

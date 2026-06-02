@@ -1,0 +1,106 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "agent": {
+      "additionalProperties": true,
+      "title": "Agent",
+      "type": "object"
+    },
+    "assembly_spec_path": {
+      "title": "Assembly Spec Path",
+      "type": "string"
+    },
+    "bindings": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Bindings",
+      "type": "object"
+    },
+    "contracts": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Contracts",
+      "type": "object"
+    },
+    "factory_run_id": {
+      "title": "Factory Run Id",
+      "type": "string"
+    },
+    "formatters": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Formatters",
+      "type": "array"
+    },
+    "patterns": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Patterns",
+      "type": "array"
+    },
+    "policies": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Policies",
+      "type": "array"
+    },
+    "prompts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Prompts",
+      "type": "array"
+    },
+    "render_manifest_path": {
+      "title": "Render Manifest Path",
+      "type": "string"
+    },
+    "resources_path": {
+      "title": "Resources Path",
+      "type": "string"
+    },
+    "runtime": {
+      "additionalProperties": true,
+      "title": "Runtime",
+      "type": "object"
+    },
+    "sandbox_contract_path": {
+      "title": "Sandbox Contract Path",
+      "type": "string"
+    },
+    "strategies": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Strategies",
+      "type": "array"
+    },
+    "tools": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tools",
+      "type": "array"
+    },
+    "version": {
+      "const": "agent_package.v0",
+      "default": "agent_package.v0",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "factory_run_id",
+    "assembly_spec_path",
+    "render_manifest_path",
+    "resources_path",
+    "sandbox_contract_path"
+  ],
+  "title": "AgentPackageManifest",
+  "type": "object"
+}

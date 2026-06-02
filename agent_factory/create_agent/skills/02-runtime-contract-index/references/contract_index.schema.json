@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "config": {
+      "additionalProperties": true,
+      "title": "Config",
+      "type": "object"
+    },
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "type": {
+      "title": "Type",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type",
+    "version"
+  ],
+  "title": "RuntimeContractEnvelope",
+  "type": "object"
+}

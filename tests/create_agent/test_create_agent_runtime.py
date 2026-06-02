@@ -22,9 +22,16 @@ from agent_factory.create_agent.models import (
     initial_todo_list,
 )
 from agent_factory.create_agent.runtime import CreateAgentRuntime
-from agent_factory.create_agent.tooling import CreateAgentToolEnvironmentBuilder
+from agent_factory.create_agent.scripts.export_skill_schemas import (
+    EXAMPLE_EXPORTS,
+    SCHEMA_EXPORTS,
+    SKILLS_ROOT,
+    _example_text,
+    _schema_text,
+)
+from agent_factory.create_agent.tooling import CREATE_AGENT_BUILTIN_TOOL_IDS, CreateAgentToolEnvironmentBuilder
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
-from agent_factory.create_agent.workflow import CreateAgentWorkflow, _messages_with_system
+from agent_factory.create_agent.workflow import CreateAgentWorkflow, _messages_with_system, _validation_event_from_tool_calls
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.skills import parse_skill_directory
 
@@ -37,6 +44,8 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertEqual(report.status, "failed")
         self.assertEqual(report.issues[0].where, "package.manifest")
         self.assertEqual(report.issues[0].target_files, ["agent_package.json"])
+        self.assertEqual(report.issues[0].recommended_skill, "01-package-manifest")
+        self.assertIn("references/agent_package.schema.json", report.issues[0].recommended_resources)
 
     def test_todo_list_adds_deduplicated_repair_items(self) -> None:
         todo = initial_todo_list()
@@ -52,6 +61,9 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         repair_items = [item for item in updated.items if item.kind == "repair"]
         self.assertEqual(len(repair_items), 1)
         self.assertEqual(repair_items[0].status, TodoStatus.failed_needs_repair)
+        self.assertIn("issue_id", repair_items[0].details)
+        self.assertEqual(repair_items[0].details["where"], "package.manifest")
+        self.assertNotIn("message", repair_items[0].details)
 
     def test_required_todo_must_be_done_not_skipped(self) -> None:
         todo = TodoList(
@@ -96,6 +108,19 @@ class CreateAgentRuntimeTest(unittest.TestCase):
 
         self.assertTrue(packages)
         self.assertEqual([package.name for package in packages], sorted(package.name for package in packages))
+        for package in packages:
+            self.assertNotIn('"$schema"', package.body)
+            self.assertTrue(package.resources, package.name)
+
+    def test_create_agent_skill_schemas_are_generated_from_runtime_models(self) -> None:
+        for relative, model in SCHEMA_EXPORTS.items():
+            target = SKILLS_ROOT / relative
+            self.assertEqual(target.read_text(encoding="utf-8"), _schema_text(model), relative)
+
+    def test_create_agent_skill_examples_are_generated_from_runtime_models(self) -> None:
+        for relative, model in EXAMPLE_EXPORTS.items():
+            target = SKILLS_ROOT / relative
+            self.assertEqual(target.read_text(encoding="utf-8"), _example_text(model), relative)
 
     def test_tool_environment_executes_builtin_tool_through_compiled_gateway(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -215,14 +240,33 @@ class CreateAgentRuntimeTest(unittest.TestCase):
             env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
             skill_tool = next(tool for tool in env.tools if tool.name == "skill")
             listed = skill_tool.invoke({"action": "list"})
-            described = skill_tool.invoke({"action": "describe", "name": "05-knowledge-contract"})
-            loaded = skill_tool.invoke({"action": "load", "name": "05-knowledge-contract"})
+            described = skill_tool.invoke(
+                {"action": "describe", "name": "05-knowledge-contract", "current_todo": "runtime_contracts"}
+            )
+            loaded = skill_tool.invoke(
+                {
+                    "action": "load",
+                    "name": "05-knowledge-contract",
+                    "current_todo": "runtime_contracts",
+                    "reason": "The active todo is deciding whether a knowledge contract is needed.",
+                }
+            )
+            loaded_state = skill_tool.invoke({"action": "list_loaded", "current_todo": "runtime_contracts"})
             searched = skill_tool.invoke({"action": "search", "query": "memory contract"})
             denied = skill_tool.invoke(
                 {
                     "action": "read_resource",
                     "name": "05-knowledge-contract",
                     "path": "../outside.md",
+                    "current_todo": "runtime_contracts",
+                }
+            )
+            resource = skill_tool.invoke(
+                {
+                    "action": "read_resource",
+                    "name": "05-knowledge-contract",
+                    "path": "references/knowledge_contract.schema.json",
+                    "current_todo": "runtime_contracts",
                 }
             )
 
@@ -232,14 +276,71 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertIn("03-context-contract", skill_names)
         self.assertIn("05-knowledge-contract", skill_names)
         self.assertIn("15-validation-repair", skill_names)
+        self.assertNotIn("resource_index", listed["output"]["skills"][0])
         self.assertEqual(described["status"], "completed")
         self.assertFalse(described["output"]["skill"]["loaded_content"])
         self.assertNotIn("content", described["output"]["skill"])
         self.assertEqual(loaded["status"], "completed")
         self.assertIn("Knowledge Contract", loaded["output"]["skill"]["content"])
+        self.assertEqual(loaded_state["status"], "completed")
+        self.assertEqual(loaded_state["output"]["loaded_state"]["primary_skill"], "05-knowledge-contract")
         self.assertEqual(searched["status"], "completed")
         self.assertIn("04-memory-contract", [item["name"] for item in searched["output"]["skills"]])
         self.assertEqual(denied["status"], "denied")
+        self.assertEqual(resource["status"], "completed")
+        self.assertEqual(resource["output"]["resource"]["path"], "references/knowledge_contract.schema.json")
+        self.assertEqual(resource["output"]["resource"]["mode"], "outline")
+        self.assertIn("outline", resource["output"]["resource"])
+        self.assertEqual(resource["output"]["resource"]["content"], "")
+
+    def test_skill_gateway_rejects_legacy_load_and_unguarded_second_primary(self) -> None:
+        with TemporaryDirectory() as tmp:
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            skill_tool = next(tool for tool in env.tools if tool.name == "skill")
+            legacy = skill_tool.invoke({"action": "load", "name": "05-knowledge-contract"})
+            first = skill_tool.invoke(
+                {
+                    "action": "load",
+                    "name": "05-knowledge-contract",
+                    "current_todo": "runtime_contracts",
+                    "reason": "The active todo needs the knowledge contract manufacturing guide.",
+                }
+            )
+            second_without_describe = skill_tool.invoke(
+                {
+                    "action": "load",
+                    "name": "04-memory-contract",
+                    "current_todo": "runtime_contracts",
+                    "reason": "Need to compare memory against knowledge for the same contract-selection todo.",
+                }
+            )
+            described = skill_tool.invoke(
+                {"action": "describe", "name": "04-memory-contract", "current_todo": "runtime_contracts"}
+            )
+            second_after_describe = skill_tool.invoke(
+                {
+                    "action": "load",
+                    "name": "04-memory-contract",
+                    "current_todo": "runtime_contracts",
+                    "reason": "The primary knowledge guide is insufficient because this todo must decide memory ownership too.",
+                }
+            )
+
+        self.assertNotEqual(legacy["status"], "completed")
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(second_without_describe["status"], "denied")
+        self.assertEqual(described["status"], "completed")
+        self.assertEqual(second_after_describe["status"], "completed")
+
+    def test_create_agent_default_tools_do_not_include_generic_bash(self) -> None:
+        with TemporaryDirectory() as tmp:
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+
+        self.assertNotIn("bash", CREATE_AGENT_BUILTIN_TOOL_IDS)
+        self.assertNotIn("bash_status", CREATE_AGENT_BUILTIN_TOOL_IDS)
+        self.assertNotIn("bash_stop", CREATE_AGENT_BUILTIN_TOOL_IDS)
+        self.assertNotIn("bash", env.tool_ids)
+        self.assertIn("create_agent_validate", env.system_tool_ids)
 
     def test_create_agent_system_prompt_uses_skill_gateway_not_skill_body_injection(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -292,6 +393,8 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertIn("repair_context", update)
         self.assertIn("Package validation/todo gate is not complete", update["repair_context"])
         self.assertIn("Package validation/todo gate is not complete", messages[0].content)
+        self.assertIn("Validation digest:", update["repair_context"])
+        self.assertNotIn("Validation report:", update["repair_context"])
 
     def test_workflow_continues_when_validation_and_todo_remain_unfinished(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -361,6 +464,8 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertTrue(second["validation"]["cached"])
         self.assertTrue(second["validation"]["skipped"])
         self.assertEqual(second["validation"]["validation_scope"], "unchanged")
+        self.assertIn("issues", second["validation"])
+        self.assertIn("issue_id", second["validation"]["issues"][0])
 
     def test_validation_gate_runs_scoped_validation_after_package_file_change(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -410,6 +515,16 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertEqual(validator.calls, 2)
         self.assertEqual(validator.scopes[-1], "full_static")
         self.assertFalse(finalized["validation"]["cached"])
+
+    def test_validation_events_are_triggered_only_by_state_changing_tools(self) -> None:
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "read"}]), "none")
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "skill"}]), "none")
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "write"}]), "package_change")
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "edit"}]), "package_change")
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "multi_edit"}]), "package_change")
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "create_agent_todo"}]), "todo")
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "create_agent_control"}]), "control")
+        self.assertEqual(_validation_event_from_tool_calls([{"name": "create_agent_validate"}]), "explicit_validation")
 
     def test_runtime_routes_non_manufacturing_message_to_assist_without_package_validation(self) -> None:
         with TemporaryDirectory() as tmp, patch.dict(os.environ, {"AGENTFACTORY_PROJECT_ROOT": tmp}):

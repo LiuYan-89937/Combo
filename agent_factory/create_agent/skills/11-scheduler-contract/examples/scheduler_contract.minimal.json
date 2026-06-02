@@ -1,0 +1,18 @@
+{
+  "config": {
+    "default_concurrency_policy": "skip",
+    "default_failure_policy": {
+      "action": "pause",
+      "enabled": true,
+      "max_consecutive_failures": 3
+    },
+    "default_timeout_seconds": 900,
+    "store_backend": "sqlite",
+    "store_path": "/runtime/scheduler/scheduler.sqlite",
+    "timezone": "Asia/Shanghai",
+    "unattended_policy": "deny_if_approval_required"
+  },
+  "enabled": true,
+  "type": "scheduler",
+  "version": "scheduler_contract.v0"
+}

@@ -20,21 +20,20 @@ Rules:
 
 Repair loop:
 
-```text
-read .factory/validation.json
-call create_agent_todo list
-identify failing file, contract, pattern, binding, state, or tool
-edit package files through tools
-run package validation
-update todo statuses through create_agent_todo with evidence
-continue until validation passes and required todos are done
-```
+- Read `.factory/validation.json` through workspace file tools.
+- Call `create_agent_todo list`.
+- Use `recommended_skill` and `recommended_resources` from the validation report.
+- Load the recommended skill, read the recommended resources, then repair target files.
+- Run validation through `create_agent_validate` or finalize through `create_agent_control`.
+- Update todo statuses through `create_agent_todo` with evidence.
+- Continue until validation passes and required todos are done.
 
-Helper script:
+Resources:
 
-```bash
-python3 -m agent_factory.create_agent.scripts.validate_package <workspace> --out .factory/validation.json
-```
+- `references/validation_report.schema.json`
+- `examples/validation_report.minimal.json`
+- `references/validation_report.common_errors.md`
+- `references/validation_report.repair_hints.md`
 
 Acceptance:
 

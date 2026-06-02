@@ -1,0 +1,17 @@
+{
+  "cached": false,
+  "changed_files": [],
+  "issues": [],
+  "next_action": {
+    "kind": "continue",
+    "recommended_resources": [],
+    "recommended_skill": "",
+    "target_files": []
+  },
+  "package_root": ".",
+  "skipped": true,
+  "status": "failed",
+  "summary": "Validation report example.",
+  "validation_scope": "full_static",
+  "version": "package_validation_report.v0"
+}

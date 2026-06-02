@@ -1,0 +1,406 @@
+{
+  "$defs": {
+    "PatternConstraintsSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_node_types": {
+          "items": {
+            "enum": [
+              "reserved",
+              "cognitive",
+              "operational",
+              "governance",
+              "terminal",
+              "sub_graph"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Node Types",
+          "type": "array"
+        },
+        "required_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Capabilities",
+          "type": "array"
+        }
+      },
+      "title": "PatternConstraintsSpec",
+      "type": "object"
+    },
+    "PatternEdgeSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "title": "From",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        },
+        "when": {
+          "title": "When",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "when"
+      ],
+      "title": "PatternEdgeSpec",
+      "type": "object"
+    },
+    "PatternIOContractSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "readable_sections": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Readable Sections",
+          "type": "array"
+        },
+        "writable_sections": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Writable Sections",
+          "type": "array"
+        }
+      },
+      "title": "PatternIOContractSpec",
+      "type": "object"
+    },
+    "PatternMetadataSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "avoid_when": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Avoid When",
+          "type": "array"
+        },
+        "selection_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selection Notes",
+          "type": "array"
+        },
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "use_when": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Use When",
+          "type": "array"
+        }
+      },
+      "title": "PatternMetadataSpec",
+      "type": "object"
+    },
+    "PatternNodeSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "impl": {
+          "title": "Impl",
+          "type": "string"
+        },
+        "pattern_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pattern Ref"
+        },
+        "type": {
+          "enum": [
+            "reserved",
+            "cognitive",
+            "operational",
+            "governance",
+            "terminal",
+            "sub_graph"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "wrappers": {
+          "items": {
+            "$ref": "#/$defs/PatternNodeWrapperSpec"
+          },
+          "title": "Wrappers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "impl"
+      ],
+      "title": "PatternNodeSpec",
+      "type": "object"
+    },
+    "PatternNodeWrapperSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "order": {
+          "default": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "phase": {
+          "enum": [
+            "before",
+            "after",
+            "on_error"
+          ],
+          "title": "Phase",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "phase"
+      ],
+      "title": "PatternNodeWrapperSpec",
+      "type": "object"
+    },
+    "PatternSlotSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_binding": {
+          "default": "",
+          "title": "Expected Binding",
+          "type": "string"
+        },
+        "node_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Node Id"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "output_target": {
+          "default": "",
+          "title": "Output Target",
+          "type": "string"
+        },
+        "purpose": {
+          "title": "Purpose",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "slot_id": {
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "slot_type": {
+          "enum": [
+            "prompt",
+            "tool",
+            "resource",
+            "state",
+            "scheduler",
+            "structured_output",
+            "package_node",
+            "artifact",
+            "knowledge",
+            "memory",
+            "context"
+          ],
+          "title": "Slot Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot_id",
+        "slot_type",
+        "purpose"
+      ],
+      "title": "PatternSlotSpec",
+      "type": "object"
+    },
+    "PatternTerminationSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "failure_nodes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Failure Nodes",
+          "type": "array"
+        },
+        "success_nodes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Nodes",
+          "type": "array"
+        }
+      },
+      "title": "PatternTerminationSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "constraints": {
+      "$ref": "#/$defs/PatternConstraintsSpec"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/PatternEdgeSpec"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "embeddable": {
+      "title": "Embeddable",
+      "type": "boolean"
+    },
+    "entry_node": {
+      "title": "Entry Node",
+      "type": "string"
+    },
+    "exit_routes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Exit Routes",
+      "type": "array"
+    },
+    "input_contract": {
+      "$ref": "#/$defs/PatternIOContractSpec"
+    },
+    "interrupt_points": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Interrupt Points",
+      "type": "array"
+    },
+    "kind": {
+      "enum": [
+        "main",
+        "subgraph"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/PatternMetadataSpec"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/PatternNodeSpec"
+      },
+      "title": "Nodes",
+      "type": "array"
+    },
+    "output_contract": {
+      "$ref": "#/$defs/PatternIOContractSpec"
+    },
+    "pattern_id": {
+      "title": "Pattern Id",
+      "type": "string"
+    },
+    "slots": {
+      "items": {
+        "$ref": "#/$defs/PatternSlotSpec"
+      },
+      "title": "Slots",
+      "type": "array"
+    },
+    "state_mode": {
+      "default": "shared",
+      "enum": [
+        "shared",
+        "isolated"
+      ],
+      "title": "State Mode",
+      "type": "string"
+    },
+    "termination": {
+      "$ref": "#/$defs/PatternTerminationSpec"
+    },
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "pattern_id",
+    "kind",
+    "embeddable",
+    "version",
+    "name",
+    "description",
+    "entry_node",
+    "termination"
+  ],
+  "title": "GraphPatternSpec",
+  "type": "object"
+}

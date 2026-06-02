@@ -1,0 +1,79 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "entrypoint": {
+      "title": "Entrypoint",
+      "type": "string"
+    },
+    "impl_id": {
+      "title": "Impl Id",
+      "type": "string"
+    },
+    "input_schema": {
+      "additionalProperties": true,
+      "title": "Input Schema",
+      "type": "object"
+    },
+    "node_type": {
+      "enum": [
+        "cognitive",
+        "operational",
+        "governance",
+        "terminal"
+      ],
+      "title": "Node Type",
+      "type": "string"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "title": "Output Schema",
+      "type": "object"
+    },
+    "readable_sections": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Readable Sections",
+      "type": "array"
+    },
+    "required_services": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Services",
+      "type": "array"
+    },
+    "tool_access": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tool Access",
+      "type": "array"
+    },
+    "version": {
+      "const": "package_node.v0",
+      "default": "package_node.v0",
+      "title": "Version",
+      "type": "string"
+    },
+    "writable_sections": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Writable Sections",
+      "type": "array"
+    }
+  },
+  "required": [
+    "impl_id",
+    "node_type",
+    "entrypoint",
+    "description"
+  ],
+  "title": "PackageNodeManifest",
+  "type": "object"
+}

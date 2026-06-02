@@ -1,0 +1,8 @@
+{
+  "config": {
+    "seeds": []
+  },
+  "enabled": true,
+  "type": "scheduler_seed",
+  "version": "scheduler_seed_contract.v0"
+}

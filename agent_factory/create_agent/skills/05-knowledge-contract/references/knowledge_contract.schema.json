@@ -1,0 +1,253 @@
+{
+  "$defs": {
+    "KnowledgeContractConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "catalog_path": {
+          "default": "/runtime/knowledge/catalog/knowledge.sqlite",
+          "title": "Catalog Path",
+          "type": "string"
+        },
+        "default_mount_mode": {
+          "default": "index_only",
+          "enum": [
+            "index_only",
+            "rag"
+          ],
+          "title": "Default Mount Mode",
+          "type": "string"
+        },
+        "keyword_backend": {
+          "const": "sqlite_fts5",
+          "default": "sqlite_fts5",
+          "title": "Keyword Backend",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/KnowledgeLimits"
+        },
+        "rag_store": {
+          "$ref": "#/$defs/KnowledgeRagStoreConfig"
+        },
+        "root": {
+          "default": "/runtime/knowledge",
+          "title": "Root",
+          "type": "string"
+        }
+      },
+      "title": "KnowledgeContractConfig",
+      "type": "object"
+    },
+    "KnowledgeLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_overlap": {
+          "default": 120,
+          "maximum": 2000,
+          "minimum": 0,
+          "title": "Chunk Overlap",
+          "type": "integer"
+        },
+        "chunk_size": {
+          "default": 800,
+          "maximum": 8000,
+          "minimum": 100,
+          "title": "Chunk Size",
+          "type": "integer"
+        },
+        "max_file_bytes": {
+          "default": 2000000,
+          "minimum": 1024,
+          "title": "Max File Bytes",
+          "type": "integer"
+        },
+        "max_preview_files": {
+          "default": 200,
+          "maximum": 5000,
+          "minimum": 1,
+          "title": "Max Preview Files",
+          "type": "integer"
+        },
+        "max_read_chars": {
+          "default": 20000,
+          "maximum": 200000,
+          "minimum": 1000,
+          "title": "Max Read Chars",
+          "type": "integer"
+        },
+        "max_search_results": {
+          "default": 12,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Search Results",
+          "type": "integer"
+        },
+        "splitter_overrides": {
+          "additionalProperties": {
+            "$ref": "#/$defs/KnowledgeSplitterOverride"
+          },
+          "title": "Splitter Overrides",
+          "type": "object"
+        }
+      },
+      "title": "KnowledgeLimits",
+      "type": "object"
+    },
+    "KnowledgeRagStoreConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "default": "sqlite",
+          "enum": [
+            "sqlite",
+            "memory",
+            "postgres",
+            "redis",
+            "mongodb"
+          ],
+          "title": "Backend",
+          "type": "string"
+        },
+        "collection_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collection Name"
+        },
+        "connection_uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connection Uri"
+        },
+        "database_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Database Name"
+        },
+        "index_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Index Fields",
+          "type": "array"
+        },
+        "namespace_prefix": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Namespace Prefix",
+          "type": "array"
+        },
+        "path": {
+          "default": "/runtime/knowledge/catalog/knowledge_store.sqlite",
+          "title": "Path",
+          "type": "string"
+        },
+        "provider_options": {
+          "additionalProperties": true,
+          "title": "Provider Options",
+          "type": "object"
+        },
+        "setup": {
+          "default": true,
+          "title": "Setup",
+          "type": "boolean"
+        }
+      },
+      "title": "KnowledgeRagStoreConfig",
+      "type": "object"
+    },
+    "KnowledgeSplitterOverride": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_overlap": {
+          "anyOf": [
+            {
+              "maximum": 2000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chunk Overlap"
+        },
+        "chunk_size": {
+          "anyOf": [
+            {
+              "maximum": 8000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chunk Size"
+        },
+        "splitter": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "recursive",
+            "markdown",
+            "code",
+            "json"
+          ],
+          "title": "Splitter",
+          "type": "string"
+        }
+      },
+      "title": "KnowledgeSplitterOverride",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "config": {
+      "$ref": "#/$defs/KnowledgeContractConfig"
+    },
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "type": {
+      "const": "knowledge",
+      "default": "knowledge",
+      "title": "Type",
+      "type": "string"
+    },
+    "version": {
+      "const": "knowledge_contract.v0",
+      "default": "knowledge_contract.v0",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "title": "KnowledgeContract",
+  "type": "object"
+}

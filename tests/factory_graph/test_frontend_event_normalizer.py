@@ -223,7 +223,16 @@ class FrontendEventNormalizerTest(unittest.TestCase):
                         "type": "AIMessage",
                         "content": "before tool",
                         "tool_calls": [
-                            {"id": "call-a", "name": "skill", "args": {"action": "load", "name": "weather"}}
+                            {
+                                "id": "call-a",
+                                "name": "skill",
+                                "args": {
+                                    "action": "load",
+                                    "name": "weather",
+                                    "current_todo": "answer",
+                                    "reason": "The active answer step needs weather skill guidance.",
+                                },
+                            }
                         ],
                     }
                 ]

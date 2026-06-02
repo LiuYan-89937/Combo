@@ -1,0 +1,192 @@
+{
+  "$defs": {
+    "PackageValidationIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "actual": {
+          "default": "",
+          "title": "Actual",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "expected": {
+          "default": "",
+          "title": "Expected",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "title": "Path",
+          "type": "string"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "repair_hint": {
+          "default": "",
+          "title": "Repair Hint",
+          "type": "string"
+        },
+        "severity": {
+          "default": "blocking",
+          "enum": [
+            "blocking",
+            "warning",
+            "info"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "target_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Files",
+          "type": "array"
+        },
+        "where": {
+          "title": "Where",
+          "type": "string"
+        }
+      },
+      "required": [
+        "where",
+        "summary",
+        "message"
+      ],
+      "title": "PackageValidationIssue",
+      "type": "object"
+    },
+    "PackageValidationNextAction": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "default": "continue",
+          "enum": [
+            "continue",
+            "repair_files",
+            "ask_user",
+            "finalize_ready"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "target_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Files",
+          "type": "array"
+        }
+      },
+      "title": "PackageValidationNextAction",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "cached": {
+      "default": false,
+      "title": "Cached",
+      "type": "boolean"
+    },
+    "changed_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Changed Files",
+      "type": "array"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/PackageValidationIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "next_action": {
+      "$ref": "#/$defs/PackageValidationNextAction"
+    },
+    "package_root": {
+      "title": "Package Root",
+      "type": "string"
+    },
+    "skipped": {
+      "default": false,
+      "title": "Skipped",
+      "type": "boolean"
+    },
+    "status": {
+      "default": "failed",
+      "enum": [
+        "passed",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "summary": {
+      "default": "",
+      "title": "Summary",
+      "type": "string"
+    },
+    "validation_scope": {
+      "default": "full_static",
+      "enum": [
+        "workspace_hygiene",
+        "package_shape",
+        "runtime_contract_build",
+        "assembly_compile",
+        "python_syntax",
+        "full_static",
+        "unchanged"
+      ],
+      "title": "Validation Scope",
+      "type": "string"
+    },
+    "version": {
+      "const": "package_validation_report.v0",
+      "default": "package_validation_report.v0",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "package_root"
+  ],
+  "title": "PackageValidationReport",
+  "type": "object"
+}

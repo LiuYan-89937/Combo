@@ -1,0 +1,58 @@
+{
+  "$defs": {
+    "StateContractConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "initial_state_path": {
+          "default": "state/package.initial.json",
+          "title": "Initial State Path",
+          "type": "string"
+        },
+        "namespace": {
+          "default": "package",
+          "title": "Namespace",
+          "type": "string"
+        },
+        "schema_path": {
+          "default": "state/package.schema.json",
+          "title": "Schema Path",
+          "type": "string"
+        },
+        "writable_node_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Writable Node Ids",
+          "type": "array"
+        }
+      },
+      "title": "StateContractConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "config": {
+      "$ref": "#/$defs/StateContractConfig"
+    },
+    "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "type": {
+      "const": "state",
+      "default": "state",
+      "title": "Type",
+      "type": "string"
+    },
+    "version": {
+      "const": "state_contract.v0",
+      "default": "state_contract.v0",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "title": "StateContract",
+  "type": "object"
+}

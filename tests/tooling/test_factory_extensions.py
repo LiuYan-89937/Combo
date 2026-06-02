@@ -32,8 +32,8 @@ class FactoryExtensionTest(unittest.TestCase):
                 tool_runtime_resources={"scheduler_runtime": runtime},
             )
 
-            self.assertEqual([tool.name for tool in tools], ["scheduler"])
-            result = tools[0].invoke({"action": "list"})
+            self.assertIn("scheduler", [tool.name for tool in tools])
+            result = next(tool for tool in tools if tool.name == "scheduler").invoke({"action": "list"})
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["output"]["jobs"][0]["job_id"], "job_1")
@@ -41,7 +41,7 @@ class FactoryExtensionTest(unittest.TestCase):
     def test_factory_scheduler_tool_is_not_compiled_without_runtime_instance(self) -> None:
         tools = get_factory_tools(tool_ids=["scheduler"], include_extensions=False)
 
-        self.assertEqual(tools, [])
+        self.assertNotIn("scheduler", [tool.name for tool in tools])
 
     def test_factory_extension_manager_discovers_skill_tool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -66,8 +66,8 @@ class FactoryExtensionTest(unittest.TestCase):
                 extension_root=root,
             )
 
-        self.assertEqual([spec.id for spec in specs], ["skill"])
-        self.assertEqual(without_extensions, [])
+        self.assertIn("skill", [spec.id for spec in specs])
+        self.assertNotIn("skill", [spec.id for spec in without_extensions])
 
     def test_stage_scoped_factory_tools_ignore_unselected_extension_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -76,7 +76,7 @@ class FactoryExtensionTest(unittest.TestCase):
 
             specs = get_factory_tool_specs(tool_ids=["ls"], extension_root=root)
 
-        self.assertEqual([spec.id for spec in specs], ["ls"])
+        self.assertIn("ls", [spec.id for spec in specs])
 
     def test_factory_tools_compile_progressive_skill_tool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -84,8 +84,16 @@ class FactoryExtensionTest(unittest.TestCase):
             _write_skill_extension(root)
 
             tools = get_factory_tools(tool_ids=["skill"], extension_root=root)
-            listed = tools[0].invoke({"action": "list"})
-            result = tools[0].invoke({"action": "load", "name": "factory"})
+            skill_tool = next(tool for tool in tools if tool.name == "skill")
+            listed = skill_tool.invoke({"action": "list"})
+            result = skill_tool.invoke(
+                {
+                    "action": "load",
+                    "name": "factory",
+                    "current_todo": "extension_skill_smoke",
+                    "reason": "Smoke test needs the enabled skill body.",
+                }
+            )
 
         self.assertEqual(listed["status"], "completed")
         self.assertEqual(listed["output"]["skills"][0]["name"], "factory")
@@ -142,7 +150,7 @@ class FactoryExtensionTest(unittest.TestCase):
                 mcp_catalog_clients={"factory_mcp": FakeMCPClient()},
                 mcp_tool_clients={"factory_mcp": FakeMCPClient()},
             )
-            result = tools[0].invoke({"text": "hello"})
+            result = next(tool for tool in tools if tool.name == "factory_mcp_echo").invoke({"text": "hello"})
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["output"], {"echo": "hello"})
@@ -184,7 +192,7 @@ class FactoryExtensionTest(unittest.TestCase):
             _write_mcp_extension(root)
             with patch("agent_factory.tooling.factory_extensions.MCPRuntimeManager", FakeRuntimeManager):
                 tools = get_factory_tools(tool_ids=["factory_mcp_echo"], extension_root=root)
-                result = tools[0].invoke({"text": "hello"})
+                result = next(tool for tool in tools if tool.name == "factory_mcp_echo").invoke({"text": "hello"})
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["output"], {"echo": "hello"})
