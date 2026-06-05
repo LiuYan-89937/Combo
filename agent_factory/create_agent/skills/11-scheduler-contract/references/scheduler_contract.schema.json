@@ -29,7 +29,7 @@
           "type": "string"
         },
         "store_path": {
-          "default": "/runtime/scheduler/scheduler.sqlite",
+          "default": ".agent_runtime/scheduler/scheduler.sqlite",
           "title": "Store Path",
           "type": "string"
         },

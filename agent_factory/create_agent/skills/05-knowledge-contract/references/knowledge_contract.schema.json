@@ -4,7 +4,7 @@
       "additionalProperties": false,
       "properties": {
         "catalog_path": {
-          "default": "/runtime/knowledge/catalog/knowledge.sqlite",
+          "default": ".agent_runtime/knowledge/catalog/knowledge.sqlite",
           "title": "Catalog Path",
           "type": "string"
         },
@@ -30,7 +30,7 @@
           "$ref": "#/$defs/KnowledgeRagStoreConfig"
         },
         "root": {
-          "default": "/runtime/knowledge",
+          "default": ".agent_runtime/knowledge",
           "title": "Root",
           "type": "string"
         }
@@ -159,7 +159,7 @@
           "type": "array"
         },
         "path": {
-          "default": "/runtime/knowledge/catalog/knowledge_store.sqlite",
+          "default": ".agent_runtime/knowledge/catalog/knowledge_store.sqlite",
           "title": "Path",
           "type": "string"
         },

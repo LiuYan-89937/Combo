@@ -32,7 +32,7 @@ class SchedulerContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     store_backend: SchedulerStoreBackend = "sqlite"
-    store_path: str = "/runtime/scheduler/scheduler.sqlite"
+    store_path: str = ".agent_runtime/scheduler/scheduler.sqlite"
     timezone: str = "Asia/Shanghai"
     default_concurrency_policy: SchedulerConcurrencyPolicy = "skip"
     default_timeout_seconds: int = Field(default=900, ge=1)

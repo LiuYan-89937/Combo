@@ -151,7 +151,7 @@ class ToolsContractConfig(BaseModel):
     builtin_allow_external_paths: bool = False
     package_tools_enabled: bool = True
     instance_extensions_enabled: bool = True
-    instance_extension_root: str = "/runtime/extensions"
+    instance_extension_root: str = ".agent_runtime/extensions"
 
     @field_validator("builtin_tool_ids")
     @classmethod
@@ -348,8 +348,8 @@ class NodeProviderContract(BaseModel):
 class ArtifactContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    root: str = "/artifacts"
-    index_path: str = "/artifacts/index.jsonl"
+    root: str = ".agent_runtime/artifacts"
+    index_path: str = ".agent_runtime/artifacts/index.jsonl"
     allowed_kinds: list[str] = Field(default_factory=lambda: ["report", "artifact"])
 
     @field_validator("root", "index_path")

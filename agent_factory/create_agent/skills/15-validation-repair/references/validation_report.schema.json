@@ -1,5 +1,119 @@
 {
   "$defs": {
+    "PackageRepairBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "title": "Bundle Id",
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "title": "Inputs",
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "manifest_missing",
+            "missing_required_contracts",
+            "missing_referenced_files",
+            "runtime_path_contract_repair",
+            "runtime_contract_build",
+            "assembly_compile",
+            "python_syntax",
+            "generic_repair"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "machine_applicable": {
+          "default": false,
+          "title": "Machine Applicable",
+          "type": "boolean"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "repair_action": {
+          "enum": [
+            "materialize_base_package",
+            "materialize_required_contracts",
+            "normalize_runtime_contract_paths",
+            "read_skill_resources",
+            "repair_files",
+            "fix_python_syntax"
+          ],
+          "title": "Repair Action",
+          "type": "string"
+        },
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        },
+        "target_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Files",
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/PackageRepairTarget"
+          },
+          "title": "Targets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "kind",
+        "repair_action"
+      ],
+      "title": "PackageRepairBundle",
+      "type": "object"
+    },
+    "PackageRepairTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_key": {
+          "default": "",
+          "title": "Contract Key",
+          "type": "string"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "target_file": {
+          "title": "Target File",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_file"
+      ],
+      "title": "PackageRepairTarget",
+      "type": "object"
+    },
     "PackageValidationIssue": {
       "additionalProperties": false,
       "properties": {
@@ -38,6 +152,17 @@
           "default": "",
           "title": "Recommended Skill",
           "type": "string"
+        },
+        "repair_bundle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageRepairBundle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "repair_hint": {
           "default": "",
@@ -103,6 +228,13 @@
           "default": "",
           "title": "Recommended Skill",
           "type": "string"
+        },
+        "repair_bundles": {
+          "items": {
+            "$ref": "#/$defs/PackageRepairBundle"
+          },
+          "title": "Repair Bundles",
+          "type": "array"
         },
         "target_files": {
           "items": {

@@ -12,9 +12,11 @@ from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_
 from agent_factory.tooling.builtins.network.specs import get_network_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
+from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.entrypoint import ToolEntrypointError, ToolEntrypointLoader
 from agent_factory.tooling.gateway import ToolApprovalDecision, ToolExecutionGateway
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, incomplete_tool_call_ids, latest_ai_tool_calls
+from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 
 
 try:
@@ -302,6 +304,19 @@ class GatewayAndCompilerTest(unittest.TestCase):
         self.assertEqual(compiled.errors_for(valid), [])
         self.assertTrue(compiled.errors_for(command_array))
         self.assertTrue(compiled.errors_for(named_interval))
+
+    def test_tool_output_fake_id_returns_available_outputs_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ToolOutputStore(Path(temp_dir) / "tool_outputs")
+            real_ref = store.write_output(tool_id="sample_tool", tool_call_id="call_real", output={"value": "ok"})
+            tool = ToolCompiler(resources={TOOL_OUTPUT_STORE_RESOURCE: store}).compile(get_tool_output_tool_specs()[0])
+
+            result = tool.invoke({"action": "read", "output_id": "toolout_not_a_real_id"})
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["output"]["status"], "output_ref_not_found")
+        self.assertIn("Do not invent output_id", result["output"]["message"])
+        self.assertEqual(result["output"]["available_outputs"][0]["id"], real_ref["id"])
 
     def test_langgraph_tool_node_adapter_preserves_tool_call_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

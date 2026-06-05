@@ -118,7 +118,7 @@ class KnowledgeRagStoreConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     backend: VectorStoreBackend = "sqlite"
-    path: str = "/runtime/knowledge/catalog/knowledge_store.sqlite"
+    path: str = ".agent_runtime/knowledge/catalog/knowledge_store.sqlite"
     connection_uri: str | None = None
     database_name: str | None = None
     collection_name: str | None = None
@@ -158,8 +158,8 @@ class KnowledgeRagStoreConfig(BaseModel):
 class KnowledgeContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    root: str = "/runtime/knowledge"
-    catalog_path: str = "/runtime/knowledge/catalog/knowledge.sqlite"
+    root: str = ".agent_runtime/knowledge"
+    catalog_path: str = ".agent_runtime/knowledge/catalog/knowledge.sqlite"
     keyword_backend: Literal["sqlite_fts5"] = "sqlite_fts5"
     default_mount_mode: MountMode = "index_only"
     rag_store: KnowledgeRagStoreConfig = Field(default_factory=KnowledgeRagStoreConfig)

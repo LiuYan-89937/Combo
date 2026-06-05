@@ -10,7 +10,7 @@
           "type": "integer"
         },
         "root": {
-          "default": "/runtime/trace",
+          "default": ".agent_runtime/trace",
           "title": "Root",
           "type": "string"
         }

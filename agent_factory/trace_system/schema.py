@@ -15,7 +15,7 @@ def utc_now() -> str:
 class TraceContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    root: str = "/runtime/trace"
+    root: str = ".agent_runtime/trace"
     max_inline_payload_chars: int = Field(default=12000, ge=1000)
 
     @field_validator("root")

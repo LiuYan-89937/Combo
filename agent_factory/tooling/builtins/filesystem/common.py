@@ -87,16 +87,36 @@ def path_risk_result(
             reasons=[f"path is outside the configured filesystem boundary: {exc}"],
             facts={"path": path_value, "filesystem_root": str(root)},
         ).model_dump(mode="json")
-    protected = _is_protected_write_path(resolved, root=root, resources=tool_resources)
+    managed_path = _managed_path_spec(resolved, root=root, resources=tool_resources)
+    protected = managed_path is not None or _is_protected_write_path(resolved, root=root, resources=tool_resources)
     if protected:
+        is_write_like = default_action != "allow"
+        tool_key = "write_tool" if is_write_like else "read_tool"
+        dedicated_tool = str((managed_path or {}).get(tool_key) or (managed_path or {}).get("tool") or "").strip()
+        reason = (
+            "path is managed by a dedicated control tool and cannot be modified through generic filesystem tools"
+            if is_write_like
+            else "path is managed by a dedicated control tool and cannot be read through generic filesystem tools"
+        )
+        suggested_action = (
+            f"Use {dedicated_tool} to update this managed file."
+            if dedicated_tool
+            else "Use the dedicated control tool to update this managed file."
+        ) if is_write_like else (
+            f"Use {dedicated_tool} to inspect this managed file."
+            if dedicated_tool
+            else "Use the dedicated control tool to inspect this managed file."
+        )
         return ToolRiskResult(
             action="deny",
             risk_level="high",
-            reasons=["path is managed by a dedicated control tool and cannot be modified through generic filesystem tools"],
+            reasons=[reason, suggested_action],
             facts={
                 "path": path_value,
                 "resolved_path": str(resolved),
                 "filesystem_root": str(root),
+                "managed_file_operation": "write" if is_write_like else "read",
+                "dedicated_tool": dedicated_tool,
             },
         ).model_dump(mode="json")
     sensitive = _is_sensitive_path(resolved)
@@ -144,3 +164,19 @@ def _is_protected_write_path(path: Path, *, root: Path, resources: dict[str, Any
         if path == candidate.resolve(strict=False):
             return True
     return False
+
+
+def _managed_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any] | None:
+    config = resources.get("filesystem", {})
+    values = config.get("managed_paths", {}) if isinstance(config, dict) else {}
+    if not isinstance(values, dict):
+        return None
+    for raw_path, raw_spec in values.items():
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        requested = Path(raw_path).expanduser()
+        candidate = requested if requested.is_absolute() else root / requested
+        if path != candidate.resolve(strict=False):
+            continue
+        return raw_spec if isinstance(raw_spec, dict) else {}
+    return None

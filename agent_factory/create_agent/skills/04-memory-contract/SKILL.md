@@ -1,6 +1,6 @@
 ---
 name: 04-memory-contract
-description: Use when an AgentPackage needs cross-session memory, long-term facts, or BaseStore-backed recall. Clarifies memory versus context compression and secret handling.
+description: Use when the agent needs cross-session persistent memory. Covers store backends, write_enabled flag, and namespace isolation.
 metadata:
   system_boundary: memory-contract
   load_when: memory, cross-session, long-term-facts
@@ -8,21 +8,53 @@ metadata:
 
 # Memory Contract
 
-Memory stores durable cross-session facts. It is separate from current-session context compression.
+## When to load
 
-Build rules:
+Load when the agent should remember facts/preferences across sessions.
 
-- Use memory only when the produced agent should remember user, task, or domain facts across sessions.
-- Keep namespaces isolated by owner/package/session where required.
-- Do not store secrets or private credentials as memory facts.
-- Use BaseStore-backed retrieval through the memory system instead of custom vector store code.
-- Context may inject memory results, but memory owns persistence and retrieval semantics.
+## Hard Constraints
 
-When not to include:
+1. `contracts/memory.json`: `"type": "memory"`, `"version": "memory_contract.v0"`
+2. Do not store secrets or credentials as memory facts.
 
-- The package only needs current run state.
-- The package only needs a knowledge base supplied as explicit sources.
+## Decision Rules
 
-Acceptance:
+```
+IF agent needs cross-session memory (user preferences, learned facts):
+  → Set config.write_enabled = true
+  → Configure store backend
 
-- Memory contract contributes memory services without leaking secrets into state, events, or package source files.
+IF agent is stateless (each run independent):
+  → Keep default (write_enabled: false)
+```
+
+## Key Fields
+
+```
+config.memory_system:
+  write_enabled: bool     — enables memory writes
+  store:
+    backend: "memory" | "sqlite" | "mongodb"
+    path: str             — for sqlite: ".agent_runtime/memory/memory.sqlite"
+    connection_uri: str   — for mongodb
+```
+
+## Minimal Example (memory disabled)
+
+```json
+{
+  "type": "memory",
+  "version": "memory_contract.v0",
+  "config": {
+    "memory_system": {
+      "write_enabled": false,
+      "store": {"backend": "memory"}
+    }
+  }
+}
+```
+
+## Resources
+
+- `references/memory_contract.schema.json`
+- `examples/memory_contract.minimal.json`

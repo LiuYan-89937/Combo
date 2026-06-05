@@ -12,8 +12,11 @@ from agent_factory.create_agent.control_tool import (
     build_create_agent_control_tool_spec,
 )
 from agent_factory.create_agent.models import ACTION_FILE, TODO_FILE
+from agent_factory.create_agent.scaffold_tool import CREATE_AGENT_SCAFFOLD_TOOL_ID, build_create_agent_scaffold_tool_spec
+from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.todo_tool import CREATE_AGENT_TODO_TOOL_ID, build_create_agent_todo_tool_spec
 from agent_factory.create_agent.validate_tool import CREATE_AGENT_VALIDATE_TOOL_ID, build_create_agent_validate_tool_spec
+from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.factory_extensions import FactoryExtensionManager, default_factory_extension_root
@@ -26,6 +29,8 @@ from agent_factory.tooling.skills import (
     build_skill_tool_spec,
     parse_skill_directory,
 )
+from agent_factory.tooling.skills.schema import SkillGatewayState
+from agent_factory.tooling.skills.skill_tool import SKILL_GATEWAY_STATE_RESOURCE_KEY
 
 
 CREATE_AGENT_BUILTIN_TOOL_IDS = {
@@ -37,6 +42,7 @@ CREATE_AGENT_BUILTIN_TOOL_IDS = {
     "grep",
     "ls",
     "tool_output",
+    "resource_set",
 }
 
 CREATE_AGENT_SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
@@ -48,6 +54,7 @@ class CreateAgentToolEnvironment:
     tool_ids: list[str]
     system_tool_ids: list[str]
     extension_report: dict[str, Any]
+    resource_set_store: ResourceSetStore | None = None
 
 
 class CreateAgentToolEnvironmentBuilder:
@@ -56,6 +63,7 @@ class CreateAgentToolEnvironmentBuilder:
 
     def build(self, *, workspace_root: str | Path) -> CreateAgentToolEnvironment:
         workspace = Path(workspace_root).expanduser().resolve()
+        create_agent_workspace = CreateAgentWorkspace(workspace)
         extension_root = default_factory_extension_root()
         context = ToolProviderContext(
             package_root=workspace,
@@ -73,15 +81,30 @@ class CreateAgentToolEnvironmentBuilder:
             **extension_result.runtime_resources,
             CREATE_AGENT_WORKSPACE_RESOURCE: {"root": str(workspace)},
             TOOL_OUTPUT_STORE_RESOURCE: ToolOutputStore(workspace / ".factory" / "tool_outputs"),
+            RESOURCE_SET_STORE_KEY: ResourceSetStore(),
         }
         filesystem_resource = runtime_resources.get("filesystem")
         if isinstance(filesystem_resource, dict):
             filesystem_resource["protected_write_paths"] = [ACTION_FILE, TODO_FILE]
-        skill_registry = _create_agent_skill_registry(runtime_resources.get("skills"))
+            filesystem_resource["managed_paths"] = {
+                ACTION_FILE: {
+                    "read_tool": CREATE_AGENT_CONTROL_TOOL_ID,
+                    "write_tool": CREATE_AGENT_CONTROL_TOOL_ID,
+                },
+                TODO_FILE: {
+                    "read_tool": CREATE_AGENT_TODO_TOOL_ID,
+                    "write_tool": CREATE_AGENT_TODO_TOOL_ID,
+                },
+            }
+        skill_registry = _create_agent_skill_registry(
+            runtime_resources.get("skills"),
+            gateway_state=_load_skill_gateway_state(create_agent_workspace.skill_gateway_state_path),
+        )
         if skill_registry.list_metadata():
             runtime_resources["skills"] = skill_registry.to_resource_payload()
+            runtime_resources[SKILL_GATEWAY_STATE_RESOURCE_KEY] = str(create_agent_workspace.skill_gateway_state_path)
             provider_result.system_tool_ids = sorted(set([*provider_result.system_tool_ids, SKILL_TOOL_ID]))
-            skill_specs = [build_skill_tool_spec(skill_registry)]
+            skill_specs = [build_skill_tool_spec(skill_registry, persist_gateway_state=True)]
         else:
             skill_specs = []
         provider_result.system_tool_ids = sorted(
@@ -89,6 +112,7 @@ class CreateAgentToolEnvironmentBuilder:
                 [
                     *provider_result.system_tool_ids,
                     CREATE_AGENT_CONTROL_TOOL_ID,
+                    CREATE_AGENT_SCAFFOLD_TOOL_ID,
                     CREATE_AGENT_TODO_TOOL_ID,
                     CREATE_AGENT_VALIDATE_TOOL_ID,
                 ]
@@ -98,6 +122,7 @@ class CreateAgentToolEnvironmentBuilder:
             provider_result,
             extra_specs=[
                 build_create_agent_control_tool_spec(),
+                build_create_agent_scaffold_tool_spec(),
                 build_create_agent_todo_tool_spec(),
                 build_create_agent_validate_tool_spec(),
                 *skill_specs,
@@ -116,6 +141,7 @@ class CreateAgentToolEnvironmentBuilder:
             tool_ids=[tool.name for tool in tools],
             system_tool_ids=sorted(set(provider_result.system_tool_ids)),
             extension_report=extension_report.model_dump(mode="json"),
+            resource_set_store=runtime_resources.get(RESOURCE_SET_STORE_KEY),
         )
 
 
@@ -134,12 +160,14 @@ def _unique_specs(result: ToolProviderResult, *, extra_specs=()):
     return specs
 
 
-def _create_agent_skill_registry(existing_payload: Any) -> SkillRegistry:
+def _create_agent_skill_registry(existing_payload: Any, *, gateway_state: SkillGatewayState | None = None) -> SkillRegistry:
     registry = (
         SkillRegistry.from_resource_payload(existing_payload)
         if isinstance(existing_payload, dict)
         else SkillRegistry()
     )
+    if gateway_state is not None:
+        registry.gateway_state = gateway_state
     if not CREATE_AGENT_SKILLS_ROOT.is_dir():
         return registry
     for child in sorted(item for item in CREATE_AGENT_SKILLS_ROOT.iterdir() if item.is_dir()):
@@ -148,3 +176,14 @@ def _create_agent_skill_registry(existing_payload: Any) -> SkillRegistry:
             continue
         registry.register(parse_skill_directory(child))
     return registry
+
+
+def _load_skill_gateway_state(path: Path) -> SkillGatewayState | None:
+    if not path.exists():
+        return None
+    try:
+        return SkillGatewayState.model_validate_json(path.read_text(encoding="utf-8"))
+    except Exception:
+        # Invalid skill gateway state is non-fatal during tool environment setup.
+        # The validator will detect and report the broken JSON so the LLM can repair it.
+        return None

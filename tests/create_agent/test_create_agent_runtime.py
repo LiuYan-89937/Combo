@@ -7,7 +7,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from agent_factory.create_agent.models import CreateAgentIntentDecision
@@ -29,11 +29,33 @@ from agent_factory.create_agent.scripts.export_skill_schemas import (
     _example_text,
     _schema_text,
 )
+from agent_factory.create_agent.prompt_builder import build_create_agent_messages
+from agent_factory.create_agent.prompt_context import project_messages_for_prompt
 from agent_factory.create_agent.tooling import CREATE_AGENT_BUILTIN_TOOL_IDS, CreateAgentToolEnvironmentBuilder
+from agent_factory.create_agent.validation_progress import validation_event_from_tool_calls
+from agent_factory.create_agent.validation_progress import apply_validation_progress
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
-from agent_factory.create_agent.workflow import CreateAgentWorkflow, _messages_with_system, _validation_event_from_tool_calls
+from agent_factory.create_agent.workflow import CreateAgentWorkflow
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.runtime_contracts.builtins import (
+    default_artifact_contract,
+    default_context_contract,
+    default_dependencies_contract,
+    default_knowledge_contract,
+    default_memory_contract,
+    default_model_contract,
+    default_node_provider_contract,
+    default_render_contract,
+    default_resources_contract,
+    default_sandbox_contract,
+    default_scheduler_contract,
+    default_session_contract,
+    default_state_contract,
+    default_tools_contract,
+    default_trace_contract,
+)
 from agent_factory.tooling.skills import parse_skill_directory
+from agent_factory.tooling.output_store import ToolOutputStore
 
 
 class CreateAgentRuntimeTest(unittest.TestCase):
@@ -46,6 +68,100 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertEqual(report.issues[0].target_files, ["agent_package.json"])
         self.assertEqual(report.issues[0].recommended_skill, "01-package-manifest")
         self.assertIn("references/agent_package.schema.json", report.issues[0].recommended_resources)
+
+    def test_validator_registers_package_local_patterns_before_compile(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_minimal_package_with_local_pattern(root)
+
+            report = CreateAgentPackageValidator().validate(root)
+
+        self.assertEqual(report.status, "passed", report.summary)
+
+    def test_create_agent_scaffold_runtime_contracts_build_inside_workspace(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+
+            report = CreateAgentPackageValidator().validate(tmp, scope="runtime_contract_build")
+
+        self.assertEqual(report.status, "passed", report.summary)
+        self.assertFalse((Path("/runtime") / "scheduler" / "scheduler.sqlite").exists())
+
+    def test_validator_reports_absolute_runtime_contract_path_as_machine_repair(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            scheduler_path = workspace.root / "contracts" / "scheduler.json"
+            payload = json.loads(scheduler_path.read_text(encoding="utf-8"))
+            payload["config"]["store_path"] = "/runtime/scheduler/scheduler.sqlite"
+            _write_json(scheduler_path, payload)
+
+            report = CreateAgentPackageValidator().validate(tmp, scope="runtime_contract_build")
+
+        self.assertEqual(report.status, "failed")
+        self.assertEqual(report.issues[0].where, "runtime_contracts.path")
+        self.assertEqual(report.issues[0].details["contract_key"], "scheduler")
+        self.assertEqual(report.issues[0].details["field_path"], "config.store_path")
+        self.assertTrue(report.issues[0].repair_bundle)
+        self.assertTrue(report.issues[0].repair_bundle.machine_applicable)
+        self.assertEqual(report.issues[0].repair_bundle.repair_action, "normalize_runtime_contract_paths")
+
+    def test_scaffold_applies_runtime_path_machine_repair(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            scheduler_path = workspace.root / "contracts" / "scheduler.json"
+            payload = json.loads(scheduler_path.read_text(encoding="utf-8"))
+            payload["config"]["store_path"] = "/runtime/scheduler/scheduler.sqlite"
+            _write_json(scheduler_path, payload)
+            report = CreateAgentPackageValidator().validate(tmp, scope="runtime_contract_build")
+            workspace.write_validation(report)
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            scaffold_tool = next(tool for tool in env.tools if tool.name == "create_agent_scaffold")
+
+            repair = scaffold_tool.invoke({"action": "apply_machine_repair"})
+            repaired_payload = json.loads(scheduler_path.read_text(encoding="utf-8"))
+            repaired_report = CreateAgentPackageValidator().validate(tmp, scope="runtime_contract_build")
+
+        self.assertEqual(repair["status"], "completed")
+        self.assertEqual(repaired_payload["config"]["store_path"], ".agent_runtime/scheduler/scheduler.sqlite")
+        self.assertEqual(repaired_report.status, "passed", repaired_report.summary)
+
+    def test_failed_validation_does_not_mark_todo_done(self) -> None:
+        todo = initial_todo_list()
+        failed = PackageValidationReport(
+            status="failed",
+            package_root="/tmp/package",
+            validation_scope="full_static",
+            summary="runtime path failed",
+            issues=[
+                PackageValidationIssue(
+                    where="runtime_contracts.path",
+                    summary="path escapes",
+                    message="path escapes",
+                    target_files=["contracts/scheduler.json"],
+                )
+            ],
+        )
+
+        updated = apply_validation_progress(todo, failed)
+
+        statuses = {item.todo_id: item.status for item in updated.items}
+        self.assertEqual(statuses["package_manifest"], TodoStatus.pending)
+        self.assertTrue(any(item.kind == "repair" for item in updated.items))
+
+    def test_create_agent_skill_schema_examples_do_not_default_to_runtime_root(self) -> None:
+        skill_root = Path(__file__).resolve().parents[2] / "agent_factory" / "create_agent" / "skills"
+        checked = [
+            path
+            for path in skill_root.glob("**/*")
+            if path.is_file() and path.suffix in {".json", ".md"}
+        ]
+
+        offenders = [path for path in checked if "/runtime/" in path.read_text(encoding="utf-8")]
+
+        self.assertEqual(offenders, [])
 
     def test_todo_list_adds_deduplicated_repair_items(self) -> None:
         todo = initial_todo_list()
@@ -98,6 +214,7 @@ class CreateAgentRuntimeTest(unittest.TestCase):
                 "13-assembly-and-patterns",
                 "14-render-and-events",
                 "15-validation-repair",
+                "16-session-contract",
             ],
         )
 
@@ -169,7 +286,7 @@ class CreateAgentRuntimeTest(unittest.TestCase):
             )
             updated = todo_tool.invoke(
                 {
-                    "action": "update",
+                    "action": "upsert",
                     "todo_id": "custom_contract",
                     "status": "done",
                     "evidence": ["contracts/custom.json exists and was validated"],
@@ -185,6 +302,31 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         item = next(item for item in todo.items if item.todo_id == "custom_contract")
         self.assertEqual(item.status, TodoStatus.done)
         self.assertEqual(item.details["evidence"], ["contracts/custom.json exists and was validated"])
+
+    def test_workspace_context_summary_includes_completed_todo_summaries(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            todo_tool = next(tool for tool in env.tools if tool.name == "create_agent_todo")
+            todo_tool.invoke(
+                {
+                    "action": "upsert",
+                    "todo_id": "custom_contract",
+                    "title": "Materialize custom contract",
+                    "kind": "write",
+                    "status": "done",
+                    "target_files": ["agent_package.json"],
+                    "evidence": ["agent_package.json references package-relative files"],
+                    "source": "test",
+                }
+            )
+
+            summary = workspace.context_summary()
+
+        self.assertIn("Completed todo summaries:", summary)
+        self.assertIn("custom_contract", summary)
+        self.assertIn("agent_package.json references package-relative files", summary)
 
     def test_generic_filesystem_tools_cannot_write_create_agent_action(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -220,7 +362,21 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertEqual(observation["status"], "denied")
         self.assertTrue(todo.items)
 
-    def test_malformed_action_file_does_not_crash_workspace_context(self) -> None:
+    def test_generic_filesystem_read_of_create_agent_todo_points_to_todo_tool(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            read_tool = next(tool for tool in env.tools if tool.name == "read")
+
+            observation = read_tool.invoke({"path": TODO_FILE})
+
+        self.assertEqual(observation["status"], "denied")
+        self.assertIn("cannot be read", observation["message"])
+        self.assertIn("create_agent_todo", observation["message"])
+        self.assertNotIn("cannot be modified", observation["message"])
+
+    def test_invalid_action_file_is_rejected(self) -> None:
         with TemporaryDirectory() as tmp:
             workspace = CreateAgentWorkspace(tmp)
             workspace.initialize(user_input="build an agent")
@@ -229,11 +385,11 @@ class CreateAgentRuntimeTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            action = workspace.read_action()
-            summary = workspace.context_summary()
+            with self.assertRaises(ValueError) as caught:
+                workspace.read_action()
 
-        self.assertEqual(action.action, "continue")
-        self.assertIn("managed by create_agent_control", summary)
+        self.assertIn("invalid managed create-agent file", str(caught.exception))
+        self.assertIn("create_agent_control", str(caught.exception))
 
     def test_tool_environment_exposes_create_agent_skills_through_skill_gateway(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -293,11 +449,76 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertIn("outline", resource["output"]["resource"])
         self.assertEqual(resource["output"]["resource"]["content"], "")
 
-    def test_skill_gateway_rejects_legacy_load_and_unguarded_second_primary(self) -> None:
+    def test_skill_gateway_requires_describe_before_resource_read_with_clear_guidance(self) -> None:
         with TemporaryDirectory() as tmp:
             env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
             skill_tool = next(tool for tool in env.tools if tool.name == "skill")
-            legacy = skill_tool.invoke({"action": "load", "name": "05-knowledge-contract"})
+            denied = skill_tool.invoke(
+                {
+                    "action": "read_resource",
+                    "name": "05-knowledge-contract",
+                    "path": "references/knowledge_contract.schema.json",
+                    "current_todo": "runtime_contracts",
+                }
+            )
+
+        self.assertEqual(denied["status"], "denied")
+        self.assertIn("Protocol violation", denied["message"])
+        self.assertIn("action='describe'", denied["message"])
+
+    def test_skill_gateway_reports_invalid_fragment_without_resource_path_confusion(self) -> None:
+        with TemporaryDirectory() as tmp:
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            skill_tool = next(tool for tool in env.tools if tool.name == "skill")
+            described = skill_tool.invoke(
+                {"action": "describe", "name": "13-assembly-and-patterns", "current_todo": "assembly_and_patterns"}
+            )
+            denied = skill_tool.invoke(
+                {
+                    "action": "read_resource",
+                    "name": "13-assembly-and-patterns",
+                    "path": "references/assembly_spec.schema.json",
+                    "mode": "fragment",
+                    "pointer": "/assembly",
+                    "current_todo": "assembly_and_patterns",
+                }
+            )
+
+        self.assertEqual(described["status"], "completed")
+        self.assertEqual(denied["status"], "denied")
+        self.assertIn("Invalid resource fragment", denied["message"])
+        self.assertIn("available_top_level_keys", denied["message"])
+        self.assertNotIn("Unknown skill resource path", denied["message"])
+
+    def test_create_agent_skill_gateway_state_survives_tool_environment_rebuild(self) -> None:
+        with TemporaryDirectory() as tmp:
+            first_env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            first_skill_tool = next(tool for tool in first_env.tools if tool.name == "skill")
+            described = first_skill_tool.invoke(
+                {"action": "describe", "name": "05-knowledge-contract", "current_todo": "runtime_contracts"}
+            )
+            self.assertEqual(described["status"], "completed")
+            self.assertTrue((Path(tmp) / ".factory" / "skill_gateway_state.json").is_file())
+
+            second_env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            second_skill_tool = next(tool for tool in second_env.tools if tool.name == "skill")
+            resource = second_skill_tool.invoke(
+                {
+                    "action": "read_resource",
+                    "name": "05-knowledge-contract",
+                    "path": "references/knowledge_contract.schema.json",
+                    "current_todo": "runtime_contracts",
+                }
+            )
+
+        self.assertEqual(resource["status"], "completed")
+        self.assertEqual(resource["output"]["resource"]["mode"], "outline")
+
+    def test_skill_gateway_rejects_load_without_context_and_unguarded_second_primary(self) -> None:
+        with TemporaryDirectory() as tmp:
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            skill_tool = next(tool for tool in env.tools if tool.name == "skill")
+            missing_context = skill_tool.invoke({"action": "load", "name": "05-knowledge-contract"})
             first = skill_tool.invoke(
                 {
                     "action": "load",
@@ -326,7 +547,7 @@ class CreateAgentRuntimeTest(unittest.TestCase):
                 }
             )
 
-        self.assertNotEqual(legacy["status"], "completed")
+        self.assertNotEqual(missing_context["status"], "completed")
         self.assertEqual(first["status"], "completed")
         self.assertEqual(second_without_describe["status"], "denied")
         self.assertEqual(described["status"], "completed")
@@ -347,7 +568,7 @@ class CreateAgentRuntimeTest(unittest.TestCase):
             workspace = CreateAgentWorkspace(tmp)
             workspace.initialize(user_input="build an agent")
             env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
-            messages = _messages_with_system(
+            messages = build_create_agent_messages(
                 {
                     "workspace_path": str(workspace.root),
                     "messages": [HumanMessage(content="build an agent")],
@@ -361,6 +582,198 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertIn("create_agent_todo", system_prompt)
         self.assertNotIn("# Knowledge Contract", system_prompt)
         self.assertNotIn("Create-agent manufacturing skills", system_prompt)
+
+    def test_create_agent_context_summary_lists_real_tool_outputs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            ref = ToolOutputStore(workspace.tool_outputs_path).write_output(
+                tool_id="read",
+                tool_call_id="call_read",
+                output={"content": "large result"},
+            )
+
+            summary = workspace.context_summary()
+
+        self.assertIn("Available tool outputs:", summary)
+        self.assertIn(ref["id"], summary)
+        self.assertIn("tool=read", summary)
+
+    def test_tool_output_unknown_id_returns_recoverable_observation_with_available_refs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            real_ref = ToolOutputStore(workspace.tool_outputs_path).write_output(
+                tool_id="grep",
+                tool_call_id="call_grep",
+                output={"matches": []},
+            )
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            tool_output = next(tool for tool in env.tools if tool.name == "tool_output")
+
+            listed = tool_output.invoke({"action": "list"})
+            missing = tool_output.invoke(
+                {"action": "read", "output_id": "toolout_00000000000000000000000000000000"}
+            )
+
+        self.assertEqual(listed["status"], "completed")
+        self.assertEqual(listed["output"]["status"], "completed")
+        self.assertEqual(listed["output"]["outputs"][0]["id"], real_ref["id"])
+        self.assertEqual(missing["status"], "completed")
+        self.assertEqual(missing["output"]["status"], "output_ref_not_found")
+        self.assertEqual(missing["output"]["available_outputs"][0]["id"], real_ref["id"])
+
+    def test_create_agent_system_prompt_compacts_old_history(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            old_tool_output = "old tool output " + ("x" * 5000)
+            history = [
+                HumanMessage(content="initial user request"),
+                AIMessage(content="older assistant"),
+                ToolMessage(content=old_tool_output, tool_call_id="old_call", name="read"),
+                *[AIMessage(content=f"older message {index}") for index in range(10)],
+                HumanMessage(content="recent user correction"),
+            ]
+            messages = build_create_agent_messages(
+                {
+                    "workspace_path": str(workspace.root),
+                    "messages": history,
+                },
+                [],
+            )
+
+        rendered = "\n".join(str(message.content) for message in messages)
+        self.assertIn("Compacted prior create-agent history", rendered)
+        self.assertIn("recent user correction", rendered)
+        self.assertNotIn(old_tool_output, rendered)
+        self.assertLessEqual(len(messages), 12)
+
+    def test_create_agent_prompt_compaction_preserves_real_tool_output_refs(self) -> None:
+        output_id = "toolout_11111111111111111111111111111111"
+        compacted_payload = {
+            "type": "tool_observation",
+            "status": "completed",
+            "tool_id": "grep",
+            "output": {
+                "_tool_output_compacted": {
+                    "output_ref": {
+                        "type": "tool_output_ref",
+                        "id": output_id,
+                        "tool_id": "grep",
+                        "tool_call_id": "call_grep",
+                        "size_chars": 50000,
+                    }
+                }
+            },
+        }
+        messages = [
+            HumanMessage(content="request"),
+            ToolMessage(content=json.dumps(compacted_payload), tool_call_id="call_grep", name="grep"),
+            *[AIMessage(content=f"recent {index}") for index in range(10)],
+        ]
+
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            projected = project_messages_for_prompt(messages, workspace=workspace)
+            rendered = "\n".join(str(message.content) for message in projected)
+
+        self.assertIn("Available output refs preserved from compacted history", rendered)
+        self.assertIn(output_id, rendered)
+
+    def test_create_agent_prompt_compacts_completed_todo_history_even_when_recent(self) -> None:
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            env = CreateAgentToolEnvironmentBuilder().build(workspace_root=tmp)
+            todo_tool = next(tool for tool in env.tools if tool.name == "create_agent_todo")
+            todo_tool.invoke(
+                {
+                    "action": "add",
+                    "todo_id": "custom_manifest",
+                    "title": "Materialize custom manifest",
+                    "kind": "write",
+                    "acceptance": "custom manifest exists",
+                }
+            )
+            todo_output = todo_tool.invoke(
+                {
+                    "action": "update",
+                    "todo_id": "custom_manifest",
+                    "status": "done",
+                    "target_files": ["agent_package.json"],
+                    "evidence": ["agent_package.json was materialized"],
+                }
+            )
+            history = [
+                HumanMessage(content="manifest phase user detail that should not be replayed"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "create_agent_todo",
+                            "args": {"action": "update", "todo_id": "custom_manifest", "status": "done"},
+                            "id": "todo_done",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content=json.dumps(
+                        {
+                            "type": "tool_observation",
+                            "status": "completed",
+                            "tool_id": "create_agent_todo",
+                            "tool_call_id": "todo_done",
+                            "message": "Todo updated",
+                            "retryable": False,
+                            "arguments": {},
+                            "output": todo_output,
+                            "errors": [],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    tool_call_id="todo_done",
+                    name="create_agent_todo",
+                ),
+                AIMessage(content="working on next active todo"),
+                HumanMessage(content="current active todo correction"),
+            ]
+
+            messages = build_create_agent_messages(
+                {
+                    "workspace_path": str(workspace.root),
+                    "messages": history,
+                },
+                env.tools,
+            )
+
+        rendered = "\n".join(str(message.content) for message in messages)
+        self.assertIn("Completed todo history compacted", rendered)
+        self.assertIn("Completed todo summaries:", rendered)
+        self.assertIn("agent_package.json was materialized", rendered)
+        self.assertIn("current active todo correction", rendered)
+        self.assertNotIn("manifest phase user detail that should not be replayed", rendered)
+
+    def test_prompt_projection_preserves_tool_message_pair_boundary(self) -> None:
+        messages = [
+            HumanMessage(content="request"),
+            AIMessage(content="older"),
+            HumanMessage(content="older user"),
+            AIMessage(content="", tool_calls=[{"name": "read", "args": {"path": "."}, "id": "call_1"}]),
+            ToolMessage(content="tool result", tool_call_id="call_1", name="read"),
+            *[AIMessage(content=f"recent {index}") for index in range(9)],
+        ]
+
+        with TemporaryDirectory() as tmp:
+            workspace = CreateAgentWorkspace(tmp)
+            workspace.initialize(user_input="build an agent")
+            projected = project_messages_for_prompt(messages, workspace=workspace)
+
+        self.assertIsInstance(projected[0], SystemMessage)
+        self.assertIsInstance(projected[1], AIMessage)
+        self.assertIsInstance(projected[2], ToolMessage)
+        self.assertEqual(projected[2].tool_call_id, "call_1")
 
     def test_validation_repair_context_is_hidden_state_not_chat_message(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -380,7 +793,7 @@ class CreateAgentRuntimeTest(unittest.TestCase):
                     "messages": [HumanMessage(content="build an agent")],
                 }
             )
-            messages = _messages_with_system(
+            messages = build_create_agent_messages(
                 {
                     "workspace_path": str(workspace.root),
                     "messages": [HumanMessage(content="build an agent")],
@@ -517,14 +930,15 @@ class CreateAgentRuntimeTest(unittest.TestCase):
         self.assertFalse(finalized["validation"]["cached"])
 
     def test_validation_events_are_triggered_only_by_state_changing_tools(self) -> None:
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "read"}]), "none")
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "skill"}]), "none")
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "write"}]), "package_change")
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "edit"}]), "package_change")
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "multi_edit"}]), "package_change")
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "create_agent_todo"}]), "todo")
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "create_agent_control"}]), "control")
-        self.assertEqual(_validation_event_from_tool_calls([{"name": "create_agent_validate"}]), "explicit_validation")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "read"}]), "none")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "skill"}]), "none")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "write"}]), "package_change")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "edit"}]), "package_change")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "multi_edit"}]), "package_change")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "create_agent_scaffold"}]), "package_change")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "create_agent_todo"}]), "todo")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "create_agent_control"}]), "control")
+        self.assertEqual(validation_event_from_tool_calls([{"name": "create_agent_validate"}]), "explicit_validation")
 
     def test_runtime_routes_non_manufacturing_message_to_assist_without_package_validation(self) -> None:
         with TemporaryDirectory() as tmp, patch.dict(os.environ, {"AGENTFACTORY_PROJECT_ROOT": tmp}):
@@ -562,6 +976,145 @@ class _NoToolModel:
 
     def invoke(self, _messages):
         return AIMessage(content="I need to keep working.")
+
+
+def _write_minimal_package_with_local_pattern(root: Path) -> None:
+    contracts_dir = root / "contracts"
+    patterns_dir = root / "patterns"
+    contracts_dir.mkdir(parents=True)
+    patterns_dir.mkdir(parents=True)
+
+    manifest = {
+        "version": "agent_package.v0",
+        "factory_run_id": "test_run",
+        "agent": {},
+        "runtime": {},
+        "assembly_spec_path": "assembly_spec.json",
+        "render_manifest_path": "render_manifest.json",
+        "resources_path": "resources.json",
+        "sandbox_contract_path": "sandbox_contract.json",
+        "contracts": {
+            "artifact": "contracts/artifact.json",
+            "context": "contracts/context.json",
+            "dependencies": "contracts/dependencies.json",
+            "knowledge": "contracts/knowledge.json",
+            "memory": "contracts/memory.json",
+            "model": "contracts/model.json",
+            "node_provider": "contracts/node_provider.json",
+            "render": "contracts/render.json",
+            "resources": "contracts/resources.json",
+            "sandbox": "contracts/sandbox.json",
+            "scheduler": "contracts/scheduler.json",
+            "session": "contracts/session.json",
+            "state": "contracts/state.json",
+            "tools": "contracts/tools.json",
+            "trace": "contracts/trace.json",
+        },
+        "bindings": {},
+        "patterns": ["patterns/main.yaml"],
+        "prompts": [],
+        "tools": [],
+        "policies": [],
+        "strategies": [],
+        "formatters": [],
+    }
+    assembly_spec = {
+        "schema_version": "0.1",
+        "agent": {"id": "test_agent", "name": "Test Agent", "version": "0.1.0"},
+        "runtime": {"pattern_id": "main", "user_config": {}, "agent_config": {}},
+        "graph_overrides": {"node_wrappers": []},
+        "bindings": {"hooks": [], "node_bindings": [], "services": []},
+        "tools": [],
+        "output": {"citations_required": False, "format": "text"},
+        "harness": [],
+        "metadata": {},
+    }
+    pattern = {
+        "pattern_id": "main",
+        "kind": "main",
+        "embeddable": False,
+        "version": 1,
+        "name": "Main",
+        "description": "Minimal executable pattern.",
+        "metadata": {"summary": "", "use_when": [], "avoid_when": [], "selection_notes": [], "tags": []},
+        "entry_node": "ingress",
+        "nodes": [
+            {"id": "ingress", "type": "reserved", "impl": "ingress", "config": {}, "wrappers": []},
+            {"id": "finalize", "type": "terminal", "impl": "finalize", "config": {}, "wrappers": []},
+        ],
+        "edges": [{"from": "ingress", "to": "finalize", "when": "always"}],
+        "interrupt_points": [],
+        "termination": {"success_nodes": ["finalize"], "failure_nodes": []},
+        "constraints": {"allowed_node_types": [], "required_capabilities": []},
+        "input_contract": {"readable_sections": [], "writable_sections": []},
+        "output_contract": {"readable_sections": [], "writable_sections": []},
+        "slots": [],
+        "exit_routes": [],
+        "state_mode": "shared",
+    }
+    render_manifest = {
+        "version": "render_manifest.v0",
+        "graph_id": "test_agent",
+        "producer_type": "agent",
+        "nodes": {
+            "ingress": {
+                "node_id": "ingress",
+                "label": "Ingress",
+                "kind": "reserved",
+                "purpose": "Accept input.",
+                "doing": "Preparing the run.",
+                "expected_output": "Initial state is ready.",
+                "visible_to_user": True,
+            },
+            "finalize": {
+                "node_id": "finalize",
+                "label": "Finalize",
+                "kind": "terminal",
+                "purpose": "Complete the run.",
+                "doing": "Finalizing output.",
+                "expected_output": "Run is complete.",
+                "visible_to_user": True,
+            },
+        },
+    }
+    disabled_contracts = {
+        "artifact": default_artifact_contract(),
+        "context": default_context_contract(),
+        "dependencies": default_dependencies_contract(),
+        "knowledge": default_knowledge_contract(),
+        "memory": default_memory_contract(),
+        "model": default_model_contract(),
+        "node_provider": default_node_provider_contract(),
+        "sandbox": default_sandbox_contract(),
+        "scheduler": default_scheduler_contract(),
+        "state": default_state_contract(),
+        "tools": default_tools_contract(),
+        "trace": default_trace_contract(),
+    }
+    session_contract = default_session_contract()
+    session_contract = session_contract.model_copy(
+        update={
+            "config": session_contract.config.model_copy(
+                update={"checkpointer_backend": "memory", "checkpoint_path": ".agent_runtime/checkpoints/test.sqlite"}
+            )
+        }
+    )
+
+    _write_json(root / "agent_package.json", manifest)
+    _write_json(root / "assembly_spec.json", assembly_spec)
+    _write_json(root / "patterns" / "main.yaml", pattern)
+    _write_json(root / "render_manifest.json", render_manifest)
+    _write_json(root / "resources.json", {"resources": {}})
+    _write_json(root / "sandbox_contract.json", {})
+    _write_json(root / "contracts" / "render.json", default_render_contract().model_dump(mode="json"))
+    _write_json(root / "contracts" / "resources.json", default_resources_contract().model_dump(mode="json"))
+    _write_json(root / "contracts" / "session.json", session_contract.model_dump(mode="json"))
+    for name, contract in disabled_contracts.items():
+        _write_json(root / "contracts" / f"{name}.json", contract.model_copy(update={"enabled": False}).model_dump(mode="json"))
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 class _PassingValidator:

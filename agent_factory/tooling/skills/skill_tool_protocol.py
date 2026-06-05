@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from agent_factory.tooling.skills.registry import SkillRegistry, SkillResourceFragmentNotFound
+
+
+SKILL_ACTIONS = ("list", "search", "describe", "load", "list_loaded", "read_resource", "read_repair_resources")
+SKILL_RESOURCE_KEY = "skills"
+SKILL_GATEWAY_STATE_RESOURCE_KEY = "skill_gateway_state_path"
+SKILL_TOOL_ID = "skill"
+
+
+def registry_from_resources(resources: dict[str, Any]) -> SkillRegistry:
+    payload = resources.get(SKILL_RESOURCE_KEY)
+    if not isinstance(payload, dict):
+        raise ValueError("skills runtime resource is missing")
+    return SkillRegistry.from_resource_payload(payload)
+
+
+def persist_registry(resources: dict[str, Any], registry: SkillRegistry) -> None:
+    payload = resources.get(SKILL_RESOURCE_KEY)
+    if not isinstance(payload, dict):
+        raise ValueError("skills runtime resource is missing")
+    payload.clear()
+    payload.update(registry.to_resource_payload())
+    raw_state_path = resources.get(SKILL_GATEWAY_STATE_RESOURCE_KEY)
+    if isinstance(raw_state_path, str) and raw_state_path.strip():
+        state_path = Path(raw_state_path).expanduser().resolve()
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(registry.gateway_state.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+
+def required_string(arguments: dict[str, Any], key: str) -> str:
+    value = arguments.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be a non-empty string")
+    return value.strip()
+
+
+def limit_value(value: Any) -> int:
+    if value is None:
+        return 20
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("limit must be an integer")
+    return max(1, min(50, value))
+
+
+def resource_mode(value: Any) -> str:
+    mode = str(value or "outline").strip()
+    if mode not in {"outline", "fragment", "content"}:
+        raise ValueError("mode must be one of: outline, fragment, content")
+    return mode
+
+
+def resource_paths(value: Any) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("paths must be a non-empty list of skill resource paths")
+    paths: list[str] = []
+    for item in value:
+        path = str(item or "").strip()
+        if not path:
+            raise ValueError("paths must not contain empty values")
+        paths.append(path)
+    return paths
+
+
+def repair_resource_mode(path: str) -> str:
+    if path.endswith(".schema.json"):
+        return "outline"
+    return "content"
+
+
+def skill_error_guidance(arguments: dict[str, Any], exc: Exception) -> str:
+    action = str(arguments.get("action") or "").strip()
+    if action == "read_resource" and isinstance(exc, PermissionError):
+        name = str(arguments.get("name") or "").strip()
+        current_todo = str(arguments.get("current_todo") or "").strip()
+        return (
+            "Protocol violation: read_resource requires the same skill to be described or loaded first "
+            f"for current_todo={current_todo!r}. Next call: "
+            f"skill(action='describe', name={name!r}, current_todo={current_todo!r}), then retry read_resource."
+        )
+    if action == "read_resource" and isinstance(exc, SkillResourceFragmentNotFound):
+        return (
+            "Invalid resource fragment: the skill resource exists, but the requested JSON pointer is not present. "
+            "Read the resource in outline mode or use one of the available top-level keys before retrying mode=fragment."
+        )
+    if action == "read_resource" and isinstance(exc, KeyError):
+        return "Unknown skill resource path. Call describe for this skill and choose one of the returned resources."
+    if action == "load" and isinstance(exc, PermissionError):
+        return "Loading a second primary skill requires describe for that skill first, then load with a concrete reason."
+    if action == "read_resource":
+        return "Read resource failed. Verify action, name, path, current_todo, mode, and pointer."
+    if action == "read_repair_resources":
+        return "Read repair resources failed. Use recommended_skill and recommended_resources from the validator without renaming paths."
+    return "Correct the skill action arguments according to the Skill Gateway protocol."
+
+
+def skill_error_facts(arguments: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    facts = {
+        "action": str(arguments.get("action") or ""),
+        "name": str(arguments.get("name") or ""),
+        "path": str(arguments.get("path") or ""),
+        "mode": str(arguments.get("mode") or ""),
+        "pointer": str(arguments.get("pointer") or ""),
+        "current_todo": str(arguments.get("current_todo") or ""),
+        "error_type": type(exc).__name__,
+    }
+    if isinstance(exc, SkillResourceFragmentNotFound):
+        facts["error_category"] = "skill_resource_fragment_not_found"
+        facts["available_top_level_keys"] = exc.available_keys
+    elif isinstance(exc, KeyError):
+        facts["error_category"] = "skill_resource_not_found"
+    return facts

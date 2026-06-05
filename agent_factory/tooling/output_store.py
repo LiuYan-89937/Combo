@@ -81,6 +81,28 @@ class ToolOutputStore:
             "size_chars": record["size_chars"],
         }
 
+    def list_outputs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = []
+        for path in self.records_dir.glob("toolout_*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(record, dict) or record.get("type") != "tool_output_record":
+                continue
+            refs.append(
+                {
+                    "type": "tool_output_ref",
+                    "id": str(record.get("id") or ""),
+                    "tool_id": str(record.get("tool_id") or ""),
+                    "tool_call_id": str(record.get("tool_call_id") or ""),
+                    "created_at": str(record.get("created_at") or ""),
+                    "size_chars": int(record.get("size_chars") or 0),
+                }
+            )
+        refs.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return refs[: max(limit, 0)]
+
     def read(
         self,
         *,
@@ -134,9 +156,13 @@ def project_tool_output(
     output: dict[str, Any],
     tool_id: str,
     tool_call_id: str | None,
+    arguments: dict[str, Any] | None = None,
     store: ToolOutputStore | None,
     policy: ToolOutputPolicy | None = None,
+    compression_model: Any | None = None,
 ) -> ToolOutputProjection:
+    from agent_factory.tooling.output_compressor import compress_tool_output
+
     effective_policy = policy or default_tool_output_policy()
     raw_text = _json_text(output)
     if len(raw_text) <= effective_policy.max_model_chars:
@@ -146,21 +172,25 @@ def project_tool_output(
         if store is not None
         else None
     )
-    compacted = _compact_value(output, budget=effective_policy.max_model_chars)
-    if not isinstance(compacted, dict):
-        compacted = {"value": compacted}
-    compacted["_tool_output_compacted"] = {
-        "original_chars": len(raw_text),
-        "model_visible_limit_chars": effective_policy.max_model_chars,
-        "output_ref": output_ref,
-    }
-    compacted = _fit_projection(
-        compacted,
-        raw_text=raw_text,
-        output_ref=output_ref,
+    # Use LLM compression when available, fallback to structural truncation
+    compression = compress_tool_output(
+        output,
+        tool_id=tool_id,
+        arguments=arguments or {},
         max_chars=effective_policy.max_model_chars,
+        model=compression_model,
     )
-    summary = "Tool output exceeded the model-visible limit; a compact preview was returned."
+    compacted: dict[str, Any] = {
+        "compressed_output": compression.compressed_text,
+        "_tool_output_compacted": {
+            "original_chars": compression.original_chars,
+            "compressed_chars": compression.compressed_chars,
+            "model_visible_limit_chars": effective_policy.max_model_chars,
+            "compression_method": "llm" if compression_model is not None and compression.compressed else "truncation",
+            "output_ref": output_ref,
+        },
+    }
+    summary = "Tool output exceeded the model-visible limit; a compressed summary was returned."
     if output_ref is not None:
         summary += f" Full output can be read with tool_output using output_id={output_ref['id']}."
     return ToolOutputProjection(
@@ -177,19 +207,46 @@ def run_tool_output(arguments: dict[str, Any], resources: dict[str, Any]) -> dic
         raise ValueError("tool_output_store resource is not configured")
     action = str(arguments.get("action") or "").strip()
     output_id = str(arguments.get("output_id") or "").strip()
-    if action == "describe":
-        return {"action": action, "output": store.describe(output_id)}
-    if action == "read":
+    if action == "list":
+        limit = _optional_int(arguments.get("limit"), default=20)
         return {
             "action": action,
-            "output": store.read(
+            "status": "completed",
+            "message": "Available tool outputs for this workspace.",
+            "outputs": store.list_outputs(limit=limit),
+        }
+    if action == "describe":
+        try:
+            output = store.describe(output_id)
+        except (FileNotFoundError, ValueError):
+            return _output_ref_not_found(action=action, output_id=output_id, store=store)
+        return {"action": action, "status": "completed", "output": output}
+    if action == "read":
+        try:
+            output = store.read(
                 output_id=output_id,
                 path=_optional_string(arguments.get("path")),
                 offset=_optional_int(arguments.get("offset"), default=0),
                 limit=_optional_int(arguments.get("limit"), default=DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS),
-            ),
-        }
+            )
+        except (FileNotFoundError, ValueError):
+            return _output_ref_not_found(action=action, output_id=output_id, store=store)
+        return {"action": action, "status": "completed", "output": output}
     raise ValueError(f"unsupported tool_output action: {action}")
+
+
+def _output_ref_not_found(*, action: str, output_id: str, store: ToolOutputStore) -> dict[str, Any]:
+    return {
+        "action": action,
+        "status": "output_ref_not_found",
+        "message": (
+            "The requested output_id is not a readable output for this workspace. "
+            "Do not invent output_id values. Call tool_output with action=list and use one of the returned ids."
+        ),
+        "requested_id": output_id,
+        "available_outputs": store.list_outputs(limit=20),
+        "suggested_action": "Call tool_output list, then retry with an id from available_outputs.",
+    }
 
 
 def _fit_projection(

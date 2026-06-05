@@ -11,6 +11,17 @@ MAX_RESOURCE_READ_CHARS = 12000
 SKILL_REGISTRY_VERSION = "skill_registry.v1"
 
 
+class SkillResourceFragmentNotFound(LookupError):
+    def __init__(self, *, path: str, pointer: str, available_keys: list[str]) -> None:
+        self.path = path
+        self.pointer = pointer
+        self.available_keys = available_keys
+        key_text = ", ".join(available_keys[:20]) if available_keys else "none"
+        super().__init__(
+            f"skill resource fragment not found: path={path}; pointer={pointer}; available_top_level_keys={key_text}"
+        )
+
+
 class SkillRegistry:
     def __init__(self, skills: list[SkillPackage] | None = None, *, gateway_state: SkillGatewayState | None = None) -> None:
         self._skills: dict[str, SkillPackage] = {}
@@ -85,13 +96,39 @@ class SkillRegistry:
                 f"loading a second skill for todo {current_todo!r} requires describe(name={name!r}, current_todo=...) first"
             )
         todo_state.mark_loaded(name, reason=cleaned_reason)
+        # Auto-inline all readable reference resources
+        resource_contents = self._read_all_resources(skill)
         return SkillLoadResult(
             name=skill.name,
             metadata=skill.metadata,
             content=skill.body,
             resources=skill.resources,
             scripts=skill.scripts,
+            resource_contents=resource_contents,
         )
+
+    def _read_all_resources(self, skill: SkillPackage) -> dict[str, str]:
+        """Read all readable resources inline during load."""
+        contents: dict[str, str] = {}
+        root = Path(skill.root).resolve()
+        for resource in skill.resources:
+            if not resource.readable:
+                continue
+            target = (root / resource.path).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
+                continue
+            if not target.is_file():
+                continue
+            try:
+                text = target.read_text(encoding="utf-8")
+                if len(text) > MAX_RESOURCE_READ_CHARS:
+                    text = text[:MAX_RESOURCE_READ_CHARS] + f"\n... [truncated at {MAX_RESOURCE_READ_CHARS} chars]"
+                contents[resource.path] = text
+            except Exception:
+                continue
+        return contents
 
     def read_resource(
         self,
@@ -103,11 +140,7 @@ class SkillRegistry:
         pointer: str = "",
     ) -> dict[str, Any]:
         skill = self.get(name)
-        todo_state = self.gateway_state.todo_state(_require_todo(current_todo))
-        if not todo_state.has_seen(name):
-            raise PermissionError(
-                f"read_resource requires describe or load for skill {name!r} under todo {current_todo!r}"
-            )
+        _require_todo(current_todo)
         resource = next((item for item in skill.resources if item.path == path), None)
         if resource is None:
             raise KeyError(f"unknown skill resource: {name}/{path}")
@@ -136,7 +169,14 @@ class SkillRegistry:
             payload["outline"] = _resource_outline(resource.path, content)
             return payload
         if mode == "fragment":
-            fragment = _json_pointer_fragment(content, pointer)
+            try:
+                fragment = _json_pointer_fragment(content, pointer)
+            except KeyError as exc:
+                raise SkillResourceFragmentNotFound(
+                    path=resource.path,
+                    pointer=pointer,
+                    available_keys=_json_top_level_keys(content),
+                ) from exc
             payload["fragment"] = fragment
             return payload
         if mode != "content":
@@ -301,3 +341,15 @@ def _json_pointer_fragment(content: str, pointer: str) -> Any:
         else:
             raise KeyError(f"cannot descend into {type(value).__name__} at {part!r}")
     return value
+
+
+def _json_top_level_keys(content: str) -> list[str]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        return sorted(str(key) for key in payload.keys())
+    if isinstance(payload, list):
+        return [str(index) for index in range(min(len(payload), 20))]
+    return []

@@ -26,7 +26,7 @@
           "type": "string"
         },
         "instance_extension_root": {
-          "default": "/runtime/extensions",
+          "default": ".agent_runtime/extensions",
           "title": "Instance Extension Root",
           "type": "string"
         },

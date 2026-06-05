@@ -1,6 +1,6 @@
 ---
 name: 03-context-contract
-description: Use when an AgentPackage needs context assembly, compression, retrieval injection, or model input policy. Defines context contract boundaries and what must not be handled by context.
+description: Use when configuring prompt context window management, compression, and retrieval injection policies.
 metadata:
   system_boundary: context-contract
   load_when: context, compression, retrieval, prompt-assembly
@@ -8,23 +8,36 @@ metadata:
 
 # Context Contract
 
-Context controls model input preparation. It is not a business memory store and not a tool-output cleanup system.
+## When to load
 
-Build rules:
+Load when configuring context compression thresholds or retrieval injection policies.
 
-- Configure compression, retrieval, and assembly policies only when the package needs them.
-- Keep compression thresholds explicit and contract-valid.
-- Context retrieval consumes selected sources; it must not perform every-turn automatic knowledge recall unless the package explicitly needs it.
-- Tool output summarization belongs to the tool system, not the context contract.
-- Cross-session facts belong to memory, not context compression.
+## Hard Constraints
 
-When to include:
+1. `contracts/context.json`: `"type": "context"`, `"version": "context_contract.v0"`
+2. Context is NOT memory (cross-session) or knowledge (document store). It's model input preparation.
 
-- Long-running conversations need compression.
-- A node needs controlled prompt assembly from state, memory, knowledge, or artifacts.
-- The package needs retrieval results injected before cognitive nodes.
+## Decision Rules
 
-Acceptance:
+```
+IF agent has long conversations (>10 turns):
+  → Configure compression with appropriate token budget
 
-- Context contract builds `services.context_system` through RuntimeBuildPlanner.
-- Context policy does not duplicate memory or knowledge responsibilities.
+IF agent is short-lived (scheduled reports, single-turn):
+  → Keep default context contract (no compression needed)
+```
+
+## Minimal Example
+
+```json
+{
+  "type": "context",
+  "version": "context_contract.v0",
+  "config": {}
+}
+```
+
+## Resources
+
+- `references/context_contract.schema.json`
+- `examples/context_contract.minimal.json`

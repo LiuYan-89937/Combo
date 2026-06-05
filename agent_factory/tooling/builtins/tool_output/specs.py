@@ -9,8 +9,9 @@ def get_tool_output_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="tool_output",
             description=(
-                "Read a full tool output by output_id when a prior tool observation says its output was compacted. "
-                "Use describe for metadata and read for a selected range or nested dot path."
+                "Inspect full tool outputs stored outside model context. "
+                "Use action=list first unless the current prompt explicitly lists a real output_id. "
+                "Never invent output_id values; describe/read only accept ids returned by list or shown in an output_ref."
             ),
             entrypoint="agent_factory.tooling.output_store:run_tool_output",
             input_schema=_input_schema(),
@@ -27,11 +28,10 @@ def _input_schema() -> dict:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "action": {"type": "string", "enum": ["describe", "read"]},
+            "action": {"type": "string", "enum": ["list", "describe", "read"]},
             "output_id": {
                 "type": "string",
-                "pattern": r"^toolout_[a-f0-9]{32}$",
-                "description": "The output_id from a compacted tool observation.",
+                "description": "A real output_id returned by action=list or shown in a compacted tool observation output_ref.",
             },
             "path": {
                 "type": "string",
@@ -40,5 +40,9 @@ def _input_schema() -> dict:
             "offset": {"type": "integer", "minimum": 0, "default": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200000, "default": 12000},
         },
-        "required": ["action", "output_id"],
+        "oneOf": [
+            {"properties": {"action": {"const": "list"}}, "required": ["action"]},
+            {"properties": {"action": {"const": "describe"}}, "required": ["action", "output_id"]},
+            {"properties": {"action": {"const": "read"}}, "required": ["action", "output_id"]},
+        ],
     }

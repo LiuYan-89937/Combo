@@ -56,6 +56,7 @@ def _cached_report(report: PackageValidationReport) -> PackageValidationReport:
                 target_files=_target_files(report),
                 recommended_skill=report.next_action.recommended_skill,
                 recommended_resources=report.next_action.recommended_resources,
+                repair_bundles=report.next_action.repair_bundles,
             ),
         }
     )

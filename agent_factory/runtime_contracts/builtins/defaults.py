@@ -26,9 +26,9 @@ from agent_factory.runtime_contracts.schema import (
 def default_session_contract() -> SessionContract:
     return SessionContract(
         config=SessionContractConfig(
-            session_root="/runtime/sessions",
+            session_root=".agent_runtime/sessions",
             checkpointer_backend="sqlite",
-            checkpoint_path="/runtime/checkpoints/agent.sqlite",
+            checkpoint_path=".agent_runtime/checkpoints/agent.sqlite",
         )
     )
 
@@ -57,8 +57,8 @@ def default_memory_contract() -> MemoryContract:
     config = default_agent_memory_config()
     config = config.model_copy(
         update={
-            "store": MemoryStoreRuntimeConfig(backend=config.store.backend, path="/runtime/memory/agent.sqlite"),
-            "background": config.background.model_copy(update={"journal_root": "/runtime/memory/jobs"}),
+            "store": MemoryStoreRuntimeConfig(backend=config.store.backend, path=".agent_runtime/memory/agent.sqlite"),
+            "background": config.background.model_copy(update={"journal_root": ".agent_runtime/memory/jobs"}),
         },
         deep=True,
     )

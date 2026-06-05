@@ -1,25 +1,44 @@
 ---
 name: 06-trace-contract
-description: Use when an AgentPackage needs execution trace, debugging evidence, self-repair facts, or WebUI observability. Defines JSONL fact store and sensitive-output boundaries.
+description: Use when configuring execution trace and observability. Covers trace storage, output mode, and what to record.
 metadata:
   system_boundary: trace-contract
-  load_when: trace, observability, self-repair, webui-monitoring
+  load_when: trace, observability, debugging, monitoring
 ---
 
 # Trace Contract
 
-Trace records execution facts for observability and future repair. It must not own business state.
+## When to load
 
-Build rules:
+Load when configuring observability or debugging capabilities for the agent.
 
-- Use append-only JSONL trace storage.
-- Record run, node, model, tool, scheduler, artifact, and error correlation ids.
-- Store summaries, counts, hashes, references, and report paths instead of large outputs.
-- Do not record secrets in plaintext.
-- Link tool outputs, artifacts, knowledge chunks, and reports by reference.
-- Keep trace independent from graph execution semantics.
+## Hard Constraints
 
-Acceptance:
+1. `contracts/trace.json`: `"type": "trace"`, `"version": "trace_contract.v0"`
+2. Do not record secrets in plaintext in trace output.
+3. Trace is append-only; it does not own business state.
 
-- Trace contract contributes a runtime trace service.
-- Failures are inspectable by trace reader or WebUI without parsing raw UI strings.
+## Decision Rules
+
+```
+IF agent is production-facing and needs debugging:
+  → Enable trace with appropriate output_mode
+
+IF agent is a simple utility:
+  → Keep default trace contract
+```
+
+## Minimal Example
+
+```json
+{
+  "type": "trace",
+  "version": "trace_contract.v0",
+  "config": {}
+}
+```
+
+## Resources
+
+- `references/trace_contract.schema.json`
+- `examples/trace_contract.minimal.json`

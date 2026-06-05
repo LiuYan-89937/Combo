@@ -15,6 +15,7 @@ from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution, RuntimeDiagnostic
+from agent_factory.runtime_contracts.paths import package_runtime_path_text, resolve_package_runtime_path
 from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
@@ -62,7 +63,12 @@ class SessionContractBuilder:
 
     def build(self, contract: SessionContract, context: RuntimeBuildContext) -> RuntimeContribution:
         config = contract.config
-        checkpoint_path = Path(config.checkpoint_path) if config.checkpointer_backend == "sqlite" else None
+        session_root = package_runtime_path_text(context, config.session_root, field_path="session.config.session_root")
+        checkpoint_path = (
+            resolve_package_runtime_path(context, config.checkpoint_path, field_path="session.config.checkpoint_path")
+            if config.checkpointer_backend == "sqlite"
+            else None
+        )
         checkpointer = LangGraphCheckpointerFactory().build(
             LangGraphCheckpointerConfig(
                 backend=config.checkpointer_backend,
@@ -72,9 +78,9 @@ class SessionContractBuilder:
         return RuntimeContribution(
             services={"checkpointer": checkpointer},
             session_config={
-                "session_root": config.session_root,
+                "session_root": session_root,
                 "checkpointer_backend": config.checkpointer_backend,
-                "checkpoint_path": config.checkpoint_path,
+                "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else "",
             },
         )
 
@@ -91,7 +97,11 @@ class ToolsContractBuilder:
         tool_runtime_resources = dict(context.tool_runtime_resources)
         mcp_clients = {}
         system_tool_ids: set[str] = set()
-        instance_extension_root = Path(config.instance_extension_root).expanduser().resolve()
+        instance_extension_root = resolve_package_runtime_path(
+            context,
+            config.instance_extension_root,
+            field_path="tools.config.instance_extension_root",
+        )
         tool_runtime_resources.setdefault(
             TOOL_OUTPUT_STORE_RESOURCE,
             ToolOutputStore(_tool_output_root(context=context, instance_extension_root=instance_extension_root)),
@@ -176,7 +186,7 @@ class MemoryContractBuilder:
     contract_version = "memory_contract.v0"
 
     def build(self, contract: MemoryContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = contract.config.memory_system
+        config = _resolved_memory_config(contract.config.memory_system, context)
         if not config.enabled:
             return RuntimeContribution(
                 services={
@@ -241,7 +251,11 @@ class TraceContractBuilder:
     contract_version = "trace_contract.v0"
 
     def build(self, contract: TraceContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = contract.config
+        config = contract.config.model_copy(
+            update={
+                "root": package_runtime_path_text(context, contract.config.root, field_path="trace.config.root"),
+            }
+        )
         runtime = context.package.manifest.runtime or {}
         producer_type = "system_package" if runtime.get("system_package") else "agent_runtime"
         recorder = TraceRecorder(
@@ -276,7 +290,30 @@ class KnowledgeContractBuilder:
     contract_version = "knowledge_contract.v0"
 
     def build(self, contract: KnowledgeContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = contract.config
+        rag_store = contract.config.rag_store
+        config = contract.config.model_copy(
+            update={
+                "root": package_runtime_path_text(context, contract.config.root, field_path="knowledge.config.root"),
+                "catalog_path": package_runtime_path_text(
+                    context,
+                    contract.config.catalog_path,
+                    field_path="knowledge.config.catalog_path",
+                ),
+                "rag_store": (
+                    rag_store.model_copy(
+                        update={
+                            "path": package_runtime_path_text(
+                                context,
+                                rag_store.path,
+                                field_path="knowledge.config.rag_store.path",
+                            )
+                        }
+                    )
+                    if rag_store.backend == "sqlite" and rag_store.path.strip()
+                    else rag_store
+                ),
+            }
+        )
         catalog = KnowledgeCatalog(config.catalog_path)
         store_handle = LangGraphStoreFactory().build(
             LangGraphStoreConfig(
@@ -387,7 +424,16 @@ class ArtifactContractBuilder:
     contract_version = "artifact_contract.v0"
 
     def build(self, contract: ArtifactContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = contract.config
+        config = contract.config.model_copy(
+            update={
+                "root": package_runtime_path_text(context, contract.config.root, field_path="artifact.config.root"),
+                "index_path": package_runtime_path_text(
+                    context,
+                    contract.config.index_path,
+                    field_path="artifact.config.index_path",
+                ),
+            }
+        )
         artifact_store = ArtifactStore(
             root=config.root,
             index_path=config.index_path,
@@ -433,7 +479,15 @@ class SchedulerContractBuilder:
     contract_version = "scheduler_contract.v0"
 
     def build(self, contract: SchedulerContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = contract.config
+        config = contract.config.model_copy(
+            update={
+                "store_path": package_runtime_path_text(
+                    context,
+                    contract.config.store_path,
+                    field_path="scheduler.config.store_path",
+                )
+            }
+        )
         owner_id = context.package.assembly_spec.agent.id
         store = SQLiteSchedulerStore(config.store_path)
         runtime = SchedulerRuntime(
@@ -562,6 +616,38 @@ def _tool_output_root(*, context: RuntimeBuildContext, instance_extension_root: 
     if instance_extension_root.name == "extensions":
         return instance_extension_root.parent / "tool_outputs"
     return instance_extension_root / "tool_outputs"
+
+
+def _resolved_memory_config(config: Any, context: RuntimeBuildContext) -> Any:
+    store = config.store
+    background = config.background
+    return config.model_copy(
+        update={
+            "store": (
+                store.model_copy(
+                    update={
+                        "path": package_runtime_path_text(
+                            context,
+                            store.path,
+                            field_path="memory.config.memory_system.store.path",
+                        )
+                    }
+                )
+                if store.backend == "sqlite" and store.path.strip()
+                else store
+            ),
+            "background": background.model_copy(
+                update={
+                    "journal_root": package_runtime_path_text(
+                        context,
+                        background.journal_root,
+                        field_path="memory.config.memory_system.background.journal_root",
+                    )
+                }
+            ),
+        },
+        deep=True,
+    )
 
 
 def _runtime_root_from_session_contract(context: RuntimeBuildContext) -> Path | None:

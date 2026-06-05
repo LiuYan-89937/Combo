@@ -1,6 +1,6 @@
 ---
 name: 05-knowledge-contract
-description: Use when an AgentPackage needs runtime knowledge sources, cataloged documents, RAG, index-only sources, or the built-in knowledge tool. Defines source ownership and retrieval boundaries.
+description: Use when the agent needs runtime knowledge sources (RAG, document catalog, or FTS). Configures knowledge retrieval and the auto-injected knowledge tool.
 metadata:
   system_boundary: knowledge-contract
   load_when: knowledge, rag, documents, source-catalog
@@ -8,25 +8,44 @@ metadata:
 
 # Knowledge Contract
 
-Knowledge manages external knowledge sources. Retrieval should enter through the `knowledge` tool unless the package has a specific runtime wrapper.
+## When to load
 
-Build rules:
+Load when the agent needs access to documents, knowledge bases, or search-based retrieval at runtime.
 
-- Add knowledge only when the produced agent needs runtime knowledge sources.
-- Use `index_only` for catalog plus keyword/FTS style lookup.
-- Use `rag` only when chunking, embeddings, and semantic retrieval are needed.
-- Keep source manifests and provenance explicit.
-- Do not write user-private knowledge into package source files.
-- Web sources should store URL, hash, metadata, and indexed text according to the knowledge system policy.
-- Knowledge is not automatic every-turn context injection; context consumes selected knowledge results when requested.
+## Hard Constraints
 
-Source handling:
+1. `contracts/knowledge.json`: `"type": "knowledge"`, `"version": "knowledge_contract.v0"`
+2. Knowledge tool is auto-injected only when knowledge contract has configured sources.
+3. Do not write user-private knowledge into package source files.
 
-- User-provided files become runtime-owned sources.
-- MCP or managed remote sources remain referenced; do not copy remote implementation.
-- Deleting a managed source should remove catalog/index facts and system-managed copies, not external originals.
+## Decision Rules
 
-Acceptance:
+```
+IF agent needs semantic search over documents:
+  → Configure knowledge contract with sources
+  → knowledge tool will be auto-available
 
-- Knowledge contract builds a runtime knowledge service.
-- The tools contract exposes the `knowledge` system tool when retrieval is needed.
+IF agent only needs public web search:
+  → Use a package tool or builtin bash+curl. Do NOT configure knowledge contract.
+
+IF no retrieval needed:
+  → Keep default empty knowledge contract
+```
+
+## Minimal Working Example
+
+```json
+{
+  "type": "knowledge",
+  "version": "knowledge_contract.v0",
+  "config": {
+    "enabled": false,
+    "sources": []
+  }
+}
+```
+
+## Resources
+
+- `references/knowledge_contract.schema.json`
+- `examples/knowledge_contract.minimal.json`

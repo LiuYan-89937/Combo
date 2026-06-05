@@ -1,6 +1,6 @@
 {
   "config": {
-    "catalog_path": "/runtime/knowledge/catalog/knowledge.sqlite",
+    "catalog_path": ".agent_runtime/knowledge/catalog/knowledge.sqlite",
     "default_mount_mode": "index_only",
     "keyword_backend": "sqlite_fts5",
     "limits": {
@@ -22,11 +22,11 @@
       "namespace_prefix": [
         "knowledge"
       ],
-      "path": "/runtime/knowledge/catalog/knowledge_store.sqlite",
+      "path": ".agent_runtime/knowledge/catalog/knowledge_store.sqlite",
       "provider_options": {},
       "setup": true
     },
-    "root": "/runtime/knowledge"
+    "root": ".agent_runtime/knowledge"
   },
   "enabled": true,
   "type": "knowledge",

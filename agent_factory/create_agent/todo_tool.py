@@ -10,6 +10,14 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, 
 
 
 CREATE_AGENT_TODO_TOOL_ID = "create_agent_todo"
+VALIDATOR_GATED_TODO_IDS = {
+    "package_manifest",
+    "runtime_contracts",
+    "assembly_and_patterns",
+    "state_resources_render",
+    "tools_nodes_extensions",
+    "validate_agent_package",
+}
 
 
 def build_create_agent_todo_tool_spec() -> ToolSpec:
@@ -56,7 +64,7 @@ def build_create_agent_todo_tool_spec() -> ToolSpec:
                 {"properties": {"action": {"const": "list"}}, "required": ["action"]},
                 {"properties": {"action": {"const": "add"}}, "required": ["action", "title"]},
                 {"properties": {"action": {"const": "update"}}, "required": ["action", "todo_id"]},
-                {"properties": {"action": {"const": "upsert"}}, "required": ["action", "todo_id", "title"]},
+                {"properties": {"action": {"const": "upsert"}}, "required": ["action", "todo_id"]},
             ],
             "additionalProperties": False,
         },
@@ -117,7 +125,10 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
             _update_payload(arguments)
         elif action == "upsert":
             _required_string(arguments, "todo_id")
-            _item_from_arguments(arguments)
+            if "title" in arguments and arguments.get("title") is not None:
+                _item_from_arguments(arguments)
+            else:
+                _update_payload(arguments)
         else:
             raise ValueError("action must be one of: list, add, update, upsert")
     except Exception as exc:
@@ -150,6 +161,9 @@ def _item_from_arguments(arguments: dict[str, Any]) -> TodoItem:
     for key in ("todo_id", "kind", "status", "required", "target_files", "acceptance", "source", "details"):
         if key in arguments and arguments.get(key) is not None:
             payload[key] = arguments[key]
+    todo_id = str(payload.get("todo_id") or "").strip()
+    if todo_id in VALIDATOR_GATED_TODO_IDS and payload.get("status") == TodoStatus.done.value:
+        raise ValueError(f"{todo_id} is validator-gated; run create_agent_validate instead of marking it done manually")
     payload["details"] = _details_with_evidence(payload.get("details"), arguments.get("evidence"))
     return TodoItem.model_validate(payload)
 
@@ -178,6 +192,9 @@ def _update_payload(arguments: dict[str, Any]) -> dict[str, Any]:
     payload = {key: arguments[key] for key in allowed if key in arguments and arguments.get(key) is not None}
     if not payload and arguments.get("evidence") is None:
         raise ValueError("update requires at least one todo field or evidence")
+    todo_id = str(arguments.get("todo_id") or "").strip()
+    if todo_id in VALIDATOR_GATED_TODO_IDS and payload.get("status") == TodoStatus.done.value:
+        raise ValueError(f"{todo_id} is validator-gated; run create_agent_validate instead of marking it done manually")
     return payload
 
 

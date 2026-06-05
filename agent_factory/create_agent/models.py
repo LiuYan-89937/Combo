@@ -15,8 +15,10 @@ ACTION_FILE = ".factory/action.json"
 VALIDATION_FILE = ".factory/validation.json"
 VALIDATION_STATE_FILE = ".factory/validation_state.json"
 RESOURCES_FILE = ".factory/resources.json"
+SKILL_GATEWAY_STATE_FILE = ".factory/skill_gateway_state.json"
 TEXT_SUMMARY_LIMIT = 240
 TODO_TITLE_LIMIT = 160
+TODO_COMPLETION_SUMMARY_LIMIT = 220
 
 
 class TodoStatus(str, Enum):
@@ -91,6 +93,20 @@ class TodoItem(BaseModel):
             where=where,
         )
 
+    def completion_summary(self) -> "TodoCompletionSummary":
+        evidence = []
+        if isinstance(self.details, dict):
+            raw_evidence = self.details.get("evidence")
+            if isinstance(raw_evidence, list):
+                evidence = [_compact_text(item, TODO_COMPLETION_SUMMARY_LIMIT) for item in raw_evidence[:4]]
+        return TodoCompletionSummary(
+            todo_id=self.todo_id,
+            title=_compact_text(self.title, TODO_TITLE_LIMIT),
+            target_files=self.target_files[:8],
+            evidence=evidence,
+            acceptance=_compact_text(self.acceptance, TEXT_SUMMARY_LIMIT),
+        )
+
 
 class TodoItemDigest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -105,6 +121,16 @@ class TodoItemDigest(BaseModel):
     source: str = "factory"
     issue_id: str = ""
     where: str = ""
+
+
+class TodoCompletionSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    todo_id: str
+    title: str
+    target_files: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    acceptance: str = ""
 
 
 class TodoStatusCount(BaseModel):
@@ -190,6 +216,10 @@ class TodoList(BaseModel):
             )
         return self.model_copy(update={"items": items, "updated_at": datetime.now(UTC).isoformat()})
 
+    def completion_summaries(self, *, limit: int = 6) -> list[TodoCompletionSummary]:
+        done_items = [item for item in self.items if item.status == TodoStatus.done]
+        return [item.completion_summary() for item in done_items[-max(0, limit):]]
+
 
 class ResourceFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -217,6 +247,46 @@ class CreateAgentIntentDecision(BaseModel):
     rationale: str = ""
 
 
+class PackageRepairTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_key: str = ""
+    target_file: str
+    recommended_skill: str = ""
+    recommended_resources: list[str] = Field(default_factory=list)
+
+
+class PackageRepairBundle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bundle_id: str
+    kind: Literal[
+        "manifest_missing",
+        "missing_required_contracts",
+        "missing_referenced_files",
+        "runtime_path_contract_repair",
+        "runtime_contract_build",
+        "assembly_compile",
+        "python_syntax",
+        "generic_repair",
+    ]
+    repair_action: Literal[
+        "materialize_base_package",
+        "materialize_required_contracts",
+        "normalize_runtime_contract_paths",
+        "read_skill_resources",
+        "repair_files",
+        "fix_python_syntax",
+    ]
+    machine_applicable: bool = False
+    target_files: list[str] = Field(default_factory=list)
+    targets: list[PackageRepairTarget] = Field(default_factory=list)
+    recommended_skill: str = ""
+    recommended_resources: list[str] = Field(default_factory=list)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    summary: str = ""
+
+
 class PackageValidationIssue(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -231,6 +301,7 @@ class PackageValidationIssue(BaseModel):
     target_files: list[str] = Field(default_factory=list)
     recommended_skill: str = ""
     recommended_resources: list[str] = Field(default_factory=list)
+    repair_bundle: PackageRepairBundle | None = None
     details: dict[str, Any] = Field(default_factory=dict)
 
     def repair_todo_id(self) -> str:
@@ -290,6 +361,7 @@ class PackageValidationNextAction(BaseModel):
     target_files: list[str] = Field(default_factory=list)
     recommended_skill: str = ""
     recommended_resources: list[str] = Field(default_factory=list)
+    repair_bundles: list[PackageRepairBundle] = Field(default_factory=list)
 
 
 class PackageValidationReport(BaseModel):
@@ -366,7 +438,7 @@ def initial_todo_list() -> TodoList:
                 todo_id="todo_control_plan",
                 title="Create a RuntimeKernel-verifiable manufacturing plan",
                 kind="plan",
-                acceptance=".factory/todo.json contains concrete system-boundary todos.",
+                acceptance=".factory/todo.json contains concrete system-boundary todos with specific target_files.",
             ),
             TodoItem(
                 todo_id="package_manifest",
@@ -376,15 +448,15 @@ def initial_todo_list() -> TodoList:
             ),
             TodoItem(
                 todo_id="runtime_contracts",
-                title="Materialize RuntimeContracts used by the package",
+                title="Materialize RuntimeContracts with actual configuration",
                 kind="write",
-                acceptance="RuntimeBuildPlanner can build all referenced contracts.",
+                acceptance="RuntimeBuildPlanner can build all contracts AND contracts contain non-default configuration matching user requirements.",
             ),
             TodoItem(
                 todo_id="assembly_and_patterns",
-                title="Materialize assembly and executable graph patterns",
+                title="Materialize assembly with operational logic",
                 kind="write",
-                acceptance="AgentAssemblyCompiler can compile the assembly.",
+                acceptance="Pattern has >2 nodes with at least one cognitive/operational node. Assembly bindings are non-empty.",
             ),
             TodoItem(
                 todo_id="state_resources_render",
@@ -396,13 +468,13 @@ def initial_todo_list() -> TodoList:
                 todo_id="tools_nodes_extensions",
                 title="Resolve tools, extensions, package tools, and package nodes",
                 kind="write",
-                acceptance="Required capabilities are inherited or materialized without duplicate tools or hardcoded resources.",
+                acceptance="tools_contract declares at least one tool. Package tools (if any) pass import and invocation test.",
             ),
             TodoItem(
                 todo_id="validate_agent_package",
-                title="Validate the AgentPackage through the package validator",
+                title="Validate the AgentPackage through full_static including semantic check and smoke test",
                 kind="verify",
-                acceptance="Package validation passes.",
+                acceptance="Package passes full_static validation including semantic completeness and runtime smoke test with task_model.",
             ),
         ]
     )

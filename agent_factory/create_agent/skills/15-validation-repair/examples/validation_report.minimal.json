@@ -6,6 +6,7 @@
     "kind": "continue",
     "recommended_resources": [],
     "recommended_skill": "",
+    "repair_bundles": [],
     "target_files": []
   },
   "package_root": ".",

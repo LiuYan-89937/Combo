@@ -8,7 +8,7 @@
     },
     "default_timeout_seconds": 900,
     "store_backend": "sqlite",
-    "store_path": "/runtime/scheduler/scheduler.sqlite",
+    "store_path": ".agent_runtime/scheduler/scheduler.sqlite",
     "timezone": "Asia/Shanghai",
     "unattended_policy": "deny_if_approval_required"
   },

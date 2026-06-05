@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from agent_factory.assembly.schema import AgentAssemblySpec
+from agent_factory.create_agent.contract_catalog import required_contract_paths
 from agent_factory.create_agent.models import PackageValidationReport, TodoList
 from agent_factory.runtime_contracts.schema import (
     AgentPackageManifest,
@@ -17,6 +18,7 @@ from agent_factory.runtime_contracts.schema import (
     RuntimeContractEnvelope,
     SchedulerContract,
     SchedulerSeedContract,
+    SessionContract,
     StateContract,
     ToolsContract,
     TraceContract,
@@ -48,6 +50,7 @@ SCHEMA_EXPORTS: dict[str, type[BaseModel]] = {
     "13-assembly-and-patterns/references/pattern.schema.json": GraphPatternSpec,
     "14-render-and-events/references/render_manifest.schema.json": RenderManifest,
     "15-validation-repair/references/validation_report.schema.json": PackageValidationReport,
+    "16-session-contract/references/session_contract.schema.json": SessionContract,
 }
 
 EXAMPLE_EXPORTS: dict[str, BaseModel] = {
@@ -58,22 +61,7 @@ EXAMPLE_EXPORTS: dict[str, BaseModel] = {
         render_manifest_path="render_manifest.json",
         resources_path="resources.json",
         sandbox_contract_path="sandbox_contract.json",
-        contracts={
-            "artifact": "contracts/artifact.json",
-            "context": "contracts/context.json",
-            "dependencies": "contracts/dependencies.json",
-            "knowledge": "contracts/knowledge.json",
-            "model": "contracts/model.json",
-            "node_provider": "contracts/node_provider.json",
-            "render": "contracts/render.json",
-            "resources": "contracts/resources.json",
-            "sandbox": "contracts/sandbox.json",
-            "scheduler": "contracts/scheduler.json",
-            "session": "contracts/session.json",
-            "state": "contracts/state.json",
-            "tools": "contracts/tools.json",
-            "trace": "contracts/trace.json",
-        },
+        contracts=required_contract_paths(),
         patterns=["patterns/main.yaml"],
     ),
     "02-runtime-contract-index/examples/runtime_contract_index.minimal.json": RuntimeContractEnvelope(
@@ -153,6 +141,7 @@ EXAMPLE_EXPORTS: dict[str, BaseModel] = {
         skipped=True,
         summary="Validation report example.",
     ),
+    "16-session-contract/examples/session_contract.minimal.json": SessionContract(),
 }
 
 
@@ -168,7 +157,113 @@ def export_skill_schemas(*, skills_root: Path = SKILLS_ROOT) -> list[Path]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(_example_text(model), encoding="utf-8")
         written.append(target)
+    # Export runtime enumerations and builtin references
+    for relative, content in sorted(_runtime_reference_exports().items()):
+        target = skills_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        written.append(target)
     return written
+
+
+def _runtime_reference_exports() -> dict[str, str]:
+    """Generate reference markdown files from actual RuntimeKernel code."""
+    from agent_factory.runtime_kernel.nodes.standard import (
+        CognitiveAnswerNode, CognitiveClarifyNode, CognitivePlanNode,
+        CognitiveReviewNode, CognitiveRouteNode, CognitiveStructuredNode,
+        FinalizeNode, GovernanceApprovalGateNode, GovernancePostcheckNode,
+        GovernancePrecheckNode, GovernanceRefusalGateNode, IngressNode,
+        OperationalResourceProbeNode, OperationalToolCallNode,
+        TerminalCloseNode, TerminalCommitNode,
+    )
+    from agent_factory.runtime_kernel.patterns.schema import (
+        NodeType, PatternKind, PatternSlotType, StateMode,
+    )
+    from agent_factory.runtime_kernel.bindings.schema import (
+        BindingType, HookPoint, ServiceKind,
+    )
+    from agent_factory.tooling.builtins.registry import IMPLEMENTED_BUILTIN_TOOL_IDS
+
+    builtin_impls = [
+        IngressNode, GovernancePrecheckNode, GovernancePostcheckNode,
+        GovernanceApprovalGateNode, GovernanceRefusalGateNode,
+        CognitiveClarifyNode, CognitivePlanNode, CognitiveRouteNode,
+        CognitiveStructuredNode, CognitiveAnswerNode, CognitiveReviewNode,
+        OperationalToolCallNode, OperationalResourceProbeNode,
+        TerminalCommitNode, TerminalCloseNode, FinalizeNode,
+    ]
+
+    # Builtin node impl reference
+    impl_lines = ["# Builtin Node Implementations", "",
+                  "These are the ONLY valid `impl` values for pattern nodes (unless using a package node with `package.*` prefix).", ""]
+    for node_cls in sorted(builtin_impls, key=lambda c: c.impl_id):
+        node_type = getattr(node_cls, "node_type", "unknown")
+        impl_lines.append(f"- `{node_cls.impl_id}` (type: {node_type})")
+    impl_lines.append("")
+    impl_lines.append("## Node Types")
+    impl_lines.append("")
+    impl_lines.append(f"Valid values: {', '.join(f'`{t}`' for t in _get_literal_args(NodeType))}")
+    impl_lines.append("")
+    impl_lines.append("## Edge `when` Conditions")
+    impl_lines.append("")
+    impl_lines.append("Extracted from builtin patterns:")
+    edge_conditions = sorted({
+        "always", "model.requests_tool", "model.ready_to_answer",
+        "tool.completed", "tool.failed", "tool.interrupted",
+        "policy.blocked", "policy.approval_required",
+        "subgraph.done", "subgraph.need_more_input", "subgraph.blocked",
+    })
+    for cond in edge_conditions:
+        impl_lines.append(f"- `{cond}`")
+    impl_lines.append("")
+    impl_lines.append("## Builtin Patterns")
+    impl_lines.append("")
+    impl_lines.append("- `react_agent` — Standard conversational tool-using agent (default choice)")
+    impl_lines.append("- `clarify_then_act` — Ask for missing info before entering action flow")
+    impl_lines.append("- `clarification_loop_v1` — Embeddable subgraph for clarification (not selectable as main)")
+    impl_lines.append("")
+
+    # Binding reference
+    binding_lines = ["# Binding Reference", "",
+                     "## binding_type values", ""]
+    for bt in _get_literal_args(BindingType):
+        binding_lines.append(f"- `{bt}`")
+    binding_lines.append("")
+    binding_lines.append("## ServiceKind values")
+    binding_lines.append("")
+    for sk in _get_literal_args(ServiceKind):
+        binding_lines.append(f"- `{sk}`")
+    binding_lines.append("")
+    binding_lines.append("## HookPoint values")
+    binding_lines.append("")
+    for hp in _get_literal_args(HookPoint):
+        binding_lines.append(f"- `{hp}`")
+    binding_lines.append("")
+    binding_lines.append("## PatternSlotType values")
+    binding_lines.append("")
+    for st in _get_literal_args(PatternSlotType):
+        binding_lines.append(f"- `{st}`")
+    binding_lines.append("")
+
+    # Tools builtin IDs
+    tools_lines = ["# Builtin Tool IDs", "",
+                   "These tools are automatically available when `builtin_tools_enabled: true` in tools_contract.", ""]
+    for tool_id in sorted(IMPLEMENTED_BUILTIN_TOOL_IDS):
+        tools_lines.append(f"- `{tool_id}`")
+    tools_lines.append("")
+
+    return {
+        "13-assembly-and-patterns/references/builtin_impls.md": "\n".join(impl_lines),
+        "13-assembly-and-patterns/references/binding_reference.md": "\n".join(binding_lines),
+        "08-tools-contract/references/builtin_tool_ids.md": "\n".join(tools_lines),
+    }
+
+
+def _get_literal_args(literal_type: Any) -> list[str]:
+    """Extract string values from a typing.Literal type."""
+    import typing
+    args = typing.get_args(literal_type)
+    return [str(a) for a in args]
 
 
 def _schema_text(model: type[BaseModel]) -> str:

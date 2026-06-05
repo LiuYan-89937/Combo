@@ -36,7 +36,6 @@ class SkillMetadata(BaseModel):
     name: str
     description: str
     license: str | None = None
-    compatibility: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("name")
@@ -80,6 +79,7 @@ class SkillLoadResult(BaseModel):
     content: str
     resources: list[SkillResourceRef] = Field(default_factory=list)
     scripts: list[SkillScriptRef] = Field(default_factory=list)
+    resource_contents: dict[str, str] = Field(default_factory=dict)
 
 
 class SkillLoadRecord(BaseModel):

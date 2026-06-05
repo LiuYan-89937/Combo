@@ -1,0 +1,55 @@
+{
+  "$defs": {
+    "SessionContractConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint_path": {
+          "default": ".agent_runtime/checkpoints/agent.sqlite",
+          "title": "Checkpoint Path",
+          "type": "string"
+        },
+        "checkpointer_backend": {
+          "default": "sqlite",
+          "enum": [
+            "sqlite",
+            "memory"
+          ],
+          "title": "Checkpointer Backend",
+          "type": "string"
+        },
+        "session_root": {
+          "default": ".agent_runtime/sessions",
+          "title": "Session Root",
+          "type": "string"
+        }
+      },
+      "title": "SessionContractConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "config": {
+      "$ref": "#/$defs/SessionContractConfig"
+    },
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "type": {
+      "const": "session",
+      "default": "session",
+      "title": "Type",
+      "type": "string"
+    },
+    "version": {
+      "const": "session_contract.v0",
+      "default": "session_contract.v0",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "title": "SessionContract",
+  "type": "object"
+}

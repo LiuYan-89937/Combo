@@ -14,6 +14,12 @@ from agent_factory.tooling.output_store import (
     default_tool_output_policy,
     project_tool_output,
 )
+from agent_factory.tooling.builtins.resource_set.resource_set import (
+    RESOURCE_SET_STORE_KEY,
+    ResourceSetStore,
+    auto_record_path,
+)
+from agent_factory.models import get_compression_model
 from agent_factory.tooling.resource_context import build_tool_resource_context
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
@@ -99,12 +105,14 @@ class ToolExecutionGateway:
         arguments, risk = self._evaluate_risk(arguments, risk_context_resources)
         approval = self._approval(arguments, risk)
         if approval.action == "deny":
+            denial_guidance = approval.revision_guidance or _risk_guidance(risk)
             return self._observation(
                 "denied",
-                "Tool call denied by approval policy or human review.",
+                f"Tool call denied: {denial_guidance}" if denial_guidance else "Tool call denied by approval policy or human review.",
                 tool_call_id=tool_call_id,
                 arguments=arguments,
-                user_instruction=approval.revision_guidance or None,
+                user_instruction=denial_guidance or None,
+                errors=risk.reasons,
             )
         if approval.action == "revise":
             return self._observation(
@@ -144,12 +152,18 @@ class ToolExecutionGateway:
                 output=output,
                 errors=output_errors,
             )
+        # Auto-record explored paths in the resource set
+        resource_set_store = self.global_resources.get(RESOURCE_SET_STORE_KEY)
+        if isinstance(resource_set_store, ResourceSetStore):
+            auto_record_path(resource_set_store, self.spec.id, arguments)
         projection = project_tool_output(
             output=output,
             tool_id=self.spec.id,
             tool_call_id=tool_call_id,
+            arguments=arguments,
             store=self.output_store,
             policy=self.output_policy,
+            compression_model=get_compression_model(),
         )
         return self._observation(
             "completed",
