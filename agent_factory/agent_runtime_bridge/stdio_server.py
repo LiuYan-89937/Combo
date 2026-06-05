@@ -15,6 +15,7 @@ from agent_factory.runtime_contracts.builtins import default_runtime_contract_re
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
+from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
@@ -562,7 +563,6 @@ def _run_harness_tool_tests(compiled: Any, plan: dict[str, Any], result: dict[st
     registry = compiled.compiled_app.services.tool_registry
     if registry is None:
         return
-    from agent_factory.runtime_kernel.state import RuntimeState
 
     state = RuntimeState()
     for item in plan.get("tool_tests") or []:

@@ -5,6 +5,8 @@ from typing import Any
 
 from langgraph.config import get_stream_writer
 
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
+
 ContextEventSink = Callable[[dict[str, Any]], None]
 
 
@@ -25,8 +27,6 @@ def emit_context_event(
     if event_sink is not None:
         event_sink(event_payload)
     if services is not None and state is not None and getattr(services, "observability_manager", None) is not None:
-        from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
-
         event = RuntimeObservationEvent(
             trace_id=state.observability.trace_id,
             run_id=state.run.run_id,

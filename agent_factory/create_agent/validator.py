@@ -5,8 +5,10 @@ from pathlib import Path
 import py_compile
 from typing import Any
 
+from pydantic import ValidationError
 from ruamel.yaml import YAML
 
+from agent_factory.create_agent.smoke_test import run_smoke_test
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.create_agent.repair_policy import CreateAgentRepairPolicy
 from agent_factory.create_agent.models import (
@@ -21,6 +23,7 @@ from agent_factory.runtime_contracts.builtins import default_runtime_contract_re
 from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRACTS
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
+from agent_factory.tooling.skills.schema import SkillGatewayState
 
 
 ValidationScope = str
@@ -377,9 +380,6 @@ def _json_syntax_report(
     This catches common LLM-generated JSON errors (trailing commas, extra braces)
     before they cause runtime loading failures.
     """
-    from pydantic import ValidationError
-    from agent_factory.tooling.skills.schema import SkillGatewayState
-
     critical_json_files = [
         ("agent_package.json", None),
         ("assembly_spec.json", None),
@@ -684,8 +684,6 @@ def _smoke_test_report(
     changed_files: list[str],
 ) -> PackageValidationReport | None:
     """Run the manufactured agent with task_model to verify it produces useful output."""
-    from agent_factory.create_agent.smoke_test import run_smoke_test
-
     try:
         result = run_smoke_test(root)
     except Exception as exc:

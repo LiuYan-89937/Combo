@@ -3,15 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
+from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.patterns.loader import PatternLoader
 from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
 from agent_factory.runtime_render import RenderManifest
-
-if TYPE_CHECKING:
-    from agent_factory.assembly.schema import AgentAssemblySpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +17,7 @@ class LoadedAgentPackage:
     package_root: Path
     manifest_path: Path
     manifest: AgentPackageManifest
-    assembly_spec: "AgentAssemblySpec"
+    assembly_spec: AgentAssemblySpec
     render_manifest: RenderManifest
     resources: dict[str, Any]
     sandbox_contract: dict[str, Any]
@@ -32,7 +30,6 @@ class AgentPackageLoader:
         manifest_path = Path(path)
         manifest = AgentPackageManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
         package_root = manifest_path.parent
-        from agent_factory.assembly.schema import AgentAssemblySpec
 
         assembly_spec = AgentAssemblySpec.model_validate_json(
             _read_package_file(package_root, manifest.assembly_spec_path)

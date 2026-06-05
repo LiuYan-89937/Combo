@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_factory.tooling.spec import ToolRiskResult
+
 
 RESOURCE_SET_STORE_KEY = "resource_set_store"
 
@@ -83,8 +85,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    from agent_factory.tooling.spec import ToolRiskResult
-
     action = str(arguments.get("action") or "").strip()
     if action not in {"add", "list", "remove"}:
         return ToolRiskResult(

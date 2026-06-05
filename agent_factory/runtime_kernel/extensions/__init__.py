@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
 
@@ -14,19 +15,13 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name == "AgentInstanceExtensionConfigLoader":
-        from agent_factory.runtime_kernel.extensions.loader import AgentInstanceExtensionConfigLoader
-
-        return AgentInstanceExtensionConfigLoader
+        return importlib.import_module("agent_factory.runtime_kernel.extensions.loader").AgentInstanceExtensionConfigLoader
     if name == "AgentInstanceExtensionManager":
-        from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
-
-        return AgentInstanceExtensionManager
+        return importlib.import_module("agent_factory.runtime_kernel.extensions.manager").AgentInstanceExtensionManager
     if name in {
         "AgentInstanceExtensionConfigBundle",
         "AgentInstanceExtensionLoadReport",
         "AgentInstanceExtensionSources",
     }:
-        from agent_factory.runtime_kernel.extensions import schema
-
-        return getattr(schema, name)
+        return getattr(importlib.import_module("agent_factory.runtime_kernel.extensions.schema"), name)
     raise AttributeError(name)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, Literal
+import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -183,9 +185,6 @@ def event(
     message: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> FactoryFrontendEvent:
-    from datetime import UTC, datetime
-    import uuid
-
     return FactoryFrontendEvent(
         event_id=uuid.uuid4().hex,
         protocol_version=protocol_version or FACTORY_FRONTEND_EVENT_PROTOCOL_VERSION,

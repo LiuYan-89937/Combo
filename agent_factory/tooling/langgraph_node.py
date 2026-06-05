@@ -11,6 +11,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.runtime import Runtime
 
+from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.tooling.execution_context import tool_call_context
 
@@ -172,8 +173,6 @@ class AgentFactoryToolNode:
         if self.emit_event is not None:
             self.emit_event(payload)
         if self.stream_events:
-            from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
-
             emit_runtime_tool_activity(payload, node_id=self.node_id)
 
 

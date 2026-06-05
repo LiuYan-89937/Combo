@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryFrontendEvent, FactoryMode, event
@@ -338,8 +339,6 @@ class RuntimeAgentPackageCommandMixin:
             first_user_input,
         )
         if not self.session_record.create_agent_session_id:
-            from uuid import uuid4
-
             self.session_record.create_agent_session_id = uuid4().hex
         self.session_record.create_agent_turn_count += 1
         self.session_manager.save(self.session_record)

@@ -40,6 +40,7 @@ from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChai
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
 from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
+from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
@@ -234,8 +235,6 @@ class ContextContractBuilder:
     contract_version = "context_contract.v0"
 
     def build(self, contract: ContextContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
-
         sources = default_context_sources()
         knowledge_source = context.tool_runtime_resources.get("knowledge_context_source")
         if knowledge_source is not None:

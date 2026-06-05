@@ -1,5 +1,6 @@
 """Unified ToolSpec-based tool system."""
 
+import importlib
 from typing import Any
 
 from agent_factory.tooling.compiler import ToolCompiler
@@ -41,9 +42,7 @@ def __getattr__(name: str) -> Any:
         "FactoryExtensionManager",
         "default_factory_extension_root",
     }:
-        from agent_factory.tooling import factory_extensions
-
-        return getattr(factory_extensions, name)
+        return getattr(importlib.import_module("agent_factory.tooling.factory_extensions"), name)
     raise AttributeError(name)
 
 

@@ -8,6 +8,7 @@ from ruamel.yaml import YAML
 
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.create_agent.contract_catalog import (
+    contract_item,
     default_contract_payload,
     required_contract_items,
     required_contract_paths,
@@ -49,6 +50,12 @@ def ensure_base_package(root: str | Path, *, request_text: str = "") -> dict[str
     for item in required_contract_items():
         writer.write_json_if_missing_or_empty(
             package_root / item.path,
+            default_contract_payload(item.contract_key),
+        )
+    for key, path in manifest.get("contracts", {}).items():
+        item = contract_item(str(key))
+        writer.write_json_if_missing_or_empty(
+            package_root / str(path),
             default_contract_payload(item.contract_key),
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -261,8 +262,6 @@ class PackageRuntimeCore:
         sessions = []
         for path in sorted(session_root.glob("*.json")):
             try:
-                import json
-
                 sessions.append(json.loads(path.read_text(encoding="utf-8")))
             except Exception:
                 continue

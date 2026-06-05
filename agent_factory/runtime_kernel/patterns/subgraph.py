@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.runtime_kernel.bindings import RuntimeServices
+from agent_factory.runtime_kernel.execution import ExecutionController
 from agent_factory.runtime_kernel.kernel.models import CompiledKernelApp
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
@@ -19,8 +20,6 @@ def make_subgraph_executor(
     output_contract: PatternIOContractSpec,
     state_mode: str,
 ):
-    from agent_factory.runtime_kernel.execution import ExecutionController
-
     controller = ExecutionController()
 
     def runner(parent_state: RuntimeState, _context: NodeExecutionContext) -> dict[str, Any]:

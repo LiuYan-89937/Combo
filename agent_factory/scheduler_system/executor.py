@@ -6,6 +6,7 @@ from typing import Any
 
 from agent_factory.scheduler_system.schema import SchedulerExecutionReport, SchedulerJob, SchedulerRun
 from agent_factory.tooling.execution_context import tool_approval_override
+from agent_factory.runtime_kernel.state import RuntimeState
 
 
 SchedulerGraphRunner = Callable[[SchedulerJob, SchedulerRun], dict[str, Any]]
@@ -107,8 +108,6 @@ class SchedulerExecutor:
 
 def runtime_tool_runner(registry: Any) -> SchedulerToolRunner:
     def run(tool_id: str, arguments: dict[str, Any], job: SchedulerJob, run_record: SchedulerRun) -> dict[str, Any]:
-        from agent_factory.runtime_kernel.state import RuntimeState
-
         state = RuntimeState()
         state.run.agent_id = job.owner_id
         state.run.run_id = run_record.run_id

@@ -10,12 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.models import get_task_model, get_compression_model
 from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
+from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.runtime_protocol.completion import runtime_completed
 
@@ -43,7 +46,7 @@ def run_smoke_test(
 
     Uses the same runtime path as PackageRuntimeCore.ensure_compiled():
     - AgentPackageLoader → RuntimeBuildPlanner → AgentAssemblyCompiler → facade.run
-    - model_service replaced with task_model
+    - model_operation_service replaced with task_model
     - checkpointer/store = memory (ephemeral)
     """
     root = Path(package_root).resolve()
@@ -79,9 +82,7 @@ def run_smoke_test(
         runtime_build=runtime_build,
     )
 
-    # Replace model_service with task_model
-    from agent_factory.runtime_kernel.adapters.model import LangChainModelServiceAdapter
-    facade.instance.services.model_service = LangChainModelServiceAdapter(model=task_model)
+    facade.instance.services.model_operation_service = ModelOperationService(role="task", model=task_model)
 
     # Run one turn
     try:
@@ -164,7 +165,6 @@ def _score_quality(test_input: str, final_answer: str) -> float:
         # No scoring model available, give benefit of the doubt
         return 0.7 if len(final_answer.strip()) > 20 else 0.3
 
-    from langchain_core.messages import HumanMessage, SystemMessage
     try:
         response = model.invoke([
             SystemMessage(content=(

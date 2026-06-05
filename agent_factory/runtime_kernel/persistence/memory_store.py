@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import importlib
 import inspect
 import json
 import math
@@ -57,10 +58,8 @@ class LangGraphStoreHandle:
 class LangGraphStoreFactory:
     def build(self, config: LangGraphStoreConfig) -> LangGraphStoreHandle:
         if config.backend == "memory":
-            from langgraph.store.memory import InMemoryStore
-
             return LangGraphStoreHandle(
-                store=InMemoryStore(index=_index_payload(config.index)),
+                store=importlib.import_module("langgraph.store.memory").InMemoryStore(index=_index_payload(config.index)),
                 backend="memory",
                 persistent=False,
                 semantic_index_enabled=config.index is not None,
@@ -115,14 +114,14 @@ def _build_external_store(config: LangGraphStoreConfig) -> BaseStore:
 
 def _build_postgres_store(config: LangGraphStoreConfig) -> BaseStore:
     try:
-        from langgraph.store.postgres import PostgresStore
+        postgres_store = importlib.import_module("langgraph.store.postgres").PostgresStore
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Postgres LangGraph store requires the official langgraph-checkpoint-postgres package."
         ) from exc
 
     context = _call_store_factory(
-        PostgresStore.from_conn_string,
+        postgres_store.from_conn_string,
         config.connection_uri,
         index=_index_payload(config.index),
         **_provider_options(config),
@@ -134,14 +133,14 @@ def _build_postgres_store(config: LangGraphStoreConfig) -> BaseStore:
 
 def _build_redis_store(config: LangGraphStoreConfig) -> BaseStore:
     try:
-        from langgraph.store.redis import RedisStore
+        redis_store = importlib.import_module("langgraph.store.redis").RedisStore
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Redis LangGraph store requires the official langgraph-checkpoint-redis package."
         ) from exc
 
     context = _call_store_factory(
-        RedisStore.from_conn_string,
+        redis_store.from_conn_string,
         config.connection_uri,
         index=_index_payload(config.index),
         **_provider_options(config),
@@ -153,7 +152,7 @@ def _build_redis_store(config: LangGraphStoreConfig) -> BaseStore:
 
 def _build_mongodb_store(config: LangGraphStoreConfig) -> BaseStore:
     try:
-        from langgraph.store.mongodb import MongoDBStore
+        mongodb_store = importlib.import_module("langgraph.store.mongodb").MongoDBStore
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "MongoDB LangGraph store requires the official langgraph-store-mongodb package."
@@ -167,7 +166,7 @@ def _build_mongodb_store(config: LangGraphStoreConfig) -> BaseStore:
         kwargs["db_name"] = config.database_name
     if config.collection_name:
         kwargs["collection_name"] = config.collection_name
-    context = _call_store_factory(MongoDBStore.from_conn_string, config.connection_uri, **kwargs)
+    context = _call_store_factory(mongodb_store.from_conn_string, config.connection_uri, **kwargs)
     store = _enter_store_context(context)
     _setup_store(store, config)
     return store
@@ -220,7 +219,7 @@ def _mongodb_index_payload(index: IndexConfig | None) -> Any:
     if index is None:
         return None
     try:
-        from langgraph.store.mongodb import create_vector_index_config
+        create_vector_index_config = importlib.import_module("langgraph.store.mongodb").create_vector_index_config
     except ModuleNotFoundError:
         return _index_payload(index)
     return create_vector_index_config(

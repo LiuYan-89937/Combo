@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import importlib
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -133,9 +134,7 @@ class SchedulerSeedPlan(BaseModel):
 
     @model_validator(mode="after")
     def _validate_seed_schedule(self) -> "SchedulerSeedPlan":
-        from agent_factory.scheduler_system.triggers import validate_schedule_expression
-
-        validate_schedule_expression(
+        _validate_schedule_expression(
             schedule_type=self.schedule_type,
             schedule_expr=self.schedule_expr,
             timezone=self.timezone,
@@ -196,14 +195,21 @@ class SchedulerJob(BaseModel):
 
     @model_validator(mode="after")
     def _validate_schedule(self) -> "SchedulerJob":
-        from agent_factory.scheduler_system.triggers import validate_schedule_expression
-
-        validate_schedule_expression(
+        _validate_schedule_expression(
             schedule_type=self.schedule_type,
             schedule_expr=self.schedule_expr,
             timezone=self.timezone,
         )
         return self
+
+
+def _validate_schedule_expression(*, schedule_type: SchedulerScheduleType, schedule_expr: str, timezone: str) -> None:
+    triggers = importlib.import_module("agent_factory.scheduler_system.triggers")
+    triggers.validate_schedule_expression(
+        schedule_type=schedule_type,
+        schedule_expr=schedule_expr,
+        timezone=timezone,
+    )
 
 
 class SchedulerRun(BaseModel):

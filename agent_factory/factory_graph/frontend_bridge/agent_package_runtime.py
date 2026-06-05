@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import hashlib
 import json
 import os
@@ -706,8 +707,6 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 
 
 def _path_updated_at(path: Path) -> str:
-    from datetime import UTC, datetime
-
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
     except OSError:

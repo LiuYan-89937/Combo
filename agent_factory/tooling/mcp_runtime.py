@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+import importlib
 import json
 import os
 from pathlib import Path
@@ -167,14 +168,14 @@ async def _with_timeout(coro: Any, *, timeout_seconds: float, operation: str) ->
 
 def _load_mcp_sdk() -> dict[str, Any]:
     try:
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
+        mcp_module = importlib.import_module("mcp")
+        stdio_module = importlib.import_module("mcp.client.stdio")
     except ModuleNotFoundError as exc:
         raise MCPRuntimeError("Python package 'mcp' is required to use MCP servers") from exc
     return {
-        "ClientSession": ClientSession,
-        "StdioServerParameters": StdioServerParameters,
-        "stdio_client": stdio_client,
+        "ClientSession": mcp_module.ClientSession,
+        "StdioServerParameters": mcp_module.StdioServerParameters,
+        "stdio_client": stdio_module.stdio_client,
     }
 
 

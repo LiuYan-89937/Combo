@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import importlib
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -58,8 +59,6 @@ def get_factory_tools(
     runtime_resources: Mapping[str, Any] | None = None,
     tool_runtime_resources: Mapping[str, Any] | None = None,
 ) -> list[BaseTool]:
-    from agent_factory.tooling.factory_extensions import default_factory_extension_root
-
     selected_ids = set(tool_ids or [])
     base_runtime_resources = dict(runtime_resources or {})
     base_tool_runtime_resources = dict(tool_runtime_resources or {})
@@ -73,7 +72,11 @@ def get_factory_tools(
         tool_runtime_resources=base_tool_runtime_resources,
     )
     effective_runtime_resources = _merge_runtime_resources(base_runtime_resources, discovered_runtime_resources)
-    factory_extension_root = Path(extension_root).expanduser().resolve() if extension_root else default_factory_extension_root()
+    factory_extension_root = (
+        Path(extension_root).expanduser().resolve()
+        if extension_root
+        else _factory_extensions_module().default_factory_extension_root()
+    )
     compiler = ToolCompiler(
         allowed_python_roots=[factory_extension_root],
         mcp_clients=effective_mcp_clients,
@@ -124,8 +127,6 @@ def _collect_factory_tool_specs(
     runtime_resources: Mapping[str, Any],
     tool_runtime_resources: Mapping[str, Any],
 ) -> tuple[list[ToolSpec], Mapping[str, MCPToolClient], dict[str, object]]:
-    from agent_factory.tooling.factory_extensions import FactoryExtensionManager
-
     specs = get_builtin_tool_specs()
     if not scheduler_enabled_from_env() or "scheduler_runtime" not in tool_runtime_resources:
         specs = [spec for spec in specs if spec.id != "scheduler"]
@@ -134,7 +135,7 @@ def _collect_factory_tool_specs(
     effective_mcp_clients: Mapping[str, MCPToolClient] = dict(mcp_tool_clients or {})
     discovered_runtime_resources: dict[str, object] = {}
     if include_extensions:
-        manager = FactoryExtensionManager(
+        manager = _factory_extensions_module().FactoryExtensionManager(
             extension_root=extension_root,
             mcp_catalog_clients=mcp_catalog_clients,
             mcp_tool_clients=mcp_tool_clients,
@@ -180,3 +181,7 @@ def _merge_runtime_resources(
             raise ValueError(f"conflicting factory tool runtime resource: {key}")
         merged[key] = value
     return merged
+
+
+def _factory_extensions_module():
+    return importlib.import_module("agent_factory.tooling.factory_extensions")

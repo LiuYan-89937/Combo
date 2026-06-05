@@ -16,6 +16,7 @@ from agent_factory.runtime_contracts.builtins import (
     default_resources_contract,
     default_sandbox_contract,
     default_scheduler_contract,
+    default_scheduler_seed_contract,
     default_session_contract,
     default_state_contract,
     default_tools_contract,
@@ -171,6 +172,16 @@ _CONTRACT_CATALOG = {
             "references/scheduler_contract.schema.json",
             "examples/scheduler_contract.minimal.json",
             "references/scheduler_contract.repair_hints.md",
+        ),
+    ),
+    "scheduler_seed": _item(
+        "scheduler_seed",
+        default_factory=default_scheduler_seed_contract,
+        recommended_skill="12-scheduler-seeds",
+        recommended_resources=(
+            "references/scheduler_seed.schema.json",
+            "examples/scheduler_seed.minimal.json",
+            "references/scheduler_seed.repair_hints.md",
         ),
     ),
     "session": _item(

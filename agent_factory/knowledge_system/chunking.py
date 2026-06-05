@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -144,44 +145,44 @@ def _split_content(*, content: str, plan: SplitterPlan) -> list[Document]:
 
 def _split_with_langchain(*, text: str, plan: SplitterPlan) -> list[Document]:
     if plan.splitter == "markdown":
-        from langchain_text_splitters import MarkdownTextSplitter
-
-        splitter = MarkdownTextSplitter(chunk_size=plan.chunk_size, chunk_overlap=plan.chunk_overlap)
+        splitter = _text_splitters_module().MarkdownTextSplitter(chunk_size=plan.chunk_size, chunk_overlap=plan.chunk_overlap)
         return splitter.create_documents([text])
     if plan.splitter == "json":
         return _split_json_with_langchain(text=text, plan=plan)
     if plan.splitter == "code" and plan.language:
-        from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
-
-        language = getattr(Language, plan.language)
-        splitter = RecursiveCharacterTextSplitter.from_language(
+        splitters = _text_splitters_module()
+        language = getattr(splitters.Language, plan.language)
+        splitter = splitters.RecursiveCharacterTextSplitter.from_language(
             language=language,
             chunk_size=plan.chunk_size,
             chunk_overlap=plan.chunk_overlap,
         )
         return splitter.create_documents([text])
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=plan.chunk_size, chunk_overlap=plan.chunk_overlap)
+    splitter = _text_splitters_module().RecursiveCharacterTextSplitter(
+        chunk_size=plan.chunk_size,
+        chunk_overlap=plan.chunk_overlap,
+    )
     return splitter.create_documents([text])
 
 
 def _split_json_with_langchain(*, text: str, plan: SplitterPlan) -> list[Document]:
     try:
-        from langchain_text_splitters import RecursiveJsonSplitter
-    except ImportError:
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-        splitter = RecursiveCharacterTextSplitter(chunk_size=plan.chunk_size, chunk_overlap=plan.chunk_overlap)
+        json_splitter = _text_splitters_module().RecursiveJsonSplitter
+    except (ImportError, AttributeError):
+        splitter = _text_splitters_module().RecursiveCharacterTextSplitter(
+            chunk_size=plan.chunk_size,
+            chunk_overlap=plan.chunk_overlap,
+        )
         return splitter.create_documents([text])
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-        splitter = RecursiveCharacterTextSplitter(chunk_size=plan.chunk_size, chunk_overlap=plan.chunk_overlap)
+        splitter = _text_splitters_module().RecursiveCharacterTextSplitter(
+            chunk_size=plan.chunk_size,
+            chunk_overlap=plan.chunk_overlap,
+        )
         return splitter.create_documents([text])
-    splitter = RecursiveJsonSplitter(max_chunk_size=plan.chunk_size)
+    splitter = json_splitter(max_chunk_size=plan.chunk_size)
     try:
         documents = splitter.create_documents(texts=[data])
     except TypeError:
@@ -218,3 +219,7 @@ def _language_for(*, document_type: str, file_type: str) -> str | None:
         "rust": "RUST",
         "sql": "SQL",
     }.get(key)
+
+
+def _text_splitters_module():
+    return importlib.import_module("langchain_text_splitters")

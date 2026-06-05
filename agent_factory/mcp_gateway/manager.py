@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import importlib
 import json
 import os
 from threading import Lock
@@ -66,10 +67,10 @@ class HostMCPGatewayManager:
 
 
 def build_gateway_clients(config: MCPServersConfig, gateway_url: str) -> dict[str, object]:
-    from agent_factory.mcp_gateway.client import MCPGatewayClient
+    client_cls = importlib.import_module("agent_factory.mcp_gateway.client").MCPGatewayClient
 
     return {
-        server.server_id: MCPGatewayClient(
+        server.server_id: client_cls(
             base_url=gateway_url,
             server_id=server.server_id,
             timeout_seconds=server.timeout_seconds,
@@ -97,4 +98,3 @@ def _configured_port() -> int:
 def _config_key(config: MCPServersConfig) -> str:
     payload = json.dumps(config.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel
 
@@ -24,8 +24,29 @@ from agent_factory.runtime_contracts.schema import (
     TraceContract,
 )
 from agent_factory.runtime_kernel.node_providers.package import PackageNodeManifest
+from agent_factory.runtime_kernel.bindings.schema import BindingType, HookPoint, ServiceKind
+from agent_factory.runtime_kernel.nodes.standard import (
+    CognitiveAnswerNode,
+    CognitiveClarifyNode,
+    CognitivePlanNode,
+    CognitiveReviewNode,
+    CognitiveRouteNode,
+    CognitiveStructuredNode,
+    FinalizeNode,
+    GovernanceApprovalGateNode,
+    GovernancePostcheckNode,
+    GovernancePrecheckNode,
+    GovernanceRefusalGateNode,
+    IngressNode,
+    OperationalResourceProbeNode,
+    OperationalToolCallNode,
+    TerminalCloseNode,
+    TerminalCommitNode,
+)
+from agent_factory.runtime_kernel.patterns.schema import NodeType, PatternKind, PatternSlotType, StateMode
 from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
 from agent_factory.runtime_render import RenderManifest
+from agent_factory.tooling.builtins.registry import IMPLEMENTED_BUILTIN_TOOL_IDS
 from agent_factory.tooling.spec import ToolSpec
 
 
@@ -168,22 +189,6 @@ def export_skill_schemas(*, skills_root: Path = SKILLS_ROOT) -> list[Path]:
 
 def _runtime_reference_exports() -> dict[str, str]:
     """Generate reference markdown files from actual RuntimeKernel code."""
-    from agent_factory.runtime_kernel.nodes.standard import (
-        CognitiveAnswerNode, CognitiveClarifyNode, CognitivePlanNode,
-        CognitiveReviewNode, CognitiveRouteNode, CognitiveStructuredNode,
-        FinalizeNode, GovernanceApprovalGateNode, GovernancePostcheckNode,
-        GovernancePrecheckNode, GovernanceRefusalGateNode, IngressNode,
-        OperationalResourceProbeNode, OperationalToolCallNode,
-        TerminalCloseNode, TerminalCommitNode,
-    )
-    from agent_factory.runtime_kernel.patterns.schema import (
-        NodeType, PatternKind, PatternSlotType, StateMode,
-    )
-    from agent_factory.runtime_kernel.bindings.schema import (
-        BindingType, HookPoint, ServiceKind,
-    )
-    from agent_factory.tooling.builtins.registry import IMPLEMENTED_BUILTIN_TOOL_IDS
-
     builtin_impls = [
         IngressNode, GovernancePrecheckNode, GovernancePostcheckNode,
         GovernanceApprovalGateNode, GovernanceRefusalGateNode,
@@ -261,8 +266,7 @@ def _runtime_reference_exports() -> dict[str, str]:
 
 def _get_literal_args(literal_type: Any) -> list[str]:
     """Extract string values from a typing.Literal type."""
-    import typing
-    args = typing.get_args(literal_type)
+    args = get_args(literal_type)
     return [str(a) for a in args]
 
 

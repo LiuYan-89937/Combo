@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import html
+import importlib
 import json
 from pathlib import Path
 import re
@@ -134,8 +135,7 @@ def discover_web_snapshot(
     if parsed.scheme not in {"http", "https"}:
         return SourceDiscovery(documents=[], file_type_counts={}, warnings=["web_snapshot requires http or https URL"])
     try:
-        import httpx
-
+        httpx = importlib.import_module("httpx")
         response = httpx.get(uri, timeout=20.0, follow_redirects=True)
         response.raise_for_status()
     except Exception as exc:
@@ -262,22 +262,17 @@ def _load_file_documents(*, path: Path, suffix: str) -> list[Document]:
 
 def _build_langchain_loader(*, path: Path, suffix: str):
     try:
-        from langchain_community.document_loaders import (
-            BSHTMLLoader,
-            Docx2txtLoader,
-            PyPDFLoader,
-            TextLoader,
-        )
+        document_loaders = importlib.import_module("langchain_community.document_loaders")
     except ModuleNotFoundError:
         return None
     if suffix in PDF_EXTENSIONS:
-        return PyPDFLoader(str(path))
+        return document_loaders.PyPDFLoader(str(path))
     if suffix in DOCX_EXTENSIONS:
-        return Docx2txtLoader(str(path))
+        return document_loaders.Docx2txtLoader(str(path))
     if suffix in {".html", ".htm"}:
-        return BSHTMLLoader(str(path), open_encoding="utf-8")
+        return document_loaders.BSHTMLLoader(str(path), open_encoding="utf-8")
     if suffix in TEXT_EXTENSIONS:
-        return TextLoader(str(path), encoding="utf-8", autodetect_encoding=True)
+        return document_loaders.TextLoader(str(path), encoding="utf-8", autodetect_encoding=True)
     return None
 
 
@@ -307,8 +302,7 @@ def _read_text(path: Path) -> str:
 
 
 def _html_to_text(value: str) -> str:
-    from bs4 import BeautifulSoup
-
+    BeautifulSoup = importlib.import_module("bs4").BeautifulSoup
     soup = BeautifulSoup(value, "html.parser")
     for item in soup(["script", "style", "noscript"]):
         item.decompose()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -42,10 +43,9 @@ def compile_json_schema(*, schema: dict[str, Any], model_name: str) -> CompiledJ
 
 def _draft_validator():
     try:
-        from jsonschema import Draft202012Validator
+        return importlib.import_module("jsonschema").Draft202012Validator
     except ModuleNotFoundError as exc:
         raise ToolSchemaError("jsonschema dependency is required for tool schema validation") from exc
-    return Draft202012Validator
 
 
 def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:

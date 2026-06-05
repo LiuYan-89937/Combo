@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,10 +29,8 @@ class LangGraphCheckpointerHandle:
 class LangGraphCheckpointerFactory:
     def build(self, config: LangGraphCheckpointerConfig) -> LangGraphCheckpointerHandle:
         if config.backend == "memory":
-            from langgraph.checkpoint.memory import InMemorySaver
-
             return LangGraphCheckpointerHandle(
-                saver=InMemorySaver(),
+                saver=importlib.import_module("langgraph.checkpoint.memory").InMemorySaver(),
                 backend="memory",
                 persistent=False,
                 path=None,
@@ -42,7 +41,7 @@ class LangGraphCheckpointerFactory:
 
     def _build_sqlite(self, checkpoint_path: Path) -> LangGraphCheckpointerHandle:
         try:
-            from langgraph.checkpoint.sqlite import SqliteSaver
+            sqlite_saver = importlib.import_module("langgraph.checkpoint.sqlite").SqliteSaver
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "SQLite checkpointer backend is configured, but langgraph-checkpoint-sqlite "
@@ -50,7 +49,7 @@ class LangGraphCheckpointerFactory:
                 "for a non-persistent debug run."
             ) from exc
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        saver = _enter_checkpointer_context(SqliteSaver.from_conn_string(str(checkpoint_path)))
+        saver = _enter_checkpointer_context(sqlite_saver.from_conn_string(str(checkpoint_path)))
         _PERSISTENT_CHECKPOINTER_IDS.add(id(saver))
         return LangGraphCheckpointerHandle(
             saver=saver,

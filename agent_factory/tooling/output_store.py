@@ -9,6 +9,8 @@ import re
 from typing import Any
 from uuid import uuid4
 
+from agent_factory.tooling.output_compressor import compress_tool_output
+
 
 TOOL_OUTPUT_STORE_RESOURCE = "tool_output_store"
 TOOL_OUTPUT_MAX_MODEL_CHARS_ENV = "AGENTFACTORY_TOOL_OUTPUT_MAX_MODEL_CHARS"
@@ -161,8 +163,6 @@ def project_tool_output(
     policy: ToolOutputPolicy | None = None,
     compression_model: Any | None = None,
 ) -> ToolOutputProjection:
-    from agent_factory.tooling.output_compressor import compress_tool_output
-
     effective_policy = policy or default_tool_output_policy()
     raw_text = _json_text(output)
     if len(raw_text) <= effective_policy.max_model_chars:
