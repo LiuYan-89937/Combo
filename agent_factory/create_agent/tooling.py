@@ -11,10 +11,9 @@ from agent_factory.create_agent.control_tool import (
     CREATE_AGENT_WORKSPACE_RESOURCE,
     build_create_agent_control_tool_spec,
 )
-from agent_factory.create_agent.models import ACTION_FILE, TODO_FILE
-from agent_factory.create_agent.scaffold_tool import CREATE_AGENT_SCAFFOLD_TOOL_ID, build_create_agent_scaffold_tool_spec
+from agent_factory.create_agent.models import ACTION_FILE, SYSTEM_STATE_FILE
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
-from agent_factory.create_agent.todo_tool import CREATE_AGENT_TODO_TOOL_ID, build_create_agent_todo_tool_spec
+from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
 from agent_factory.create_agent.validate_tool import CREATE_AGENT_VALIDATE_TOOL_ID, build_create_agent_validate_tool_spec
 from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
@@ -85,15 +84,17 @@ class CreateAgentToolEnvironmentBuilder:
         }
         filesystem_resource = runtime_resources.get("filesystem")
         if isinstance(filesystem_resource, dict):
-            filesystem_resource["protected_write_paths"] = [ACTION_FILE, TODO_FILE]
+            active_stage = create_agent_workspace.read_system_state().active_stage()
+            filesystem_resource["allowed_write_paths"] = _allowed_write_paths(active_stage.owned_files if active_stage else [])
+            filesystem_resource["protected_write_paths"] = [ACTION_FILE, SYSTEM_STATE_FILE]
             filesystem_resource["managed_paths"] = {
                 ACTION_FILE: {
                     "read_tool": CREATE_AGENT_CONTROL_TOOL_ID,
                     "write_tool": CREATE_AGENT_CONTROL_TOOL_ID,
                 },
-                TODO_FILE: {
-                    "read_tool": CREATE_AGENT_TODO_TOOL_ID,
-                    "write_tool": CREATE_AGENT_TODO_TOOL_ID,
+                SYSTEM_STATE_FILE: {
+                    "read_tool": CREATE_AGENT_STAGE_TOOL_ID,
+                    "write_tool": CREATE_AGENT_STAGE_TOOL_ID,
                 },
             }
         skill_registry = _create_agent_skill_registry(
@@ -112,8 +113,7 @@ class CreateAgentToolEnvironmentBuilder:
                 [
                     *provider_result.system_tool_ids,
                     CREATE_AGENT_CONTROL_TOOL_ID,
-                    CREATE_AGENT_SCAFFOLD_TOOL_ID,
-                    CREATE_AGENT_TODO_TOOL_ID,
+                    CREATE_AGENT_STAGE_TOOL_ID,
                     CREATE_AGENT_VALIDATE_TOOL_ID,
                 ]
             )
@@ -122,8 +122,7 @@ class CreateAgentToolEnvironmentBuilder:
             provider_result,
             extra_specs=[
                 build_create_agent_control_tool_spec(),
-                build_create_agent_scaffold_tool_spec(),
-                build_create_agent_todo_tool_spec(),
+                build_create_agent_stage_tool_spec(),
                 build_create_agent_validate_tool_spec(),
                 *skill_specs,
             ],
@@ -143,6 +142,19 @@ class CreateAgentToolEnvironmentBuilder:
             extension_report=extension_report.model_dump(mode="json"),
             resource_set_store=runtime_resources.get(RESOURCE_SET_STORE_KEY),
         )
+
+
+def _allowed_write_paths(owned_files: list[str]) -> list[str]:
+    values: list[str] = []
+    for item in owned_files:
+        cleaned = str(item or "").strip()
+        if not cleaned:
+            continue
+        if cleaned.endswith("/"):
+            values.append(cleaned)
+            continue
+        values.append(cleaned)
+    return values
 
 
 def _unique_specs(result: ToolProviderResult, *, extra_specs=()):

@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "title": "Assembly Pattern System",
+  "description": "Owns assembly specification and optional custom patterns."
+}

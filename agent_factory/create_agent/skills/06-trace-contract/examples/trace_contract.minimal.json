@@ -1,9 +1,0 @@
-{
-  "config": {
-    "max_inline_payload_chars": 12000,
-    "root": ".agent_runtime/trace"
-  },
-  "enabled": true,
-  "type": "trace",
-  "version": "trace_contract.v0"
-}

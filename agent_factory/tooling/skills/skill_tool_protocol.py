@@ -80,11 +80,11 @@ def skill_error_guidance(arguments: dict[str, Any], exc: Exception) -> str:
     action = str(arguments.get("action") or "").strip()
     if action == "read_resource" and isinstance(exc, PermissionError):
         name = str(arguments.get("name") or "").strip()
-        current_todo = str(arguments.get("current_todo") or "").strip()
+        current_system = str(arguments.get("current_system") or "").strip()
         return (
             "Protocol violation: read_resource requires the same skill to be described or loaded first "
-            f"for current_todo={current_todo!r}. Next call: "
-            f"skill(action='describe', name={name!r}, current_todo={current_todo!r}), then retry read_resource."
+            f"for current_system={current_system!r}. Next call: "
+            f"skill(action='describe', name={name!r}, current_system={current_system!r}), then retry read_resource."
         )
     if action == "read_resource" and isinstance(exc, SkillResourceFragmentNotFound):
         return (
@@ -96,7 +96,7 @@ def skill_error_guidance(arguments: dict[str, Any], exc: Exception) -> str:
     if action == "load" and isinstance(exc, PermissionError):
         return "Loading a second primary skill requires describe for that skill first, then load with a concrete reason."
     if action == "read_resource":
-        return "Read resource failed. Verify action, name, path, current_todo, mode, and pointer."
+        return "Read resource failed. Verify action, name, path, current_system, mode, and pointer."
     if action == "read_repair_resources":
         return "Read repair resources failed. Use recommended_skill and recommended_resources from the validator without renaming paths."
     return "Correct the skill action arguments according to the Skill Gateway protocol."
@@ -109,7 +109,7 @@ def skill_error_facts(arguments: dict[str, Any], exc: Exception) -> dict[str, An
         "path": str(arguments.get("path") or ""),
         "mode": str(arguments.get("mode") or ""),
         "pointer": str(arguments.get("pointer") or ""),
-        "current_todo": str(arguments.get("current_todo") or ""),
+        "current_system": str(arguments.get("current_system") or ""),
         "error_type": type(exc).__name__,
     }
     if isinstance(exc, SkillResourceFragmentNotFound):

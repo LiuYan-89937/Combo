@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.patterns.loader import PatternLoader
 from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
@@ -17,7 +17,7 @@ class LoadedAgentPackage:
     package_root: Path
     manifest_path: Path
     manifest: AgentPackageManifest
-    assembly_spec: AgentAssemblySpec
+    assembly_spec: Any
     render_manifest: RenderManifest
     resources: dict[str, Any]
     sandbox_contract: dict[str, Any]
@@ -31,7 +31,7 @@ class AgentPackageLoader:
         manifest = AgentPackageManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
         package_root = manifest_path.parent
 
-        assembly_spec = AgentAssemblySpec.model_validate_json(
+        assembly_spec = _agent_assembly_spec_model().model_validate_json(
             _read_package_file(package_root, manifest.assembly_spec_path)
         )
         render_manifest = RenderManifest.model_validate_json(
@@ -59,6 +59,10 @@ class AgentPackageLoader:
             contracts=contracts,
             patterns=patterns,
         )
+
+
+def _agent_assembly_spec_model():
+    return importlib.import_module("agent_factory.assembly.schema").AgentAssemblySpec
 
 
 def _read_package_file(package_root: Path, relative_path: str) -> str:

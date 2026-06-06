@@ -1,7 +1,15 @@
 from __future__ import annotations
 
-from agent_factory.create_agent.models import PackageValidationReport, TodoList, TodoStatus
-from agent_factory.create_agent.scaffold_tool import CREATE_AGENT_SCAFFOLD_TOOL_ID
+from datetime import UTC, datetime
+
+from agent_factory.create_agent.models import (
+    PackageValidationReport,
+    SystemManufacturingState,
+    SystemRepairIssue,
+    SystemStage,
+    SystemStageStatus,
+    SystemStageValidation,
+)
 
 
 def validation_event_from_tool_calls(tool_calls: list[dict[str, object]]) -> str:
@@ -10,55 +18,99 @@ def validation_event_from_tool_calls(tool_calls: list[dict[str, object]]) -> str
         return "control"
     if "create_agent_validate" in tool_names:
         return "explicit_validation"
-    if tool_names & {"write", "edit", "multi_edit", CREATE_AGENT_SCAFFOLD_TOOL_ID}:
+    if tool_names & {"write", "edit", "multi_edit"}:
         return "package_change"
-    if "create_agent_todo" in tool_names:
-        return "todo"
+    if "create_agent_stage" in tool_names:
+        return "stage"
     return "none"
 
 
-def apply_validation_progress(todo: TodoList, report: PackageValidationReport) -> TodoList:
-    todo = _apply_validation_passes(todo, report)
-    if report.status != "passed":
-        return todo.upsert_repair_items(report.issues)
-    return todo
-
-
-def _apply_validation_passes(todo: TodoList, report: PackageValidationReport) -> TodoList:
-    passed_ids = _validator_passed_todo_ids(report)
-    if not passed_ids:
-        return todo
-    items = []
-    changed = False
-    for item in todo.items:
-        if item.todo_id not in passed_ids or item.status == TodoStatus.done:
-            items.append(item)
-            continue
-        details = dict(item.details or {})
-        evidence = list(details.get("evidence") or [])
-        evidence.append(f"Validated by create_agent_validate: {report.validation_scope} | {report.summary}")
-        details["evidence"] = evidence[-12:]
-        items.append(item.model_copy(update={"status": TodoStatus.done, "details": details}))
-        changed = True
-    return todo.model_copy(update={"items": items}) if changed else todo
-
-
-def _validator_passed_todo_ids(report: PackageValidationReport) -> set[str]:
+def apply_system_validation_progress(
+    state: SystemManufacturingState,
+    report: PackageValidationReport,
+) -> SystemManufacturingState:
+    stage = state.active_stage()
+    if stage is None:
+        return state
     if report.status == "passed":
-        if report.validation_scope == "full_static":
-            # Only full_static (which now includes semantic + smoke test) marks all
-            return {
-                "package_manifest",
-                "runtime_contracts",
-                "assembly_and_patterns",
-                "state_resources_render",
-                "tools_nodes_extensions",
-                "validate_agent_package",
-            }
-        if report.validation_scope == "assembly_compile":
-            return {"package_manifest", "runtime_contracts", "assembly_and_patterns"}
-        if report.validation_scope == "runtime_contract_build":
-            return {"package_manifest", "runtime_contracts"}
-        if report.validation_scope == "package_shape":
-            return {"package_manifest"}
-    return set()
+        return _mark_stage_done(state, stage, report)
+    return _mark_stage_failed(state, stage, report)
+
+
+def _mark_stage_done(
+    state: SystemManufacturingState,
+    stage: SystemStage,
+    report: PackageValidationReport,
+) -> SystemManufacturingState:
+    resolved_repairs = [
+        item.model_copy(update={"resolved": True})
+        for item in stage.repair_history
+    ]
+    updated = stage.model_copy(
+        update={
+            "status": SystemStageStatus.done,
+            "repair_history": resolved_repairs,
+            "validation": SystemStageValidation(
+                scope=report.validation_scope,
+                status="passed",
+                summary=report.summary,
+                issue_ids=[],
+                updated_at=datetime.now(UTC).isoformat(),
+            ),
+        }
+    )
+    return state.update_stage(updated)
+
+
+def _mark_stage_failed(
+    state: SystemManufacturingState,
+    stage: SystemStage,
+    report: PackageValidationReport,
+) -> SystemManufacturingState:
+    existing = {item.issue_id: item for item in stage.repair_history}
+    repairs = list(stage.repair_history)
+    for issue in report.issues:
+        digest = issue.to_digest()
+        if digest.issue_id in existing:
+            continue
+        repairs.append(
+            SystemRepairIssue(
+                issue_id=digest.issue_id,
+                where=issue.where,
+                summary=issue.summary,
+                category=_issue_category(issue.where, issue.message),
+                target_files=issue.target_files,
+                repair_hint=issue.repair_hint,
+            )
+        )
+    updated = stage.model_copy(
+        update={
+            "status": SystemStageStatus.failed_needs_repair,
+            "repair_history": repairs,
+            "validation": SystemStageValidation(
+                scope=report.validation_scope,
+                status="failed",
+                summary=report.summary,
+                issue_ids=[issue.to_digest().issue_id for issue in report.issues],
+                updated_at=datetime.now(UTC).isoformat(),
+            ),
+        }
+    )
+    return state.update_stage(updated)
+
+
+def _issue_category(where: str, message: str) -> str:
+    text = f"{where} {message}".lower()
+    if "attributeerror" in text or "adapter" in text or "validator" in text:
+        return "validator_runtime_defect"
+    if "resource" in text:
+        return "resource_missing"
+    if "tool" in text:
+        return "tool_binding_error"
+    if "assembly" in text or "pattern" in text:
+        return "assembly_compile_error"
+    if "contract" in text:
+        return "runtime_contract_error"
+    if "schema" in text or "validationerror" in text:
+        return "schema_error"
+    return "package_shape_error"

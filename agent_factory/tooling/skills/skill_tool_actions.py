@@ -54,40 +54,40 @@ class SkillToolActionRunner:
         )
 
     def _list_loaded(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_todo = required_string(arguments, "current_todo")
+        current_system = required_string(arguments, "current_system")
         return _output(
             action=action,
-            message=f"Loaded skill state for todo: {current_todo}",
-            loaded_state=self.registry.list_loaded(current_todo=current_todo),
+            message=f"Loaded skill state for system: {current_system}",
+            loaded_state=self.registry.list_loaded(current_system=current_system),
         )
 
     def _describe(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_todo = required_string(arguments, "current_todo")
-        described = self.registry.describe(name, current_todo=current_todo)
+        current_system = required_string(arguments, "current_system")
+        described = self.registry.describe(name, current_system=current_system)
         persist_registry(self.resources, self.registry)
         return _output(
             action=action,
             message=f"Skill described: {name}",
             skill=described,
-            loaded_state=self.registry.list_loaded(current_todo=current_todo),
+            loaded_state=self.registry.list_loaded(current_system=current_system),
         )
 
     def _load(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_todo = required_string(arguments, "current_todo")
+        current_system = required_string(arguments, "current_system")
         reason = required_string(arguments, "reason")
-        loaded = self.registry.load(name, current_todo=current_todo, reason=reason)
+        loaded = self.registry.load(name, current_system=current_system, reason=reason)
         persist_registry(self.resources, self.registry)
         return _output(
             action=action,
             message=f"Skill loaded: {name}",
             skill=loaded.model_dump(mode="json"),
-            loaded_state=self.registry.list_loaded(current_todo=current_todo),
+            loaded_state=self.registry.list_loaded(current_system=current_system),
         )
 
     def _read_repair_resources(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_todo = required_string(arguments, "current_todo")
+        current_system = required_string(arguments, "current_system")
         paths = resource_paths(arguments.get("paths"))
-        self.registry.describe(name, current_todo=current_todo)
+        self.registry.describe(name, current_system=current_system)
         persist_registry(self.resources, self.registry)
         return _output(
             action=action,
@@ -98,17 +98,17 @@ class SkillToolActionRunner:
                     self.registry.read_resource(
                         name,
                         path,
-                        current_todo=current_todo,
+                        current_system=current_system,
                         mode=repair_resource_mode(path),
                     )
                     for path in paths
                 ],
             },
-            loaded_state=self.registry.list_loaded(current_todo=current_todo),
+            loaded_state=self.registry.list_loaded(current_system=current_system),
         )
 
     def _read_resource(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_todo = required_string(arguments, "current_todo")
+        current_system = required_string(arguments, "current_system")
         path = required_string(arguments, "path")
         mode = resource_mode(arguments.get("mode"))
         pointer = str(arguments.get("pointer") or "").strip()
@@ -118,11 +118,11 @@ class SkillToolActionRunner:
             resource=self.registry.read_resource(
                 name,
                 path,
-                current_todo=current_todo,
+                current_system=current_system,
                 mode=mode,
                 pointer=pointer,
             ),
-            loaded_state=self.registry.list_loaded(current_todo=current_todo),
+            loaded_state=self.registry.list_loaded(current_system=current_system),
         )
 
 

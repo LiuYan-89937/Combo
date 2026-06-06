@@ -13,7 +13,12 @@ VALIDATION_SCOPES = [
     "workspace_hygiene",
     "package_shape",
     "runtime_contract_build",
+    "runtime_contract_build_subset",
+    "tools_contract_validate",
+    "package_tool_syntax_and_binding",
     "assembly_compile",
+    "render_manifest_validate",
+    "scheduler_seed_validate",
     "python_syntax",
     "full_static",
 ]
@@ -33,14 +38,23 @@ def build_create_agent_validate_tool_spec() -> ToolSpec:
                 "scope": {
                     "type": "string",
                     "enum": VALIDATION_SCOPES,
-                    "default": "full_static",
-                    "description": "Validation scope to run.",
+                    "description": "Validation scope to run. Omit to use the active system stage scope.",
                 },
                 "changed_files": {
                     "type": "array",
                     "items": {"type": "string"},
                     "default": [],
                     "description": "Optional package-relative files that changed.",
+                },
+                "system_id": {
+                    "type": "string",
+                    "description": "RuntimeKernel system stage to validate. Defaults to the active system.",
+                },
+                "owned_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": [],
+                    "description": "Owned files for the active system.",
                 },
             },
             "additionalProperties": False,
@@ -63,7 +77,8 @@ def build_create_agent_validate_tool_spec() -> ToolSpec:
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     workspace = _workspace(resources)
-    scope = _scope(arguments.get("scope"))
+    system_id = str(arguments.get("system_id") or "").strip()
+    scope = _scope(arguments.get("scope"), workspace=workspace, system_id=system_id)
     changed_files = _changed_files(arguments.get("changed_files"))
     report = CreateAgentPackageValidator().validate(
         workspace.root,
@@ -79,7 +94,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
-        scope = _scope(arguments.get("scope"))
         _changed_files(arguments.get("changed_files"))
     except Exception as exc:
         return ToolRiskResult(
@@ -91,7 +105,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
         action="allow",
         risk_level="low",
         reasons=["create-agent validation is read-only within the package workspace"],
-        facts={"scope": scope},
+        facts={"scope": str(arguments.get("scope") or "")},
     ).model_dump(mode="json")
 
 
@@ -104,8 +118,16 @@ def _workspace(resources: dict[str, Any]) -> CreateAgentWorkspace:
     raise ValueError("create_agent workspace resource is missing")
 
 
-def _scope(value: Any) -> str:
-    scope = str(value or "full_static").strip()
+def _scope(value: Any, *, workspace: CreateAgentWorkspace, system_id: str) -> str:
+    active = workspace.read_system_state().active_stage()
+    active_id = system_id or (active.system_id if active else "")
+    if active_id != "final_validation" and str(value or "").strip() == "full_static":
+        raise ValueError("full_static is only allowed when active system is final_validation")
+    scope = str(value or (active.validation_scope if active else "workspace_hygiene")).strip()
+    if scope in {"runtime_contract_build_subset", "tools_contract_validate", "render_manifest_validate", "scheduler_seed_validate"}:
+        scope = "runtime_contract_build"
+    if scope == "package_tool_syntax_and_binding":
+        scope = "python_syntax"
     if scope not in VALIDATION_SCOPES:
         raise ValueError(f"scope must be one of: {', '.join(VALIDATION_SCOPES)}")
     return scope

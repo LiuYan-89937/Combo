@@ -17,6 +17,7 @@ from agent_factory.create_agent.workspace import CreateAgentWorkspace
 @dataclass(frozen=True, slots=True)
 class ValidationDecision:
     force_full: bool = False
+    requested_scope: str = ""
 
 
 @dataclass(slots=True)
@@ -32,7 +33,8 @@ class CreateAgentValidationGate:
         if not decision.force_full and previous_state is not None and previous_report is not None and not changed_files:
             return _cached_report(previous_report)
 
-        scope = "full_static" if decision.force_full else _validation_scope(changed_files, previous_state is None)
+        active = workspace.read_system_state().active_stage()
+        scope = _scope_for_active_system(active.validation_scope if active else "", force_full=decision.force_full)
         report = self.validator.validate(workspace.root, scope=scope, changed_files=changed_files)
         workspace.write_validation_state(
             PackageValidationState(
@@ -69,19 +71,20 @@ def _target_files(report: PackageValidationReport) -> list[str]:
     return sorted(set(values))
 
 
-def _validation_scope(changed_files: list[str], first_validation: bool) -> ValidationScope:
-    if first_validation:
+def _scope_for_active_system(validation_scope: str, *, force_full: bool) -> ValidationScope:
+    if force_full:
         return "full_static"
-    if not changed_files:
-        return "workspace_hygiene"
-    if any(path.endswith(".py") and (path.startswith("tools/") or path.startswith("nodes/")) for path in changed_files):
-        return "full_static"
-    if any(path == "assembly_spec.json" or path.startswith("patterns/") or path.startswith("bindings/") for path in changed_files):
-        return "assembly_compile"
-    if any(path == "agent_package.json" or path.startswith("contracts/") for path in changed_files):
+    if validation_scope in {"full_static", "assembly_compile", "package_shape", "python_syntax"}:
+        return validation_scope
+    if validation_scope in {
+        "runtime_contract_build_subset",
+        "tools_contract_validate",
+        "render_manifest_validate",
+        "scheduler_seed_validate",
+    }:
         return "runtime_contract_build"
-    if any(path.endswith((".json", ".yaml", ".yml")) for path in changed_files):
-        return "package_shape"
+    if validation_scope == "package_tool_syntax_and_binding":
+        return "python_syntax"
     return "workspace_hygiene"
 
 

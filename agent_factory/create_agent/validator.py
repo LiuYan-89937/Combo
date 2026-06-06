@@ -604,9 +604,9 @@ def _semantic_completeness_report(
                 path="patterns/main.yaml",
                 expected="Pattern with >2 nodes including at least one cognitive or operational node",
                 actual=f"Pattern has {len(nodes)} nodes, types: {sorted(node_types)}",
-                repair_hint="Add operational.tool_call and cognitive.answer nodes to the pattern. Load skill 13-assembly-and-patterns for guidance.",
+                repair_hint="Add operational.tool_call and cognitive.answer nodes to the pattern. Load skill 12-assembly-pattern-system for guidance.",
                 target_files=["patterns/main.yaml", "assembly_spec.json"],
-                recommended_skill="13-assembly-and-patterns",
+                recommended_skill="12-assembly-pattern-system",
             ))
             break
 
@@ -622,9 +622,9 @@ def _semantic_completeness_report(
             path="assembly_spec.json",
             expected="assembly_spec.bindings with model and/or tool service bindings",
             actual="bindings are empty or all null",
-            repair_hint="Add model_service and tool_service bindings in assembly_spec.json. Load skill 13-assembly-and-patterns.",
+            repair_hint="Add model_service and tool_service bindings in assembly_spec.json. Load skill 12-assembly-pattern-system.",
             target_files=["assembly_spec.json"],
-            recommended_skill="13-assembly-and-patterns",
+            recommended_skill="12-assembly-pattern-system",
         ))
 
     # Check 4: If user requested scheduling, scheduler_seed must exist
@@ -644,9 +644,9 @@ def _semantic_completeness_report(
                     path="contracts/scheduler_seed.json" if (root / "contracts" / "scheduler_seed.json").exists() else "agent_package.json",
                     expected="scheduler_seed_contract with at least one seed plan (cron job)",
                     actual="No scheduler seed plans found",
-                    repair_hint="Create contracts/scheduler_seed.json with cron-triggered jobs. Load skill 12-scheduler-seeds for schema and examples.",
+                    repair_hint="Create contracts/scheduler_seed.json with cron-triggered jobs. Load skill 15-scheduler-seed-system for schema and examples.",
                     target_files=["contracts/scheduler_seed.json" if (root / "contracts" / "scheduler_seed.json").exists() else "agent_package.json"],
-                    recommended_skill="12-scheduler-seeds",
+                    recommended_skill="15-scheduler-seed-system",
                 ))
 
     if not issues:
@@ -687,32 +687,29 @@ def _smoke_test_report(
     try:
         result = run_smoke_test(root)
     except Exception as exc:
-        repair_bundle = REPAIR_POLICY.generic_bundle(
-            where="smoke_test.runtime",
-            target_files=["assembly_spec.json", "patterns/main.yaml"],
-            exc=exc,
-        )
         return _with_scope(
             PackageValidationReport(
                 package_root=str(root),
-                summary=f"Smoke test crashed: {type(exc).__name__}: {exc}",
+                summary=f"Validator runtime defect: smoke test crashed with {type(exc).__name__}: {exc}",
                 next_action=PackageValidationNextAction(
-                    kind="repair_files",
-                    target_files=["assembly_spec.json", "patterns/main.yaml"],
-                    recommended_skill="13-assembly-and-patterns",
-                    repair_bundles=[repair_bundle],
+                    kind="continue",
+                    target_files=[],
+                    recommended_skill="17-final-validation-repair",
+                    recommended_resources=["references/final_validation.repair_hints.md"],
+                    repair_bundles=[],
                 ),
                 issues=[
                     PackageValidationIssue(
-                        where="smoke_test.runtime",
-                        summary=f"Smoke test crashed: {type(exc).__name__}",
+                        where="validator.runtime_defect",
+                        summary=f"Smoke test runtime defect: {type(exc).__name__}",
                         message=str(exc),
-                        path="assembly_spec.json",
-                        expected="Agent runs without crashing on a test message",
+                        path="",
+                        expected="Validator and smoke harness run without internal errors",
                         actual=f"{type(exc).__name__}: {exc}",
-                        repair_hint="Fix the runtime error. Check pattern nodes, bindings, and tool entrypoints.",
-                        target_files=["assembly_spec.json", "patterns/main.yaml"],
-                        recommended_skill="13-assembly-and-patterns",
+                        repair_hint="Report the validator/runtime defect. Do not modify package files for this issue.",
+                        target_files=[],
+                        recommended_skill="17-final-validation-repair",
+                        recommended_resources=["references/final_validation.repair_hints.md"],
                         details=_exception_details(exc),
                     )
                 ],
@@ -737,7 +734,7 @@ def _smoke_test_report(
             next_action=PackageValidationNextAction(
                 kind="repair_files",
                 target_files=["patterns/main.yaml", "contracts/tools.json", "assembly_spec.json"],
-                recommended_skill="13-assembly-and-patterns",
+                recommended_skill="17-final-validation-repair",
                 repair_bundles=[repair_bundle],
             ),
             issues=[
@@ -750,7 +747,7 @@ def _smoke_test_report(
                     actual=f"final_answer={result.final_answer!r}, tools={result.tool_calls_observed}, errors={result.errors}",
                     repair_hint="Ensure the pattern routes to tool_call and answer nodes. Verify tools are correctly bound and produce output. Check model bindings.",
                     target_files=["patterns/main.yaml", "contracts/tools.json", "assembly_spec.json"],
-                    recommended_skill="13-assembly-and-patterns",
+                    recommended_skill="17-final-validation-repair",
                 )
             ],
         ),

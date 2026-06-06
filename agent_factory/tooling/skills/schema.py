@@ -91,10 +91,10 @@ class SkillLoadRecord(BaseModel):
     primary: bool = False
 
 
-class SkillTodoLoadState(BaseModel):
+class SkillSystemLoadState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    current_todo: str
+    current_system: str
     primary_skill: str = ""
     described_skills: list[str] = Field(default_factory=list)
     loaded_skills: list[SkillLoadRecord] = Field(default_factory=list)
@@ -125,11 +125,11 @@ class SkillGatewayState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: Literal["skill_gateway_state.v0"] = "skill_gateway_state.v0"
-    by_todo: dict[str, SkillTodoLoadState] = Field(default_factory=dict)
+    by_system: dict[str, SkillSystemLoadState] = Field(default_factory=dict)
 
-    def todo_state(self, current_todo: str) -> SkillTodoLoadState:
-        state = self.by_todo.get(current_todo)
+    def system_state(self, current_system: str) -> SkillSystemLoadState:
+        state = self.by_system.get(current_system)
         if state is None:
-            state = SkillTodoLoadState(current_todo=current_todo)
-            self.by_todo[current_todo] = state
+            state = SkillSystemLoadState(current_system=current_system)
+            self.by_system[current_system] = state
         return state

@@ -119,6 +119,19 @@ def path_risk_result(
                 "dedicated_tool": dedicated_tool,
             },
         ).model_dump(mode="json")
+    is_write_like = default_action != "allow"
+    if is_write_like and not _is_allowed_write_path(resolved, root=root, resources=tool_resources):
+        return ToolRiskResult(
+            action="deny",
+            risk_level="high",
+            reasons=["path is outside the active system owned files"],
+            facts={
+                "path": path_value,
+                "resolved_path": str(resolved),
+                "filesystem_root": str(root),
+                "active_system_write_boundary": True,
+            },
+        ).model_dump(mode="json")
     sensitive = _is_sensitive_path(resolved)
     reasons = []
     action = default_action
@@ -143,6 +156,8 @@ def path_risk_result(
 def assert_not_protected_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> None:
     if _is_protected_write_path(path, root=root, resources=resources):
         raise PermissionError(f"path is managed by a dedicated control tool: {path}")
+    if not _is_allowed_write_path(path, root=root, resources=resources):
+        raise PermissionError(f"path is outside the active system owned files: {path}")
 
 
 def _is_sensitive_path(path: Path) -> bool:
@@ -180,3 +195,19 @@ def _managed_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> 
             continue
         return raw_spec if isinstance(raw_spec, dict) else {}
     return None
+
+
+def _is_allowed_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
+    config = resources.get("filesystem", {})
+    values = config.get("allowed_write_paths", []) if isinstance(config, dict) else []
+    if not isinstance(values, list) or not values:
+        return True
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        requested = Path(value).expanduser()
+        candidate = requested if requested.is_absolute() else root / requested
+        resolved = candidate.resolve(strict=False)
+        if path == resolved or resolved in path.parents:
+            return True
+    return False

@@ -5,220 +5,17 @@ from enum import Enum
 import hashlib
 import json
 from typing import Any, Literal
-from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-TODO_FILE = ".factory/todo.json"
+SYSTEM_STATE_FILE = ".factory/system_state.json"
 ACTION_FILE = ".factory/action.json"
 VALIDATION_FILE = ".factory/validation.json"
 VALIDATION_STATE_FILE = ".factory/validation_state.json"
 RESOURCES_FILE = ".factory/resources.json"
 SKILL_GATEWAY_STATE_FILE = ".factory/skill_gateway_state.json"
 TEXT_SUMMARY_LIMIT = 240
-TODO_TITLE_LIMIT = 160
-TODO_COMPLETION_SUMMARY_LIMIT = 220
-
-
-class TodoStatus(str, Enum):
-    pending = "pending"
-    in_progress = "in_progress"
-    blocked_waiting_user = "blocked_waiting_user"
-    failed_needs_repair = "failed_needs_repair"
-    done = "done"
-    skipped_by_user = "skipped_by_user"
-
-
-class TodoItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    todo_id: str = Field(default_factory=lambda: f"todo_{uuid4().hex[:12]}")
-    title: str
-    kind: Literal["plan", "write", "verify", "repair", "question"] = "write"
-    status: TodoStatus = TodoStatus.pending
-    required: bool = True
-    target_files: list[str] = Field(default_factory=list)
-    acceptance: str = ""
-    source: str = "factory"
-    details: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_package_validator_details(cls, value: Any) -> Any:
-        if not isinstance(value, dict) or value.get("source") != "package_validator":
-            return value
-        details = value.get("details")
-        if not isinstance(details, dict):
-            return value
-        compact = _compact_issue_details(details)
-        payload = dict(value)
-        payload["details"] = compact
-        return payload
-
-    @field_validator("todo_id")
-    @classmethod
-    def _clean_todo_id(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("todo_id must not be empty")
-        return cleaned
-
-    @field_validator("title")
-    @classmethod
-    def _compact_title(cls, value: str) -> str:
-        return _compact_text(value, TODO_TITLE_LIMIT)
-
-    @field_validator("acceptance")
-    @classmethod
-    def _compact_acceptance(cls, value: str) -> str:
-        return _compact_text(value, TEXT_SUMMARY_LIMIT)
-
-    def to_digest(self) -> "TodoItemDigest":
-        issue_id = ""
-        where = ""
-        if isinstance(self.details, dict):
-            issue_id = str(self.details.get("issue_id") or "")
-            where = str(self.details.get("where") or "")
-        return TodoItemDigest(
-            todo_id=self.todo_id,
-            title=_compact_text(self.title, TODO_TITLE_LIMIT),
-            kind=self.kind,
-            status=self.status,
-            required=self.required,
-            target_files=self.target_files[:8],
-            acceptance=_compact_text(self.acceptance, TEXT_SUMMARY_LIMIT),
-            source=self.source,
-            issue_id=issue_id,
-            where=where,
-        )
-
-    def completion_summary(self) -> "TodoCompletionSummary":
-        evidence = []
-        if isinstance(self.details, dict):
-            raw_evidence = self.details.get("evidence")
-            if isinstance(raw_evidence, list):
-                evidence = [_compact_text(item, TODO_COMPLETION_SUMMARY_LIMIT) for item in raw_evidence[:4]]
-        return TodoCompletionSummary(
-            todo_id=self.todo_id,
-            title=_compact_text(self.title, TODO_TITLE_LIMIT),
-            target_files=self.target_files[:8],
-            evidence=evidence,
-            acceptance=_compact_text(self.acceptance, TEXT_SUMMARY_LIMIT),
-        )
-
-
-class TodoItemDigest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    todo_id: str
-    title: str
-    kind: Literal["plan", "write", "verify", "repair", "question"]
-    status: TodoStatus
-    required: bool = True
-    target_files: list[str] = Field(default_factory=list)
-    acceptance: str = ""
-    source: str = "factory"
-    issue_id: str = ""
-    where: str = ""
-
-
-class TodoCompletionSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    todo_id: str
-    title: str
-    target_files: list[str] = Field(default_factory=list)
-    evidence: list[str] = Field(default_factory=list)
-    acceptance: str = ""
-
-
-class TodoStatusCount(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: TodoStatus
-    count: int
-
-
-class TodoWorkingSet(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["create_agent_working_set.v0"] = "create_agent_working_set.v0"
-    active_todo: TodoItemDigest | None = None
-    items: list[TodoItemDigest] = Field(default_factory=list)
-    status_counts: list[TodoStatusCount] = Field(default_factory=list)
-    required_remaining: int = 0
-    total_items: int = 0
-
-
-class TodoList(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["create_agent_todo.v0"] = "create_agent_todo.v0"
-    items: list[TodoItem] = Field(default_factory=list)
-    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
-
-    def all_required_done(self) -> bool:
-        return all(
-            item.status == TodoStatus.done
-            for item in self.items
-            if item.required
-        )
-
-    def working_set(self, *, limit: int = 8) -> TodoWorkingSet:
-        ordered_pairs = sorted(
-            enumerate(self.items),
-            key=lambda pair: (
-                _todo_priority(pair[1].status),
-                0 if pair[1].required else 1,
-                pair[0],
-            ),
-        )
-        ordered = [item for _index, item in ordered_pairs]
-        selected = ordered[: max(1, limit)]
-        active = selected[0].to_digest() if selected else None
-        counts = [
-            TodoStatusCount(status=status, count=sum(1 for item in self.items if item.status == status))
-            for status in TodoStatus
-        ]
-        return TodoWorkingSet(
-            active_todo=active,
-            items=[item.to_digest() for item in selected],
-            status_counts=counts,
-            required_remaining=sum(
-                1
-                for item in self.items
-                if item.required and item.status != TodoStatus.done
-            ),
-            total_items=len(self.items),
-        )
-
-    def upsert_repair_items(self, issues: list["PackageValidationIssue"]) -> "TodoList":
-        existing_ids = {item.todo_id for item in self.items}
-        items = list(self.items)
-        for issue in issues:
-            digest = issue.to_digest()
-            todo_id = digest.repair_todo_id()
-            if todo_id in existing_ids:
-                continue
-            existing_ids.add(todo_id)
-            items.append(
-                TodoItem(
-                    todo_id=todo_id,
-                    title=_compact_text(f"Repair {digest.where}: {digest.summary}", TODO_TITLE_LIMIT),
-                    kind="repair",
-                    status=TodoStatus.failed_needs_repair,
-                    target_files=digest.target_files,
-                    acceptance="Package validation passes for this issue.",
-                    source="package_validator",
-                    details=digest.model_dump(mode="json"),
-                )
-            )
-        return self.model_copy(update={"items": items, "updated_at": datetime.now(UTC).isoformat()})
-
-    def completion_summaries(self, *, limit: int = 6) -> list[TodoCompletionSummary]:
-        done_items = [item for item in self.items if item.status == TodoStatus.done]
-        return [item.completion_summary() for item in done_items[-max(0, limit):]]
 
 
 class ResourceFact(BaseModel):
@@ -245,6 +42,137 @@ class CreateAgentIntentDecision(BaseModel):
 
     intent: Literal["manufacture_agent", "workspace_assist", "chat"]
     rationale: str = ""
+
+
+class SystemStageStatus(str, Enum):
+    pending = "pending"
+    in_progress = "in_progress"
+    validating = "validating"
+    done = "done"
+    failed_needs_repair = "failed_needs_repair"
+    blocked_waiting_user = "blocked_waiting_user"
+
+
+class SystemRepairIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: str
+    where: str
+    summary: str
+    category: Literal[
+        "schema_error",
+        "package_shape_error",
+        "runtime_contract_error",
+        "assembly_compile_error",
+        "tool_binding_error",
+        "model_behavior_error",
+        "resource_missing",
+        "resource_unavailable",
+        "validator_runtime_defect",
+    ] = "schema_error"
+    target_files: list[str] = Field(default_factory=list)
+    repair_hint: str = ""
+    resolved: bool = False
+
+
+class SystemStageValidation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str
+    status: Literal["not_run", "passed", "failed"] = "not_run"
+    summary: str = ""
+    issue_ids: list[str] = Field(default_factory=list)
+    updated_at: str = ""
+
+
+class SystemStageHandoff(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class SystemStage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    system_id: str
+    stage_order: int
+    title: str
+    status: SystemStageStatus = SystemStageStatus.pending
+    owned_files: list[str] = Field(default_factory=list)
+    read_only_dependencies: list[str] = Field(default_factory=list)
+    required_skill: str
+    validation_scope: str
+    entry_conditions: list[str] = Field(default_factory=list)
+    exit_conditions: list[str] = Field(default_factory=list)
+    repair_history: list[SystemRepairIssue] = Field(default_factory=list)
+    handoff_outputs: SystemStageHandoff = Field(default_factory=SystemStageHandoff)
+    validation: SystemStageValidation | None = None
+
+    def to_digest(self) -> dict[str, Any]:
+        return {
+            "system_id": self.system_id,
+            "stage_order": self.stage_order,
+            "title": self.title,
+            "status": self.status.value,
+            "owned_files": self.owned_files,
+            "required_skill": self.required_skill,
+            "validation_scope": self.validation_scope,
+            "open_issues": [
+                issue.model_dump(mode="json")
+                for issue in self.repair_history
+                if not issue.resolved
+            ][:6],
+        }
+
+
+class SystemManufacturingState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["system_manufacturing_state.v0"] = "system_manufacturing_state.v0"
+    stages: list[SystemStage] = Field(default_factory=list)
+    active_system_id: str = ""
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def active_stage(self) -> SystemStage | None:
+        if self.active_system_id:
+            for stage in self.stages:
+                if stage.system_id == self.active_system_id:
+                    return stage
+        for stage in self.stages:
+            if stage.status != SystemStageStatus.done:
+                return stage
+        return None
+
+    def all_done(self) -> bool:
+        return all(stage.status == SystemStageStatus.done for stage in self.stages)
+
+    def update_stage(self, updated_stage: SystemStage) -> "SystemManufacturingState":
+        stages = [
+            updated_stage if stage.system_id == updated_stage.system_id else stage
+            for stage in self.stages
+        ]
+        next_active = ""
+        for stage in stages:
+            if stage.status != SystemStageStatus.done:
+                next_active = stage.system_id
+                break
+        return self.model_copy(
+            update={
+                "stages": stages,
+                "active_system_id": next_active,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+
+    def working_set(self) -> dict[str, Any]:
+        active = self.active_stage()
+        return {
+            "active_system": active.to_digest() if active else None,
+            "remaining": sum(1 for stage in self.stages if stage.status != SystemStageStatus.done),
+            "total": len(self.stages),
+            "stages": [stage.to_digest() for stage in self.stages],
+        }
 
 
 class PackageRepairTarget(BaseModel):
@@ -304,8 +232,8 @@ class PackageValidationIssue(BaseModel):
     repair_bundle: PackageRepairBundle | None = None
     details: dict[str, Any] = Field(default_factory=dict)
 
-    def repair_todo_id(self) -> str:
-        return self.to_digest().repair_todo_id()
+    def repair_issue_id(self) -> str:
+        return self.to_digest().repair_issue_id()
 
     def to_digest(self) -> "ValidationIssueDigest":
         raw = json.dumps(
@@ -350,7 +278,7 @@ class ValidationIssueDigest(BaseModel):
     recommended_skill: str = ""
     recommended_resources: list[str] = Field(default_factory=list)
 
-    def repair_todo_id(self) -> str:
+    def repair_issue_id(self) -> str:
         return f"repair_{self.issue_id}"
 
 
@@ -431,64 +359,49 @@ class PackageValidationState(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
-def initial_todo_list() -> TodoList:
-    return TodoList(
-        items=[
-            TodoItem(
-                todo_id="todo_control_plan",
-                title="Create a RuntimeKernel-verifiable manufacturing plan",
-                kind="plan",
-                acceptance=".factory/todo.json contains concrete system-boundary todos with specific target_files.",
-            ),
-            TodoItem(
-                todo_id="package_manifest",
-                title="Materialize package identity and manifest references",
-                kind="write",
-                acceptance="agent_package.json exists and references only existing package-relative files.",
-            ),
-            TodoItem(
-                todo_id="runtime_contracts",
-                title="Materialize RuntimeContracts with actual configuration",
-                kind="write",
-                acceptance="RuntimeBuildPlanner can build all contracts AND contracts contain non-default configuration matching user requirements.",
-            ),
-            TodoItem(
-                todo_id="assembly_and_patterns",
-                title="Materialize assembly with operational logic",
-                kind="write",
-                acceptance="Pattern has >2 nodes with at least one cognitive/operational node. Assembly bindings are non-empty.",
-            ),
-            TodoItem(
-                todo_id="state_resources_render",
-                title="Materialize state, resources, and render surfaces",
-                kind="write",
-                acceptance="State, resources, and render manifests are loadable and package-relative.",
-            ),
-            TodoItem(
-                todo_id="tools_nodes_extensions",
-                title="Resolve tools, extensions, package tools, and package nodes",
-                kind="write",
-                acceptance="tools_contract declares at least one tool. Package tools (if any) pass import and invocation test.",
-            ),
-            TodoItem(
-                todo_id="validate_agent_package",
-                title="Validate the AgentPackage through full_static including semantic check and smoke test",
-                kind="verify",
-                acceptance="Package passes full_static validation including semantic completeness and runtime smoke test with task_model.",
-            ),
-        ]
+def initial_system_manufacturing_state() -> SystemManufacturingState:
+    stages = [
+        _stage("package_identity", 1, "Package identity", ["agent_package.json"], "01-package-identity-system", "package_shape"),
+        _stage("model_system", 2, "Model system", ["contracts/model.json"], "02-model-system", "runtime_contract_build_subset", ["package_identity"]),
+        _stage("session_system", 3, "Session and checkpoint system", ["contracts/session.json"], "03-session-system", "runtime_contract_build_subset", ["model_system"]),
+        _stage("state_system", 4, "State system", ["contracts/state.json", "state/package.schema.json", "state/package.initial.json"], "04-state-system", "runtime_contract_build_subset", ["session_system"]),
+        _stage("resources_system", 5, "Resources system", ["contracts/resources.json", RESOURCES_FILE], "05-resources-system", "runtime_contract_build_subset", ["state_system"]),
+        _stage("context_system", 6, "Context system", ["contracts/context.json"], "06-context-system", "runtime_contract_build_subset", ["resources_system"]),
+        _stage("memory_system", 7, "Memory system", ["contracts/memory.json"], "07-memory-system", "runtime_contract_build_subset", ["context_system"]),
+        _stage("knowledge_system", 8, "Knowledge system", ["contracts/knowledge.json"], "08-knowledge-system", "runtime_contract_build_subset", ["memory_system"]),
+        _stage("tools_system", 9, "Tools system", ["contracts/tools.json"], "09-tools-system", "tools_contract_validate", ["knowledge_system"]),
+        _stage("package_tool_system", 10, "Package tool system", ["tools/"], "10-package-tool-system", "package_tool_syntax_and_binding", ["tools_system"]),
+        _stage("node_provider_system", 11, "Node provider system", ["contracts/node_provider.json", "nodes/"], "11-node-provider-system", "runtime_contract_build_subset", ["package_tool_system"]),
+        _stage("assembly_pattern_system", 12, "Assembly and pattern system", ["assembly_spec.json", "patterns/"], "12-assembly-pattern-system", "assembly_compile", ["node_provider_system"]),
+        _stage("render_event_system", 13, "Render and event system", ["render_manifest.json", "contracts/render.json"], "13-render-event-system", "render_manifest_validate", ["assembly_pattern_system"]),
+        _stage("scheduler_system", 14, "Scheduler system", ["contracts/scheduler.json"], "14-scheduler-system", "runtime_contract_build_subset", ["render_event_system"]),
+        _stage("scheduler_seed_system", 15, "Scheduler seed system", ["contracts/scheduler_seed.json"], "15-scheduler-seed-system", "scheduler_seed_validate", ["scheduler_system"]),
+        _stage("trace_artifact_system", 16, "Trace and artifact system", ["contracts/trace.json", "contracts/artifact.json"], "16-trace-artifact-system", "runtime_contract_build_subset", ["scheduler_seed_system"]),
+        _stage("final_validation", 17, "Final package validation", [], "17-final-validation-repair", "full_static", ["trace_artifact_system"]),
+    ]
+    return SystemManufacturingState(stages=stages, active_system_id=stages[0].system_id)
+
+
+def _stage(
+    system_id: str,
+    stage_order: int,
+    title: str,
+    owned_files: list[str],
+    required_skill: str,
+    validation_scope: str,
+    read_only_dependencies: list[str] | None = None,
+) -> SystemStage:
+    return SystemStage(
+        system_id=system_id,
+        stage_order=stage_order,
+        title=title,
+        owned_files=owned_files,
+        read_only_dependencies=read_only_dependencies or [],
+        required_skill=required_skill,
+        validation_scope=validation_scope,
+        entry_conditions=[f"{item} done" for item in (read_only_dependencies or [])],
+        exit_conditions=[f"{validation_scope} passed"],
     )
-
-
-def _todo_priority(status: TodoStatus) -> int:
-    return {
-        TodoStatus.in_progress: 0,
-        TodoStatus.failed_needs_repair: 1,
-        TodoStatus.blocked_waiting_user: 2,
-        TodoStatus.pending: 3,
-        TodoStatus.skipped_by_user: 4,
-        TodoStatus.done: 5,
-    }[status]
 
 
 def _compact_text(value: Any, limit: int) -> str:

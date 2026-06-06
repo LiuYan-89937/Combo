@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Any, TypeVar
@@ -10,16 +11,15 @@ from agent_factory.create_agent.models import (
     ACTION_FILE,
     RESOURCES_FILE,
     SKILL_GATEWAY_STATE_FILE,
-    TODO_FILE,
+    SYSTEM_STATE_FILE,
     VALIDATION_FILE,
     VALIDATION_STATE_FILE,
     CreateAgentAction,
     PackageValidationReport,
     PackageValidationState,
-    TodoList,
-    initial_todo_list,
+    SystemManufacturingState,
+    initial_system_manufacturing_state,
 )
-from agent_factory.create_agent.scaffold import ensure_base_package
 from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.paths import factory_artifact_path
 from agent_factory.tooling.output_store import ToolOutputStore
@@ -43,8 +43,8 @@ class CreateAgentWorkspace:
     def initialize(self, *, user_input: str) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.factory_dir.mkdir(parents=True, exist_ok=True)
-        if not self.todo_path.exists():
-            self.write_todo(initial_todo_list())
+        if not self.system_state_path.exists():
+            self.write_system_state(initial_system_manufacturing_state())
         if not self.action_path.exists():
             self.write_action(CreateAgentAction())
         if not self.resources_path.exists():
@@ -52,15 +52,14 @@ class CreateAgentWorkspace:
         request_path = self.factory_dir / "request.txt"
         if not request_path.exists():
             request_path.write_text(user_input, encoding="utf-8")
-        ensure_base_package(self.root, request_text=request_path.read_text(encoding="utf-8"))
 
     @property
     def factory_dir(self) -> Path:
         return self.root / ".factory"
 
     @property
-    def todo_path(self) -> Path:
-        return self.root / TODO_FILE
+    def system_state_path(self) -> Path:
+        return self.root / SYSTEM_STATE_FILE
 
     @property
     def action_path(self) -> Path:
@@ -87,16 +86,20 @@ class CreateAgentWorkspace:
         return self.factory_dir / "request.txt"
 
     @property
+    def manufacturing_trace_path(self) -> Path:
+        return self.factory_dir / "manufacturing_trace.json"
+
+    @property
     def tool_outputs_path(self) -> Path:
         return self.factory_dir / "tool_outputs"
 
-    def read_todo(self) -> TodoList:
-        if not self.todo_path.exists():
-            return initial_todo_list()
-        return TodoList.model_validate_json(self.todo_path.read_text(encoding="utf-8"))
+    def read_system_state(self) -> SystemManufacturingState:
+        if not self.system_state_path.exists():
+            return initial_system_manufacturing_state()
+        return SystemManufacturingState.model_validate_json(self.system_state_path.read_text(encoding="utf-8"))
 
-    def write_todo(self, todo: TodoList) -> None:
-        self._write_json(self.todo_path, todo.model_dump(mode="json"))
+    def write_system_state(self, state: SystemManufacturingState) -> None:
+        self._write_json(self.system_state_path, state.model_dump(mode="json"))
 
     def read_action(self) -> CreateAgentAction:
         return _read_managed_model(
@@ -131,35 +134,77 @@ class CreateAgentWorkspace:
     def write_validation_state(self, state: PackageValidationState) -> None:
         self._write_json(self.validation_state_path, state.model_dump(mode="json"))
 
+    def reset_manufacturing_trace(self, *, session_id: str, request_id: str, graph_id: str) -> None:
+        self._write_json(
+            self.manufacturing_trace_path,
+            {
+                "version": "create_agent_manufacturing_trace.v0",
+                "session_id": session_id,
+                "request_id": request_id,
+                "graph_id": graph_id,
+                "workspace_path": str(self.root),
+                "created_at": datetime.now(UTC).isoformat(),
+                "records": [],
+            },
+        )
+
+    def append_manufacturing_trace_record(self, record: dict[str, Any]) -> None:
+        payload = _read_json_object(self.manufacturing_trace_path)
+        if payload.get("version") != "create_agent_manufacturing_trace.v0":
+            payload = {
+                "version": "create_agent_manufacturing_trace.v0",
+                "workspace_path": str(self.root),
+                "created_at": datetime.now(UTC).isoformat(),
+                "records": [],
+            }
+        records = payload.get("records")
+        if not isinstance(records, list):
+            records = []
+            payload["records"] = records
+        records.append(record)
+        payload["updated_at"] = datetime.now(UTC).isoformat()
+        self._write_json(self.manufacturing_trace_path, payload)
+
+    def manufacturing_trace_record_count(self) -> int:
+        payload = _read_json_object(self.manufacturing_trace_path)
+        records = payload.get("records")
+        if not isinstance(records, list):
+            return 0
+        return len(records)
+
     def package_manifest_path(self) -> Path:
         return self.root / "agent_package.json"
 
     def context_summary(self, *, resource_set_store: ResourceSetStore | None = None) -> str:
         effective_store = resource_set_store or self._resource_set_store
-        todo = self.read_todo()
+        system_state = self.read_system_state()
         action = self.read_action()
         validation = self.read_validation()
-        working_set = todo.working_set()
+        working_set = system_state.working_set()
+        active = system_state.active_stage()
         request_text = self._read_text_snippet(self.request_path, limit=360)
         lines = [
             f"Workspace: {self.root}",
             f"Original request: {request_text}" if request_text else "Original request: unavailable",
-            f"Todo file: {TODO_FILE} (managed by create_agent_todo; do not edit directly)",
+            f"System state file: {SYSTEM_STATE_FILE} (managed by create_agent_stage; do not edit directly)",
             f"Action file: {ACTION_FILE} (managed by create_agent_control; do not edit directly)",
             f"Resources file: {RESOURCES_FILE}",
             f"Validation file: {VALIDATION_FILE}",
-            f"Required remaining todos: {working_set.required_remaining}/{working_set.total_items}",
-            "Active todo working set:",
+            f"Systems remaining: {working_set['remaining']}/{working_set['total']}",
+            "Active system:",
         ]
-        for item in working_set.items:
-            lines.append(f"- {item.todo_id}: {item.status.value} | {item.title}")
-        completed = todo.completion_summaries()
+        if active:
+            lines.append(f"- {active.system_id}: {active.status.value} | {active.title}")
+            lines.append(f"  owned_files={active.owned_files}")
+            lines.append(f"  required_skill={active.required_skill}")
+            lines.append(f"  validation_scope={active.validation_scope}")
+            if active.read_only_dependencies:
+                lines.append(f"  read_only_dependencies={active.read_only_dependencies}")
+        completed = [stage for stage in system_state.stages if stage.status.value == "done"]
         if completed:
-            lines.append("Completed todo summaries:")
-            for item in completed:
-                evidence = "; ".join(item.evidence[:3]) if item.evidence else item.acceptance
-                files = ", ".join(item.target_files[:4]) if item.target_files else "no specific files"
-                lines.append(f"- {item.todo_id}: {item.title} | files={files} | {evidence}")
+            lines.append("Completed systems:")
+            for stage in completed[-8:]:
+                lines.append(f"- {stage.system_id}: {stage.title}")
         lines.append(f"Current action: {action.action} {action.message}".strip())
         if validation:
             digest = validation.to_digest()
@@ -213,6 +258,14 @@ def _read_managed_model(path: Path, model: type[ModelT], *, missing: ModelT | No
             f"invalid managed create-agent file: {path}. Regenerate it through {owner_tool}; "
             "direct edits and older structures are not accepted."
         ) from exc
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _assert_inside(root: Path, path: Path) -> None:

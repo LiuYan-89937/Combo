@@ -29,56 +29,56 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
                 reasons=["skill search exposes enabled skill metadata only"],
             ).model_dump(mode="json")
         if action == "list_loaded":
-            current_todo = required_string(arguments, "current_todo")
+            current_system = required_string(arguments, "current_system")
             return ToolRiskResult(
                 action="allow",
                 risk_level="low",
                 reasons=["skill loaded-state inspection exposes gateway state only"],
-                facts={"current_todo": current_todo},
+                facts={"current_system": current_system},
             ).model_dump(mode="json")
         name = required_string(arguments, "name")
         registry.get(name)
         if action == "describe":
-            current_todo = required_string(arguments, "current_todo")
+            current_system = required_string(arguments, "current_system")
             return ToolRiskResult(
                 action="allow",
                 risk_level="low",
                 reasons=["skill describe exposes metadata and resource index only"],
-                facts={"skill": name, "current_todo": current_todo},
+                facts={"skill": name, "current_system": current_system},
             ).model_dump(mode="json")
         if action == "load":
-            current_todo = required_string(arguments, "current_todo")
+            current_system = required_string(arguments, "current_system")
             reason = required_string(arguments, "reason")
-            registry.load(name, current_todo=current_todo, reason=reason)
+            registry.load(name, current_system=current_system, reason=reason)
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
-                reasons=["skill load exposes one enabled SKILL.md body to the model for the active todo"],
-                facts={"skill": name, "current_todo": current_todo, "reason": reason},
+                reasons=["skill load exposes one enabled SKILL.md body to the model for the active system"],
+                facts={"skill": name, "current_system": current_system, "reason": reason},
             ).model_dump(mode="json")
         if action == "read_resource":
-            current_todo = required_string(arguments, "current_todo")
+            current_system = required_string(arguments, "current_system")
             path = required_string(arguments, "path")
             mode = resource_mode(arguments.get("mode"))
             pointer = str(arguments.get("pointer") or "").strip()
-            registry.read_resource(name, path, current_todo=current_todo, mode=mode, pointer=pointer)
+            registry.read_resource(name, path, current_system=current_system, mode=mode, pointer=pointer)
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
                 reasons=["skill resource read is restricted to enabled skill resources"],
-                facts={"skill": name, "path": path, "mode": mode, "current_todo": current_todo},
+                facts={"skill": name, "path": path, "mode": mode, "current_system": current_system},
             ).model_dump(mode="json")
         if action == "read_repair_resources":
-            current_todo = required_string(arguments, "current_todo")
+            current_system = required_string(arguments, "current_system")
             paths = resource_paths(arguments.get("paths"))
-            registry.describe(name, current_todo=current_todo)
+            registry.describe(name, current_system=current_system)
             for path in paths:
-                registry.read_resource(name, path, current_todo=current_todo, mode=repair_resource_mode(path))
+                registry.read_resource(name, path, current_system=current_system, mode=repair_resource_mode(path))
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
                 reasons=["skill repair resource bundle is restricted to enabled skill resources"],
-                facts={"skill": name, "paths": paths, "current_todo": current_todo},
+                facts={"skill": name, "paths": paths, "current_system": current_system},
             ).model_dump(mode="json")
         return ToolRiskResult(
             action="deny",

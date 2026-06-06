@@ -13,7 +13,7 @@ from langgraph.types import interrupt
 from agent_factory.create_agent.models import CreateAgentAction, PackageValidationReport
 from agent_factory.create_agent.prompt_builder import build_create_agent_messages, validation_repair_context
 from agent_factory.create_agent.validation_gate import CreateAgentValidationGate, ValidationDecision
-from agent_factory.create_agent.validation_progress import apply_validation_progress, validation_event_from_tool_calls
+from agent_factory.create_agent.validation_progress import apply_system_validation_progress, validation_event_from_tool_calls
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
@@ -122,7 +122,8 @@ class CreateAgentWorkflow:
                 "done": False,
                 "validation_event": "none",
             }
-        force_full = action.action == "finalize"
+        active_stage = workspace.read_system_state().active_stage()
+        force_full = action.action == "finalize" and active_stage is not None and active_stage.system_id == "final_validation"
         validation_event = str(state.get("validation_event") or "none")
         if validation_event == "explicit_validation" and workspace.read_validation() is not None and not force_full:
             report = workspace.read_validation()
@@ -135,9 +136,9 @@ class CreateAgentWorkflow:
         workspace.write_validation(report)
         if force_full:
             workspace.write_action(CreateAgentAction())
-        todo = apply_validation_progress(workspace.read_todo(), report)
-        workspace.write_todo(todo)
-        done = report.status == "passed" and todo.all_required_done()
+        system_state = apply_system_validation_progress(workspace.read_system_state(), report)
+        workspace.write_system_state(system_state)
+        done = report.status == "passed" and system_state.all_done()
         if done:
             return {
                 "validation": report.to_digest().model_dump(mode="json"),

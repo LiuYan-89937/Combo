@@ -1,9 +1,0 @@
-{
-  "config": {
-    "resource_descriptors": [],
-    "resources_path": "resources.json"
-  },
-  "enabled": true,
-  "type": "resources",
-  "version": "resources_contract.v0"
-}

@@ -25,10 +25,12 @@ from agent_factory.runtime_contracts.builtins import (
 from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRACTS
 
 
-RUNTIME_INDEX_RESOURCES = (
-    "references/runtime_contract_index.repair_hints.md",
-    "examples/runtime_contract_index.minimal.json",
-)
+def system_resources(system_id: str) -> tuple[str, str, str]:
+    return (
+        f"references/{system_id}.schema.json",
+        f"examples/{system_id}.minimal.json",
+        f"references/{system_id}.repair_hints.md",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,138 +93,98 @@ _CONTRACT_CATALOG = {
     "artifact": _item(
         "artifact",
         default_factory=default_artifact_contract,
-        recommended_skill="14-render-and-events",
-        recommended_resources=RUNTIME_INDEX_RESOURCES,
+        recommended_skill="16-trace-artifact-system",
+        recommended_resources=system_resources("trace_artifact_system"),
     ),
     "context": _item(
         "context",
         default_factory=default_context_contract,
-        recommended_skill="03-context-contract",
-        recommended_resources=(
-            "references/context_contract.schema.json",
-            "examples/context_contract.minimal.json",
-            "references/context_contract.repair_hints.md",
-        ),
+        recommended_skill="06-context-system",
+        recommended_resources=system_resources("context_system"),
     ),
     "dependencies": _item(
         "dependencies",
         default_factory=default_dependencies_contract,
-        recommended_skill="02-runtime-contract-index",
-        recommended_resources=RUNTIME_INDEX_RESOURCES,
+        recommended_skill="02-model-system",
+        recommended_resources=system_resources("model_system"),
     ),
     "knowledge": _item(
         "knowledge",
         default_factory=default_knowledge_contract,
-        recommended_skill="05-knowledge-contract",
-        recommended_resources=(
-            "references/knowledge_contract.schema.json",
-            "examples/knowledge_contract.minimal.json",
-            "references/knowledge_contract.repair_hints.md",
-        ),
+        recommended_skill="08-knowledge-system",
+        recommended_resources=system_resources("knowledge_system"),
     ),
     "memory": _item(
         "memory",
         default_factory=default_memory_contract,
-        recommended_skill="04-memory-contract",
-        recommended_resources=(
-            "references/memory_contract.schema.json",
-            "examples/memory_contract.minimal.json",
-            "references/memory_contract.repair_hints.md",
-        ),
+        recommended_skill="07-memory-system",
+        recommended_resources=system_resources("memory_system"),
     ),
     "model": _item(
         "model",
         default_factory=default_model_contract,
-        recommended_skill="02-runtime-contract-index",
-        recommended_resources=RUNTIME_INDEX_RESOURCES,
+        recommended_skill="02-model-system",
+        recommended_resources=system_resources("model_system"),
     ),
     "node_provider": _item(
         "node_provider",
         default_factory=default_node_provider_contract,
-        recommended_skill="10-package-nodes",
-        recommended_resources=RUNTIME_INDEX_RESOURCES,
+        recommended_skill="11-node-provider-system",
+        recommended_resources=system_resources("node_provider_system"),
     ),
     "render": _item(
         "render",
         default_factory=default_render_contract,
-        recommended_skill="14-render-and-events",
-        recommended_resources=RUNTIME_INDEX_RESOURCES,
+        recommended_skill="13-render-event-system",
+        recommended_resources=system_resources("render_event_system"),
     ),
     "resources": _item(
         "resources",
         default_factory=default_resources_contract,
-        recommended_skill="07-state-resources-contract",
-        recommended_resources=(
-            "references/resources_contract.schema.json",
-            "examples/resources_contract.minimal.json",
-            "references/state_resources.repair_hints.md",
-        ),
+        recommended_skill="05-resources-system",
+        recommended_resources=system_resources("resources_system"),
     ),
     "sandbox": _item(
         "sandbox",
         default_factory=default_sandbox_contract,
-        recommended_skill="02-runtime-contract-index",
-        recommended_resources=RUNTIME_INDEX_RESOURCES,
+        recommended_skill="02-model-system",
+        recommended_resources=system_resources("model_system"),
     ),
     "scheduler": _item(
         "scheduler",
         default_factory=default_scheduler_contract,
-        recommended_skill="11-scheduler-contract",
-        recommended_resources=(
-            "references/scheduler_contract.schema.json",
-            "examples/scheduler_contract.minimal.json",
-            "references/scheduler_contract.repair_hints.md",
-        ),
+        recommended_skill="14-scheduler-system",
+        recommended_resources=system_resources("scheduler_system"),
     ),
     "scheduler_seed": _item(
         "scheduler_seed",
         default_factory=default_scheduler_seed_contract,
-        recommended_skill="12-scheduler-seeds",
-        recommended_resources=(
-            "references/scheduler_seed.schema.json",
-            "examples/scheduler_seed.minimal.json",
-            "references/scheduler_seed.repair_hints.md",
-        ),
+        recommended_skill="15-scheduler-seed-system",
+        recommended_resources=system_resources("scheduler_seed_system"),
     ),
     "session": _item(
         "session",
         default_factory=default_session_contract,
-        recommended_skill="16-session-contract",
-        recommended_resources=(
-            "references/session_contract.schema.json",
-            "examples/session_contract.minimal.json",
-            "references/session_contract.repair_hints.md",
-        ),
+        recommended_skill="03-session-system",
+        recommended_resources=system_resources("session_system"),
     ),
     "state": _item(
         "state",
         default_factory=default_state_contract,
-        recommended_skill="07-state-resources-contract",
-        recommended_resources=(
-            "references/state_contract.schema.json",
-            "examples/state_contract.minimal.json",
-            "references/state_resources.repair_hints.md",
-        ),
+        recommended_skill="04-state-system",
+        recommended_resources=system_resources("state_system"),
     ),
     "tools": _item(
         "tools",
         default_factory=default_tools_contract,
-        recommended_skill="08-tools-contract",
-        recommended_resources=(
-            "references/tools_contract.schema.json",
-            "examples/tools_contract.minimal.json",
-            "references/tools_contract.repair_hints.md",
-        ),
+        recommended_skill="09-tools-system",
+        recommended_resources=system_resources("tools_system"),
     ),
     "trace": _item(
         "trace",
         default_factory=default_trace_contract,
-        recommended_skill="06-trace-contract",
-        recommended_resources=(
-            "references/trace_contract.schema.json",
-            "examples/trace_contract.minimal.json",
-            "references/trace_contract.repair_hints.md",
-        ),
+        recommended_skill="16-trace-artifact-system",
+        recommended_resources=system_resources("trace_artifact_system"),
     ),
 }
 

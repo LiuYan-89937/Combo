@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent_factory.create_agent.contract_catalog import RUNTIME_INDEX_RESOURCES, contract_resources, contract_skill
+from agent_factory.create_agent.contract_catalog import contract_resources, contract_skill, system_resources
 from agent_factory.create_agent.models import PackageRepairBundle, PackageRepairTarget
 
 
@@ -19,12 +19,12 @@ class CreateAgentRepairPolicy:
         return PackageRepairBundle(
             bundle_id="materialize_base_package",
             kind="manifest_missing",
-            repair_action="materialize_base_package",
-            machine_applicable=True,
+            repair_action="read_skill_resources",
+            machine_applicable=False,
             target_files=["agent_package.json"],
             recommended_skill=recommendation.skill,
             recommended_resources=recommendation.resources,
-            summary="Create the deterministic RuntimeKernel package scaffold before semantic customization.",
+            summary="Create agent_package.json inside the package identity system using its skill resources.",
         )
 
     def manifest_contract_targets(
@@ -66,12 +66,12 @@ class CreateAgentRepairPolicy:
         return PackageRepairBundle(
             bundle_id="materialize_required_contracts",
             kind=bundle_kind,
-            repair_action="materialize_required_contracts",
-            machine_applicable=True,
+            repair_action="read_skill_resources",
+            machine_applicable=False,
             target_files=target_files,
             targets=targets,
-            recommended_skill="02-runtime-contract-index",
-            recommended_resources=list(RUNTIME_INDEX_RESOURCES),
+            recommended_skill="01-package-identity-system",
+            recommended_resources=list(system_resources("package_identity")),
             inputs={
                 "missing_contracts": missing_contracts,
                 "missing_files": [{"contract_key": key, "target_file": path} for key, path in missing_files],
@@ -135,46 +135,66 @@ class CreateAgentRepairPolicy:
     def recommended_skill(self, where: str, target_files: list[str]) -> str:
         targets = " ".join(target_files)
         if where == "runtime_contracts.build":
-            return "02-runtime-contract-index"
+            return self._skill_for_targets(target_files)
         if where == "assembly.compile":
-            return "13-assembly-and-patterns"
+            return "12-assembly-pattern-system"
         if "tools/" in targets:
-            return "09-package-tools"
+            return "10-package-tool-system"
         if "nodes/" in targets:
-            return "10-package-nodes"
-        return "01-package-manifest"
+            return "11-node-provider-system"
+        return "01-package-identity-system"
 
     def recommended_resources(self, skill: str, target_files: list[str]) -> list[str]:
         targets = " ".join(target_files)
-        if skill == "01-package-manifest":
+        if skill == "01-package-identity-system":
             return [
-                "references/agent_package.schema.json",
-                "examples/agent_package.minimal.json",
-                "references/agent_package.repair_hints.md",
+                "references/package_identity.schema.json",
+                "examples/package_identity.minimal.json",
+                "references/package_identity.repair_hints.md",
             ]
-        if skill == "02-runtime-contract-index":
-            return list(RUNTIME_INDEX_RESOURCES)
-        if skill == "09-package-tools":
-            artifact = "package_tool" if "tools/" in targets else "tool_contract"
+        if skill == "10-package-tool-system":
+            artifact = "package_tool_system"
             return [
                 f"references/{artifact}.schema.json",
                 f"examples/{artifact}.minimal.json",
                 f"references/{artifact}.repair_hints.md",
             ]
-        if skill == "10-package-nodes":
+        if skill == "11-node-provider-system":
             return [
-                "references/package_node.schema.json",
-                "examples/package_node.minimal.json",
-                "references/package_node.repair_hints.md",
+                "references/node_provider_system.schema.json",
+                "examples/node_provider_system.minimal.json",
+                "references/node_provider_system.repair_hints.md",
             ]
-        if skill == "13-assembly-and-patterns":
+        if skill == "12-assembly-pattern-system":
             return [
-                "references/assembly_spec.schema.json",
-                "examples/assembly_spec.minimal.json",
-                "references/pattern.schema.json",
-                "references/assembly_spec.repair_hints.md",
+                "references/assembly_pattern_system.schema.json",
+                "examples/assembly_pattern_system.minimal.json",
+                "references/assembly_pattern_system.repair_hints.md",
             ]
-        return ["references/contract.repair_hints.md"]
+        return [f"references/{skill.split('-', 1)[-1]}.repair_hints.md"]
+
+    def _skill_for_targets(self, target_files: list[str]) -> str:
+        targets = " ".join(target_files)
+        pairs = [
+            ("contracts/model", "02-model-system"),
+            ("contracts/session", "03-session-system"),
+            ("contracts/state", "04-state-system"),
+            ("contracts/resources", "05-resources-system"),
+            ("contracts/context", "06-context-system"),
+            ("contracts/memory", "07-memory-system"),
+            ("contracts/knowledge", "08-knowledge-system"),
+            ("contracts/tools", "09-tools-system"),
+            ("contracts/scheduler_seed", "15-scheduler-seed-system"),
+            ("contracts/scheduler", "14-scheduler-system"),
+            ("contracts/trace", "16-trace-artifact-system"),
+            ("contracts/artifact", "16-trace-artifact-system"),
+            ("contracts/render", "13-render-event-system"),
+            ("contracts/node_provider", "11-node-provider-system"),
+        ]
+        for needle, skill in pairs:
+            if needle in targets:
+                return skill
+        return "17-final-validation-repair"
 
     def expected_for_where(self, where: str) -> str:
         return {

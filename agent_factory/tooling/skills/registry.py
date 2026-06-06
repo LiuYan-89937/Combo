@@ -43,9 +43,9 @@ class SkillRegistry:
     def packages(self) -> list[SkillPackage]:
         return sorted(self._skills.values(), key=lambda item: item.name)
 
-    def describe(self, name: str, *, current_todo: str) -> dict[str, Any]:
+    def describe(self, name: str, *, current_system: str) -> dict[str, Any]:
         skill = self.get(name)
-        self.gateway_state.todo_state(_require_todo(current_todo)).mark_described(name)
+        self.gateway_state.system_state(_require_system(current_system)).mark_described(name)
         return {
             "metadata": skill.metadata.model_dump(mode="json"),
             "resources": [item.model_dump(mode="json") for item in skill.resources],
@@ -83,28 +83,26 @@ class SkillRegistry:
         except KeyError as exc:
             raise KeyError(f"unknown skill: {name}") from exc
 
-    def list_loaded(self, *, current_todo: str) -> dict[str, Any]:
-        state = self.gateway_state.todo_state(_require_todo(current_todo))
+    def list_loaded(self, *, current_system: str) -> dict[str, Any]:
+        state = self.gateway_state.system_state(_require_system(current_system))
         return state.model_dump(mode="json")
 
-    def load(self, name: str, *, current_todo: str, reason: str) -> SkillLoadResult:
+    def load(self, name: str, *, current_system: str, reason: str) -> SkillLoadResult:
         skill = self.get(name)
-        todo_state = self.gateway_state.todo_state(_require_todo(current_todo))
+        system_state = self.gateway_state.system_state(_require_system(current_system))
         cleaned_reason = _require_reason(reason)
-        if todo_state.primary_skill and todo_state.primary_skill != name and not todo_state.has_seen(name):
+        if system_state.primary_skill and system_state.primary_skill != name and not system_state.has_seen(name):
             raise PermissionError(
-                f"loading a second skill for todo {current_todo!r} requires describe(name={name!r}, current_todo=...) first"
+                f"loading a second skill for system {current_system!r} requires describe(name={name!r}, current_system=...) first"
             )
-        todo_state.mark_loaded(name, reason=cleaned_reason)
-        # Auto-inline all readable reference resources
-        resource_contents = self._read_all_resources(skill)
+        system_state.mark_loaded(name, reason=cleaned_reason)
         return SkillLoadResult(
             name=skill.name,
             metadata=skill.metadata,
             content=skill.body,
             resources=skill.resources,
             scripts=skill.scripts,
-            resource_contents=resource_contents,
+            resource_contents={},
         )
 
     def _read_all_resources(self, skill: SkillPackage) -> dict[str, str]:
@@ -135,12 +133,12 @@ class SkillRegistry:
         name: str,
         path: str,
         *,
-        current_todo: str,
+        current_system: str,
         mode: str = "outline",
         pointer: str = "",
     ) -> dict[str, Any]:
         skill = self.get(name)
-        _require_todo(current_todo)
+        _require_system(current_system)
         resource = next((item for item in skill.resources if item.path == path), None)
         if resource is None:
             raise KeyError(f"unknown skill resource: {name}/{path}")
@@ -243,7 +241,7 @@ def _candidate_view(skill: SkillPackage) -> dict[str, Any]:
         "name": skill.name,
         "description": skill.metadata.description,
         "loaded_content": False,
-        "applicable_todos": _applicable_todos(load_when),
+        "applicable_systems": _applicable_systems(load_when),
         "loading_cost": {
             "skill_body_chars": len(skill.body),
             "resource_count": len(skill.resources),
@@ -252,7 +250,7 @@ def _candidate_view(skill: SkillPackage) -> dict[str, Any]:
     }
 
 
-def _applicable_todos(value: Any) -> list[str]:
+def _applicable_systems(value: Any) -> list[str]:
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
     if isinstance(value, list):
@@ -260,10 +258,10 @@ def _applicable_todos(value: Any) -> list[str]:
     return []
 
 
-def _require_todo(value: str) -> str:
+def _require_system(value: str) -> str:
     cleaned = (value or "").strip()
     if not cleaned:
-        raise ValueError("current_todo must be a non-empty string")
+        raise ValueError("current_system must be a non-empty string")
     return cleaned
 
 

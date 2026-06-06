@@ -5,7 +5,6 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent_factory.create_agent.models import TodoStatus
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 
 
@@ -19,46 +18,46 @@ def project_messages_for_prompt(messages: list[BaseMessage], *, workspace: Creat
     No layer 2 (quantity-based compaction) — all post-boundary messages are kept intact.
     No per-message truncation — ToolMessage compression is handled at the gateway layer.
     """
-    cutoff = _completed_todo_history_cutoff(messages, workspace=workspace)
+    cutoff = _completed_system_history_cutoff(messages, workspace=workspace)
     if cutoff > 0:
         compacted = _compacted_history_message(
             messages[:cutoff],
             workspace=workspace,
             reason=(
-                "Completed todo history compacted. Completed work is represented by "
-                "workspace todo completion summaries, not by replaying prior chat/tool output."
+                "Completed system history compacted. Completed work is represented by "
+                "workspace system-stage summaries, not by replaying prior chat/tool output."
             ),
         )
         return [compacted, *messages[cutoff:]]
     return list(messages)
 
 
-def _completed_todo_history_cutoff(messages: list[BaseMessage], *, workspace: CreateAgentWorkspace) -> int:
-    completed_todo_ids = {
-        item.todo_id
-        for item in workspace.read_todo().items
-        if item.status in {TodoStatus.done, TodoStatus.skipped_by_user}
+def _completed_system_history_cutoff(messages: list[BaseMessage], *, workspace: CreateAgentWorkspace) -> int:
+    completed_system_ids = {
+        item.system_id
+        for item in workspace.read_system_state().stages
+        if item.status.value == "done"
     }
-    if not completed_todo_ids:
+    if not completed_system_ids:
         return 0
     cutoff = 0
     for index, message in enumerate(messages):
         if not isinstance(message, ToolMessage):
             continue
-        if str(getattr(message, "name", "") or "") != "create_agent_todo":
+        if str(getattr(message, "name", "") or "") != "create_agent_stage":
             continue
-        completion = _todo_completion_from_tool_message(message)
+        completion = _system_completion_from_tool_message(message)
         if completion is None:
             continue
-        todo_id, status = completion
-        if todo_id in completed_todo_ids and status in {TodoStatus.done.value, TodoStatus.skipped_by_user.value}:
+        system_id, status = completion
+        if system_id in completed_system_ids and status == "done":
             cutoff = index + 1
     while cutoff < len(messages) and isinstance(messages[cutoff], ToolMessage):
         cutoff += 1
     return cutoff
 
 
-def _todo_completion_from_tool_message(message: ToolMessage) -> tuple[str, str] | None:
+def _system_completion_from_tool_message(message: ToolMessage) -> tuple[str, str] | None:
     try:
         payload = json.loads(str(message.content or ""))
     except json.JSONDecodeError:
@@ -70,14 +69,14 @@ def _todo_completion_from_tool_message(message: ToolMessage) -> tuple[str, str] 
         return None
     if isinstance(output.get("output"), dict):
         output = output["output"]
-    item = output.get("item")
+    item = output.get("active_system")
     if not isinstance(item, dict):
         return None
-    todo_id = str(item.get("todo_id") or "").strip()
+    system_id = str(item.get("system_id") or "").strip()
     status = str(item.get("status") or "").strip()
-    if not todo_id or not status:
+    if not system_id or not status:
         return None
-    return todo_id, status
+    return system_id, status
 
 
 def _compacted_history_message(

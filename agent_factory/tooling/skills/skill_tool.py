@@ -47,9 +47,9 @@ def _input_schema() -> dict[str, Any]:
                 "type": "string",
                 "enum": list(SKILL_ACTIONS),
                 "description": (
-                    "Skill Gateway action. Use describe before read_resource for the same current_todo. "
+                    "Skill Gateway action. Use describe before read_resource for the same current_system. "
                     "list/search/describe expose metadata only. "
-                    "load returns SKILL.md for one active todo. list_loaded returns loaded state. "
+                    "load returns SKILL.md for one active system. list_loaded returns loaded state. "
                     "read_resource reads one referenced skill resource. "
                     "read_repair_resources reads validator-recommended resources as a compact bundle."
                 ),
@@ -80,13 +80,13 @@ def _input_schema() -> dict[str, Any]:
                 "type": "string",
                 "description": "JSON pointer required when read_resource mode is fragment, such as /properties/nodes.",
             },
-            "current_todo": {
+            "current_system": {
                 "type": "string",
-                "description": "Required for describe/load/list_loaded/read_resource. Use the active todo_id.",
+                "description": "Required for describe/load/list_loaded/read_resource. Use the active system_id.",
             },
             "reason": {
                 "type": "string",
-                "description": "Required for load. Explain why this skill is needed for the active todo.",
+                "description": "Required for load. Explain why this skill is needed for the active system.",
             },
             "query": {
                 "type": "string",
@@ -103,16 +103,16 @@ def _input_schema() -> dict[str, Any]:
         "oneOf": [
             {"properties": {"action": {"const": "list"}}, "required": ["action"]},
             {"properties": {"action": {"const": "search"}}, "required": ["action", "query"]},
-            {"properties": {"action": {"const": "describe"}}, "required": ["action", "name", "current_todo"]},
-            {"properties": {"action": {"const": "load"}}, "required": ["action", "name", "current_todo", "reason"]},
-            {"properties": {"action": {"const": "list_loaded"}}, "required": ["action", "current_todo"]},
+            {"properties": {"action": {"const": "describe"}}, "required": ["action", "name", "current_system"]},
+            {"properties": {"action": {"const": "load"}}, "required": ["action", "name", "current_system", "reason"]},
+            {"properties": {"action": {"const": "list_loaded"}}, "required": ["action", "current_system"]},
             {
                 "properties": {"action": {"const": "read_resource"}},
-                "required": ["action", "name", "path", "current_todo"],
+                "required": ["action", "name", "path", "current_system"],
             },
             {
                 "properties": {"action": {"const": "read_repair_resources"}},
-                "required": ["action", "name", "paths", "current_todo"],
+                "required": ["action", "name", "paths", "current_system"],
             },
         ],
         "additionalProperties": False,
@@ -140,13 +140,13 @@ def _tool_description(registry: SkillRegistry) -> str:
     lines = [
         "Skill Gateway for enabled skills using progressive disclosure.",
         (
-            "Protocol: call action=describe for the target skill and current_todo before action=read_resource. "
+            "Protocol: call action=describe for the target skill and current_system before action=read_resource. "
             "When validator provides recommended_skill/recommended_resources, prefer action=read_repair_resources "
             "with those exact paths instead of guessing individual resource paths. "
             "Use action=list/search/describe to inspect metadata before loading content. "
-            "Use action=load with current_todo and reason only when the active todo needs that SKILL.md body. "
+            "Use action=load with current_system and reason only when the active system needs that SKILL.md body. "
             "Use action=list_loaded to inspect loaded state. "
-            "Use action=read_resource with current_todo only for resources explicitly listed by describe/load. "
+            "Use action=read_resource with current_system only for resources explicitly listed by describe/load. "
             "read_resource defaults to a compact outline; use mode=fragment for a JSON pointer subtree; "
             "use mode=content only when raw text is necessary."
         ),
@@ -157,5 +157,5 @@ def _tool_description(registry: SkillRegistry) -> str:
     ]
     if skill_names:
         lines.append("Enabled skills: " + ", ".join(skill_names[:40]))
-    lines.append("Call action=list or action=search to inspect available skills for the active todo.")
+    lines.append("Call action=list or action=search to inspect available skills for the active system.")
     return "\n".join(lines)

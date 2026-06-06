@@ -18,11 +18,11 @@ def classify_create_agent_intent(
     classifier = model or get_task_model() or get_main_model()
     if classifier is None:
         return CreateAgentIntentDecision(
-            intent="manufacture_agent",
-            rationale="No model is configured; defaulting to manufacturing to preserve create-agent behavior.",
+            intent="workspace_assist",
+            rationale="No model is configured; cannot classify manufacturing intent safely.",
         )
     try:
-        structured = classifier.with_structured_output(CreateAgentIntentDecision, method="json_mode")
+        structured = classifier.with_structured_output(CreateAgentIntentDecision)
         result = structured.invoke(
             [
                 SystemMessage(
@@ -49,6 +49,6 @@ def classify_create_agent_intent(
         return result if isinstance(result, CreateAgentIntentDecision) else CreateAgentIntentDecision.model_validate(result)
     except Exception as exc:
         return CreateAgentIntentDecision(
-            intent="manufacture_agent",
-            rationale=f"Intent classifier failed; defaulting to manufacturing: {type(exc).__name__}: {exc}",
+            intent="workspace_assist",
+            rationale=f"Intent classifier failed; manufacturing was not started: {type(exc).__name__}: {exc}",
         )
