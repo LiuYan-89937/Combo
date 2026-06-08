@@ -14,10 +14,17 @@ from agent_factory.tooling.skills.skill_tool_risk import evaluate_skill_tool_ris
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
-def build_skill_tool_spec(registry: SkillRegistry, *, persist_gateway_state: bool = False) -> ToolSpec:
+def build_skill_tool_spec(
+    registry: SkillRegistry,
+    *,
+    persist_gateway_state: bool = False,
+    stage_context_resource: str | None = None,
+) -> ToolSpec:
     tool_resources = {SKILL_RESOURCE_KEY: SKILL_RESOURCE_KEY}
     if persist_gateway_state:
         tool_resources[SKILL_GATEWAY_STATE_RESOURCE_KEY] = SKILL_GATEWAY_STATE_RESOURCE_KEY
+    if stage_context_resource:
+        tool_resources[stage_context_resource] = stage_context_resource
     return ToolSpec(
         id=SKILL_TOOL_ID,
         description=_tool_description(registry),

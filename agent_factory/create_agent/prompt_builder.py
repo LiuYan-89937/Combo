@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
+from agent_factory.create_agent.capability_inventory import render_capability_inventory
 from agent_factory.create_agent.prompt_context import project_messages_for_prompt
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.builtins.resource_set.resource_set import ResourceSetStore
@@ -17,13 +18,21 @@ def build_create_agent_messages(
     tools: list[BaseTool],
     *,
     resource_set_store: ResourceSetStore | None = None,
+    capability_inventory: dict[str, Any] | None = None,
 ) -> list[BaseMessage]:
     workspace = CreateAgentWorkspace(str(state["workspace_path"]), resource_set_store=resource_set_store)
-    system = SystemMessage(content=_system_prompt_text(state=state, tools=tools, workspace=workspace))
+    system = SystemMessage(
+        content=_system_prompt_text(
+            state=state,
+            tools=tools,
+            workspace=workspace,
+            capability_inventory=capability_inventory or {},
+        )
+    )
     return [system, *project_messages_for_prompt(list(state.get("messages") or []), workspace=workspace)]
 
 
-def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any) -> str:
+def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any, stage_progress: dict[str, Any] | None = None) -> str:
     digest = report.to_digest()
     issue_lines = [
         (
@@ -56,12 +65,25 @@ def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any) -
         "load only the recommended skill resources needed for the next repair.\n\n"
         f"{workspace.context_summary()}\n\n"
         f"Validation digest: {digest.status} | scope={digest.validation_scope} | {digest.summary}\n"
+        + (
+            "Stage progress: "
+            + json.dumps(stage_progress, ensure_ascii=False, sort_keys=True)
+            + "\n"
+            if stage_progress
+            else ""
+        )
         + "\n".join(issue_lines)
         + ("\nMachine-applicable repair bundles:\n" + "\n".join(repair_bundle_lines) if repair_bundle_lines else "")
     )
 
 
-def _system_prompt_text(*, state: Mapping[str, Any], tools: list[BaseTool], workspace: CreateAgentWorkspace) -> str:
+def _system_prompt_text(
+    *,
+    state: Mapping[str, Any],
+    tools: list[BaseTool],
+    workspace: CreateAgentWorkspace,
+    capability_inventory: dict[str, Any],
+) -> str:
     repair_context = str(state.get("repair_context") or "").strip()
     sections = [
         "你是 FastAgentFactory 的 create-agent 文件制造 ReAct agent。",
@@ -70,11 +92,17 @@ def _system_prompt_text(*, state: Mapping[str, Any], tools: list[BaseTool], work
         (
             "必须通过 create_agent_stage 查看和推进 RuntimeKernel system manufacturing state；"
             "不要直接写 .factory/system_state.json。当前 active system 未通过 scoped validation 前，"
-            "不得切换到后续 system。"
+            "不得切换到后续 system。每轮写文件前先确认 active_system.owned_files；"
+            "目标文件不在 owned_files 内时不要调用 write/edit/multi_edit。"
+            "create_agent_stage 只用于 list 当前状态，或把当前 active system 标为 failed_needs_repair / blocked_waiting_user；"
+            "它不是阶段完成或阶段切换工具。阶段完成只由 create_agent_validate passed 后的 runtime progress 执行。"
         ),
         (
             "需要用户补充资源或决策时，必须调用 create_agent_control(action=ask_user, message=...)；"
             "不要直接写 .factory/action.json，不要输出表单。"
+            "提问前必须先对照 Runtime Capability Inventory：未出现在 confirmed runtime tools、"
+            "inherited extension candidates 或 verified package tools 中的能力，不能承诺已支持，"
+            "也不能直接向用户索要该能力的账号、token 或配置。"
         ),
         "不要硬编码业务资源。用户提供的信息优先；公开信息可通过已绑定工具发现；secret 只能由用户提供。",
         "最终出厂条件只有两个：final_validation passed，并且所有 system stages 都是 done。",
@@ -108,6 +136,8 @@ def _system_prompt_text(*, state: Mapping[str, Any], tools: list[BaseTool], work
         ),
         (
             "模型只能修改 active system 的 owned_files。需要后续系统文件时，先完成当前系统 scoped validation。"
+            "如果 write/edit 被拒绝为 outside active system owned files，读取 observation 中的 active_system_id、"
+            "target_system_id 和 active_system_owned_files，回到当前系统完成验证，不要重试同一路径。"
             "制造期 read/write/edit/glob/grep/bash 等工具不得默认暴露给最终子 Agent；"
             "运行期工具必须在 tools_system/package_tool_system 中做来源决策。"
         ),
@@ -115,7 +145,8 @@ def _system_prompt_text(*, state: Mapping[str, Any], tools: list[BaseTool], work
             "tool_output 的 output_id 只能来自当前提示中列出的 output_ref 或 tool_output(action=list) 返回值；"
             "不要构造、猜测或复用看起来像 id 的字符串。"
         ),
-        f"Bound tools: {', '.join(tool.name for tool in tools) if tools else 'none'}",
+        f"Manufacturing tools bound to this ReAct loop only: {', '.join(tool.name for tool in tools) if tools else 'none'}",
+        render_capability_inventory(capability_inventory, package_root=workspace.root),
         workspace.context_summary(),
     ]
     if repair_context:

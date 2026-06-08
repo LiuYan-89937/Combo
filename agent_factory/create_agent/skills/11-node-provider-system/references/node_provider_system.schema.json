@@ -1,18 +1,153 @@
 {
   "type": "object",
+  "title": "Node provider contract and package node manifest",
+  "description": "System resource map. Each property is the schema for the named package file.",
+  "additionalProperties": false,
   "properties": {
-    "type": {
-      "type": "string"
+    "contracts/node_provider.json": {
+      "$defs": {
+        "NodeProviderContractConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "providers": {
+              "items": {
+                "$ref": "#/$defs/NodeProviderReference"
+              },
+              "title": "Providers",
+              "type": "array"
+            }
+          },
+          "title": "NodeProviderContractConfig",
+          "type": "object"
+        },
+        "NodeProviderReference": {
+          "additionalProperties": false,
+          "properties": {
+            "provider_id": {
+              "title": "Provider Id",
+              "type": "string"
+            },
+            "config": {
+              "additionalProperties": true,
+              "title": "Config",
+              "type": "object"
+            }
+          },
+          "required": [
+            "provider_id"
+          ],
+          "title": "NodeProviderReference",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "node_provider",
+          "default": "node_provider",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": "node_provider_contract.v0",
+          "default": "node_provider_contract.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/NodeProviderContractConfig"
+        }
+      },
+      "title": "contracts/node_provider.json",
+      "type": "object"
     },
-    "version": {
-      "type": "string"
-    },
-    "config": {
-      "type": "object",
-      "additionalProperties": true
+    "nodes/<node_id>/manifest.json": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "package_node.v0",
+          "default": "package_node.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "impl_id": {
+          "title": "Impl Id",
+          "type": "string"
+        },
+        "node_type": {
+          "enum": [
+            "cognitive",
+            "operational",
+            "governance",
+            "terminal"
+          ],
+          "title": "Node Type",
+          "type": "string"
+        },
+        "entrypoint": {
+          "title": "Entrypoint",
+          "type": "string"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "title": "Output Schema",
+          "type": "object"
+        },
+        "readable_sections": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Readable Sections",
+          "type": "array"
+        },
+        "writable_sections": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Writable Sections",
+          "type": "array"
+        },
+        "required_services": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Services",
+          "type": "array"
+        },
+        "tool_access": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tool Access",
+          "type": "array"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "impl_id",
+        "node_type",
+        "entrypoint",
+        "description"
+      ],
+      "title": "nodes/<node_id>/manifest.json",
+      "type": "object"
     }
   },
-  "additionalProperties": true,
-  "title": "Node Provider System",
-  "description": "Owns node provider contract and package node assets."
+  "required": [
+    "contracts/node_provider.json",
+    "nodes/<node_id>/manifest.json"
+  ]
 }

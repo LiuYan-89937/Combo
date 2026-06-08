@@ -19,6 +19,9 @@ Previous RuntimeKernel systems in stage order.
 
 ## Owned Files
 - `contracts/model.json`
+- `contracts/dependencies.json`
+- `contracts/sandbox.json`
+- `sandbox_contract.json`
 
 ## Read-Only Dependencies
 Read prior system outputs only. Do not modify files outside Owned Files.

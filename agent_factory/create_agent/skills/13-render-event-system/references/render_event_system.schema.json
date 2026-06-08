@@ -1,18 +1,132 @@
 {
   "type": "object",
+  "title": "Render contract and manifest",
+  "description": "System resource map. Each property is the schema for the named package file.",
+  "additionalProperties": false,
   "properties": {
-    "type": {
-      "type": "string"
+    "contracts/render.json": {
+      "$defs": {
+        "RenderContractConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "manifest_path": {
+              "default": "render_manifest.json",
+              "title": "Manifest Path",
+              "type": "string"
+            }
+          },
+          "title": "RenderContractConfig",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "render",
+          "default": "render",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": "render_contract.v0",
+          "default": "render_contract.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/RenderContractConfig"
+        }
+      },
+      "title": "contracts/render.json",
+      "type": "object"
     },
-    "version": {
-      "type": "string"
-    },
-    "config": {
-      "type": "object",
-      "additionalProperties": true
+    "render_manifest.json": {
+      "$defs": {
+        "NodeRenderSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "node_id": {
+              "title": "Node Id",
+              "type": "string"
+            },
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "kind": {
+              "title": "Kind",
+              "type": "string"
+            },
+            "purpose": {
+              "title": "Purpose",
+              "type": "string"
+            },
+            "doing": {
+              "title": "Doing",
+              "type": "string"
+            },
+            "expected_output": {
+              "title": "Expected Output",
+              "type": "string"
+            },
+            "visible_to_user": {
+              "default": true,
+              "title": "Visible To User",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "node_id",
+            "label",
+            "kind",
+            "purpose",
+            "doing",
+            "expected_output"
+          ],
+          "title": "NodeRenderSpec",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "render_manifest.v0",
+          "default": "render_manifest.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "graph_id": {
+          "title": "Graph Id",
+          "type": "string"
+        },
+        "producer_type": {
+          "const": "agent",
+          "default": "agent",
+          "title": "Producer Type",
+          "type": "string"
+        },
+        "nodes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/NodeRenderSpec"
+          },
+          "title": "Nodes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "graph_id"
+      ],
+      "title": "render_manifest.json",
+      "type": "object"
     }
   },
-  "additionalProperties": true,
-  "title": "Render Event System",
-  "description": "Owns render manifest and render contract."
+  "required": [
+    "contracts/render.json",
+    "render_manifest.json"
+  ]
 }

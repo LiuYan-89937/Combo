@@ -1,18 +1,73 @@
 {
-  "type": "object",
+  "$defs": {
+    "ToolsContractConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "builtin_tools_enabled": {
+          "default": true,
+          "title": "Builtin Tools Enabled",
+          "type": "boolean"
+        },
+        "builtin_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Builtin Tool Ids",
+          "type": "array"
+        },
+        "builtin_workspace_root": {
+          "default": "/workdir",
+          "title": "Builtin Workspace Root",
+          "type": "string"
+        },
+        "builtin_allow_external_paths": {
+          "default": false,
+          "title": "Builtin Allow External Paths",
+          "type": "boolean"
+        },
+        "package_tools_enabled": {
+          "default": true,
+          "title": "Package Tools Enabled",
+          "type": "boolean"
+        },
+        "instance_extensions_enabled": {
+          "default": true,
+          "title": "Instance Extensions Enabled",
+          "type": "boolean"
+        },
+        "instance_extension_root": {
+          "default": ".agent_runtime/extensions",
+          "title": "Instance Extension Root",
+          "type": "string"
+        }
+      },
+      "title": "ToolsContractConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
   "properties": {
     "type": {
+      "const": "tools",
+      "default": "tools",
+      "title": "Type",
       "type": "string"
     },
     "version": {
+      "const": "tools_contract.v0",
+      "default": "tools_contract.v0",
+      "title": "Version",
       "type": "string"
     },
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
     "config": {
-      "type": "object",
-      "additionalProperties": true
+      "$ref": "#/$defs/ToolsContractConfig"
     }
   },
-  "additionalProperties": true,
-  "title": "Tools System",
-  "description": "Owns runtime tool provider decisions and tools contract."
+  "title": "Tools contract",
+  "type": "object"
 }

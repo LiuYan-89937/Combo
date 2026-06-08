@@ -1,5 +1,29 @@
 {
-  "type": "node_provider_system",
-  "version": "node_provider_system.v0",
-  "config": {}
+  "contracts/node_provider.json": {
+    "type": "node_provider",
+    "version": "node_provider_contract.v0",
+    "enabled": true,
+    "config": {
+      "providers": []
+    }
+  },
+  "nodes/<node_id>/manifest.json": {
+    "version": "package_node.v0",
+    "impl_id": "package.example_node",
+    "node_type": "operational",
+    "entrypoint": "nodes/example_node/node.py:run",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "output_schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "readable_sections": [],
+    "writable_sections": [],
+    "required_services": [],
+    "tool_access": [],
+    "description": "Package node description."
+  }
 }

@@ -1,5 +1,24 @@
 {
-  "type": "trace_artifact_system",
-  "version": "trace_artifact_system.v0",
-  "config": {}
+  "contracts/trace.json": {
+    "type": "trace",
+    "version": "trace_contract.v0",
+    "enabled": true,
+    "config": {
+      "root": ".agent_runtime/trace",
+      "max_inline_payload_chars": 12000
+    }
+  },
+  "contracts/artifact.json": {
+    "type": "artifact",
+    "version": "artifact_contract.v0",
+    "enabled": true,
+    "config": {
+      "root": ".agent_runtime/artifacts",
+      "index_path": ".agent_runtime/artifacts/index.jsonl",
+      "allowed_kinds": [
+        "report",
+        "artifact"
+      ]
+    }
+  }
 }

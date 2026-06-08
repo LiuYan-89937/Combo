@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.tooling.skills.skill_tool_protocol import (
+    active_system_string,
     limit_value,
     persist_registry,
     registry_from_resources,
@@ -54,7 +55,7 @@ class SkillToolActionRunner:
         )
 
     def _list_loaded(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_system = required_string(arguments, "current_system")
+        current_system = active_system_string(arguments, self.resources)
         return _output(
             action=action,
             message=f"Loaded skill state for system: {current_system}",
@@ -62,7 +63,7 @@ class SkillToolActionRunner:
         )
 
     def _describe(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_system = required_string(arguments, "current_system")
+        current_system = active_system_string(arguments, self.resources)
         described = self.registry.describe(name, current_system=current_system)
         persist_registry(self.resources, self.registry)
         return _output(
@@ -73,7 +74,7 @@ class SkillToolActionRunner:
         )
 
     def _load(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_system = required_string(arguments, "current_system")
+        current_system = active_system_string(arguments, self.resources)
         reason = required_string(arguments, "reason")
         loaded = self.registry.load(name, current_system=current_system, reason=reason)
         persist_registry(self.resources, self.registry)
@@ -85,7 +86,7 @@ class SkillToolActionRunner:
         )
 
     def _read_repair_resources(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_system = required_string(arguments, "current_system")
+        current_system = active_system_string(arguments, self.resources)
         paths = resource_paths(arguments.get("paths"))
         self.registry.describe(name, current_system=current_system)
         persist_registry(self.resources, self.registry)
@@ -108,7 +109,7 @@ class SkillToolActionRunner:
         )
 
     def _read_resource(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        current_system = required_string(arguments, "current_system")
+        current_system = active_system_string(arguments, self.resources)
         path = required_string(arguments, "path")
         mode = resource_mode(arguments.get("mode"))
         pointer = str(arguments.get("pointer") or "").strip()

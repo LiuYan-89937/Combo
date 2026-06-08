@@ -20,9 +20,31 @@ def validation_event_from_tool_calls(tool_calls: list[dict[str, object]]) -> str
         return "explicit_validation"
     if tool_names & {"write", "edit", "multi_edit"}:
         return "package_change"
-    if "create_agent_stage" in tool_names:
-        return "stage"
     return "none"
+
+
+def stage_progress_summary(
+    before: SystemManufacturingState,
+    after: SystemManufacturingState,
+    report: PackageValidationReport,
+) -> dict[str, object]:
+    before_active = before.active_stage()
+    after_active = after.active_stage()
+    return {
+        "validation_status": report.status,
+        "previous_active_system": before_active.system_id if before_active else "",
+        "previous_active_status": before_active.status.value if before_active else "",
+        "current_active_system": after_active.system_id if after_active else "",
+        "current_active_status": after_active.status.value if after_active else "",
+        "advanced": bool(
+            report.status == "passed"
+            and before_active is not None
+            and (
+                after_active is None
+                or after_active.system_id != before_active.system_id
+            )
+        ),
+    }
 
 
 def apply_system_validation_progress(

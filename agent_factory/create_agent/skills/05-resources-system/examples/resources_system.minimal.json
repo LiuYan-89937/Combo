@@ -1,5 +1,16 @@
 {
-  "type": "resources_system",
-  "version": "resources_system.v0",
-  "config": {}
+  "contracts/resources.json": {
+    "type": "resources",
+    "version": "resources_contract.v0",
+    "enabled": true,
+    "config": {
+      "resources_path": "resources.json",
+      "resource_descriptors": []
+    }
+  },
+  "resources.json": {},
+  ".factory/resources.json": {
+    "version": "resource_facts.v0",
+    "facts": []
+  }
 }

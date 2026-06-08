@@ -1,5 +1,19 @@
 {
-  "type": "package_tool_system",
-  "version": "package_tool_system.v0",
-  "config": {}
+  "id": "package_tool",
+  "description": "Package tool description.",
+  "entrypoint": "python:tools/package_tool/tool.py:run",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": true
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": true
+  },
+  "resources": {},
+  "risk_level": "low",
+  "risk_evaluator": {
+    "llm_mode": "disabled"
+  },
+  "concurrent": true
 }

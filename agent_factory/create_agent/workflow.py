@@ -13,7 +13,7 @@ from langgraph.types import interrupt
 from agent_factory.create_agent.models import CreateAgentAction, PackageValidationReport
 from agent_factory.create_agent.prompt_builder import build_create_agent_messages, validation_repair_context
 from agent_factory.create_agent.validation_gate import CreateAgentValidationGate, ValidationDecision
-from agent_factory.create_agent.validation_progress import apply_system_validation_progress, validation_event_from_tool_calls
+from agent_factory.create_agent.validation_progress import apply_system_validation_progress, stage_progress_summary, validation_event_from_tool_calls
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
@@ -39,6 +39,7 @@ class CreateAgentWorkflow:
     validator: CreateAgentPackageValidator
     model: Any | None = None
     resource_set_store: ResourceSetStore | None = None
+    capability_inventory: dict[str, Any] | None = None
 
     def compile(self, *, checkpointer: Any | None = None):
         graph = StateGraph(CreateAgentGraphState)
@@ -67,7 +68,12 @@ class CreateAgentWorkflow:
         model = self.model or get_main_model()
         if model is None:
             raise RuntimeError("main model is not configured for create-agent")
-        messages = build_create_agent_messages(state, self.tools, resource_set_store=self.resource_set_store)
+        messages = build_create_agent_messages(
+            state,
+            self.tools,
+            resource_set_store=self.resource_set_store,
+            capability_inventory=self.capability_inventory or {},
+        )
         response = model.bind_tools(self.tools, tool_choice="auto").invoke(messages) if self.tools else model.invoke(messages)
         if not isinstance(response, BaseMessage):
             response = AIMessage(content=str(response))
@@ -136,8 +142,10 @@ class CreateAgentWorkflow:
         workspace.write_validation(report)
         if force_full:
             workspace.write_action(CreateAgentAction())
-        system_state = apply_system_validation_progress(workspace.read_system_state(), report)
+        previous_system_state = workspace.read_system_state()
+        system_state = apply_system_validation_progress(previous_system_state, report)
         workspace.write_system_state(system_state)
+        progress_summary = stage_progress_summary(previous_system_state, system_state, report)
         done = report.status == "passed" and system_state.all_done()
         if done:
             return {
@@ -147,7 +155,7 @@ class CreateAgentWorkflow:
                 "final_answer": f"AgentPackage 制造完成并通过校验：{workspace.root}",
                 "validation_event": "none",
             }
-        repair_context = validation_repair_context(workspace=workspace, report=report)
+        repair_context = validation_repair_context(workspace=workspace, report=report, stage_progress=progress_summary)
         return {
             "repair_context": repair_context,
             "validation": report.to_digest().model_dump(mode="json"),

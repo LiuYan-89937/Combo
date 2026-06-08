@@ -1,5 +1,18 @@
 {
-  "type": "state_system",
-  "version": "state_system.v0",
-  "config": {}
+  "contracts/state.json": {
+    "type": "state",
+    "version": "state_contract.v0",
+    "enabled": false,
+    "config": {
+      "namespace": "package",
+      "schema_path": "state/package.schema.json",
+      "initial_state_path": "state/package.initial.json",
+      "writable_node_ids": []
+    }
+  },
+  "state/package.schema.json": {
+    "type": "object",
+    "additionalProperties": true
+  },
+  "state/package.initial.json": {}
 }

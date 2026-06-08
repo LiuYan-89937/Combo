@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.create_agent.control_tool import CREATE_AGENT_WORKSPACE_RESOURCE
+from agent_factory.create_agent.stage_context import CreateAgentStageContext
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
@@ -76,9 +77,11 @@ def build_create_agent_validate_tool_spec() -> ToolSpec:
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    context = _stage_context(resources)
     workspace = _workspace(resources)
     system_id = str(arguments.get("system_id") or "").strip()
-    scope = _scope(arguments.get("scope"), workspace=workspace, system_id=system_id)
+    context.assert_active_system(system_id)
+    scope = _scope(arguments.get("scope"), stage_context=context, system_id=system_id)
     changed_files = _changed_files(arguments.get("changed_files"))
     report = CreateAgentPackageValidator().validate(
         workspace.root,
@@ -94,12 +97,19 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
+        stage_context = _stage_context(dict(context.get("resources") or {}))
+        stage_context.assert_active_system(str(arguments.get("system_id") or "").strip())
         _changed_files(arguments.get("changed_files"))
     except Exception as exc:
         return ToolRiskResult(
             action="deny",
             risk_level="low",
             reasons=[f"invalid create-agent validation request: {type(exc).__name__}: {exc}"],
+            facts={
+                "requested_system_id": str(arguments.get("system_id") or ""),
+                "error_type": type(exc).__name__,
+                "required_next_action": "validate only the active system; future systems are validated after stage advancement",
+            },
         ).model_dump(mode="json")
     return ToolRiskResult(
         action="allow",
@@ -118,8 +128,12 @@ def _workspace(resources: dict[str, Any]) -> CreateAgentWorkspace:
     raise ValueError("create_agent workspace resource is missing")
 
 
-def _scope(value: Any, *, workspace: CreateAgentWorkspace, system_id: str) -> str:
-    active = workspace.read_system_state().active_stage()
+def _stage_context(resources: dict[str, Any]) -> CreateAgentStageContext:
+    return CreateAgentStageContext.from_workspace_root(_workspace(resources).root)
+
+
+def _scope(value: Any, *, stage_context: CreateAgentStageContext, system_id: str) -> str:
+    active = stage_context.active_stage()
     active_id = system_id or (active.system_id if active else "")
     if active_id != "final_validation" and str(value or "").strip() == "full_static":
         raise ValueError("full_static is only allowed when active system is final_validation")

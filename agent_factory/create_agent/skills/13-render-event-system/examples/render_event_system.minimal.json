@@ -1,5 +1,26 @@
 {
-  "type": "render_event_system",
-  "version": "render_event_system.v0",
-  "config": {}
+  "contracts/render.json": {
+    "type": "render",
+    "version": "render_contract.v0",
+    "enabled": true,
+    "config": {
+      "manifest_path": "render_manifest.json"
+    }
+  },
+  "render_manifest.json": {
+    "version": "render_manifest.v0",
+    "graph_id": "react_agent",
+    "producer_type": "agent",
+    "nodes": {
+      "answer": {
+        "node_id": "answer",
+        "label": "Answer",
+        "kind": "cognitive",
+        "purpose": "Generate an answer.",
+        "doing": "Running the answer node.",
+        "expected_output": "Final response.",
+        "visible_to_user": true
+      }
+    }
+  }
 }

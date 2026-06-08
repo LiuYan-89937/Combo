@@ -1,18 +1,324 @@
 {
-  "type": "object",
-  "properties": {
-    "type": {
-      "type": "string"
+  "$defs": {
+    "PackageRepairBundle": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "title": "Bundle Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "manifest_missing",
+            "missing_required_contracts",
+            "missing_referenced_files",
+            "runtime_path_contract_repair",
+            "runtime_contract_build",
+            "assembly_compile",
+            "python_syntax",
+            "generic_repair"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "repair_action": {
+          "enum": [
+            "materialize_base_package",
+            "materialize_required_contracts",
+            "normalize_runtime_contract_paths",
+            "read_skill_resources",
+            "repair_files",
+            "fix_python_syntax"
+          ],
+          "title": "Repair Action",
+          "type": "string"
+        },
+        "machine_applicable": {
+          "default": false,
+          "title": "Machine Applicable",
+          "type": "boolean"
+        },
+        "target_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Files",
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/PackageRepairTarget"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "title": "Inputs",
+          "type": "object"
+        },
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "kind",
+        "repair_action"
+      ],
+      "title": "PackageRepairBundle",
+      "type": "object"
     },
-    "version": {
-      "type": "string"
+    "PackageRepairTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_key": {
+          "default": "",
+          "title": "Contract Key",
+          "type": "string"
+        },
+        "target_file": {
+          "title": "Target File",
+          "type": "string"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "target_file"
+      ],
+      "title": "PackageRepairTarget",
+      "type": "object"
     },
-    "config": {
-      "type": "object",
-      "additionalProperties": true
+    "PackageValidationIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "where": {
+          "title": "Where",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "severity": {
+          "default": "blocking",
+          "enum": [
+            "blocking",
+            "warning",
+            "info"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "title": "Path",
+          "type": "string"
+        },
+        "expected": {
+          "default": "",
+          "title": "Expected",
+          "type": "string"
+        },
+        "actual": {
+          "default": "",
+          "title": "Actual",
+          "type": "string"
+        },
+        "repair_hint": {
+          "default": "",
+          "title": "Repair Hint",
+          "type": "string"
+        },
+        "target_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Files",
+          "type": "array"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        },
+        "repair_bundle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageRepairBundle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        }
+      },
+      "required": [
+        "where",
+        "summary",
+        "message"
+      ],
+      "title": "PackageValidationIssue",
+      "type": "object"
+    },
+    "PackageValidationNextAction": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "default": "continue",
+          "enum": [
+            "continue",
+            "repair_files",
+            "ask_user",
+            "finalize_ready"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "target_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Files",
+          "type": "array"
+        },
+        "recommended_skill": {
+          "default": "",
+          "title": "Recommended Skill",
+          "type": "string"
+        },
+        "recommended_resources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Resources",
+          "type": "array"
+        },
+        "repair_bundles": {
+          "items": {
+            "$ref": "#/$defs/PackageRepairBundle"
+          },
+          "title": "Repair Bundles",
+          "type": "array"
+        }
+      },
+      "title": "PackageValidationNextAction",
+      "type": "object"
     }
   },
-  "additionalProperties": true,
-  "title": "Final Validation Repair",
-  "description": "Owns final static validation and system-scoped repair routing."
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": "package_validation_report.v0",
+      "default": "package_validation_report.v0",
+      "title": "Version",
+      "type": "string"
+    },
+    "status": {
+      "default": "failed",
+      "enum": [
+        "passed",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "package_root": {
+      "title": "Package Root",
+      "type": "string"
+    },
+    "validation_scope": {
+      "default": "full_static",
+      "enum": [
+        "workspace_hygiene",
+        "package_shape",
+        "runtime_contract_build",
+        "assembly_compile",
+        "python_syntax",
+        "full_static",
+        "unchanged"
+      ],
+      "title": "Validation Scope",
+      "type": "string"
+    },
+    "changed_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Changed Files",
+      "type": "array"
+    },
+    "cached": {
+      "default": false,
+      "title": "Cached",
+      "type": "boolean"
+    },
+    "skipped": {
+      "default": false,
+      "title": "Skipped",
+      "type": "boolean"
+    },
+    "summary": {
+      "default": "",
+      "title": "Summary",
+      "type": "string"
+    },
+    "next_action": {
+      "$ref": "#/$defs/PackageValidationNextAction"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/PackageValidationIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    }
+  },
+  "required": [
+    "package_root"
+  ],
+  "title": "Package validation report",
+  "type": "object"
 }

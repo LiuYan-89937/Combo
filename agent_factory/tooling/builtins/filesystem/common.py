@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from agent_factory.create_agent.stage_context import stage_context_from_resources
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -121,15 +122,17 @@ def path_risk_result(
         ).model_dump(mode="json")
     is_write_like = default_action != "allow"
     if is_write_like and not _is_allowed_write_path(resolved, root=root, resources=tool_resources):
+        guidance = _active_system_write_guidance(resolved, root=root, resources=tool_resources)
         return ToolRiskResult(
             action="deny",
             risk_level="high",
-            reasons=["path is outside the active system owned files"],
+            reasons=[guidance],
             facts={
                 "path": path_value,
                 "resolved_path": str(resolved),
                 "filesystem_root": str(root),
                 "active_system_write_boundary": True,
+                **_active_system_write_facts(resolved, root=root, resources=tool_resources),
             },
         ).model_dump(mode="json")
     sensitive = _is_sensitive_path(resolved)
@@ -198,11 +201,20 @@ def _managed_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> 
 
 
 def _is_allowed_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
+    stage_context = stage_context_from_resources(resources)
+    if stage_context is not None:
+        return _path_matches_owned_files(path, root=root, owned_files=stage_context.active_owned_files())
     config = resources.get("filesystem", {})
     values = config.get("allowed_write_paths", []) if isinstance(config, dict) else []
     if not isinstance(values, list) or not values:
         return True
-    for value in values:
+    return _path_matches_owned_files(path, root=root, owned_files=values)
+
+
+def _path_matches_owned_files(path: Path, *, root: Path, owned_files: list[Any]) -> bool:
+    if not owned_files:
+        return False
+    for value in owned_files:
         if not isinstance(value, str) or not value.strip():
             continue
         requested = Path(value).expanduser()
@@ -211,3 +223,59 @@ def _is_allowed_write_path(path: Path, *, root: Path, resources: dict[str, Any])
         if path == resolved or resolved in path.parents:
             return True
     return False
+
+
+def _active_system_write_guidance(path: Path, *, root: Path, resources: dict[str, Any]) -> str:
+    facts = _active_system_write_facts(path, root=root, resources=resources)
+    target_system = facts.get("target_system_id")
+    active_system = facts.get("active_system_id") or "unknown"
+    relative_path = facts.get("relative_path") or str(path)
+    allowed = facts.get("active_system_owned_files") or []
+    if target_system and target_system != active_system:
+        return (
+            f"write denied: {relative_path} belongs to system {target_system}, "
+            f"but the active system is {active_system}. Finish the active system scoped validation first; "
+            "the runtime will advance the stage before this file can be written. "
+            f"Current owned files: {', '.join(allowed) if allowed else 'none'}."
+        )
+    return (
+        f"write denied: {relative_path} is outside the active system owned files for {active_system}. "
+        f"Current owned files: {', '.join(allowed) if allowed else 'none'}. "
+        "Do not write this file until the matching system stage is active."
+    )
+
+
+def _active_system_write_facts(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any]:
+    stage_context = stage_context_from_resources(resources)
+    if stage_context is not None:
+        relative_path = _relative_path_text(path, root=root)
+        active = stage_context.active_stage()
+        return {
+            "relative_path": relative_path,
+            "active_system_id": active.system_id if active else "",
+            "active_system_owned_files": stage_context.active_owned_files(),
+            "target_system_id": _target_system_for_path(relative_path, stage_context.file_owners()),
+        }
+    return {"relative_path": _relative_path_text(path, root=root)}
+
+
+def _relative_path_text(path: Path, *, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _target_system_for_path(relative_path: str, owners: dict[Any, Any]) -> str:
+    for raw_owned_path, raw_system_id in owners.items():
+        owned_path = str(raw_owned_path or "").strip()
+        system_id = str(raw_system_id or "").strip()
+        if not owned_path or not system_id:
+            continue
+        if owned_path.endswith("/"):
+            if relative_path.startswith(owned_path):
+                return system_id
+            continue
+        if relative_path == owned_path:
+            return system_id
+    return ""

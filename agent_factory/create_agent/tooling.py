@@ -2,23 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
 
+from agent_factory.create_agent.capability_inventory import build_capability_inventory
 from agent_factory.create_agent.control_tool import (
     CREATE_AGENT_CONTROL_TOOL_ID,
     CREATE_AGENT_WORKSPACE_RESOURCE,
     build_create_agent_control_tool_spec,
 )
 from agent_factory.create_agent.models import ACTION_FILE, SYSTEM_STATE_FILE
+from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
 from agent_factory.create_agent.validate_tool import CREATE_AGENT_VALIDATE_TOOL_ID, build_create_agent_validate_tool_spec
 from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.compiler import ToolCompiler
-from agent_factory.tooling.factory_extensions import FactoryExtensionManager, default_factory_extension_root
+from agent_factory.tooling.factory_extensions import FactoryExtensionLoadReport, FactoryExtensionManager, default_factory_extension_root
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import BuiltinToolProvider, ToolProviderContext, ToolProviderResult
 from agent_factory.tooling.registry import ToolRegistry
@@ -43,6 +45,13 @@ CREATE_AGENT_BUILTIN_TOOL_IDS = {
     "tool_output",
     "resource_set",
 }
+CREATE_AGENT_ASSIST_TOOL_IDS = {
+    "read",
+    "glob",
+    "grep",
+    "ls",
+    "tool_output",
+}
 
 CREATE_AGENT_SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
 
@@ -53,6 +62,7 @@ class CreateAgentToolEnvironment:
     tool_ids: list[str]
     system_tool_ids: list[str]
     extension_report: dict[str, Any]
+    capability_inventory: dict[str, Any]
     resource_set_store: ResourceSetStore | None = None
 
 
@@ -60,7 +70,7 @@ class CreateAgentToolEnvironmentBuilder:
     def __init__(self, *, extension_manager: FactoryExtensionManager | None = None) -> None:
         self.extension_manager = extension_manager or FactoryExtensionManager()
 
-    def build(self, *, workspace_root: str | Path) -> CreateAgentToolEnvironment:
+    def build(self, *, workspace_root: str | Path, mode: Literal["manufacture", "assist"] = "manufacture") -> CreateAgentToolEnvironment:
         workspace = Path(workspace_root).expanduser().resolve()
         create_agent_workspace = CreateAgentWorkspace(workspace)
         extension_root = default_factory_extension_root()
@@ -72,20 +82,26 @@ class CreateAgentToolEnvironmentBuilder:
                 "builtin_allow_external_paths": False,
             },
         )
-        builtin_result = BuiltinToolProvider(tool_ids=CREATE_AGENT_BUILTIN_TOOL_IDS).discover(context)
-        extension_result, extension_report = self.extension_manager.discover(context=context)
-        provider_result = builtin_result.merge(extension_result)
+        builtin_tool_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if mode == "manufacture" else CREATE_AGENT_ASSIST_TOOL_IDS
+        builtin_result = BuiltinToolProvider(tool_ids=builtin_tool_ids).discover(context)
+        if mode == "manufacture":
+            extension_result, extension_report = self.extension_manager.discover(context=context)
+        else:
+            extension_result = ToolProviderResult()
+            extension_report = FactoryExtensionLoadReport(extension_root=str(extension_root))
+        provider_result = builtin_result.merge(extension_result) if mode == "manufacture" else builtin_result
         runtime_resources = {
             **builtin_result.runtime_resources,
-            **extension_result.runtime_resources,
+            **(extension_result.runtime_resources if mode == "manufacture" else {}),
             CREATE_AGENT_WORKSPACE_RESOURCE: {"root": str(workspace)},
+            CREATE_AGENT_STAGE_CONTEXT_RESOURCE: stage_context_payload(workspace),
             TOOL_OUTPUT_STORE_RESOURCE: ToolOutputStore(workspace / ".factory" / "tool_outputs"),
-            RESOURCE_SET_STORE_KEY: ResourceSetStore(),
         }
+        if mode == "manufacture":
+            runtime_resources[RESOURCE_SET_STORE_KEY] = ResourceSetStore()
         filesystem_resource = runtime_resources.get("filesystem")
-        if isinstance(filesystem_resource, dict):
-            active_stage = create_agent_workspace.read_system_state().active_stage()
-            filesystem_resource["allowed_write_paths"] = _allowed_write_paths(active_stage.owned_files if active_stage else [])
+        if isinstance(filesystem_resource, dict) and mode == "manufacture":
+            filesystem_resource[CREATE_AGENT_STAGE_CONTEXT_RESOURCE] = runtime_resources[CREATE_AGENT_STAGE_CONTEXT_RESOURCE]
             filesystem_resource["protected_write_paths"] = [ACTION_FILE, SYSTEM_STATE_FILE]
             filesystem_resource["managed_paths"] = {
                 ACTION_FILE: {
@@ -97,42 +113,56 @@ class CreateAgentToolEnvironmentBuilder:
                     "write_tool": CREATE_AGENT_STAGE_TOOL_ID,
                 },
             }
-        skill_registry = _create_agent_skill_registry(
-            runtime_resources.get("skills"),
-            gateway_state=_load_skill_gateway_state(create_agent_workspace.skill_gateway_state_path),
-        )
-        if skill_registry.list_metadata():
-            runtime_resources["skills"] = skill_registry.to_resource_payload()
-            runtime_resources[SKILL_GATEWAY_STATE_RESOURCE_KEY] = str(create_agent_workspace.skill_gateway_state_path)
-            provider_result.system_tool_ids = sorted(set([*provider_result.system_tool_ids, SKILL_TOOL_ID]))
-            skill_specs = [build_skill_tool_spec(skill_registry, persist_gateway_state=True)]
-        else:
-            skill_specs = []
-        provider_result.system_tool_ids = sorted(
-            set(
-                [
-                    *provider_result.system_tool_ids,
-                    CREATE_AGENT_CONTROL_TOOL_ID,
-                    CREATE_AGENT_STAGE_TOOL_ID,
-                    CREATE_AGENT_VALIDATE_TOOL_ID,
-                ]
+        if mode == "manufacture":
+            skill_registry = _create_agent_skill_registry(
+                runtime_resources.get("skills"),
+                gateway_state=_load_skill_gateway_state(create_agent_workspace.skill_gateway_state_path),
             )
-        )
-        specs = _unique_specs(
-            provider_result,
-            extra_specs=[
+            if skill_registry.list_metadata():
+                runtime_resources["skills"] = skill_registry.to_resource_payload()
+                runtime_resources[SKILL_GATEWAY_STATE_RESOURCE_KEY] = str(create_agent_workspace.skill_gateway_state_path)
+                provider_result.system_tool_ids = sorted(set([*provider_result.system_tool_ids, SKILL_TOOL_ID]))
+                skill_specs = [
+                    build_skill_tool_spec(
+                        skill_registry,
+                        persist_gateway_state=True,
+                        stage_context_resource=CREATE_AGENT_STAGE_CONTEXT_RESOURCE,
+                    )
+                ]
+            else:
+                skill_specs = []
+            provider_result.system_tool_ids = sorted(
+                set(
+                    [
+                        *provider_result.system_tool_ids,
+                        CREATE_AGENT_CONTROL_TOOL_ID,
+                        CREATE_AGENT_STAGE_TOOL_ID,
+                        CREATE_AGENT_VALIDATE_TOOL_ID,
+                    ]
+                )
+            )
+            extra_specs = [
                 build_create_agent_control_tool_spec(),
                 build_create_agent_stage_tool_spec(),
                 build_create_agent_validate_tool_spec(),
                 *skill_specs,
-            ],
+            ]
+        else:
+            extra_specs = []
+        specs = _unique_specs(
+            provider_result,
+            extra_specs=extra_specs,
+        )
+        capability_inventory = build_capability_inventory(
+            manufacturing_specs=specs,
+            extension_specs=extension_result.tool_specs if mode == "manufacture" else [],
         )
         registry = ToolRegistry(specs)
         compiler = ToolCompiler(
             package_root=workspace,
             resources=runtime_resources,
             allowed_python_roots=[extension_root],
-            mcp_clients=self.extension_manager.mcp_tool_clients(),
+            mcp_clients=self.extension_manager.mcp_tool_clients() if mode == "manufacture" else {},
         )
         tools = compiler.compile_many(registry.all())
         return CreateAgentToolEnvironment(
@@ -140,21 +170,9 @@ class CreateAgentToolEnvironmentBuilder:
             tool_ids=[tool.name for tool in tools],
             system_tool_ids=sorted(set(provider_result.system_tool_ids)),
             extension_report=extension_report.model_dump(mode="json"),
+            capability_inventory=capability_inventory.model_dump(mode="json"),
             resource_set_store=runtime_resources.get(RESOURCE_SET_STORE_KEY),
         )
-
-
-def _allowed_write_paths(owned_files: list[str]) -> list[str]:
-    values: list[str] = []
-    for item in owned_files:
-        cleaned = str(item or "").strip()
-        if not cleaned:
-            continue
-        if cleaned.endswith("/"):
-            values.append(cleaned)
-            continue
-        values.append(cleaned)
-    return values
 
 
 def _unique_specs(result: ToolProviderResult, *, extra_specs=()):

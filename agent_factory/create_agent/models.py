@@ -153,13 +153,16 @@ class SystemManufacturingState(BaseModel):
             for stage in self.stages
         ]
         next_active = ""
-        for stage in stages:
+        normalized_stages = list(stages)
+        for index, stage in enumerate(normalized_stages):
             if stage.status != SystemStageStatus.done:
                 next_active = stage.system_id
+                if stage.status == SystemStageStatus.pending:
+                    normalized_stages[index] = stage.model_copy(update={"status": SystemStageStatus.in_progress})
                 break
         return self.model_copy(
             update={
-                "stages": stages,
+                "stages": normalized_stages,
                 "active_system_id": next_active,
                 "updated_at": datetime.now(UTC).isoformat(),
             }
@@ -362,10 +365,18 @@ class PackageValidationState(BaseModel):
 def initial_system_manufacturing_state() -> SystemManufacturingState:
     stages = [
         _stage("package_identity", 1, "Package identity", ["agent_package.json"], "01-package-identity-system", "package_shape"),
-        _stage("model_system", 2, "Model system", ["contracts/model.json"], "02-model-system", "runtime_contract_build_subset", ["package_identity"]),
+        _stage(
+            "model_system",
+            2,
+            "Model system",
+            ["contracts/model.json", "contracts/dependencies.json", "contracts/sandbox.json", "sandbox_contract.json"],
+            "02-model-system",
+            "runtime_contract_build_subset",
+            ["package_identity"],
+        ),
         _stage("session_system", 3, "Session and checkpoint system", ["contracts/session.json"], "03-session-system", "runtime_contract_build_subset", ["model_system"]),
         _stage("state_system", 4, "State system", ["contracts/state.json", "state/package.schema.json", "state/package.initial.json"], "04-state-system", "runtime_contract_build_subset", ["session_system"]),
-        _stage("resources_system", 5, "Resources system", ["contracts/resources.json", RESOURCES_FILE], "05-resources-system", "runtime_contract_build_subset", ["state_system"]),
+        _stage("resources_system", 5, "Resources system", ["contracts/resources.json", "resources.json", RESOURCES_FILE], "05-resources-system", "runtime_contract_build_subset", ["state_system"]),
         _stage("context_system", 6, "Context system", ["contracts/context.json"], "06-context-system", "runtime_contract_build_subset", ["resources_system"]),
         _stage("memory_system", 7, "Memory system", ["contracts/memory.json"], "07-memory-system", "runtime_contract_build_subset", ["context_system"]),
         _stage("knowledge_system", 8, "Knowledge system", ["contracts/knowledge.json"], "08-knowledge-system", "runtime_contract_build_subset", ["memory_system"]),
@@ -379,7 +390,8 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
         _stage("trace_artifact_system", 16, "Trace and artifact system", ["contracts/trace.json", "contracts/artifact.json"], "16-trace-artifact-system", "runtime_contract_build_subset", ["scheduler_seed_system"]),
         _stage("final_validation", 17, "Final package validation", [], "17-final-validation-repair", "full_static", ["trace_artifact_system"]),
     ]
-    return SystemManufacturingState(stages=stages, active_system_id=stages[0].system_id)
+    started = stages[0].model_copy(update={"status": SystemStageStatus.in_progress})
+    return SystemManufacturingState(stages=[started, *stages[1:]], active_system_id=started.system_id)
 
 
 def _stage(

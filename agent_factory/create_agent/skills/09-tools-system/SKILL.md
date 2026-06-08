@@ -24,13 +24,17 @@ Previous RuntimeKernel systems in stage order.
 Read prior system outputs only. Do not modify files outside Owned Files.
 
 ## Required Resources
-Use confirmed resource facts from `.factory/resources.json`. If required information is missing, ask the user through `create_agent_control(action=ask_user)` using natural language.
+Use confirmed resource facts from `.factory/resources.json`.
+Use Runtime Capability Inventory as the source of truth for available manufacturing tools, runtime builtin candidates, inherited extension candidates, and verified package tools.
+If a requested runtime capability is not present in the inventory, do not represent it as supported; either choose an available candidate, generate a package tool in the package tool system, or ask the user for a provider decision.
 
 ## Allowed Decisions
 Make decisions only inside this system boundary. Prefer existing RuntimeKernel contracts and existing Gateway tools over inventing new mechanisms.
+Decide which inventory candidates should be declared in `contracts/tools.json`; do not expose manufacturing-only tools by default.
 
 ## Forbidden Actions
 - Do not hardcode business resources, URLs, account values, schedules, or secrets.
+- Do not promise runtime support for a capability absent from the inventory.
 - Do not modify files owned by later systems.
 - Do not expose manufacturing-only file tools as produced-agent runtime tools.
 - Do not infer schema from project source code; read listed resources.

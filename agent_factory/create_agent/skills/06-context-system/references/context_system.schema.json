@@ -1,18 +1,175 @@
 {
-  "type": "object",
+  "$defs": {
+    "AssemblyPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_items_total": {
+          "default": 8,
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Max Items Total",
+          "type": "integer"
+        },
+        "max_tokens_total": {
+          "default": 1200,
+          "maximum": 32000,
+          "minimum": 100,
+          "title": "Max Tokens Total",
+          "type": "integer"
+        },
+        "per_source_limits": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Per Source Limits",
+          "type": "object"
+        }
+      },
+      "title": "AssemblyPolicy",
+      "type": "object"
+    },
+    "CompressionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "trigger_token_threshold": {
+          "default": 8000,
+          "minimum": 1000,
+          "title": "Trigger Token Threshold",
+          "type": "integer"
+        },
+        "keep_recent_messages": {
+          "default": 12,
+          "maximum": 128,
+          "minimum": 2,
+          "title": "Keep Recent Messages",
+          "type": "integer"
+        }
+      },
+      "title": "CompressionPolicy",
+      "type": "object"
+    },
+    "ContextContractConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "context_system.v0",
+          "default": "context_system.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "default_policy": {
+          "$ref": "#/$defs/ContextPolicy"
+        },
+        "node_policies": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ContextPolicy"
+          },
+          "title": "Node Policies",
+          "type": "object"
+        }
+      },
+      "title": "ContextContractConfig",
+      "type": "object"
+    },
+    "ContextPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "context_policy.v0",
+          "default": "context_policy.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "compression": {
+          "$ref": "#/$defs/CompressionPolicy"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/RetrievalPolicy"
+        },
+        "assembly": {
+          "$ref": "#/$defs/AssemblyPolicy"
+        }
+      },
+      "title": "ContextPolicy",
+      "type": "object"
+    },
+    "RetrievalPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "source_ids": {
+          "items": {
+            "enum": [
+              "recent_messages",
+              "cross_session_memory",
+              "resources",
+              "artifacts",
+              "tool_metadata",
+              "scheduler",
+              "knowledge",
+              "trace"
+            ],
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "max_candidates": {
+          "default": 24,
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Max Candidates",
+          "type": "integer"
+        },
+        "min_score": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Min Score",
+          "type": "number"
+        }
+      },
+      "title": "RetrievalPolicy",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
   "properties": {
     "type": {
+      "const": "context",
+      "default": "context",
+      "title": "Type",
       "type": "string"
     },
     "version": {
+      "const": "context_contract.v0",
+      "default": "context_contract.v0",
+      "title": "Version",
       "type": "string"
     },
+    "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+    },
     "config": {
-      "type": "object",
-      "additionalProperties": true
+      "$ref": "#/$defs/ContextContractConfig"
     }
   },
-  "additionalProperties": true,
-  "title": "Context System",
-  "description": "Owns context runtime contract configuration."
+  "title": "Context contract",
+  "type": "object"
 }

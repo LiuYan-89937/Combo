@@ -1,18 +1,177 @@
 {
   "type": "object",
+  "title": "Model, dependency, and sandbox contracts",
+  "description": "System resource map. Each property is the schema for the named package file.",
+  "additionalProperties": false,
   "properties": {
-    "type": {
-      "type": "string"
+    "contracts/model.json": {
+      "$defs": {
+        "ModelContractConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "role": {
+              "default": "main",
+              "enum": [
+                "main",
+                "task"
+              ],
+              "title": "Role",
+              "type": "string"
+            },
+            "source": {
+              "const": "factory_runtime_env",
+              "default": "factory_runtime_env",
+              "title": "Source",
+              "type": "string"
+            }
+          },
+          "title": "ModelContractConfig",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "model",
+          "default": "model",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": "model_contract.v0",
+          "default": "model_contract.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/ModelContractConfig"
+        }
+      },
+      "title": "contracts/model.json",
+      "type": "object"
     },
-    "version": {
-      "type": "string"
+    "contracts/dependencies.json": {
+      "$defs": {
+        "DependenciesContractConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "python_requirements": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Python Requirements",
+              "type": "array"
+            },
+            "system_packages": {
+              "items": {
+                "type": "string"
+              },
+              "title": "System Packages",
+              "type": "array"
+            },
+            "system_binaries": {
+              "items": {
+                "type": "string"
+              },
+              "title": "System Binaries",
+              "type": "array"
+            },
+            "install_mode": {
+              "default": "sandbox_init",
+              "enum": [
+                "none",
+                "sandbox_init"
+              ],
+              "title": "Install Mode",
+              "type": "string"
+            }
+          },
+          "title": "DependenciesContractConfig",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "dependencies",
+          "default": "dependencies",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": "dependencies_contract.v0",
+          "default": "dependencies_contract.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/DependenciesContractConfig"
+        }
+      },
+      "title": "contracts/dependencies.json",
+      "type": "object"
     },
-    "config": {
+    "contracts/sandbox.json": {
+      "$defs": {
+        "SandboxRuntimeContractConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "sandbox_contract_path": {
+              "default": "sandbox_contract.json",
+              "title": "Sandbox Contract Path",
+              "type": "string"
+            }
+          },
+          "title": "SandboxRuntimeContractConfig",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "sandbox",
+          "default": "sandbox",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": "sandbox_contract.v0",
+          "default": "sandbox_contract.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/SandboxRuntimeContractConfig"
+        }
+      },
+      "title": "contracts/sandbox.json",
+      "type": "object"
+    },
+    "sandbox_contract.json": {
       "type": "object",
+      "title": "sandbox_contract.json",
       "additionalProperties": true
     }
   },
-  "additionalProperties": true,
-  "title": "Model System",
-  "description": "Owns model runtime contract configuration."
+  "required": [
+    "contracts/model.json",
+    "contracts/dependencies.json",
+    "contracts/sandbox.json",
+    "sandbox_contract.json"
+  ]
 }

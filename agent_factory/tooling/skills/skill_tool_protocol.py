@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agent_factory.create_agent.stage_context import stage_context_from_resources
 from agent_factory.tooling.skills.registry import SkillRegistry, SkillResourceFragmentNotFound
 
 
@@ -41,6 +42,14 @@ def required_string(arguments: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} must be a non-empty string")
     return value.strip()
+
+
+def active_system_string(arguments: dict[str, Any], resources: dict[str, Any], key: str = "current_system") -> str:
+    current_system = required_string(arguments, key)
+    stage_context = stage_context_from_resources(resources)
+    if stage_context is not None:
+        stage_context.assert_active_system(current_system)
+    return current_system
 
 
 def limit_value(value: Any) -> int:
@@ -94,7 +103,13 @@ def skill_error_guidance(arguments: dict[str, Any], exc: Exception) -> str:
     if action == "read_resource" and isinstance(exc, KeyError):
         return "Unknown skill resource path. Call describe for this skill and choose one of the returned resources."
     if action == "load" and isinstance(exc, PermissionError):
-        return "Loading a second primary skill requires describe for that skill first, then load with a concrete reason."
+        name = str(arguments.get("name") or "").strip()
+        current_system = str(arguments.get("current_system") or "").strip()
+        return (
+            "Loading a second primary skill requires describe for that skill first. "
+            f"Next call: skill(action='describe', name={name!r}, current_system={current_system!r}); "
+            "then retry load with a concrete reason if the described skill is still needed."
+        )
     if action == "read_resource":
         return "Read resource failed. Verify action, name, path, current_system, mode, and pointer."
     if action == "read_repair_resources":
@@ -117,4 +132,13 @@ def skill_error_facts(arguments: dict[str, Any], exc: Exception) -> dict[str, An
         facts["available_top_level_keys"] = exc.available_keys
     elif isinstance(exc, KeyError):
         facts["error_category"] = "skill_resource_not_found"
+    elif facts["action"] == "load" and isinstance(exc, PermissionError):
+        facts["error_category"] = "second_primary_skill_requires_describe"
+        facts["required_next_tool"] = "skill"
+        facts["required_next_args"] = {
+            "action": "describe",
+            "name": facts["name"],
+            "current_system": facts["current_system"],
+        }
+        facts["then_retry_load"] = True
     return facts

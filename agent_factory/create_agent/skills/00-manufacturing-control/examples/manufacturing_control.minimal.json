@@ -1,5 +1,56 @@
 {
-  "type": "manufacturing_control",
-  "version": "manufacturing_control.v0",
-  "config": {}
+  "version": "system_manufacturing_state.v0",
+  "stages": [
+    {
+      "system_id": "package_identity",
+      "stage_order": 1,
+      "title": "Package identity",
+      "status": "in_progress",
+      "owned_files": [
+        "agent_package.json"
+      ],
+      "read_only_dependencies": [],
+      "required_skill": "01-package-identity-system",
+      "validation_scope": "package_shape",
+      "entry_conditions": [],
+      "exit_conditions": [
+        "package_shape passed"
+      ],
+      "repair_history": [],
+      "handoff_outputs": {
+        "outputs": {},
+        "notes": []
+      }
+    },
+    {
+      "system_id": "model_system",
+      "stage_order": 2,
+      "title": "Model system",
+      "status": "pending",
+      "owned_files": [
+        "contracts/model.json",
+        "contracts/dependencies.json",
+        "contracts/sandbox.json",
+        "sandbox_contract.json"
+      ],
+      "read_only_dependencies": [
+        "package_identity"
+      ],
+      "required_skill": "02-model-system",
+      "validation_scope": "runtime_contract_build_subset",
+      "entry_conditions": [
+        "package_identity done"
+      ],
+      "exit_conditions": [
+        "runtime_contract_build_subset passed"
+      ],
+      "repair_history": [],
+      "handoff_outputs": {
+        "outputs": {},
+        "notes": []
+      }
+    }
+  ],
+  "active_system_id": "package_identity",
+  "updated_at": "2026-06-07T13:55:19.756082+00:00"
 }

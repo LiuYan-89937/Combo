@@ -1,18 +1,1235 @@
 {
   "type": "object",
+  "title": "Assembly spec and custom pattern",
+  "description": "System resource map. Each property is the schema for the named package file.",
+  "additionalProperties": false,
   "properties": {
-    "type": {
-      "type": "string"
+    "assembly_spec.json": {
+      "$defs": {
+        "AgentSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Description"
+            },
+            "version": {
+              "default": "0.1.0",
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "title": "AgentSpec",
+          "type": "object"
+        },
+        "BindingSet": {
+          "additionalProperties": false,
+          "properties": {
+            "services": {
+              "items": {
+                "$ref": "#/$defs/ServiceBindingSpec"
+              },
+              "title": "Services",
+              "type": "array"
+            },
+            "node_bindings": {
+              "items": {
+                "$ref": "#/$defs/NodeBinding"
+              },
+              "title": "Node Bindings",
+              "type": "array"
+            },
+            "hooks": {
+              "items": {
+                "$ref": "#/$defs/HookBinding"
+              },
+              "title": "Hooks",
+              "type": "array"
+            }
+          },
+          "title": "BindingSet",
+          "type": "object"
+        },
+        "CustomBindingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "extension_id": {
+              "title": "Extension Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "default": "v0",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "purpose": {
+              "title": "Purpose",
+              "type": "string"
+            },
+            "config": {
+              "additionalProperties": true,
+              "title": "Config",
+              "type": "object"
+            }
+          },
+          "required": [
+            "extension_id",
+            "purpose"
+          ],
+          "title": "CustomBindingPayload",
+          "type": "object"
+        },
+        "GraphOverrides": {
+          "additionalProperties": false,
+          "properties": {
+            "node_wrappers": {
+              "items": {
+                "$ref": "#/$defs/NodeWrapperOverride"
+              },
+              "title": "Node Wrappers",
+              "type": "array"
+            }
+          },
+          "title": "GraphOverrides",
+          "type": "object"
+        },
+        "HarnessScenario": {
+          "additionalProperties": false,
+          "properties": {
+            "scenario_id": {
+              "title": "Scenario Id",
+              "type": "string"
+            },
+            "input_text": {
+              "title": "Input Text",
+              "type": "string"
+            },
+            "user_config": {
+              "additionalProperties": true,
+              "title": "User Config",
+              "type": "object"
+            },
+            "agent_config": {
+              "additionalProperties": true,
+              "title": "Agent Config",
+              "type": "object"
+            },
+            "session_config": {
+              "additionalProperties": true,
+              "title": "Session Config",
+              "type": "object"
+            },
+            "resume_payload": {
+              "additionalProperties": true,
+              "title": "Resume Payload",
+              "type": "object"
+            },
+            "resume_after_interrupt": {
+              "default": false,
+              "title": "Resume After Interrupt",
+              "type": "boolean"
+            },
+            "assertions": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "title": "Assertions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "scenario_id",
+            "input_text"
+          ],
+          "title": "HarnessScenario",
+          "type": "object"
+        },
+        "HookBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "binding_id": {
+              "title": "Binding Id",
+              "type": "string"
+            },
+            "hook_point": {
+              "enum": [
+                "pre_cognitive",
+                "post_cognitive",
+                "pre_operational",
+                "post_operational",
+                "pre_governance",
+                "post_governance",
+                "pre_terminal",
+                "post_terminal",
+                "on_interrupt",
+                "on_resume"
+              ],
+              "title": "Hook Point",
+              "type": "string"
+            },
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "order": {
+              "default": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            }
+          },
+          "required": [
+            "binding_id",
+            "hook_point"
+          ],
+          "title": "HookBinding",
+          "type": "object"
+        },
+        "ModelOperationBindingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "enum": [
+                "chat",
+                "tool_bound_chat",
+                "structured_json"
+              ],
+              "title": "Operation",
+              "type": "string"
+            },
+            "model_role": {
+              "default": "main",
+              "enum": [
+                "main",
+                "task"
+              ],
+              "title": "Model Role",
+              "type": "string"
+            },
+            "output_schema": {
+              "additionalProperties": true,
+              "title": "Output Schema",
+              "type": "object"
+            },
+            "write_target": {
+              "$ref": "#/$defs/ModelOperationWriteTarget"
+            },
+            "max_attempts": {
+              "default": 5,
+              "minimum": 1,
+              "title": "Max Attempts",
+              "type": "integer"
+            },
+            "structured_method": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Structured Method"
+            },
+            "prompt_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Prompt Id"
+            }
+          },
+          "required": [
+            "operation",
+            "write_target"
+          ],
+          "title": "ModelOperationBindingPayload",
+          "type": "object"
+        },
+        "ModelOperationWriteTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "section": {
+              "enum": [
+                "package_state",
+                "context"
+              ],
+              "title": "Section",
+              "type": "string"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Namespace"
+            },
+            "path": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Path",
+              "type": "array"
+            }
+          },
+          "required": [
+            "section"
+          ],
+          "title": "ModelOperationWriteTarget",
+          "type": "object"
+        },
+        "NodeBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "binding_id": {
+              "title": "Binding Id",
+              "type": "string"
+            },
+            "binding_type": {
+              "enum": [
+                "prompt",
+                "tool_access",
+                "model_operation",
+                "policy_profile",
+                "strategy_profile",
+                "output_formatter",
+                "custom"
+              ],
+              "title": "Binding Type",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/NodeBindingTarget"
+            },
+            "payload": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PromptBindingPayload"
+                },
+                {
+                  "$ref": "#/$defs/ToolAccessBindingPayload"
+                },
+                {
+                  "$ref": "#/$defs/ModelOperationBindingPayload"
+                },
+                {
+                  "$ref": "#/$defs/PolicyProfileBindingPayload"
+                },
+                {
+                  "$ref": "#/$defs/StrategyProfileBindingPayload"
+                },
+                {
+                  "$ref": "#/$defs/OutputFormatterBindingPayload"
+                },
+                {
+                  "$ref": "#/$defs/CustomBindingPayload"
+                }
+              ],
+              "title": "Payload"
+            }
+          },
+          "required": [
+            "binding_id",
+            "binding_type",
+            "target",
+            "payload"
+          ],
+          "title": "NodeBinding",
+          "type": "object"
+        },
+        "NodeBindingTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "node_id": {
+              "title": "Node Id",
+              "type": "string"
+            },
+            "impl": {
+              "title": "Impl",
+              "type": "string"
+            }
+          },
+          "required": [
+            "node_id",
+            "impl"
+          ],
+          "title": "NodeBindingTarget",
+          "type": "object"
+        },
+        "NodeWrapperOverride": {
+          "additionalProperties": false,
+          "properties": {
+            "node_id": {
+              "title": "Node Id",
+              "type": "string"
+            },
+            "replace_existing": {
+              "default": false,
+              "title": "Replace Existing",
+              "type": "boolean"
+            },
+            "wrappers": {
+              "items": {
+                "$ref": "#/$defs/PatternNodeWrapperSpec"
+              },
+              "title": "Wrappers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "node_id"
+          ],
+          "title": "NodeWrapperOverride",
+          "type": "object"
+        },
+        "OutputFormatterBindingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "formatter_id": {
+              "title": "Formatter Id",
+              "type": "string"
+            },
+            "mode": {
+              "default": "identity",
+              "title": "Mode",
+              "type": "string"
+            },
+            "config": {
+              "additionalProperties": true,
+              "title": "Config",
+              "type": "object"
+            }
+          },
+          "required": [
+            "formatter_id"
+          ],
+          "title": "OutputFormatterBindingPayload",
+          "type": "object"
+        },
+        "OutputSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "citations_required": {
+              "default": false,
+              "title": "Citations Required",
+              "type": "boolean"
+            },
+            "format": {
+              "default": "text",
+              "enum": [
+                "text",
+                "json",
+                "markdown"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          "title": "OutputSpec",
+          "type": "object"
+        },
+        "PatternNodeWrapperSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "phase": {
+              "enum": [
+                "before",
+                "after",
+                "on_error"
+              ],
+              "title": "Phase",
+              "type": "string"
+            },
+            "order": {
+              "default": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "config": {
+              "additionalProperties": true,
+              "title": "Config",
+              "type": "object"
+            }
+          },
+          "required": [
+            "id",
+            "phase"
+          ],
+          "title": "PatternNodeWrapperSpec",
+          "type": "object"
+        },
+        "PolicyProfileBindingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "profile_id": {
+              "title": "Profile Id",
+              "type": "string"
+            },
+            "rules": {
+              "additionalProperties": true,
+              "title": "Rules",
+              "type": "object"
+            }
+          },
+          "required": [
+            "profile_id"
+          ],
+          "title": "PolicyProfileBindingPayload",
+          "type": "object"
+        },
+        "PromptBindingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "prompt_id": {
+              "title": "Prompt Id",
+              "type": "string"
+            },
+            "template": {
+              "title": "Template",
+              "type": "string"
+            },
+            "variables": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Variables",
+              "type": "array"
+            }
+          },
+          "required": [
+            "prompt_id",
+            "template"
+          ],
+          "title": "PromptBindingPayload",
+          "type": "object"
+        },
+        "RuntimeSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "pattern_id": {
+              "title": "Pattern Id",
+              "type": "string"
+            },
+            "compiled_pattern_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compiled Pattern Id"
+            },
+            "user_config": {
+              "additionalProperties": true,
+              "title": "User Config",
+              "type": "object"
+            },
+            "agent_config": {
+              "additionalProperties": true,
+              "title": "Agent Config",
+              "type": "object"
+            }
+          },
+          "required": [
+            "pattern_id"
+          ],
+          "title": "RuntimeSpec",
+          "type": "object"
+        },
+        "ServiceBindingSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "service_id": {
+              "title": "Service Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "model_service",
+                "model_operation_service",
+                "tool_registry",
+                "memory_store",
+                "memory_system",
+                "knowledge_runtime",
+                "context_engine",
+                "policy_engine",
+                "observability_manager",
+                "trace_recorder",
+                "trace_reader",
+                "trace_projector",
+                "trace_diagnostics",
+                "checkpointer",
+                "harness_bridge"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "required": {
+              "default": true,
+              "title": "Required",
+              "type": "boolean"
+            },
+            "config": {
+              "additionalProperties": true,
+              "title": "Config",
+              "type": "object"
+            }
+          },
+          "required": [
+            "service_id",
+            "kind"
+          ],
+          "title": "ServiceBindingSpec",
+          "type": "object"
+        },
+        "StrategyProfileBindingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "strategy_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Strategy Ids",
+              "type": "array"
+            },
+            "parameters": {
+              "additionalProperties": true,
+              "title": "Parameters",
+              "type": "object"
+            }
+          },
+          "title": "StrategyProfileBindingPayload",
+          "type": "object"
+        },
+        "ToolAccessBindingPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_tool_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Allowed Tool Ids",
+              "type": "array"
+            },
+            "approval_policy": {
+              "default": "standard",
+              "title": "Approval Policy",
+              "type": "string"
+            }
+          },
+          "title": "ToolAccessBindingPayload",
+          "type": "object"
+        },
+        "ToolRiskEvaluatorConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "hard": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hard"
+            },
+            "llm": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Llm"
+            },
+            "llm_mode": {
+              "default": "disabled",
+              "enum": [
+                "disabled",
+                "on_uncertain",
+                "always"
+              ],
+              "title": "Llm Mode",
+              "type": "string"
+            }
+          },
+          "title": "ToolRiskEvaluatorConfig",
+          "type": "object"
+        },
+        "ToolSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "entrypoint": {
+              "title": "Entrypoint",
+              "type": "string"
+            },
+            "input_schema": {
+              "additionalProperties": true,
+              "title": "Input Schema",
+              "type": "object"
+            },
+            "output_schema": {
+              "additionalProperties": true,
+              "title": "Output Schema",
+              "type": "object"
+            },
+            "resources": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Resources",
+              "type": "object"
+            },
+            "risk_level": {
+              "default": "low",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "title": "Risk Level",
+              "type": "string"
+            },
+            "risk_evaluator": {
+              "$ref": "#/$defs/ToolRiskEvaluatorConfig"
+            },
+            "concurrent": {
+              "default": true,
+              "title": "Concurrent",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "description",
+            "entrypoint"
+          ],
+          "title": "ToolSpec",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "default": "0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentSpec"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeSpec"
+        },
+        "graph_overrides": {
+          "$ref": "#/$defs/GraphOverrides"
+        },
+        "bindings": {
+          "$ref": "#/$defs/BindingSet"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolSpec"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "output": {
+          "$ref": "#/$defs/OutputSpec"
+        },
+        "harness": {
+          "items": {
+            "$ref": "#/$defs/HarnessScenario"
+          },
+          "title": "Harness",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "agent",
+        "runtime"
+      ],
+      "title": "assembly_spec.json",
+      "type": "object"
     },
-    "version": {
-      "type": "string"
-    },
-    "config": {
-      "type": "object",
-      "additionalProperties": true
+    "patterns/<pattern_id>.yaml": {
+      "$defs": {
+        "PatternConstraintsSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_node_types": {
+              "items": {
+                "enum": [
+                  "reserved",
+                  "cognitive",
+                  "operational",
+                  "governance",
+                  "terminal",
+                  "sub_graph"
+                ],
+                "type": "string"
+              },
+              "title": "Allowed Node Types",
+              "type": "array"
+            },
+            "required_capabilities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Capabilities",
+              "type": "array"
+            }
+          },
+          "title": "PatternConstraintsSpec",
+          "type": "object"
+        },
+        "PatternEdgeSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "title": "From",
+              "type": "string"
+            },
+            "to": {
+              "title": "To",
+              "type": "string"
+            },
+            "when": {
+              "title": "When",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "when"
+          ],
+          "title": "PatternEdgeSpec",
+          "type": "object"
+        },
+        "PatternIOContractSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "readable_sections": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Readable Sections",
+              "type": "array"
+            },
+            "writable_sections": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Writable Sections",
+              "type": "array"
+            }
+          },
+          "title": "PatternIOContractSpec",
+          "type": "object"
+        },
+        "PatternMetadataSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "default": "",
+              "title": "Summary",
+              "type": "string"
+            },
+            "use_when": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Use When",
+              "type": "array"
+            },
+            "avoid_when": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Avoid When",
+              "type": "array"
+            },
+            "selection_notes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Selection Notes",
+              "type": "array"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
+            }
+          },
+          "title": "PatternMetadataSpec",
+          "type": "object"
+        },
+        "PatternNodeSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "reserved",
+                "cognitive",
+                "operational",
+                "governance",
+                "terminal",
+                "sub_graph"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "impl": {
+              "title": "Impl",
+              "type": "string"
+            },
+            "pattern_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pattern Ref"
+            },
+            "config": {
+              "additionalProperties": true,
+              "title": "Config",
+              "type": "object"
+            },
+            "wrappers": {
+              "items": {
+                "$ref": "#/$defs/PatternNodeWrapperSpec"
+              },
+              "title": "Wrappers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "impl"
+          ],
+          "title": "PatternNodeSpec",
+          "type": "object"
+        },
+        "PatternNodeWrapperSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "phase": {
+              "enum": [
+                "before",
+                "after",
+                "on_error"
+              ],
+              "title": "Phase",
+              "type": "string"
+            },
+            "order": {
+              "default": 0,
+              "title": "Order",
+              "type": "integer"
+            },
+            "config": {
+              "additionalProperties": true,
+              "title": "Config",
+              "type": "object"
+            }
+          },
+          "required": [
+            "id",
+            "phase"
+          ],
+          "title": "PatternNodeWrapperSpec",
+          "type": "object"
+        },
+        "PatternSlotSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "slot_id": {
+              "title": "Slot Id",
+              "type": "string"
+            },
+            "slot_type": {
+              "enum": [
+                "prompt",
+                "tool",
+                "resource",
+                "state",
+                "scheduler",
+                "structured_output",
+                "package_node",
+                "artifact",
+                "knowledge",
+                "memory",
+                "context"
+              ],
+              "title": "Slot Type",
+              "type": "string"
+            },
+            "node_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Node Id"
+            },
+            "required": {
+              "default": true,
+              "title": "Required",
+              "type": "boolean"
+            },
+            "purpose": {
+              "title": "Purpose",
+              "type": "string"
+            },
+            "expected_binding": {
+              "default": "",
+              "title": "Expected Binding",
+              "type": "string"
+            },
+            "output_target": {
+              "default": "",
+              "title": "Output Target",
+              "type": "string"
+            },
+            "notes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Notes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "slot_id",
+            "slot_type",
+            "purpose"
+          ],
+          "title": "PatternSlotSpec",
+          "type": "object"
+        },
+        "PatternTerminationSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "success_nodes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Success Nodes",
+              "type": "array"
+            },
+            "failure_nodes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Failure Nodes",
+              "type": "array"
+            }
+          },
+          "title": "PatternTerminationSpec",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "pattern_id": {
+          "title": "Pattern Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "main",
+            "subgraph"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "embeddable": {
+          "title": "Embeddable",
+          "type": "boolean"
+        },
+        "version": {
+          "title": "Version",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/PatternMetadataSpec"
+        },
+        "entry_node": {
+          "title": "Entry Node",
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/PatternNodeSpec"
+          },
+          "title": "Nodes",
+          "type": "array"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/PatternEdgeSpec"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "interrupt_points": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Interrupt Points",
+          "type": "array"
+        },
+        "termination": {
+          "$ref": "#/$defs/PatternTerminationSpec"
+        },
+        "constraints": {
+          "$ref": "#/$defs/PatternConstraintsSpec"
+        },
+        "input_contract": {
+          "$ref": "#/$defs/PatternIOContractSpec"
+        },
+        "output_contract": {
+          "$ref": "#/$defs/PatternIOContractSpec"
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/PatternSlotSpec"
+          },
+          "title": "Slots",
+          "type": "array"
+        },
+        "exit_routes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Exit Routes",
+          "type": "array"
+        },
+        "state_mode": {
+          "default": "shared",
+          "enum": [
+            "shared",
+            "isolated"
+          ],
+          "title": "State Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern_id",
+        "kind",
+        "embeddable",
+        "version",
+        "name",
+        "description",
+        "entry_node",
+        "termination"
+      ],
+      "title": "patterns/<pattern_id>.yaml",
+      "type": "object"
     }
   },
-  "additionalProperties": true,
-  "title": "Assembly Pattern System",
-  "description": "Owns assembly specification and optional custom patterns."
+  "required": [
+    "assembly_spec.json",
+    "patterns/<pattern_id>.yaml"
+  ]
 }

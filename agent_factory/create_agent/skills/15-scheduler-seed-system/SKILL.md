@@ -24,13 +24,16 @@ Previous RuntimeKernel systems in stage order.
 Read prior system outputs only. Do not modify files outside Owned Files.
 
 ## Required Resources
-Use confirmed resource facts from `.factory/resources.json`. If required information is missing, ask the user through `create_agent_control(action=ask_user)` using natural language.
+Use confirmed resource facts from `.factory/resources.json`.
+Use Scheduler capabilities from Runtime Capability Inventory as the source of truth.
+This system schedules when and how the Agent graph/tool/script is triggered; it does not imply any external delivery or notification capability unless that capability is already confirmed elsewhere in the inventory.
 
 ## Allowed Decisions
 Make decisions only inside this system boundary. Prefer existing RuntimeKernel contracts and existing Gateway tools over inventing new mechanisms.
 
 ## Forbidden Actions
 - Do not hardcode business resources, URLs, account values, schedules, or secrets.
+- Do not treat a schedule as proof that an external delivery channel exists.
 - Do not modify files owned by later systems.
 - Do not expose manufacturing-only file tools as produced-agent runtime tools.
 - Do not infer schema from project source code; read listed resources.

@@ -1,5 +1,8 @@
 {
-  "type": "scheduler_seed_system",
-  "version": "scheduler_seed_system.v0",
-  "config": {}
+  "type": "scheduler_seed",
+  "version": "scheduler_seed_contract.v0",
+  "enabled": true,
+  "config": {
+    "seeds": []
+  }
 }

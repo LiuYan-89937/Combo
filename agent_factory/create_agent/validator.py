@@ -20,7 +20,7 @@ from agent_factory.create_agent.runtime_path_repair import find_runtime_path_rep
 from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
-from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRACTS
+from agent_factory.runtime_contracts.schema import AgentPackageManifest, REQUIRED_AGENT_PACKAGE_CONTRACTS
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.tooling.skills.schema import SkillGatewayState
@@ -86,6 +86,12 @@ class CreateAgentPackageValidator:
         json_syntax_report = _json_syntax_report(root, scope=scope, changed_files=changed)
         if json_syntax_report is not None:
             return json_syntax_report
+        if scope == "package_shape":
+            try:
+                AgentPackageManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                return _failed(root, "package.manifest", exc, ["agent_package.json"], scope=scope, changed_files=changed)
+            return _passed(root, scope=scope, changed_files=changed, summary="Package shape checks passed.")
 
         try:
             package = AgentPackageLoader().load_path(manifest_path)
@@ -94,8 +100,6 @@ class CreateAgentPackageValidator:
         runtime_path_report = _runtime_path_report(root, package, scope=scope, changed_files=changed)
         if runtime_path_report is not None:
             return runtime_path_report
-        if scope == "package_shape":
-            return _passed(root, scope=scope, changed_files=changed, summary="Package shape checks passed.")
         if scope in {"python_syntax", "full_static"}:
             syntax_report = _python_syntax(root, changed)
             if syntax_report is not None:
@@ -206,11 +210,13 @@ def _manifest_shape_report(
     if not isinstance(contracts, dict):
         return None
     missing_contracts = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - {str(key) for key in contracts})
-    missing_files = [
-        (str(key), str(value))
-        for key, value in sorted(contracts.items())
-        if isinstance(value, str) and value.strip() and not (root / value).is_file()
-    ]
+    missing_files = []
+    if scope != "package_shape":
+        missing_files = [
+            (str(key), str(value))
+            for key, value in sorted(contracts.items())
+            if isinstance(value, str) and value.strip() and not (root / value).is_file()
+        ]
     if not missing_contracts and not missing_files:
         return None
     targets = REPAIR_POLICY.manifest_contract_targets(

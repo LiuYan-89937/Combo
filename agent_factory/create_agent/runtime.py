@@ -173,12 +173,14 @@ class CreateAgentRuntime:
         )
         yield "frontend_event", node_started
         try:
-            tool_env = self.tool_environment_builder.build(workspace_root=workspace.root)
+            tool_env = self.tool_environment_builder.build(workspace_root=workspace.root, mode=graph_kind)
             if graph_kind == "manufacture":
                 workflow = CreateAgentWorkflow(
                     tools=tool_env.tools,
                     validator=self.validator,
                     model=self.model,
+                    capability_inventory=tool_env.capability_inventory,
+                    resource_set_store=tool_env.resource_set_store,
                 ).compile(checkpointer=self.checkpointer)
             else:
                 workflow = CreateAgentAssistWorkflow(

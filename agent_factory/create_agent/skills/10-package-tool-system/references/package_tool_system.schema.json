@@ -1,18 +1,102 @@
 {
-  "type": "object",
-  "properties": {
-    "type": {
-      "type": "string"
-    },
-    "version": {
-      "type": "string"
-    },
-    "config": {
-      "type": "object",
-      "additionalProperties": true
+  "$defs": {
+    "ToolRiskEvaluatorConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hard": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hard"
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Llm"
+        },
+        "llm_mode": {
+          "default": "disabled",
+          "enum": [
+            "disabled",
+            "on_uncertain",
+            "always"
+          ],
+          "title": "Llm Mode",
+          "type": "string"
+        }
+      },
+      "title": "ToolRiskEvaluatorConfig",
+      "type": "object"
     }
   },
-  "additionalProperties": true,
-  "title": "Package Tool System",
-  "description": "Owns generated package tool assets and verification."
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "entrypoint": {
+      "title": "Entrypoint",
+      "type": "string"
+    },
+    "input_schema": {
+      "additionalProperties": true,
+      "title": "Input Schema",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "title": "Output Schema",
+      "type": "object"
+    },
+    "resources": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Resources",
+      "type": "object"
+    },
+    "risk_level": {
+      "default": "low",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Risk Level",
+      "type": "string"
+    },
+    "risk_evaluator": {
+      "$ref": "#/$defs/ToolRiskEvaluatorConfig"
+    },
+    "concurrent": {
+      "default": true,
+      "title": "Concurrent",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "description",
+    "entrypoint"
+  ],
+  "title": "Package tool manifest",
+  "type": "object"
 }

@@ -1,5 +1,18 @@
 {
-  "type": "final_validation",
-  "version": "final_validation.v0",
-  "config": {}
+  "version": "package_validation_report.v0",
+  "status": "failed",
+  "package_root": ".",
+  "validation_scope": "full_static",
+  "changed_files": [],
+  "cached": false,
+  "skipped": false,
+  "summary": "",
+  "next_action": {
+    "kind": "continue",
+    "target_files": [],
+    "recommended_skill": "",
+    "recommended_resources": [],
+    "repair_bundles": []
+  },
+  "issues": []
 }
