@@ -130,15 +130,10 @@ class CreateAgentWorkflow:
             }
         active_stage = workspace.read_system_state().active_stage()
         force_full = action.action == "finalize" and active_stage is not None and active_stage.system_id == "final_validation"
-        validation_event = str(state.get("validation_event") or "none")
-        if validation_event == "explicit_validation" and workspace.read_validation() is not None and not force_full:
-            report = workspace.read_validation()
-            assert report is not None
-        else:
-            report = CreateAgentValidationGate(self.validator).run(
-                workspace,
-                decision=ValidationDecision(force_full=force_full),
-            )
+        report = CreateAgentValidationGate(self.validator).run(
+            workspace,
+            decision=ValidationDecision(force_full=force_full),
+        )
         workspace.write_validation(report)
         if force_full:
             workspace.write_action(CreateAgentAction())

@@ -39,7 +39,7 @@ Make decisions only inside this system boundary. Prefer existing RuntimeKernel c
 ## Manufacturing Steps
 1. Read this skill's schema and minimal example resources.
 2. Materialize only Owned Files needed for this system.
-3. Run `create_agent_validate` with this system's validation scope.
+3. Stop tool calls after writing this system's owned files; the graph runs this system's scoped validation automatically.
 4. Repair only this system's owned files until validation passes.
 
 ## Validation

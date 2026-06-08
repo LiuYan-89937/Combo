@@ -95,7 +95,7 @@ def _system_prompt_text(
             "不得切换到后续 system。每轮写文件前先确认 active_system.owned_files；"
             "目标文件不在 owned_files 内时不要调用 write/edit/multi_edit。"
             "create_agent_stage 只用于 list 当前状态，或把当前 active system 标为 failed_needs_repair / blocked_waiting_user；"
-            "它不是阶段完成或阶段切换工具。阶段完成只由 create_agent_validate passed 后的 runtime progress 执行。"
+            "它不是阶段完成或阶段切换工具。阶段完成只由 graph 内部 scoped validation passed 后的 runtime progress 执行。"
         ),
         (
             "需要用户补充资源或决策时，必须调用 create_agent_control(action=ask_user, message=...)；"
@@ -121,14 +121,15 @@ def _system_prompt_text(
             "不要通过项目源码 inspect 或 shell 推断 schema。"
         ),
         (
-            "通用 bash 不在 create-agent 默认工具集中。需要校验时调用 create_agent_validate；"
+            "通用 bash 不在 create-agent 默认工具集中。不要主动调用验证工具；"
+            "完成 active system 的必要文件写入后停止工具调用，graph 会自动运行当前 system 的 scoped validation。"
             "Package validator observation 中的 recommended_skill/recommended_resources 是下一步修复入口。"
         ),
         (
             "当 validation digest 或 repair_context 中出现 machine_applicable repair bundle，"
             "只能把它作为结构化诊断。当前 create-agent 不提供跨 system scaffold 自动修复；"
             "必须回到 active system 的 skill resource，只修改 active system 拥有的文件，"
-            "然后再调用 create_agent_validate。"
+            "然后停止工具调用，让 graph 自动校验。"
         ),
         (
             ".factory/system_state.json 只能通过 create_agent_stage 读取或更新；"

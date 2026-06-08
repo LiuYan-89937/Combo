@@ -120,7 +120,7 @@ class CreateAgentWorkspace:
             self.validation_path,
             PackageValidationReport,
             missing=None,
-            owner_tool="create_agent_validate",
+            owner_tool="the internal create-agent validation gate",
         )
 
     def read_validation_state(self) -> PackageValidationState | None:
@@ -128,7 +128,7 @@ class CreateAgentWorkspace:
             self.validation_state_path,
             PackageValidationState,
             missing=None,
-            owner_tool="create_agent_validate",
+            owner_tool="the internal create-agent validation gate",
         )
 
     def write_validation_state(self, state: PackageValidationState) -> None:

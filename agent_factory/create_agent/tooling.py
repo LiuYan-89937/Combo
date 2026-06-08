@@ -16,7 +16,6 @@ from agent_factory.create_agent.models import ACTION_FILE, SYSTEM_STATE_FILE
 from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
-from agent_factory.create_agent.validate_tool import CREATE_AGENT_VALIDATE_TOOL_ID, build_create_agent_validate_tool_spec
 from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.compiler import ToolCompiler
@@ -137,14 +136,12 @@ class CreateAgentToolEnvironmentBuilder:
                         *provider_result.system_tool_ids,
                         CREATE_AGENT_CONTROL_TOOL_ID,
                         CREATE_AGENT_STAGE_TOOL_ID,
-                        CREATE_AGENT_VALIDATE_TOOL_ID,
                     ]
                 )
             )
             extra_specs = [
                 build_create_agent_control_tool_spec(),
                 build_create_agent_stage_tool_spec(),
-                build_create_agent_validate_tool_spec(),
                 *skill_specs,
             ]
         else:
