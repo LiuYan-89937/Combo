@@ -1,4 +1,49 @@
 {
+  "$defs": {
+    "AgentIdentitySpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "version": {
+          "default": "0.1.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "AgentIdentitySpec",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "version": {
@@ -12,9 +57,7 @@
       "type": "string"
     },
     "agent": {
-      "additionalProperties": true,
-      "title": "Agent",
-      "type": "object"
+      "$ref": "#/$defs/AgentIdentitySpec"
     },
     "runtime": {
       "additionalProperties": true,
@@ -96,6 +139,7 @@
   },
   "required": [
     "factory_run_id",
+    "agent",
     "assembly_spec_path",
     "render_manifest_path",
     "resources_path",

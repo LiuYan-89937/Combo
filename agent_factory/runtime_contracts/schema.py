@@ -72,12 +72,24 @@ class ContractValidationError(ValueError):
     pass
 
 
+class AgentIdentitySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str | None = None
+    description: str | None = None
+    version: str = "0.1.0"
+
+
+AgentPackageAgentSpec = AgentIdentitySpec
+
+
 class AgentPackageManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: Literal["agent_package.v0"] = "agent_package.v0"
     factory_run_id: str
-    agent: dict[str, Any] = Field(default_factory=dict)
+    agent: AgentPackageAgentSpec
     runtime: dict[str, Any] = Field(default_factory=dict)
     assembly_spec_path: str
     render_manifest_path: str

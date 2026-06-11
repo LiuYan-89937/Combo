@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from agent_factory.assembly.schema import AgentAssemblySpec
-from agent_factory.create_agent.contract_catalog import required_contract_paths
 from agent_factory.create_agent.models import PackageValidationReport, SystemManufacturingState, initial_system_manufacturing_state
+from agent_factory.create_agent.package_scaffold import materialize_empty_agent_package
 from agent_factory.runtime_contracts.builtins import (
     default_artifact_contract,
     default_context_contract,
@@ -54,9 +55,13 @@ RESOURCE_IDS = {
     "16-trace-artifact-system": "trace_artifact_system",
     "17-final-validation-repair": "final_validation",
 }
+SCAFFOLD_RUN_ID = "factory_run"
+SCAFFOLD_USER_INPUT = "Generated RuntimeKernel AgentPackage."
+STATIC_EXAMPLE_UPDATED_AT = "2026-01-01T00:00:00+00:00"
 
 
 def main() -> None:
+    scaffold = _scaffold_example_files()
     exports = {
         "00-manufacturing-control": _export(
             title="Manufacturing control state",
@@ -64,15 +69,15 @@ def main() -> None:
         ),
         "01-package-identity-system": _export(
             title="Agent package manifest",
-            files={"agent_package.json": (AgentPackageManifest, _agent_package_example())},
+            files={"agent_package.json": (AgentPackageManifest, scaffold["agent_package.json"])},
         ),
         "02-model-system": _export(
             title="Model, dependency, and sandbox contracts",
             files={
-                "contracts/model.json": (type(default_model_contract()), default_model_contract()),
-                "contracts/dependencies.json": (type(default_dependencies_contract()), default_dependencies_contract()),
-                "contracts/sandbox.json": (type(default_sandbox_contract()), default_sandbox_contract()),
-                "sandbox_contract.json": (dict, {"version": "sandbox_contract.v0", "resources": {}}),
+                "contracts/model.json": (type(default_model_contract()), scaffold["contracts/model.json"]),
+                "contracts/dependencies.json": (type(default_dependencies_contract()), scaffold["contracts/dependencies.json"]),
+                "contracts/sandbox.json": (type(default_sandbox_contract()), scaffold["contracts/sandbox.json"]),
+                "sandbox_contract.json": (dict, scaffold["sandbox_contract.json"]),
             },
         ),
         "03-session-system": _export(
@@ -90,8 +95,8 @@ def main() -> None:
         "05-resources-system": _export(
             title="Resources contract and resource facts",
             files={
-                "contracts/resources.json": (type(default_resources_contract()), default_resources_contract()),
-                "resources.json": (dict, {}),
+                "contracts/resources.json": (type(default_resources_contract()), scaffold["contracts/resources.json"]),
+                "resources.json": (dict, scaffold["resources.json"]),
                 ".factory/resources.json": (
                     dict,
                     {"version": "resource_facts.v0", "facts": []},
@@ -116,7 +121,7 @@ def main() -> None:
         ),
         "10-package-tool-system": _export(
             title="Package tool manifest",
-            files={"tools/<tool_id>/manifest.json": (ToolSpec, _tool_spec_example())},
+            files=_package_tool_example_files(),
         ),
         "11-node-provider-system": _export(
             title="Node provider contract and package node manifest",
@@ -128,15 +133,15 @@ def main() -> None:
         "12-assembly-pattern-system": _export(
             title="Assembly spec and custom pattern",
             files={
-                "assembly_spec.json": (AgentAssemblySpec, _assembly_example()),
+                "assembly_spec.json": (AgentAssemblySpec, scaffold["assembly_spec.json"]),
                 "patterns/<pattern_id>.yaml": (GraphPatternSpec, _pattern_example()),
             },
         ),
         "13-render-event-system": _export(
             title="Render contract and manifest",
             files={
-                "contracts/render.json": (type(default_render_contract()), default_render_contract()),
-                "render_manifest.json": (RenderManifest, _render_manifest_example()),
+                "contracts/render.json": (type(default_render_contract()), scaffold["contracts/render.json"]),
+                "render_manifest.json": (RenderManifest, scaffold["render_manifest.json"]),
             },
         ),
         "14-scheduler-system": _export(
@@ -191,6 +196,11 @@ def _schema_for(model_or_type: type[Any], *, title: str) -> dict[str, Any]:
         schema = model_or_type.model_json_schema()
         schema["title"] = title
         return schema
+    if model_or_type is str:
+        return {
+            "type": "string",
+            "title": title,
+        }
     return {
         "type": "object",
         "title": title,
@@ -204,31 +214,84 @@ def _dump_example(value: Any) -> Any:
     return value
 
 
-def _agent_package_example() -> AgentPackageManifest:
-    return AgentPackageManifest(
-        version="agent_package.v0",
-        factory_run_id="factory_run",
-        agent={
-            "id": "generated_agent",
-            "name": "Generated Agent",
-            "description": "Generated RuntimeKernel AgentPackage.",
-            "version": "0.1.0",
+def _scaffold_example_files() -> dict[str, Any]:
+    with TemporaryDirectory() as tmp:
+        package_root = Path(tmp)
+        materialize_empty_agent_package(
+            package_root,
+            factory_run_id=SCAFFOLD_RUN_ID,
+            user_input=SCAFFOLD_USER_INPUT,
+        )
+        result: dict[str, Any] = {}
+        for path in sorted(item for item in package_root.rglob("*") if item.is_file()):
+            relative = path.relative_to(package_root).as_posix()
+            result[relative] = json.loads(path.read_text(encoding="utf-8"))
+        return result
+
+
+def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
+    tool_spec = ToolSpec(
+        id="package_action",
+        description="Performs one package-defined runtime action.",
+        entrypoint="python:tools/package_action/tool.py:run",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
         },
-        runtime={"pattern_id": "react_agent"},
-        assembly_spec_path="assembly_spec.json",
-        render_manifest_path="render_manifest.json",
-        resources_path="resources.json",
-        sandbox_contract_path="sandbox_contract.json",
-        contracts=required_contract_paths(),
-        patterns=[],
+        output_schema={
+            "type": "object",
+            "properties": {"result": {"type": "string"}},
+            "required": ["result"],
+            "additionalProperties": True,
+        },
+        risk_level="low",
     )
+    return {
+        "tools/package_action/manifest.json": (ToolSpec, tool_spec),
+        "tools/package_action/tool.py": (
+            str,
+            (
+                "from agent_factory.tooling.envelope import tool_envelope\n\n\n"
+                "def run(arguments, resources):\n"
+                "    query = str(arguments.get(\"query\") or \"\").strip()\n"
+                "    result = query if query else \"No query provided.\"\n"
+                "    return tool_envelope(\n"
+                "        {\"result\": result},\n"
+                "        evidence={\"tool_id\": \"package_action\"},\n"
+                "        summary=\"Package action completed.\",\n"
+                "    )\n"
+            ),
+        ),
+        "contracts/tools.json": (
+            type(default_tools_contract()),
+            {
+                "type": "tools",
+                "version": "tools_contract.v0",
+                "config": {
+                    "builtin_tools_enabled": True,
+                    "builtin_tool_ids": [],
+                    "package_tools_enabled": True,
+                    "package_tool_ids": ["package_action"],
+                },
+            },
+        ),
+        "assembly_spec.json#tools_item": (ToolSpec, tool_spec),
+    }
 
 
 def _manufacturing_control_example() -> SystemManufacturingState:
     state = initial_system_manufacturing_state()
     active = state.stages[0]
     next_stage = state.stages[1]
-    return state.model_copy(update={"stages": [active, next_stage], "active_focus_id": active.system_id})
+    return state.model_copy(
+        update={
+            "stages": [active, next_stage],
+            "active_focus_id": active.system_id,
+            "updated_at": STATIC_EXAMPLE_UPDATED_AT,
+        }
+    )
 
 
 def _tool_spec_example() -> ToolSpec:

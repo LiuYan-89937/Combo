@@ -25,6 +25,7 @@
     "resources": "contracts/resources.json",
     "sandbox": "contracts/sandbox.json",
     "scheduler": "contracts/scheduler.json",
+    "scheduler_seed": "contracts/scheduler_seed.json",
     "session": "contracts/session.json",
     "state": "contracts/state.json",
     "tools": "contracts/tools.json",

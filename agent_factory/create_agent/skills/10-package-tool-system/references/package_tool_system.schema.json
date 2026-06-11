@@ -1,102 +1,295 @@
 {
-  "$defs": {
-    "ToolRiskEvaluatorConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "hard": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Hard"
-        },
-        "llm": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Llm"
-        },
-        "llm_mode": {
-          "default": "disabled",
-          "enum": [
-            "disabled",
-            "on_uncertain",
-            "always"
-          ],
-          "title": "Llm Mode",
-          "type": "string"
-        }
-      },
-      "title": "ToolRiskEvaluatorConfig",
-      "type": "object"
-    }
-  },
+  "type": "object",
+  "title": "Package tool manifest",
+  "description": "System resource map. Each property is the schema for the named package file.",
   "additionalProperties": false,
   "properties": {
-    "id": {
-      "title": "Id",
-      "type": "string"
-    },
-    "description": {
-      "title": "Description",
-      "type": "string"
-    },
-    "entrypoint": {
-      "title": "Entrypoint",
-      "type": "string"
-    },
-    "input_schema": {
-      "additionalProperties": true,
-      "title": "Input Schema",
-      "type": "object"
-    },
-    "output_schema": {
-      "additionalProperties": true,
-      "title": "Output Schema",
-      "type": "object"
-    },
-    "resources": {
-      "additionalProperties": {
-        "type": "string"
+    "tools/package_action/manifest.json": {
+      "$defs": {
+        "ToolRiskEvaluatorConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "hard": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hard"
+            },
+            "llm": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Llm"
+            },
+            "llm_mode": {
+              "default": "disabled",
+              "enum": [
+                "disabled",
+                "on_uncertain",
+                "always"
+              ],
+              "title": "Llm Mode",
+              "type": "string"
+            }
+          },
+          "title": "ToolRiskEvaluatorConfig",
+          "type": "object"
+        }
       },
-      "title": "Resources",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "entrypoint": {
+          "title": "Entrypoint",
+          "type": "string"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "title": "Output Schema",
+          "type": "object"
+        },
+        "resources": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Resources",
+          "type": "object"
+        },
+        "risk_level": {
+          "default": "low",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk Level",
+          "type": "string"
+        },
+        "risk_evaluator": {
+          "$ref": "#/$defs/ToolRiskEvaluatorConfig"
+        },
+        "concurrent": {
+          "default": true,
+          "title": "Concurrent",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "entrypoint"
+      ],
+      "title": "tools/package_action/manifest.json",
       "type": "object"
     },
-    "risk_level": {
-      "default": "low",
-      "enum": [
-        "low",
-        "medium",
-        "high"
+    "tools/package_action/tool.py": {
+      "type": "string",
+      "title": "tools/package_action/tool.py"
+    },
+    "contracts/tools.json": {
+      "$defs": {
+        "ToolsContractConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "builtin_tools_enabled": {
+              "default": true,
+              "title": "Builtin Tools Enabled",
+              "type": "boolean"
+            },
+            "builtin_tool_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Builtin Tool Ids",
+              "type": "array"
+            },
+            "builtin_workspace_root": {
+              "default": "/workdir",
+              "title": "Builtin Workspace Root",
+              "type": "string"
+            },
+            "builtin_allow_external_paths": {
+              "default": false,
+              "title": "Builtin Allow External Paths",
+              "type": "boolean"
+            },
+            "package_tools_enabled": {
+              "default": true,
+              "title": "Package Tools Enabled",
+              "type": "boolean"
+            },
+            "instance_extensions_enabled": {
+              "default": true,
+              "title": "Instance Extensions Enabled",
+              "type": "boolean"
+            },
+            "instance_extension_root": {
+              "default": ".agent_runtime/extensions",
+              "title": "Instance Extension Root",
+              "type": "string"
+            }
+          },
+          "title": "ToolsContractConfig",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "tools",
+          "default": "tools",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "const": "tools_contract.v0",
+          "default": "tools_contract.v0",
+          "title": "Version",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/ToolsContractConfig"
+        }
+      },
+      "title": "contracts/tools.json",
+      "type": "object"
+    },
+    "assembly_spec.json#tools_item": {
+      "$defs": {
+        "ToolRiskEvaluatorConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "hard": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hard"
+            },
+            "llm": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Llm"
+            },
+            "llm_mode": {
+              "default": "disabled",
+              "enum": [
+                "disabled",
+                "on_uncertain",
+                "always"
+              ],
+              "title": "Llm Mode",
+              "type": "string"
+            }
+          },
+          "title": "ToolRiskEvaluatorConfig",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "entrypoint": {
+          "title": "Entrypoint",
+          "type": "string"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "title": "Output Schema",
+          "type": "object"
+        },
+        "resources": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Resources",
+          "type": "object"
+        },
+        "risk_level": {
+          "default": "low",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk Level",
+          "type": "string"
+        },
+        "risk_evaluator": {
+          "$ref": "#/$defs/ToolRiskEvaluatorConfig"
+        },
+        "concurrent": {
+          "default": true,
+          "title": "Concurrent",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "entrypoint"
       ],
-      "title": "Risk Level",
-      "type": "string"
-    },
-    "risk_evaluator": {
-      "$ref": "#/$defs/ToolRiskEvaluatorConfig"
-    },
-    "concurrent": {
-      "default": true,
-      "title": "Concurrent",
-      "type": "boolean"
+      "title": "assembly_spec.json#tools_item",
+      "type": "object"
     }
   },
   "required": [
-    "id",
-    "description",
-    "entrypoint"
-  ],
-  "title": "Package tool manifest",
-  "type": "object"
+    "tools/package_action/manifest.json",
+    "tools/package_action/tool.py",
+    "contracts/tools.json",
+    "assembly_spec.json#tools_item"
+  ]
 }

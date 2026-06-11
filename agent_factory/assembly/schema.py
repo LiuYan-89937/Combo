@@ -7,19 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_factory.runtime_kernel.bindings import BindingSet
 from agent_factory.runtime_kernel.harness import HarnessScenario
 from agent_factory.runtime_kernel.patterns.schema import PatternNodeWrapperSpec
+from agent_factory.runtime_contracts.schema import AgentIdentitySpec as AgentSpec
 from agent_factory.tooling.spec import ToolSpec
 
 
 OutputFormat = Literal["text", "json", "markdown"]
-
-
-class AgentSpec(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    name: str | None = None
-    description: str | None = None
-    version: str = "0.1.0"
 
 
 class RuntimeSpec(BaseModel):

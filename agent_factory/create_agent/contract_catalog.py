@@ -25,6 +25,9 @@ from agent_factory.runtime_contracts.builtins import (
 from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRACTS
 
 
+OPTIONAL_BASE_CONTRACTS = ("scheduler_seed",)
+
+
 def system_resources(system_id: str) -> tuple[str, str, str]:
     return (
         f"references/{system_id}.schema.json",
@@ -48,6 +51,11 @@ class CreateAgentContractCatalogItem:
 
 def required_contract_paths() -> dict[str, str]:
     return {item.contract_key: item.path for item in required_contract_items()}
+
+
+def base_contract_paths() -> dict[str, str]:
+    keys = sorted({*REQUIRED_AGENT_PACKAGE_CONTRACTS, *OPTIONAL_BASE_CONTRACTS})
+    return {key: contract_item(key).path for key in keys}
 
 
 def required_contract_items() -> list[CreateAgentContractCatalogItem]:

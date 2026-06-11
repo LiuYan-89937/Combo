@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.assembly.schema import AgentAssemblySpec
-from agent_factory.create_agent.contract_catalog import default_contract_payload, required_contract_paths
+from agent_factory.create_agent.contract_catalog import base_contract_paths, default_contract_payload
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.patterns.registry import PatternRegistry
 from agent_factory.runtime_render import RenderManifest, default_node_render_spec
@@ -23,9 +23,6 @@ PACKAGE_ASSET_DIRECTORIES = (
     "artifacts",
 )
 
-OPTIONAL_BASE_CONTRACTS = ("scheduler_seed",)
-
-
 def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, user_input: str = "") -> None:
     package_root = Path(root).expanduser().resolve()
     package_root.mkdir(parents=True, exist_ok=True)
@@ -34,9 +31,9 @@ def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, us
     manifest_path = package_root / "agent_package.json"
     if manifest_path.exists():
         return
-    manifest_agent = _manifest_agent_identity(factory_run_id=factory_run_id, user_input=user_input)
+    manifest_agent = _agent_identity(user_input=user_input)
     assembly_agent = _assembly_agent_identity(user_input=user_input)
-    contracts = _base_contract_paths()
+    contracts = base_contract_paths()
     _write_json(
         manifest_path,
         AgentPackageManifest(
@@ -66,18 +63,8 @@ def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, us
         _write_json(package_root / contracts[contract_key], default_contract_payload(contract_key))
 
 
-def _base_contract_paths() -> dict[str, str]:
-    contracts = dict(required_contract_paths())
-    for contract_key in OPTIONAL_BASE_CONTRACTS:
-        contracts[contract_key] = f"contracts/{contract_key}.json"
-    return dict(sorted(contracts.items()))
-
-
-def _manifest_agent_identity(*, factory_run_id: str, user_input: str) -> dict[str, Any]:
-    return {
-        **_assembly_agent_identity(user_input=user_input),
-        "factory_run_id": factory_run_id,
-    }
+def _agent_identity(*, user_input: str) -> dict[str, Any]:
+    return _assembly_agent_identity(user_input=user_input)
 
 
 def _assembly_agent_identity(*, user_input: str) -> dict[str, Any]:

@@ -34,7 +34,7 @@ Guides AgentPackage manifest identity and package-level references after scaffol
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- Keep manufacturing metadata such as factory_run_id in agent_package.json, not in assembly_spec.json agent identity.
+- Keep `factory_run_id` only at the top level of `agent_package.json`; do not put it inside `agent_package.json.agent` or `assembly_spec.json.agent`.
 - Do not rewrite the scaffolded contracts list unless adding or repairing a real package reference.
 - If manifest arrays such as prompts/tools/patterns stay empty, that is acceptable unless the package actually adds those assets.
 - When an asset is added, index the package-relative path in the correct manifest field and ensure the file exists.

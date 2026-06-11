@@ -12,13 +12,76 @@
     "graph_id": "react_agent",
     "producer_type": "agent",
     "nodes": {
+      "ingress": {
+        "node_id": "ingress",
+        "label": "Ingress",
+        "kind": "reserved",
+        "purpose": "Execute runtime node ingress.",
+        "doing": "Running implementation ingress.",
+        "expected_output": "Validated state patch from ingress.",
+        "visible_to_user": true
+      },
+      "precheck": {
+        "node_id": "precheck",
+        "label": "Precheck",
+        "kind": "governance",
+        "purpose": "Execute runtime node precheck.",
+        "doing": "Running implementation governance.precheck.",
+        "expected_output": "Validated state patch from precheck.",
+        "visible_to_user": true
+      },
+      "approval_gate": {
+        "node_id": "approval_gate",
+        "label": "Approval Gate",
+        "kind": "governance",
+        "purpose": "Execute runtime node approval_gate.",
+        "doing": "Running implementation governance.approval_gate.",
+        "expected_output": "Validated state patch from approval_gate.",
+        "visible_to_user": true
+      },
       "answer": {
         "node_id": "answer",
         "label": "Answer",
         "kind": "cognitive",
-        "purpose": "Generate an answer.",
-        "doing": "Running the answer node.",
-        "expected_output": "Final response.",
+        "purpose": "Execute runtime node answer.",
+        "doing": "Running implementation cognitive.answer.",
+        "expected_output": "Validated state patch from answer.",
+        "visible_to_user": true
+      },
+      "tool_exec": {
+        "node_id": "tool_exec",
+        "label": "Tool Exec",
+        "kind": "operational",
+        "purpose": "Execute runtime node tool_exec.",
+        "doing": "Running implementation operational.tool_call.",
+        "expected_output": "Validated state patch from tool_exec.",
+        "visible_to_user": true
+      },
+      "postcheck": {
+        "node_id": "postcheck",
+        "label": "Postcheck",
+        "kind": "governance",
+        "purpose": "Execute runtime node postcheck.",
+        "doing": "Running implementation governance.postcheck.",
+        "expected_output": "Validated state patch from postcheck.",
+        "visible_to_user": true
+      },
+      "commit": {
+        "node_id": "commit",
+        "label": "Commit",
+        "kind": "terminal",
+        "purpose": "Execute runtime node commit.",
+        "doing": "Running implementation terminal.commit.",
+        "expected_output": "Validated state patch from commit.",
+        "visible_to_user": true
+      },
+      "finalize": {
+        "node_id": "finalize",
+        "label": "Finalize",
+        "kind": "reserved",
+        "purpose": "Execute runtime node finalize.",
+        "doing": "Running implementation finalize.",
+        "expected_output": "Validated state patch from finalize.",
         "visible_to_user": true
       }
     }

@@ -6,7 +6,7 @@
   "properties": {
     "assembly_spec.json": {
       "$defs": {
-        "AgentSpec": {
+        "AgentIdentitySpec": {
           "additionalProperties": false,
           "properties": {
             "id": {
@@ -46,7 +46,7 @@
           "required": [
             "id"
           ],
-          "title": "AgentSpec",
+          "title": "AgentIdentitySpec",
           "type": "object"
         },
         "BindingSet": {
@@ -780,7 +780,7 @@
           "type": "string"
         },
         "agent": {
-          "$ref": "#/$defs/AgentSpec"
+          "$ref": "#/$defs/AgentIdentitySpec"
         },
         "runtime": {
           "$ref": "#/$defs/RuntimeSpec"

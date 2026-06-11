@@ -4,6 +4,7 @@
     "agent": {
       "id": "generated_agent",
       "name": "Generated Agent",
+      "description": "Generated RuntimeKernel AgentPackage.",
       "version": "0.1.0"
     },
     "runtime": {
@@ -16,108 +17,76 @@
     },
     "bindings": {
       "services": [],
-      "node_bindings": [
-        {
-          "binding_id": "answer_prompt",
-          "binding_type": "prompt",
-          "target": {
-            "node_id": "answer",
-            "impl": "standard.answer"
-          },
-          "payload": {
-            "prompt_id": "answer_prompt",
-            "template": "Answer the user with the package capabilities and available runtime context.",
-            "variables": []
-          }
-        },
-        {
-          "binding_id": "answer_tools",
-          "binding_type": "tool_access",
-          "target": {
-            "node_id": "answer",
-            "impl": "standard.answer"
-          },
-          "payload": {
-            "allowed_tool_ids": [
-              "package_action"
-            ],
-            "approval_policy": "standard"
-          }
-        },
-        {
-          "binding_id": "answer_model_operation",
-          "binding_type": "model_operation",
-          "target": {
-            "node_id": "answer",
-            "impl": "standard.answer"
-          },
-          "payload": {
-            "operation": "tool_bound_chat",
-            "model_role": "main",
-            "output_schema": {
-              "type": "object",
-              "properties": {
-                "answer": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "answer"
-              ],
-              "additionalProperties": true
-            },
-            "write_target": {
-              "section": "context"
-            },
-            "max_attempts": 3,
-            "prompt_id": "answer_prompt"
-          }
-        }
-      ],
+      "node_bindings": [],
       "hooks": []
     },
-    "tools": [
-      {
-        "id": "package_action",
-        "description": "Performs one package-defined runtime action.",
-        "entrypoint": "python:tools/package_action/tool.py:run",
-        "input_schema": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "query"
-          ],
-          "additionalProperties": false
-        },
-        "output_schema": {
-          "type": "object",
-          "properties": {
-            "result": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "result"
-          ],
-          "additionalProperties": true
-        },
-        "resources": {},
-        "risk_level": "low",
-        "risk_evaluator": {
-          "llm_mode": "disabled"
-        },
-        "concurrent": true
-      }
-    ],
+    "tools": [],
     "output": {
       "citations_required": false,
       "format": "text"
     },
     "harness": [],
     "metadata": {}
+  },
+  "patterns/<pattern_id>.yaml": {
+    "pattern_id": "custom_pattern",
+    "kind": "main",
+    "embeddable": false,
+    "version": 1,
+    "name": "Custom Pattern",
+    "description": "Custom package pattern.",
+    "metadata": {
+      "summary": "",
+      "use_when": [],
+      "avoid_when": [],
+      "selection_notes": [],
+      "tags": []
+    },
+    "entry_node": "ingress",
+    "nodes": [
+      {
+        "id": "ingress",
+        "type": "reserved",
+        "impl": "reserved.ingress",
+        "config": {},
+        "wrappers": []
+      },
+      {
+        "id": "finalize",
+        "type": "reserved",
+        "impl": "reserved.finalize",
+        "config": {},
+        "wrappers": []
+      }
+    ],
+    "edges": [
+      {
+        "from": "ingress",
+        "to": "finalize",
+        "when": "always"
+      }
+    ],
+    "interrupt_points": [],
+    "termination": {
+      "success_nodes": [
+        "finalize"
+      ],
+      "failure_nodes": []
+    },
+    "constraints": {
+      "allowed_node_types": [],
+      "required_capabilities": []
+    },
+    "input_contract": {
+      "readable_sections": [],
+      "writable_sections": []
+    },
+    "output_contract": {
+      "readable_sections": [],
+      "writable_sections": []
+    },
+    "slots": [],
+    "exit_routes": [],
+    "state_mode": "shared"
   }
 }

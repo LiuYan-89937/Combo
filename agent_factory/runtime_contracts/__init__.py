@@ -10,6 +10,7 @@ from agent_factory.runtime_contracts.contribution import (
 from agent_factory.runtime_contracts.loader import AgentPackageLoader, LoadedAgentPackage
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
 from agent_factory.runtime_contracts.schema import (
+    AgentIdentitySpec,
     AgentPackageManifest,
     ContextContract,
     DependenciesContract,
@@ -29,6 +30,7 @@ from agent_factory.runtime_contracts.schema import (
 
 __all__ = [
     "AgentPackageLoader",
+    "AgentIdentitySpec",
     "AgentPackageManifest",
     "ContextContract",
     "DependenciesContract",
