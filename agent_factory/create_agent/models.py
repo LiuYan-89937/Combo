@@ -99,12 +99,10 @@ class SystemStage(BaseModel):
     stage_order: int
     title: str
     status: SystemStageStatus = SystemStageStatus.pending
-    owned_files: list[str] = Field(default_factory=list)
-    read_only_dependencies: list[str] = Field(default_factory=list)
-    required_skill: str
-    validation_scope: str
-    entry_conditions: list[str] = Field(default_factory=list)
-    exit_conditions: list[str] = Field(default_factory=list)
+    focus_files: list[str] = Field(default_factory=list)
+    suggested_skills: list[str] = Field(default_factory=list)
+    validation_focus: str = "workspace_hygiene"
+    focus_summary: str = ""
     repair_history: list[SystemRepairIssue] = Field(default_factory=list)
     handoff_outputs: SystemStageHandoff = Field(default_factory=SystemStageHandoff)
     validation: SystemStageValidation | None = None
@@ -115,9 +113,10 @@ class SystemStage(BaseModel):
             "stage_order": self.stage_order,
             "title": self.title,
             "status": self.status.value,
-            "owned_files": self.owned_files,
-            "required_skill": self.required_skill,
-            "validation_scope": self.validation_scope,
+            "focus_files": self.focus_files,
+            "suggested_skills": self.suggested_skills,
+            "validation_focus": self.validation_focus,
+            "focus_summary": self.focus_summary,
             "open_issues": [
                 issue.model_dump(mode="json")
                 for issue in self.repair_history
@@ -131,39 +130,50 @@ class SystemManufacturingState(BaseModel):
 
     version: Literal["system_manufacturing_state.v0"] = "system_manufacturing_state.v0"
     stages: list[SystemStage] = Field(default_factory=list)
-    active_system_id: str = ""
+    active_focus_id: str = ""
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def active_stage(self) -> SystemStage | None:
-        if self.active_system_id:
+        if self.active_focus_id:
             for stage in self.stages:
-                if stage.system_id == self.active_system_id:
+                if stage.system_id == self.active_focus_id:
                     return stage
-        for stage in self.stages:
-            if stage.status != SystemStageStatus.done:
-                return stage
         return None
 
     def all_done(self) -> bool:
-        return all(stage.status == SystemStageStatus.done for stage in self.stages)
+        active = self.active_stage()
+        return active is not None and active.system_id == "validation_publish"
 
     def update_stage(self, updated_stage: SystemStage) -> "SystemManufacturingState":
         stages = [
             updated_stage if stage.system_id == updated_stage.system_id else stage
             for stage in self.stages
         ]
-        next_active = ""
-        normalized_stages = list(stages)
-        for index, stage in enumerate(normalized_stages):
-            if stage.status != SystemStageStatus.done:
-                next_active = stage.system_id
-                if stage.status == SystemStageStatus.pending:
-                    normalized_stages[index] = stage.model_copy(update={"status": SystemStageStatus.in_progress})
-                break
         return self.model_copy(
             update={
-                "stages": normalized_stages,
-                "active_system_id": next_active,
+                "stages": stages,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+
+    def set_focus(self, focus_id: str, *, status: SystemStageStatus = SystemStageStatus.in_progress) -> "SystemManufacturingState":
+        target = str(focus_id or "").strip()
+        if not target:
+            raise ValueError("focus_id must not be empty")
+        found = False
+        stages: list[SystemStage] = []
+        for stage in self.stages:
+            if stage.system_id == target:
+                stages.append(stage.model_copy(update={"status": status}))
+                found = True
+            else:
+                stages.append(stage)
+        if not found:
+            raise ValueError(f"unknown create-agent focus_id: {focus_id}")
+        return self.model_copy(
+            update={
+                "stages": stages,
+                "active_focus_id": target,
                 "updated_at": datetime.now(UTC).isoformat(),
             }
         )
@@ -171,7 +181,7 @@ class SystemManufacturingState(BaseModel):
     def working_set(self) -> dict[str, Any]:
         active = self.active_stage()
         return {
-            "active_system": active.to_digest() if active else None,
+            "active_focus": active.to_digest() if active else None,
             "remaining": sum(1 for stage in self.stages if stage.status != SystemStageStatus.done),
             "total": len(self.stages),
             "stages": [stage.to_digest() for stage in self.stages],
@@ -364,55 +374,91 @@ class PackageValidationState(BaseModel):
 
 def initial_system_manufacturing_state() -> SystemManufacturingState:
     stages = [
-        _stage("package_identity", 1, "Package identity", ["agent_package.json"], "01-package-identity-system", "package_shape"),
         _stage(
-            "model_system",
-            2,
-            "Model system",
-            ["contracts/model.json", "contracts/dependencies.json", "contracts/sandbox.json", "sandbox_contract.json"],
-            "02-model-system",
-            "runtime_contract_build_subset",
-            ["package_identity"],
+            "requirement_focus",
+            1,
+            "Requirement focus",
+            [RESOURCES_FILE, "agent_package.json"],
+            ["00-manufacturing-control", "01-package-identity-system", "05-resources-system"],
+            "workspace_hygiene",
+            "Clarify user intent, missing resources, secrets, schedules, and manufacturable capability boundaries.",
         ),
-        _stage("session_system", 3, "Session and checkpoint system", ["contracts/session.json"], "03-session-system", "runtime_contract_build_subset", ["model_system"]),
-        _stage("state_system", 4, "State system", ["contracts/state.json", "state/package.schema.json", "state/package.initial.json"], "04-state-system", "runtime_contract_build_subset", ["session_system"]),
-        _stage("resources_system", 5, "Resources system", ["contracts/resources.json", "resources.json", RESOURCES_FILE], "05-resources-system", "runtime_contract_build_subset", ["state_system"]),
-        _stage("context_system", 6, "Context system", ["contracts/context.json"], "06-context-system", "runtime_contract_build_subset", ["resources_system"]),
-        _stage("memory_system", 7, "Memory system", ["contracts/memory.json"], "07-memory-system", "runtime_contract_build_subset", ["context_system"]),
-        _stage("knowledge_system", 8, "Knowledge system", ["contracts/knowledge.json"], "08-knowledge-system", "runtime_contract_build_subset", ["memory_system"]),
-        _stage("tools_system", 9, "Tools system", ["contracts/tools.json"], "09-tools-system", "tools_contract_validate", ["knowledge_system"]),
-        _stage("package_tool_system", 10, "Package tool system", ["tools/"], "10-package-tool-system", "package_tool_syntax_and_binding", ["tools_system"]),
-        _stage("node_provider_system", 11, "Node provider system", ["contracts/node_provider.json", "nodes/"], "11-node-provider-system", "runtime_contract_build_subset", ["package_tool_system"]),
-        _stage("assembly_pattern_system", 12, "Assembly and pattern system", ["assembly_spec.json", "patterns/"], "12-assembly-pattern-system", "assembly_compile", ["node_provider_system"]),
-        _stage("render_event_system", 13, "Render and event system", ["render_manifest.json", "contracts/render.json"], "13-render-event-system", "render_manifest_validate", ["assembly_pattern_system"]),
-        _stage("scheduler_system", 14, "Scheduler system", ["contracts/scheduler.json"], "14-scheduler-system", "runtime_contract_build_subset", ["render_event_system"]),
-        _stage("scheduler_seed_system", 15, "Scheduler seed system", ["contracts/scheduler_seed.json"], "15-scheduler-seed-system", "scheduler_seed_validate", ["scheduler_system"]),
-        _stage("trace_artifact_system", 16, "Trace and artifact system", ["contracts/trace.json", "contracts/artifact.json"], "16-trace-artifact-system", "runtime_contract_build_subset", ["scheduler_seed_system"]),
-        _stage("final_validation", 17, "Final package validation", [], "17-final-validation-repair", "full_static", ["trace_artifact_system"]),
+        _stage(
+            "package_foundation",
+            2,
+            "Package foundation",
+            ["agent_package.json", "resources.json", "render_manifest.json", "sandbox_contract.json"],
+            ["01-package-identity-system", "05-resources-system", "13-render-event-system"],
+            "package_shape",
+            "Stabilize package manifest shape, root references, basic resources, render, and sandbox files.",
+        ),
+        _stage(
+            "runtime_contracts",
+            3,
+            "Runtime contracts",
+            ["contracts/"],
+            [
+                "02-model-system",
+                "03-session-system",
+                "04-state-system",
+                "06-context-system",
+                "07-memory-system",
+                "08-knowledge-system",
+                "09-tools-system",
+                "14-scheduler-system",
+            ],
+            "runtime_contract_build",
+            "Declare and validate the runtime contracts needed by the produced AgentPackage.",
+        ),
+        _stage(
+            "capability_implementation",
+            4,
+            "Capability implementation",
+            ["tools/", "nodes/", "contracts/tools.json", "contracts/node_provider.json", "contracts/scheduler_seed.json", "resources.json"],
+            ["09-tools-system", "10-package-tool-system", "11-node-provider-system", "15-scheduler-seed-system", "08-knowledge-system"],
+            "runtime_contract_build",
+            "Connect requested capabilities to executable package tools, nodes, scheduler seeds, knowledge, or resources.",
+        ),
+        _stage(
+            "experience_and_operations",
+            5,
+            "Experience and operations",
+            ["assembly_spec.json", "patterns/", "render_manifest.json", "contracts/render.json", "contracts/trace.json", "contracts/artifact.json"],
+            ["12-assembly-pattern-system", "13-render-event-system", "16-trace-artifact-system"],
+            "assembly_compile",
+            "Assemble runtime behavior, render/session experience, events, and operational trace artifacts.",
+        ),
+        _stage(
+            "validation_publish",
+            6,
+            "Validation and publish",
+            [],
+            ["17-final-validation-repair", "00-manufacturing-control"],
+            "full_static",
+            "Run full validation, repair from evidence, and finalize only when the package is ready.",
+        ),
     ]
     started = stages[0].model_copy(update={"status": SystemStageStatus.in_progress})
-    return SystemManufacturingState(stages=[started, *stages[1:]], active_system_id=started.system_id)
+    return SystemManufacturingState(stages=[started, *stages[1:]], active_focus_id=started.system_id)
 
 
 def _stage(
     system_id: str,
     stage_order: int,
     title: str,
-    owned_files: list[str],
-    required_skill: str,
-    validation_scope: str,
-    read_only_dependencies: list[str] | None = None,
+    focus_files: list[str],
+    suggested_skills: list[str],
+    validation_focus: str,
+    focus_summary: str,
 ) -> SystemStage:
     return SystemStage(
         system_id=system_id,
         stage_order=stage_order,
         title=title,
-        owned_files=owned_files,
-        read_only_dependencies=read_only_dependencies or [],
-        required_skill=required_skill,
-        validation_scope=validation_scope,
-        entry_conditions=[f"{item} done" for item in (read_only_dependencies or [])],
-        exit_conditions=[f"{validation_scope} passed"],
+        focus_files=focus_files,
+        suggested_skills=suggested_skills,
+        validation_focus=validation_focus,
+        focus_summary=focus_summary,
     )
 
 

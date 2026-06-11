@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.tooling.skills.skill_tool_protocol import (
-    active_system_string,
+    current_system_string,
     registry_from_resources,
     repair_resource_mode,
     required_string,
@@ -30,7 +30,7 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
                 reasons=["skill search exposes enabled skill metadata only"],
             ).model_dump(mode="json")
         if action == "list_loaded":
-            current_system = active_system_string(arguments, resources)
+            current_system = current_system_string(arguments, resources)
             return ToolRiskResult(
                 action="allow",
                 risk_level="low",
@@ -40,7 +40,7 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
         name = required_string(arguments, "name")
         registry.get(name)
         if action == "describe":
-            current_system = active_system_string(arguments, resources)
+            current_system = current_system_string(arguments, resources)
             return ToolRiskResult(
                 action="allow",
                 risk_level="low",
@@ -48,17 +48,17 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
                 facts={"skill": name, "current_system": current_system},
             ).model_dump(mode="json")
         if action == "load":
-            current_system = active_system_string(arguments, resources)
+            current_system = current_system_string(arguments, resources)
             reason = required_string(arguments, "reason")
             registry.load(name, current_system=current_system, reason=reason)
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
-                reasons=["skill load exposes one enabled SKILL.md body to the model for the active system"],
+                reasons=["skill load exposes one enabled SKILL.md body to the model for the current manufacturing context"],
                 facts={"skill": name, "current_system": current_system, "reason": reason},
             ).model_dump(mode="json")
         if action == "read_resource":
-            current_system = active_system_string(arguments, resources)
+            current_system = current_system_string(arguments, resources)
             path = required_string(arguments, "path")
             mode = resource_mode(arguments.get("mode"))
             pointer = str(arguments.get("pointer") or "").strip()
@@ -70,7 +70,7 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
                 facts={"skill": name, "path": path, "mode": mode, "current_system": current_system},
             ).model_dump(mode="json")
         if action == "read_repair_resources":
-            current_system = active_system_string(arguments, resources)
+            current_system = current_system_string(arguments, resources)
             paths = resource_paths(arguments.get("paths"))
             registry.describe(name, current_system=current_system)
             for path in paths:

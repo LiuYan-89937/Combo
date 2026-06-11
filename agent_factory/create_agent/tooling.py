@@ -12,7 +12,7 @@ from agent_factory.create_agent.control_tool import (
     CREATE_AGENT_WORKSPACE_RESOURCE,
     build_create_agent_control_tool_spec,
 )
-from agent_factory.create_agent.models import ACTION_FILE, SYSTEM_STATE_FILE
+from agent_factory.create_agent.models import ACTION_FILE, SKILL_GATEWAY_STATE_FILE, SYSTEM_STATE_FILE, VALIDATION_FILE, VALIDATION_STATE_FILE
 from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
@@ -101,7 +101,16 @@ class CreateAgentToolEnvironmentBuilder:
         filesystem_resource = runtime_resources.get("filesystem")
         if isinstance(filesystem_resource, dict) and mode == "manufacture":
             filesystem_resource[CREATE_AGENT_STAGE_CONTEXT_RESOURCE] = runtime_resources[CREATE_AGENT_STAGE_CONTEXT_RESOURCE]
-            filesystem_resource["protected_write_paths"] = [ACTION_FILE, SYSTEM_STATE_FILE]
+            filesystem_resource["protected_write_paths"] = [
+                ACTION_FILE,
+                SYSTEM_STATE_FILE,
+                VALIDATION_FILE,
+                VALIDATION_STATE_FILE,
+                SKILL_GATEWAY_STATE_FILE,
+                ".factory/manufacturing_trace.json",
+                ".factory/tool_outputs",
+                ".agent_runtime",
+            ]
             filesystem_resource["managed_paths"] = {
                 ACTION_FILE: {
                     "read_tool": CREATE_AGENT_CONTROL_TOOL_ID,

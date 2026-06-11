@@ -76,41 +76,29 @@
           "$ref": "#/$defs/SystemStageStatus",
           "default": "pending"
         },
-        "owned_files": {
+        "focus_files": {
           "items": {
             "type": "string"
           },
-          "title": "Owned Files",
+          "title": "Focus Files",
           "type": "array"
         },
-        "read_only_dependencies": {
+        "suggested_skills": {
           "items": {
             "type": "string"
           },
-          "title": "Read Only Dependencies",
+          "title": "Suggested Skills",
           "type": "array"
         },
-        "required_skill": {
-          "title": "Required Skill",
+        "validation_focus": {
+          "default": "workspace_hygiene",
+          "title": "Validation Focus",
           "type": "string"
         },
-        "validation_scope": {
-          "title": "Validation Scope",
+        "focus_summary": {
+          "default": "",
+          "title": "Focus Summary",
           "type": "string"
-        },
-        "entry_conditions": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Entry Conditions",
-          "type": "array"
-        },
-        "exit_conditions": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Exit Conditions",
-          "type": "array"
         },
         "repair_history": {
           "items": {
@@ -137,9 +125,7 @@
       "required": [
         "system_id",
         "stage_order",
-        "title",
-        "required_skill",
-        "validation_scope"
+        "title"
       ],
       "title": "SystemStage",
       "type": "object"
@@ -232,9 +218,9 @@
       "title": "Stages",
       "type": "array"
     },
-    "active_system_id": {
+    "active_focus_id": {
       "default": "",
-      "title": "Active System Id",
+      "title": "Active Focus Id",
       "type": "string"
     },
     "updated_at": {

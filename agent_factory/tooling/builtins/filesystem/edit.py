@@ -10,6 +10,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     path_risk_result,
     required_string,
     resolve_path,
+    write_focus_facts,
 )
 
 
@@ -49,6 +50,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "replacements": count if replace_all else 1,
         "before_hash": sha256(raw).hexdigest(),
         "after_hash": sha256(updated_bytes).hexdigest(),
+        "focus": write_focus_facts(target, root=root, resources=resources),
     }
 
 

@@ -1,3 +1,3 @@
 # Validator Scope
 
-Use the validation scope declared by the active system stage for `scheduler_seed_system`.
+Use the validation scope declared by the current focus stage for `scheduler_seed_system`.

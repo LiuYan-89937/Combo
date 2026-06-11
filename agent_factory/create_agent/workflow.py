@@ -13,7 +13,7 @@ from langgraph.types import interrupt
 from agent_factory.create_agent.models import CreateAgentAction, PackageValidationReport
 from agent_factory.create_agent.prompt_builder import build_create_agent_messages, validation_repair_context
 from agent_factory.create_agent.validation_gate import CreateAgentValidationGate, ValidationDecision
-from agent_factory.create_agent.validation_progress import apply_system_validation_progress, stage_progress_summary, validation_event_from_tool_calls
+from agent_factory.create_agent.validation_progress import validation_event_from_tool_calls
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
@@ -129,7 +129,7 @@ class CreateAgentWorkflow:
                 "validation_event": "none",
             }
         active_stage = workspace.read_system_state().active_stage()
-        force_full = action.action == "finalize" and active_stage is not None and active_stage.system_id == "final_validation"
+        force_full = action.action == "finalize" and active_stage is not None and active_stage.system_id == "validation_publish"
         report = CreateAgentValidationGate(self.validator).run(
             workspace,
             decision=ValidationDecision(force_full=force_full),
@@ -137,11 +137,8 @@ class CreateAgentWorkflow:
         workspace.write_validation(report)
         if force_full:
             workspace.write_action(CreateAgentAction())
-        previous_system_state = workspace.read_system_state()
-        system_state = apply_system_validation_progress(previous_system_state, report)
-        workspace.write_system_state(system_state)
-        progress_summary = stage_progress_summary(previous_system_state, system_state, report)
-        done = report.status == "passed" and system_state.all_done()
+        system_state = workspace.read_system_state()
+        done = report.status == "passed" and force_full and system_state.all_done()
         if done:
             return {
                 "validation": report.to_digest().model_dump(mode="json"),
@@ -150,7 +147,7 @@ class CreateAgentWorkflow:
                 "final_answer": f"AgentPackage 制造完成并通过校验：{workspace.root}",
                 "validation_event": "none",
             }
-        repair_context = validation_repair_context(workspace=workspace, report=report, stage_progress=progress_summary)
+        repair_context = validation_repair_context(workspace=workspace, report=report)
         return {
             "repair_context": repair_context,
             "validation": report.to_digest().model_dump(mode="json"),

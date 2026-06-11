@@ -190,19 +190,19 @@ class CreateAgentWorkspace:
             f"Action file: {ACTION_FILE} (managed by create_agent_control; do not edit directly)",
             f"Resources file: {RESOURCES_FILE}",
             f"Validation file: {VALIDATION_FILE}",
-            f"Systems remaining: {working_set['remaining']}/{working_set['total']}",
-            "Active system:",
+            f"Focus stages remaining: {working_set['remaining']}/{working_set['total']}",
+            "Active focus:",
         ]
         if active:
             lines.append(f"- {active.system_id}: {active.status.value} | {active.title}")
-            lines.append(f"  owned_files={active.owned_files}")
-            lines.append(f"  required_skill={active.required_skill}")
-            lines.append(f"  validation_scope={active.validation_scope}")
-            if active.read_only_dependencies:
-                lines.append(f"  read_only_dependencies={active.read_only_dependencies}")
+            lines.append(f"  focus_files={active.focus_files}")
+            lines.append(f"  suggested_skills={active.suggested_skills}")
+            lines.append(f"  validation_focus={active.validation_focus}")
+            if active.focus_summary:
+                lines.append(f"  focus_summary={active.focus_summary}")
         completed = [stage for stage in system_state.stages if stage.status.value == "done"]
         if completed:
-            lines.append("Completed systems:")
+            lines.append("Completed focus stages:")
             for stage in completed[-8:]:
                 lines.append(f"- {stage.system_id}: {stage.title}")
         lines.append(f"Current action: {action.action} {action.message}".strip())

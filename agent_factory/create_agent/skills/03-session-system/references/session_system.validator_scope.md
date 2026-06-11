@@ -1,3 +1,3 @@
 # Validator Scope
 
-Use the validation scope declared by the active system stage for `session_system`.
+Use the validation scope declared by the current focus stage for `session_system`.

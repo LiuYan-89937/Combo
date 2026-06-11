@@ -1,3 +1,3 @@
 # Validator Scope
 
-Use the validation scope declared by the active system stage for `manufacturing_control`.
+Use the validation scope declared by the current focus stage for `manufacturing_control`.

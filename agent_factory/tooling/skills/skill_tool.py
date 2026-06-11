@@ -151,7 +151,7 @@ def _tool_description(registry: SkillRegistry) -> str:
             "When validator provides recommended_skill/recommended_resources, prefer action=read_repair_resources "
             "with those exact paths instead of guessing individual resource paths. "
             "Use action=list/search/describe to inspect metadata before loading content. "
-            "Use action=load with current_system and reason only when the active system needs that SKILL.md body. "
+            "Use action=load with current_system and reason only when the current manufacturing context needs that SKILL.md body. "
             "Use action=list_loaded to inspect loaded state. "
             "Use action=read_resource with current_system only for resources explicitly listed by describe/load. "
             "read_resource defaults to a compact outline; use mode=fragment for a JSON pointer subtree; "

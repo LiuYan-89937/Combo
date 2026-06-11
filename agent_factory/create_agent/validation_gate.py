@@ -34,7 +34,7 @@ class CreateAgentValidationGate:
             return _cached_report(previous_report)
 
         active = workspace.read_system_state().active_stage()
-        scope = _scope_for_active_system(active.validation_scope if active else "", force_full=decision.force_full)
+        scope = _scope_for_focus(active.validation_focus if active else "", force_full=decision.force_full)
         report = self.validator.validate(workspace.root, scope=scope, changed_files=changed_files)
         workspace.write_validation_state(
             PackageValidationState(
@@ -71,7 +71,7 @@ def _target_files(report: PackageValidationReport) -> list[str]:
     return sorted(set(values))
 
 
-def _scope_for_active_system(validation_scope: str, *, force_full: bool) -> ValidationScope:
+def _scope_for_focus(validation_scope: str, *, force_full: bool) -> ValidationScope:
     if force_full:
         return "full_static"
     if validation_scope in {"full_static", "assembly_compile", "package_shape", "python_syntax"}:

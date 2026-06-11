@@ -38,33 +38,37 @@ class CreateAgentStageContext:
     def active_stage(self) -> SystemStage | None:
         return self.read_state().active_stage()
 
-    def assert_active_system(self, requested_system_id: str) -> SystemStage:
-        active = self.active_stage()
-        if active is None:
-            raise ValueError("no active system")
+    def assert_known_focus(self, requested_system_id: str) -> SystemStage:
         requested = str(requested_system_id or "").strip()
-        if requested and requested != active.system_id:
-            raise ValueError(
-                f"requested system {requested!r} is not active; active system is {active.system_id!r}. "
-                "All create-agent tools must use the active system from the unified stage context."
-            )
-        return active
+        for stage in self.read_state().stages:
+            if stage.system_id == requested:
+                return stage
+        raise ValueError(f"unknown create-agent focus: {requested!r}")
 
-    def file_owners(self) -> dict[str, str]:
-        owners: dict[str, str] = {}
+    def focus_alignment_facts(self, requested_system_id: str) -> dict[str, Any]:
+        active = self.active_stage()
+        requested = str(requested_system_id or "").strip()
+        return {
+            "requested_focus_id": requested,
+            "active_focus_id": active.system_id if active else "",
+            "focus_matches": bool(active and requested == active.system_id),
+        }
+
+    def file_focuses(self) -> dict[str, str]:
+        focuses: dict[str, str] = {}
         for stage in self.read_state().stages:
             system_id = str(stage.system_id or "").strip()
             if not system_id:
                 continue
-            for item in stage.owned_files:
+            for item in stage.focus_files:
                 cleaned = str(item or "").strip()
                 if cleaned:
-                    owners[cleaned] = system_id
-        return owners
+                    focuses[cleaned] = system_id
+        return focuses
 
-    def active_owned_files(self) -> list[str]:
+    def active_focus_files(self) -> list[str]:
         active = self.active_stage()
-        return list(active.owned_files) if active else []
+        return list(active.focus_files) if active else []
 
 
 def stage_context_payload(workspace_root: str | Path) -> dict[str, str]:

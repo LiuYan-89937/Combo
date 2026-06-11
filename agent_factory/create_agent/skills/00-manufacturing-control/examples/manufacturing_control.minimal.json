@@ -2,20 +2,21 @@
   "version": "system_manufacturing_state.v0",
   "stages": [
     {
-      "system_id": "package_identity",
+      "system_id": "requirement_focus",
       "stage_order": 1,
-      "title": "Package identity",
+      "title": "Requirement focus",
       "status": "in_progress",
-      "owned_files": [
+      "focus_files": [
+        ".factory/resources.json",
         "agent_package.json"
       ],
-      "read_only_dependencies": [],
-      "required_skill": "01-package-identity-system",
-      "validation_scope": "package_shape",
-      "entry_conditions": [],
-      "exit_conditions": [
-        "package_shape passed"
+      "suggested_skills": [
+        "00-manufacturing-control",
+        "01-package-identity-system",
+        "05-resources-system"
       ],
+      "validation_focus": "workspace_hygiene",
+      "focus_summary": "Clarify user intent, missing resources, secrets, schedules, and manufacturable capability boundaries.",
       "repair_history": [],
       "handoff_outputs": {
         "outputs": {},
@@ -23,27 +24,23 @@
       }
     },
     {
-      "system_id": "model_system",
+      "system_id": "package_foundation",
       "stage_order": 2,
-      "title": "Model system",
+      "title": "Package foundation",
       "status": "pending",
-      "owned_files": [
-        "contracts/model.json",
-        "contracts/dependencies.json",
-        "contracts/sandbox.json",
+      "focus_files": [
+        "agent_package.json",
+        "resources.json",
+        "render_manifest.json",
         "sandbox_contract.json"
       ],
-      "read_only_dependencies": [
-        "package_identity"
+      "suggested_skills": [
+        "01-package-identity-system",
+        "05-resources-system",
+        "13-render-event-system"
       ],
-      "required_skill": "02-model-system",
-      "validation_scope": "runtime_contract_build_subset",
-      "entry_conditions": [
-        "package_identity done"
-      ],
-      "exit_conditions": [
-        "runtime_contract_build_subset passed"
-      ],
+      "validation_focus": "package_shape",
+      "focus_summary": "Stabilize package manifest shape, root references, basic resources, render, and sandbox files.",
       "repair_history": [],
       "handoff_outputs": {
         "outputs": {},
@@ -51,6 +48,6 @@
       }
     }
   ],
-  "active_system_id": "package_identity",
-  "updated_at": "2026-06-07T13:55:19.756082+00:00"
+  "active_focus_id": "requirement_focus",
+  "updated_at": "2026-06-11T06:03:26.841349+00:00"
 }

@@ -17,7 +17,7 @@ def build_create_agent_stage_tool_spec() -> ToolSpec:
     return ToolSpec(
         id=CREATE_AGENT_STAGE_TOOL_ID,
         description=(
-            "Inspect and update the active create-agent RuntimeKernel system manufacturing stage. "
+            "Inspect and explicitly set the active create-agent manufacturing focus. "
             "Use this instead of editing .factory/system_state.json directly."
         ),
         entrypoint="agent_factory.create_agent.stage_tool:run",
@@ -26,9 +26,11 @@ def build_create_agent_stage_tool_spec() -> ToolSpec:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "mark_failed_needs_repair", "mark_blocked_waiting_user"],
+                    "enum": ["inspect", "set_focus", "mark_waiting_user"],
                 },
+                "focus_id": {"type": "string"},
                 "system_id": {"type": "string"},
+                "reason": {"type": "string"},
                 "summary": {"type": "string"},
                 "issue": {"type": "object", "additionalProperties": True},
             },
@@ -41,10 +43,10 @@ def build_create_agent_stage_tool_spec() -> ToolSpec:
                 "action": {"type": "string"},
                 "message": {"type": "string"},
                 "state": {"type": "object", "additionalProperties": True},
-                "active_system": {"type": ["object", "null"], "additionalProperties": True},
+                "active_focus": {"type": ["object", "null"], "additionalProperties": True},
                 "updated_at": {"type": "string"},
             },
-            "required": ["action", "message", "state", "active_system", "updated_at"],
+            "required": ["action", "message", "state", "active_focus", "updated_at"],
             "additionalProperties": False,
         },
         resources={"workspace": CREATE_AGENT_WORKSPACE_RESOURCE},
@@ -58,24 +60,25 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     context = _stage_context(resources)
     state = context.read_state()
     action = str(arguments.get("action") or "").strip()
-    if action == "list":
-        return _output(action=action, message="Current RuntimeKernel system manufacturing state.", state=state)
-    if action == "mark_failed_needs_repair":
-        stage = _target_active_stage(state, arguments)
-        state = state.update_stage(stage.model_copy(update={"status": SystemStageStatus.failed_needs_repair}))
+    if action == "inspect":
+        return _output(action=action, message="Current create-agent manufacturing focus state.", state=state)
+    if action == "set_focus":
+        focus_id = _requested_focus_id(arguments)
+        _reason(arguments)
+        state = state.set_focus(focus_id)
         context.write_state(state)
-        return _output(action=action, message=f"System needs repair: {stage.system_id}", state=state)
-    if action == "mark_blocked_waiting_user":
-        stage = _target_active_stage(state, arguments)
+        return _output(action=action, message=f"Active manufacturing focus set to: {focus_id}", state=state)
+    if action == "mark_waiting_user":
+        stage = _active_stage(state)
         state = state.update_stage(stage.model_copy(update={"status": SystemStageStatus.blocked_waiting_user}))
         context.write_state(state)
-        return _output(action=action, message=f"System blocked waiting for user: {stage.system_id}", state=state)
-    raise ValueError("action must be one of: list, mark_failed_needs_repair, mark_blocked_waiting_user")
+        return _output(action=action, message=f"Focus waiting for user input: {stage.system_id}", state=state)
+    raise ValueError("action must be one of: inspect, set_focus, mark_waiting_user")
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
-    if action not in {"list", "mark_failed_needs_repair", "mark_blocked_waiting_user"}:
+    if action not in {"inspect", "set_focus", "mark_waiting_user"}:
         return ToolRiskResult(
             action="deny",
             risk_level="low",
@@ -83,23 +86,27 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
         ).model_dump(mode="json")
     try:
         state = _stage_context(dict(context.get("resources") or {})).read_state()
-        _target_active_stage(state, arguments) if action != "list" else None
+        if action == "set_focus":
+            _known_stage(state, _requested_focus_id(arguments))
+            _reason(arguments)
+        elif action == "mark_waiting_user":
+            _active_stage(state)
     except Exception as exc:
         return ToolRiskResult(
             action="deny",
             risk_level="low",
-            reasons=[f"invalid create-agent stage transition: {type(exc).__name__}: {exc}"],
+            reasons=[f"invalid create-agent focus operation: {type(exc).__name__}: {exc}"],
             facts={
                 "action": action,
-                "requested_system_id": str(arguments.get("system_id") or ""),
+                "requested_focus_id": str(arguments.get("focus_id") or arguments.get("system_id") or ""),
                 "error_type": type(exc).__name__,
-                "required_next_action": "work on the active system and run scoped validation; do not start future stages manually",
+                "required_next_action": "inspect available focus ids, then call set_focus with a valid focus_id and reason",
             },
         ).model_dump(mode="json")
     return ToolRiskResult(
         action="allow",
         risk_level="low",
-        reasons=["create-agent stage action is schema-validated"],
+        reasons=["create-agent focus action is schema-validated"],
         facts={"action": action},
     ).model_dump(mode="json")
 
@@ -117,19 +124,32 @@ def _stage_context(resources: dict[str, Any]) -> CreateAgentStageContext:
     return CreateAgentStageContext.from_workspace_root(_workspace(resources).root)
 
 
-def _target_active_stage(state: SystemManufacturingState, arguments: dict[str, Any]):
+def _requested_focus_id(arguments: dict[str, Any]) -> str:
+    value = str(arguments.get("focus_id") or arguments.get("system_id") or "").strip()
+    if not value:
+        raise ValueError("focus_id must be provided")
+    return value
+
+
+def _reason(arguments: dict[str, Any]) -> str:
+    value = str(arguments.get("reason") or arguments.get("summary") or "").strip()
+    if not value:
+        raise ValueError("reason must be provided")
+    return value
+
+
+def _active_stage(state: SystemManufacturingState):
     active = state.active_stage()
     if active is None:
-        raise ValueError("no active system")
-    system_id = str(arguments.get("system_id") or state.active_system_id or "").strip()
-    if not system_id:
-        return active
-    if system_id != active.system_id:
-        raise ValueError(
-            f"requested system {system_id!r} is not active; active system is {active.system_id!r}. "
-            "Stages advance only after the active system validation passes."
-        )
+        raise ValueError("no active focus")
     return active
+
+
+def _known_stage(state: SystemManufacturingState, focus_id: str):
+    for stage in state.stages:
+        if stage.system_id == focus_id:
+            return stage
+    raise ValueError(f"unknown focus_id: {focus_id}")
 
 
 def _output(*, action: str, message: str, state: SystemManufacturingState) -> dict[str, Any]:
@@ -138,6 +158,6 @@ def _output(*, action: str, message: str, state: SystemManufacturingState) -> di
         "action": action,
         "message": message,
         "state": state.working_set(),
-        "active_system": active.to_digest() if active else None,
+        "active_focus": active.to_digest() if active else None,
         "updated_at": datetime.now(UTC).isoformat(),
     }

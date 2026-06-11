@@ -1,3 +1,3 @@
 # Validator Scope
 
-Use the validation scope declared by the active system stage for `state_system`.
+Use the validation scope declared by the current focus stage for `state_system`.

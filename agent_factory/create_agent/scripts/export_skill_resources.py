@@ -228,7 +228,7 @@ def _manufacturing_control_example() -> SystemManufacturingState:
     state = initial_system_manufacturing_state()
     active = state.stages[0]
     next_stage = state.stages[1]
-    return state.model_copy(update={"stages": [active, next_stage], "active_system_id": active.system_id})
+    return state.model_copy(update={"stages": [active, next_stage], "active_focus_id": active.system_id})
 
 
 def _tool_spec_example() -> ToolSpec:

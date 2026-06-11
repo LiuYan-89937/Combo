@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent_factory.create_agent.stage_context import stage_context_from_resources
 from agent_factory.tooling.skills.registry import SkillRegistry, SkillResourceFragmentNotFound
 
 
@@ -44,11 +43,8 @@ def required_string(arguments: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
-def active_system_string(arguments: dict[str, Any], resources: dict[str, Any], key: str = "current_system") -> str:
+def current_system_string(arguments: dict[str, Any], resources: dict[str, Any], key: str = "current_system") -> str:
     current_system = required_string(arguments, key)
-    stage_context = stage_context_from_resources(resources)
-    if stage_context is not None:
-        stage_context.assert_active_system(current_system)
     return current_system
 
 

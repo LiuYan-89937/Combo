@@ -1,3 +1,3 @@
 # Validator Scope
 
-Use the validation scope declared by the active system stage for `final_validation`.
+Use the validation scope declared by the current focus stage for `final_validation`.

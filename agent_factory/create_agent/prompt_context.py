@@ -24,8 +24,8 @@ def project_messages_for_prompt(messages: list[BaseMessage], *, workspace: Creat
             messages[:cutoff],
             workspace=workspace,
             reason=(
-                "Completed system history compacted. Completed work is represented by "
-                "workspace system-stage summaries, not by replaying prior chat/tool output."
+                "Completed focus history compacted. Completed work is represented by "
+                "workspace focus-stage summaries, not by replaying prior chat/tool output."
             ),
         )
         return [compacted, *messages[cutoff:]]
@@ -69,7 +69,7 @@ def _system_completion_from_tool_message(message: ToolMessage) -> tuple[str, str
         return None
     if isinstance(output.get("output"), dict):
         output = output["output"]
-    item = output.get("active_system")
+    item = output.get("active_focus")
     if not isinstance(item, dict):
         return None
     system_id = str(item.get("system_id") or "").strip()
