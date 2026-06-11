@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import os
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from agent_factory.create_agent.models import (
     ACTION_FILE,
+    PUBLISH_FILE,
     RESOURCES_FILE,
     SKILL_GATEWAY_STATE_FILE,
     SYSTEM_STATE_FILE,
@@ -20,9 +22,11 @@ from agent_factory.create_agent.models import (
     SystemManufacturingState,
     initial_system_manufacturing_state,
 )
+from agent_factory.create_agent.package_scaffold import materialize_empty_agent_package
 from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.paths import factory_artifact_path
 from agent_factory.tooling.output_store import ToolOutputStore
+from agent_factory.tooling.skills.schema import SkillGatewayState
 
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -43,6 +47,12 @@ class CreateAgentWorkspace:
     def initialize(self, *, user_input: str) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.factory_dir.mkdir(parents=True, exist_ok=True)
+        if not self.package_manifest_path().exists():
+            materialize_empty_agent_package(
+                self.root,
+                factory_run_id=self.root.name,
+                user_input=user_input,
+            )
         if not self.system_state_path.exists():
             self.write_system_state(initial_system_manufacturing_state())
         if not self.action_path.exists():
@@ -72,6 +82,10 @@ class CreateAgentWorkspace:
     @property
     def validation_state_path(self) -> Path:
         return self.root / VALIDATION_STATE_FILE
+
+    @property
+    def publish_path(self) -> Path:
+        return self.root / PUBLISH_FILE
 
     @property
     def resources_path(self) -> Path:
@@ -134,6 +148,12 @@ class CreateAgentWorkspace:
     def write_validation_state(self, state: PackageValidationState) -> None:
         self._write_json(self.validation_state_path, state.model_dump(mode="json"))
 
+    def read_publish_report(self) -> dict[str, Any]:
+        return _read_json_object(self.publish_path)
+
+    def write_publish_report(self, payload: dict[str, Any]) -> None:
+        self._write_json(self.publish_path, payload)
+
     def reset_manufacturing_trace(self, *, session_id: str, request_id: str, graph_id: str) -> None:
         self._write_json(
             self.manufacturing_trace_path,
@@ -188,6 +208,7 @@ class CreateAgentWorkspace:
             f"Original request: {request_text}" if request_text else "Original request: unavailable",
             f"System state file: {SYSTEM_STATE_FILE} (managed by create_agent_stage; do not edit directly)",
             f"Action file: {ACTION_FILE} (managed by create_agent_control; do not edit directly)",
+            f"Publish file: {PUBLISH_FILE} (managed by create_agent_publish; do not edit directly)",
             f"Resources file: {RESOURCES_FILE}",
             f"Validation file: {VALIDATION_FILE}",
             f"Focus stages remaining: {working_set['remaining']}/{working_set['total']}",
@@ -216,6 +237,9 @@ class CreateAgentWorkspace:
                 lines.append(
                     f"- issue {issue.issue_id}: {issue.where} | files={issue.target_files} | {issue.repair_hint}"
                 )
+        skill_context = self._skill_context_summary(active.system_id if active else "")
+        if skill_context:
+            lines.extend(skill_context)
         # Resource set: paths already explored in this session
         if effective_store is not None and effective_store.size() > 0:
             explored_paths = effective_store.list_paths()
@@ -235,6 +259,30 @@ class CreateAgentWorkspace:
             lines.append("Available tool outputs: none. Do not call tool_output read unless an output_id is listed.")
         return "\n".join(lines)
 
+    def _skill_context_summary(self, current_system: str) -> list[str]:
+        if not current_system or not self.skill_gateway_state_path.exists():
+            return []
+        try:
+            state = SkillGatewayState.model_validate_json(self.skill_gateway_state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return ["Skill gateway state: unreadable; use skill list_loaded for current state instead of direct file reads."]
+        system_state = state.by_system.get(current_system)
+        if system_state is None:
+            return []
+        lines = [
+            f"Skill gateway state for active focus {current_system}:",
+            f"- described_skills={system_state.described_skills}",
+            f"- loaded_skills={[item.name for item in system_state.loaded_skills]}",
+        ]
+        if system_state.read_resources:
+            lines.append("Already-read skill resources for this focus (avoid re-reading unless pointer/mode must change):")
+            for record in system_state.read_resources[:12]:
+                pointer = f" pointer={record.pointer}" if record.pointer else ""
+                lines.append(
+                    f"- {record.name}/{record.path} mode={record.mode}{pointer} reads={record.read_count} digest={record.digest[:12]}"
+                )
+        return lines
+
     def _read_text_snippet(self, path: Path, *, limit: int) -> str:
         try:
             text = path.read_text(encoding="utf-8")
@@ -245,7 +293,9 @@ class CreateAgentWorkspace:
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
         _assert_inside(self.root, path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp_path.replace(path)
 
 
 def _read_managed_model(path: Path, model: type[ModelT], *, missing: ModelT | None, owner_tool: str) -> ModelT | None:

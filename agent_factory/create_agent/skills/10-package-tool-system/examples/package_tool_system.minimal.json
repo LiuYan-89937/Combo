@@ -1,19 +1,85 @@
 {
-  "id": "package_tool",
-  "description": "Package tool description.",
-  "entrypoint": "python:tools/package_tool/tool.py:run",
-  "input_schema": {
-    "type": "object",
-    "additionalProperties": true
+  "tools/package_action/manifest.json": {
+    "id": "package_action",
+    "description": "Performs one package-defined runtime action.",
+    "entrypoint": "python:tools/package_action/tool.py:run",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": true
+    },
+    "resources": {},
+    "risk_level": "low",
+    "risk_evaluator": {
+      "llm_mode": "disabled"
+    },
+    "concurrent": true
   },
-  "output_schema": {
-    "type": "object",
-    "additionalProperties": true
+  "tools/package_action/tool.py": "from agent_factory.tooling.envelope import tool_envelope\n\n\ndef run(arguments, resources):\n    query = str(arguments.get(\"query\") or \"\").strip()\n    result = query if query else \"No query provided.\"\n    return tool_envelope(\n        {\"result\": result},\n        evidence={\"tool_id\": \"package_action\"},\n        summary=\"Package action completed.\",\n    )\n",
+  "contracts/tools.json": {
+    "type": "tools",
+    "version": "tools_contract.v0",
+    "config": {
+      "builtin_tools_enabled": true,
+      "builtin_tool_ids": [],
+      "package_tools_enabled": true,
+      "package_tool_ids": [
+        "package_action"
+      ]
+    }
   },
-  "resources": {},
-  "risk_level": "low",
-  "risk_evaluator": {
-    "llm_mode": "disabled"
-  },
-  "concurrent": true
+  "assembly_spec.json#tools_item": {
+    "id": "package_action",
+    "description": "Performs one package-defined runtime action.",
+    "entrypoint": "python:tools/package_action/tool.py:run",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": true
+    },
+    "resources": {},
+    "risk_level": "low",
+    "risk_evaluator": {
+      "llm_mode": "disabled"
+    },
+    "concurrent": true
+  }
 }

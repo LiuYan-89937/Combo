@@ -3,35 +3,36 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.knowledge_system.runtime import KnowledgeRuntime
+from agent_factory.tooling.envelope import tool_envelope
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get("knowledge_runtime")
     if not isinstance(runtime, KnowledgeRuntime):
-        return {"status": "failed", "error": "knowledge runtime is not configured"}
+        return tool_envelope({"status": "failed", "error": "knowledge runtime is not configured"})
     action = str(arguments.get("action") or "").strip()
     try:
         if action == "list_sources":
-            return {
+            return tool_envelope({
                 "status": "completed",
                 "sources": [source.model_dump(mode="json") for source in runtime.list_sources()],
-            }
+            })
         if action == "describe_source":
-            return {"status": "completed", **runtime.describe_source(_source_id(arguments))}
+            return tool_envelope({"status": "completed", **runtime.describe_source(_source_id(arguments))})
         if action == "prepare_source":
             preview = runtime.prepare_source(_source_payload(arguments))
-            return {"status": "completed", "preview": preview.model_dump(mode="json")}
+            return tool_envelope({"status": "completed", "preview": preview.model_dump(mode="json")})
         if action == "confirm_source":
             job = runtime.confirm_source(_source_payload(arguments))
-            return {"status": "completed", "job": job.model_dump(mode="json")}
+            return tool_envelope({"status": "completed", "job": job.model_dump(mode="json")})
         if action == "list_documents":
-            return {
+            return tool_envelope({
                 "status": "completed",
                 "documents": [
                     document.model_dump(mode="json")
                     for document in runtime.list_documents(arguments.get("source_id"))
                 ],
-            }
+            })
         if action == "search":
             results = runtime.search(
                 query=str(arguments.get("query") or ""),
@@ -39,32 +40,32 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 mode=str(arguments.get("mode") or "auto"),
                 top_k=int(arguments.get("top_k") or 8),
             )
-            return {"status": "completed", "results": [result.model_dump(mode="json") for result in results]}
+            return tool_envelope({"status": "completed", "results": [result.model_dump(mode="json") for result in results]})
         if action == "open":
-            return {
+            return tool_envelope({
                 "status": "completed",
                 **runtime.open(
                     source_id=arguments.get("source_id"),
                     document_id=arguments.get("document_id"),
                     chunk_id=arguments.get("chunk_id"),
                 ),
-            }
+            })
         if action == "read":
-            return {
+            return tool_envelope({
                 "status": "completed",
                 **runtime.read(
                     document_id=arguments.get("document_id"),
                     chunk_id=arguments.get("chunk_id"),
                 ),
-            }
+            })
         if action == "reindex":
             job = runtime.reindex_source(_source_id(arguments))
-            return {"status": "completed", "job": job.model_dump(mode="json")}
+            return tool_envelope({"status": "completed", "job": job.model_dump(mode="json")})
         if action == "remove_source":
-            return {"status": "completed", "removed": runtime.remove_source(_source_id(arguments))}
+            return tool_envelope({"status": "completed", "removed": runtime.remove_source(_source_id(arguments))})
     except Exception as exc:
-        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
-    return {"status": "failed", "error": f"unsupported knowledge action: {action}"}
+        return tool_envelope({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+    return tool_envelope({"status": "failed", "error": f"unsupported knowledge action: {action}"})
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

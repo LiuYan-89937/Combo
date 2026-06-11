@@ -1,6 +1,6 @@
 ---
 name: 17-final-validation-repair
-description: Guides final static validation and system-scoped repair routing.
+description: Guides final validation, repair interpretation, and publish readiness.
 metadata:
   system_id: final_validation
   stage_order: 17
@@ -8,48 +8,61 @@ metadata:
 ---
 # Final Validation Repair
 
-## Focus Role
-Guides final static validation and system-scoped repair routing.
+## Role
+Guides final validation, repair interpretation, and publish readiness.
 
-## Focus Use
-17. Use this skill when it is relevant to the current manufacturing focus.
+## Baseline Package Assumption
+- The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
+- Do not compare scaffolded files against schema or minimal examples just to prove they are valid. The validator owns schema correctness.
+- Treat focus files as suggested edit surfaces, not write locks. Edit cross-file references when one capability requires a coherent package change.
+- Use examples to learn the smallest complete shape for a capability you are adding or repairing, not as a checklist for unchanged scaffold files.
+- Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
-## Focus Context
-Use when this knowledge helps the current manufacturing focus.
+## When To Use This Skill
+- The model is in validation_publish focus and needs to interpret validation results.
+- Full validation fails and repair must be routed to concrete package files.
+- The package is ready for user confirmation and publish.
 
 ## Focus Files
-- No package files; validates whole package readiness.
+- `whole package readiness`
 
-## Cross-File Guidance
-Focus files are suggested starting points. Cross-file package repairs are allowed when validator evidence requires them.
+## Manufacturing Protocol
+1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
+2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
+3. If the requested capability does not affect this focus, leave these files unchanged and move to the next useful focus yourself.
+4. When adding a capability, update all required package surfaces in one coherent step, then stop tool calls so graph validation can run.
+5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
-## Required Resources
-Use confirmed resource facts from `.factory/resources.json`. If required information is missing, ask the user through `create_agent_control(action=ask_user)` using natural language.
+## Capability Write Guidance
+- Do not decide success by self-inspection. Use validator evidence from create_agent_stage inspect and graph validation.
+- Prefer validator fields such as target_files, schema_path, invalid_value_path, expected_shape, repair_template, and replace_strategy when present.
+- If repair requires missing user information, ask the user instead of fabricating config.
+- Publish only after validation_publish focus, final validation passed, and user confirmation.
 
-## Allowed Decisions
-Make decisions using this skill's domain knowledge while respecting validator evidence and package safety boundaries. Prefer existing RuntimeKernel contracts and existing Gateway tools over inventing new mechanisms.
+## Boundaries
+- Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.
+- Do not expose create-agent manufacturing tools, .factory files, traces, caches, or validation state as produced-agent runtime capability.
+- Do not infer package schemas from project source code during manufacturing; use validator evidence and this skill's examples/resources.
+- If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.
 
-## Forbidden Actions
-- Do not hardcode business resources, URLs, account values, schedules, or secrets.
-- Prefer the current focus files, but repair cross-file references when validator evidence requires it.
-- Do not expose manufacturing-only file tools as produced-agent runtime tools.
-- Do not infer schema from project source code; read listed resources.
+## Validation And Focus
+- Validator evidence should guide repairs but must not automatically change focus.
+- Only explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) changes focus.
+- Run final validation only from validation_publish after the package behavior is actually implemented.
 
-## Manufacturing Steps
-1. Read this skill's schema and minimal example resources.
-2. Update the focus files first, and cross-edit related package files when validation evidence requires it.
-3. Stop tool calls after a coherent repair step; the graph runs validation automatically.
-4. Repair the files indicated by validation evidence; focus files are guidance, not a write boundary.
+## Resource Loading
+- Prefer examples when adding or repairing this capability.
+- Read repair hints or validator scope only when validation evidence points here.
+- Read schema only for a concrete validator failure path or when examples do not define the needed object shape.
 
-## Validation
-Use the active focus validation evidence. Run full validation only from the validation_publish focus when finalizing.
-
-## Exit Conditions
-Validator evidence should guide, not control, focus changes. Only explicit create_agent_stage set_focus calls change focus.
-
-## Resources
-- `references/final_validation.schema.json`
+Examples:
 - `examples/final_validation.minimal.json`
-- `references/final_validation.common_errors.md`
+
+Repair references:
 - `references/final_validation.repair_hints.md`
+- `references/final_validation.common_errors.md`
 - `references/final_validation.validator_scope.md`
+- `references/final_validation.repair_mappings.json`
+
+Schema reference, last resort:
+- `references/final_validation.schema.json`

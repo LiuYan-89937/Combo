@@ -3,36 +3,37 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.scheduler_system.runtime import SchedulerRuntime
+from agent_factory.tooling.envelope import tool_envelope
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get("scheduler_runtime")
     if not isinstance(runtime, SchedulerRuntime):
-        return {
+        return tool_envelope({
             "status": "failed",
             "error": "scheduler runtime is not configured",
-        }
+        })
     action = str(arguments.get("action") or "").strip()
     if action == "create":
         job = runtime.create_job(_job_payload(arguments))
-        return {"status": "completed", "job": job.model_dump(mode="json")}
+        return tool_envelope({"status": "completed", "job": job.model_dump(mode="json")})
     if action == "list":
         jobs = runtime.list_jobs()
-        return {"status": "completed", "jobs": [job.model_dump(mode="json") for job in jobs]}
+        return tool_envelope({"status": "completed", "jobs": [job.model_dump(mode="json") for job in jobs]})
     if action == "describe":
-        return {"status": "completed", **runtime.describe_job(_job_id(arguments))}
+        return tool_envelope({"status": "completed", **runtime.describe_job(_job_id(arguments))})
     if action == "pause":
         job = runtime.set_job_enabled(_job_id(arguments), False)
-        return {"status": "completed", "job": job.model_dump(mode="json")}
+        return tool_envelope({"status": "completed", "job": job.model_dump(mode="json")})
     if action == "resume":
         job = runtime.set_job_enabled(_job_id(arguments), True)
-        return {"status": "completed", "job": job.model_dump(mode="json")}
+        return tool_envelope({"status": "completed", "job": job.model_dump(mode="json")})
     if action == "delete":
-        return {"status": "completed", "deleted": runtime.delete_job(_job_id(arguments))}
+        return tool_envelope({"status": "completed", "deleted": runtime.delete_job(_job_id(arguments))})
     if action == "run_now":
         report = runtime.run_now(_job_id(arguments))
-        return {"status": report.status, "report": report.model_dump(mode="json")}
-    return {"status": "failed", "error": f"unsupported scheduler action: {action}"}
+        return tool_envelope({"status": report.status, "report": report.model_dump(mode="json")})
+    return tool_envelope({"status": "failed", "error": f"unsupported scheduler action: {action}"})
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

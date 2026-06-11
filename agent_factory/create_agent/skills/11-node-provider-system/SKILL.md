@@ -1,6 +1,6 @@
 ---
 name: 11-node-provider-system
-description: Guides node provider contract and package node assets.
+description: Guides package node provider contract and custom runtime nodes.
 metadata:
   system_id: node_provider_system
   stage_order: 11
@@ -8,49 +8,60 @@ metadata:
 ---
 # Node Provider System
 
-## Focus Role
-Guides node provider contract and package node assets.
+## Role
+Guides package node provider contract and custom runtime nodes.
 
-## Focus Use
-11. Use this skill when it is relevant to the current manufacturing focus.
+## Baseline Package Assumption
+- The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
+- Do not compare scaffolded files against schema or minimal examples just to prove they are valid. The validator owns schema correctness.
+- Treat focus files as suggested edit surfaces, not write locks. Edit cross-file references when one capability requires a coherent package change.
+- Use examples to learn the smallest complete shape for a capability you are adding or repairing, not as a checklist for unchanged scaffold files.
+- Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
-## Focus Context
-Use when this knowledge helps the current manufacturing focus.
+## When To Use This Skill
+- The requested behavior cannot be represented by built-in react_agent nodes, bindings, tools, or package tools.
+- A custom node is explicitly needed and can be implemented inside the package.
+- Validator reports node provider or custom node issues.
 
 ## Focus Files
 - `contracts/node_provider.json`
 - `nodes/`
 
-## Cross-File Guidance
-Focus files are suggested starting points. Cross-file package repairs are allowed when validator evidence requires them.
+## Manufacturing Protocol
+1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
+2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
+3. If the requested capability does not affect this focus, leave these files unchanged and move to the next useful focus yourself.
+4. When adding a capability, update all required package surfaces in one coherent step, then stop tool calls so graph validation can run.
+5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
-## Required Resources
-Use confirmed resource facts from `.factory/resources.json`. If required information is missing, ask the user through `create_agent_control(action=ask_user)` using natural language.
+## Capability Write Guidance
+- Prefer existing RuntimeKernel nodes and package tools before adding custom nodes.
+- When a custom node is necessary, add its manifest, implementation, node provider contract entry, and assembly references together.
+- Do not create custom nodes to bypass tool or resource approval boundaries.
 
-## Allowed Decisions
-Make decisions using this skill's domain knowledge while respecting validator evidence and package safety boundaries. Prefer existing RuntimeKernel contracts and existing Gateway tools over inventing new mechanisms.
+## Boundaries
+- Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.
+- Do not expose create-agent manufacturing tools, .factory files, traces, caches, or validation state as produced-agent runtime capability.
+- Do not infer package schemas from project source code during manufacturing; use validator evidence and this skill's examples/resources.
+- If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.
 
-## Forbidden Actions
-- Do not hardcode business resources, URLs, account values, schedules, or secrets.
-- Prefer the current focus files, but repair cross-file references when validator evidence requires it.
-- Do not expose manufacturing-only file tools as produced-agent runtime tools.
-- Do not infer schema from project source code; read listed resources.
+## Validation And Focus
+- Validator evidence should guide repairs but must not automatically change focus.
+- Only explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) changes focus.
+- Run final validation only from validation_publish after the package behavior is actually implemented.
 
-## Manufacturing Steps
-1. Read this skill's schema and minimal example resources.
-2. Update the focus files first, and cross-edit related package files when validation evidence requires it.
-3. Stop tool calls after a coherent repair step; the graph runs validation automatically.
-4. Repair the files indicated by validation evidence; focus files are guidance, not a write boundary.
+## Resource Loading
+- Prefer examples when adding or repairing this capability.
+- Read repair hints or validator scope only when validation evidence points here.
+- Read schema only for a concrete validator failure path or when examples do not define the needed object shape.
 
-## Validation
-Use the active focus validation evidence. Run full validation only from the validation_publish focus when finalizing.
-
-## Exit Conditions
-Validator evidence should guide, not control, focus changes. Only explicit create_agent_stage set_focus calls change focus.
-
-## Resources
-- `references/node_provider_system.schema.json`
+Examples:
 - `examples/node_provider_system.minimal.json`
-- `references/node_provider_system.common_errors.md`
+
+Repair references:
 - `references/node_provider_system.repair_hints.md`
+- `references/node_provider_system.common_errors.md`
 - `references/node_provider_system.validator_scope.md`
+
+Schema reference, last resort:
+- `references/node_provider_system.schema.json`

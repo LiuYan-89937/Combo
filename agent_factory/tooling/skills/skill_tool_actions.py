@@ -5,12 +5,12 @@ from typing import Any
 from agent_factory.tooling.skills.skill_tool_protocol import (
     current_system_string,
     limit_value,
-    persist_registry,
     registry_from_resources,
     repair_resource_mode,
     required_string,
     resource_mode,
     resource_paths,
+    run_with_gateway_state_lock,
 )
 
 
@@ -25,6 +25,13 @@ class SkillToolActionRunner:
             return self._list(action)
         if action == "search":
             return self._search(action, arguments)
+        if action in {"describe", "load", "list_loaded", "read_resource", "read_repair_resources"}:
+            return run_with_gateway_state_lock(self.resources, lambda registry: self._run_stateful(arguments, registry))
+        raise ValueError("action must be one of: list, search, describe, load, list_loaded, read_resource, read_repair_resources")
+
+    def _run_stateful(self, arguments: dict[str, Any], registry) -> dict[str, Any]:
+        self.registry = registry
+        action = str(arguments.get("action") or "").strip()
         if action == "list_loaded":
             return self._list_loaded(action, arguments)
         name = required_string(arguments, "name")
@@ -65,7 +72,6 @@ class SkillToolActionRunner:
     def _describe(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         current_system = current_system_string(arguments, self.resources)
         described = self.registry.describe(name, current_system=current_system)
-        persist_registry(self.resources, self.registry)
         return _output(
             action=action,
             message=f"Skill described: {name}",
@@ -77,7 +83,6 @@ class SkillToolActionRunner:
         current_system = current_system_string(arguments, self.resources)
         reason = required_string(arguments, "reason")
         loaded = self.registry.load(name, current_system=current_system, reason=reason)
-        persist_registry(self.resources, self.registry)
         return _output(
             action=action,
             message=f"Skill loaded: {name}",
@@ -89,7 +94,6 @@ class SkillToolActionRunner:
         current_system = current_system_string(arguments, self.resources)
         paths = resource_paths(arguments.get("paths"))
         self.registry.describe(name, current_system=current_system)
-        persist_registry(self.resources, self.registry)
         return _output(
             action=action,
             message=f"Skill repair resources loaded: {name}",

@@ -11,6 +11,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     required_string,
     resolve_path,
 )
+from agent_factory.tooling.envelope import tool_envelope
 
 
 _SKIPPED_DIR_NAMES = {
@@ -62,7 +63,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 "type": path_type(item),
             }
         )
-    return {"matches": matches, "truncated": truncated}
+    return tool_envelope({"matches": matches, "truncated": truncated})
 
 
 def _glob_paths(root: Path, pattern: str) -> list[Path]:

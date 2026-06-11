@@ -12,6 +12,10 @@ from agent_factory.tooling.builtins.filesystem.common import (
     resolve_path,
     write_focus_facts,
 )
+from agent_factory.tooling.envelope import tool_envelope
+
+
+FOCUS_EVIDENCE_KEY = "focus"
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -54,14 +58,19 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         total_replacements += replacements
     updated_bytes = updated.encode("utf-8")
     _atomic_write(target, updated_bytes)
-    return {
+    output = {
         "path": str(target),
         "replacements": total_replacements,
         "edit_results": results,
         "before_hash": sha256(raw).hexdigest(),
         "after_hash": sha256(updated_bytes).hexdigest(),
-        "focus": write_focus_facts(target, root=root, resources=resources),
     }
+    evidence = _write_evidence(target, root=root, resources=resources)
+    return tool_envelope(output, evidence=evidence)
+
+
+def _write_evidence(target, *, root, resources: dict[str, Any]) -> dict[str, Any]:
+    return {FOCUS_EVIDENCE_KEY: write_focus_facts(target, root=root, resources=resources)}
 
 
 def _edit_values(edit: Any, index: int) -> tuple[str, str, bool]:

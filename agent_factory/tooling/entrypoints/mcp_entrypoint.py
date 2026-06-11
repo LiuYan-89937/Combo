@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Protocol
 
 from agent_factory.tooling.entrypoints.base import EntrypointAdapterError, ToolEntrypointCallable, parse_protocol
+from agent_factory.tooling.envelope import tool_envelope
 
 
 class MCPToolClient(Protocol):
@@ -28,7 +29,7 @@ class MCPEntrypointAdapter:
 
         def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             result = client.call_tool(tool_name, arguments)
-            return _normalize_mcp_result(result)
+            return tool_envelope(_normalize_mcp_result(result))
 
         return run
 

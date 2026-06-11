@@ -135,18 +135,21 @@ class AgentFactoryToolNode:
                 tool_call_id=tool_call_id,
                 arguments=arguments,
             )
-            event_type = "tool_completed" if _observation_completed(normalized) else "tool_failed"
+            event_type = _tool_event_type(normalized)
             self._emit(
                 {
                     "event_type": event_type,
                     "tool_id": tool_id,
                     "tool_call_id": tool_call_id,
                     "arguments": arguments,
-                    "status": "completed" if event_type == "tool_completed" else "failed",
+                    "status": "completed" if event_type in {"tool_completed", "tool_contract_invalid"} else "failed",
                     "result": normalized,
                     "output": normalized.get("output"),
+                    "evidence": normalized.get("evidence") if isinstance(normalized.get("evidence"), dict) else {},
+                    "execution_status": str(normalized.get("execution_status") or ""),
+                    "contract_status": str(normalized.get("contract_status") or ""),
                     "observation": normalized,
-                    "error": None if event_type == "tool_completed" else normalized.get("message"),
+                    "error": None if event_type in {"tool_completed", "tool_contract_invalid"} else normalized.get("message"),
                     "message": str(normalized.get("message") or ""),
                 }
             )
@@ -154,7 +157,7 @@ class AgentFactoryToolNode:
                 tool_id=tool_id,
                 tool_call_id=tool_call_id,
                 payload=normalized,
-                status="success" if event_type == "tool_completed" else "error",
+                status="success" if event_type in {"tool_completed", "tool_contract_invalid"} else "error",
             )
         self._emit(
             {
@@ -434,6 +437,14 @@ def _observation_completed(payload: dict[str, Any]) -> bool:
     return True
 
 
+def _tool_event_type(payload: dict[str, Any]) -> str:
+    if _observation_completed(payload):
+        return "tool_completed"
+    if payload.get("execution_status") == "completed" and payload.get("contract_status") == "invalid":
+        return "tool_contract_invalid"
+    return "tool_failed"
+
+
 def _tool_message(*, tool_id: str, tool_call_id: str, payload: dict[str, Any], status: str = "success") -> ToolMessage:
     return ToolMessage(
         content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
@@ -462,5 +473,8 @@ def _observation_payload(
         "retryable": retryable,
         "arguments": arguments,
         "output": output,
+        "evidence": {},
+        "execution_status": "completed" if status == "completed" else "failed",
+        "contract_status": "valid",
         "errors": [] if status == "completed" else [message],
     }

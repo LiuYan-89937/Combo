@@ -11,6 +11,7 @@ from langgraph.graph.message import add_messages
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
+from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
 
 
@@ -49,9 +50,15 @@ class CreateAgentAssistWorkflow:
         if model is None:
             raise RuntimeError("main model is not configured for create-agent assist")
         messages = _messages_with_system(state, self.tools)
-        response = model.bind_tools(self.tools, tool_choice="auto").invoke(messages) if self.tools else model.invoke(messages)
-        if not isinstance(response, BaseMessage):
-            response = AIMessage(content=str(response))
+        prompt_binding, chat_messages = _operation_prompt(messages)
+        result = ModelOperationService(role="main", model=model).tool_bound_chat(
+            state=state,
+            prompt_binding=prompt_binding,
+            messages=chat_messages,
+            tools=self.tools,
+            node_id="create_agent_assist",
+        )
+        response = result.ai_message if isinstance(result.ai_message, BaseMessage) else AIMessage(content=result.assistant_draft or "")
         return {
             "messages": [response],
             "done": not bool(getattr(response, "tool_calls", None)),
@@ -99,6 +106,12 @@ def _messages_with_system(state: CreateAgentAssistState, tools: list[BaseTool]) 
         )
     )
     return [system, *list(state.get("messages") or [])]
+
+
+def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list[BaseMessage]]:
+    if messages and isinstance(messages[0], SystemMessage):
+        return {"template": str(messages[0].content or "")}, messages[1:]
+    return {}, messages
 
 
 def _emit_tool_activity(payload: dict[str, Any]) -> None:

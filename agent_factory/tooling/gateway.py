@@ -24,6 +24,7 @@ from agent_factory.tooling.resource_context import build_tool_resource_context
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
 from agent_factory.tooling.spec import ToolObservation, ToolRiskContext, ToolRiskResult, ToolSpec
+from agent_factory.tooling.envelope import unpack_tool_envelope
 
 
 ToolApprovalAction = Literal["approve", "deny", "revise"]
@@ -136,11 +137,26 @@ class ToolExecutionGateway:
         if not isinstance(output, dict):
             return self._observation(
                 "invalid_output",
-                "Tool entrypoint must return a dict.",
+                "Tool entrypoint must return a tool execution envelope.",
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 output={"value": output},
+                execution_status="failed",
+                contract_status="invalid",
                 errors=["output is not a dict"],
+            )
+        try:
+            output, evidence, summary = unpack_tool_envelope(output)
+        except Exception as exc:
+            return self._observation(
+                "invalid_output",
+                f"Tool entrypoint returned an invalid execution envelope: {type(exc).__name__}: {exc}",
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                output=output,
+                execution_status="completed",
+                contract_status="invalid",
+                errors=[f"{type(exc).__name__}: {exc}"],
             )
         output_errors = self.output_schema.errors_for(output)
         if output_errors:
@@ -150,6 +166,9 @@ class ToolExecutionGateway:
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 output=output,
+                evidence=evidence,
+                execution_status="completed",
+                contract_status="invalid",
                 errors=output_errors,
             )
         # Auto-record explored paths in the resource set
@@ -167,13 +186,16 @@ class ToolExecutionGateway:
         )
         return self._observation(
             "completed",
-            projection.output_summary or "Tool execution completed.",
+            projection.output_summary or summary or "Tool execution completed.",
             tool_call_id=tool_call_id,
             arguments=arguments,
             output=projection.output,
             output_ref=projection.output_ref,
             output_summary=projection.output_summary,
             output_truncated=projection.output_truncated,
+            evidence=evidence,
+            execution_status="completed",
+            contract_status="valid",
             retryable=False,
         )
 
@@ -305,6 +327,9 @@ class ToolExecutionGateway:
         output_ref: dict[str, Any] | None = None,
         output_summary: str | None = None,
         output_truncated: bool = False,
+        evidence: dict[str, Any] | None = None,
+        execution_status: str = "failed",
+        contract_status: str = "valid",
         errors: list[str] | None = None,
     ) -> dict[str, Any]:
         return ToolObservation(
@@ -319,6 +344,9 @@ class ToolExecutionGateway:
             output_ref=output_ref,
             output_summary=output_summary,
             output_truncated=output_truncated,
+            evidence=evidence or {},
+            execution_status=execution_status,  # type: ignore[arg-type]
+            contract_status=contract_status,  # type: ignore[arg-type]
             errors=errors or [],
         ).model_dump(mode="json")
 

@@ -1,0 +1,167 @@
+{
+  "package.load.schema.assembly_tools": {
+    "when": "validator issue schema_path is AgentAssemblySpec.tools[] or Pydantic error mentions tools.N model_type",
+    "target_files": [
+      "assembly_spec.json",
+      "tools/<tool_id>/manifest.json",
+      "tools/<tool_id>/tool.py",
+      "contracts/tools.json"
+    ],
+    "replace_strategy": "replace_array_item",
+    "expected_shape": {
+      "id": "snake_case_tool_id",
+      "description": "What the runtime tool does.",
+      "entrypoint": "python:tools/snake_case_tool_id/tool.py:run",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "resources": {},
+      "risk_level": "low",
+      "risk_evaluator": {
+        "llm_mode": "disabled"
+      },
+      "concurrent": true
+    },
+    "repair_template": {
+      "id": "<tool_id>",
+      "description": "<specific runtime capability>",
+      "entrypoint": "python:tools/<tool_id>/tool.py:run",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "additionalProperties": true
+      },
+      "resources": {},
+      "risk_level": "low",
+      "risk_evaluator": {
+        "llm_mode": "disabled"
+      },
+      "concurrent": true
+    }
+  },
+  "package.load.schema.node_binding": {
+    "when": "validator issue schema_path is AgentAssemblySpec.bindings.node_bindings[] or Pydantic error mentions bindings.node_bindings.N missing target/payload",
+    "target_files": [
+      "assembly_spec.json"
+    ],
+    "replace_strategy": "replace_array_item",
+    "expected_shape": {
+      "binding_id": "snake_case_binding_id",
+      "binding_type": "prompt|tool_access|model_operation|policy_profile|strategy_profile|output_formatter|custom",
+      "target": {
+        "node_id": "pattern_node_id",
+        "impl": "node.impl"
+      },
+      "payload": {}
+    },
+    "repair_templates": {
+      "prompt": {
+        "binding_id": "<node_id>_prompt",
+        "binding_type": "prompt",
+        "target": {
+          "node_id": "<node_id>",
+          "impl": "standard.answer"
+        },
+        "payload": {
+          "prompt_id": "<prompt_id>",
+          "template": "<prompt text>",
+          "variables": []
+        }
+      },
+      "tool_access": {
+        "binding_id": "<node_id>_tools",
+        "binding_type": "tool_access",
+        "target": {
+          "node_id": "<node_id>",
+          "impl": "standard.answer"
+        },
+        "payload": {
+          "allowed_tool_ids": [
+            "<tool_id>"
+          ],
+          "approval_policy": "standard"
+        }
+      },
+      "model_operation": {
+        "binding_id": "<node_id>_model_operation",
+        "binding_type": "model_operation",
+        "target": {
+          "node_id": "<node_id>",
+          "impl": "standard.answer"
+        },
+        "payload": {
+          "operation": "tool_bound_chat",
+          "model_role": "main",
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": true
+          },
+          "write_target": {
+            "section": "context"
+          },
+          "max_attempts": 3
+        }
+      }
+    }
+  },
+  "extra_forbidden.node_id_provider_id": {
+    "when": "validator issue reports extra_forbidden for node_id, impl, provider_id, or similar fields inside a binding item",
+    "replace_strategy": "replace_object",
+    "rule": "Move node identity into target. Move provider-specific configuration into payload.config or the binding-type-specific payload.",
+    "before": {
+      "binding_id": "bad_binding",
+      "binding_type": "custom",
+      "node_id": "answer",
+      "provider_id": "custom_provider",
+      "payload": {}
+    },
+    "after": {
+      "binding_id": "good_binding",
+      "binding_type": "custom",
+      "target": {
+        "node_id": "answer",
+        "impl": "standard.answer"
+      },
+      "payload": {
+        "extension_id": "custom_provider",
+        "schema_version": "v0",
+        "purpose": "Describe why the custom binding is needed.",
+        "config": {}
+      }
+    }
+  }
+}

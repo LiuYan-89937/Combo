@@ -91,6 +91,19 @@ class SkillLoadRecord(BaseModel):
     primary: bool = False
 
 
+class SkillResourceReadRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    path: str
+    mode: str = "outline"
+    pointer: str = ""
+    digest: str = ""
+    read_count: int = 1
+    first_read_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    last_read_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
 class SkillSystemLoadState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -98,6 +111,7 @@ class SkillSystemLoadState(BaseModel):
     primary_skill: str = ""
     described_skills: list[str] = Field(default_factory=list)
     loaded_skills: list[SkillLoadRecord] = Field(default_factory=list)
+    read_resources: list[SkillResourceReadRecord] = Field(default_factory=list)
 
     def has_seen(self, name: str) -> bool:
         return name in self.described_skills or any(item.name == name for item in self.loaded_skills)
@@ -119,6 +133,41 @@ class SkillSystemLoadState(BaseModel):
                 primary=name == self.primary_skill,
             )
         )
+
+    def resource_read_record(self, name: str, path: str, *, mode: str, pointer: str) -> SkillResourceReadRecord | None:
+        for record in self.read_resources:
+            if record.name == name and record.path == path and record.mode == mode and record.pointer == pointer:
+                return record
+        return None
+
+    def mark_resource_read(self, name: str, path: str, *, mode: str, pointer: str, digest: str) -> SkillResourceReadRecord:
+        existing = self.resource_read_record(name, path, mode=mode, pointer=pointer)
+        now = datetime.now(UTC).isoformat()
+        if existing is not None:
+            updated = existing.model_copy(
+                update={
+                    "digest": digest,
+                    "read_count": existing.read_count + 1,
+                    "last_read_at": now,
+                }
+            )
+            self.read_resources = [
+                updated if item is existing else item
+                for item in self.read_resources
+            ]
+            return updated
+        record = SkillResourceReadRecord(
+            name=name,
+            path=path,
+            mode=mode,
+            pointer=pointer,
+            digest=digest,
+            first_read_at=now,
+            last_read_at=now,
+        )
+        self.read_resources.append(record)
+        self.read_resources.sort(key=lambda item: (item.name, item.path, item.mode, item.pointer))
+        return record
 
 
 class SkillGatewayState(BaseModel):

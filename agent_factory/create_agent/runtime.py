@@ -484,7 +484,7 @@ def _tool_trace_records(chunk: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         event_type = str(item.get("event_type") or "")
-        if event_type not in {"tool_proposed", "tool_completed", "tool_failed"}:
+        if event_type not in {"tool_proposed", "tool_completed", "tool_contract_invalid", "tool_failed"}:
             continue
         status = str(item.get("status") or "")
         records.append(
@@ -494,7 +494,9 @@ def _tool_trace_records(chunk: Any) -> list[dict[str, Any]]:
                 "tool_call_id": item.get("tool_call_id"),
                 "arguments": _json_safe(item.get("arguments") if isinstance(item.get("arguments"), dict) else {}),
                 "status": status,
-                "success": event_type == "tool_completed" or status == "completed",
+                "success": event_type in {"tool_completed", "tool_contract_invalid"} or status == "completed",
+                "contract_status": str(item.get("contract_status") or ""),
+                "execution_status": str(item.get("execution_status") or ""),
             }
         )
     return records

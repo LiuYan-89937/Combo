@@ -72,23 +72,40 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def _discover_resources(root: Path) -> list[SkillResourceRef]:
-    refs: list[SkillResourceRef] = []
+    discovered: list[tuple[Path, str]] = []
     for directory, kind in RESOURCE_DIR_KINDS.items():
         base = root / directory
         if not base.is_dir():
             continue
-        for path in sorted(item for item in base.rglob("*") if item.is_file()):
-            _assert_inside(root, path)
-            refs.append(
-                SkillResourceRef(
-                    path=path.relative_to(root).as_posix(),
-                    kind=kind,
-                    media_type=_media_type(path),
-                    size_bytes=path.stat().st_size,
-                    readable=_is_text_resource(path),
-                )
+        for path in (item for item in base.rglob("*") if item.is_file()):
+            discovered.append((path, kind))
+    refs: list[SkillResourceRef] = []
+    for path, kind in sorted(discovered, key=lambda item: _resource_sort_key(item[0])):
+        _assert_inside(root, path)
+        refs.append(
+            SkillResourceRef(
+                path=path.relative_to(root).as_posix(),
+                kind=kind,
+                media_type=_media_type(path),
+                size_bytes=path.stat().st_size,
+                readable=_is_text_resource(path),
             )
+        )
     return refs
+
+
+def _resource_sort_key(path: Path) -> tuple[int, str]:
+    relative = path.as_posix()
+    name = path.name
+    if "/examples/" in relative or relative.endswith(".minimal.json"):
+        group = 0
+    elif name.endswith(".repair_hints.md") or name.endswith(".common_errors.md") or name.endswith(".validator_scope.md"):
+        group = 1
+    elif name.endswith(".schema.json"):
+        group = 3
+    else:
+        group = 2
+    return (group, relative)
 
 
 def _discover_scripts(root: Path, skill_name: str) -> list[SkillScriptRef]:

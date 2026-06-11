@@ -4,6 +4,7 @@ from typing import Any
 
 from agent_factory.create_agent.models import CreateAgentAction
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
 
 
@@ -76,12 +77,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if action.action == "ask_user" and not action.message.strip():
         raise ValueError("message is required when action is ask_user")
     workspace.write_action(action)
-    return {
+    return tool_envelope({
         "action": action.action,
         "message": action.message,
         "action_path": str(workspace.action_path),
         "resource_fact_count": len(action.resource_facts),
-    }
+    })
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

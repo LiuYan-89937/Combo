@@ -30,15 +30,22 @@ class CreateAgentValidationGate:
         previous_state = workspace.read_validation_state()
         previous_report = workspace.read_validation()
         changed_files = _changed_files(previous_state.package_fingerprint if previous_state else {}, current_fingerprint)
-        if not decision.force_full and previous_state is not None and previous_report is not None and not changed_files:
-            return _cached_report(previous_report)
 
         active = workspace.read_system_state().active_stage()
         scope = _scope_for_focus(active.validation_focus if active else "", force_full=decision.force_full)
+        if (
+            not decision.force_full
+            and previous_state is not None
+            and previous_report is not None
+            and not changed_files
+            and _scope_covers(previous_state.validation_scope, scope)
+        ):
+            return _cached_report(previous_report)
         report = self.validator.validate(workspace.root, scope=scope, changed_files=changed_files)
         workspace.write_validation_state(
             PackageValidationState(
                 package_fingerprint=current_fingerprint,
+                validation_scope=report.validation_scope,
                 updated_at=datetime.now(UTC).isoformat(),
             )
         )
@@ -86,6 +93,22 @@ def _scope_for_focus(validation_scope: str, *, force_full: bool) -> ValidationSc
     if validation_scope == "package_tool_syntax_and_binding":
         return "python_syntax"
     return "workspace_hygiene"
+
+
+def _scope_covers(previous_scope: str, requested_scope: str) -> bool:
+    if previous_scope == requested_scope:
+        return True
+    if previous_scope == "full_static":
+        return True
+    if requested_scope == "workspace_hygiene":
+        return previous_scope in {
+            "package_shape",
+            "runtime_contract_build",
+            "assembly_compile",
+            "python_syntax",
+            "full_static",
+        }
+    return False
 
 
 def _changed_files(previous: dict[str, str], current: dict[str, str]) -> list[str]:

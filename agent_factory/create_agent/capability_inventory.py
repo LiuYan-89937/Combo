@@ -74,8 +74,16 @@ def build_capability_inventory(
 
 
 def render_capability_inventory(inventory: dict[str, Any] | CapabilityInventory, *, package_root: str | Path) -> str:
+    return "\n\n".join(
+        [
+            render_static_capability_inventory(inventory),
+            render_dynamic_capability_context(package_root=package_root),
+        ]
+    )
+
+
+def render_static_capability_inventory(inventory: dict[str, Any] | CapabilityInventory) -> str:
     value = inventory if isinstance(inventory, CapabilityInventory) else CapabilityInventory.model_validate(inventory)
-    root = Path(package_root).expanduser().resolve()
     lines = [
         "Runtime Capability Inventory:",
         "Boundary rule: before asking the user for a resource or account, check this inventory. "
@@ -94,12 +102,6 @@ def render_capability_inventory(inventory: dict[str, Any] | CapabilityInventory,
         "Inherited MCP/Skill extension candidates (candidate only until tools_system chooses to inherit them):",
         *_item_lines(value.inherited_extension_candidates, empty="none"),
         "",
-        "Current package runtime tool facts:",
-        *_current_runtime_tool_lines(root),
-        "",
-        "Current resource facts summary (secrets redacted):",
-        *_resource_fact_lines(root),
-        "",
         "Scheduler capabilities:",
         f"- schedule_types={value.scheduler_capabilities.schedule_types}",
         f"- target_types={value.scheduler_capabilities.target_types}",
@@ -107,6 +109,19 @@ def render_capability_inventory(inventory: dict[str, Any] | CapabilityInventory,
         f"- failure_actions={value.scheduler_capabilities.failure_actions}",
         "",
         f"Boundary note: {value.boundary_note}",
+    ]
+    return "\n".join(lines)
+
+
+def render_dynamic_capability_context(*, package_root: str | Path) -> str:
+    root = Path(package_root).expanduser().resolve()
+    lines = [
+        "Current package capability facts:",
+        "Current package runtime tool facts:",
+        *_current_runtime_tool_lines(root),
+        "",
+        "Current resource facts summary (secrets redacted):",
+        *_resource_fact_lines(root),
     ]
     return "\n".join(lines)
 

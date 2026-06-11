@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 from typing import Any
+from collections.abc import Callable
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback for non-production local runs.
+    fcntl = None  # type: ignore[assignment]
 
 from agent_factory.tooling.skills.registry import SkillRegistry, SkillResourceFragmentNotFound
+from agent_factory.tooling.skills.schema import SkillGatewayState
 
 
 SKILL_ACTIONS = ("list", "search", "describe", "load", "list_loaded", "read_resource", "read_repair_resources")
@@ -26,14 +35,52 @@ def persist_registry(resources: dict[str, Any], registry: SkillRegistry) -> None
         raise ValueError("skills runtime resource is missing")
     payload.clear()
     payload.update(registry.to_resource_payload())
+    state_path = gateway_state_path(resources)
+    if state_path is not None:
+        _atomic_write_json(state_path, registry.gateway_state.model_dump(mode="json"))
+
+
+def gateway_state_path(resources: dict[str, Any]) -> Path | None:
     raw_state_path = resources.get(SKILL_GATEWAY_STATE_RESOURCE_KEY)
     if isinstance(raw_state_path, str) and raw_state_path.strip():
-        state_path = Path(raw_state_path).expanduser().resolve()
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(
-            json.dumps(registry.gateway_state.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        return Path(raw_state_path).expanduser().resolve()
+    return None
+
+
+def run_with_gateway_state_lock(resources: dict[str, Any], callback: Callable[[SkillRegistry], dict[str, Any]]) -> dict[str, Any]:
+    state_path = gateway_state_path(resources)
+    if state_path is None:
+        registry = registry_from_resources(resources)
+        return callback(registry)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.with_name(f"{state_path.name}.lock")
+    with _file_lock(lock_path):
+        registry = registry_from_resources(resources)
+        if state_path.exists():
+            registry.gateway_state = SkillGatewayState.model_validate_json(state_path.read_text(encoding="utf-8"))
+        result = callback(registry)
+        persist_registry(resources, registry)
+        return result
+
+
+@contextmanager
+def _file_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def required_string(arguments: dict[str, Any], key: str) -> str:

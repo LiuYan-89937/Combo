@@ -23,8 +23,6 @@
         },
         "repair_action": {
           "enum": [
-            "materialize_base_package",
-            "materialize_required_contracts",
             "normalize_runtime_contract_paths",
             "read_skill_resources",
             "repair_files",

@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.tooling.output_compressor import compress_tool_output
+from agent_factory.tooling.envelope import tool_envelope
 
 
 TOOL_OUTPUT_STORE_RESOURCE = "tool_output_store"
@@ -209,18 +210,18 @@ def run_tool_output(arguments: dict[str, Any], resources: dict[str, Any]) -> dic
     output_id = str(arguments.get("output_id") or "").strip()
     if action == "list":
         limit = _optional_int(arguments.get("limit"), default=20)
-        return {
+        return tool_envelope({
             "action": action,
             "status": "completed",
             "message": "Available tool outputs for this workspace.",
             "outputs": store.list_outputs(limit=limit),
-        }
+        })
     if action == "describe":
         try:
             output = store.describe(output_id)
         except (FileNotFoundError, ValueError):
-            return _output_ref_not_found(action=action, output_id=output_id, store=store)
-        return {"action": action, "status": "completed", "output": output}
+            return tool_envelope(_output_ref_not_found(action=action, output_id=output_id, store=store))
+        return tool_envelope({"action": action, "status": "completed", "output": output})
     if action == "read":
         try:
             output = store.read(
@@ -230,8 +231,8 @@ def run_tool_output(arguments: dict[str, Any], resources: dict[str, Any]) -> dic
                 limit=_optional_int(arguments.get("limit"), default=DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS),
             )
         except (FileNotFoundError, ValueError):
-            return _output_ref_not_found(action=action, output_id=output_id, store=store)
-        return {"action": action, "status": "completed", "output": output}
+            return tool_envelope(_output_ref_not_found(action=action, output_id=output_id, store=store))
+        return tool_envelope({"action": action, "status": "completed", "output": output})
     raise ValueError(f"unsupported tool_output action: {action}")
 
 

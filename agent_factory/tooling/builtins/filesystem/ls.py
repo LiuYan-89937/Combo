@@ -11,6 +11,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     required_string,
     resolve_path,
 )
+from agent_factory.tooling.envelope import tool_envelope
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -43,7 +44,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 "type": path_type(item),
             }
         )
-    return {"entries": entries, "truncated": truncated}
+    return tool_envelope({"entries": entries, "truncated": truncated})
 
 
 def _iter_paths(root: Path, *, recursive: bool) -> list[Path]:

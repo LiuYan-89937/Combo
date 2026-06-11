@@ -4,6 +4,7 @@ from typing import Any
 
 from agent_factory.tooling.builtins.process.manager import PROCESS_MANAGER, output_limit, required_string
 from agent_factory.tooling.spec import ToolRiskResult
+from agent_factory.tooling.envelope import tool_envelope
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -16,7 +17,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     _ = resources
     process_id = required_string(arguments, "process_id")
-    return PROCESS_MANAGER.snapshot(
+    return tool_envelope(PROCESS_MANAGER.snapshot(
         process_id=process_id,
         max_output_chars=output_limit(arguments),
-    )
+    ))

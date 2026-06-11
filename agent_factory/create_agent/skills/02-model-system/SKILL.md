@@ -1,6 +1,6 @@
 ---
 name: 02-model-system
-description: Guides model runtime contract configuration.
+description: Guides model, dependency, and sandbox runtime contract changes for produced agents.
 metadata:
   system_id: model_system
   stage_order: 2
@@ -8,14 +8,20 @@ metadata:
 ---
 # Model System
 
-## Focus Role
-Guides model runtime contract configuration.
+## Role
+Guides model, dependency, and sandbox runtime contract changes for produced agents.
 
-## Focus Use
-2. Use this skill when it is relevant to the current manufacturing focus.
+## Baseline Package Assumption
+- The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
+- Do not compare scaffolded files against schema or minimal examples just to prove they are valid. The validator owns schema correctness.
+- Treat focus files as suggested edit surfaces, not write locks. Edit cross-file references when one capability requires a coherent package change.
+- Use examples to learn the smallest complete shape for a capability you are adding or repairing, not as a checklist for unchanged scaffold files.
+- Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
-## Focus Context
-Use when this knowledge helps the current manufacturing focus.
+## When To Use This Skill
+- The agent needs a non-default model role, output behavior, dependency declaration, or sandbox resource boundary.
+- A package tool/node introduces runtime dependencies or sandbox resource requirements.
+- Validator reports model/dependency/sandbox contract issues.
 
 ## Focus Files
 - `contracts/model.json`
@@ -23,36 +29,42 @@ Use when this knowledge helps the current manufacturing focus.
 - `contracts/sandbox.json`
 - `sandbox_contract.json`
 
-## Cross-File Guidance
-Focus files are suggested starting points. Cross-file package repairs are allowed when validator evidence requires them.
+## Manufacturing Protocol
+1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
+2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
+3. If the requested capability does not affect this focus, leave these files unchanged and move to the next useful focus yourself.
+4. When adding a capability, update all required package surfaces in one coherent step, then stop tool calls so graph validation can run.
+5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
-## Required Resources
-Use confirmed resource facts from `.factory/resources.json`. If required information is missing, ask the user through `create_agent_control(action=ask_user)` using natural language.
+## Capability Write Guidance
+- Leave default model/dependency/sandbox contracts unchanged when the request does not require changes.
+- Do not invent provider credentials, account ids, API keys, endpoints, or local paths.
+- Declare dependencies and sandbox resources only for capabilities that are actually implemented in package files.
+- If an external resource is required but not confirmed, ask the user before writing concrete config.
 
-## Allowed Decisions
-Make decisions using this skill's domain knowledge while respecting validator evidence and package safety boundaries. Prefer existing RuntimeKernel contracts and existing Gateway tools over inventing new mechanisms.
+## Boundaries
+- Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.
+- Do not expose create-agent manufacturing tools, .factory files, traces, caches, or validation state as produced-agent runtime capability.
+- Do not infer package schemas from project source code during manufacturing; use validator evidence and this skill's examples/resources.
+- If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.
 
-## Forbidden Actions
-- Do not hardcode business resources, URLs, account values, schedules, or secrets.
-- Prefer the current focus files, but repair cross-file references when validator evidence requires it.
-- Do not expose manufacturing-only file tools as produced-agent runtime tools.
-- Do not infer schema from project source code; read listed resources.
+## Validation And Focus
+- Validator evidence should guide repairs but must not automatically change focus.
+- Only explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) changes focus.
+- Run final validation only from validation_publish after the package behavior is actually implemented.
 
-## Manufacturing Steps
-1. Read this skill's schema and minimal example resources.
-2. Update the focus files first, and cross-edit related package files when validation evidence requires it.
-3. Stop tool calls after a coherent repair step; the graph runs validation automatically.
-4. Repair the files indicated by validation evidence; focus files are guidance, not a write boundary.
+## Resource Loading
+- Prefer examples when adding or repairing this capability.
+- Read repair hints or validator scope only when validation evidence points here.
+- Read schema only for a concrete validator failure path or when examples do not define the needed object shape.
 
-## Validation
-Use the active focus validation evidence. Run full validation only from the validation_publish focus when finalizing.
-
-## Exit Conditions
-Validator evidence should guide, not control, focus changes. Only explicit create_agent_stage set_focus calls change focus.
-
-## Resources
-- `references/model_system.schema.json`
+Examples:
 - `examples/model_system.minimal.json`
-- `references/model_system.common_errors.md`
+
+Repair references:
 - `references/model_system.repair_hints.md`
+- `references/model_system.common_errors.md`
 - `references/model_system.validator_scope.md`
+
+Schema reference, last resort:
+- `references/model_system.schema.json`

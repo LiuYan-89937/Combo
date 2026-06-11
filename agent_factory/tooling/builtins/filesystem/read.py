@@ -10,6 +10,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     required_string,
     resolve_path,
 )
+from agent_factory.tooling.envelope import tool_envelope
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -39,7 +40,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     end_index = min(start_index + limit, total_lines)
     selected = lines[start_index:end_index] if start_index < total_lines else []
     end_line = start_line + len(selected) - 1 if selected else max(start_line - 1, 0)
-    return {
+    return tool_envelope({
         "path": str(target),
         "content": "".join(selected),
         "start_line": start_line,
@@ -47,4 +48,4 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "total_lines": total_lines,
         "truncated": end_index < total_lines,
         "content_hash": sha256(raw).hexdigest(),
-    }
+    })

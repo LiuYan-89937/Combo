@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +31,9 @@ class CreateAgentStageContext:
 
     def write_state(self, state: SystemManufacturingState) -> None:
         self.system_state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.system_state_path.write_text(
-            json.dumps(state.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        tmp_path = self.system_state_path.with_name(f".{self.system_state_path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(json.dumps(state.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp_path.replace(self.system_state_path)
 
     def active_stage(self) -> SystemStage | None:
         return self.read_state().active_stage()

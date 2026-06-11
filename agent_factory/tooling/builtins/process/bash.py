@@ -12,6 +12,7 @@ from agent_factory.tooling.builtins.process.manager import (
     wait_seconds,
 )
 from agent_factory.tooling.spec import ToolRiskResult
+from agent_factory.tooling.envelope import tool_envelope
 
 
 HIGH_RISK_COMMANDS = {"rm", "dd", "mkfs", "sudo", "chmod", "chown", "curl", "wget", "scp", "ssh"}
@@ -66,13 +67,13 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise FileNotFoundError(str(cwd))
     if not cwd.is_dir():
         raise NotADirectoryError(str(cwd))
-    return PROCESS_MANAGER.start(
+    return tool_envelope(PROCESS_MANAGER.start(
         command=command,
         cwd=cwd,
         mode=mode,
         wait_seconds=wait_seconds(arguments),
         max_output_chars=output_limit(arguments),
-    )
+    ))
 
 
 def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRiskResult:

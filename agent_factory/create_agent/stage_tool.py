@@ -7,6 +7,7 @@ from agent_factory.create_agent.control_tool import CREATE_AGENT_WORKSPACE_RESOU
 from agent_factory.create_agent.models import SystemManufacturingState, SystemStageStatus
 from agent_factory.create_agent.stage_context import CreateAgentStageContext
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
 
 
@@ -44,9 +45,11 @@ def build_create_agent_stage_tool_spec() -> ToolSpec:
                 "message": {"type": "string"},
                 "state": {"type": "object", "additionalProperties": True},
                 "active_focus": {"type": ["object", "null"], "additionalProperties": True},
+                "latest_validation": {"type": ["object", "null"], "additionalProperties": True},
                 "updated_at": {"type": "string"},
+                "warnings": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
             },
-            "required": ["action", "message", "state", "active_focus", "updated_at"],
+            "required": ["action", "message", "state", "active_focus", "latest_validation", "updated_at", "warnings"],
             "additionalProperties": False,
         },
         resources={"workspace": CREATE_AGENT_WORKSPACE_RESOURCE},
@@ -57,22 +60,23 @@ def build_create_agent_stage_tool_spec() -> ToolSpec:
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    workspace = _workspace(resources)
     context = _stage_context(resources)
     state = context.read_state()
     action = str(arguments.get("action") or "").strip()
     if action == "inspect":
-        return _output(action=action, message="Current create-agent manufacturing focus state.", state=state)
+        return tool_envelope(_output(action=action, message="Current create-agent manufacturing focus state.", state=state, workspace=workspace))
     if action == "set_focus":
         focus_id = _requested_focus_id(arguments)
         _reason(arguments)
         state = state.set_focus(focus_id)
         context.write_state(state)
-        return _output(action=action, message=f"Active manufacturing focus set to: {focus_id}", state=state)
+        return tool_envelope(_output(action=action, message=f"Active manufacturing focus set to: {focus_id}", state=state, workspace=workspace))
     if action == "mark_waiting_user":
         stage = _active_stage(state)
         state = state.update_stage(stage.model_copy(update={"status": SystemStageStatus.blocked_waiting_user}))
         context.write_state(state)
-        return _output(action=action, message=f"Focus waiting for user input: {stage.system_id}", state=state)
+        return tool_envelope(_output(action=action, message=f"Focus waiting for user input: {stage.system_id}", state=state, workspace=workspace))
     raise ValueError("action must be one of: inspect, set_focus, mark_waiting_user")
 
 
@@ -152,12 +156,78 @@ def _known_stage(state: SystemManufacturingState, focus_id: str):
     raise ValueError(f"unknown focus_id: {focus_id}")
 
 
-def _output(*, action: str, message: str, state: SystemManufacturingState) -> dict[str, Any]:
+def _output(*, action: str, message: str, state: SystemManufacturingState, workspace: CreateAgentWorkspace) -> dict[str, Any]:
     active = state.active_stage()
     return {
         "action": action,
         "message": message,
         "state": state.working_set(),
         "active_focus": active.to_digest() if active else None,
+        "latest_validation": _latest_validation_digest(workspace=workspace, state=state),
         "updated_at": datetime.now(UTC).isoformat(),
+        "warnings": _stage_warnings(workspace=workspace, state=state),
     }
+
+
+def _latest_validation_digest(*, workspace: CreateAgentWorkspace, state: SystemManufacturingState) -> dict[str, Any] | None:
+    try:
+        validation = workspace.read_validation()
+    except Exception as exc:
+        return {
+            "readable": False,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    active = state.active_stage()
+    if validation is None:
+        return None
+    digest = validation.to_digest().model_dump(mode="json")
+    expected_scope = active.validation_focus if active else ""
+    digest["active_focus_id"] = active.system_id if active else ""
+    digest["expected_validation_focus"] = expected_scope
+    digest["covers_active_focus"] = validation.validation_scope in {expected_scope, "full_static"}
+    digest["use_this_instead_of_private_validation_file"] = True
+    return digest
+
+
+def _stage_warnings(*, workspace: CreateAgentWorkspace, state: SystemManufacturingState) -> list[dict[str, Any]]:
+    try:
+        validation = workspace.read_validation()
+    except Exception as exc:
+        return [
+            {
+                "kind": "validation_evidence_unreadable",
+                "message": f"Latest validation evidence could not be read: {type(exc).__name__}: {exc}",
+                "latest_validation_scope": "",
+                "latest_validation_status": "unreadable",
+                "active_focus_id": state.active_focus_id,
+            }
+        ]
+    active = state.active_stage()
+    if validation is None or active is None:
+        return []
+    warnings: list[dict[str, Any]] = []
+    if validation.status != "passed":
+        warnings.append(
+            {
+                "kind": "validation_not_passed_for_current_focus",
+                "message": "Latest validation is not passed; focus changes are advisory and should be reconciled with validator evidence.",
+                "latest_validation_scope": validation.validation_scope,
+                "latest_validation_status": validation.status,
+                "active_focus_id": active.system_id,
+            }
+        )
+    expected_scope = active.validation_focus
+    covered = validation.validation_scope in {expected_scope, "full_static"}
+    if validation.status == "passed" and not covered:
+        warnings.append(
+            {
+                "kind": "validation_scope_does_not_cover_current_focus",
+                "message": "Latest validation passed, but it did not validate the active focus scope.",
+                "latest_validation_scope": validation.validation_scope,
+                "expected_validation_focus": expected_scope,
+                "latest_validation_status": validation.status,
+                "active_focus_id": active.system_id,
+            }
+        )
+    return warnings

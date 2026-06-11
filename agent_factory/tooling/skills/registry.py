@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Any
@@ -45,12 +46,18 @@ class SkillRegistry:
 
     def describe(self, name: str, *, current_system: str) -> dict[str, Any]:
         skill = self.get(name)
-        self.gateway_state.system_state(_require_system(current_system)).mark_described(name)
+        system_state = self.gateway_state.system_state(_require_system(current_system))
+        system_state.mark_described(name)
         return {
             "metadata": skill.metadata.model_dump(mode="json"),
             "resources": [item.model_dump(mode="json") for item in skill.resources],
             "scripts": [item.model_dump(mode="json") for item in skill.scripts],
             "loaded_content": False,
+            "already_read_resources": [
+                item.model_dump(mode="json")
+                for item in system_state.read_resources
+                if item.name == name
+            ],
         }
 
     def search(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -138,7 +145,7 @@ class SkillRegistry:
         pointer: str = "",
     ) -> dict[str, Any]:
         skill = self.get(name)
-        _require_system(current_system)
+        system_state = self.gateway_state.system_state(_require_system(current_system))
         resource = next((item for item in skill.resources if item.path == path), None)
         if resource is None:
             raise KeyError(f"unknown skill resource: {name}/{path}")
@@ -159,13 +166,32 @@ class SkillRegistry:
             "mode": mode,
             "pointer": pointer,
         }
+        previous_read = system_state.resource_read_record(name, resource.path, mode=mode, pointer=pointer)
         if not resource.readable:
             payload["message"] = "Resource is not text-readable; returning metadata only."
+            payload["already_read"] = previous_read is not None
+            payload["read_record"] = system_state.mark_resource_read(
+                name,
+                resource.path,
+                mode=mode,
+                pointer=pointer,
+                digest="",
+            ).model_dump(mode="json")
             return payload
         content = target.read_text(encoding="utf-8")
+        digest = sha256(content.encode("utf-8")).hexdigest()
         if mode == "outline":
             payload["outline"] = _resource_outline(resource.path, content)
-            return payload
+            return _with_read_record(
+                payload,
+                system_state=system_state,
+                name=name,
+                path=resource.path,
+                mode=mode,
+                pointer=pointer,
+                digest=digest,
+                already_read=previous_read is not None,
+            )
         if mode == "fragment":
             try:
                 fragment = _json_pointer_fragment(content, pointer)
@@ -176,7 +202,16 @@ class SkillRegistry:
                     available_keys=_json_top_level_keys(content),
                 ) from exc
             payload["fragment"] = fragment
-            return payload
+            return _with_read_record(
+                payload,
+                system_state=system_state,
+                name=name,
+                path=resource.path,
+                mode=mode,
+                pointer=pointer,
+                digest=digest,
+                already_read=previous_read is not None,
+            )
         if mode != "content":
             raise ValueError("resource read mode must be one of: outline, fragment, content")
         if len(content) > MAX_RESOURCE_READ_CHARS:
@@ -184,7 +219,16 @@ class SkillRegistry:
             payload["truncated"] = True
         else:
             payload["content"] = content
-        return payload
+        return _with_read_record(
+            payload,
+            system_state=system_state,
+            name=name,
+            path=resource.path,
+            mode=mode,
+            pointer=pointer,
+            digest=digest,
+            already_read=previous_read is not None,
+        )
 
     def to_resource_payload(self) -> dict[str, Any]:
         return {
@@ -351,3 +395,28 @@ def _json_top_level_keys(content: str) -> list[str]:
     if isinstance(payload, list):
         return [str(index) for index in range(min(len(payload), 20))]
     return []
+
+
+def _with_read_record(
+    payload: dict[str, Any],
+    *,
+    system_state: Any,
+    name: str,
+    path: str,
+    mode: str,
+    pointer: str,
+    digest: str,
+    already_read: bool,
+) -> dict[str, Any]:
+    payload["already_read"] = already_read
+    payload["digest"] = digest
+    payload["read_record"] = system_state.mark_resource_read(
+        name,
+        path,
+        mode=mode,
+        pointer=pointer,
+        digest=digest,
+    ).model_dump(mode="json")
+    if already_read:
+        payload["message"] = "This resource was already read for the same current_system, mode, and pointer."
+    return payload

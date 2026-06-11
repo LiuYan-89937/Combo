@@ -12,7 +12,19 @@ from agent_factory.create_agent.control_tool import (
     CREATE_AGENT_WORKSPACE_RESOURCE,
     build_create_agent_control_tool_spec,
 )
-from agent_factory.create_agent.models import ACTION_FILE, SKILL_GATEWAY_STATE_FILE, SYSTEM_STATE_FILE, VALIDATION_FILE, VALIDATION_STATE_FILE
+from agent_factory.create_agent.models import (
+    ACTION_FILE,
+    PUBLISH_FILE,
+    SKILL_GATEWAY_STATE_FILE,
+    SYSTEM_STATE_FILE,
+    VALIDATION_FILE,
+    VALIDATION_STATE_FILE,
+)
+from agent_factory.create_agent.publish_tool import (
+    CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE,
+    CREATE_AGENT_PUBLISH_TOOL_ID,
+    build_create_agent_publish_tool_spec,
+)
 from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
@@ -23,6 +35,7 @@ from agent_factory.tooling.factory_extensions import FactoryExtensionLoadReport,
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import BuiltinToolProvider, ToolProviderContext, ToolProviderResult
 from agent_factory.tooling.registry import ToolRegistry
+from agent_factory.paths import factory_artifact_path
 from agent_factory.tooling.skills import (
     SKILL_TOOL_ID,
     SkillRegistry,
@@ -98,6 +111,7 @@ class CreateAgentToolEnvironmentBuilder:
         }
         if mode == "manufacture":
             runtime_resources[RESOURCE_SET_STORE_KEY] = ResourceSetStore()
+            runtime_resources[CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE] = str(factory_artifact_path("packages"))
         filesystem_resource = runtime_resources.get("filesystem")
         if isinstance(filesystem_resource, dict) and mode == "manufacture":
             filesystem_resource[CREATE_AGENT_STAGE_CONTEXT_RESOURCE] = runtime_resources[CREATE_AGENT_STAGE_CONTEXT_RESOURCE]
@@ -106,6 +120,7 @@ class CreateAgentToolEnvironmentBuilder:
                 SYSTEM_STATE_FILE,
                 VALIDATION_FILE,
                 VALIDATION_STATE_FILE,
+                PUBLISH_FILE,
                 SKILL_GATEWAY_STATE_FILE,
                 ".factory/manufacturing_trace.json",
                 ".factory/tool_outputs",
@@ -145,23 +160,28 @@ class CreateAgentToolEnvironmentBuilder:
                         *provider_result.system_tool_ids,
                         CREATE_AGENT_CONTROL_TOOL_ID,
                         CREATE_AGENT_STAGE_TOOL_ID,
+                        CREATE_AGENT_PUBLISH_TOOL_ID,
                     ]
                 )
             )
             extra_specs = [
                 build_create_agent_control_tool_spec(),
                 build_create_agent_stage_tool_spec(),
+                build_create_agent_publish_tool_spec(),
                 *skill_specs,
             ]
         else:
             extra_specs = []
-        specs = _unique_specs(
-            provider_result,
-            extra_specs=extra_specs,
+        specs = _stable_specs(
+            _unique_specs(
+                provider_result,
+                extra_specs=extra_specs,
+            )
         )
+        extension_specs = _stable_specs(extension_result.tool_specs) if mode == "manufacture" else []
         capability_inventory = build_capability_inventory(
             manufacturing_specs=specs,
-            extension_specs=extension_result.tool_specs if mode == "manufacture" else [],
+            extension_specs=extension_specs,
         )
         registry = ToolRegistry(specs)
         compiler = ToolCompiler(
@@ -170,7 +190,7 @@ class CreateAgentToolEnvironmentBuilder:
             allowed_python_roots=[extension_root],
             mcp_clients=self.extension_manager.mcp_tool_clients() if mode == "manufacture" else {},
         )
-        tools = compiler.compile_many(registry.all())
+        tools = _stable_tools(compiler.compile_many(registry.all()))
         return CreateAgentToolEnvironment(
             tools=tools,
             tool_ids=[tool.name for tool in tools],
@@ -179,6 +199,14 @@ class CreateAgentToolEnvironmentBuilder:
             capability_inventory=capability_inventory.model_dump(mode="json"),
             resource_set_store=runtime_resources.get(RESOURCE_SET_STORE_KEY),
         )
+
+
+def _stable_specs(specs: list[Any]) -> list[Any]:
+    return sorted(specs, key=lambda spec: str(spec.id))
+
+
+def _stable_tools(tools: list[BaseTool]) -> list[BaseTool]:
+    return sorted(tools, key=lambda tool: str(tool.name))
 
 
 def _unique_specs(result: ToolProviderResult, *, extra_specs=()):

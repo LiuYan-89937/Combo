@@ -7,7 +7,10 @@ from typing import Any
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.create_agent.capability_inventory import render_capability_inventory
+from agent_factory.create_agent.capability_inventory import (
+    render_dynamic_capability_context,
+    render_static_capability_inventory,
+)
 from agent_factory.create_agent.prompt_context import project_messages_for_prompt
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.builtins.resource_set.resource_set import ResourceSetStore
@@ -21,15 +24,25 @@ def build_create_agent_messages(
     capability_inventory: dict[str, Any] | None = None,
 ) -> list[BaseMessage]:
     workspace = CreateAgentWorkspace(str(state["workspace_path"]), resource_set_store=resource_set_store)
-    system = SystemMessage(
-        content=_system_prompt_text(
-            state=state,
+    invariant_system = SystemMessage(content=_invariant_system_prompt_text())
+    environment_system = SystemMessage(
+        content=_stable_environment_prompt_text(
             tools=tools,
-            workspace=workspace,
             capability_inventory=capability_inventory or {},
         )
     )
-    return [system, *project_messages_for_prompt(list(state.get("messages") or []), workspace=workspace)]
+    dynamic_system = SystemMessage(
+        content=_dynamic_system_context_text(
+            state=state,
+            workspace=workspace,
+        )
+    )
+    return [
+        invariant_system,
+        environment_system,
+        dynamic_system,
+        *project_messages_for_prompt(list(state.get("messages") or []), workspace=workspace),
+    ]
 
 
 def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any, stage_progress: dict[str, Any] | None = None) -> str:
@@ -63,8 +76,8 @@ def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any, s
         "Package validation is not complete. Continue the ReAct loop from the active focus.\n"
         "Use create_agent_stage(action='inspect') for focus state. Validator evidence may suggest a focus, "
         "but only your explicit create_agent_stage(action='set_focus', focus_id=..., reason=...) call changes it. "
-        "Full validation details are stored in .factory/validation.json; load only the recommended skill resources needed for the next repair.\n\n"
-        f"{workspace.context_summary()}\n\n"
+        "Use create_agent_stage(action='inspect') to read the latest validation digest; do not read .factory/validation.json directly. "
+        "Load only the recommended skill resources needed for the next repair.\n\n"
         f"Validation digest: {digest.status} | scope={digest.validation_scope} | {digest.summary}\n"
         + (
             "Stage progress: "
@@ -78,14 +91,7 @@ def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any, s
     )
 
 
-def _system_prompt_text(
-    *,
-    state: Mapping[str, Any],
-    tools: list[BaseTool],
-    workspace: CreateAgentWorkspace,
-    capability_inventory: dict[str, Any],
-) -> str:
-    repair_context = str(state.get("repair_context") or "").strip()
+def _invariant_system_prompt_text() -> str:
     sections = [
         "你是 FastAgentFactory 的 create-agent 文件制造 ReAct agent。",
         "你不运行 RuntimeKernel SystemPackage 制造流程；你的职责是在工作区直接制造一个 RuntimeKernel AgentPackage。",
@@ -105,7 +111,12 @@ def _system_prompt_text(
             "也不能直接向用户索要该能力的账号、token 或配置。"
         ),
         "不要硬编码业务资源。用户提供的信息优先；公开信息可通过已绑定工具发现；secret 只能由用户提供。",
-        "最终出厂条件只有两个：当前 focus 是 validation_publish，并且 finalize 触发的 full validation passed。",
+        (
+            "最终出厂流程固定为：当前 focus 是 validation_publish；"
+            "调用 create_agent_control(action=finalize) 触发 full validation；"
+            "full validation passed 后系统会向用户做发布前确认。"
+            "如果用户要求调整，继续按自然语言修改；如果用户确认发布，调用 create_agent_publish。"
+        ),
         (
             "制造 skill 必须通过内置 skill gateway 渐进加载：先用 skill list/search/describe "
             "确定当前 focus 的候选 skill；候选 skill 不等于允许全部加载。"
@@ -119,6 +130,8 @@ def _system_prompt_text(
             "即使 validator 已给出 recommended_skill/recommended_resources，也必须先对同一个 current_system 调用 describe；"
             "不要直接 read_resource，不存在 read_source action。"
             "不要通过项目源码 inspect 或 shell 推断 schema。"
+            "若 validation issue 包含 schema_path、invalid_value_path、expected_shape、repair_template 或 replace_strategy，"
+            "必须优先按这些结构化字段修复，再对照 skill 的完整可执行示例。"
         ),
         (
             "通用 bash 不在 create-agent 默认工具集中。不要主动调用验证工具；"
@@ -132,7 +145,7 @@ def _system_prompt_text(
             "然后停止工具调用，让 graph 自动校验。"
         ),
         (
-            ".factory/system_state.json 只能通过 create_agent_stage 读取或更新；"
+            ".factory/system_state.json 和 .factory/validation.json 只能通过 create_agent_stage inspect 获取摘要，不要直接读写；"
             "如果通用 read 被拒绝，不要再次用 read 访问这个文件。"
         ),
         (
@@ -146,8 +159,32 @@ def _system_prompt_text(
             "tool_output 的 output_id 只能来自当前提示中列出的 output_ref 或 tool_output(action=list) 返回值；"
             "不要构造、猜测或复用看起来像 id 的字符串。"
         ),
-        f"Manufacturing tools bound to this ReAct loop only: {', '.join(tool.name for tool in tools) if tools else 'none'}",
-        render_capability_inventory(capability_inventory, package_root=workspace.root),
+    ]
+    return "\n\n".join(sections)
+
+
+def _stable_environment_prompt_text(
+    *,
+    tools: list[BaseTool],
+    capability_inventory: dict[str, Any],
+) -> str:
+    sections = [
+        "Stable create-agent manufacturing environment. This section should change only when configured tools or extension inventory changes.",
+        f"Manufacturing tools bound to this ReAct loop only: {', '.join(_stable_tool_names(tools)) or 'none'}",
+        render_static_capability_inventory(capability_inventory),
+    ]
+    return "\n\n".join(sections)
+
+
+def _dynamic_system_context_text(
+    *,
+    state: Mapping[str, Any],
+    workspace: CreateAgentWorkspace,
+) -> str:
+    repair_context = str(state.get("repair_context") or "").strip()
+    sections = [
+        "Dynamic create-agent manufacturing context. This section changes across turns and must not be treated as stable policy.",
+        render_dynamic_capability_context(package_root=workspace.root),
         workspace.context_summary(),
     ]
     if repair_context:
@@ -157,3 +194,7 @@ def _system_prompt_text(
             f"{repair_context}"
         )
     return "\n\n".join(sections)
+
+
+def _stable_tool_names(tools: list[BaseTool]) -> list[str]:
+    return sorted(str(tool.name) for tool in tools)

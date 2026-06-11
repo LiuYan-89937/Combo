@@ -9,6 +9,7 @@ from agent_factory.tooling.builtins.process.manager import (
     required_string,
 )
 from agent_factory.tooling.spec import ToolRiskResult
+from agent_factory.tooling.envelope import tool_envelope
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -26,8 +27,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     _ = resources
     process_id = required_string(arguments, "process_id")
     grace_seconds = bounded_int(arguments, "grace_seconds", default=2, minimum=0, maximum=300)
-    return PROCESS_MANAGER.stop(
+    return tool_envelope(PROCESS_MANAGER.stop(
         process_id=process_id,
         grace_seconds=grace_seconds,
         max_output_chars=output_limit(arguments),
-    )
+    ))

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
@@ -17,6 +17,7 @@ from agent_factory.create_agent.validation_progress import validation_event_from
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
+from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.builtins.resource_set.resource_set import ResourceSetStore
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
 
@@ -74,9 +75,15 @@ class CreateAgentWorkflow:
             resource_set_store=self.resource_set_store,
             capability_inventory=self.capability_inventory or {},
         )
-        response = model.bind_tools(self.tools, tool_choice="auto").invoke(messages) if self.tools else model.invoke(messages)
-        if not isinstance(response, BaseMessage):
-            response = AIMessage(content=str(response))
+        prompt_binding, chat_messages = _operation_prompt(messages)
+        result = ModelOperationService(role="main", model=model).tool_bound_chat(
+            state=state,
+            prompt_binding=prompt_binding,
+            messages=chat_messages,
+            tools=self.tools,
+            node_id="create_agent_supervisor",
+        )
+        response = result.ai_message if isinstance(result.ai_message, BaseMessage) else AIMessage(content=result.assistant_draft or "")
         validation_event = "assistant_stopped" if not bool(getattr(response, "tool_calls", None)) else "none"
         return {
             "messages": [response],
@@ -101,6 +108,16 @@ class CreateAgentWorkflow:
 
     def _validate(self, state: CreateAgentGraphState) -> dict[str, Any]:
         workspace = CreateAgentWorkspace(state["workspace_path"])
+        publish_report = workspace.read_publish_report()
+        if publish_report.get("status") == "available":
+            package_id = str(publish_report.get("package_id") or "").strip()
+            package_path = str(publish_report.get("package_path") or "").strip()
+            return {
+                "repair_context": "",
+                "done": True,
+                "final_answer": f"AgentPackage 已发布：{package_id} ({package_path})",
+                "validation_event": "none",
+            }
         action = workspace.read_action()
         if action.action == "ask_user":
             answer = interrupt(
@@ -138,13 +155,23 @@ class CreateAgentWorkflow:
         if force_full:
             workspace.write_action(CreateAgentAction())
         system_state = workspace.read_system_state()
-        done = report.status == "passed" and force_full and system_state.all_done()
-        if done:
+        if report.status == "passed" and force_full and system_state.all_done():
+            answer = interrupt(
+                {
+                    "type": "create_agent_publish_confirmation",
+                    "presentation": "assistant_dialogue",
+                    "resume_kind": "answer",
+                    "title": "发布前确认",
+                    "message": _publish_confirmation_text(workspace, report),
+                    "workspace_path": str(workspace.root),
+                    "validation": report.to_digest().model_dump(mode="json"),
+                }
+            )
             return {
+                "messages": [HumanMessage(content=_resume_text(answer))],
                 "validation": report.to_digest().model_dump(mode="json"),
                 "repair_context": "",
-                "done": True,
-                "final_answer": f"AgentPackage 制造完成并通过校验：{workspace.root}",
+                "done": False,
                 "validation_event": "none",
             }
         repair_context = validation_repair_context(workspace=workspace, report=report)
@@ -179,3 +206,20 @@ def _resume_text(value: Any) -> str:
                 return item.strip()
         return str(value)
     return str(value or "").strip()
+
+
+def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list[BaseMessage]]:
+    if messages and isinstance(messages[0], SystemMessage):
+        return {"template": str(messages[0].content or "")}, messages[1:]
+    return {}, messages
+
+
+def _publish_confirmation_text(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> str:
+    return (
+        "AgentPackage 已通过最终静态校验。\n\n"
+        f"- Workspace: {workspace.root}\n"
+        f"- Validation: {report.validation_scope} / {report.status}\n"
+        f"- Summary: {report.summary}\n\n"
+        "如果还需要调整，请直接用自然语言说明要改哪里；"
+        "如果确认发布，请直接回复确认发布。"
+    )

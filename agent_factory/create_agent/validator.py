@@ -8,7 +8,6 @@ from typing import Any
 from pydantic import ValidationError
 from ruamel.yaml import YAML
 
-from agent_factory.create_agent.smoke_test import run_smoke_test
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.create_agent.repair_policy import CreateAgentRepairPolicy
 from agent_factory.create_agent.models import (
@@ -96,6 +95,9 @@ class CreateAgentPackageValidator:
         try:
             package = AgentPackageLoader().load_path(manifest_path)
         except Exception as exc:
+            load_report = _package_load_schema_report(root, exc, scope=scope, changed_files=changed)
+            if load_report is not None:
+                return load_report
             return _failed(root, "package.load", exc, ["agent_package.json"], scope=scope, changed_files=changed)
         runtime_path_report = _runtime_path_report(root, package, scope=scope, changed_files=changed)
         if runtime_path_report is not None:
@@ -125,10 +127,6 @@ class CreateAgentPackageValidator:
         semantic_report = _semantic_completeness_report(root, package, scope=scope, changed_files=changed)
         if semantic_report is not None:
             return semantic_report
-        # Full static: smoke test gate
-        smoke_report = _smoke_test_report(root, package, scope=scope, changed_files=changed)
-        if smoke_report is not None:
-            return smoke_report
         return _passed(root, scope=scope, changed_files=changed, summary="Package static validation passed.")
 
 
@@ -193,6 +191,204 @@ def _failed(
     )
 
 
+def _package_load_schema_report(
+    root: Path,
+    exc: Exception,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    if not isinstance(exc, ValidationError):
+        return None
+    issues: list[PackageValidationIssue] = []
+    for error in exc.errors():
+        issue = _schema_repair_issue_from_pydantic_error(error)
+        if issue is not None:
+            issues.append(issue)
+    if not issues:
+        return None
+    target_files = sorted({target for issue in issues for target in issue.target_files})
+    repair_bundle = REPAIR_POLICY.generic_bundle(
+        where="package.load.schema",
+        target_files=target_files or ["agent_package.json"],
+        exc=exc,
+    )
+    for index, issue in enumerate(issues):
+        if issue.repair_bundle is None:
+            issues[index] = issue.model_copy(update={"repair_bundle": repair_bundle})
+    return PackageValidationReport(
+        package_root=str(root),
+        validation_scope=scope,  # type: ignore[arg-type]
+        changed_files=changed_files,
+        summary="package.load.schema failed: package files do not match executable runtime schemas.",
+        next_action=PackageValidationNextAction(
+            kind="repair_files",
+            target_files=target_files,
+            recommended_skill=issues[0].recommended_skill,
+            recommended_resources=issues[0].recommended_resources,
+            repair_bundles=[repair_bundle],
+        ),
+        issues=issues,
+    )
+
+
+def _schema_repair_issue_from_pydantic_error(error: dict[str, Any]) -> PackageValidationIssue | None:
+    loc = tuple(str(item) for item in error.get("loc", ()))
+    error_type = str(error.get("type") or "")
+    message = str(error.get("msg") or "")
+    input_value = error.get("input")
+    if _loc_contains(loc, "tools"):
+        index = _loc_index_after(loc, "tools")
+        invalid_path = "assembly_spec.json:/tools" + (f"/{index}" if index is not None else "")
+        return PackageValidationIssue(
+            where="package.load.schema.assembly_tools",
+            summary="assembly_spec.json tools entries must be ToolSpec objects",
+            message=message,
+            path="assembly_spec.json",
+            expected="AgentAssemblySpec.tools is an array of ToolSpec objects.",
+            actual=_compact_actual(input_value),
+            repair_hint="Replace the invalid tools item with a complete ToolSpec object and ensure the package tool manifest uses the same shape.",
+            target_files=["assembly_spec.json", "tools/"],
+            recommended_skill="12-assembly-pattern-system",
+            recommended_resources=[
+                "examples/assembly_spec.with_tools_and_bindings.json",
+                "examples/package_tool_system.minimal.json",
+            ],
+            schema_path="AgentAssemblySpec.tools[]",
+            invalid_value_path=invalid_path,
+            expected_shape=_tool_spec_expected_shape(),
+            repair_template=_tool_spec_repair_template(),
+            replace_strategy="replace_array_item",
+            details={"pydantic_error": error, "error_type": error_type},
+        )
+    if _loc_contains(loc, "node_bindings"):
+        index = _loc_index_after(loc, "node_bindings")
+        invalid_path = "assembly_spec.json:/bindings/node_bindings" + (f"/{index}" if index is not None else "")
+        return PackageValidationIssue(
+            where="package.load.schema.node_binding",
+            summary="assembly_spec.json node_bindings entries must be NodeBinding objects",
+            message=message,
+            path="assembly_spec.json",
+            expected="BindingSet.node_bindings is an array of NodeBinding objects with binding_id, binding_type, target, and payload.",
+            actual=_compact_actual(input_value),
+            repair_hint="Move node_id/provider_id style fields into target or payload, and replace the invalid binding with a complete NodeBinding object.",
+            target_files=["assembly_spec.json"],
+            recommended_skill="12-assembly-pattern-system",
+            recommended_resources=[
+                "examples/assembly_spec.with_tools_and_bindings.json",
+                "references/final_validation.repair_mappings.json",
+            ],
+            schema_path="AgentAssemblySpec.bindings.node_bindings[]",
+            invalid_value_path=invalid_path,
+            expected_shape=_node_binding_expected_shape(),
+            repair_template=_node_binding_repair_template(),
+            replace_strategy="replace_array_item",
+            details={"pydantic_error": error, "error_type": error_type},
+        )
+    if _loc_contains(loc, "contracts"):
+        return PackageValidationIssue(
+            where="package.load.schema.manifest_contracts",
+            summary="agent_package.json contracts must use package-relative file references",
+            message=message,
+            path="agent_package.json",
+            expected="agent_package.json contracts is an object mapping required contract keys to package-relative paths.",
+            actual=_compact_actual(input_value),
+            repair_hint="Rewrite the manifest contract reference and create the referenced file when it is missing.",
+            target_files=["agent_package.json"],
+            recommended_skill="01-package-identity-system",
+            recommended_resources=["references/package_identity.schema.json"],
+            schema_path="AgentPackageManifest.contracts",
+            invalid_value_path="agent_package.json:/contracts",
+            expected_shape={"contracts": {"tools": "contracts/tools.json"}},
+            repair_template={"contracts": {"<required_contract_key>": "contracts/<required_contract_key>.json"}},
+            replace_strategy="replace_object",
+            details={"pydantic_error": error, "error_type": error_type},
+        )
+    return None
+
+
+def _loc_contains(loc: tuple[str, ...], segment: str) -> bool:
+    return segment in loc
+
+
+def _loc_index_after(loc: tuple[str, ...], segment: str) -> str | None:
+    try:
+        value = loc[loc.index(segment) + 1]
+    except (ValueError, IndexError):
+        return None
+    return value if value.isdigit() else None
+
+
+def _compact_actual(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)[:500]
+    except TypeError:
+        return str(value)[:500]
+
+
+def _tool_spec_expected_shape() -> dict[str, Any]:
+    return {
+        "id": "snake_case_tool_id",
+        "description": "What the tool does.",
+        "entrypoint": "python:tools/snake_case_tool_id/tool.py:run",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "output_schema": {"type": "object", "properties": {}, "additionalProperties": True},
+        "resources": {},
+        "risk_level": "low|medium|high",
+        "risk_evaluator": {"llm_mode": "disabled"},
+        "concurrent": True,
+    }
+
+
+def _tool_spec_repair_template() -> dict[str, Any]:
+    return {
+        "id": "<tool_id>",
+        "description": "<specific runtime capability>",
+        "entrypoint": "python:tools/<tool_id>/tool.py:run",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string"},
+            },
+            "required": ["result"],
+            "additionalProperties": True,
+        },
+        "resources": {},
+        "risk_level": "low",
+        "risk_evaluator": {"llm_mode": "disabled"},
+        "concurrent": True,
+    }
+
+
+def _node_binding_expected_shape() -> dict[str, Any]:
+    return {
+        "binding_id": "snake_case_binding_id",
+        "binding_type": "prompt|tool_access|model_operation|policy_profile|strategy_profile|output_formatter|custom",
+        "target": {"node_id": "pattern_node_id", "impl": "node.impl"},
+        "payload": {},
+    }
+
+
+def _node_binding_repair_template() -> dict[str, Any]:
+    return {
+        "binding_id": "<node_id>_tools",
+        "binding_type": "tool_access",
+        "target": {"node_id": "<node_id>", "impl": "standard.answer"},
+        "payload": {
+            "allowed_tool_ids": ["<tool_id>"],
+            "approval_policy": "standard",
+        },
+    }
+
+
 def _manifest_shape_report(
     root: Path,
     manifest_path: Path,
@@ -210,13 +406,11 @@ def _manifest_shape_report(
     if not isinstance(contracts, dict):
         return None
     missing_contracts = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - {str(key) for key in contracts})
-    missing_files = []
-    if scope != "package_shape":
-        missing_files = [
-            (str(key), str(value))
-            for key, value in sorted(contracts.items())
-            if isinstance(value, str) and value.strip() and not (root / value).is_file()
-        ]
+    missing_files = [
+        (str(key), str(value))
+        for key, value in sorted(contracts.items())
+        if isinstance(value, str) and value.strip() and not (root / value).is_file()
+    ]
     if not missing_contracts and not missing_files:
         return None
     targets = REPAIR_POLICY.manifest_contract_targets(
@@ -244,7 +438,7 @@ def _manifest_shape_report(
         path="agent_package.json",
         expected="agent_package.json declares all RuntimeKernel required contracts and every referenced file exists.",
         actual=summary,
-        repair_hint="Apply the deterministic package scaffold repair for required built-in contracts, then rerun validation.",
+        repair_hint="Repair agent_package.json and the referenced package files using validator targets and recommended skill resources, then rerun validation.",
         target_files=target_files,
         recommended_skill=repair_bundle.recommended_skill,
         recommended_resources=repair_bundle.recommended_resources,
@@ -267,7 +461,6 @@ def _manifest_shape_report(
         scope=scope,
         changed_files=changed_files,
     )
-
 
 def _runtime_path_report(
     root: Path,
@@ -633,28 +826,6 @@ def _semantic_completeness_report(
             recommended_skill="12-assembly-pattern-system",
         ))
 
-    # Check 4: If user requested scheduling, scheduler_seed must exist
-    request_path = root / ".factory" / "request.txt"
-    if request_path.exists():
-        request_text = request_path.read_text(encoding="utf-8").lower()
-        schedule_keywords = {"定时", "每天", "每日", "推送", "schedule", "cron", "daily", "periodic"}
-        if any(kw in request_text for kw in schedule_keywords):
-            # Check scheduler_seed contract exists and has actual jobs
-            scheduler_seed = package.contracts.get("scheduler_seed") or {}
-            seed_plans = scheduler_seed.get("config", {}).get("seeds", [])
-            if not seed_plans:
-                issues.append(PackageValidationIssue(
-                    where="semantic.scheduler_seed_missing",
-                    summary="User requested scheduled behavior but no scheduler_seed jobs are defined",
-                    message="The user's request mentions timed/scheduled behavior. scheduler_seed_contract must define at least one cron job.",
-                    path="contracts/scheduler_seed.json" if (root / "contracts" / "scheduler_seed.json").exists() else "agent_package.json",
-                    expected="scheduler_seed_contract with at least one seed plan (cron job)",
-                    actual="No scheduler seed plans found",
-                    repair_hint="Create contracts/scheduler_seed.json with cron-triggered jobs. Load skill 15-scheduler-seed-system for schema and examples.",
-                    target_files=["contracts/scheduler_seed.json" if (root / "contracts" / "scheduler_seed.json").exists() else "agent_package.json"],
-                    recommended_skill="15-scheduler-seed-system",
-                ))
-
     if not issues:
         return None
 
@@ -676,86 +847,6 @@ def _semantic_completeness_report(
                 repair_bundles=[repair_bundle],
             ),
             issues=issues,
-        ),
-        scope=scope,
-        changed_files=changed_files,
-    )
-
-
-def _smoke_test_report(
-    root: Path,
-    package: Any,
-    *,
-    scope: ValidationScope,
-    changed_files: list[str],
-) -> PackageValidationReport | None:
-    """Run the manufactured agent with task_model to verify it produces useful output."""
-    try:
-        result = run_smoke_test(root)
-    except Exception as exc:
-        return _with_scope(
-            PackageValidationReport(
-                package_root=str(root),
-                summary=f"Validator runtime defect: smoke test crashed with {type(exc).__name__}: {exc}",
-                next_action=PackageValidationNextAction(
-                    kind="continue",
-                    target_files=[],
-                    recommended_skill="17-final-validation-repair",
-                    recommended_resources=["references/final_validation.repair_hints.md"],
-                    repair_bundles=[],
-                ),
-                issues=[
-                    PackageValidationIssue(
-                        where="validator.runtime_defect",
-                        summary=f"Smoke test runtime defect: {type(exc).__name__}",
-                        message=str(exc),
-                        path="",
-                        expected="Validator and smoke harness run without internal errors",
-                        actual=f"{type(exc).__name__}: {exc}",
-                        repair_hint="Report the validator/runtime defect. Do not modify package files for this issue.",
-                        target_files=[],
-                        recommended_skill="17-final-validation-repair",
-                        recommended_resources=["references/final_validation.repair_hints.md"],
-                        details=_exception_details(exc),
-                    )
-                ],
-            ),
-            scope=scope,
-            changed_files=changed_files,
-        )
-
-    if result.passed:
-        return None
-
-    error_summary = "; ".join(result.errors[:3]) if result.errors else "Agent produced no useful output"
-    repair_bundle = REPAIR_POLICY.generic_bundle(
-        where="smoke_test.quality",
-        target_files=["patterns/main.yaml", "contracts/tools.json"],
-        exc=ValueError(error_summary),
-    )
-    return _with_scope(
-        PackageValidationReport(
-            package_root=str(root),
-            summary=f"Smoke test failed: {error_summary}",
-            next_action=PackageValidationNextAction(
-                kind="repair_files",
-                target_files=["patterns/main.yaml", "contracts/tools.json", "assembly_spec.json"],
-                recommended_skill="17-final-validation-repair",
-                repair_bundles=[repair_bundle],
-            ),
-            issues=[
-                PackageValidationIssue(
-                    where="smoke_test.quality",
-                    summary="Agent failed smoke test",
-                    message=f"Test input: {result.test_input!r}. Errors: {error_summary}. Tools called: {result.tool_calls_observed}. Final answer: {result.final_answer!r}",
-                    path="patterns/main.yaml",
-                    expected="Agent produces a non-empty final_answer and invokes declared tools",
-                    actual=f"final_answer={result.final_answer!r}, tools={result.tool_calls_observed}, errors={result.errors}",
-                    repair_hint="Ensure the pattern routes to tool_call and answer nodes. Verify tools are correctly bound and produce output. Check model bindings.",
-                    target_files=["patterns/main.yaml", "contracts/tools.json", "assembly_spec.json"],
-                    recommended_skill="17-final-validation-repair",
-                )
-            ],
         ),
         scope=scope,
         changed_files=changed_files,

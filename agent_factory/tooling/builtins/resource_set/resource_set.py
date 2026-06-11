@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.tooling.spec import ToolRiskResult
+from agent_factory.tooling.envelope import tool_envelope
 
 
 RESOURCE_SET_STORE_KEY = "resource_set_store"
@@ -51,35 +52,35 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if action == "add":
         paths = _paths_from_arguments(arguments)
         store.add_many(paths)
-        return {
+        return tool_envelope({
             "action": "add",
             "status": "completed",
             "added": paths,
             "total": store.size(),
             "message": f"Added {len(paths)} path(s) to resource set. Total: {store.size()}.",
-        }
+        })
 
     if action == "list":
         paths = store.list_paths()
-        return {
+        return tool_envelope({
             "action": "list",
             "status": "completed",
             "paths": paths,
             "total": store.size(),
             "message": f"Resource set contains {store.size()} path(s).",
-        }
+        })
 
     if action == "remove":
         paths = _paths_from_arguments(arguments)
         for path in paths:
             store.remove(path)
-        return {
+        return tool_envelope({
             "action": "remove",
             "status": "completed",
             "removed": paths,
             "total": store.size(),
             "message": f"Removed {len(paths)} path(s). Total: {store.size()}.",
-        }
+        })
 
     raise ValueError(f"action must be one of: add, list, remove (got: {action!r})")
 

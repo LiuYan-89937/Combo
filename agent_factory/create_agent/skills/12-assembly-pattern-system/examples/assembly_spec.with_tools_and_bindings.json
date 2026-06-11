@@ -26,12 +26,12 @@
           },
           "payload": {
             "prompt_id": "answer_prompt",
-            "template": "Answer the user with the package capabilities and available runtime context.",
+            "template": "Use the user's request, runtime context, and approved tools to produce a useful answer.",
             "variables": []
           }
         },
         {
-          "binding_id": "answer_tools",
+          "binding_id": "answer_tool_access",
           "binding_type": "tool_access",
           "target": {
             "node_id": "answer",
@@ -119,5 +119,11 @@
     },
     "harness": [],
     "metadata": {}
-  }
+  },
+  "binding_rules": [
+    "tools must be ToolSpec objects, not string ids",
+    "node_bindings items must contain binding_id, binding_type, target, and payload",
+    "node_id and impl belong under target",
+    "provider_id or other provider config belongs under payload/config when a custom binding needs it"
+  ]
 }

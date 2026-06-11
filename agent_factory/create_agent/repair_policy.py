@@ -17,7 +17,7 @@ class CreateAgentRepairPolicy:
     def manifest_missing_bundle(self) -> PackageRepairBundle:
         recommendation = self.recommendation("package.manifest", ["agent_package.json"])
         return PackageRepairBundle(
-            bundle_id="materialize_base_package",
+            bundle_id="repair_missing_manifest",
             kind="manifest_missing",
             repair_action="read_skill_resources",
             machine_applicable=False,
@@ -64,7 +64,7 @@ class CreateAgentRepairPolicy:
     ) -> PackageRepairBundle:
         bundle_kind = "missing_required_contracts" if missing_contracts else "missing_referenced_files"
         return PackageRepairBundle(
-            bundle_id="materialize_required_contracts",
+            bundle_id="repair_manifest_contract_references",
             kind=bundle_kind,
             repair_action="read_skill_resources",
             machine_applicable=False,

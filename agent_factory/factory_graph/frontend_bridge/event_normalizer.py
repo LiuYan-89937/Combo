@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import json
 from typing import Any, Callable
 import uuid
 
@@ -387,6 +388,7 @@ class RuntimeEventNormalizer:
                 "tool_call_proposed",
                 "tool_call_started",
                 "tool_call_completed",
+                "tool_contract_invalid",
                 "tool_call_failed",
                 "tool_observation_available",
             }:
@@ -684,7 +686,7 @@ class RuntimeEventNormalizer:
             tool_span_id = uuid.uuid4().hex
             payload = {"message": message}
             self.runtime_event(
-                "tool_call_completed",
+                _tool_message_event_type(message),
                 node_id=node_id,
                 stage_id=stage_id,
                 span_id=tool_span_id,
@@ -747,8 +749,27 @@ def _canonical_tool_event_type(event_type: str) -> str:
         "tool_proposed": "tool_call_proposed",
         "tool_started": "tool_call_started",
         "tool_completed": "tool_call_completed",
+        "tool_contract_invalid": "tool_contract_invalid",
         "tool_failed": "tool_call_failed",
     }.get(event_type, event_type)
+
+
+def _tool_message_event_type(message: dict[str, Any]) -> FactoryFrontendEventType:
+    content = message.get("content")
+    if isinstance(content, str):
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            payload = {}
+        if (
+            isinstance(payload, dict)
+            and payload.get("execution_status") == "completed"
+            and payload.get("contract_status") == "invalid"
+        ):
+            return "tool_contract_invalid"
+    if str(message.get("status") or "") == "error":
+        return "tool_call_failed"
+    return "tool_call_completed"
 
 
 def _patch_has_ai_message(patch: dict[str, Any]) -> bool:

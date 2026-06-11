@@ -13,6 +13,7 @@ SYSTEM_STATE_FILE = ".factory/system_state.json"
 ACTION_FILE = ".factory/action.json"
 VALIDATION_FILE = ".factory/validation.json"
 VALIDATION_STATE_FILE = ".factory/validation_state.json"
+PUBLISH_FILE = ".factory/publish.json"
 RESOURCES_FILE = ".factory/resources.json"
 SKILL_GATEWAY_STATE_FILE = ".factory/skill_gateway_state.json"
 TEXT_SUMMARY_LIMIT = 240
@@ -212,8 +213,6 @@ class PackageRepairBundle(BaseModel):
         "generic_repair",
     ]
     repair_action: Literal[
-        "materialize_base_package",
-        "materialize_required_contracts",
         "normalize_runtime_contract_paths",
         "read_skill_resources",
         "repair_files",
@@ -243,6 +242,11 @@ class PackageValidationIssue(BaseModel):
     recommended_skill: str = ""
     recommended_resources: list[str] = Field(default_factory=list)
     repair_bundle: PackageRepairBundle | None = None
+    schema_path: str = ""
+    invalid_value_path: str = ""
+    expected_shape: dict[str, Any] = Field(default_factory=dict)
+    repair_template: dict[str, Any] = Field(default_factory=dict)
+    replace_strategy: Literal["", "replace_object", "replace_array_item", "rewrite_file"] = ""
     details: dict[str, Any] = Field(default_factory=dict)
 
     def repair_issue_id(self) -> str:
@@ -256,6 +260,8 @@ class PackageValidationIssue(BaseModel):
                 "target_files": self.target_files,
                 "recommended_skill": self.recommended_skill,
                 "summary": self.summary,
+                "schema_path": self.schema_path,
+                "invalid_value_path": self.invalid_value_path,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -273,6 +279,11 @@ class PackageValidationIssue(BaseModel):
             target_files=self.target_files[:8],
             recommended_skill=self.recommended_skill,
             recommended_resources=self.recommended_resources[:8],
+            schema_path=self.schema_path,
+            invalid_value_path=self.invalid_value_path,
+            expected_shape=self.expected_shape,
+            repair_template=self.repair_template,
+            replace_strategy=self.replace_strategy,
         )
 
 
@@ -290,6 +301,11 @@ class ValidationIssueDigest(BaseModel):
     target_files: list[str] = Field(default_factory=list)
     recommended_skill: str = ""
     recommended_resources: list[str] = Field(default_factory=list)
+    schema_path: str = ""
+    invalid_value_path: str = ""
+    expected_shape: dict[str, Any] = Field(default_factory=dict)
+    repair_template: dict[str, Any] = Field(default_factory=dict)
+    replace_strategy: Literal["", "replace_object", "replace_array_item", "rewrite_file"] = ""
 
     def repair_issue_id(self) -> str:
         return f"repair_{self.issue_id}"
@@ -369,6 +385,7 @@ class PackageValidationState(BaseModel):
 
     version: Literal["package_validation_state.v0"] = "package_validation_state.v0"
     package_fingerprint: dict[str, str] = Field(default_factory=dict)
+    validation_scope: str = ""
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 

@@ -60,6 +60,7 @@ FactoryFrontendEventType = Literal[
     "tool_approval_resolved",
     "tool_call_started",
     "tool_call_completed",
+    "tool_contract_invalid",
     "tool_call_failed",
     "tool_observation_available",
     "memory_write_queued",

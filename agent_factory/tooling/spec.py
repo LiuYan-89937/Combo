@@ -16,6 +16,8 @@ ToolObservationStatus = Literal[
     "execution_failed",
     "completed",
 ]
+ToolExecutionStatus = Literal["completed", "failed"]
+ToolContractStatus = Literal["valid", "invalid"]
 
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
@@ -27,6 +29,7 @@ ToolEventType = Literal[
     "tool_approval_resolved",
     "tool_call_started",
     "tool_call_completed",
+    "tool_contract_invalid",
     "tool_call_failed",
     "tool_observation_available",
 ]
@@ -137,6 +140,9 @@ class ToolObservation(BaseModel):
     output_ref: dict[str, Any] | None = None
     output_summary: str | None = None
     output_truncated: bool = False
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    execution_status: ToolExecutionStatus = "failed"
+    contract_status: ToolContractStatus = "valid"
     errors: list[str] = Field(default_factory=list)
 
 
@@ -153,6 +159,9 @@ class ToolEventPayload(BaseModel):
     output_ref: dict[str, Any] | None = None
     output_summary: str | None = None
     output_truncated: bool = False
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    execution_status: str = ""
+    contract_status: str = ""
     observation: dict[str, Any] | None = None
     message: str = ""
 

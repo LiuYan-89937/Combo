@@ -11,6 +11,7 @@ from agent_factory.tooling.skills.skill_tool_protocol import (
     SKILL_TOOL_ID,
 )
 from agent_factory.tooling.skills.skill_tool_risk import evaluate_skill_tool_risk
+from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -39,7 +40,7 @@ def build_skill_tool_spec(
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    return SkillToolActionRunner(resources).run(arguments)
+    return tool_envelope(SkillToolActionRunner(resources).run(arguments))
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
