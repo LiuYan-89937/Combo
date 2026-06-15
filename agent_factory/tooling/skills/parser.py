@@ -97,7 +97,7 @@ def _discover_resources(root: Path) -> list[SkillResourceRef]:
 def _resource_sort_key(path: Path) -> tuple[int, str]:
     relative = path.as_posix()
     name = path.name
-    if "/examples/" in relative or relative.endswith(".minimal.json"):
+    if "/examples/" in relative or relative.endswith(".capability.json"):
         group = 0
     elif name.endswith(".repair_hints.md") or name.endswith(".common_errors.md") or name.endswith(".validator_scope.md"):
         group = 1

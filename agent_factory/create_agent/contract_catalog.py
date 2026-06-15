@@ -28,12 +28,14 @@ from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRA
 OPTIONAL_BASE_CONTRACTS = ("scheduler_seed",)
 
 
-def system_resources(system_id: str) -> tuple[str, str, str]:
-    return (
+def system_resources(system_id: str, *, include_example: bool = False) -> tuple[str, ...]:
+    resources = [
         f"references/{system_id}.schema.json",
-        f"examples/{system_id}.minimal.json",
         f"references/{system_id}.repair_hints.md",
-    )
+    ]
+    if include_example:
+        resources.insert(1, f"examples/{system_id}.capability.json")
+    return tuple(resources)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +170,7 @@ _CONTRACT_CATALOG = {
         "scheduler_seed",
         default_factory=default_scheduler_seed_contract,
         recommended_skill="15-scheduler-seed-system",
-        recommended_resources=system_resources("scheduler_seed_system"),
+        recommended_resources=system_resources("scheduler_seed_system", include_example=True),
     ),
     "session": _item(
         "session",

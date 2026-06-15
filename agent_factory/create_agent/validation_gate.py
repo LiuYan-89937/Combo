@@ -32,41 +32,54 @@ class CreateAgentValidationGate:
         changed_files = _changed_files(previous_state.package_fingerprint if previous_state else {}, current_fingerprint)
 
         active = workspace.read_system_state().active_stage()
+        active_focus_id = active.system_id if active else ""
         scope = _scope_for_focus(active.validation_focus if active else "", force_full=decision.force_full)
         if (
             not decision.force_full
             and previous_state is not None
             and previous_report is not None
             and not changed_files
+            and previous_state.active_focus_id == active_focus_id
             and _scope_covers(previous_state.validation_scope, scope)
         ):
-            return _cached_report(previous_report)
+            return _cached_report(previous_report, requested_scope=scope, active_focus_id=active_focus_id, workspace=workspace)
         report = self.validator.validate(workspace.root, scope=scope, changed_files=changed_files)
         workspace.write_validation_state(
             PackageValidationState(
                 package_fingerprint=current_fingerprint,
                 validation_scope=report.validation_scope,
+                active_focus_id=active_focus_id,
                 updated_at=datetime.now(UTC).isoformat(),
             )
         )
         return report
 
 
-def _cached_report(report: PackageValidationReport) -> PackageValidationReport:
+def _cached_report(
+    report: PackageValidationReport,
+    *,
+    requested_scope: str,
+    active_focus_id: str,
+    workspace: CreateAgentWorkspace,
+) -> PackageValidationReport:
+    next_action = PackageValidationNextAction(
+        kind="continue" if requested_scope != "full_static" else ("finalize_ready" if report.status == "passed" else "repair_files"),
+        target_files=_target_files(report),
+        recommended_skill=report.next_action.recommended_skill,
+        recommended_resources=report.next_action.recommended_resources,
+        repair_bundles=report.next_action.repair_bundles,
+    )
+    summary = report.summary or "No package-relevant changes since the previous validation."
+    if active_focus_id == "capability_implementation" and report.status == "passed":
+        summary = _capability_cached_summary(workspace)
     return report.model_copy(
         update={
-            "validation_scope": "unchanged",
+            "validation_scope": requested_scope,
             "changed_files": [],
             "cached": True,
             "skipped": True,
-            "summary": report.summary or "No package-relevant changes since the previous validation.",
-            "next_action": PackageValidationNextAction(
-                kind="finalize_ready" if report.status == "passed" else "repair_files",
-                target_files=_target_files(report),
-                recommended_skill=report.next_action.recommended_skill,
-                recommended_resources=report.next_action.recommended_resources,
-                repair_bundles=report.next_action.repair_bundles,
-            ),
+            "summary": summary,
+            "next_action": next_action,
         }
     )
 
@@ -78,10 +91,31 @@ def _target_files(report: PackageValidationReport) -> list[str]:
     return sorted(set(values))
 
 
+def _capability_cached_summary(workspace: CreateAgentWorkspace) -> str:
+    if _baseline_only_package(workspace.root):
+        return (
+            "Baseline empty AgentPackage is valid. Continue capability implementation from the user request: "
+            "read at most one relevant capability example, edit package capability files, then stop for validation."
+        )
+    return (
+        "Capability package files have not changed since the previous validation. Continue implementation or move focus based on "
+        "the requested behavior; do not audit scaffold files."
+    )
+
+
+def _baseline_only_package(root: Path) -> bool:
+    generated_dirs = ("tools", "nodes", "knowledge", "prompts", "patterns", "policies", "strategies", "formatters")
+    for relative in generated_dirs:
+        directory = root / relative
+        if directory.is_dir() and any(item.is_file() for item in directory.rglob("*")):
+            return False
+    return True
+
+
 def _scope_for_focus(validation_scope: str, *, force_full: bool) -> ValidationScope:
     if force_full:
         return "full_static"
-    if validation_scope in {"full_static", "assembly_compile", "package_shape", "python_syntax"}:
+    if validation_scope in {"full_static", "assembly_compile", "package_shape", "python_syntax", "runtime_contract_build"}:
         return validation_scope
     if validation_scope in {
         "runtime_contract_build_subset",

@@ -13,9 +13,9 @@ Guides render manifest and render contract updates for user-visible runtime expe
 
 ## Baseline Package Assumption
 - The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
-- Do not compare scaffolded files against schema or minimal examples just to prove they are valid. The validator owns schema correctness.
+- Do not compare scaffolded files against schema or capability examples just to prove they are valid. The validator owns schema correctness.
 - Treat focus files as suggested edit surfaces, not write locks. Edit cross-file references when one capability requires a coherent package change.
-- Use examples to learn the smallest complete shape for a capability you are adding or repairing, not as a checklist for unchanged scaffold files.
+- Use examples to learn the smallest complete shape for a capability you are adding or repairing, not as a checklist for baseline scaffold files.
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
@@ -30,13 +30,13 @@ Guides render manifest and render contract updates for user-visible runtime expe
 ## Manufacturing Protocol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
-3. If the requested capability does not affect this focus, leave these files unchanged and move to the next useful focus yourself.
+3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
 4. When adding a capability, update all required package surfaces in one coherent step, then stop tool calls so graph validation can run.
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Do not compare the default react_agent render_manifest.json with examples; the scaffold default is already valid.
-- If the package still uses default react_agent nodes, leave render files unchanged.
+- If the package still uses default react_agent nodes, leave render files as-is.
 - When new nodes are added, add only the corresponding render node specs and keep graph_id aligned with runtime pattern_id.
 
 ## Boundaries
@@ -51,12 +51,9 @@ Guides render manifest and render contract updates for user-visible runtime expe
 - Run final validation only from validation_publish after the package behavior is actually implemented.
 
 ## Resource Loading
-- Prefer examples when adding or repairing this capability.
+- Use a listed capability example when this skill provides one; otherwise rely on current package files and validator evidence.
 - Read repair hints or validator scope only when validation evidence points here.
 - Read schema only for a concrete validator failure path or when examples do not define the needed object shape.
-
-Examples:
-- `examples/render_event_system.minimal.json`
 
 Repair references:
 - `references/render_event_system.repair_hints.md`

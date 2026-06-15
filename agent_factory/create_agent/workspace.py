@@ -216,8 +216,7 @@ class CreateAgentWorkspace:
         ]
         if active:
             lines.append(f"- {active.system_id}: {active.status.value} | {active.title}")
-            lines.append(f"  focus_files={active.focus_files}")
-            lines.append(f"  suggested_skills={active.suggested_skills}")
+            lines.append(f"  target_files={active.focus_files}")
             lines.append(f"  validation_focus={active.validation_focus}")
             if active.focus_summary:
                 lines.append(f"  focus_summary={active.focus_summary}")

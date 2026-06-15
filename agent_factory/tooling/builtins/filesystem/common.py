@@ -132,6 +132,20 @@ def path_risk_result(
                 "filesystem_root": str(root),
             },
         ).model_dump(mode="json")
+    if not is_write_like:
+        read_block = _read_focus_block_reason(resolved, root=root, resources=tool_resources)
+        if read_block:
+            return ToolRiskResult(
+                action="deny",
+                risk_level="low",
+                reasons=[read_block],
+                facts={
+                    "path": path_value,
+                    "resolved_path": str(resolved),
+                    "filesystem_root": str(root),
+                    "required_next_action": "read active capability target files, write a capability increment, or stop for validation",
+                },
+            ).model_dump(mode="json")
     focus_facts = _focus_write_facts(resolved, root=root, resources=tool_resources) if is_write_like else {}
     sensitive = _is_sensitive_path(resolved)
     reasons = []
@@ -224,6 +238,25 @@ def _path_matches_focus_files(path: Path, *, root: Path, focus_files: list[Any])
         if path == resolved or resolved in path.parents:
             return True
     return False
+
+
+def _read_focus_block_reason(path: Path, *, root: Path, resources: dict[str, Any]) -> str:
+    stage_context = stage_context_from_resources(resources)
+    if stage_context is None:
+        return ""
+    active = stage_context.active_stage()
+    if active is None:
+        return ""
+    relative = _relative_path_text(path, root=root)
+    if relative != "contracts" and not relative.startswith("contracts/"):
+        return ""
+    focus_files = stage_context.active_focus_files()
+    if _path_matches_focus_files(path, root=root, focus_files=focus_files):
+        return ""
+    return (
+        f"contracts scaffold audit is not part of active focus {active.system_id!r}. "
+        "Baseline contracts are produced by scaffold and checked by validator."
+    )
 
 
 def _focus_write_facts(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any]:

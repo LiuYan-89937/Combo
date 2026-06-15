@@ -28,7 +28,6 @@ from agent_factory.runtime_contracts.builtins import (
 )
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 from agent_factory.runtime_kernel.node_providers.package import PackageNodeManifest
-from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
 from agent_factory.runtime_render import RenderManifest
 from agent_factory.tooling.spec import ToolSpec
 
@@ -55,6 +54,15 @@ RESOURCE_IDS = {
     "16-trace-artifact-system": "trace_artifact_system",
     "17-final-validation-repair": "final_validation",
 }
+CAPABILITY_EXAMPLE_SKILLS = frozenset(
+    {
+        "10-package-tool-system",
+        "11-node-provider-system",
+        "12-assembly-pattern-system",
+        "15-scheduler-seed-system",
+        "17-final-validation-repair",
+    }
+)
 SCAFFOLD_RUN_ID = "factory_run"
 SCAFFOLD_USER_INPUT = "Generated RuntimeKernel AgentPackage."
 STATIC_EXAMPLE_UPDATED_AT = "2026-01-01T00:00:00+00:00"
@@ -131,10 +139,9 @@ def main() -> None:
             },
         ),
         "12-assembly-pattern-system": _export(
-            title="Assembly spec and custom pattern",
+            title="Assembly spec capability increment",
             files={
-                "assembly_spec.json": (AgentAssemblySpec, scaffold["assembly_spec.json"]),
-                "patterns/<pattern_id>.yaml": (GraphPatternSpec, _pattern_example()),
+                "assembly_spec.json": (AgentAssemblySpec, _assembly_with_tool_binding_example()),
             },
         ),
         "13-render-event-system": _export(
@@ -150,7 +157,7 @@ def main() -> None:
         ),
         "15-scheduler-seed-system": _export(
             title="Scheduler seed contract",
-            files={"contracts/scheduler_seed.json": (type(default_scheduler_seed_contract()), default_scheduler_seed_contract())},
+            files={"contracts/scheduler_seed.json": (type(default_scheduler_seed_contract()), _scheduler_seed_capability_example())},
         ),
         "16-trace-artifact-system": _export(
             title="Trace and artifact contracts",
@@ -168,7 +175,11 @@ def main() -> None:
         system_id = RESOURCE_IDS[skill_name]
         skill_root = SKILLS_ROOT / skill_name
         _write_json(skill_root / "references" / f"{system_id}.schema.json", payload["schema"])
-        _write_json(skill_root / "examples" / f"{system_id}.minimal.json", payload["example"])
+        example_path = skill_root / "examples" / f"{system_id}.capability.json"
+        if skill_name in CAPABILITY_EXAMPLE_SKILLS:
+            _write_json(example_path, payload["example"])
+        elif example_path.exists():
+            example_path.unlink()
 
 
 def _export(*, title: str, files: dict[str, tuple[type[Any], Any]]) -> dict[str, Any]:
@@ -189,6 +200,44 @@ def _export(*, title: str, files: dict[str, tuple[type[Any], Any]]) -> dict[str,
         },
         "example": {path: _dump_example(example) for path, (_model, example) in files.items()},
     }
+
+
+def _scheduler_seed_capability_example() -> Any:
+    contract = default_scheduler_seed_contract()
+    config = type(contract.config).model_validate(
+        {
+            "seeds": [
+                {
+                    "seed_id": "daily_runtime_task",
+                    "title": "Daily runtime task",
+                    "human_schedule": "Every weekday at 09:00 Asia/Shanghai",
+                    "schedule_type": "cron",
+                    "schedule_expr": "0 9 * * 1-5",
+                    "timezone": "Asia/Shanghai",
+                    "target": {
+                        "target_type": "graph_run",
+                        "payload": {
+                            "message": "Run the scheduled agent task using the package's implemented runtime capability."
+                        },
+                    },
+                    "task_content": "Run the package's implemented scheduled task and produce the configured user-facing output.",
+                    "enabled_on_apply": True,
+                    "failure_policy": {"enabled": True, "max_consecutive_failures": 3, "action": "pause"},
+                    "feedback": {"enabled": True, "mode": "llm_summary"},
+                    "source_slot_id": "user_confirmed_schedule",
+                    "concurrency_policy": "skip",
+                    "max_concurrent_runs": 1,
+                    "timeout_seconds": 900,
+                    "unattended_policy": "deny_if_approval_required",
+                }
+            ]
+        }
+    )
+    return contract.model_copy(
+        update={
+            "config": config
+        }
+    )
 
 
 def _schema_for(model_or_type: type[Any], *, title: str) -> dict[str, Any]:
@@ -269,11 +318,11 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
             {
                 "type": "tools",
                 "version": "tools_contract.v0",
+                "enabled": True,
                 "config": {
                     "builtin_tools_enabled": True,
                     "builtin_tool_ids": [],
                     "package_tools_enabled": True,
-                    "package_tool_ids": ["package_action"],
                 },
             },
         ),
@@ -296,9 +345,9 @@ def _manufacturing_control_example() -> SystemManufacturingState:
 
 def _tool_spec_example() -> ToolSpec:
     return ToolSpec(
-        id="package_tool",
-        description="Package tool description.",
-        entrypoint="python:tools/package_tool/tool.py:run",
+        id="package_action",
+        description="Performs one package-defined runtime action.",
+        entrypoint="python:tools/package_action/tool.py:run",
         input_schema={"type": "object", "additionalProperties": True},
         output_schema={"type": "object", "additionalProperties": True},
     )
@@ -313,48 +362,66 @@ def _package_node_example() -> PackageNodeManifest:
     )
 
 
-def _assembly_example() -> AgentAssemblySpec:
-    return AgentAssemblySpec(
-        agent={"id": "generated_agent", "name": "Generated Agent"},
-        runtime={"pattern_id": "react_agent"},
+def _assembly_with_tool_binding_example() -> AgentAssemblySpec:
+    return AgentAssemblySpec.model_validate(
+        {
+            "schema_version": "0.1",
+            "agent": {
+                "id": "generated_agent",
+                "name": "Generated Agent",
+                "description": "Generated RuntimeKernel AgentPackage.",
+                "version": "0.1.0",
+            },
+            "runtime": {
+                "pattern_id": "react_agent",
+                "user_config": {},
+                "agent_config": {},
+            },
+            "bindings": {
+                "node_bindings": [
+                    {
+                        "binding_id": "answer_prompt",
+                        "binding_type": "prompt",
+                        "target": {"node_id": "answer", "impl": "standard.answer"},
+                        "payload": {
+                            "prompt_id": "answer_prompt",
+                            "template": "Use the user's request, runtime context, and approved tools to produce a useful answer.",
+                            "variables": [],
+                        },
+                    },
+                    {
+                        "binding_id": "answer_tool_access",
+                        "binding_type": "tool_access",
+                        "target": {"node_id": "answer", "impl": "standard.answer"},
+                        "payload": {
+                            "allowed_tool_ids": ["package_action"],
+                            "approval_policy": "standard",
+                        },
+                    },
+                    {
+                        "binding_id": "answer_model_operation",
+                        "binding_type": "model_operation",
+                        "target": {"node_id": "answer", "impl": "standard.answer"},
+                        "payload": {
+                            "operation": "tool_bound_chat",
+                            "model_role": "main",
+                            "output_schema": {
+                                "type": "object",
+                                "properties": {"answer": {"type": "string"}},
+                                "required": ["answer"],
+                                "additionalProperties": True,
+                            },
+                            "write_target": {"section": "context"},
+                            "max_attempts": 3,
+                            "prompt_id": "answer_prompt",
+                        },
+                    },
+                ],
+            },
+            "tools": [_tool_spec_example().model_dump(mode="json", exclude_none=True)],
+            "output": {"citations_required": False, "format": "text"},
+        }
     )
-
-
-def _pattern_example() -> GraphPatternSpec:
-    return GraphPatternSpec(
-        pattern_id="custom_pattern",
-        kind="main",
-        embeddable=False,
-        version=1,
-        name="Custom Pattern",
-        description="Custom package pattern.",
-        entry_node="ingress",
-        nodes=[
-            {"id": "ingress", "type": "reserved", "impl": "reserved.ingress"},
-            {"id": "finalize", "type": "reserved", "impl": "reserved.finalize"},
-        ],
-        edges=[{"from": "ingress", "to": "finalize", "when": "always"}],
-        termination={"success_nodes": ["finalize"], "failure_nodes": []},
-    )
-
-
-def _render_manifest_example() -> RenderManifest:
-    return RenderManifest(
-        graph_id="react_agent",
-        nodes={
-            "answer": {
-                "node_id": "answer",
-                "label": "Answer",
-                "kind": "cognitive",
-                "purpose": "Generate an answer.",
-                "doing": "Running the answer node.",
-                "expected_output": "Final response.",
-                "visible_to_user": True,
-            }
-        },
-    )
-
-
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

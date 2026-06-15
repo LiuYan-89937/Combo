@@ -684,9 +684,10 @@ class RuntimeEventNormalizer:
             if message.get("type") != "ToolMessage":
                 continue
             tool_span_id = uuid.uuid4().hex
-            payload = {"message": message}
+            event_type = _tool_message_event_type(message)
+            payload = {"message": _frontend_tool_message(message)}
             self.runtime_event(
-                _tool_message_event_type(message),
+                event_type,
                 node_id=node_id,
                 stage_id=stage_id,
                 span_id=tool_span_id,
@@ -770,6 +771,90 @@ def _tool_message_event_type(message: dict[str, Any]) -> FactoryFrontendEventTyp
     if str(message.get("status") or "") == "error":
         return "tool_call_failed"
     return "tool_call_completed"
+
+
+def _frontend_tool_message(message: dict[str, Any]) -> dict[str, Any]:
+    if str(message.get("name") or "") != "skill":
+        return message
+    content = message.get("content")
+    if not isinstance(content, str):
+        return message
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return message
+    if not isinstance(payload, dict):
+        return message
+    compacted = _compact_skill_observation(payload)
+    updated = dict(message)
+    updated["content"] = json.dumps(compacted, ensure_ascii=False, sort_keys=True)
+    updated["content_omitted"] = compacted is not payload
+    return updated
+
+
+def _compact_skill_observation(payload: dict[str, Any]) -> dict[str, Any]:
+    output = payload.get("output")
+    if not isinstance(output, dict):
+        return payload
+    resource = output.get("resource")
+    if not isinstance(resource, dict):
+        return payload
+    compact_resource = _compact_skill_resource(resource)
+    if isinstance(resource.get("resources"), list):
+        compact_resource["resources"] = [
+            _compact_skill_resource(item) if isinstance(item, dict) else item
+            for item in resource.get("resources", [])
+        ]
+    compact_output = dict(output)
+    compact_output["resource"] = compact_resource
+    compacted = dict(payload)
+    compacted["output"] = compact_output
+    compacted["message"] = _skill_resource_summary_message(compact_resource)
+    return compacted
+
+
+def _compact_skill_resource(resource: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        key: value
+        for key, value in resource.items()
+        if key
+        in {
+            "name",
+            "path",
+            "kind",
+            "purpose",
+            "media_type",
+            "size_bytes",
+            "readable",
+            "mode",
+            "pointer",
+            "already_read",
+            "digest",
+            "content_ref",
+            "schema_read_level",
+            "task_model_summary",
+            "outline",
+            "read_record",
+            "message",
+            "content_omitted",
+            "omission_reason",
+        }
+    }
+    if "fragment" in resource:
+        compact["fragment"] = resource["fragment"]
+    if resource.get("content") and not resource.get("task_model_summary"):
+        text = str(resource.get("content") or "")
+        compact["task_model_summary"] = {"preview": " ".join(text.split())[:500], "chars": len(text)}
+    compact["content"] = ""
+    compact["content_omitted"] = True
+    return compact
+
+
+def _skill_resource_summary_message(resource: dict[str, Any]) -> str:
+    path = str(resource.get("path") or "resource")
+    purpose = str(resource.get("purpose") or "resource")
+    digest = str(resource.get("digest") or "")[:12]
+    return f"Skill resource summarized: {path} ({purpose}, digest={digest})"
 
 
 def _patch_has_ai_message(patch: dict[str, Any]) -> bool:

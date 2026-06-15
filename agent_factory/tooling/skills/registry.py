@@ -9,6 +9,7 @@ from agent_factory.tooling.skills.schema import SkillGatewayState, SkillLoadResu
 
 
 MAX_RESOURCE_READ_CHARS = 12000
+MAX_INLINE_RESOURCE_CHARS = 6000
 SKILL_REGISTRY_VERSION = "skill_registry.v1"
 
 
@@ -112,29 +113,6 @@ class SkillRegistry:
             resource_contents={},
         )
 
-    def _read_all_resources(self, skill: SkillPackage) -> dict[str, str]:
-        """Read all readable resources inline during load."""
-        contents: dict[str, str] = {}
-        root = Path(skill.root).resolve()
-        for resource in skill.resources:
-            if not resource.readable:
-                continue
-            target = (root / resource.path).resolve()
-            try:
-                target.relative_to(root)
-            except ValueError:
-                continue
-            if not target.is_file():
-                continue
-            try:
-                text = target.read_text(encoding="utf-8")
-                if len(text) > MAX_RESOURCE_READ_CHARS:
-                    text = text[:MAX_RESOURCE_READ_CHARS] + f"\n... [truncated at {MAX_RESOURCE_READ_CHARS} chars]"
-                contents[resource.path] = text
-            except Exception:
-                continue
-        return contents
-
     def read_resource(
         self,
         name: str,
@@ -143,6 +121,7 @@ class SkillRegistry:
         current_system: str,
         mode: str = "outline",
         pointer: str = "",
+        reason: str = "",
     ) -> dict[str, Any]:
         skill = self.get(name)
         system_state = self.gateway_state.system_state(_require_system(current_system))
@@ -158,6 +137,7 @@ class SkillRegistry:
             "name": name,
             "path": resource.path,
             "kind": resource.kind,
+            "purpose": _resource_purpose(resource.path),
             "media_type": resource.media_type,
             "size_bytes": resource.size_bytes,
             "readable": resource.readable,
@@ -165,6 +145,7 @@ class SkillRegistry:
             "content": "",
             "mode": mode,
             "pointer": pointer,
+            "content_ref": f"skill://{name}/{resource.path}",
         }
         previous_read = system_state.resource_read_record(name, resource.path, mode=mode, pointer=pointer)
         if not resource.readable:
@@ -182,6 +163,7 @@ class SkillRegistry:
         digest = sha256(content.encode("utf-8")).hexdigest()
         if mode == "outline":
             payload["outline"] = _resource_outline(resource.path, content)
+            payload["task_model_summary"] = _task_model_summary(resource.path, content)
             return _with_read_record(
                 payload,
                 system_state=system_state,
@@ -202,6 +184,7 @@ class SkillRegistry:
                     available_keys=_json_top_level_keys(content),
                 ) from exc
             payload["fragment"] = fragment
+            payload["task_model_summary"] = _fragment_summary(resource.path, pointer, fragment)
             return _with_read_record(
                 payload,
                 system_state=system_state,
@@ -214,11 +197,27 @@ class SkillRegistry:
             )
         if mode != "content":
             raise ValueError("resource read mode must be one of: outline, fragment, content")
-        if len(content) > MAX_RESOURCE_READ_CHARS:
+        is_schema = _is_schema_resource(resource.path)
+        if is_schema and not reason.strip():
+            raise ValueError("full schema content requires reason; use mode=fragment for schema fields by default")
+        payload["schema_read_level"] = "full" if is_schema else ""
+        payload["read_reason"] = reason.strip()
+        payload["task_model_summary"] = _task_model_summary(resource.path, content)
+        if is_schema or previous_read is not None or len(content) > MAX_INLINE_RESOURCE_CHARS:
+            payload["content"] = ""
+            payload["content_omitted"] = True
+            payload["omission_reason"] = _content_omission_reason(
+                is_schema=is_schema,
+                already_read=previous_read is not None,
+                chars=len(content),
+            )
+        elif len(content) > MAX_RESOURCE_READ_CHARS:
             payload["content"] = content[:MAX_RESOURCE_READ_CHARS]
             payload["truncated"] = True
+            payload["content_omitted"] = False
         else:
             payload["content"] = content
+            payload["content_omitted"] = False
         return _with_read_record(
             payload,
             system_state=system_state,
@@ -322,6 +321,7 @@ def _resource_outline(path: str, content: str) -> dict[str, Any]:
             "format": "text",
             "chars": len(content),
             "preview": content[:600],
+            "purpose": _resource_purpose(path),
         }
     try:
         payload = json.loads(content)
@@ -331,6 +331,7 @@ def _resource_outline(path: str, content: str) -> dict[str, Any]:
             "parseable": False,
             "chars": len(content),
             "preview": content[:600],
+            "purpose": _resource_purpose(path),
         }
     if not isinstance(payload, dict):
         return {"format": "json", "json_type": type(payload).__name__, "chars": len(content)}
@@ -353,6 +354,7 @@ def _resource_outline(path: str, content: str) -> dict[str, Any]:
     defs = payload.get("$defs")
     return {
         "format": "json_schema" if "$schema" in payload or "properties" in payload else "json",
+        "purpose": _resource_purpose(path),
         "title": payload.get("title"),
         "type": payload.get("type"),
         "required": payload.get("required", []),
@@ -361,6 +363,107 @@ def _resource_outline(path: str, content: str) -> dict[str, Any]:
         "chars": len(content),
         "hint": "Use mode=fragment with a JSON pointer for a specific subtree, or mode=content only when raw content is necessary.",
     }
+
+
+def _resource_purpose(path: str) -> str:
+    if path.startswith("examples/"):
+        return "capability_example"
+    if path.endswith(".repair_hints.md") or path.endswith(".common_errors.md") or path.endswith(".validator_scope.md"):
+        return "repair_hint"
+    if path.endswith(".schema.json"):
+        return "schema_fragment"
+    if path.startswith("guidance/") or path.endswith(".guidance.md"):
+        return "guidance"
+    return "reference"
+
+
+def _is_schema_resource(path: str) -> bool:
+    return path.endswith(".schema.json")
+
+
+def _content_omission_reason(*, is_schema: bool, already_read: bool, chars: int) -> str:
+    if is_schema:
+        return "schema content is summarized; use mode=fragment with a JSON pointer for exact fields"
+    if already_read:
+        return "resource content was already read for this focus/mode/pointer"
+    return f"resource is large ({chars} chars); summary returned instead"
+
+
+def _task_model_summary(path: str, content: str) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "resource_path": path,
+        "purpose": _resource_purpose(path),
+        "chars": len(content),
+        "digest": sha256(content.encode("utf-8")).hexdigest(),
+        "writable_targets": _writable_targets_from_text(content),
+        "required_fields": [],
+        "object_shapes": [],
+        "recommended_next_action": _recommended_next_action(path),
+    }
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        summary["preview"] = " ".join(content.split())[:500]
+        return summary
+    summary["json_type"] = type(payload).__name__
+    if isinstance(payload, dict):
+        summary["top_level_keys"] = sorted(str(key) for key in payload.keys())[:40]
+        required = payload.get("required")
+        if isinstance(required, list):
+            summary["required_fields"] = [str(item) for item in required[:40]]
+        properties = payload.get("properties")
+        if isinstance(properties, dict):
+            summary["object_shapes"] = [
+                {
+                    "name": str(name),
+                    "type": spec.get("type") if isinstance(spec, dict) else type(spec).__name__,
+                    "ref": spec.get("$ref") if isinstance(spec, dict) else None,
+                }
+                for name, spec in list(sorted(properties.items()))[:40]
+            ]
+    return summary
+
+
+def _fragment_summary(path: str, pointer: str, fragment: Any) -> dict[str, Any]:
+    return {
+        "resource_path": path,
+        "purpose": "schema_fragment" if _is_schema_resource(path) else _resource_purpose(path),
+        "pointer": pointer,
+        "json_type": type(fragment).__name__,
+        "required_fields": fragment.get("required", []) if isinstance(fragment, dict) else [],
+        "top_level_keys": sorted(str(key) for key in fragment.keys())[:40] if isinstance(fragment, dict) else [],
+        "recommended_next_action": "Use this fragment to fill or repair only the targeted object; do not audit scaffold files.",
+    }
+
+
+def _writable_targets_from_text(content: str) -> list[str]:
+    targets: list[str] = []
+    for token in (
+        "agent_package.json",
+        "assembly_spec.json",
+        "resources.json",
+        "render_manifest.json",
+        "sandbox_contract.json",
+        "contracts/",
+        "tools/",
+        "nodes/",
+        "knowledge/",
+        "prompts/",
+    ):
+        if token in content:
+            targets.append(token)
+    return targets
+
+
+def _recommended_next_action(path: str) -> str:
+    purpose = _resource_purpose(path)
+    if purpose == "capability_example":
+        return "Adapt this capability example to the current empty package, then stop tool calls so validation can run."
+    if purpose == "schema_fragment":
+        return "Use mode=fragment for the exact schema path needed by validator evidence or missing example fields."
+    if purpose == "repair_hint":
+        return "Use only after validator evidence identifies the matching repair target."
+    return "Use this guidance to decide whether the current capability should edit this surface."
 
 
 def _json_pointer_fragment(content: str, pointer: str) -> Any:

@@ -334,7 +334,6 @@ class PackageValidationReport(BaseModel):
         "assembly_compile",
         "python_syntax",
         "full_static",
-        "unchanged",
     ] = "full_static"
     changed_files: list[str] = Field(default_factory=list)
     cached: bool = False
@@ -370,7 +369,6 @@ class PackageValidationDigest(BaseModel):
         "assembly_compile",
         "python_syntax",
         "full_static",
-        "unchanged",
     ] = "full_static"
     changed_files: list[str] = Field(default_factory=list)
     cached: bool = False
@@ -386,6 +384,7 @@ class PackageValidationState(BaseModel):
     version: Literal["package_validation_state.v0"] = "package_validation_state.v0"
     package_fingerprint: dict[str, str] = Field(default_factory=dict)
     validation_scope: str = ""
+    active_focus_id: str = ""
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -395,62 +394,45 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
             "requirement_focus",
             1,
             "Requirement focus",
-            [RESOURCES_FILE, "agent_package.json"],
-            ["00-manufacturing-control", "01-package-identity-system", "05-resources-system"],
+            [RESOURCES_FILE, "agent_package.json", "resources.json"],
+            [],
             "workspace_hygiene",
             "Clarify user intent, missing resources, secrets, schedules, and manufacturable capability boundaries.",
         ),
         _stage(
-            "package_foundation",
-            2,
-            "Package foundation",
-            ["agent_package.json", "resources.json", "render_manifest.json", "sandbox_contract.json"],
-            ["01-package-identity-system", "05-resources-system", "13-render-event-system"],
-            "package_shape",
-            "Stabilize package manifest shape, root references, basic resources, render, and sandbox files.",
-        ),
-        _stage(
-            "runtime_contracts",
-            3,
-            "Runtime contracts",
-            ["contracts/"],
-            [
-                "02-model-system",
-                "03-session-system",
-                "04-state-system",
-                "06-context-system",
-                "07-memory-system",
-                "08-knowledge-system",
-                "09-tools-system",
-                "14-scheduler-system",
-            ],
-            "runtime_contract_build",
-            "Declare and validate the runtime contracts needed by the produced AgentPackage.",
-        ),
-        _stage(
             "capability_implementation",
-            4,
+            2,
             "Capability implementation",
-            ["tools/", "nodes/", "contracts/tools.json", "contracts/node_provider.json", "contracts/scheduler_seed.json", "resources.json"],
-            ["09-tools-system", "10-package-tool-system", "11-node-provider-system", "15-scheduler-seed-system", "08-knowledge-system"],
+            [
+                "agent_package.json",
+                "resources.json",
+                "tools/",
+                "knowledge/",
+                "contracts/tools.json",
+                "contracts/scheduler_seed.json",
+                "contracts/knowledge.json",
+                "contracts/node_provider.json",
+                "assembly_spec.json",
+            ],
+            [],
             "runtime_contract_build",
-            "Connect requested capabilities to executable package tools, nodes, scheduler seeds, knowledge, or resources.",
+            "Implement one user-facing capability increment at a time. Baseline package and contracts are already scaffolded; do not audit them.",
         ),
         _stage(
-            "experience_and_operations",
-            5,
-            "Experience and operations",
-            ["assembly_spec.json", "patterns/", "render_manifest.json", "contracts/render.json", "contracts/trace.json", "contracts/artifact.json"],
-            ["12-assembly-pattern-system", "13-render-event-system", "16-trace-artifact-system"],
+            "experience_assembly",
+            3,
+            "Experience assembly",
+            ["assembly_spec.json", "render_manifest.json", "prompts/", "patterns/"],
+            [],
             "assembly_compile",
-            "Assemble runtime behavior, render/session experience, events, and operational trace artifacts.",
+            "Bind implemented capabilities into runtime assembly and user-visible experience only after capability files exist.",
         ),
         _stage(
             "validation_publish",
-            6,
+            4,
             "Validation and publish",
             [],
-            ["17-final-validation-repair", "00-manufacturing-control"],
+            [],
             "full_static",
             "Run full validation, repair from evidence, and finalize only when the package is ready.",
         ),

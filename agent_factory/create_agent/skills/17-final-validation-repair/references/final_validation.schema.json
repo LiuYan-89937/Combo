@@ -306,8 +306,7 @@
         "runtime_contract_build",
         "assembly_compile",
         "python_syntax",
-        "full_static",
-        "unchanged"
+        "full_static"
       ],
       "title": "Validation Scope",
       "type": "string"

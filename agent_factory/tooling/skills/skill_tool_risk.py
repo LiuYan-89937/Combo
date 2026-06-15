@@ -62,7 +62,8 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
             path = required_string(arguments, "path")
             mode = resource_mode(arguments.get("mode"))
             pointer = str(arguments.get("pointer") or "").strip()
-            registry.read_resource(name, path, current_system=current_system, mode=mode, pointer=pointer)
+            reason = str(arguments.get("reason") or "").strip()
+            registry.read_resource(name, path, current_system=current_system, mode=mode, pointer=pointer, reason=reason)
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
@@ -74,7 +75,13 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
             paths = resource_paths(arguments.get("paths"))
             registry.describe(name, current_system=current_system)
             for path in paths:
-                registry.read_resource(name, path, current_system=current_system, mode=repair_resource_mode(path))
+                registry.read_resource(
+                    name,
+                    path,
+                    current_system=current_system,
+                    mode=repair_resource_mode(path),
+                    reason="validator recommended repair resources",
+                )
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",

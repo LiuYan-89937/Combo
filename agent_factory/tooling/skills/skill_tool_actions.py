@@ -93,6 +93,7 @@ class SkillToolActionRunner:
     def _read_repair_resources(self, action: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         current_system = current_system_string(arguments, self.resources)
         paths = resource_paths(arguments.get("paths"))
+        reason = str(arguments.get("reason") or "validator recommended repair resources").strip()
         self.registry.describe(name, current_system=current_system)
         return _output(
             action=action,
@@ -105,6 +106,7 @@ class SkillToolActionRunner:
                         path,
                         current_system=current_system,
                         mode=repair_resource_mode(path),
+                        reason=reason,
                     )
                     for path in paths
                 ],
@@ -117,6 +119,7 @@ class SkillToolActionRunner:
         path = required_string(arguments, "path")
         mode = resource_mode(arguments.get("mode"))
         pointer = str(arguments.get("pointer") or "").strip()
+        reason = str(arguments.get("reason") or "").strip()
         return _output(
             action=action,
             message=f"Skill resource loaded: {name}/{path} ({mode})",
@@ -126,6 +129,7 @@ class SkillToolActionRunner:
                 current_system=current_system,
                 mode=mode,
                 pointer=pointer,
+                reason=reason,
             ),
             loaded_state=self.registry.list_loaded(current_system=current_system),
         )

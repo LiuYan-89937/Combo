@@ -38,13 +38,11 @@
   "contracts/tools.json": {
     "type": "tools",
     "version": "tools_contract.v0",
+    "enabled": true,
     "config": {
       "builtin_tools_enabled": true,
       "builtin_tool_ids": [],
-      "package_tools_enabled": true,
-      "package_tool_ids": [
-        "package_action"
-      ]
+      "package_tools_enabled": true
     }
   },
   "assembly_spec.json#tools_item": {

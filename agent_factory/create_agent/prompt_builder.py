@@ -100,8 +100,8 @@ def _invariant_system_prompt_text() -> str:
             "必须通过 create_agent_stage(action='inspect') 查看制造 focus；"
             "需要切换阶段时，只有你可以显式调用 create_agent_stage(action='set_focus', focus_id=..., reason=...)。"
             "validator 只提供证据和建议，不会自动推进或回退 focus。"
-            "不要直接写 .factory/system_state.json。focus_files 是建议工作区，不是写入权限边界；"
-            "当 validation evidence 需要跨文件修复时，可以修改非 focus 文件，但要根据 observation 中的 focus facts 自我校正。"
+            "不要直接写 .factory/system_state.json。active focus target files 是读取边界；"
+            "baseline scaffold 和 baseline contracts 只由代码生成和 validator 负责，不由你逐个审计。"
         ),
         (
             "需要用户补充资源或决策时，必须调用 create_agent_control(action=ask_user, message=...)；"
@@ -118,20 +118,14 @@ def _invariant_system_prompt_text() -> str:
             "如果用户要求调整，继续按自然语言修改；如果用户确认发布，调用 create_agent_publish。"
         ),
         (
-            "制造 skill 必须通过内置 skill gateway 渐进加载：先用 skill list/search/describe "
-            "确定当前 focus 的候选 skill；候选 skill 不等于允许全部加载。"
-            "同一 focus 默认只加载一个 primary skill 全文。"
-            "skill load 必须携带 current_system 和 reason；current_system 是制造语义，不是硬阶段锁。需要第二个 skill 时必须先 describe，"
-            "并在 reason 里说明当前 primary skill 为什么不够。"
+            "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
+            "你的职责是读取当前能力目标文件，根据用户需求做一个能力增量编辑，然后停止工具调用等待 validation。"
         ),
         (
-            "写某类 package 文件前，必须优先通过 skill 读取对应 schema/minimal example/repair hints。"
-            "协议顺序固定为：skill describe(name, current_system) -> skill read_resource(name, path, current_system)。"
-            "即使 validator 已给出 recommended_skill/recommended_resources，也必须先对同一个 current_system 调用 describe；"
-            "不要直接 read_resource，不存在 read_source action。"
-            "不要通过项目源码 inspect 或 shell 推断 schema。"
-            "若 validation issue 包含 schema_path、invalid_value_path、expected_shape、repair_template 或 replace_strategy，"
-            "必须优先按这些结构化字段修复，再对照 skill 的完整可执行示例。"
+            "skill gateway 只服务能力写法和 validator 修复。正常生产路径：describe 一个相关 skill，读取一个相关 capability example，"
+            "然后开始写文件。schema 不是常规资料；只有 validator issue 指向 schema_path、example 缺少关键字段、"
+            "或同一路径修复后再次失败时，才读取 schema fragment。full schema content 是最后手段，必须提供 reason。"
+            "不要直接 read_resource，不存在 read_source action；不要通过项目源码 inspect 或 shell 推断 schema。"
         ),
         (
             "通用 bash 不在 create-agent 默认工具集中。不要主动调用验证工具；"
@@ -149,9 +143,8 @@ def _invariant_system_prompt_text() -> str:
             "如果通用 read 被拒绝，不要再次用 read 访问这个文件。"
         ),
         (
-            "focus_files 只表示建议文件，不限制 package 文件修复。"
-            "如果 write/edit observation 中出现 outside_focus=true，检查 active_focus_id、target_focus_id 和 active_focus_files，"
-            "确认这是 validator evidence 所需的跨文件修复；否则主动 set_focus 到更合适的 focus。"
+            "不要读取 contracts/ 进行全量巡检。只读取 active focus target files 或 validator issue target_files。"
+            "如果 write/edit observation 中出现 outside_focus=true，只有 validator evidence 指向该文件时才继续。"
             "制造期 read/write/edit/glob/grep/bash 等工具不得默认暴露给最终子 Agent；"
             "运行期工具必须在 tools_system/package_tool_system 中做来源决策。"
         ),

@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - Windows fallback for non-production lo
 
 from agent_factory.tooling.skills.registry import SkillRegistry, SkillResourceFragmentNotFound
 from agent_factory.tooling.skills.schema import SkillGatewayState
+from agent_factory.create_agent.stage_context import stage_context_from_resources
 
 
 SKILL_ACTIONS = ("list", "search", "describe", "load", "list_loaded", "read_resource", "read_repair_resources")
@@ -92,6 +93,14 @@ def required_string(arguments: dict[str, Any], key: str) -> str:
 
 def current_system_string(arguments: dict[str, Any], resources: dict[str, Any], key: str = "current_system") -> str:
     current_system = required_string(arguments, key)
+    stage_context = stage_context_from_resources(resources)
+    if stage_context is not None:
+        active = stage_context.active_stage()
+        active_focus_id = active.system_id if active else ""
+        if active_focus_id and current_system != active_focus_id:
+            raise ValueError(
+                f"current_system must equal active create-agent focus {active_focus_id!r}; got {current_system!r}"
+            )
     return current_system
 
 
@@ -154,7 +163,10 @@ def skill_error_guidance(arguments: dict[str, Any], exc: Exception) -> str:
             "then retry load with a concrete reason if the described skill is still needed."
         )
     if action == "read_resource":
-        return "Read resource failed. Verify action, name, path, current_system, mode, and pointer."
+        return (
+            "Read resource failed. Verify action, name, path, current_system, mode, and pointer. "
+            "For schema resources, prefer mode=fragment with a JSON pointer; full schema content requires a reason."
+        )
     if action == "read_repair_resources":
         return "Read repair resources failed. Use recommended_skill and recommended_resources from the validator without renaming paths."
     return "Correct the skill action arguments according to the Skill Gateway protocol."

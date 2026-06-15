@@ -149,26 +149,26 @@ class CreateAgentRepairPolicy:
         if skill == "01-package-identity-system":
             return [
                 "references/package_identity.schema.json",
-                "examples/package_identity.minimal.json",
                 "references/package_identity.repair_hints.md",
             ]
         if skill == "10-package-tool-system":
             artifact = "package_tool_system"
             return [
                 f"references/{artifact}.schema.json",
-                f"examples/{artifact}.minimal.json",
+                f"examples/{artifact}.capability.json",
                 f"references/{artifact}.repair_hints.md",
             ]
         if skill == "11-node-provider-system":
             return [
                 "references/node_provider_system.schema.json",
-                "examples/node_provider_system.minimal.json",
+                "examples/node_provider_system.capability.json",
                 "references/node_provider_system.repair_hints.md",
             ]
         if skill == "12-assembly-pattern-system":
             return [
                 "references/assembly_pattern_system.schema.json",
-                "examples/assembly_pattern_system.minimal.json",
+                "examples/assembly_pattern_system.capability.json",
+                "examples/assembly_spec.with_tools_and_bindings.json",
                 "references/assembly_pattern_system.repair_hints.md",
             ]
         return [f"references/{skill.split('-', 1)[-1]}.repair_hints.md"]

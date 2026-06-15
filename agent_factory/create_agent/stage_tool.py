@@ -48,8 +48,18 @@ def build_create_agent_stage_tool_spec() -> ToolSpec:
                 "latest_validation": {"type": ["object", "null"], "additionalProperties": True},
                 "updated_at": {"type": "string"},
                 "warnings": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                "manufacturing_guidance": {"type": "object", "additionalProperties": True},
             },
-            "required": ["action", "message", "state", "active_focus", "latest_validation", "updated_at", "warnings"],
+            "required": [
+                "action",
+                "message",
+                "state",
+                "active_focus",
+                "latest_validation",
+                "updated_at",
+                "warnings",
+                "manufacturing_guidance",
+            ],
             "additionalProperties": False,
         },
         resources={"workspace": CREATE_AGENT_WORKSPACE_RESOURCE},
@@ -166,7 +176,38 @@ def _output(*, action: str, message: str, state: SystemManufacturingState, works
         "latest_validation": _latest_validation_digest(workspace=workspace, state=state),
         "updated_at": datetime.now(UTC).isoformat(),
         "warnings": _stage_warnings(workspace=workspace, state=state),
+        "manufacturing_guidance": _manufacturing_guidance(active),
     }
+
+
+def _manufacturing_guidance(active: Any) -> dict[str, Any]:
+    focus_id = active.system_id if active else ""
+    guidance: dict[str, Any] = {
+        "baseline_package_is_scaffolded": True,
+        "do_not_audit_scaffold": True,
+        "normal_resource_order": [
+            "read current package target files",
+            "read at most one relevant capability example when object shape is needed",
+            "write one coherent capability increment",
+            "stop tool calls so graph validation can run",
+        ],
+        "schema_policy": "Do not read schema during normal capability authoring. Read schema fragments only after validator evidence or insufficient examples.",
+    }
+    if focus_id == "capability_implementation":
+        guidance["active_focus_instruction"] = (
+            "Implement requested runtime capability now. Prefer package tools, scheduler seeds, knowledge, and assembly bindings; "
+            "custom nodes are only for behavior that cannot be expressed with the standard react pattern plus tools."
+        )
+        guidance["max_capability_examples_before_write"] = 1
+    elif focus_id == "requirement_focus":
+        guidance["active_focus_instruction"] = (
+            "Collect enough user-confirmed facts to choose the first capability increment. Do not inspect baseline contracts."
+        )
+    elif focus_id == "experience_assembly":
+        guidance["active_focus_instruction"] = "Bind implemented capability files into assembly/render experience; do not inspect unrelated contracts."
+    elif focus_id == "validation_publish":
+        guidance["active_focus_instruction"] = "Use final validation/publish controls; repair only validator-directed issues."
+    return guidance
 
 
 def _latest_validation_digest(*, workspace: CreateAgentWorkspace, state: SystemManufacturingState) -> dict[str, Any] | None:

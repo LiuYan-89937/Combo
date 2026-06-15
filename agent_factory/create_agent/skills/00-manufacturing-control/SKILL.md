@@ -13,9 +13,9 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 
 ## Baseline Package Assumption
 - The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
-- Do not compare scaffolded files against schema or minimal examples just to prove they are valid. The validator owns schema correctness.
+- Do not compare scaffolded files against schema or capability examples just to prove they are valid. The validator owns schema correctness.
 - Treat focus files as suggested edit surfaces, not write locks. Edit cross-file references when one capability requires a coherent package change.
-- Use examples to learn the smallest complete shape for a capability you are adding or repairing, not as a checklist for unchanged scaffold files.
+- Use examples to learn the smallest complete shape for a capability you are adding or repairing, not as a checklist for baseline scaffold files.
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
@@ -30,7 +30,7 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 ## Manufacturing Protocol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
-3. If the requested capability does not affect this focus, leave these files unchanged and move to the next useful focus yourself.
+3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
 4. When adding a capability, update all required package surfaces in one coherent step, then stop tool calls so graph validation can run.
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
@@ -52,12 +52,9 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 - Run final validation only from validation_publish after the package behavior is actually implemented.
 
 ## Resource Loading
-- Prefer examples when adding or repairing this capability.
+- Use a listed capability example when this skill provides one; otherwise rely on current package files and validator evidence.
 - Read repair hints or validator scope only when validation evidence points here.
 - Read schema only for a concrete validator failure path or when examples do not define the needed object shape.
-
-Examples:
-- `examples/manufacturing_control.minimal.json`
 
 Repair references:
 - `references/manufacturing_control.repair_hints.md`

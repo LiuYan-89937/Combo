@@ -252,7 +252,6 @@ def _schema_repair_issue_from_pydantic_error(error: dict[str, Any]) -> PackageVa
             recommended_skill="12-assembly-pattern-system",
             recommended_resources=[
                 "examples/assembly_spec.with_tools_and_bindings.json",
-                "examples/package_tool_system.minimal.json",
             ],
             schema_path="AgentAssemblySpec.tools[]",
             invalid_value_path=invalid_path,
