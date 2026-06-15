@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -16,6 +18,12 @@ from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.builtins.resource_set.resource_set import ResourceSetStore
 
 
+@dataclass(frozen=True, slots=True)
+class CreateAgentPromptPayload:
+    messages: list[BaseMessage]
+    diagnostics: dict[str, Any]
+
+
 def build_create_agent_messages(
     state: Mapping[str, Any],
     tools: list[BaseTool],
@@ -23,29 +31,97 @@ def build_create_agent_messages(
     resource_set_store: ResourceSetStore | None = None,
     capability_inventory: dict[str, Any] | None = None,
 ) -> list[BaseMessage]:
+    return build_create_agent_prompt(
+        state,
+        tools,
+        resource_set_store=resource_set_store,
+        capability_inventory=capability_inventory,
+    ).messages
+
+
+def build_create_agent_prompt(
+    state: Mapping[str, Any],
+    tools: list[BaseTool],
+    *,
+    resource_set_store: ResourceSetStore | None = None,
+    capability_inventory: dict[str, Any] | None = None,
+) -> CreateAgentPromptPayload:
     workspace = CreateAgentWorkspace(str(state["workspace_path"]), resource_set_store=resource_set_store)
-    stable_system = SystemMessage(
-        content="\n\n".join(
-            [
-                _invariant_system_prompt_text(),
-                _stable_environment_prompt_text(
-                    tools=tools,
-                    capability_inventory=capability_inventory or {},
-                ),
-            ]
-        )
+    invariant_text = _invariant_system_prompt_text()
+    stable_environment_text = _stable_environment_prompt_text(
+        tools=tools,
+        capability_inventory=capability_inventory or {},
     )
-    dynamic_system = SystemMessage(
-        content=_dynamic_system_context_text(
-            state=state,
-            workspace=workspace,
-        )
+    stable_system_text = "\n\n".join([invariant_text, stable_environment_text])
+    dynamic_system_text = _dynamic_system_context_text(
+        state=state,
+        workspace=workspace,
     )
-    return [
+    projected_messages = project_messages_for_prompt(list(state.get("messages") or []), workspace=workspace)
+    stable_system = SystemMessage(content=stable_system_text)
+    dynamic_system = SystemMessage(content=dynamic_system_text)
+    messages = [
         stable_system,
         dynamic_system,
-        *project_messages_for_prompt(list(state.get("messages") or []), workspace=workspace),
+        *projected_messages,
     ]
+    diagnostics = {
+        "version": "create_agent_prompt_diagnostics.v0",
+        "section_digests": {
+            "invariant_system": _digest_text(invariant_text),
+            "stable_environment": _digest_text(stable_environment_text),
+            "stable_system": _digest_text(stable_system_text),
+            "dynamic_system": _digest_text(dynamic_system_text),
+            "projected_history": _digest_messages(projected_messages),
+            "full_prompt_projection": _digest_messages(messages),
+        },
+        "section_lengths": {
+            "invariant_system_chars": len(invariant_text),
+            "stable_environment_chars": len(stable_environment_text),
+            "stable_system_chars": len(stable_system_text),
+            "dynamic_system_chars": len(dynamic_system_text),
+            "projected_history_messages": len(projected_messages),
+            "projected_history_chars": sum(len(_message_content_text(message)) for message in projected_messages),
+        },
+        "tool_names_digest": _digest_json(_stable_tool_names(tools)),
+        "tool_count": len(tools),
+        "message_count": len(messages),
+    }
+    return CreateAgentPromptPayload(
+        messages=messages,
+        diagnostics=diagnostics,
+    )
+
+
+def _digest_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _digest_json(value: Any) -> str:
+    return _digest_text(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _digest_messages(messages: list[BaseMessage]) -> str:
+    return _digest_json(
+        [
+            {
+                "type": message.__class__.__name__,
+                "content": _message_content_text(message),
+                "name": str(getattr(message, "name", "") or ""),
+            }
+            for message in messages
+        ]
+    )
+
+
+def _message_content_text(message: BaseMessage) -> str:
+    content = message.content
+    if isinstance(content, str):
+        return content
+    try:
+        return json.dumps(content, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(content)
 
 
 def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any, stage_progress: dict[str, Any] | None = None) -> str:

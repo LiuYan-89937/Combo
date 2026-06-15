@@ -237,6 +237,9 @@ class CreateAgentRuntime:
                     model_trace.accept(chunk)
                 if stream_mode == "custom" and graph_kind == "manufacture":
                     model_trace.flush()
+                    if _is_model_cache_chunk(chunk):
+                        record_trace("model_cache", _json_safe(chunk.get("payload") or {}))
+                        continue
                     for record in _tool_trace_records(chunk):
                         record_trace("tool_call", record)
                 yield stream_mode, chunk
@@ -500,6 +503,10 @@ def _tool_trace_records(chunk: Any) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def _is_model_cache_chunk(chunk: Any) -> bool:
+    return isinstance(chunk, dict) and chunk.get("type") == "create_agent_model_cache" and isinstance(chunk.get("payload"), dict)
 
 
 def _json_safe(value: Any) -> Any:

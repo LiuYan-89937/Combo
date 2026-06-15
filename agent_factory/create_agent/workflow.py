@@ -11,7 +11,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from agent_factory.create_agent.models import CreateAgentAction, CreateAgentPublishDecision, PackageValidationReport
-from agent_factory.create_agent.prompt_builder import build_create_agent_messages, validation_repair_context
+from agent_factory.create_agent.prompt_builder import build_create_agent_prompt, validation_repair_context
 from agent_factory.create_agent.validation_gate import CreateAgentValidationGate, ValidationDecision
 from agent_factory.create_agent.validation_gate import _package_fingerprint
 from agent_factory.create_agent.validation_progress import validation_event_from_tool_calls
@@ -71,12 +71,13 @@ class CreateAgentWorkflow:
         model = self.model or get_main_model()
         if model is None:
             raise RuntimeError("main model is not configured for create-agent")
-        messages = build_create_agent_messages(
+        prompt_payload = build_create_agent_prompt(
             state,
             self.tools,
             resource_set_store=self.resource_set_store,
             capability_inventory=self.capability_inventory or {},
         )
+        messages = prompt_payload.messages
         prompt_binding, chat_messages = _operation_prompt(messages)
         result = ModelOperationService(role="main", model=model).tool_bound_chat(
             state=state,
@@ -84,6 +85,12 @@ class CreateAgentWorkflow:
             messages=chat_messages,
             tools=self.tools,
             node_id="create_agent_supervisor",
+        )
+        _emit_model_cache_metrics(
+            state=state,
+            workspace=CreateAgentWorkspace(state["workspace_path"]),
+            metadata=result.metadata,
+            prompt_diagnostics=prompt_payload.diagnostics,
         )
         response = result.ai_message if isinstance(result.ai_message, BaseMessage) else AIMessage(content=result.assistant_draft or "")
         validation_event = "assistant_stopped" if not bool(getattr(response, "tool_calls", None)) else "none"
@@ -220,6 +227,64 @@ class CreateAgentWorkflow:
 def _emit_tool_activity(payload: dict[str, Any]) -> None:
     writer = get_stream_writer()
     writer({"type": "tool_activity", "payload": {"events": [payload]}})
+
+
+def _emit_model_cache_metrics(
+    *,
+    state: CreateAgentGraphState,
+    workspace: CreateAgentWorkspace,
+    metadata: dict[str, Any],
+    prompt_diagnostics: dict[str, Any],
+) -> None:
+    usage = metadata.get("usage_metadata") if isinstance(metadata.get("usage_metadata"), dict) else {}
+    input_tokens = _usage_int(usage, "input_tokens", "prompt_tokens")
+    output_tokens = _usage_int(usage, "output_tokens", "completion_tokens")
+    cached_input_tokens = _cached_input_tokens(usage)
+    hit_ratio = None
+    if input_tokens and cached_input_tokens is not None:
+        hit_ratio = round(float(cached_input_tokens) / float(input_tokens), 6)
+    active = workspace.read_system_state().active_stage()
+    payload = {
+        "version": "create_agent_model_cache_metrics.v0",
+        "node_id": "create_agent_supervisor",
+        "iteration": int(state.get("iteration") or 0) + 1,
+        "active_focus_id": active.system_id if active else None,
+        "active_focus_status": active.status.value if active else None,
+        "provider_cache": {
+            "available": cached_input_tokens is not None,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "hit_ratio": hit_ratio,
+            "source": "usage_metadata.input_token_details.cache_read" if cached_input_tokens is not None else None,
+        },
+        "prompt_diagnostics": prompt_diagnostics,
+        "model": metadata.get("model"),
+        "tool_count": metadata.get("tool_count"),
+    }
+    writer = get_stream_writer()
+    writer({"type": "create_agent_model_cache", "payload": payload})
+
+
+def _usage_int(usage: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+    return None
+
+
+def _cached_input_tokens(usage: dict[str, Any]) -> int | None:
+    details = usage.get("input_token_details")
+    if isinstance(details, dict):
+        value = details.get("cache_read")
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+    return None
 
 
 def _resume_text(value: Any) -> str:
