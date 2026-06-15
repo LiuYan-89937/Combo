@@ -204,14 +204,16 @@ class CreateAgentWorkspace:
         active = system_state.active_stage()
         request_text = self._read_text_snippet(self.request_path, limit=360)
         lines = [
-            f"Workspace: {self.root}",
+            "Workspace: active create-agent package workspace",
             f"Original request: {request_text}" if request_text else "Original request: unavailable",
-            f"System state file: {SYSTEM_STATE_FILE} (managed by create_agent_stage; do not edit directly)",
-            f"Action file: {ACTION_FILE} (managed by create_agent_control; do not edit directly)",
-            f"Publish file: {PUBLISH_FILE} (managed by create_agent_publish; do not edit directly)",
-            f"Resources file: {RESOURCES_FILE}",
-            f"Validation file: {VALIDATION_FILE}",
-            f"Focus stages remaining: {working_set['remaining']}/{working_set['total']}",
+            (
+                "Managed files: "
+                f"{SYSTEM_STATE_FILE}=create_agent_stage; "
+                f"{ACTION_FILE}=create_agent_control; "
+                f"{PUBLISH_FILE}=create_agent_publish; "
+                f"{VALIDATION_FILE}=validation gate"
+            ),
+            f"Focus progress: remaining={working_set['remaining']} total={working_set['total']}",
             "Active focus:",
         ]
         if active:
@@ -252,7 +254,7 @@ class CreateAgentWorkspace:
             lines.append("Available tool outputs:")
             for ref in output_refs:
                 lines.append(
-                    f"- {ref['id']}: tool={ref['tool_id']} | chars={ref['size_chars']} | created={ref['created_at']}"
+                    f"- {ref['id']}: tool={ref['tool_id']} | chars={ref['size_chars']}"
                 )
         else:
             lines.append("Available tool outputs: none. Do not call tool_output read unless an output_id is listed.")
@@ -278,7 +280,7 @@ class CreateAgentWorkspace:
             for record in system_state.read_resources[:12]:
                 pointer = f" pointer={record.pointer}" if record.pointer else ""
                 lines.append(
-                    f"- {record.name}/{record.path} mode={record.mode}{pointer} reads={record.read_count} digest={record.digest[:12]}"
+                    f"- {record.name}/{record.path} mode={record.mode}{pointer} digest={record.digest[:12]}"
                 )
         return lines
 

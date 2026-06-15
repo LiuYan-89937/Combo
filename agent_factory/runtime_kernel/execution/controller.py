@@ -75,6 +75,7 @@ class ExecutionController:
         thread_id: str,
         resume_payload: dict[str, Any] | None = None,
     ) -> Iterator[tuple[str, Any]]:
+        state = _prepare_resume_state(state, resume_payload=resume_payload)
         self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
         final_raw: dict[str, Any] = {"runtime": state.model_dump(mode="python")}
         graph_messages: list[Any] = []
@@ -82,7 +83,10 @@ class ExecutionController:
             compiled_app,
             state,
             thread_id=thread_id,
-            stream_input=Command(resume=resume_payload or {}),
+            stream_input=Command(
+                update={"runtime": state.model_dump(mode="python")},
+                resume=resume_payload or {},
+            ),
         ):
             if stream_mode == "values" and isinstance(chunk, dict):
                 final_raw = chunk
@@ -106,13 +110,7 @@ class ExecutionController:
         thread_id: str,
         resume_payload: dict[str, Any] | None = None,
     ) -> RuntimeState:
-        state.execution.finished = False
-        state.execution.finish_status = None
-        state.execution.interrupted = False
-        state.execution.resume_payload = resume_payload or {}
-        state.policy.interrupted = False
-        state.policy.interrupt_required = False
-        state.policy.approval_required = False
+        state = _prepare_resume_state(state, resume_payload=resume_payload)
         self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
         state, graph_messages = self._invoke_graph(compiled_app, state, thread_id=thread_id)
         self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
@@ -304,6 +302,17 @@ def _messages_delta(state: RuntimeState) -> list[dict[str, str]]:
     if assistant_text:
         messages.append({"role": "assistant", "content": assistant_text})
     return messages
+
+
+def _prepare_resume_state(state: RuntimeState, *, resume_payload: dict[str, Any] | None) -> RuntimeState:
+    state.execution.finished = False
+    state.execution.finish_status = None
+    state.execution.interrupted = False
+    state.execution.resume_payload = resume_payload or {}
+    state.policy.interrupted = False
+    state.policy.interrupt_required = False
+    state.policy.approval_required = False
+    return state
 
 
 def _graph_input(state: RuntimeState) -> dict[str, Any]:

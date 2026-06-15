@@ -15,6 +15,7 @@ from agent_factory.runtime_kernel.bindings import RuntimeServices
 @dataclass(frozen=True, slots=True)
 class RuntimeBuildContext:
     package_root: Path
+    runtime_root: Path | None
     package: LoadedAgentPackage
     resources: dict[str, object]
     tool_runtime_resources: dict[str, object]
@@ -30,12 +31,14 @@ class RuntimeBuildPlanner:
         package: LoadedAgentPackage,
         *,
         base_services: RuntimeServices,
+        runtime_root: str | Path | None = None,
     ) -> RuntimeBuildResult:
         missing = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - set(package.contracts))
         if missing:
             raise ValueError("agent package missing required runtime contracts: " + ", ".join(missing))
         context = RuntimeBuildContext(
             package_root=package.package_root,
+            runtime_root=Path(runtime_root).expanduser().resolve() if runtime_root is not None else None,
             package=package,
             resources=_resource_values(package.resources),
             tool_runtime_resources={},
@@ -53,6 +56,7 @@ class RuntimeBuildPlanner:
                 continue
             contract_context = RuntimeBuildContext(
                 package_root=context.package_root,
+                runtime_root=context.runtime_root,
                 package=context.package,
                 resources=build_resources,
                 tool_runtime_resources=build_tool_runtime_resources,

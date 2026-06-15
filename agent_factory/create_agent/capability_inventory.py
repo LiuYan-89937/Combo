@@ -116,11 +116,8 @@ def render_static_capability_inventory(inventory: dict[str, Any] | CapabilityInv
 def render_dynamic_capability_context(*, package_root: str | Path) -> str:
     root = Path(package_root).expanduser().resolve()
     lines = [
-        "Current package capability facts:",
-        "Current package runtime tool facts:",
+        "Produced package capability facts:",
         *_current_runtime_tool_lines(root),
-        "",
-        "Current resource facts summary (secrets redacted):",
         *_resource_fact_lines(root),
     ]
     return "\n".join(lines)
@@ -172,55 +169,57 @@ def _current_runtime_tool_lines(root: Path) -> list[str]:
     if tools_contract:
         builtin_enabled = bool(config.get("builtin_tools_enabled", True))
         builtin_ids = config.get("builtin_tool_ids")
-        if builtin_enabled:
-            if isinstance(builtin_ids, list) and builtin_ids:
-                lines.append(f"- declared_builtin_tools={[_compact(item, limit=80) for item in builtin_ids]}")
-            else:
-                lines.append("- declared_builtin_tools=all implemented builtin tools")
+        builtin_summary: str | list[str]
+        if not builtin_enabled:
+            builtin_summary = "disabled"
+        elif isinstance(builtin_ids, list) and builtin_ids:
+            builtin_summary = [_compact(item, limit=80) for item in builtin_ids[:12]]
         else:
-            lines.append("- declared_builtin_tools=disabled")
-        lines.append(f"- package_tools_enabled={bool(config.get('package_tools_enabled', True))}")
-        lines.append(f"- instance_extensions_enabled={bool(config.get('instance_extensions_enabled', True))}")
+            builtin_summary = "all"
+        lines.append(
+            "- runtime_tools: "
+            f"builtin={builtin_summary}; "
+            f"package_enabled={bool(config.get('package_tools_enabled', True))}; "
+            f"extensions_enabled={bool(config.get('instance_extensions_enabled', True))}"
+        )
     else:
-        lines.append("- contracts/tools.json not present yet")
-    package_tools = _package_tool_lines(root)
-    lines.extend(package_tools if package_tools else ["- verified package tools: none"])
+        lines.append("- runtime_tools: contracts/tools.json missing")
+    lines.append(f"- verified_package_tools={_package_tool_ids(root) or []}")
     return lines
 
 
-def _package_tool_lines(root: Path) -> list[str]:
+def _package_tool_ids(root: Path) -> list[str]:
     tools_root = root / "tools"
     if not tools_root.is_dir():
         return []
-    lines: list[str] = []
-    for manifest_path in sorted(tools_root.glob("*/manifest.json"))[:24]:
+    tool_ids: list[str] = []
+    for manifest_path in sorted(tools_root.glob("*/manifest.json"))[:12]:
         payload = _read_json_object(manifest_path)
         tool_id = str(payload.get("id") or manifest_path.parent.name)
-        description = _compact(payload.get("description") or "", limit=120)
-        lines.append(f"- package_tool={tool_id}" + (f" | {description}" if description else ""))
-    return lines
+        if tool_id:
+            tool_ids.append(_compact(tool_id, limit=80))
+    return tool_ids
 
 
 def _resource_fact_lines(root: Path) -> list[str]:
     payload = _read_json_object(root / ".factory" / "resources.json")
     facts = payload.get("facts") if isinstance(payload.get("facts"), list) else []
     if not facts:
-        return ["- none"]
+        return ["- resource_facts=none"]
     lines: list[str] = []
-    for item in facts[:24]:
+    for item in facts[:12]:
         if not isinstance(item, dict):
             continue
         key = _compact(item.get("key") or "", limit=100)
-        source = _compact(item.get("source") or "", limit=40)
         secret = bool(item.get("secret"))
         if secret:
             summary = "<secret redacted>"
         else:
-            summary = _compact(item.get("value"), limit=100)
-        lines.append(f"- {key}: {summary} | source={source or 'unknown'} | secret={secret}")
-    if len(facts) > 24:
-        lines.append(f"- ... {len(facts) - 24} more")
-    return lines or ["- none"]
+            summary = _compact(item.get("value"), limit=80)
+        lines.append(f"- resource_fact {key}: {summary}; secret={secret}")
+    if len(facts) > 12:
+        lines.append(f"- resource_facts_more={len(facts) - 12}")
+    return lines or ["- resource_facts=none"]
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

@@ -659,7 +659,7 @@ def _runtime_root_from_session_contract(context: RuntimeBuildContext) -> Path | 
     session_root = str(config.get("session_root") or "").strip()
     if not session_root:
         return None
-    path = Path(session_root).expanduser().resolve()
+    path = resolve_package_runtime_path(context, session_root, field_path="session.config.session_root")
     return path.parent if path.name == "sessions" else path
 
 

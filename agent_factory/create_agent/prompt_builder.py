@@ -24,11 +24,15 @@ def build_create_agent_messages(
     capability_inventory: dict[str, Any] | None = None,
 ) -> list[BaseMessage]:
     workspace = CreateAgentWorkspace(str(state["workspace_path"]), resource_set_store=resource_set_store)
-    invariant_system = SystemMessage(content=_invariant_system_prompt_text())
-    environment_system = SystemMessage(
-        content=_stable_environment_prompt_text(
-            tools=tools,
-            capability_inventory=capability_inventory or {},
+    stable_system = SystemMessage(
+        content="\n\n".join(
+            [
+                _invariant_system_prompt_text(),
+                _stable_environment_prompt_text(
+                    tools=tools,
+                    capability_inventory=capability_inventory or {},
+                ),
+            ]
         )
     )
     dynamic_system = SystemMessage(
@@ -38,8 +42,7 @@ def build_create_agent_messages(
         )
     )
     return [
-        invariant_system,
-        environment_system,
+        stable_system,
         dynamic_system,
         *project_messages_for_prompt(list(state.get("messages") or []), workspace=workspace),
     ]

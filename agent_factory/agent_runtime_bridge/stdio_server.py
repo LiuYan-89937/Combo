@@ -20,6 +20,7 @@ from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
@@ -149,6 +150,7 @@ class BridgeRuntimeState:
         runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
             package,
             base_services=facade.instance.services,
+            runtime_root=RUNTIME_ROOT,
         )
         register_package_patterns(facade=facade, package=package, runtime_build=runtime_build)
         compiler = AgentAssemblyCompiler(facade=facade)
@@ -156,6 +158,7 @@ class BridgeRuntimeState:
         self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
         _configure_scheduler_runtime(package=package, compiled=compiled, facade=facade)
         _configure_knowledge_runtime(compiled=compiled)
+        _apply_scheduler_seeds(package=package, compiled=compiled)
         self.background_workers.add_many(runtime_build.background_workers)
         for lifecycle_event in self.background_workers.start_all():
             if lifecycle_event.status == "failed":
@@ -234,6 +237,19 @@ def _configure_knowledge_runtime(*, compiled: Any) -> None:
     if knowledge_runtime is None:
         return
     knowledge_runtime.event_sink = _knowledge_event_sink
+
+
+def _apply_scheduler_seeds(*, package: LoadedAgentPackage, compiled: Any) -> None:
+    scheduler_runtime = getattr(compiled.compiled_app.services, "scheduler_runtime", None)
+    if scheduler_runtime is None:
+        return
+    contract = package.contracts.get("scheduler_seed") if isinstance(package.contracts, dict) else None
+    package_id = package.manifest.factory_run_id or package.package_root.name
+    apply_scheduler_seed_contract(
+        runtime=scheduler_runtime,
+        contract_payload=contract if isinstance(contract, dict) else None,
+        package_id=package_id,
+    )
 
 
 def _emit_worker_lifecycle_failure(*, package: LoadedAgentPackage, lifecycle_event: WorkerLifecycleEvent) -> None:
