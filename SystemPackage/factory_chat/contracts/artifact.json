@@ -3,8 +3,8 @@
   "version": "artifact_contract.v0",
   "enabled": true,
   "config": {
-    "root": "/artifacts",
-    "index_path": "/artifacts/index.jsonl",
+    "root": ".agent_runtime/artifacts",
+    "index_path": ".agent_runtime/artifacts/index.jsonl",
     "allowed_kinds": [
       "report",
       "artifact",

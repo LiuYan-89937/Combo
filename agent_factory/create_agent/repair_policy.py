@@ -145,7 +145,7 @@ class CreateAgentRepairPolicy:
         return "01-package-identity-system"
 
     def recommended_resources(self, skill: str, target_files: list[str]) -> list[str]:
-        targets = " ".join(target_files)
+        del target_files
         if skill == "01-package-identity-system":
             return [
                 "references/package_identity.schema.json",
@@ -171,7 +171,22 @@ class CreateAgentRepairPolicy:
                 "examples/assembly_spec.with_tools_and_bindings.json",
                 "references/assembly_pattern_system.repair_hints.md",
             ]
-        return [f"references/{skill.split('-', 1)[-1]}.repair_hints.md"]
+        artifact = {
+            "02-model-system": "model_system",
+            "03-session-system": "session_system",
+            "04-state-system": "state_system",
+            "05-resources-system": "resources_system",
+            "06-context-system": "context_system",
+            "07-memory-system": "memory_system",
+            "08-knowledge-system": "knowledge_system",
+            "09-tools-system": "tools_system",
+            "13-render-event-system": "render_event_system",
+            "14-scheduler-system": "scheduler_system",
+            "15-scheduler-seed-system": "scheduler_seed_system",
+            "16-trace-artifact-system": "trace_artifact_system",
+            "17-final-validation-repair": "final_validation",
+        }.get(skill, skill.replace("-", "_"))
+        return [f"references/{artifact}.repair_hints.md"]
 
     def _skill_for_targets(self, target_files: list[str]) -> str:
         targets = " ".join(target_files)

@@ -30,8 +30,13 @@ describe('interrupt resume payloads', () => {
 			answer: '确认',
 			input_text: '确认'
 		});
+		expect(buildResumePayload(assistantDialogueConfirmationEvent(), '确认发布')).toEqual({
+			decision: 'approve',
+			answer: '确认发布',
+			input_text: '确认发布'
+		});
 		expect(buildResumePayload(assistantDialogueConfirmationEvent(), '这里要改')).toEqual({
-			decision: 'revise',
+			decision: 'pending',
 			answer: '这里要改',
 			input_text: '这里要改'
 		});

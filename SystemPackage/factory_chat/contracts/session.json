@@ -3,8 +3,8 @@
   "version": "session_contract.v0",
   "enabled": true,
   "config": {
-    "session_root": "/runtime/sessions",
+    "session_root": ".agent_runtime/sessions",
     "checkpointer_backend": "sqlite",
-    "checkpoint_path": "/runtime/checkpoints/factory_chat.sqlite"
+    "checkpoint_path": ".agent_runtime/checkpoints/factory_chat.sqlite"
   }
 }

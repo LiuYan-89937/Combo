@@ -171,6 +171,13 @@ def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:
     current_fingerprint = _package_fingerprint(workspace.root)
     if current_fingerprint != validation_state.package_fingerprint:
         raise ValueError("package files changed after validation; run final validation again before publishing")
+    decision = workspace.read_publish_decision()
+    if decision.decision != "approve":
+        raise ValueError("publish requires explicit user approval from the publish confirmation gate")
+    if decision.package_fingerprint != current_fingerprint:
+        raise ValueError("package files changed after user approval; run final validation and ask for publish confirmation again")
+    if decision.validation_scope != "full_static" or decision.validation_status != "passed":
+        raise ValueError("publish approval must correspond to a passed full_static validation")
     if not workspace.package_manifest_path().is_file():
         raise ValueError("agent_package.json is missing")
 

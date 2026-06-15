@@ -11,12 +11,16 @@ from pydantic import BaseModel, ValidationError
 from agent_factory.create_agent.models import (
     ACTION_FILE,
     PUBLISH_FILE,
+    PUBLISH_DECISION_FILE,
     RESOURCES_FILE,
     SKILL_GATEWAY_STATE_FILE,
     SYSTEM_STATE_FILE,
+    TOOL_PROBE_FILE,
     VALIDATION_FILE,
     VALIDATION_STATE_FILE,
     CreateAgentAction,
+    CreateAgentPublishDecision,
+    PackageToolProbeState,
     PackageValidationReport,
     PackageValidationState,
     SystemManufacturingState,
@@ -88,6 +92,14 @@ class CreateAgentWorkspace:
         return self.root / PUBLISH_FILE
 
     @property
+    def publish_decision_path(self) -> Path:
+        return self.root / PUBLISH_DECISION_FILE
+
+    @property
+    def tool_probe_path(self) -> Path:
+        return self.root / TOOL_PROBE_FILE
+
+    @property
     def resources_path(self) -> Path:
         return self.root / RESOURCES_FILE
 
@@ -148,11 +160,33 @@ class CreateAgentWorkspace:
     def write_validation_state(self, state: PackageValidationState) -> None:
         self._write_json(self.validation_state_path, state.model_dump(mode="json"))
 
+    def read_tool_probe_state(self) -> PackageToolProbeState:
+        return _read_managed_model(
+            self.tool_probe_path,
+            PackageToolProbeState,
+            missing=PackageToolProbeState(),
+            owner_tool="create_agent_probe_tool",
+        ) or PackageToolProbeState()
+
+    def write_tool_probe_state(self, state: PackageToolProbeState) -> None:
+        self._write_json(self.tool_probe_path, state.model_dump(mode="json"))
+
     def read_publish_report(self) -> dict[str, Any]:
         return _read_json_object(self.publish_path)
 
     def write_publish_report(self, payload: dict[str, Any]) -> None:
         self._write_json(self.publish_path, payload)
+
+    def read_publish_decision(self) -> CreateAgentPublishDecision:
+        return _read_managed_model(
+            self.publish_decision_path,
+            CreateAgentPublishDecision,
+            missing=CreateAgentPublishDecision(),
+            owner_tool="the internal create-agent publish confirmation gate",
+        ) or CreateAgentPublishDecision()
+
+    def write_publish_decision(self, decision: CreateAgentPublishDecision) -> None:
+        self._write_json(self.publish_decision_path, decision.model_dump(mode="json"))
 
     def reset_manufacturing_trace(self, *, session_id: str, request_id: str, graph_id: str) -> None:
         self._write_json(
@@ -211,7 +245,9 @@ class CreateAgentWorkspace:
                 f"{SYSTEM_STATE_FILE}=create_agent_stage; "
                 f"{ACTION_FILE}=create_agent_control; "
                 f"{PUBLISH_FILE}=create_agent_publish; "
-                f"{VALIDATION_FILE}=validation gate"
+                f"{PUBLISH_DECISION_FILE}=publish confirmation gate; "
+                f"{VALIDATION_FILE}=validation gate; "
+                f"{TOOL_PROBE_FILE}=create_agent_probe_tool"
             ),
             f"Focus progress: remaining={working_set['remaining']} total={working_set['total']}",
             "Active focus:",
@@ -238,6 +274,15 @@ class CreateAgentWorkspace:
                 lines.append(
                     f"- issue {issue.issue_id}: {issue.where} | files={issue.target_files} | {issue.repair_hint}"
                 )
+        probe_summary = self._tool_probe_summary()
+        if probe_summary:
+            lines.extend(probe_summary)
+        publish_decision = self.read_publish_decision()
+        if publish_decision.decision != "pending":
+            lines.append(
+                "Latest publish decision: "
+                f"{publish_decision.decision} | {publish_decision.input_text[:180]}"
+            )
         skill_context = self._skill_context_summary(active.system_id if active else "")
         if skill_context:
             lines.extend(skill_context)
@@ -259,6 +304,24 @@ class CreateAgentWorkspace:
         else:
             lines.append("Available tool outputs: none. Do not call tool_output read unless an output_id is listed.")
         return "\n".join(lines)
+
+    def _tool_probe_summary(self) -> list[str]:
+        if not self.tool_probe_path.exists():
+            return []
+        try:
+            state = self.read_tool_probe_state()
+        except Exception:
+            return ["Package tool probe state: unreadable; use create_agent_probe_tool inspect instead of direct file reads."]
+        latest = state.latest_by_tool()
+        if not latest:
+            return []
+        lines = ["Latest package tool probe evidence:"]
+        for tool_id, record in sorted(latest.items()):
+            lines.append(
+                f"- {tool_id}: {record.status} | observation={record.observation_status} | "
+                f"contract={record.contract_status} | {record.message[:160]}"
+            )
+        return lines
 
     def _skill_context_summary(self, current_system: str) -> list[str]:
         if not current_system or not self.skill_gateway_state_path.exists():

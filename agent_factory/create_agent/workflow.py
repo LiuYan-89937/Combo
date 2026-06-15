@@ -10,9 +10,10 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
-from agent_factory.create_agent.models import CreateAgentAction, PackageValidationReport
+from agent_factory.create_agent.models import CreateAgentAction, CreateAgentPublishDecision, PackageValidationReport
 from agent_factory.create_agent.prompt_builder import build_create_agent_messages, validation_repair_context
 from agent_factory.create_agent.validation_gate import CreateAgentValidationGate, ValidationDecision
+from agent_factory.create_agent.validation_gate import _package_fingerprint
 from agent_factory.create_agent.validation_progress import validation_event_from_tool_calls
 from agent_factory.create_agent.validator import CreateAgentPackageValidator
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
@@ -30,6 +31,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     repair_context: str
     validation: dict[str, Any]
     validation_event: str
+    publish_confirmation_response: dict[str, Any]
     done: bool
     final_answer: str
 
@@ -89,6 +91,7 @@ class CreateAgentWorkflow:
             "messages": [response],
             "iteration": int(state.get("iteration") or 0) + 1,
             "repair_context": "",
+            "publish_confirmation_response": {},
             "validation_event": validation_event,
         }
 
@@ -160,16 +163,37 @@ class CreateAgentWorkflow:
                 {
                     "type": "create_agent_publish_confirmation",
                     "presentation": "assistant_dialogue",
-                    "resume_kind": "answer",
+                    "resume_kind": "confirmation",
                     "title": "发布前确认",
                     "message": _publish_confirmation_text(workspace, report),
                     "workspace_path": str(workspace.root),
                     "validation": report.to_digest().model_dump(mode="json"),
                 }
             )
+            publish_decision = _publish_decision_from_resume(answer)
+            workspace.write_publish_decision(
+                CreateAgentPublishDecision(
+                    decision=publish_decision,
+                    input_text=_resume_text(answer),
+                    package_fingerprint=_package_fingerprint(workspace.root),
+                    validation_scope=report.validation_scope,
+                    validation_status=report.status,
+                )
+            )
+            resume_text = _publish_resume_text(answer, decision=publish_decision)
+            publish_response = {
+                "decision": publish_decision,
+                "input_text": _resume_text(answer),
+                "instruction": (
+                    "User explicitly approved publish."
+                    if publish_decision == "approve"
+                    else "Publish is still pending. Treat input_text as the user's latest message, not as an automatic modification request."
+                ),
+            }
             return {
-                "messages": [HumanMessage(content=_resume_text(answer))],
+                "messages": [HumanMessage(content=resume_text)],
                 "validation": report.to_digest().model_dump(mode="json"),
+                "publish_confirmation_response": publish_response,
                 "repair_context": "",
                 "done": False,
                 "validation_event": "none",
@@ -206,6 +230,29 @@ def _resume_text(value: Any) -> str:
                 return item.strip()
         return str(value)
     return str(value or "").strip()
+
+
+def _publish_decision_from_resume(value: Any) -> str:
+    if isinstance(value, dict):
+        decision = str(value.get("decision") or "").strip().lower()
+        if decision == "approve":
+            return "approve"
+        return "pending"
+    text = str(value or "").strip().lower()
+    return "approve" if text in {"确认", "确认发布", "发布", "approve", "approved", "yes", "y", "ok"} else "pending"
+
+
+def _publish_resume_text(value: Any, *, decision: str) -> str:
+    text = _resume_text(value)
+    if decision == "approve":
+        return f"用户已明确确认发布 AgentPackage。确认内容：{text}"
+    return (
+        "用户在发布确认阶段回复了一条消息，但尚未明确确认发布。"
+        f"请把下面内容作为用户最新消息处理，而不是自动当作修改需求：{text}\n"
+        "如果这是问题或质疑，先基于当前 AgentPackage 状态回答；"
+        "如果这是修改要求，再进入制造修改和校验；"
+        "如果用户随后明确确认发布，再调用 create_agent_publish。"
+    )
 
 
 def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list[BaseMessage]]:

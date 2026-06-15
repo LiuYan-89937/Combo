@@ -110,12 +110,13 @@ export function buildAssistantDialoguePayload(payload: Record<string, unknown>, 
 	const normalized = value.trim().toLowerCase();
 	const resumeKind = String(payload.resume_kind ?? 'answer');
 	if (resumeKind === 'confirmation') {
-		if (['继续', '确认', 'approve', 'approved', 'yes', 'y', 'ok'].includes(normalized)) {
+		if (['继续', '确认', '确认发布', '发布', 'approve', 'approved', 'yes', 'y', 'ok'].includes(normalized)) {
 			return {decision: 'approve', answer: value, input_text: value};
 		}
 		if (['暂不提供', '跳过', 'skip', 'no', 'n'].includes(normalized)) {
-			return {decision: 'skip', answer: value, input_text: value};
+			return {decision: 'pending', answer: value, input_text: value};
 		}
+		return {decision: 'pending', answer: value, input_text: value};
 	}
 	return {decision: 'revise', answer: value, input_text: value};
 }

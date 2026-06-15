@@ -118,7 +118,8 @@ def _invariant_system_prompt_text() -> str:
             "最终出厂流程固定为：当前 focus 是 validation_publish；"
             "调用 create_agent_control(action=finalize) 触发 full validation；"
             "full validation passed 后系统会向用户做发布前确认。"
-            "如果用户要求调整，继续按自然语言修改；如果用户确认发布，调用 create_agent_publish。"
+            "发布确认阶段的用户输入仍是普通自然语言：问题先回答，修改请求再改文件，明确确认发布才调用 create_agent_publish。"
+            "create_agent_publish 只有在发布确认 gate 记录到明确用户确认后才会通过；不要把修改意见当作发布确认。"
         ),
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
@@ -134,6 +135,12 @@ def _invariant_system_prompt_text() -> str:
             "通用 bash 不在 create-agent 默认工具集中。不要主动调用验证工具；"
             "完成一轮必要文件写入后停止工具调用，graph 会自动运行 validation gate。"
             "Package validator observation 中的 recommended_skill/recommended_resources 是下一步修复入口。"
+        ),
+        (
+            "当你新增或修改 package tool 后，必须使用 create_agent_probe_tool(action='inspect') 查看可探测工具，"
+            "再用 create_agent_probe_tool(action='call', tool_id=..., arguments=...) 提供一次真实输入进行探测。"
+            "工具行为证据来自真实 probe observation。"
+            "如果 full validation 报 package_tool_probe issue，先 probe 或按 probe observation 修复工具，再停止工具调用等待 validation。"
         ),
         (
             "当 validation digest 或 repair_context 中出现 machine_applicable repair bundle，"
@@ -178,8 +185,10 @@ def _dynamic_system_context_text(
     workspace: CreateAgentWorkspace,
 ) -> str:
     repair_context = str(state.get("repair_context") or "").strip()
+    publish_confirmation = _publish_confirmation_context(state.get("publish_confirmation_response"))
     sections = [
         "Dynamic create-agent manufacturing context. This section changes across turns and must not be treated as stable policy.",
+        *([publish_confirmation] if publish_confirmation else []),
         render_dynamic_capability_context(package_root=workspace.root),
         workspace.context_summary(),
     ]
@@ -194,3 +203,27 @@ def _dynamic_system_context_text(
 
 def _stable_tool_names(tools: list[BaseTool]) -> list[str]:
     return sorted(str(tool.name) for tool in tools)
+
+
+def _publish_confirmation_context(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    decision = str(value.get("decision") or "").strip()
+    input_text = str(value.get("input_text") or "").strip()
+    instruction = str(value.get("instruction") or "").strip()
+    if not decision and not input_text:
+        return ""
+    if decision == "approve":
+        return (
+            "High-priority publish confirmation response:\n"
+            f"- decision: approve\n"
+            f"- user_input: {input_text}\n"
+            "- next_required_action: call create_agent_publish if publish readiness still holds."
+        )
+    return (
+        "High-priority publish confirmation response:\n"
+        "- decision: pending\n"
+        f"- user_input: {input_text}\n"
+        f"- instruction: {instruction or 'Treat user_input as the user latest message, not as an automatic package modification request.'}\n"
+        "- next_required_action: do not publish. If user_input is a question, answer it from current package evidence; if it asks for changes, modify then validate."
+    )

@@ -13,7 +13,9 @@ SYSTEM_STATE_FILE = ".factory/system_state.json"
 ACTION_FILE = ".factory/action.json"
 VALIDATION_FILE = ".factory/validation.json"
 VALIDATION_STATE_FILE = ".factory/validation_state.json"
+TOOL_PROBE_FILE = ".factory/tool_probe.json"
 PUBLISH_FILE = ".factory/publish.json"
+PUBLISH_DECISION_FILE = ".factory/publish_decision.json"
 RESOURCES_FILE = ".factory/resources.json"
 SKILL_GATEWAY_STATE_FILE = ".factory/skill_gateway_state.json"
 TEXT_SUMMARY_LIMIT = 240
@@ -383,8 +385,51 @@ class PackageValidationState(BaseModel):
 
     version: Literal["package_validation_state.v0"] = "package_validation_state.v0"
     package_fingerprint: dict[str, str] = Field(default_factory=dict)
+    probe_digest: str = ""
     validation_scope: str = ""
     active_focus_id: str = ""
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+class PackageToolProbeRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    package_digest: str = ""
+    status: Literal["passed", "failed"] = "failed"
+    observation_status: str = ""
+    execution_status: str = ""
+    contract_status: str = ""
+    message: str = ""
+    output_summary: str = ""
+    errors: list[str] = Field(default_factory=list)
+    probed_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+class PackageToolProbeState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["package_tool_probe_state.v0"] = "package_tool_probe_state.v0"
+    records: list[PackageToolProbeRecord] = Field(default_factory=list)
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def latest_by_tool(self) -> dict[str, PackageToolProbeRecord]:
+        latest: dict[str, PackageToolProbeRecord] = {}
+        for record in self.records:
+            latest[record.tool_id] = record
+        return latest
+
+
+class CreateAgentPublishDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["create_agent_publish_decision.v0"] = "create_agent_publish_decision.v0"
+    decision: Literal["pending", "approve"] = "pending"
+    input_text: str = ""
+    package_fingerprint: dict[str, str] = Field(default_factory=dict)
+    validation_scope: str = ""
+    validation_status: str = ""
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 

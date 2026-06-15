@@ -9,6 +9,6 @@
     "builtin_allow_external_paths": false,
     "package_tools_enabled": false,
     "instance_extensions_enabled": true,
-    "instance_extension_root": "/runtime/extensions"
+    "instance_extension_root": "extensions"
   }
 }

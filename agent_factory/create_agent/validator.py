@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import py_compile
+from hashlib import sha256
 from typing import Any
 
 from pydantic import ValidationError
@@ -11,6 +12,7 @@ from ruamel.yaml import YAML
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.create_agent.repair_policy import CreateAgentRepairPolicy
 from agent_factory.create_agent.models import (
+    PackageToolProbeState,
     PackageValidationIssue,
     PackageValidationNextAction,
     PackageValidationReport,
@@ -19,9 +21,16 @@ from agent_factory.create_agent.runtime_path_repair import find_runtime_path_rep
 from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
-from agent_factory.runtime_contracts.schema import AgentPackageManifest, REQUIRED_AGENT_PACKAGE_CONTRACTS
+from agent_factory.runtime_contracts.schema import (
+    AgentPackageManifest,
+    REQUIRED_AGENT_PACKAGE_CONTRACTS,
+    SchedulerSeedContract,
+    ToolsContract,
+)
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
+from agent_factory.tooling.builtins.registry import get_builtin_tool_ids
+from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.skills.schema import SkillGatewayState
 
 
@@ -102,6 +111,9 @@ class CreateAgentPackageValidator:
         runtime_path_report = _runtime_path_report(root, package, scope=scope, changed_files=changed)
         if runtime_path_report is not None:
             return runtime_path_report
+        file_contract_report = _package_file_contract_report(root, package, scope=scope, changed_files=changed)
+        if file_contract_report is not None:
+            return file_contract_report
         if scope in {"python_syntax", "full_static"}:
             syntax_report = _python_syntax(root, changed)
             if syntax_report is not None:
@@ -113,6 +125,9 @@ class CreateAgentPackageValidator:
                 base_services=compiler.facade.instance.services,
             )
         except Exception as exc:
+            runtime_contract_report = _runtime_contract_build_report(root, package, exc, scope=scope, changed_files=changed)
+            if runtime_contract_report is not None:
+                return runtime_contract_report
             return _failed(root, "runtime_contracts.build", exc, ["agent_package.json", "contracts"], scope=scope, changed_files=changed)
         if scope == "runtime_contract_build":
             return _passed(root, scope=scope, changed_files=changed, summary="Runtime contract build checks passed.")
@@ -127,6 +142,9 @@ class CreateAgentPackageValidator:
         semantic_report = _semantic_completeness_report(root, package, scope=scope, changed_files=changed)
         if semantic_report is not None:
             return semantic_report
+        probe_report = _package_tool_probe_report(root, package, scope=scope, changed_files=changed)
+        if probe_report is not None:
+            return probe_report
         return _passed(root, scope=scope, changed_files=changed, summary="Package static validation passed.")
 
 
@@ -516,6 +534,134 @@ def _runtime_path_report(
     )
 
 
+def _runtime_contract_build_report(
+    root: Path,
+    package: Any,
+    exc: Exception,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    if not isinstance(exc, ValidationError):
+        return None
+    issues: list[PackageValidationIssue] = []
+    for error in exc.errors():
+        issue = _runtime_contract_issue_from_pydantic_error(package, error)
+        if issue is not None:
+            issues.append(issue)
+    if not issues:
+        return None
+    return _issues_report(
+        root,
+        issues,
+        scope=scope,
+        changed_files=changed_files,
+        summary="Runtime contract build check failed: " + "; ".join(issue.summary for issue in issues[:3]),
+    )
+
+
+def _runtime_contract_issue_from_pydantic_error(package: Any, error: dict[str, Any]) -> PackageValidationIssue | None:
+    loc = tuple(str(item) for item in error.get("loc", ()))
+    message = str(error.get("msg") or "")
+    input_value = error.get("input")
+    if _scheduler_seed_error(loc=loc, message=message, input_value=input_value):
+        invalid_path = _scheduler_seed_invalid_path(loc)
+        summary = _scheduler_seed_summary(loc=loc, message=message)
+        return PackageValidationIssue(
+            where="scheduler_seed.target_payload",
+            summary=summary,
+            message=message,
+            path=_contract_path(package, "scheduler_seed"),
+            expected="SchedulerSeedContract graph_run targets use payload.message to describe the scheduled agent run.",
+            actual=_compact_actual(input_value),
+            repair_hint="Rewrite the scheduler seed target payload with a message field, then stop tool calls and let validation run.",
+            target_files=[_contract_path(package, "scheduler_seed")],
+            recommended_skill="15-scheduler-seed-system",
+            recommended_resources=[
+                "examples/scheduler_seed_system.capability.json",
+                "references/scheduler_seed_system.repair_hints.md",
+            ],
+            schema_path="SchedulerSeedContract.config.seeds[].target.payload.message",
+            invalid_value_path=invalid_path,
+            expected_shape={
+                "target": {
+                    "target_type": "graph_run",
+                    "payload": {
+                        "message": "Natural-language instruction for the scheduled agent run.",
+                        "thread_policy": "new_thread_per_run",
+                    },
+                }
+            },
+            repair_template={
+                "target": {
+                    "target_type": "graph_run",
+                    "payload": {
+                        "message": "<scheduled task instruction from task_content/user request>",
+                        "thread_policy": "new_thread_per_run",
+                    },
+                }
+            },
+            replace_strategy="replace_object",
+            details={"pydantic_error": error},
+        )
+    if _loc_contains(loc, "seeds"):
+        return PackageValidationIssue(
+            where="scheduler_seed.schema",
+            summary="contracts/scheduler_seed.json does not match SchedulerSeedContract",
+            message=message,
+            path=_contract_path(package, "scheduler_seed"),
+            expected="contracts/scheduler_seed.json follows scheduler_seed_contract.v0.",
+            actual=_compact_actual(input_value),
+            repair_hint="Repair only contracts/scheduler_seed.json using scheduler seed validator evidence.",
+            target_files=[_contract_path(package, "scheduler_seed")],
+            recommended_skill="15-scheduler-seed-system",
+            recommended_resources=[
+                "examples/scheduler_seed_system.capability.json",
+                "references/scheduler_seed_system.repair_hints.md",
+            ],
+            schema_path="SchedulerSeedContract.config.seeds[]",
+            invalid_value_path=_scheduler_seed_invalid_path(loc),
+            details={"pydantic_error": error},
+        )
+    return None
+
+
+def _scheduler_seed_error(*, loc: tuple[str, ...], message: str, input_value: Any) -> bool:
+    if not _loc_contains(loc, "target"):
+        return False
+    if "graph_run target payload requires message" in message:
+        return True
+    if isinstance(input_value, dict):
+        payload = input_value.get("payload")
+        return input_value.get("target_type") == "graph_run" and isinstance(payload, dict) and "message" not in payload
+    return False
+
+
+def _scheduler_seed_summary(*, loc: tuple[str, ...], message: str) -> str:
+    index = _loc_index_after(loc, "seeds")
+    seed_label = f"seed {index}" if index is not None else "scheduler seed"
+    if "payload requires message" in message:
+        return f"{seed_label} graph_run target payload is missing message"
+    return f"{seed_label} target payload is invalid"
+
+
+def _scheduler_seed_invalid_path(loc: tuple[str, ...]) -> str:
+    path = "contracts/scheduler_seed.json"
+    if loc:
+        path += ":/" + "/".join(loc)
+    return path
+
+
+def _contract_path(package: Any, contract_key: str) -> str:
+    manifest = getattr(package, "manifest", None)
+    contracts = getattr(manifest, "contracts", {}) if manifest is not None else {}
+    if isinstance(contracts, dict):
+        value = contracts.get(contract_key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return f"contracts/{contract_key}.json"
+
+
 def _with_scope(report: PackageValidationReport, *, scope: ValidationScope, changed_files: list[str]) -> PackageValidationReport:
     return report.model_copy(update={"validation_scope": scope, "changed_files": changed_files})
 
@@ -762,6 +908,442 @@ def _python_syntax(root: Path, changed_files: list[str]) -> PackageValidationRep
                 ],
             )
     return None
+
+
+def _package_file_contract_report(
+    root: Path,
+    package: Any,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    issues: list[PackageValidationIssue] = []
+    manifest = package.manifest
+    package_result = PackageToolProvider().discover(ToolProviderContext(package_root=root))
+    package_tools = {spec.id: spec for spec in package_result.tool_specs}
+    for diagnostic in package_result.diagnostics:
+        if diagnostic.level == "error":
+            manifest_path = str(diagnostic.details.get("manifest_path") or "tools/")
+            issues.append(_contract_issue(
+                where="package_tool.manifest_load",
+                summary=diagnostic.message,
+                message=str(diagnostic.details.get("error") or diagnostic.message),
+                path=_relative(root, Path(manifest_path)),
+                expected="Every tools/<id>/manifest.json loads as a ToolSpec.",
+                actual=str(diagnostic.details.get("error") or diagnostic.message),
+                repair_hint="Repair the package tool manifest so PackageToolProvider can load it.",
+                target_files=[_relative(root, Path(manifest_path))],
+                recommended_skill="10-package-tool-system",
+            ))
+    issues.extend(_manifest_asset_index_issues(root, manifest, package_tools))
+    issues.extend(_tools_contract_issues(package))
+    issues.extend(_assembly_tool_issues(package, package_tools))
+    issues.extend(_tool_access_issues(package, package_tools))
+    issues.extend(_scheduler_tool_target_issues(package, package_tools))
+    if not issues:
+        return None
+    return _issues_report(
+        root,
+        issues,
+        scope=scope,
+        changed_files=changed_files,
+        summary="Package file contract check failed: " + "; ".join(issue.summary for issue in issues[:3]),
+    )
+
+
+def _package_tool_probe_report(
+    root: Path,
+    package: Any,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    if scope != "full_static":
+        return None
+    package_result = PackageToolProvider().discover(ToolProviderContext(package_root=root))
+    package_tools = {spec.id: spec for spec in package_result.tool_specs}
+    if not package_tools:
+        return None
+    state = _read_probe_state(root)
+    latest = state.latest_by_tool()
+    current_digest = _package_digest(root)
+    issues: list[PackageValidationIssue] = []
+    scheduler_tool_ids = set(_scheduler_package_tool_ids(package, package_tools))
+    required_tool_ids = sorted(set(package_tools) | scheduler_tool_ids)
+    for tool_id in required_tool_ids:
+        record = latest.get(tool_id)
+        if record is None:
+            issues.append(_probe_issue(
+                tool_id=tool_id,
+                summary=f"package tool {tool_id} has not been probed",
+                actual="missing probe evidence",
+                repair_hint="Use create_agent_probe_tool(action='inspect'), then create_agent_probe_tool(action='call', tool_id=..., arguments=...) with realistic input.",
+            ))
+            continue
+        if record.package_digest != current_digest:
+            issues.append(_probe_issue(
+                tool_id=tool_id,
+                summary=f"package tool {tool_id} probe is stale",
+                actual="probe package digest does not match current package files",
+                repair_hint="The package changed after the last probe. Call create_agent_probe_tool again for this tool.",
+            ))
+            continue
+        if record.status != "passed":
+            issues.append(_probe_issue(
+                tool_id=tool_id,
+                summary=f"package tool {tool_id} probe failed",
+                actual=f"{record.observation_status} {record.contract_status}: {record.message}",
+                repair_hint="Repair the package tool using the probe observation, then run create_agent_probe_tool call again.",
+                details=record.model_dump(mode="json"),
+            ))
+    if not issues:
+        return None
+    return _issues_report(
+        root,
+        issues,
+        scope=scope,
+        changed_files=changed_files,
+        summary="Package tool probe check failed: " + "; ".join(issue.summary for issue in issues[:3]),
+    )
+
+
+def _manifest_asset_index_issues(root: Path, manifest: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    expected_tools = {f"tools/{tool_id}/manifest.json" for tool_id in package_tools}
+    issues.extend(_asset_index_issues(
+        root,
+        field_name="tools",
+        declared=set(getattr(manifest, "tools", []) or []),
+        expected=expected_tools,
+        recommended_skill="10-package-tool-system",
+    ))
+    for field_name, directory, skill in (
+        ("prompts", "prompts", "12-assembly-pattern-system"),
+        ("patterns", "patterns", "12-assembly-pattern-system"),
+    ):
+        expected = _asset_files(root / directory)
+        issues.extend(_asset_index_issues(
+            root,
+            field_name=field_name,
+            declared=set(getattr(manifest, field_name, []) or []),
+            expected=expected,
+            recommended_skill=skill,
+        ))
+    return issues
+
+
+def _asset_index_issues(
+    root: Path,
+    *,
+    field_name: str,
+    declared: set[str],
+    expected: set[str],
+    recommended_skill: str,
+) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    missing = sorted(expected - declared)
+    dangling = sorted(path for path in declared if not (root / path).is_file())
+    if missing:
+        issues.append(_contract_issue(
+            where=f"package_manifest.{field_name}_index",
+            summary=f"agent_package.json {field_name} index is missing package assets",
+            message=f"Missing {field_name} entries: {missing}",
+            path="agent_package.json",
+            expected=f"agent_package.json.{field_name} indexes every generated {field_name} asset.",
+            actual=", ".join(missing),
+            repair_hint=f"Add the missing package-relative asset paths to agent_package.json.{field_name}.",
+            target_files=["agent_package.json", *missing],
+            recommended_skill=recommended_skill,
+        ))
+    if dangling:
+        issues.append(_contract_issue(
+            where=f"package_manifest.{field_name}_index",
+            summary=f"agent_package.json {field_name} index references missing files",
+            message=f"Dangling {field_name} entries: {dangling}",
+            path="agent_package.json",
+            expected=f"Every agent_package.json.{field_name} entry exists in the package.",
+            actual=", ".join(dangling),
+            repair_hint=f"Create the referenced files or remove stale entries from agent_package.json.{field_name}.",
+            target_files=["agent_package.json", *dangling],
+            recommended_skill=recommended_skill,
+        ))
+    return issues
+
+
+def _assembly_tool_issues(package: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    assembly_tools = {spec.id: spec for spec in package.assembly_spec.tools}
+    for tool_id, package_spec in package_tools.items():
+        assembly_spec = assembly_tools.get(tool_id)
+        if assembly_spec is None:
+            issues.append(_contract_issue(
+                where="assembly.tools_index",
+                summary=f"assembly_spec.json does not declare package tool {tool_id}",
+                message=f"Package tool {tool_id} exists but assembly_spec.tools has no matching ToolSpec.",
+                path="assembly_spec.json",
+                expected="assembly_spec.tools contains a ToolSpec object for every package tool manifest.",
+                actual=f"missing {tool_id}",
+                repair_hint="Add the package tool ToolSpec object to assembly_spec.json tools.",
+                target_files=["assembly_spec.json", f"tools/{tool_id}/manifest.json"],
+                recommended_skill="12-assembly-pattern-system",
+            ))
+            continue
+        mismatches = _tool_spec_mismatches(package_spec, assembly_spec)
+        if mismatches:
+            issues.append(_contract_issue(
+                where="assembly.tools_manifest_mismatch",
+                summary=f"assembly ToolSpec for {tool_id} does not match package manifest",
+                message=f"Mismatched ToolSpec fields: {', '.join(mismatches)}",
+                path="assembly_spec.json",
+                expected="assembly_spec.tools ToolSpec fields match tools/<id>/manifest.json.",
+                actual=", ".join(mismatches),
+                repair_hint="Copy the canonical ToolSpec shape from the package tool manifest into assembly_spec.json.",
+                target_files=["assembly_spec.json", f"tools/{tool_id}/manifest.json"],
+                recommended_skill="12-assembly-pattern-system",
+            ))
+    return issues
+
+
+def _tools_contract_issues(package: Any) -> list[PackageValidationIssue]:
+    contract = package.contracts.get("tools")
+    if not isinstance(contract, ToolsContract):
+        return []
+    legal_builtin_ids = set(get_builtin_tool_ids())
+    blocked_ids = _manufacturing_tool_ids()
+    issues: list[PackageValidationIssue] = []
+    for tool_id in contract.config.builtin_tool_ids:
+        if tool_id in blocked_ids or tool_id.startswith("create_agent_"):
+            issues.append(_contract_issue(
+                where="tools_contract.manufacturing_tool",
+                summary=f"contracts/tools.json exposes create-agent manufacturing tool {tool_id}",
+                message="Produced AgentPackage must not expose create-agent manufacturing tools as runtime builtins.",
+                path="contracts/tools.json",
+                expected="contracts/tools.json builtin_tool_ids contains only runtime builtin tool ids.",
+                actual=tool_id,
+                repair_hint="Remove create-agent manufacturing tool ids from contracts/tools.json.",
+                target_files=["contracts/tools.json"],
+                recommended_skill="09-tools-system",
+            ))
+        elif tool_id not in legal_builtin_ids:
+            issues.append(_contract_issue(
+                where="tools_contract.unknown_builtin_tool",
+                summary=f"contracts/tools.json references unknown runtime builtin tool {tool_id}",
+                message=f"{tool_id} is not an implemented runtime builtin tool.",
+                path="contracts/tools.json",
+                expected="contracts/tools.json builtin_tool_ids contains implemented runtime builtin tool ids.",
+                actual=tool_id,
+                repair_hint="Use an implemented runtime builtin tool id or remove the stale builtin reference.",
+                target_files=["contracts/tools.json"],
+                recommended_skill="09-tools-system",
+            ))
+    return issues
+
+
+def _tool_access_issues(package: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools)
+    blocked_ids = _manufacturing_tool_ids()
+    for binding in package.assembly_spec.bindings.node_bindings:
+        if binding.binding_type != "tool_access":
+            continue
+        allowed_tool_ids = list(getattr(binding.payload, "allowed_tool_ids", []) or [])
+        for tool_id in allowed_tool_ids:
+            if tool_id in blocked_ids or tool_id.startswith("create_agent_"):
+                issues.append(_contract_issue(
+                    where="assembly.tool_access.manufacturing_tool",
+                    summary=f"tool_access exposes create-agent manufacturing tool {tool_id}",
+                    message="Produced AgentPackage must not expose create-agent manufacturing tools.",
+                    path="assembly_spec.json",
+                    expected="Only runtime builtin tools and package tools are exposed to produced agents.",
+                    actual=tool_id,
+                    repair_hint="Remove create-agent manufacturing tool ids from tool_access allowed_tool_ids.",
+                    target_files=["assembly_spec.json"],
+                    recommended_skill="12-assembly-pattern-system",
+                ))
+            elif tool_id not in legal_tool_ids:
+                issues.append(_contract_issue(
+                    where="assembly.tool_access.unknown_tool",
+                    summary=f"tool_access references unknown tool {tool_id}",
+                    message=f"{tool_id} is not an implemented runtime builtin tool and not a package tool.",
+                    path="assembly_spec.json",
+                    expected="tool_access.allowed_tool_ids contains runtime builtin tool ids or generated package tool ids.",
+                    actual=tool_id,
+                    repair_hint="Use an implemented runtime builtin tool id or add a package tool manifest with the same id.",
+                    target_files=["assembly_spec.json", "contracts/tools.json", "tools/"],
+                    recommended_skill="09-tools-system",
+                ))
+    return issues
+
+
+def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools)
+    contract = package.contracts.get("scheduler_seed")
+    if not isinstance(contract, SchedulerSeedContract):
+        return issues
+    for seed in contract.config.seeds:
+        if seed.target.target_type != "tool_call":
+            continue
+        tool_id = str(seed.target.payload.get("tool_id") or "").strip()
+        if tool_id and tool_id not in legal_tool_ids:
+            issues.append(_contract_issue(
+                where="scheduler_seed.target_tool",
+                summary=f"scheduler seed {seed.seed_id} targets unknown tool {tool_id}",
+                message="scheduler_seed tool_call targets must point to an executable runtime builtin or package tool.",
+                path="contracts/scheduler_seed.json",
+                expected="scheduler_seed.target.payload.tool_id is executable.",
+                actual=tool_id,
+                repair_hint="Change the scheduler target to a valid tool id or add the missing package tool.",
+                target_files=["contracts/scheduler_seed.json", "tools/"],
+                recommended_skill="15-scheduler-seed-system",
+            ))
+    return issues
+
+
+def _scheduler_package_tool_ids(package: Any, package_tools: dict[str, Any]) -> list[str]:
+    contract = package.contracts.get("scheduler_seed")
+    if not isinstance(contract, SchedulerSeedContract):
+        return []
+    ids: list[str] = []
+    for seed in contract.config.seeds:
+        if seed.target.target_type == "tool_call":
+            tool_id = str(seed.target.payload.get("tool_id") or "").strip()
+            if tool_id in package_tools:
+                ids.append(tool_id)
+    return ids
+
+
+def _asset_files(directory: Path) -> set[str]:
+    if not directory.is_dir():
+        return set()
+    root = directory.parent
+    return {
+        path.relative_to(root).as_posix()
+        for path in directory.rglob("*")
+        if path.is_file() and path.name not in {".DS_Store"} and "__pycache__" not in path.parts
+    }
+
+
+def _tool_spec_mismatches(left: Any, right: Any) -> list[str]:
+    left_payload = left.model_dump(mode="json") if hasattr(left, "model_dump") else dict(left)
+    right_payload = right.model_dump(mode="json") if hasattr(right, "model_dump") else dict(right)
+    keys = ("description", "entrypoint", "input_schema", "output_schema", "resources", "risk_level", "concurrent")
+    return [key for key in keys if left_payload.get(key) != right_payload.get(key)]
+
+
+def _manufacturing_tool_ids() -> set[str]:
+    return {
+        "create_agent_control",
+        "create_agent_stage",
+        "create_agent_probe_tool",
+        "create_agent_publish",
+        "skill",
+    }
+
+
+def _read_probe_state(root: Path) -> PackageToolProbeState:
+    path = root / ".factory" / "tool_probe.json"
+    if not path.is_file():
+        return PackageToolProbeState()
+    try:
+        return PackageToolProbeState.model_validate_json(path.read_text(encoding="utf-8"))
+    except Exception:
+        return PackageToolProbeState()
+
+
+def _package_digest(root: Path) -> str:
+    fingerprint: dict[str, str] = {}
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        relative = path.relative_to(root).as_posix()
+        parts = relative.split("/")
+        if not relative or parts[0] == ".factory" or "__pycache__" in parts or relative.endswith(".pyc") or relative == ".DS_Store":
+            continue
+        fingerprint[relative] = sha256(path.read_bytes()).hexdigest()
+    return sha256(json.dumps(fingerprint, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _contract_issue(
+    *,
+    where: str,
+    summary: str,
+    message: str,
+    path: str,
+    expected: str,
+    actual: str,
+    repair_hint: str,
+    target_files: list[str],
+    recommended_skill: str,
+    details: dict[str, Any] | None = None,
+) -> PackageValidationIssue:
+    return PackageValidationIssue(
+        where=where,
+        summary=summary,
+        message=message,
+        path=path,
+        expected=expected,
+        actual=actual,
+        repair_hint=repair_hint,
+        target_files=target_files,
+        recommended_skill=recommended_skill,
+        details=details or {},
+    )
+
+
+def _probe_issue(
+    *,
+    tool_id: str,
+    summary: str,
+    actual: str,
+    repair_hint: str,
+    details: dict[str, Any] | None = None,
+) -> PackageValidationIssue:
+    return _contract_issue(
+        where="package_tool_probe",
+        summary=summary,
+        message=summary,
+        path=f"tools/{tool_id}",
+        expected="Generated package tools have fresh successful create_agent_probe_tool evidence before publish.",
+        actual=actual,
+        repair_hint=repair_hint,
+        target_files=[f"tools/{tool_id}/manifest.json", f"tools/{tool_id}/tool.py", "assembly_spec.json"],
+        recommended_skill="10-package-tool-system",
+        details=details,
+    )
+
+
+def _issues_report(
+    root: Path,
+    issues: list[PackageValidationIssue],
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+    summary: str,
+) -> PackageValidationReport:
+    target_files = sorted({target for issue in issues for target in issue.target_files})
+    repair_bundle = REPAIR_POLICY.generic_bundle(
+        where=issues[0].where if issues else "package_file_contract",
+        target_files=target_files,
+        exc=ValueError(summary),
+    )
+    return _with_scope(
+        PackageValidationReport(
+            package_root=str(root),
+            summary=summary,
+            next_action=PackageValidationNextAction(
+                kind="repair_files",
+                target_files=target_files,
+                recommended_skill=issues[0].recommended_skill if issues else "",
+                recommended_resources=issues[0].recommended_resources if issues else [],
+                repair_bundles=[repair_bundle],
+            ),
+            issues=[
+                issue if issue.repair_bundle is not None else issue.model_copy(update={"repair_bundle": repair_bundle})
+                for issue in issues
+            ],
+        ),
+        scope=scope,
+        changed_files=changed_files,
+    )
 
 
 def _relative(root: Path, path: Path) -> str:

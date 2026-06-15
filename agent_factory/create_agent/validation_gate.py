@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+import json
 from pathlib import Path
 
 from agent_factory.create_agent.models import (
@@ -27,6 +28,7 @@ class CreateAgentValidationGate:
     def run(self, workspace: CreateAgentWorkspace, *, decision: ValidationDecision | None = None) -> PackageValidationReport:
         decision = decision or ValidationDecision()
         current_fingerprint = _package_fingerprint(workspace.root)
+        current_probe_digest = _tool_probe_digest(workspace)
         previous_state = workspace.read_validation_state()
         previous_report = workspace.read_validation()
         changed_files = _changed_files(previous_state.package_fingerprint if previous_state else {}, current_fingerprint)
@@ -39,6 +41,7 @@ class CreateAgentValidationGate:
             and previous_state is not None
             and previous_report is not None
             and not changed_files
+            and previous_state.probe_digest == current_probe_digest
             and previous_state.active_focus_id == active_focus_id
             and _scope_covers(previous_state.validation_scope, scope)
         ):
@@ -47,6 +50,7 @@ class CreateAgentValidationGate:
         workspace.write_validation_state(
             PackageValidationState(
                 package_fingerprint=current_fingerprint,
+                probe_digest=current_probe_digest,
                 validation_scope=report.validation_scope,
                 active_focus_id=active_focus_id,
                 updated_at=datetime.now(UTC).isoformat(),
@@ -160,6 +164,17 @@ def _package_fingerprint(root: Path) -> dict[str, str]:
             continue
         fingerprint[relative] = sha256(path.read_bytes()).hexdigest()
     return fingerprint
+
+
+def _tool_probe_digest(workspace: CreateAgentWorkspace) -> str:
+    path = workspace.tool_probe_path
+    if not path.is_file():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return "unreadable"
+    return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def _ignore_path(relative: str) -> bool:

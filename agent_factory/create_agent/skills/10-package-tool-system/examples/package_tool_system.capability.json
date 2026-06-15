@@ -45,6 +45,9 @@
       "package_tools_enabled": true
     }
   },
+  "agent_package.json#tools": [
+    "tools/package_action/manifest.json"
+  ],
   "assembly_spec.json#tools_item": {
     "id": "package_action",
     "description": "Performs one package-defined runtime action.",
@@ -79,5 +82,19 @@
       "llm_mode": "disabled"
     },
     "concurrent": true
+  },
+  "probe_after_write": {
+    "tool": "create_agent_probe_tool",
+    "inspect": {
+      "action": "inspect"
+    },
+    "call": {
+      "action": "call",
+      "tool_id": "package_action",
+      "arguments": {
+        "query": "sample user request"
+      }
+    },
+    "note": "Use realistic input for the generated tool."
   }
 }

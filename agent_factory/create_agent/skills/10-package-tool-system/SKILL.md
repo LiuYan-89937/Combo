@@ -26,6 +26,7 @@ Guides adding executable package tools and their ToolSpec declarations.
 ## Focus Files
 - `contracts/tools.json`
 - `assembly_spec.json`
+- `agent_package.json`
 - `tools/<tool_id>/manifest.json`
 - `tools/<tool_id>/tool.py`
 
@@ -37,9 +38,10 @@ Guides adding executable package tools and their ToolSpec declarations.
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- Add the complete package tool as a coherent unit: tool.py, manifest ToolSpec, contracts/tools.json enablement, and assembly tool access.
+- Add the complete package tool as a coherent unit: tool.py, manifest ToolSpec, agent_package.json tools index, contracts/tools.json enablement, and assembly tool access.
 - ToolSpec objects must be objects, not string references.
 - Package tool entrypoints return the standard tool envelope; output_schema validates only envelope.output.
+- After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic input.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 
 ## Boundaries

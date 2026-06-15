@@ -10,7 +10,7 @@
       "injection_enabled": true,
       "store": {
         "backend": "sqlite",
-        "path": "/runtime/memory/factory_chat.sqlite"
+        "path": ".agent_runtime/memory/factory_chat.sqlite"
       },
       "ranking": {
         "max_items_total": 8,
@@ -35,7 +35,7 @@
         ]
       },
       "background": {
-        "journal_root": "/runtime/memory/jobs",
+        "journal_root": ".agent_runtime/memory/jobs",
         "max_pending_jobs": 32,
         "concurrency": 1,
         "queue_full_policy": "reject_new_when_full",

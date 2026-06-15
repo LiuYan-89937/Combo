@@ -231,8 +231,8 @@ class AgentPackageRuntimeManager:
         root = _host_runtime_root(package_id) / "sessions"
         if isinstance(config, dict):
             configured = str(config.get("session_root") or "")
-            if configured and not configured.startswith("/runtime"):
-                root = Path(configured)
+            if configured:
+                root = _host_session_root(package_id=package_id, package=package, configured=configured)
         return AgentSessionManager(AgentSessionConfig(root=root))
 
     def _list_sessions_for_loaded_package(self, package: LoadedAgentPackage) -> list[dict[str, Any]]:
@@ -504,6 +504,18 @@ class AgentPackageRuntimeManager:
 
 def _host_runtime_root(package_id: str) -> Path:
     return factory_artifact_path("agent_runtime", package_id)
+
+
+def _host_session_root(*, package_id: str, package: LoadedAgentPackage, configured: str) -> Path:
+    value = configured.strip()
+    if value == "/runtime":
+        return _host_runtime_root(package_id)
+    if value.startswith("/runtime/"):
+        return (_host_runtime_root(package_id) / value.removeprefix("/runtime/")).resolve()
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (package.package_root / path).resolve()
 
 
 def _default_package_root() -> Path:

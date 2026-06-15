@@ -15,8 +15,10 @@ from agent_factory.create_agent.control_tool import (
 from agent_factory.create_agent.models import (
     ACTION_FILE,
     PUBLISH_FILE,
+    PUBLISH_DECISION_FILE,
     SKILL_GATEWAY_STATE_FILE,
     SYSTEM_STATE_FILE,
+    TOOL_PROBE_FILE,
     VALIDATION_FILE,
     VALIDATION_STATE_FILE,
 )
@@ -25,6 +27,7 @@ from agent_factory.create_agent.publish_tool import (
     CREATE_AGENT_PUBLISH_TOOL_ID,
     build_create_agent_publish_tool_spec,
 )
+from agent_factory.create_agent.probe_tool import CREATE_AGENT_PROBE_TOOL_ID, build_create_agent_probe_tool_spec
 from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
@@ -120,7 +123,9 @@ class CreateAgentToolEnvironmentBuilder:
                 SYSTEM_STATE_FILE,
                 VALIDATION_FILE,
                 VALIDATION_STATE_FILE,
+                TOOL_PROBE_FILE,
                 PUBLISH_FILE,
+                PUBLISH_DECISION_FILE,
                 SKILL_GATEWAY_STATE_FILE,
                 ".factory/manufacturing_trace.json",
                 ".factory/tool_outputs",
@@ -160,6 +165,7 @@ class CreateAgentToolEnvironmentBuilder:
                         *provider_result.system_tool_ids,
                         CREATE_AGENT_CONTROL_TOOL_ID,
                         CREATE_AGENT_STAGE_TOOL_ID,
+                        CREATE_AGENT_PROBE_TOOL_ID,
                         CREATE_AGENT_PUBLISH_TOOL_ID,
                     ]
                 )
@@ -167,6 +173,7 @@ class CreateAgentToolEnvironmentBuilder:
             extra_specs = [
                 build_create_agent_control_tool_spec(),
                 build_create_agent_stage_tool_spec(),
+                build_create_agent_probe_tool_spec(),
                 build_create_agent_publish_tool_spec(),
                 *skill_specs,
             ]
