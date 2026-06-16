@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from typing import Any, Literal, Protocol
 
@@ -19,6 +20,14 @@ from agent_factory.runtime_kernel.types import ModelInvocationResult
 
 
 ModelRole = Literal["main", "task"]
+_INTERNAL_SESSION_SNAPSHOT_BLOCK_RE = re.compile(
+    r"<session_snapshot\b[^>]*>.*?</session_snapshot>",
+    re.IGNORECASE | re.DOTALL,
+)
+_INTERNAL_SESSION_SNAPSHOT_OPEN_RE = re.compile(
+    r"<session_snapshot\b[^>]*>.*$",
+    re.IGNORECASE,
+)
 
 
 class ModelServiceAdapter(Protocol):
@@ -93,7 +102,7 @@ class LangChainModelServiceAdapter:
                 tools=tools or [],
             )
         )
-        text = _content_to_text(getattr(response, "content", response)).strip()
+        text = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
         tool_calls = _tool_calls_from_response(response)
         return ModelInvocationResult(
             ai_message=response if isinstance(response, BaseMessage) else None,
@@ -169,6 +178,16 @@ def _conversation_summary_text(messages: list[Any]) -> str:
         "Do not quote, restate, or expose this summary to the user unless they explicitly ask for the prior conversation:\n"
         + "\n\n".join(summaries[-3:])
     )
+
+
+def strip_internal_snapshot_blocks(value: str) -> str:
+    """Remove private context snapshots only when text is leaving the model as user-visible output."""
+    if not value:
+        return ""
+    text = _INTERNAL_SESSION_SNAPSHOT_BLOCK_RE.sub("", value)
+    text = _INTERNAL_SESSION_SNAPSHOT_OPEN_RE.sub("", text)
+    lines = [line.rstrip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line.strip()).strip()
 
 
 def _tool_protocol_instruction(tools: list[BaseTool]) -> str:

@@ -55,6 +55,7 @@ REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
         "dependencies",
         "model",
         "knowledge",
+        "memory",
         "node_provider",
         "render",
         "resources",

@@ -19,8 +19,8 @@ Guides memory contract changes for produced agents.
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
-- The agent needs long-term memory, user preference recall, or retrieval over prior interactions.
-- A capability explicitly depends on memory behavior.
+- The baseline scaffold includes memory because RuntimeKernel treats cross-session memory as a built-in agent capability.
+- The agent needs custom memory scope, retention, ranking, or store behavior beyond the default contract.
 - Validator reports memory contract issues.
 
 ## Focus Files
@@ -34,7 +34,8 @@ Guides memory contract changes for produced agents.
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- Do not enable or configure memory just because the user asks for a smart assistant; tie memory to a concrete implemented behavior.
+- Keep the scaffolded memory contract enabled unless validator evidence shows it is malformed.
+- Do not rewrite memory settings unless a user requirement or validator issue requires a concrete change.
 - Do not store sensitive user data unless the user explicitly wants that behavior and the runtime supports it.
 - Keep memory scope and retention clear in the contract.
 

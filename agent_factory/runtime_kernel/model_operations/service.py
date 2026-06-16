@@ -13,6 +13,7 @@ from agent_factory.runtime_kernel.adapters.model import (
     _configured_model_for_role,
     _content_to_text,
     _messages_for_state,
+    strip_internal_snapshot_blocks,
     _tool_calls_from_response,
 )
 from agent_factory.runtime_kernel.types import ModelInvocationResult
@@ -101,7 +102,7 @@ class ModelOperationService:
                 payload={"error": str(exc)},
             )
             raise
-        text = _content_to_text(getattr(response, "content", response)).strip()
+        text = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
         tool_calls = _tool_calls_from_response(response)
         usage_metadata = getattr(response, "usage_metadata", None) or {}
         _emit(

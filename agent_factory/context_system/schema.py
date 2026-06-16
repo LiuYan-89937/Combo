@@ -32,7 +32,7 @@ class CompressionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    trigger_token_threshold: int = Field(default=8000, ge=1000)
+    trigger_token_threshold: int = Field(default=200000, ge=1000)
     keep_recent_messages: int = Field(default=12, ge=2, le=128)
 
 

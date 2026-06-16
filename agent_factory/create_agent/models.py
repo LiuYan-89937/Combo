@@ -464,6 +464,7 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
                 "contracts/tools.json",
                 "contracts/scheduler_seed.json",
                 "contracts/knowledge.json",
+                "contracts/memory.json",
                 "contracts/node_provider.json",
                 "assembly_spec.json",
             ],

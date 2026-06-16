@@ -52,7 +52,7 @@ class CognitiveAnswerNode:
         tool_calls = _message_tool_calls(ai_message) or list(result.tool_calls or [])
         if tool_calls:
             return {
-                "messages": [ai_message or AIMessage(content=result.assistant_draft or "", tool_calls=tool_calls)],
+                "messages": [AIMessage(content=result.assistant_draft or "", tool_calls=tool_calls)],
                 **_context_token_budget_patch(result.metadata, context.node_id),
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
@@ -67,11 +67,7 @@ class CognitiveAnswerNode:
                 },
             }
         final_answer = result.final_answer or result.assistant_draft or ""
-        response_message = (
-            ai_message
-            if ai_message is not None and not _message_tool_calls(ai_message)
-            else AIMessage(content=final_answer)
-        )
+        response_message = AIMessage(content=final_answer)
         return {
             "messages": [response_message],
             **_context_token_budget_patch(result.metadata, context.node_id),

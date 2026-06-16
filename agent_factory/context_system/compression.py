@@ -196,7 +196,7 @@ def _summarize_messages(messages: list[Any]) -> str:
                 "You are compacting the current conversation into an internal session snapshot for a future agent turn. "
                 "The snapshot is private runtime state, not a user-facing reply. "
                 "Your job is to preserve enough information for the next agent call to continue work without reading the removed messages.\n\n"
-                "Write the output in exactly this XML-like structure:\n"
+                "Write the output as one tagged internal snapshot using exactly this shape:\n"
                 "<session_snapshot>\n"
                 "  <user_intent>...</user_intent>\n"
                 "  <key_facts>...</key_facts>\n"
@@ -214,7 +214,7 @@ def _summarize_messages(messages: list[Any]) -> str:
                 "- continuation_instructions: short guidance for the next turn, including what not to repeat or expose.\n\n"
                 "Preserve concrete details that affect future turns. Remove greetings, jokes, repeated phrasing, and details with no future value. "
                 "Do not replace specifics with vague phrases like 'goal achieved', 'task completed', or 'information found'. "
-                "If a section has no useful content, write 'None'. Do not invent facts. Return only the XML-like snapshot."
+                "If a section has no useful content, write 'None'. Do not invent facts. Return only the tagged snapshot."
             )
         ),
         HumanMessage(content=_conversation_text(messages)),
