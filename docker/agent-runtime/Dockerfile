@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 ARG PYTHON_BASE_IMAGE=python:3.12-slim
 FROM ${PYTHON_BASE_IMAGE}
 
@@ -21,7 +22,9 @@ RUN set -eux; \
             "$file"; \
     done
 
-RUN $APT_GET update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    $APT_GET update \
     && $APT_GET install -y --no-install-recommends \
         bash \
         ca-certificates \
@@ -31,14 +34,17 @@ RUN $APT_GET update \
         gawk \
         grep \
         procps \
-        sed \
-    && rm -rf /var/lib/apt/lists/*
+        sed
 
 COPY pyproject.toml README.md /opt/agentfactory/
-COPY agent_factory /opt/agentfactory/agent_factory
+RUN mkdir -p /opt/agentfactory/agent_factory \
+    && touch /opt/agentfactory/agent_factory/__init__.py
 
-RUN python -m pip install --upgrade pip \
-    && python -m pip install --no-cache-dir -e /opt/agentfactory
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    python -m pip install --upgrade pip \
+    && python -m pip install -e /opt/agentfactory
+
+COPY agent_factory /opt/agentfactory/agent_factory
 
 RUN python -c "from langgraph.checkpoint.sqlite import SqliteSaver; import tempfile; path = tempfile.NamedTemporaryFile(suffix='.sqlite').name; saver = SqliteSaver.from_conn_string(path); instance = saver.__enter__(); assert hasattr(instance.jsonplus_serde, 'dumps'), 'incompatible langgraph sqlite serializer'; saver.__exit__(None, None, None)"
 

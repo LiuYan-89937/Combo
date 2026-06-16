@@ -236,13 +236,13 @@ AgentPackage
 构建 runtime image：
 
 ```bash
-docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
+DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
 ```
 
 如果 Docker Hub 拉取基础镜像超时，可以指定镜像源：
 
 ```bash
-docker build -t agentfactory-runtime-python:3.12 \
+DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 \
   --build-arg PYTHON_BASE_IMAGE=<python-3.12-slim-mirror> \
   -f docker/agent-runtime/Dockerfile .
 ```

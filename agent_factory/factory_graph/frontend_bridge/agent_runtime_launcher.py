@@ -14,9 +14,12 @@ from agent_factory.runtime_contracts import LoadedAgentPackage
 
 
 DEFAULT_RUNTIME_IMAGE = "agentfactory-runtime-python:3.12"
-RUNTIME_IMAGE_BUILD_COMMAND = "docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile ."
+RUNTIME_IMAGE_BUILD_COMMAND = (
+    "DOCKER_BUILDKIT=1 docker build "
+    "-t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile ."
+)
 RUNTIME_IMAGE_MIRROR_BUILD_COMMAND = (
-    "docker build -t agentfactory-runtime-python:3.12 "
+    "DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 "
     "--build-arg PYTHON_BASE_IMAGE=<python-3.12-slim-mirror> "
     "-f docker/agent-runtime/Dockerfile ."
 )

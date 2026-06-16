@@ -20,9 +20,11 @@ class CompiledAgentAssembly:
 
     @property
     def runtime_config(self) -> dict:
+        agent_config = dict(self.spec.runtime.agent_config)
+        agent_config["agent_id"] = self.spec.agent.id
         return {
             "user_config": dict(self.spec.runtime.user_config),
-            "agent_config": dict(self.spec.runtime.agent_config),
+            "agent_config": agent_config,
             "session_config": dict(self.runtime_build.session_config if self.runtime_build else {}),
         }
 
@@ -61,6 +63,7 @@ class AgentAssemblyCompiler:
             node_providers=runtime_build.node_providers if runtime_build else None,
             state_contracts=runtime_build.state_contracts if runtime_build else None,
         )
+        compiled_app.metadata["agent_id"] = spec.agent.id
         return CompiledAgentAssembly(
             spec=spec,
             pattern_spec=assembled_pattern,
@@ -91,7 +94,7 @@ class AgentAssemblyCompiler:
     def _assemble_pattern(self, spec: AgentAssemblySpec) -> GraphPatternSpec:
         base_pattern = self.facade.instance.pattern_registry.get(spec.runtime.pattern_id)
         assembled = base_pattern.model_copy(deep=True)
-        assembled.pattern_id = spec.runtime.compiled_pattern_id or f"{spec.agent.id}__{base_pattern.pattern_id}"
+        assembled.pattern_id = spec.runtime.compiled_pattern_id or f"{spec.agent.id}__{spec.runtime.pattern_id}"
         assembled.name = f"{spec.agent.id} assembly"
         node_map = {node.id: node for node in assembled.nodes}
         for override in spec.graph_overrides.node_wrappers:

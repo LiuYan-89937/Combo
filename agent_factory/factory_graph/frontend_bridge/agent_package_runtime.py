@@ -444,6 +444,7 @@ class AgentPackageRuntimeManager:
             package_id=package_id,
             package=host_package,
             package_fingerprint=fingerprint,
+            runtime_root=runtime_root,
             idle_timeout_seconds=self.idle_timeout_seconds,
             request_policy=self.request_policy,
             producer_type="factory_runtime" if _is_system_package(package) else "agent_runtime_host",

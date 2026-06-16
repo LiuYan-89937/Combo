@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from pathlib import Path
 import threading
 import time
 from typing import Any, Deque, Iterator
@@ -33,6 +34,7 @@ class SystemPackageRuntimeHandle:
         package_id: str,
         package: LoadedAgentPackage,
         package_fingerprint: str,
+        runtime_root: Path,
         idle_timeout_seconds: int,
         request_policy: RuntimeRequestPolicy,
         producer_type: str,
@@ -40,6 +42,7 @@ class SystemPackageRuntimeHandle:
     ) -> None:
         self.package_id = package_id
         self.package_fingerprint = package_fingerprint
+        self.runtime_root = runtime_root
         self.idle_timeout_seconds = idle_timeout_seconds
         self.request_policy = request_policy
         self._emit = emit
@@ -53,6 +56,7 @@ class SystemPackageRuntimeHandle:
         self.startup_payload: dict[str, Any] | None = None
         self.core = PackageRuntimeCore(
             package=package,
+            runtime_root=runtime_root,
             emit_background=self._emit_background_event,
             graph_id=f"{package_id}_runtime",
             producer_type=producer_type,

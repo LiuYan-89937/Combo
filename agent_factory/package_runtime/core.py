@@ -46,11 +46,13 @@ class PackageRuntimeCore:
         self,
         *,
         package: LoadedAgentPackage,
+        runtime_root: str | Path | None = None,
         emit_background: Emit | None = None,
         graph_id: str = "agent_package_runtime",
         producer_type: str = "agent_runtime",
     ) -> None:
         self.package = package
+        self.runtime_root = Path(runtime_root).expanduser().resolve() if runtime_root is not None else None
         self.graph_id = graph_id
         self.producer_type = producer_type
         self.emit_background = emit_background
@@ -103,6 +105,7 @@ class PackageRuntimeCore:
         runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
             self.package,
             base_services=facade.instance.services,
+            runtime_root=self.runtime_root,
         )
         register_package_patterns(facade=facade, package=self.package, runtime_build=runtime_build)
         compiled = AgentAssemblyCompiler(facade=facade).compile(
