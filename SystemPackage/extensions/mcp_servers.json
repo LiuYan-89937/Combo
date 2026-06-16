@@ -2,16 +2,16 @@
   "version": "mcp_servers.v0",
   "servers": [
     {
-      "server_id": "tavily",
+      "server_id": "bigopen_llm_search",
       "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "tavily-mcp@latest"],
-      "env": {
-        "TAVILY_API_KEY": "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",
-        "DEFAULT_PARAMETERS": "{\"include_images\": false, \"max_results\": 10, \"search_depth\": \"advanced\"}"
-      },
+      "command": "node",
+      "args": [
+        "/Users/admin/Desktop/FastAgentFactory/.agentfactory/factory/mcp_servers/BigOpenLLMSearch/dist/index.js"
+      ],
+      "env": {},
       "enabled": true,
-      "tool_id_prefix": "tavily",
+      "required": false,
+      "tool_id_prefix": "bigopen",
       "risk_level_default": "medium",
       "timeout_seconds": 60
     }

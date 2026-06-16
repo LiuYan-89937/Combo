@@ -395,7 +395,10 @@ class PackageToolProbeRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tool_id: str
+    prompt: str = ""
+    tool_goal: str = ""
     arguments: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     package_digest: str = ""
     status: Literal["passed", "failed"] = "failed"
     observation_status: str = ""
@@ -403,6 +406,11 @@ class PackageToolProbeRecord(BaseModel):
     contract_status: str = ""
     message: str = ""
     output_summary: str = ""
+    observation_output: dict[str, Any] = Field(default_factory=dict)
+    final_answer: str = ""
+    summary: str = ""
+    evaluator: str = ""
+    evaluation: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     probed_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 

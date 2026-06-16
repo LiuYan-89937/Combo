@@ -27,19 +27,15 @@ from agent_factory.create_agent.models import (
     initial_system_manufacturing_state,
 )
 from agent_factory.create_agent.package_scaffold import materialize_empty_agent_package
-from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.paths import factory_artifact_path
-from agent_factory.tooling.output_store import ToolOutputStore
-from agent_factory.tooling.skills.schema import SkillGatewayState
 
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class CreateAgentWorkspace:
-    def __init__(self, root: str | Path, *, resource_set_store: ResourceSetStore | None = None) -> None:
+    def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()
-        self._resource_set_store = resource_set_store
 
     @classmethod
     def for_session(cls, session_id: str) -> "CreateAgentWorkspace":
@@ -146,7 +142,7 @@ class CreateAgentWorkspace:
             self.validation_path,
             PackageValidationReport,
             missing=None,
-            owner_tool="the internal create-agent validation gate",
+            owner_tool="create_agent_validate",
         )
 
     def read_validation_state(self) -> PackageValidationState | None:
@@ -154,7 +150,7 @@ class CreateAgentWorkspace:
             self.validation_state_path,
             PackageValidationState,
             missing=None,
-            owner_tool="the internal create-agent validation gate",
+            owner_tool="create_agent_validate",
         )
 
     def write_validation_state(self, state: PackageValidationState) -> None:
@@ -228,131 +224,6 @@ class CreateAgentWorkspace:
 
     def package_manifest_path(self) -> Path:
         return self.root / "agent_package.json"
-
-    def context_summary(self, *, resource_set_store: ResourceSetStore | None = None) -> str:
-        effective_store = resource_set_store or self._resource_set_store
-        system_state = self.read_system_state()
-        action = self.read_action()
-        validation = self.read_validation()
-        working_set = system_state.working_set()
-        active = system_state.active_stage()
-        request_text = self._read_text_snippet(self.request_path, limit=360)
-        lines = [
-            "Workspace: active create-agent package workspace",
-            f"Original request: {request_text}" if request_text else "Original request: unavailable",
-            (
-                "Managed files: "
-                f"{SYSTEM_STATE_FILE}=create_agent_stage; "
-                f"{ACTION_FILE}=create_agent_control; "
-                f"{PUBLISH_FILE}=create_agent_publish; "
-                f"{PUBLISH_DECISION_FILE}=publish confirmation gate; "
-                f"{VALIDATION_FILE}=validation gate; "
-                f"{TOOL_PROBE_FILE}=create_agent_probe_tool"
-            ),
-            f"Focus progress: remaining={working_set['remaining']} total={working_set['total']}",
-            "Active focus:",
-        ]
-        if active:
-            lines.append(f"- {active.system_id}: {active.status.value} | {active.title}")
-            lines.append(f"  target_files={active.focus_files}")
-            lines.append(f"  validation_focus={active.validation_focus}")
-            if active.focus_summary:
-                lines.append(f"  focus_summary={active.focus_summary}")
-        completed = [stage for stage in system_state.stages if stage.status.value == "done"]
-        if completed:
-            lines.append("Completed focus stages:")
-            for stage in completed[-8:]:
-                lines.append(f"- {stage.system_id}: {stage.title}")
-        lines.append(f"Current action: {action.action} {action.message}".strip())
-        if validation:
-            digest = validation.to_digest()
-            lines.append(
-                "Latest validation digest: "
-                f"{digest.status} | scope={digest.validation_scope} | cached={digest.cached} | {digest.summary}"
-            )
-            for issue in digest.issues[:3]:
-                lines.append(
-                    f"- issue {issue.issue_id}: {issue.where} | files={issue.target_files} | {issue.repair_hint}"
-                )
-        probe_summary = self._tool_probe_summary()
-        if probe_summary:
-            lines.extend(probe_summary)
-        publish_decision = self.read_publish_decision()
-        if publish_decision.decision != "pending":
-            lines.append(
-                "Latest publish decision: "
-                f"{publish_decision.decision} | {publish_decision.input_text[:180]}"
-            )
-        skill_context = self._skill_context_summary(active.system_id if active else "")
-        if skill_context:
-            lines.extend(skill_context)
-        # Resource set: paths already explored in this session
-        if effective_store is not None and effective_store.size() > 0:
-            explored_paths = effective_store.list_paths()
-            lines.append(f"Explored resource paths ({len(explored_paths)} total, do NOT re-read these):")
-            for path in explored_paths[:20]:
-                lines.append(f"- {path}")
-            if len(explored_paths) > 20:
-                lines.append(f"  ... and {len(explored_paths) - 20} more (use resource_set list to view all)")
-        output_refs = ToolOutputStore(self.tool_outputs_path).list_outputs(limit=8)
-        if output_refs:
-            lines.append("Available tool outputs:")
-            for ref in output_refs:
-                lines.append(
-                    f"- {ref['id']}: tool={ref['tool_id']} | chars={ref['size_chars']}"
-                )
-        else:
-            lines.append("Available tool outputs: none. Do not call tool_output read unless an output_id is listed.")
-        return "\n".join(lines)
-
-    def _tool_probe_summary(self) -> list[str]:
-        if not self.tool_probe_path.exists():
-            return []
-        try:
-            state = self.read_tool_probe_state()
-        except Exception:
-            return ["Package tool probe state: unreadable; use create_agent_probe_tool inspect instead of direct file reads."]
-        latest = state.latest_by_tool()
-        if not latest:
-            return []
-        lines = ["Latest package tool probe evidence:"]
-        for tool_id, record in sorted(latest.items()):
-            lines.append(
-                f"- {tool_id}: {record.status} | observation={record.observation_status} | "
-                f"contract={record.contract_status} | {record.message[:160]}"
-            )
-        return lines
-
-    def _skill_context_summary(self, current_system: str) -> list[str]:
-        if not current_system or not self.skill_gateway_state_path.exists():
-            return []
-        try:
-            state = SkillGatewayState.model_validate_json(self.skill_gateway_state_path.read_text(encoding="utf-8"))
-        except Exception:
-            return ["Skill gateway state: unreadable; use skill list_loaded for current state instead of direct file reads."]
-        system_state = state.by_system.get(current_system)
-        if system_state is None:
-            return []
-        lines = [
-            f"Skill gateway state for active focus {current_system}:",
-            f"- described_skills={system_state.described_skills}",
-            f"- loaded_skills={[item.name for item in system_state.loaded_skills]}",
-        ]
-        if system_state.read_resources:
-            lines.append("Already-read skill resources for this focus (avoid re-reading unless pointer/mode must change):")
-            for record in system_state.read_resources[:12]:
-                pointer = f" pointer={record.pointer}" if record.pointer else ""
-                lines.append(
-                    f"- {record.name}/{record.path} mode={record.mode}{pointer} digest={record.digest[:12]}"
-                )
-        return lines
-
-    def _read_text_snippet(self, path: Path, *, limit: int) -> str:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return ""
-        return " ".join(text.split())[:limit]
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
         _assert_inside(self.root, path)

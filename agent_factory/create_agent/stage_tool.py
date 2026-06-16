@@ -189,7 +189,7 @@ def _manufacturing_guidance(active: Any) -> dict[str, Any]:
             "read current package target files",
             "read at most one relevant capability example when object shape is needed",
             "write one coherent capability increment",
-            "stop tool calls so graph validation can run",
+            "call create_agent_validate with the appropriate scope",
         ],
         "schema_policy": "Do not read schema during normal capability authoring. Read schema fragments only after validator evidence or insufficient examples.",
     }

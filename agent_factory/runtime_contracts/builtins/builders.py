@@ -96,6 +96,12 @@ class ToolsContractBuilder:
         diagnostics: list[RuntimeDiagnostic] = []
         runtime_resources: dict[str, Any] = {}
         tool_runtime_resources = dict(context.tool_runtime_resources)
+        if context.runtime_root is not None:
+            tool_runtime_resources.setdefault("runtime_root", str(context.runtime_root))
+        else:
+            tool_runtime_resources.setdefault("runtime_root", str(context.package_root / ".agent_runtime"))
+        tool_runtime_resources.setdefault("package_root", str(context.package_root))
+        tool_runtime_resources.setdefault("workspace_root", str(context.package_root))
         mcp_clients = {}
         system_tool_ids: set[str] = set()
         instance_extension_root = resolve_package_runtime_path(

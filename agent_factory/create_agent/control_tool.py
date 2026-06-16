@@ -25,7 +25,7 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["continue", "ask_user", "finalize"],
+                    "enum": ["inspect", "continue", "ask_user", "finalize"],
                     "description": "The next create-agent control action.",
                 },
                 "message": {
@@ -41,6 +41,7 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
             },
             "required": ["action"],
             "oneOf": [
+                {"properties": {"action": {"const": "inspect"}}, "required": ["action"]},
                 {"properties": {"action": {"const": "continue"}}, "required": ["action"]},
                 {"properties": {"action": {"const": "ask_user"}}, "required": ["action", "message"]},
                 {"properties": {"action": {"const": "finalize"}}, "required": ["action"]},
@@ -50,10 +51,12 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
         output_schema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["continue", "ask_user", "finalize"]},
+                "action": {"type": "string", "enum": ["inspect", "continue", "ask_user", "finalize"]},
                 "message": {"type": "string"},
                 "action_path": {"type": "string"},
                 "resource_fact_count": {"type": "integer"},
+                "current_action": {"type": "object", "additionalProperties": True},
+                "publish_decision": {"type": "object", "additionalProperties": True},
             },
             "required": ["action", "message", "action_path", "resource_fact_count"],
             "additionalProperties": False,
@@ -67,9 +70,21 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     workspace = _workspace(resources)
+    requested_action = str(arguments.get("action") or "").strip()
+    if requested_action == "inspect":
+        current_action = workspace.read_action()
+        publish_decision = workspace.read_publish_decision()
+        return tool_envelope({
+            "action": "inspect",
+            "message": "Current create-agent control state.",
+            "action_path": str(workspace.action_path),
+            "resource_fact_count": len(current_action.resource_facts),
+            "current_action": current_action.model_dump(mode="json"),
+            "publish_decision": publish_decision.model_dump(mode="json"),
+        })
     action = CreateAgentAction.model_validate(
         {
-            "action": arguments.get("action"),
+            "action": requested_action,
             "message": str(arguments.get("message") or "").strip(),
             "resource_facts": arguments.get("resource_facts") or [],
         }
@@ -88,8 +103,15 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
         action = str(arguments.get("action") or "").strip()
-        if action not in {"continue", "ask_user", "finalize"}:
-            raise ValueError("action must be one of: continue, ask_user, finalize")
+        if action not in {"inspect", "continue", "ask_user", "finalize"}:
+            raise ValueError("action must be one of: inspect, continue, ask_user, finalize")
+        if action == "inspect":
+            return ToolRiskResult(
+                action="allow",
+                risk_level="low",
+                reasons=["create-agent control inspect is read-only"],
+                facts={"action": action},
+            ).model_dump(mode="json")
         message = str(arguments.get("message") or "").strip()
         if action == "ask_user" and not message:
             raise ValueError("message is required when action is ask_user")

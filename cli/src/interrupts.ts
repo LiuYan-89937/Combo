@@ -7,6 +7,7 @@ export type InterruptDescriptor = {
 		| 'tool_approval'
 		| 'plan_review'
 		| 'requirement_clarification'
+		| 'publish_confirmation'
 		| 'assistant_dialogue'
 		| 'generic';
 };
@@ -25,6 +26,9 @@ export function describeInterrupt(event: FactoryEvent | null): InterruptDescript
 	}
 	if (type === 'requirement_clarification') {
 		return {type, title: 'Requirement Clarification', resumeKind: 'requirement_clarification'};
+	}
+	if (type === 'create_agent_publish_confirmation') {
+		return {type, title: String(payload.title ?? '发布前确认'), resumeKind: 'publish_confirmation'};
 	}
 	if (payload.presentation === 'assistant_dialogue') {
 		return {type, title: String(payload.title ?? 'Assistant'), resumeKind: 'assistant_dialogue'};
@@ -65,6 +69,16 @@ export function buildResumePayload(event: FactoryEvent, value: string): Record<s
 			}));
 			return {type: 'requirement_clarification_answer', answers};
 		}
+		case 'publish_confirmation': {
+			const normalized = value.trim().toLowerCase();
+			if (['继续', '确认', '确认发布', '发布', 'approve', 'approved', 'yes', 'y', 'ok'].includes(normalized)) {
+				return buildPublishConfirmationPayload('publish', value || '发布');
+			}
+			if (['保存草稿', '草稿', 'draft', 'save', 'save_draft'].includes(normalized)) {
+				return buildPublishConfirmationPayload('save_draft', value || '保存草稿');
+			}
+			return buildPublishConfirmationPayload('message', value);
+		}
 		case 'assistant_dialogue': {
 			return buildAssistantDialoguePayload(payload, value);
 		}
@@ -104,6 +118,18 @@ export function buildToolTrustPayload(): Record<string, unknown> {
 
 export function buildToolApprovalRevisionPayload(revisionGuidance: string): Record<string, unknown> {
 	return {action: 'revise', approved: false, revision_guidance: revisionGuidance};
+}
+
+export function buildPublishConfirmationPayload(
+	decision: 'publish' | 'save_draft' | 'message',
+	inputText: string
+): Record<string, unknown> {
+	return {
+		type: 'create_agent_publish_confirmation_result',
+		decision,
+		answer: inputText,
+		input_text: inputText
+	};
 }
 
 export function buildAssistantDialoguePayload(payload: Record<string, unknown>, value: string): Record<string, unknown> {

@@ -30,11 +30,11 @@ Guides final validation, repair interpretation, and publish readiness.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then stop tool calls so graph validation can run.
+4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- Do not decide success by self-inspection. Use validator evidence from create_agent_stage inspect and graph validation.
+- Do not decide success by self-inspection. Use validator evidence from create_agent_validate and create_agent_stage inspect.
 - Prefer validator fields such as target_files, schema_path, invalid_value_path, expected_shape, repair_template, and replace_strategy when present.
 - If repair requires missing user information, ask the user instead of fabricating config.
 - Publish only after validation_publish focus, final validation passed, and user confirmation.

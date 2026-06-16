@@ -31,14 +31,14 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then stop tool calls so graph validation can run.
+4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Use create_agent_stage(action="inspect") instead of reading managed .factory files directly.
 - Only the model changes focus by explicitly calling create_agent_stage(action="set_focus", focus_id=..., reason=...).
 - Ask the user only for missing secrets, accounts, external resources, delivery channels, schedules, or ambiguous product decisions.
-- After a coherent file edit, stop tool calls and let graph validation run.
+- After a coherent file edit, call create_agent_validate with the appropriate scope.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.

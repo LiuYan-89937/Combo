@@ -11,15 +11,11 @@ from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from agent_factory.create_agent.models import CreateAgentAction, CreateAgentPublishDecision, PackageValidationReport
-from agent_factory.create_agent.prompt_builder import build_create_agent_prompt, validation_repair_context
-from agent_factory.create_agent.validation_gate import CreateAgentValidationGate, ValidationDecision
-from agent_factory.create_agent.validation_gate import _package_fingerprint
-from agent_factory.create_agent.validation_progress import validation_event_from_tool_calls
-from agent_factory.create_agent.validator import CreateAgentPackageValidator
+from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
+from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
-from agent_factory.tooling.builtins.resource_set.resource_set import ResourceSetStore
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
 
 
@@ -28,9 +24,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     request: str
     workspace_path: str
     iteration: int
-    repair_context: str
     validation: dict[str, Any]
-    validation_event: str
     publish_confirmation_response: dict[str, Any]
     done: bool
     final_answer: str
@@ -39,30 +33,28 @@ class CreateAgentGraphState(TypedDict, total=False):
 @dataclass(slots=True)
 class CreateAgentWorkflow:
     tools: list[BaseTool]
-    validator: CreateAgentPackageValidator
     model: Any | None = None
-    resource_set_store: ResourceSetStore | None = None
     capability_inventory: dict[str, Any] | None = None
 
     def compile(self, *, checkpointer: Any | None = None):
         graph = StateGraph(CreateAgentGraphState)
         graph.add_node("supervisor", self._supervisor)
         graph.add_node("tools", self._tools)
-        graph.add_node("validate", self._validate)
+        graph.add_node("control_gate", self._control_gate)
         graph.set_entry_point("supervisor")
         graph.add_conditional_edges(
             "supervisor",
             self._route_after_supervisor,
-            {"tools": "tools", "validate": "validate"},
+            {"tools": "tools", "control_gate": "control_gate"},
         )
         graph.add_conditional_edges(
             "tools",
             self._route_after_tools,
-            {"supervisor": "supervisor", "validate": "validate"},
+            {"supervisor": "supervisor", "control_gate": "control_gate"},
         )
         graph.add_conditional_edges(
-            "validate",
-            self._route_after_validate,
+            "control_gate",
+            self._route_after_control_gate,
             {"supervisor": "supervisor", "end": END},
         )
         return graph.compile(checkpointer=checkpointer)
@@ -74,7 +66,6 @@ class CreateAgentWorkflow:
         prompt_payload = build_create_agent_prompt(
             state,
             self.tools,
-            resource_set_store=self.resource_set_store,
             capability_inventory=self.capability_inventory or {},
         )
         messages = prompt_payload.messages
@@ -93,17 +84,13 @@ class CreateAgentWorkflow:
             prompt_diagnostics=prompt_payload.diagnostics,
         )
         response = result.ai_message if isinstance(result.ai_message, BaseMessage) else AIMessage(content=result.assistant_draft or "")
-        validation_event = "assistant_stopped" if not bool(getattr(response, "tool_calls", None)) else "none"
         return {
             "messages": [response],
             "iteration": int(state.get("iteration") or 0) + 1,
-            "repair_context": "",
             "publish_confirmation_response": {},
-            "validation_event": validation_event,
         }
 
     def _tools(self, state: CreateAgentGraphState) -> dict[str, Any]:
-        _ai_message, tool_calls = latest_ai_tool_calls(state.get("messages") or [])
         tool_node = build_tool_node_runner(
             self.tools,
             node_id="create_agent_tools",
@@ -111,22 +98,17 @@ class CreateAgentWorkflow:
             emit_event=_emit_tool_activity,
         )
         result = tool_node.invoke(state)
-        return {
-            **result,
-            "validation_event": validation_event_from_tool_calls(tool_calls),
-        }
+        return result
 
-    def _validate(self, state: CreateAgentGraphState) -> dict[str, Any]:
+    def _control_gate(self, state: CreateAgentGraphState) -> dict[str, Any]:
         workspace = CreateAgentWorkspace(state["workspace_path"])
         publish_report = workspace.read_publish_report()
         if publish_report.get("status") == "available":
             package_id = str(publish_report.get("package_id") or "").strip()
             package_path = str(publish_report.get("package_path") or "").strip()
             return {
-                "repair_context": "",
                 "done": True,
                 "final_answer": f"AgentPackage 已发布：{package_id} ({package_path})",
-                "validation_event": "none",
             }
         action = workspace.read_action()
         if action.action == "ask_user":
@@ -151,76 +133,83 @@ class CreateAgentWorkflow:
             return {
                 "messages": [HumanMessage(content=_resume_text(answer))],
                 "validation": previous_report.to_digest().model_dump(mode="json"),
-                "repair_context": "",
                 "done": False,
-                "validation_event": "none",
             }
-        active_stage = workspace.read_system_state().active_stage()
-        force_full = action.action == "finalize" and active_stage is not None and active_stage.system_id == "validation_publish"
-        report = CreateAgentValidationGate(self.validator).run(
-            workspace,
-            decision=ValidationDecision(force_full=force_full),
-        )
-        workspace.write_validation(report)
-        if force_full:
+        if action.action != "finalize":
+            return {"done": False}
+        report = workspace.read_validation()
+        ready_error = _finalize_ready_error(workspace=workspace, report=report)
+        if ready_error:
             workspace.write_action(CreateAgentAction())
-        system_state = workspace.read_system_state()
-        if report.status == "passed" and force_full and system_state.all_done():
-            answer = interrupt(
-                {
-                    "type": "create_agent_publish_confirmation",
-                    "presentation": "assistant_dialogue",
-                    "resume_kind": "confirmation",
-                    "title": "发布前确认",
-                    "message": _publish_confirmation_text(workspace, report),
-                    "workspace_path": str(workspace.root),
-                    "validation": report.to_digest().model_dump(mode="json"),
-                }
-            )
-            publish_decision = _publish_decision_from_resume(answer)
-            workspace.write_publish_decision(
-                CreateAgentPublishDecision(
-                    decision=publish_decision,
-                    input_text=_resume_text(answer),
-                    package_fingerprint=_package_fingerprint(workspace.root),
-                    validation_scope=report.validation_scope,
-                    validation_status=report.status,
-                )
-            )
-            resume_text = _publish_resume_text(answer, decision=publish_decision)
-            publish_response = {
-                "decision": publish_decision,
-                "input_text": _resume_text(answer),
-                "instruction": (
-                    "User explicitly approved publish."
-                    if publish_decision == "approve"
-                    else "Publish is still pending. Treat input_text as the user's latest message, not as an automatic modification request."
-                ),
-            }
             return {
-                "messages": [HumanMessage(content=resume_text)],
-                "validation": report.to_digest().model_dump(mode="json"),
-                "publish_confirmation_response": publish_response,
-                "repair_context": "",
+                "messages": [SystemMessage(content=ready_error)],
                 "done": False,
-                "validation_event": "none",
             }
-        repair_context = validation_repair_context(workspace=workspace, report=report)
+        workspace.write_action(CreateAgentAction())
+        answer = interrupt(
+            {
+                "type": "create_agent_publish_confirmation",
+                "presentation": "assistant_dialogue",
+                "resume_kind": "confirmation",
+                "title": "发布前确认",
+                "message": _publish_confirmation_text(workspace, report),
+                "options": [
+                    {
+                        "id": "publish",
+                        "label": "发布",
+                        "description": "发布已通过最终校验的 AgentPackage。",
+                    },
+                    {
+                        "id": "save_draft",
+                        "label": "保存草稿",
+                        "description": "保留当前工作区，不发布。",
+                    },
+                    {
+                        "id": "message",
+                        "label": "输入",
+                        "description": "输入问题、调整意见或其他自然语言内容。",
+                    },
+                ],
+                "workspace_path": str(workspace.root),
+                "validation": report.to_digest().model_dump(mode="json"),
+            }
+        )
+        publish_decision = _publish_decision_from_resume(answer)
+        workspace.write_publish_decision(
+            CreateAgentPublishDecision(
+                decision=publish_decision,
+                input_text=_resume_text(answer),
+                package_fingerprint=package_fingerprint(workspace.root),
+                validation_scope=report.validation_scope,
+                validation_status=report.status,
+            )
+        )
+        resume_text = _publish_resume_text(answer, decision=publish_decision)
+        publish_response = {
+            "decision": publish_decision,
+            "input_text": _resume_text(answer),
+            "instruction": (
+                "User explicitly approved publish."
+                if publish_decision == "approve"
+                else "Publish is still pending. Treat input_text as the user's latest message, not as an automatic modification request."
+            ),
+        }
         return {
-            "repair_context": repair_context,
             "validation": report.to_digest().model_dump(mode="json"),
+            "messages": [HumanMessage(content=resume_text)],
+            "publish_confirmation_response": publish_response,
             "done": False,
-            "validation_event": "none",
         }
 
-    def _route_after_supervisor(self, state: CreateAgentGraphState) -> Literal["tools", "validate"]:
+    def _route_after_supervisor(self, state: CreateAgentGraphState) -> Literal["tools", "control_gate"]:
         _ai_message, tool_calls = latest_ai_tool_calls(state.get("messages") or [])
-        return "tools" if tool_calls else "validate"
+        return "tools" if tool_calls else "control_gate"
 
-    def _route_after_tools(self, state: CreateAgentGraphState) -> Literal["supervisor", "validate"]:
-        return "validate" if state.get("validation_event") != "none" else "supervisor"
+    def _route_after_tools(self, state: CreateAgentGraphState) -> Literal["supervisor", "control_gate"]:
+        _ai_message, tool_calls = latest_ai_tool_calls(state.get("messages") or [])
+        return "control_gate" if _has_control_action(tool_calls) else "supervisor"
 
-    def _route_after_validate(self, state: CreateAgentGraphState) -> Literal["supervisor", "end"]:
+    def _route_after_control_gate(self, state: CreateAgentGraphState) -> Literal["supervisor", "end"]:
         return "end" if state.get("done") else "supervisor"
 
 
@@ -287,6 +276,35 @@ def _cached_input_tokens(usage: dict[str, Any]) -> int | None:
     return None
 
 
+def _has_control_action(tool_calls: list[dict[str, Any]]) -> bool:
+    return any(str(call.get("name") or "") == "create_agent_control" for call in tool_calls)
+
+
+def _finalize_ready_error(*, workspace: CreateAgentWorkspace, report: PackageValidationReport | None) -> str:
+    active = workspace.read_system_state().active_stage()
+    if active is None or active.system_id != "validation_publish":
+        return (
+            "Finalize blocked: active focus must be validation_publish. "
+            "Set focus explicitly with create_agent_stage(action='set_focus', focus_id='validation_publish', reason=...), "
+            "then run create_agent_validate(scope='full_static', reason=...)."
+        )
+    if report is None:
+        return "Finalize blocked: no validation report exists. Call create_agent_validate(scope='full_static', reason=...) first."
+    if report.status != "passed":
+        return (
+            f"Finalize blocked: latest validation status is {report.status}. "
+            "Repair from the create_agent_validate observation, then call create_agent_validate(scope='full_static', reason=...) again."
+        )
+    validation_state = workspace.read_validation_state()
+    if validation_state is None:
+        return "Finalize blocked: validation fingerprint state is missing. Call create_agent_validate(scope='full_static', reason=...) again."
+    if validation_state.validation_scope != "full_static" or report.validation_scope != "full_static":
+        return "Finalize blocked: latest validation must be full_static. Call create_agent_validate(scope='full_static', reason=...) first."
+    if validation_state.package_fingerprint != package_fingerprint(workspace.root):
+        return "Finalize blocked: package files changed after validation. Call create_agent_validate(scope='full_static', reason=...) again."
+    return ""
+
+
 def _resume_text(value: Any) -> str:
     if isinstance(value, dict):
         for key in ("input_text", "answer", "message"):
@@ -300,10 +318,9 @@ def _resume_text(value: Any) -> str:
 def _publish_decision_from_resume(value: Any) -> str:
     if isinstance(value, dict):
         decision = str(value.get("decision") or "").strip().lower()
-        if decision == "approve":
+        if decision in {"approve", "publish"}:
             return "approve"
-        return "pending"
-    text = str(value or "").strip().lower()
+        text = _resume_text(value).strip().lower()
     return "approve" if text in {"确认", "确认发布", "发布", "approve", "approved", "yes", "y", "ok"} else "pending"
 
 

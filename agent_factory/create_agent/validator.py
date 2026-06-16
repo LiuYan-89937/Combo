@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
+from agent_factory.create_agent.mcp_inheritance import factory_mcp_tool_ids
 from agent_factory.create_agent.repair_policy import CreateAgentRepairPolicy
 from agent_factory.create_agent.models import (
     PackageToolProbeState,
@@ -574,7 +575,7 @@ def _runtime_contract_issue_from_pydantic_error(package: Any, error: dict[str, A
             path=_contract_path(package, "scheduler_seed"),
             expected="SchedulerSeedContract graph_run targets use payload.message to describe the scheduled agent run.",
             actual=_compact_actual(input_value),
-            repair_hint="Rewrite the scheduler seed target payload with a message field, then stop tool calls and let validation run.",
+            repair_hint="Rewrite the scheduler seed target payload with a message field, then call create_agent_validate with the appropriate scope.",
             target_files=[_contract_path(package, "scheduler_seed")],
             recommended_skill="15-scheduler-seed-system",
             recommended_resources=[
@@ -938,8 +939,9 @@ def _package_file_contract_report(
     issues.extend(_manifest_asset_index_issues(root, manifest, package_tools))
     issues.extend(_tools_contract_issues(package))
     issues.extend(_assembly_tool_issues(package, package_tools))
-    issues.extend(_tool_access_issues(package, package_tools))
-    issues.extend(_scheduler_tool_target_issues(package, package_tools))
+    inherited_mcp_tools = _inherited_mcp_tool_ids()
+    issues.extend(_tool_access_issues(package, package_tools, inherited_mcp_tools))
+    issues.extend(_scheduler_tool_target_issues(package, package_tools, inherited_mcp_tools))
     if not issues:
         return None
     return _issues_report(
@@ -977,7 +979,7 @@ def _package_tool_probe_report(
                 tool_id=tool_id,
                 summary=f"package tool {tool_id} has not been probed",
                 actual="missing probe evidence",
-                repair_hint="Use create_agent_probe_tool(action='inspect'), then create_agent_probe_tool(action='call', tool_id=..., arguments=...) with realistic input.",
+                repair_hint="Use create_agent_probe_tool(action='inspect'), then create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., tool_goal=...) with realistic package tool arguments and human-readable probe context.",
             ))
             continue
         if record.package_digest != current_digest:
@@ -1139,9 +1141,9 @@ def _tools_contract_issues(package: Any) -> list[PackageValidationIssue]:
     return issues
 
 
-def _tool_access_issues(package: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
+def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
-    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools)
+    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools)
     blocked_ids = _manufacturing_tool_ids()
     for binding in package.assembly_spec.bindings.node_bindings:
         if binding.binding_type != "tool_access":
@@ -1154,7 +1156,7 @@ def _tool_access_issues(package: Any, package_tools: dict[str, Any]) -> list[Pac
                     summary=f"tool_access exposes create-agent manufacturing tool {tool_id}",
                     message="Produced AgentPackage must not expose create-agent manufacturing tools.",
                     path="assembly_spec.json",
-                    expected="Only runtime builtin tools and package tools are exposed to produced agents.",
+                    expected="Only runtime builtin tools, package tools, and inherited MCP tools are exposed to produced agents.",
                     actual=tool_id,
                     repair_hint="Remove create-agent manufacturing tool ids from tool_access allowed_tool_ids.",
                     target_files=["assembly_spec.json"],
@@ -1166,18 +1168,18 @@ def _tool_access_issues(package: Any, package_tools: dict[str, Any]) -> list[Pac
                     summary=f"tool_access references unknown tool {tool_id}",
                     message=f"{tool_id} is not an implemented runtime builtin tool and not a package tool.",
                     path="assembly_spec.json",
-                    expected="tool_access.allowed_tool_ids contains runtime builtin tool ids or generated package tool ids.",
+                    expected="tool_access.allowed_tool_ids contains runtime builtin, generated package, or inherited MCP tool ids.",
                     actual=tool_id,
-                    repair_hint="Use an implemented runtime builtin tool id or add a package tool manifest with the same id.",
+                    repair_hint="Use an implemented runtime builtin tool id, add a package tool manifest with the same id, or reference an available inherited MCP candidate.",
                     target_files=["assembly_spec.json", "contracts/tools.json", "tools/"],
                     recommended_skill="09-tools-system",
                 ))
     return issues
 
 
-def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
+def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
-    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools)
+    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools)
     contract = package.contracts.get("scheduler_seed")
     if not isinstance(contract, SchedulerSeedContract):
         return issues
@@ -1189,7 +1191,7 @@ def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any]) -
             issues.append(_contract_issue(
                 where="scheduler_seed.target_tool",
                 summary=f"scheduler seed {seed.seed_id} targets unknown tool {tool_id}",
-                message="scheduler_seed tool_call targets must point to an executable runtime builtin or package tool.",
+                message="scheduler_seed tool_call targets must point to an executable runtime builtin, package tool, or inherited MCP tool.",
                 path="contracts/scheduler_seed.json",
                 expected="scheduler_seed.target.payload.tool_id is executable.",
                 actual=tool_id,
@@ -1239,6 +1241,13 @@ def _manufacturing_tool_ids() -> set[str]:
         "create_agent_publish",
         "skill",
     }
+
+
+def _inherited_mcp_tool_ids() -> set[str]:
+    try:
+        return factory_mcp_tool_ids()
+    except Exception:
+        return set()
 
 
 def _read_probe_state(root: Path) -> PackageToolProbeState:

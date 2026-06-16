@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -73,15 +71,6 @@ def build_capability_inventory(
     )
 
 
-def render_capability_inventory(inventory: dict[str, Any] | CapabilityInventory, *, package_root: str | Path) -> str:
-    return "\n\n".join(
-        [
-            render_static_capability_inventory(inventory),
-            render_dynamic_capability_context(package_root=package_root),
-        ]
-    )
-
-
 def render_static_capability_inventory(inventory: dict[str, Any] | CapabilityInventory) -> str:
     value = inventory if isinstance(inventory, CapabilityInventory) else CapabilityInventory.model_validate(inventory)
     lines = [
@@ -109,16 +98,6 @@ def render_static_capability_inventory(inventory: dict[str, Any] | CapabilityInv
         f"- failure_actions={value.scheduler_capabilities.failure_actions}",
         "",
         f"Boundary note: {value.boundary_note}",
-    ]
-    return "\n".join(lines)
-
-
-def render_dynamic_capability_context(*, package_root: str | Path) -> str:
-    root = Path(package_root).expanduser().resolve()
-    lines = [
-        "Produced package capability facts:",
-        *_current_runtime_tool_lines(root),
-        *_resource_fact_lines(root),
     ]
     return "\n".join(lines)
 
@@ -160,74 +139,6 @@ def _item_lines(items: list[CapabilityItem], *, empty: str) -> list[str]:
     if len(items) > 24:
         lines.append(f"- ... {len(items) - 24} more")
     return lines
-
-
-def _current_runtime_tool_lines(root: Path) -> list[str]:
-    lines: list[str] = []
-    tools_contract = _read_json_object(root / "contracts" / "tools.json")
-    config = tools_contract.get("config") if isinstance(tools_contract.get("config"), dict) else {}
-    if tools_contract:
-        builtin_enabled = bool(config.get("builtin_tools_enabled", True))
-        builtin_ids = config.get("builtin_tool_ids")
-        builtin_summary: str | list[str]
-        if not builtin_enabled:
-            builtin_summary = "disabled"
-        elif isinstance(builtin_ids, list) and builtin_ids:
-            builtin_summary = [_compact(item, limit=80) for item in builtin_ids[:12]]
-        else:
-            builtin_summary = "all"
-        lines.append(
-            "- runtime_tools: "
-            f"builtin={builtin_summary}; "
-            f"package_enabled={bool(config.get('package_tools_enabled', True))}; "
-            f"extensions_enabled={bool(config.get('instance_extensions_enabled', True))}"
-        )
-    else:
-        lines.append("- runtime_tools: contracts/tools.json missing")
-    lines.append(f"- verified_package_tools={_package_tool_ids(root) or []}")
-    return lines
-
-
-def _package_tool_ids(root: Path) -> list[str]:
-    tools_root = root / "tools"
-    if not tools_root.is_dir():
-        return []
-    tool_ids: list[str] = []
-    for manifest_path in sorted(tools_root.glob("*/manifest.json"))[:12]:
-        payload = _read_json_object(manifest_path)
-        tool_id = str(payload.get("id") or manifest_path.parent.name)
-        if tool_id:
-            tool_ids.append(_compact(tool_id, limit=80))
-    return tool_ids
-
-
-def _resource_fact_lines(root: Path) -> list[str]:
-    payload = _read_json_object(root / ".factory" / "resources.json")
-    facts = payload.get("facts") if isinstance(payload.get("facts"), list) else []
-    if not facts:
-        return ["- resource_facts=none"]
-    lines: list[str] = []
-    for item in facts[:12]:
-        if not isinstance(item, dict):
-            continue
-        key = _compact(item.get("key") or "", limit=100)
-        secret = bool(item.get("secret"))
-        if secret:
-            summary = "<secret redacted>"
-        else:
-            summary = _compact(item.get("value"), limit=80)
-        lines.append(f"- resource_fact {key}: {summary}; secret={secret}")
-    if len(facts) > 12:
-        lines.append(f"- resource_facts_more={len(facts) - 12}")
-    return lines or ["- resource_facts=none"]
-
-
-def _read_json_object(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def _compact(value: Any, *, limit: int) -> str:

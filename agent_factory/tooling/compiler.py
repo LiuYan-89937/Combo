@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
+from threading import RLock
 from typing import Any, Iterable, Mapping
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -23,6 +26,9 @@ from agent_factory.tooling.spec import ToolSpec
 
 class ToolCompileError(ValueError):
     pass
+
+
+_TOOL_CWD_LOCK = RLock()
 
 
 class ToolCompiler:
@@ -80,10 +86,11 @@ class ToolCompiler:
                 _normalize_tool_arguments(dict(kwargs)),
                 schema=spec.input_schema,
             )
-            return gateway.execute(
-                arguments,
-                tool_call_id=current.tool_call_id if current is not None and current.tool_id == spec.id else None,
-            )
+            with _tool_package_cwd(self.package_root):
+                return gateway.execute(
+                    arguments,
+                    tool_call_id=current.tool_call_id if current is not None and current.tool_id == spec.id else None,
+                )
 
         return StructuredTool.from_function(
             func=invoke_tool,
@@ -205,3 +212,17 @@ def _schema_accepts_null(schema: dict[str, Any]) -> bool:
 def _output_store_from_resources(resources: Mapping[str, Any]) -> ToolOutputStore | None:
     value = resources.get(TOOL_OUTPUT_STORE_RESOURCE)
     return value if isinstance(value, ToolOutputStore) else None
+
+
+@contextmanager
+def _tool_package_cwd(package_root: Path | None):
+    if package_root is None:
+        yield
+        return
+    with _TOOL_CWD_LOCK:
+        previous = Path.cwd()
+        os.chdir(package_root)
+        try:
+            yield
+        finally:
+            os.chdir(previous)

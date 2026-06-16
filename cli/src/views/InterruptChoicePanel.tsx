@@ -3,6 +3,7 @@ import {Box, Text, useInput} from 'ink';
 import {
 	buildPlanReviewContinuePayload,
 	buildPlanReviewRevisionPayload,
+	buildPublishConfirmationPayload,
 	buildRequirementClarificationResumePayload,
 	buildToolApprovalPayload,
 	buildToolApprovalRevisionPayload,
@@ -67,7 +68,7 @@ export function InterruptChoicePanel({
 }) {
 	const event = useStoreSelector(state => state.pendingInterrupt);
 	const interruptType = String(event?.payload?.type ?? event?.event_type ?? '');
-	if (!event || !['requirement_clarification', 'plan_review', 'tool_approval'].includes(interruptType)) {
+	if (!event || !['requirement_clarification', 'plan_review', 'tool_approval', 'create_agent_publish_confirmation'].includes(interruptType)) {
 		return null;
 	}
 	if (interruptType === 'requirement_clarification') {
@@ -76,12 +77,15 @@ export function InterruptChoicePanel({
 	if (interruptType === 'plan_review') {
 		return <PlanReviewTabs event={event} onSubmit={onSubmit} />;
 	}
+	if (interruptType === 'create_agent_publish_confirmation') {
+		return <PublishConfirmationTabs event={event} onSubmit={onSubmit} />;
+	}
 	return <ToolApprovalTabs event={event} onSubmit={onSubmit} />;
 }
 
 export function isChoiceInterrupt(event: FactoryEvent | null): boolean {
 	const interruptType = String(event?.payload?.type ?? event?.event_type ?? '');
-	return ['requirement_clarification', 'plan_review', 'tool_approval'].includes(interruptType);
+	return ['requirement_clarification', 'plan_review', 'tool_approval', 'create_agent_publish_confirmation'].includes(interruptType);
 }
 
 function RequirementClarificationTabs({
@@ -278,6 +282,97 @@ function PlanReviewTabs({
 				</Text>
 			)}
 			<Text color="gray">Left/Right 选择，Enter 确认；修改会进入输入模式。</Text>
+		</Box>
+	);
+}
+
+function PublishConfirmationTabs({
+	event,
+	onSubmit
+}: {
+	event: FactoryEvent;
+	onSubmit: (payload: Record<string, unknown>) => void;
+}) {
+	const [selected, setSelected] = useState(0);
+	const [messageMode, setMessageMode] = useState(false);
+	const [messageText, setMessageText] = useState('');
+	useEffect(() => {
+		setSelected(0);
+		setMessageMode(false);
+		setMessageText('');
+	}, [event.event_id]);
+	useInput((input, key) => {
+		if (messageMode) {
+			if (key.return) {
+				onSubmit(buildPublishConfirmationPayload('message', messageText));
+				return;
+			}
+			if (key.escape) {
+				setMessageMode(false);
+				setMessageText('');
+				return;
+			}
+			if (key.backspace || key.delete) {
+				setMessageText(current => current.slice(0, -1));
+				return;
+			}
+			if (input && !key.ctrl && !key.meta) {
+				setMessageText(current => current + input);
+			}
+			return;
+		}
+		if (input === 'a') {
+			onSubmit(buildPublishConfirmationPayload('publish', '发布'));
+			return;
+		}
+		if (input === 'b') {
+			onSubmit(buildPublishConfirmationPayload('save_draft', '保存草稿'));
+			return;
+		}
+		if (input === 'c') {
+			setSelected(2);
+			setMessageMode(true);
+			return;
+		}
+		if (key.leftArrow || key.upArrow) {
+			setSelected(current => Math.max(0, current - 1));
+			return;
+		}
+		if (key.rightArrow || key.downArrow) {
+			setSelected(current => Math.min(2, current + 1));
+			return;
+		}
+		if (key.return) {
+			if (selected === 0) {
+				onSubmit(buildPublishConfirmationPayload('publish', '发布'));
+				return;
+			}
+			if (selected === 1) {
+				onSubmit(buildPublishConfirmationPayload('save_draft', '保存草稿'));
+				return;
+			}
+			setMessageMode(true);
+		}
+	});
+	return (
+		<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+			<Text bold color="yellow">{String(event.payload?.title ?? '发布前确认')}</Text>
+			<Text>{String(event.payload?.message ?? '').slice(0, 2200)}</Text>
+			<Box marginTop={1}>
+				<ActionTab action={{id: 'approve', label: '发布', key: 'a', color: 'green', description: ''}} active={selected === 0} />
+				<ActionTab action={{id: 'trust', label: '保存草稿', key: 'b', color: 'yellow', description: ''}} active={selected === 1} />
+				<ActionTab action={{id: 'revise', label: '输入', key: 'c', color: 'cyan', description: ''}} active={selected === 2} />
+			</Box>
+			<Text color={selected === 0 ? 'green' : selected === 1 ? 'yellow' : 'cyan'}>
+				{selected === 0 ? '发布已验证通过的 AgentPackage。' : selected === 1 ? '保留当前工作区，不发布。' : '输入问题、调整意见或其他自然语言内容。'}
+			</Text>
+			{messageMode && (
+				<Text color="cyan">
+					输入内容：{messageText}
+					<Text inverse>{' '}</Text>
+				</Text>
+			)}
+			<Text color="gray">Left/Right 选择，Enter 确认；a 发布，b 保存草稿，c 输入；Esc 退出输入。</Text>
 		</Box>
 	);
 }

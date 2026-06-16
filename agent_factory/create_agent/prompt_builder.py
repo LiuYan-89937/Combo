@@ -10,12 +10,9 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from agent_factory.create_agent.capability_inventory import (
-    render_dynamic_capability_context,
     render_static_capability_inventory,
 )
 from agent_factory.create_agent.prompt_context import project_messages_for_prompt
-from agent_factory.create_agent.workspace import CreateAgentWorkspace
-from agent_factory.tooling.builtins.resource_set.resource_set import ResourceSetStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,13 +25,11 @@ def build_create_agent_messages(
     state: Mapping[str, Any],
     tools: list[BaseTool],
     *,
-    resource_set_store: ResourceSetStore | None = None,
     capability_inventory: dict[str, Any] | None = None,
 ) -> list[BaseMessage]:
     return build_create_agent_prompt(
         state,
         tools,
-        resource_set_store=resource_set_store,
         capability_inventory=capability_inventory,
     ).messages
 
@@ -43,26 +38,20 @@ def build_create_agent_prompt(
     state: Mapping[str, Any],
     tools: list[BaseTool],
     *,
-    resource_set_store: ResourceSetStore | None = None,
     capability_inventory: dict[str, Any] | None = None,
 ) -> CreateAgentPromptPayload:
-    workspace = CreateAgentWorkspace(str(state["workspace_path"]), resource_set_store=resource_set_store)
     invariant_text = _invariant_system_prompt_text()
     stable_environment_text = _stable_environment_prompt_text(
         tools=tools,
         capability_inventory=capability_inventory or {},
     )
     stable_system_text = "\n\n".join([invariant_text, stable_environment_text])
-    dynamic_system_text = _dynamic_system_context_text(
-        state=state,
-        workspace=workspace,
-    )
-    projected_messages = project_messages_for_prompt(list(state.get("messages") or []), workspace=workspace)
+    dynamic_system_text = _dynamic_system_context_text(state=state)
+    projected_messages = project_messages_for_prompt(list(state.get("messages") or []))
     stable_system = SystemMessage(content=stable_system_text)
-    dynamic_system = SystemMessage(content=dynamic_system_text)
     messages = [
         stable_system,
-        dynamic_system,
+        *([SystemMessage(content=dynamic_system_text)] if dynamic_system_text else []),
         *projected_messages,
     ]
     diagnostics = {
@@ -124,52 +113,6 @@ def _message_content_text(message: BaseMessage) -> str:
         return str(content)
 
 
-def validation_repair_context(*, workspace: CreateAgentWorkspace, report: Any, stage_progress: dict[str, Any] | None = None) -> str:
-    digest = report.to_digest()
-    issue_lines = [
-        (
-            f"- {issue.issue_id}: {issue.where}; files={issue.target_files}; "
-            f"hint={issue.repair_hint}; skill={issue.recommended_skill}; resources={issue.recommended_resources}"
-        )
-        for issue in digest.issues
-    ]
-    repair_bundle_lines: list[str] = []
-    for bundle in report.next_action.repair_bundles:
-        repair_bundle_lines.append(
-            json.dumps(
-                {
-                    "bundle_id": bundle.bundle_id,
-                    "kind": bundle.kind,
-                    "repair_action": bundle.repair_action,
-                    "machine_applicable": bundle.machine_applicable,
-                    "target_files": bundle.target_files,
-                    "recommended_skill": bundle.recommended_skill,
-                    "recommended_resources": bundle.recommended_resources,
-                    "inputs": bundle.inputs,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-    return (
-        "Package validation is not complete. Continue the ReAct loop from the active focus.\n"
-        "Use create_agent_stage(action='inspect') for focus state. Validator evidence may suggest a focus, "
-        "but only your explicit create_agent_stage(action='set_focus', focus_id=..., reason=...) call changes it. "
-        "Use create_agent_stage(action='inspect') to read the latest validation digest; do not read .factory/validation.json directly. "
-        "Load only the recommended skill resources needed for the next repair.\n\n"
-        f"Validation digest: {digest.status} | scope={digest.validation_scope} | {digest.summary}\n"
-        + (
-            "Stage progress: "
-            + json.dumps(stage_progress, ensure_ascii=False, sort_keys=True)
-            + "\n"
-            if stage_progress
-            else ""
-        )
-        + "\n".join(issue_lines)
-        + ("\nMachine-applicable repair bundles:\n" + "\n".join(repair_bundle_lines) if repair_bundle_lines else "")
-    )
-
-
 def _invariant_system_prompt_text() -> str:
     sections = [
         "你是 FastAgentFactory 的 create-agent 文件制造 ReAct agent。",
@@ -192,14 +135,14 @@ def _invariant_system_prompt_text() -> str:
         "不要硬编码业务资源。用户提供的信息优先；公开信息可通过已绑定工具发现；secret 只能由用户提供。",
         (
             "最终出厂流程固定为：当前 focus 是 validation_publish；"
-            "调用 create_agent_control(action=finalize) 触发 full validation；"
-            "full validation passed 后系统会向用户做发布前确认。"
+            "先显式调用 create_agent_validate(scope='full_static', reason=...)；"
+            "full_static validation passed 后再调用 create_agent_control(action=finalize)，系统会向用户做发布前确认。"
             "发布确认阶段的用户输入仍是普通自然语言：问题先回答，修改请求再改文件，明确确认发布才调用 create_agent_publish。"
             "create_agent_publish 只有在发布确认 gate 记录到明确用户确认后才会通过；不要把修改意见当作发布确认。"
         ),
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
-            "你的职责是读取当前能力目标文件，根据用户需求做一个能力增量编辑，然后停止工具调用等待 validation。"
+            "你的职责是读取当前能力目标文件，根据用户需求做一个能力增量编辑，然后显式调用 create_agent_validate。"
         ),
         (
             "skill gateway 只服务能力写法和 validator 修复。正常生产路径：describe 一个相关 skill，读取一个相关 capability example，"
@@ -208,25 +151,32 @@ def _invariant_system_prompt_text() -> str:
             "不要直接 read_resource，不存在 read_source action；不要通过项目源码 inspect 或 shell 推断 schema。"
         ),
         (
-            "通用 bash 不在 create-agent 默认工具集中。不要主动调用验证工具；"
-            "完成一轮必要文件写入后停止工具调用，graph 会自动运行 validation gate。"
-            "Package validator observation 中的 recommended_skill/recommended_resources 是下一步修复入口。"
+            "通用 bash 不在 create-agent 默认工具集中。系统不会自动运行 validator。"
+            "完成一组连贯文件修改后，必须显式调用 create_agent_validate(scope='current_focus', reason=...)。"
+            "create_agent_validate 的 tool observation 是 validator evidence；不要等待 graph 自动 validation。"
         ),
         (
             "当你新增或修改 package tool 后，必须使用 create_agent_probe_tool(action='inspect') 查看可探测工具，"
-            "再用 create_agent_probe_tool(action='call', tool_id=..., arguments=...) 提供一次真实输入进行探测。"
-            "工具行为证据来自真实 probe observation。"
-            "如果 full validation 报 package_tool_probe issue，先 probe 或按 probe observation 修复工具，再停止工具调用等待 validation。"
+            "再用 create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., tool_goal=...) 进行真实工具探测。"
+            "arguments 是目标 package tool 的真实调用输入；如果你暂时只提供 prompt，probe 只会用 task_model 做一次短的参数推断，"
+            "随后仍由系统直接通过 ToolExecutionGateway 执行目标工具。"
+            "工具行为证据来自真实 arguments、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"
+            "如果 full validation 报 package_tool_probe issue，先 probe 或按 probe observation 修复工具，再显式调用 create_agent_validate。"
         ),
         (
-            "当 validation digest 或 repair_context 中出现 machine_applicable repair bundle，"
-            "只能把它作为结构化诊断。当前 create-agent 不提供跨 system scaffold 自动修复；"
-            "必须回到相关 focus 的 skill resource，按 validator evidence 修改必要文件，"
-            "然后停止工具调用，让 graph 自动校验。"
+            "MCP inherited candidate 不需要额外继承工具调用。"
+            "如果 produced Agent 需要使用某个 inherited MCP 工具，把该工具 id 加入 assembly_spec 的 tool_access.allowed_tool_ids，"
+            "系统会在 full_static validation/publish 前自动把对应 MCP server 配置写入 package extensions。"
+        ),
+        (
+            "validator evidence 只来自 create_agent_validate tool observation 或 create_agent_stage inspect 的 latest validation digest。"
+            "当前 create-agent 不提供跨 system scaffold 自动修复；必须由你按 validator evidence 修改必要文件，"
+            "然后再次显式调用 create_agent_validate。"
         ),
         (
             ".factory/system_state.json 和 .factory/validation.json 只能通过 create_agent_stage inspect 获取摘要，不要直接读写；"
-            "如果通用 read 被拒绝，不要再次用 read 访问这个文件。"
+            ".factory/action.json 和 .factory/publish_decision.json 只能通过 create_agent_control(action='inspect') 获取摘要。"
+            "如果通用 read 被拒绝，不要再次用 read 访问 managed file。"
         ),
         (
             "不要读取 contracts/ 进行全量巡检。只读取 active focus target files 或 validator issue target_files。"
@@ -258,23 +208,9 @@ def _stable_environment_prompt_text(
 def _dynamic_system_context_text(
     *,
     state: Mapping[str, Any],
-    workspace: CreateAgentWorkspace,
 ) -> str:
-    repair_context = str(state.get("repair_context") or "").strip()
     publish_confirmation = _publish_confirmation_context(state.get("publish_confirmation_response"))
-    sections = [
-        "Dynamic create-agent manufacturing context. This section changes across turns and must not be treated as stable policy.",
-        *([publish_confirmation] if publish_confirmation else []),
-        render_dynamic_capability_context(package_root=workspace.root),
-        workspace.context_summary(),
-    ]
-    if repair_context:
-        sections.append(
-            "Hidden repair context from the latest package/todo validation gate. "
-            "Use it to continue the ReAct repair loop; do not repeat it verbatim to the user.\n\n"
-            f"{repair_context}"
-        )
-    return "\n\n".join(sections)
+    return publish_confirmation
 
 
 def _stable_tool_names(tools: list[BaseTool]) -> list[str]:

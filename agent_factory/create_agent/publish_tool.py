@@ -8,9 +8,9 @@ from uuid import uuid4
 from typing import Any
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
+from agent_factory.create_agent.mcp_inheritance import materialize_referenced_factory_mcp
 from agent_factory.create_agent.models import PUBLISH_FILE
-from agent_factory.create_agent.validation_gate import _package_fingerprint
-from agent_factory.create_agent.validator import CreateAgentPackageValidator
+from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.package_runtime import register_package_patterns
 from agent_factory.paths import factory_artifact_path
@@ -83,6 +83,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if not confirmation:
         raise ValueError("confirmation is required")
     registry_root = _registry_root(resources)
+    materialize_referenced_factory_mcp(workspace.root)
     _assert_publish_ready(workspace)
 
     package = AgentPackageLoader().load_path(workspace.package_manifest_path())
@@ -125,7 +126,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "published_at": published_at,
         "confirmation": confirmation,
         "validation": workspace.read_validation().to_digest().model_dump(mode="json") if workspace.read_validation() else None,
-        "package_fingerprint": _package_fingerprint(target),
+        "package_fingerprint": package_fingerprint(target),
     }
     report_path = target / "package_report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -168,7 +169,7 @@ def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:
         raise ValueError("publish requires validation fingerprint state")
     if validation_state.validation_scope != "full_static":
         raise ValueError("publish requires the latest package-changing validation to be full_static")
-    current_fingerprint = _package_fingerprint(workspace.root)
+    current_fingerprint = package_fingerprint(workspace.root)
     if current_fingerprint != validation_state.package_fingerprint:
         raise ValueError("package files changed after validation; run final validation again before publishing")
     decision = workspace.read_publish_decision()
@@ -183,9 +184,6 @@ def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:
 
 
 def _assert_runtime_ready(package_root: Path) -> None:
-    report = CreateAgentPackageValidator().validate(package_root, scope="full_static", changed_files=[])
-    if report.status != "passed":
-        raise ValueError(f"published package readiness validation failed: {report.summary}")
     package = AgentPackageLoader().load_path(package_root / "agent_package.json")
     compiler = AgentAssemblyCompiler(
         facade=RuntimeKernelFacade(

@@ -31,6 +31,7 @@ from agent_factory.create_agent.probe_tool import CREATE_AGENT_PROBE_TOOL_ID, bu
 from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
+from agent_factory.create_agent.validate_tool import CREATE_AGENT_VALIDATE_TOOL_ID, build_create_agent_validate_tool_spec
 from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.compiler import ToolCompiler
@@ -78,7 +79,6 @@ class CreateAgentToolEnvironment:
     system_tool_ids: list[str]
     extension_report: dict[str, Any]
     capability_inventory: dict[str, Any]
-    resource_set_store: ResourceSetStore | None = None
 
 
 class CreateAgentToolEnvironmentBuilder:
@@ -166,6 +166,7 @@ class CreateAgentToolEnvironmentBuilder:
                         CREATE_AGENT_CONTROL_TOOL_ID,
                         CREATE_AGENT_STAGE_TOOL_ID,
                         CREATE_AGENT_PROBE_TOOL_ID,
+                        CREATE_AGENT_VALIDATE_TOOL_ID,
                         CREATE_AGENT_PUBLISH_TOOL_ID,
                     ]
                 )
@@ -174,6 +175,7 @@ class CreateAgentToolEnvironmentBuilder:
                 build_create_agent_control_tool_spec(),
                 build_create_agent_stage_tool_spec(),
                 build_create_agent_probe_tool_spec(),
+                build_create_agent_validate_tool_spec(),
                 build_create_agent_publish_tool_spec(),
                 *skill_specs,
             ]
@@ -204,7 +206,6 @@ class CreateAgentToolEnvironmentBuilder:
             system_tool_ids=sorted(set(provider_result.system_tool_ids)),
             extension_report=extension_report.model_dump(mode="json"),
             capability_inventory=capability_inventory.model_dump(mode="json"),
-            resource_set_store=runtime_resources.get(RESOURCE_SET_STORE_KEY),
         )
 
 
