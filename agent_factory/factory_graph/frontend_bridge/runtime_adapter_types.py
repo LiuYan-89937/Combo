@@ -22,6 +22,7 @@ class PendingAgentPackageRun:
     package_id: str
     session_id: str
     normalizer: RuntimeEventNormalizer
+    interrupt_id: str | None = None
 
 
 @dataclass(slots=True)

@@ -39,6 +39,18 @@ class ToolApprovalDecision(BaseModel):
     revision_guidance: str = ""
 
 
+class ToolApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_call_id: str
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    summary: str
+    risk_level: str
+    risk_reasons: list[str] = Field(default_factory=list)
+    risk_facts: dict[str, Any] = Field(default_factory=dict)
+
+
 class ToolApprovalTrustStore:
     def __init__(self) -> None:
         self._trusted_tool_ids: set[str] = set()
@@ -198,6 +210,31 @@ class ToolExecutionGateway:
             contract_status="valid",
             retryable=False,
         )
+
+    def approval_request(self, arguments: dict[str, Any], *, tool_call_id: str | None = None) -> dict[str, Any] | None:
+        """Return the human approval request this call would need, without executing it."""
+        if self.approval_handler is not None:
+            return None
+        input_errors = self.input_schema.errors_for(arguments)
+        if input_errors:
+            return None
+        try:
+            tool_resources = self._resolve_resources()
+        except Exception:
+            return None
+        risk_context_resources = build_tool_resource_context(tool_resources)
+        normalized_arguments, risk = self._evaluate_risk(arguments, risk_context_resources)
+        if _risk_policy_action(self.spec, risk) != "ask":
+            return None
+        return ToolApprovalRequest(
+            tool_call_id=tool_call_id or "",
+            tool_name=self.spec.id,
+            args=normalized_arguments,
+            summary=self.spec.id,
+            risk_level=risk.risk_level,
+            risk_reasons=risk.reasons,
+            risk_facts=risk.facts,
+        ).model_dump(mode="json")
 
     def _evaluate_risk(
         self,
@@ -405,6 +442,8 @@ def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: 
 
 
 def parse_approval_decision(decision: Any) -> ToolApprovalDecision:
+    if _is_trust_tool(decision):
+        return ToolApprovalDecision(action="approve")
     if _is_approved(decision):
         return ToolApprovalDecision(action="approve")
     if isinstance(decision, dict):

@@ -652,6 +652,10 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'scheduler_run_cancelled':
 		case 'scheduler_feedback_completed':
 		case 'scheduler_feedback_failed':
+		case 'scheduler_seed_detected':
+		case 'scheduler_seed_applied':
+		case 'scheduler_seed_unchanged':
+		case 'scheduler_seed_failed':
 			return {
 				...appendSchedulerTranscript(base, event),
 				schedulerActivities: [...base.schedulerActivities.slice(-19), schedulerActivityForEvent(event)],
@@ -1089,7 +1093,7 @@ function upsertToolActivity(current: ToolActivity[], incoming: ToolActivity): To
 }
 
 function applyToolApprovalResolution(current: ToolActivity[], event: FactoryEvent): ToolActivity[] {
-	const payload = event.payload ?? {};
+	const payload = unwrapApprovalResolutionPayload(event.payload ?? {});
 	const toolCallId = payloadToolCallId(payload);
 	if (toolCallId) {
 		return upsertToolActivities(current, [toolActivity(event)]);
@@ -1109,6 +1113,21 @@ function applyToolApprovalResolution(current: ToolActivity[], event: FactoryEven
 			arguments: item.payload.arguments ?? item.payload.args ?? undefined
 		}));
 	});
+}
+
+function unwrapApprovalResolutionPayload(payload: Record<string, unknown>): Record<string, unknown> {
+	if (approvalState(payload)) {
+		return payload;
+	}
+	for (const value of Object.values(payload)) {
+		if (value && typeof value === 'object' && !Array.isArray(value)) {
+			const nested = value as Record<string, unknown>;
+			if (approvalState(nested)) {
+				return nested;
+			}
+		}
+	}
+	return payload;
 }
 
 function mergeToolActivity(existing: ToolActivity, incoming: ToolActivity): ToolActivity {

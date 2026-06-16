@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -10,10 +11,16 @@ from langchain_core.tools import BaseTool
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.runtime import Runtime
+from langgraph.types import interrupt
 
 from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
-from agent_factory.tooling.execution_context import tool_call_context
+from agent_factory.tooling.execution_context import current_tool_approval_override, tool_approval_override, tool_call_context
+from agent_factory.tooling.gateway import (
+    DEFAULT_TOOL_APPROVAL_TRUST_STORE,
+    TRUST_TOOL_ACTIONS,
+    parse_approval_decision,
+)
 
 
 ToolEventCallback = Callable[[dict[str, Any]], None]
@@ -47,6 +54,7 @@ class AgentFactoryToolNode:
         self.emit_event = emit_event
         self.stream_events = stream_events
         self._concurrent_by_name = {tool.name: _tool_concurrent(tool) for tool in tools}
+        self._approval_request_by_name = {tool.name: _tool_approval_request(tool) for tool in tools}
         self._tool_node = ToolNode(
             list(tools),
             name=name or node_id,
@@ -74,11 +82,43 @@ class AgentFactoryToolNode:
             return {self.messages_key: []}
         outputs: list[ToolMessage] = []
         for batch in _tool_call_batches(tool_calls, self._concurrent_by_name):
+            approval_requests = self._approval_requests_for_batch(batch)
+            if approval_requests:
+                decision = interrupt(_batch_approval_payload(approval_requests))
+                parsed = parse_approval_decision(decision)
+                if _is_trust_tool_decision(decision):
+                    for request in approval_requests:
+                        DEFAULT_TOOL_APPROVAL_TRUST_STORE.trust_tool(str(request.get("tool_name") or ""))
+                if parsed.action != "approve":
+                    outputs.extend(_approval_rejection_messages(batch, parsed.action, parsed.revision_guidance))
+                    continue
             batch_state = dict(state)
             batch_state[self.messages_key] = _replace_latest_ai_tool_calls(messages, ai_message, batch)
-            raw_output = self._invoke_native_tool_node(batch_state, config=config, runtime=runtime)
+            approval_context = (
+                tool_approval_override(reason="approved by batch tool approval")
+                if approval_requests
+                else nullcontext()
+            )
+            with approval_context:
+                raw_output = self._invoke_native_tool_node(batch_state, config=config, runtime=runtime)
             outputs.extend(_messages_from_tool_node_output(raw_output, self.messages_key))
         return {self.messages_key: _complete_tool_message_set(tool_calls, outputs)}
+
+    def _approval_requests_for_batch(self, batch: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        if current_tool_approval_override() is not None:
+            return []
+        requests: list[dict[str, Any]] = []
+        for call in batch:
+            tool_id = str(call.get("name") or "")
+            if self.allowed_tool_ids is not None and tool_id not in self.allowed_tool_ids:
+                continue
+            approval_request = self._approval_request_by_name.get(tool_id)
+            if approval_request is None:
+                continue
+            request = approval_request(dict(call.get("args") or {}), tool_call_id=str(call.get("id") or tool_id))
+            if isinstance(request, dict):
+                requests.append(request)
+        return requests
 
     def _invoke_native_tool_node(
         self,
@@ -200,6 +240,59 @@ def build_tool_node_runner(
         emit_event=emit_event,
         stream_events=stream_events,
     )
+
+
+def _tool_approval_request(tool: BaseTool) -> Callable[..., dict[str, Any] | None] | None:
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    agent_factory = metadata.get("agent_factory")
+    if not isinstance(agent_factory, dict):
+        return None
+    approval_request = agent_factory.get("approval_request")
+    return approval_request if callable(approval_request) else None
+
+
+def _batch_approval_payload(requests: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "type": "tool_approval",
+        "message": "检测到需要人工确认的工具调用，请确认执行、拒绝、信任工具，或输入审查意见让模型重写工具调用。",
+        "choices": {"approve": "-y", "deny": "-n", "trust_tool": "-t", "revise": "custom"},
+        "requests": [dict(request) for request in requests],
+    }
+
+
+def _approval_rejection_messages(
+    tool_calls: Sequence[dict[str, Any]],
+    action: str,
+    guidance: str,
+) -> list[ToolMessage]:
+    status = "revision_requested" if action == "revise" else "denied"
+    message = "Human requested argument revision before execution." if action == "revise" else "Tool call denied by human review."
+    if guidance:
+        message = f"{message} {guidance}"
+    return [
+        tool_observation_message(
+            status=status,
+            tool_id=str(call.get("name") or ""),
+            tool_call_id=str(call.get("id") or call.get("name") or ""),
+            message=message,
+            arguments=dict(call.get("args") or {}),
+            retryable=True,
+        )
+        for call in tool_calls
+    ]
+
+
+def _is_trust_tool_decision(decision: Any) -> bool:
+    if isinstance(decision, str):
+        return decision.strip().lower() in TRUST_TOOL_ACTIONS or decision.strip().lower() in {"-t", "t", "trust me"}
+    if isinstance(decision, dict):
+        action = str(decision.get("action") or decision.get("choice") or "").strip().lower()
+        if action in TRUST_TOOL_ACTIONS:
+            return True
+        return bool(decision.get("trust_tool") or decision.get("no_approval"))
+    return False
 
 
 def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, list[dict[str, Any]]]:

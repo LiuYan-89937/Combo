@@ -21,7 +21,7 @@ class CognitiveAnswerNode:
         state: RuntimeState,
         context: NodeExecutionContext,
     ) -> dict[str, Any]:
-        binding_payload = _first_binding_payload(context.bindings)
+        binding_payload = _prompt_binding_payload(context)
         model_operation_service = context.services.model_operation_service
         if model_operation_service is None:
             raise RuntimeKernelError("cognitive.answer requires model_operation_service.")
@@ -86,10 +86,41 @@ class CognitiveAnswerNode:
         }
 
 
-def _first_binding_payload(bindings: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not bindings:
-        return None
-    return dict(bindings[0].get("payload") or {})
+def _prompt_binding_payload(context: NodeExecutionContext) -> dict[str, Any] | None:
+    model_operation = _model_operation_payload(context.bindings)
+    prompt_id = str(model_operation.get("prompt_id") or "").strip()
+    if prompt_id:
+        return _prompt_binding_by_id(context, prompt_id)
+    for binding in context.bindings:
+        if binding.get("binding_type") == "prompt":
+            return dict(binding.get("payload") or {})
+    return None
+
+
+def _model_operation_payload(bindings: list[dict[str, Any]]) -> dict[str, Any]:
+    for binding in bindings:
+        if binding.get("binding_type") == "model_operation":
+            return dict(binding.get("payload") or {})
+    return {}
+
+
+def _prompt_binding_by_id(context: NodeExecutionContext, prompt_id: str) -> dict[str, Any] | None:
+    for binding in context.bindings:
+        if binding.get("binding_type") != "prompt":
+            continue
+        payload = dict(binding.get("payload") or {})
+        if payload.get("prompt_id") == prompt_id:
+            return payload
+    for binding in context.all_bindings:
+        if binding.get("binding_type") != "prompt":
+            continue
+        target = dict(binding.get("target") or {})
+        if target.get("node_id") != context.node_id or target.get("impl") != context.impl:
+            continue
+        payload = dict(binding.get("payload") or {})
+        if payload.get("prompt_id") == prompt_id:
+            return payload
+    raise RuntimeKernelError(f"cognitive.answer prompt binding not found: {prompt_id}")
 
 
 def _context_token_budget_patch(metadata: dict[str, Any] | None, node_id: str) -> dict[str, Any]:

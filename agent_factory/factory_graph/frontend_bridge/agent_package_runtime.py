@@ -512,6 +512,10 @@ def _host_session_root(*, package_id: str, package: LoadedAgentPackage, configur
         return _host_runtime_root(package_id)
     if value.startswith("/runtime/"):
         return (_host_runtime_root(package_id) / value.removeprefix("/runtime/")).resolve()
+    if value == ".agent_runtime":
+        return _host_runtime_root(package_id)
+    if value.startswith(".agent_runtime/"):
+        return (_host_runtime_root(package_id) / value.removeprefix(".agent_runtime/")).resolve()
     path = Path(value).expanduser()
     if path.is_absolute():
         return path.resolve()

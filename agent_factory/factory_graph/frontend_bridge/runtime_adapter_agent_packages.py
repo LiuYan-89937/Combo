@@ -196,6 +196,7 @@ class RuntimeAgentPackageCommandMixin:
                         package_id=package_id,
                         session_id=session_id,
                         normalizer=normalizer,
+                        interrupt_id=_interrupt_id_from_event(item),
                     )
                 self.emit(_frontend_scoped_agent_event(item, mode=frontend_mode, session_id=frontend_session_id))
                 if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
@@ -217,6 +218,7 @@ class RuntimeAgentPackageCommandMixin:
                     package_id=package_id,
                     session_id=session_id,
                     normalizer=normalizer,
+                    interrupt_id=_interrupt_id_from_payload(interrupt_payload),
                 )
                 normalizer.emit_interrupt(json_safe(interrupt_payload))
                 return
@@ -381,3 +383,15 @@ def _frontend_scoped_agent_event(
     if session_id is not None:
         updates["session_id"] = session_id
     return item.model_copy(update=updates) if updates else item
+
+
+def _interrupt_id_from_event(item: FactoryFrontendEvent) -> str | None:
+    return _interrupt_id_from_payload(item.payload if isinstance(item.payload, dict) else {})
+
+
+def _interrupt_id_from_payload(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    interrupt_id = str(payload.get("interrupt_id") or "").strip()
+    return interrupt_id or None
+

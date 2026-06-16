@@ -134,6 +134,15 @@ class CreateAgentPackageValidator:
             return _passed(root, scope=scope, changed_files=changed, summary="Runtime contract build checks passed.")
         try:
             register_package_patterns(facade=compiler.facade, package=package, runtime_build=runtime_build)
+            binding_target_report = _binding_target_report(
+                root,
+                package,
+                compiler.facade.instance.pattern_registry,
+                scope=scope,
+                changed_files=changed,
+            )
+            if binding_target_report is not None:
+                return binding_target_report
             compiler.compile(package.assembly_spec, runtime_build=runtime_build)
         except Exception as exc:
             return _failed(root, "assembly.compile", exc, ["assembly_spec.json", "patterns", "bindings"], scope=scope, changed_files=changed)
@@ -399,7 +408,7 @@ def _node_binding_repair_template() -> dict[str, Any]:
     return {
         "binding_id": "<node_id>_tools",
         "binding_type": "tool_access",
-        "target": {"node_id": "<node_id>", "impl": "standard.answer"},
+        "target": {"node_id": "<node_id>", "impl": "cognitive.answer"},
         "payload": {
             "allowed_tool_ids": ["<tool_id>"],
             "approval_policy": "standard",
@@ -950,6 +959,143 @@ def _package_file_contract_report(
         scope=scope,
         changed_files=changed_files,
         summary="Package file contract check failed: " + "; ".join(issue.summary for issue in issues[:3]),
+    )
+
+
+def _binding_target_report(
+    root: Path,
+    package: Any,
+    pattern_registry: Any,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    issues = _binding_target_issues(package, pattern_registry)
+    if not issues:
+        return None
+    return _issues_report(
+        root,
+        issues,
+        scope=scope,
+        changed_files=changed_files,
+        summary="Assembly binding target check failed: " + "; ".join(issue.summary for issue in issues[:3]),
+    )
+
+
+def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageValidationIssue]:
+    pattern_id = str(getattr(getattr(package.assembly_spec, "runtime", None), "pattern_id", "") or "")
+    try:
+        pattern = pattern_registry.get(pattern_id)
+    except Exception as exc:
+        return [
+            _contract_issue(
+                where="assembly.binding_target.pattern",
+                summary=f"assembly runtime pattern {pattern_id or '<empty>'} is not available",
+                message=f"Cannot validate binding targets because the runtime pattern cannot be loaded: {type(exc).__name__}: {exc}",
+                path="assembly_spec.json",
+                expected="assembly_spec.runtime.pattern_id references a built-in or package-registered pattern.",
+                actual=pattern_id or "<empty>",
+                repair_hint="Use an available runtime pattern id or add the referenced package pattern asset.",
+                target_files=["assembly_spec.json", "patterns/"],
+                recommended_skill="12-assembly-pattern-system",
+            )
+        ]
+    node_impls = {node.id: node.impl for node in pattern.nodes}
+    issues: list[PackageValidationIssue] = []
+    prompt_bindings: dict[tuple[str, str, str], Any] = {}
+    for index, binding in enumerate(package.assembly_spec.bindings.node_bindings):
+        target = getattr(binding, "target", None)
+        node_id = str(getattr(target, "node_id", "") or "")
+        impl = str(getattr(target, "impl", "") or "")
+        actual_impl = node_impls.get(node_id)
+        if actual_impl is None:
+            issues.append(_binding_target_issue(
+                index=index,
+                binding=binding,
+                expected=f"target.node_id is one of: {', '.join(sorted(node_impls))}",
+                actual=f"{node_id or '<empty>'}.{impl or '<empty>'}",
+                summary=f"binding {binding.binding_id} targets unknown pattern node {node_id or '<empty>'}",
+                message=f"The selected pattern {pattern.pattern_id} has no node id {node_id or '<empty>'}.",
+                repair_template={"target": {"node_id": "<pattern_node_id>", "impl": "<pattern_node_impl>"}},
+            ))
+            continue
+        if impl != actual_impl:
+            issues.append(_binding_target_issue(
+                index=index,
+                binding=binding,
+                expected=f"target.impl for node {node_id} is {actual_impl}",
+                actual=impl or "<empty>",
+                summary=f"binding {binding.binding_id} target impl does not match pattern node {node_id}",
+                message=f"The selected pattern {pattern.pattern_id} defines node {node_id} with impl {actual_impl}, but the binding targets {impl or '<empty>'}.",
+                repair_template={"target": {"node_id": node_id, "impl": actual_impl}},
+            ))
+            continue
+        if binding.binding_type == "prompt":
+            payload = getattr(binding, "payload", None)
+            prompt_id = str(getattr(payload, "prompt_id", "") or "")
+            if prompt_id:
+                prompt_bindings[(node_id, impl, prompt_id)] = binding
+    for index, binding in enumerate(package.assembly_spec.bindings.node_bindings):
+        if binding.binding_type != "model_operation":
+            continue
+        target = getattr(binding, "target", None)
+        node_id = str(getattr(target, "node_id", "") or "")
+        impl = str(getattr(target, "impl", "") or "")
+        actual_impl = node_impls.get(node_id)
+        if actual_impl != impl:
+            continue
+        payload = getattr(binding, "payload", None)
+        prompt_id = str(getattr(payload, "prompt_id", "") or "").strip()
+        if not prompt_id:
+            continue
+        if (node_id, impl, prompt_id) in prompt_bindings:
+            continue
+        issues.append(_binding_target_issue(
+            index=index,
+            binding=binding,
+            expected=f"a prompt binding with target {node_id}.{impl} and payload.prompt_id={prompt_id}",
+            actual="missing prompt binding for model_operation.prompt_id",
+            summary=f"model_operation binding {binding.binding_id} references missing prompt_id {prompt_id}",
+            message="Prompt bindings are node-scoped; model_operation.prompt_id must resolve to a prompt binding on the same pattern node and impl.",
+            repair_template={
+                "binding_id": f"{node_id}_prompt",
+                "binding_type": "prompt",
+                "target": {"node_id": node_id, "impl": impl},
+                "payload": {"prompt_id": prompt_id, "template": "<system prompt>", "variables": []},
+            },
+        ))
+    return issues
+
+
+def _binding_target_issue(
+    *,
+    index: int,
+    binding: Any,
+    expected: str,
+    actual: str,
+    summary: str,
+    message: str,
+    repair_template: dict[str, Any],
+) -> PackageValidationIssue:
+    return PackageValidationIssue(
+        where="assembly.binding_target",
+        summary=summary,
+        message=message,
+        path="assembly_spec.json",
+        expected=expected,
+        actual=actual,
+        repair_hint="Align binding.target with the selected runtime pattern node table, then rerun create_agent_validate.",
+        target_files=["assembly_spec.json"],
+        recommended_skill="12-assembly-pattern-system",
+        recommended_resources=["examples/assembly_spec.with_tools_and_bindings.json"],
+        schema_path="AgentAssemblySpec.bindings.node_bindings[].target",
+        invalid_value_path=f"assembly_spec.json:/bindings/node_bindings/{index}/target",
+        expected_shape={
+            "target": {"node_id": "pattern node id", "impl": "exact impl from selected pattern node"},
+        },
+        repair_template=repair_template,
+        replace_strategy="replace_object",
+        details={"binding_id": str(getattr(binding, "binding_id", "") or ""), "binding_type": str(getattr(binding, "binding_type", "") or "")},
     )
 
 

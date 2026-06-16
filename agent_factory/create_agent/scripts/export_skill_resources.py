@@ -382,7 +382,7 @@ def _assembly_with_tool_binding_example() -> AgentAssemblySpec:
                     {
                         "binding_id": "answer_prompt",
                         "binding_type": "prompt",
-                        "target": {"node_id": "answer", "impl": "standard.answer"},
+                        "target": {"node_id": "answer", "impl": "cognitive.answer"},
                         "payload": {
                             "prompt_id": "answer_prompt",
                             "template": "Use the user's request, runtime context, and approved tools to produce a useful answer.",
@@ -392,7 +392,7 @@ def _assembly_with_tool_binding_example() -> AgentAssemblySpec:
                     {
                         "binding_id": "answer_tool_access",
                         "binding_type": "tool_access",
-                        "target": {"node_id": "answer", "impl": "standard.answer"},
+                        "target": {"node_id": "answer", "impl": "cognitive.answer"},
                         "payload": {
                             "allowed_tool_ids": ["package_action"],
                             "approval_policy": "standard",
@@ -401,7 +401,7 @@ def _assembly_with_tool_binding_example() -> AgentAssemblySpec:
                     {
                         "binding_id": "answer_model_operation",
                         "binding_type": "model_operation",
-                        "target": {"node_id": "answer", "impl": "standard.answer"},
+                        "target": {"node_id": "answer", "impl": "cognitive.answer"},
                         "payload": {
                             "operation": "tool_bound_chat",
                             "model_role": "main",

@@ -497,7 +497,7 @@ class RuntimeEventNormalizer:
         )
 
     def emit_runtime_resumed(self, payload: dict[str, Any]) -> None:
-        if "approved" in payload or "action" in payload:
+        if _is_tool_approval_resume_payload(payload):
             self.runtime_event("tool_approval_resolved", span_id=self.run_span_id, payload=payload)
         self.runtime_event("runtime_resumed", span_id=self.run_span_id, payload=payload)
 
@@ -897,6 +897,15 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+def _is_tool_approval_resume_payload(payload: dict[str, Any]) -> bool:
+    if "approved" in payload or "action" in payload:
+        return True
+    for value in payload.values():
+        if isinstance(value, dict) and ("approved" in value or "action" in value):
+            return True
+    return False
 
 
 def json_safe(value: Any) -> Any:

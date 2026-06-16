@@ -83,10 +83,7 @@ class ExecutionController:
             compiled_app,
             state,
             thread_id=thread_id,
-            stream_input=Command(
-                update={"runtime": state.model_dump(mode="python")},
-                resume=resume_payload or {},
-            ),
+            stream_input=Command(resume=resume_payload or {}),
         ):
             if stream_mode == "values" and isinstance(chunk, dict):
                 final_raw = chunk
@@ -112,15 +109,27 @@ class ExecutionController:
     ) -> RuntimeState:
         state = _prepare_resume_state(state, resume_payload=resume_payload)
         self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
-        state, graph_messages = self._invoke_graph(compiled_app, state, thread_id=thread_id)
+        state, graph_messages = self._invoke_graph(
+            compiled_app,
+            state,
+            thread_id=thread_id,
+            graph_input=Command(resume=resume_payload or {}),
+        )
         self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
         self._emit(compiled_app, state, "resume_completed", message="Kernel resumed from checkpoint.")
         self._emit_run_completed(compiled_app, state)
         return state
 
-    def _invoke_graph(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> tuple[RuntimeState, list[Any]]:
+    def _invoke_graph(
+        self,
+        compiled_app: Any,
+        state: RuntimeState,
+        *,
+        thread_id: str,
+        graph_input: Any | None = None,
+    ) -> tuple[RuntimeState, list[Any]]:
         raw = compiled_app.graph_app.invoke(
-            _graph_input(state),
+            _graph_input(state) if graph_input is None else graph_input,
             config=_graph_config(state, thread_id=thread_id),
         )
         raw = _authoritative_raw(compiled_app, raw, thread_id=thread_id)

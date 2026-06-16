@@ -86,7 +86,7 @@
         "binding_type": "prompt",
         "target": {
           "node_id": "<node_id>",
-          "impl": "standard.answer"
+          "impl": "cognitive.answer"
         },
         "payload": {
           "prompt_id": "<prompt_id>",
@@ -99,7 +99,7 @@
         "binding_type": "tool_access",
         "target": {
           "node_id": "<node_id>",
-          "impl": "standard.answer"
+          "impl": "cognitive.answer"
         },
         "payload": {
           "allowed_tool_ids": [
@@ -113,7 +113,7 @@
         "binding_type": "model_operation",
         "target": {
           "node_id": "<node_id>",
-          "impl": "standard.answer"
+          "impl": "cognitive.answer"
         },
         "payload": {
           "operation": "tool_bound_chat",
@@ -154,7 +154,7 @@
       "binding_type": "custom",
       "target": {
         "node_id": "answer",
-        "impl": "standard.answer"
+        "impl": "cognitive.answer"
       },
       "payload": {
         "extension_id": "custom_provider",

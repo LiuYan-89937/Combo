@@ -10,6 +10,7 @@ from agent_factory.agent_runtime_bridge.dependencies import ensure_dependencies
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import interrupt_payload
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
@@ -17,6 +18,7 @@ from agent_factory.runtime_protocol.completion import runtime_completed, runtime
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.package_runtime import register_package_patterns
+from agent_factory.package_runtime.approval_resume import tool_approval_resume_context
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
 from agent_factory.scheduler_system.events import SchedulerEventPayload
@@ -448,7 +450,7 @@ def _emit_pending_checkpoint_interrupt(normalizer: RuntimeEventNormalizer, compi
     if not interrupts:
         return False
     first = interrupts[0]
-    normalizer.emit_interrupt(json_safe(getattr(first, "value", first)))
+    normalizer.emit_interrupt(json_safe(interrupt_payload(first)))
     return True
 
 
@@ -485,16 +487,17 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
         payload.get("runtime_request")
     ).timeout_seconds
     final_state = None
-    for stream_mode, chunk in facade.instance.controller.stream_resume(
-        compiled.compiled_app,
-        run_context.state,
-        thread_id=run_context.thread_id,
-        resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
-    ):
-        if _handle_stream_item(normalizer, stream_mode, chunk):
-            return 0
-        if stream_mode == "runtime_final":
-            final_state = chunk
+    with tool_approval_resume_context(resume_payload):
+        for stream_mode, chunk in facade.instance.controller.stream_resume(
+            compiled.compiled_app,
+            run_context.state,
+            thread_id=run_context.thread_id,
+            resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
+        ):
+            if _handle_stream_item(normalizer, stream_mode, chunk):
+                return 0
+            if stream_mode == "runtime_final":
+                final_state = chunk
     if final_state is None:
         normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
         return 1
@@ -631,7 +634,7 @@ def _extract_interrupt_payload(chunk: Any) -> Any | None:
     if not interrupts:
         return None
     first = interrupts[0]
-    return getattr(first, "value", first)
+    return interrupt_payload(first)
 
 
 def _write_event(item: FactoryFrontendEvent) -> None:

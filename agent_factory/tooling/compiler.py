@@ -103,6 +103,7 @@ class ToolCompiler:
                     "tool_id": spec.id,
                     "concurrent": spec.concurrent,
                     "risk_level": spec.risk_level,
+                    "approval_request": gateway.approval_request,
                 }
             },
             handle_validation_error=lambda error: json.dumps(

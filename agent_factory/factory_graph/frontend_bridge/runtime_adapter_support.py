@@ -44,4 +44,14 @@ def extract_interrupt_payload(chunk: Any) -> Any | None:
     if not interrupts:
         return None
     first = interrupts[0]
-    return getattr(first, "value", first)
+    return interrupt_payload(first)
+
+
+def interrupt_payload(interrupt: Any) -> Any:
+    value = getattr(interrupt, "value", interrupt)
+    interrupt_id = str(getattr(interrupt, "id", "") or "").strip()
+    if not interrupt_id:
+        return value
+    if isinstance(value, dict):
+        return {**value, "interrupt_id": interrupt_id}
+    return {"value": value, "interrupt_id": interrupt_id}
