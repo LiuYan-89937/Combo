@@ -7,12 +7,5 @@
   "cached": false,
   "skipped": false,
   "summary": "",
-  "next_action": {
-    "kind": "continue",
-    "target_files": [],
-    "recommended_skill": "",
-    "recommended_resources": [],
-    "repair_bundles": []
-  },
   "issues": []
 }

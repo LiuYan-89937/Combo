@@ -114,7 +114,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
                 "action": action,
                 "requested_focus_id": str(arguments.get("focus_id") or arguments.get("system_id") or ""),
                 "error_type": type(exc).__name__,
-                "required_next_action": "inspect available focus ids, then call set_focus with a valid focus_id and reason",
+                "required_follow_up": "inspect available focus ids, then call set_focus with a valid focus_id and reason",
             },
         ).model_dump(mode="json")
     return ToolRiskResult(

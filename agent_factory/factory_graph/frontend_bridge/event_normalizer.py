@@ -17,7 +17,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
-NODE_EVENT_TYPES: set[str] = set()
+NODE_EVENT_TYPES: set[str] = {"model_cache_metrics"}
 
 
 Emit = Callable[[FactoryFrontendEvent], None]

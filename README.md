@@ -1,56 +1,84 @@
 # FastAgentFactory
 
-FastAgentFactory 是一个 CLI-first 的 Agent 工厂。它把自然语言需求整理成可编译、可运行、可测试、可扩展的 AgentPackage，并让工厂自身与生产出来的 Agent 尽量使用同一套运行规范。
+FastAgentFactory 是一个 CLI-first 的 AgentPackage 工厂。它把自然语言需求制造成可编译、可验证、可发布、可运行的 AgentPackage，并让工厂自身、聊天模式和生产出的子 Agent 尽量共享同一套 RuntimeKernel、工具、上下文、记忆、定时任务和事件流规范。
 
-项目的核心目标：
+项目当前关注三件事：
 
-- 用阶段化流程把需求转成 AgentPackage。
-- 用 RuntimeKernel 编译和运行 AgentPackage。
-- 用 RuntimeContracts 统一工具、记忆、知识、上下文、定时任务、Trace、Sandbox 等基础能力。
-- 用 TypeScript CLI 渲染工厂和子 Agent 的同一套事件流。
-- 让生成 Agent 默认在 Docker sandbox 中运行，避免宿主机环境污染。
+- 生产 AgentPackage：用户在 `/create-agent` 描述需求，制造链路用 ReAct 模式读写包文件、调用 validator、probe package tool、确认后发布。
+- 运行 AgentPackage：已发布包由 RuntimeKernel 编译和执行，默认通过 Docker sandbox 隔离运行。
+- 统一前端事件：CLI 只消费标准 runtime events；后续网页端、移动端可以复用同一协议。
 
-## 架构概览
+## 当前形态
 
 ```text
-User
-  -> TypeScript CLI
-  -> Python JSONL Bridge
-  -> Factory Host Workflows / AgentPackage Runtime
+TypeScript CLI
+  -> Python JSONL bridge
+  -> Factory runtime adapter
+  -> /chat SystemPackage runtime
+  -> /create-agent ReAct manufacturing runtime
+  -> /run-agent-package published AgentPackage runtime
+```
+
+核心运行链路：
+
+```text
+AgentPackage
   -> RuntimeContracts
+  -> RuntimeBuildPlanner
+  -> AgentAssemblyCompiler
   -> RuntimeKernel
-  -> Tools / Memory / Knowledge / Scheduler / Context / Trace
-  -> Runtime Events
-  -> CLI Render
+  -> LangGraph pattern
+  -> model / tools / memory / knowledge / scheduler / trace
+  -> runtime events
+  -> frontend render
 ```
 
-工厂内置两条宿主侧工作流：
+## 目录结构
 
 ```text
-/chat         -> factory_chat AgentPackage
-/create-agent -> host-side LangGraph ReAct manufacturing workflow
+agent_factory/
+  create_agent/              create-agent ReAct 制造链路
+  runtime_kernel/            RuntimeKernel、节点、pattern、状态、model operation
+  runtime_contracts/         AgentPackage contract schema 与 build planner
+  package_runtime/           宿主侧运行已发布 AgentPackage
+  agent_runtime_bridge/      Docker 子进程内 JSONL runtime bridge
+  factory_graph/             CLI bridge、frontend event normalizer、session adapter
+  tooling/                   ToolSpec、ToolExecutionGateway、内置工具、skill、MCP provider
+  context_system/            上下文检索、压缩、turn evidence
+  memory_system/             跨会话 memory store 与后台写入
+  knowledge_system/          知识源发现、索引与检索
+  scheduler_system/          定时任务事实源与 APScheduler runtime
+  trace_system/              JSONL trace fact store
+
+SystemPackage/
+  factory_chat/              工厂 chat 模式本身也是一个 AgentPackage
+  extensions/                系统级 MCP / skill 配置
+
+cli/
+  src/                       Ink CLI、事件投影、命令、interrupt 渲染
+
+docker/
+  agent-runtime/             子 Agent runtime 镜像
+
+docs/
+  basic_capability_construction.md
+  runtime_render_pipeline.md
 ```
 
-`/create-agent` 不再作为 RuntimeKernel SystemPackage 运行。它在独立制造工作区内通过 ReAct + todo + package validation 落地 AgentPackage；工具调用仍统一经过 ToolExecutionGateway。
-
-生产出来的 AgentPackage 默认放在：
-
-```text
-.agentfactory/packages/<factory_run_id>/
-```
+`.agentfactory/` 和 `.agent_runtime/` 是本地运行产物目录，不进入 Git。
 
 ## 环境要求
 
 - Python 3.11+
-- Node.js / pnpm
+- Node.js 与 pnpm
 - uv
 - Docker Desktop 或可用 Docker daemon
-- OpenAI-compatible Chat Completions 模型服务
-- 可选：OpenAI-compatible embedding 模型服务
+- OpenAI-compatible Chat Completions 服务
+- 可选：OpenAI-compatible embedding 服务，用于跨会话记忆语义检索
 
 ## 安装
 
-安装 Python 依赖：
+从仓库根目录安装 Python 依赖：
 
 ```bash
 uv sync
@@ -68,54 +96,54 @@ pnpm --dir cli install
 cp .env.example .env
 ```
 
+`.env` 不进入 Git。模型、数据库、MCP、Docker 等本地配置都放在 `.env` 或 `.agentfactory/` 运行目录内。
+
 ## 基础配置
 
-至少需要填写主模型：
+至少需要配置主模型：
 
 ```bash
+AGENTFACTORY_LLM_PROVIDER=openai_compatible_chat
 AGENTFACTORY_OPENAI_BASE_URL=
 AGENTFACTORY_OPENAI_API_KEY=
 AGENTFACTORY_OPENAI_MODEL=
 ```
 
-建议同时配置小任务模型、压缩模型和 embedding 模型：
+建议配置小任务模型和压缩模型：
 
 ```bash
 AGENTFACTORY_TASK_MODEL=
-
 AGENTFACTORY_COMPRESSION_BASE_URL=
 AGENTFACTORY_COMPRESSION_API_KEY=
 AGENTFACTORY_COMPRESSION_MODEL=
+AGENTFACTORY_CONTEXT_WINDOW_TOKENS=1000000
+```
 
+跨会话记忆语义检索需要 embedding：
+
+```bash
+AGENTFACTORY_MEMORY_SEMANTIC_INDEX_ENABLED=true
+AGENTFACTORY_EMBEDDING_PROVIDER=openai_compatible
 AGENTFACTORY_EMBEDDING_BASE_URL=
 AGENTFACTORY_EMBEDDING_API_KEY=
 AGENTFACTORY_EMBEDDING_MODEL=
 AGENTFACTORY_EMBEDDING_DIMS=1536
 ```
 
-常用运行配置：
+常用本地运行目录：
 
 ```bash
 AGENTFACTORY_SESSION_ROOT=.agentfactory/sessions
 AGENTFACTORY_CHECKPOINTER_BACKEND=sqlite
 AGENTFACTORY_CHECKPOINT_PATH=.agentfactory/checkpoints/factory.sqlite
-
 AGENTFACTORY_MEMORY_STORE_BACKEND=sqlite
 AGENTFACTORY_MEMORY_STORE_PATH=.agentfactory/memory/factory.sqlite
-AGENTFACTORY_MEMORY_WRITE_INTERVAL_TURNS=3
-
-AGENTFACTORY_TOOL_MAX_REVISIONS=5
-AGENTFACTORY_TOOL_OUTPUT_MAX_MODEL_CHARS=12000
-
-AGENTFACTORY_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS=1800
-AGENTFACTORY_AGENT_RUNTIME_REQUEST_TIMEOUT_SECONDS=900
+AGENTFACTORY_SCHEDULER_STORE_PATH=.agentfactory/scheduler/factory.sqlite
 ```
 
-完整配置以 [.env.example](/Users/liuyan/Desktop/FastAgentFactory/.env.example) 为准。
+完整配置以 [.env.example](.env.example) 为准。
 
 ## 启动
-
-从仓库根目录启动 CLI：
 
 ```bash
 pnpm factory
@@ -133,145 +161,152 @@ CLI 会自动启动 Python bridge：
 python -m agent_factory.factory_graph.frontend_bridge.stdio_server
 ```
 
-正常使用时不需要手动启动 bridge。
+正常使用时不需要手动运行 bridge。
 
-## CLI 常用命令
+## CLI 命令
 
 ```text
-/chat
-/create-agent
-/run-agent-package
-/agent-sessions
-/sessions
-/new-session
-/resume <session_id>
-/tools
-/stages
-/state on|off
-/messages on|off
-/tool-grep <query|off>
-/stop <stage_id|off>
-/exit
-/quit
-/help
+/chat                         进入 SystemPackage 聊天模式
+/create-agent                 进入 Agent 制造模式
+/run-agent-package            扫描正式产物目录并进入已发布 Agent
+/agent-sessions               选择当前 AgentPackage 的会话
+/scheduler <action>           管理定时任务与执行记录
+/session                      显示当前会话
+/sessions                     打开历史会话选择器
+/new-session                  创建新会话
+/resume <session_id>          按完整 id 切换会话
+/tools                        显示工厂基础工具
+/state on|off                 切换最终 state 展示
+/messages on|off              切换最终 messages 展示
+/tool-grep <query|off>        过滤工具执行与 observation 展示
+/cancel                       取消当前正在运行的请求
+/exit                         退出当前模式
+/quit                         退出 CLI
+/help                         显示命令帮助
 ```
 
-说明：
+## create-agent 制造链路
 
-- `/chat`：进入工厂自由对话模式，可用于测试工具、记忆、知识库、定时任务等基础能力。
-- `/create-agent`：进入 Agent 生产入口；当前后端制造实现已清空，等待重新设计。
-- `/run-agent-package`：扫描 `.agentfactory/packages`，选择已生产 AgentPackage 并运行。
-- `/agent-sessions`：选择当前 AgentPackage 的会话。
-- `/sessions`：选择工厂会话。
-- `/stop <stage_id|off>`：设置或关闭生产流程阶段断点。
-- `/tool-grep <query|off>`：过滤工具活动展示。
+`/create-agent` 是宿主侧 ReAct 制造链路，不再使用独立 workflow 代替模型决策。系统负责安全边界、空包 scaffold、工具执行、validator、publish gate；模型负责理解需求、选择能力、编辑文件、显式切换 focus、显式调用 validation 和 publish。
 
-## Agent 生产入口
+当前制造流程：
 
-`/create-agent` 的 CLI 入口仍然保留。后端制造流程已经清空为占位 SystemPackage，新的生产链路确定后再接入。
+```text
+用户需求
+  -> create-agent workspace
+  -> 代码生成空 AgentPackage
+  -> LLM 读取当前包文件和少量 capability example
+  -> LLM 通过受控文件工具编辑包
+  -> LLM 显式调用 create_agent_validate
+  -> 如有 package tool，LLM 调用 create_agent_probe_tool 做真实工具 probe
+  -> LLM 修复并再次 validate
+  -> LLM 切换到 validation_publish
+  -> full_static validation passed
+  -> create_agent_control(action=finalize)
+  -> 用户发布确认
+  -> create_agent_publish
+```
 
-## AgentPackage 结构
+制造原则：
 
-一个 AgentPackage 的主要文件：
+- 空 AgentPackage 是基础结构来源，模型不逐文件审计 scaffold。
+- validator 是 evidence provider，不自动推进或回退 focus。
+- 文件写入只受通用安全边界限制，不按阶段锁死 owned files。
+- schema 是 repair 工具，不是正常生产路径的阅读材料。
+- package tool 必须能被加载、真实 probe，并留下 observation。
+- MCP candidate 由系统在 validation/publish 前按 `tool_access.allowed_tool_ids` 轻量继承。
+- 发布前必须有最新 `full_static` validation passed，且包 fingerprint 未变化。
+
+制造工作区位于：
+
+```text
+.agentfactory/create_agent_workspaces/<session_id>/
+```
+
+制造 trace 位于工作区内：
+
+```text
+.factory/manufacturing_trace.json
+```
+
+## AgentPackage
+
+AgentPackage 是可发布运行单元。基础形状由 `package_scaffold` 生成，运行时由 `AgentPackageLoader + RuntimeBuildPlanner + AgentAssemblyCompiler` 装配。
+
+典型结构：
 
 ```text
 agent_package.json
 assembly_spec.json
+render_manifest.json
 resources.json
 sandbox_contract.json
-render_manifest.json
-package_report.json
 contracts/
-bindings/
+  artifact.json
+  context.json
+  dependencies.json
+  knowledge.json
+  memory.json
+  model.json
+  node_provider.json
+  render.json
+  resources.json
+  sandbox.json
+  scheduler.json
+  session.json
+  state.json
+  tools.json
+  trace.json
 prompts/
 tools/
 policies/
 strategies/
 formatters/
+extensions/
 ```
 
-`agent_package.json` 只负责索引文件。运行能力由 `contracts/*.json` 声明，再由系统 Builder 注入 RuntimeKernel。
+`agent_package.json` 只做索引。运行能力来自 `contracts/*.json`，业务装配来自 `assembly_spec.json`，对话体验来自 prompt binding 和 model operation binding。
 
-当前 AgentPackage 必须声明的 RuntimeContracts：
+正式发布目录：
 
 ```text
-artifact
-context
-dependencies
-knowledge
-model
-node_provider
-render
-resources
-sandbox
-scheduler
-session
-state
-tools
-trace
+.agentfactory/published_agent_packages/
 ```
 
-原则：
-
-- `AssemblySpec` 只描述 Agent 逻辑装配。
-- Runtime 基础设施不写进 `AssemblySpec.metadata`。
-- JSON 里不能声明自定义 Builder import path。
-- Builder 只能由系统注册。
-- 新增基础能力必须通过 contract、builder、contribution、package materialization 和编译校验接入。
-
-## 子 Agent Docker 运行
-
-普通 AgentPackage 默认通过 Docker sandbox 运行：
+临时或开发包目录：
 
 ```text
-AgentPackage
-  -> agentfactory-runtime-python:3.12
-  -> sandbox init
-  -> agent_runtime_bridge
-  -> RuntimeKernel compile/run
-  -> JSONL events
-  -> CLI render
+.agentfactory/packages/
 ```
 
-构建 runtime image：
+## RuntimeKernel 输入规范
 
-```bash
-DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
-```
-
-如果 Docker Hub 拉取基础镜像超时，可以指定镜像源：
-
-```bash
-DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 \
-  --build-arg PYTHON_BASE_IMAGE=<python-3.12-slim-mirror> \
-  -f docker/agent-runtime/Dockerfile .
-```
-
-sandbox 挂载约定：
+RuntimeKernel 的模型请求由统一 builder 组装：
 
 ```text
-/package                  read-only   AgentPackage
-/resources/resources.json  read-only   resources.json
-/artifacts                read-write  日志、报告、输出文件
-/workdir                  read-write  临时工作区
-/runtime                  read-write  session/checkpoint/memory/extensions/knowledge/trace
-/runtime/extensions        read-write  用户后配置 MCP/Skill/扩展工具
-/runtime/knowledge         read-write  用户后配置知识库
-/volumes/*                configurable sandbox contract 授权挂载
+stable system prompt
+  + full conversation history
+  + dynamic turn evidence
+  + native tool surface
 ```
 
-Docker preflight 会检查：
+稳定前缀和动态尾部分离，以提高 provider prompt cache 命中率。运行时会记录：
 
-- Docker CLI 是否存在。
-- Docker daemon 是否可用。
-- runtime image 是否存在。
-- mounts / volumes / secrets / network 是否能按 sandbox contract 转成容器参数。
+```text
+model_cache_metrics
+stable_prefix_digest
+dynamic_evidence_digest
+tool_surface_digest
+input_tokens
+cached_input_tokens
+hit_ratio
+```
 
-## 基础能力
+动态 evidence 只作为本轮内部上下文，不应该被直接展示给用户。
 
-### 工具系统
+## 工具系统
 
-统一链路：
+统一工具链路：
 
 ```text
 ToolProvider
@@ -280,123 +315,60 @@ ToolProvider
   -> ToolCompiler
   -> ToolExecutionGateway
   -> LangGraph ToolNode
-  -> ToolMessage / Observation
+  -> ToolObservation
 ```
 
-内置基础工具分组：
+工具入口统一返回 envelope：
+
+```json
+{
+  "output": {},
+  "evidence": {},
+  "summary": ""
+}
+```
+
+- `output` 只表达业务结果，并由 `ToolSpec.output_schema` 校验。
+- `evidence` 记录风险、审批、fingerprint、focus、changed files 等运行证据。
+- `summary` 用于面向模型和前端的短摘要。
+
+内置工具包括 filesystem、process、scheduler、knowledge、resource_set、tool_output、network、skill 和 MCP provider 编译出的工具。中高风险工具可触发审批。
+
+## Skill 与 MCP
+
+Skill 是制造期和运行期的协议知识来源，按 describe / read_resource 递进披露。create-agent skill 只应该提供：
+
+- guidance：什么时候需要该能力、应该改哪些文件。
+- examples：从空包增加能力的完整增量例子。
+- repair：validator issue 后的修复提示。
+
+MCP 通过统一 provider 暴露成 ToolSpec。宿主机 MCP 可以通过 MCP gateway 提供给 Docker 子 Agent，子 Agent 镜像不需要重复安装 Node 依赖。
+
+## 上下文、记忆、知识
+
+ContextSystem 负责模型调用前的 turn evidence 和会话压缩，不再把工具表、最近消息等动态内容塞进稳定 system prompt。
+
+MemorySystem 负责跨会话记忆：
 
 ```text
-filesystem:
-  read
-  write
-  edit
-  multi_edit
-  glob
-  grep
-  ls
-
-process:
-  bash
-  bash_status
-  bash_stop
-
-system:
-  scheduler
-  knowledge
-  skill
-  tool_output
-
-network:
-  web_fetch
-  web_search
+conversation
+  -> background memory write
+  -> store namespace
+  -> optional semantic index
+  -> retrieval evidence
 ```
 
-工具规则：
-
-- 工具 manifest 使用统一 `ToolSpec`。
-- 工具入口统一为 `run(arguments: dict, resources: dict) -> dict`。
-- 风险评估入口统一为 `evaluate_risk(arguments: dict, context: dict) -> dict`。
-- 参数先过 JSON Schema，再过风险策略，再执行 entrypoint。
-- 工具分低、中、高风险；中高风险可触发审批。
-- 长输出由 Gateway 归档完整结果，并把压缩预览写回模型。
-- 模型可用 `tool_output` 按引用读取完整工具输出。
-
-### Skill 与 MCP
-
-- Skill 通过系统内置 `skill` 工具递进式披露。
-- MCP 通过 provider 编译成统一 ToolSpec。
-- 生成 Agent 不把用户本机 MCP/Skill 写死进 package。
-- 用户后配置入口统一为 `/runtime/extensions`。
-
-### 记忆系统
-
-会话内记忆：
-
-```text
-LangGraph messages channel
-  + checkpointer
-  + thread_id
-```
-
-跨会话记忆：
-
-```text
-LangGraph BaseStore compatible store
-  + namespace
-  + background write jobs
-  + retrieval / ranking / injection
-```
-
-Factory 与子 Agent 的 session、checkpoint、store 目录隔离。跨会话记忆写入不阻塞主对话。
-
-### 知识系统
-
-知识库通过系统工具 `knowledge` 管理和检索，不默认每轮自动召回。
-
-支持的 source 类型：
-
-```text
-filesystem
-codebase
-web_snapshot
-database
-mcp
-skill
-artifact_report
-manual_note
-```
-
-支持两种模式：
-
-- `index_only`：catalog + SQLite FTS。
-- `rag`：chunk + embedding + LangGraph BaseStore semantic search。
-
-子 Agent 知识根目录映射到：
+KnowledgeSystem 负责知识源发现、索引和检索。知识目录在子 Agent 中映射到：
 
 ```text
 /runtime/knowledge
 ```
 
-### 上下文系统
+## 定时任务
 
-ContextSystem 负责三件事：
+SchedulerSystem 使用 SQLite 作为事实源，APScheduler 负责触发，任务执行复用 RuntimeKernel 或 ToolExecutionGateway。
 
-- 同步阻断式压缩当前会话 messages。
-- 从 ContextSource 检索候选上下文。
-- 在 cognitive 节点调用模型前组装临时上下文。
-
-上下文注入不写入 checkpoint messages；压缩后的摘要会进入 messages，并保持 tool call / ToolMessage 配对完整。
-
-### 定时任务系统
-
-SchedulerSystem 使用：
-
-- SQLite job store 作为事实源。
-- APScheduler 作为时间触发引擎。
-- ToolExecutionGateway 执行 script/tool。
-- RuntimeKernel 执行 graph_run。
-
-任务类型：
+支持任务类型：
 
 ```text
 graph_run
@@ -404,7 +376,7 @@ script_run
 tool_call
 ```
 
-触发类型：
+支持触发类型：
 
 ```text
 cron
@@ -412,28 +384,81 @@ interval
 date
 ```
 
-### Trace 系统
+子 Agent 可以通过运行期工具创建自己的定时任务。需要用户审批的工具在 unattended scheduler policy 下不会静默执行。
 
-TraceSystem 使用 JSONL Trace Fact Store。
+## Docker 子 Agent runtime
 
-每次运行写入：
+构建 runtime 镜像：
 
-```text
-/runtime/trace/runs/<trace_id>/manifest.json
-/runtime/trace/runs/<trace_id>/trace.jsonl
-/runtime/trace/runs/<trace_id>/refs.jsonl
+```bash
+DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
 ```
 
-RuntimeKernel 会记录：
+可指定基础镜像和 Debian 镜像源：
 
-- run started / completed / failed
-- node span started / finished
-- model call span started / finished
-- tool/context/memory/render/subgraph 相关事件
+```bash
+DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 \
+  --build-arg PYTHON_BASE_IMAGE=python:3.12-slim \
+  --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian \
+  --build-arg DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security \
+  -f docker/agent-runtime/Dockerfile .
+```
 
-Trace 是持久事实源；CLI 实时渲染仍消费 runtime events。
+容器挂载约定：
 
-## 运行产物目录
+```text
+/package                  read-only   AgentPackage
+/resources/resources.json read-only   package resources
+/artifacts                read-write  artifact output
+/workdir                  read-write  temporary workdir
+/runtime                  read-write  session/checkpoint/memory/extensions/knowledge/trace
+/runtime/extensions       read-write  runtime extensions
+/runtime/knowledge        read-write  knowledge root
+/volumes/*                optional sandbox contract volumes
+```
+
+Docker preflight 会检查 Docker CLI、daemon、runtime image、mount、volume、network 和 sandbox contract。
+
+## 事件流与前端
+
+CLI、chat、create-agent、子 Agent runtime 都通过统一 runtime events 交互。前端只做事件投影和渲染，不直接理解后端内部状态文件。
+
+常见事件包括：
+
+```text
+run_started
+node_started
+model_streaming
+tool_running
+tool_completed
+tool_failed
+tool_approval_requested
+interrupt_requested
+run_completed
+run_failed
+model_cache_metrics
+```
+
+协议目录在：
+
+```text
+agent_factory/factory_graph/frontend_bridge/protocol_catalog.json
+```
+
+## Trace
+
+TraceSystem 使用 JSONL fact store。运行期 trace 一般位于：
+
+```text
+/runtime/trace/runs/<trace_id>/
+  manifest.json
+  trace.jsonl
+  refs.jsonl
+```
+
+create-agent 制造 trace 位于制造工作区的 `.factory/manufacturing_trace.json`。Trace 是事实源；CLI timeline 是对 runtime events 的实时投影。
+
+## 本地运行产物
 
 ```text
 .agentfactory/
@@ -441,48 +466,42 @@ Trace 是持久事实源；CLI 实时渲染仍消费 runtime events。
   checkpoints/
   memory/
   scheduler/
-  resources/
-  assemblies/
   packages/
-  harness/
+  published_agent_packages/
   agent_runtime/
+  factory/
 ```
 
-`.agentfactory/` 是本地运行产物目录，不进入 Git。
+这些目录不进入 Git。清理历史运行数据时注意保留：
 
-## 验证
+- `.agentfactory/factory/mcp_servers/`：宿主机 MCP 安装位置。
+- `.agentfactory/published_agent_packages/`：正式发布包。
 
-本项目不要求自行跑特化业务示例。常规改动优先使用语法、静态和非业务测试。
+## 开发检查
 
-Python 语法检查：
+本项目不要求自行运行特化业务样例。常规改动优先做语法和静态检查。
+
+Python：
 
 ```bash
-python3 -m compileall -q agent_factory tests
+PYTHONPYCACHEPREFIX=/private/tmp/fastagentfactory_pycache .venv/bin/python -m compileall -q agent_factory
 ```
 
 TypeScript：
 
 ```bash
 pnpm --dir cli typecheck
-pnpm --dir cli lint
-pnpm --dir cli test
 ```
 
-静态检查：
+Git diff：
 
 ```bash
 git diff --check
 ```
 
-## 未完成边界
-
-- `/rerun <stage_id>` 需要基于持久 bookmark/checkpoint 完整恢复。
-- `graph_run` 当前只向主链路 Graph 投递消息；动态 GraphPattern 选择仍需补齐。
-- Web UI 还未实现；当前以 CLI-first 为准。
-- Web UI 的 Trace 详情页还未实现；当前已提供 TraceReader、projection 与 diagnostics 底座。
+运行真实链路、调用外部模型、调用 MCP、执行 Docker agent，应该在明确需要时手动进行。
 
 ## 参考文档
 
-- [docs/basic_capability_construction.md](/Users/liuyan/Desktop/FastAgentFactory/docs/basic_capability_construction.md)：基础能力系统与 Contract/Builder 规范。
-- [docs/runtime_render_pipeline.md](/Users/liuyan/Desktop/FastAgentFactory/docs/runtime_render_pipeline.md)：Factory 与生成 Agent 共用渲染管线。
-- [docs/trace_system_engineering.md](/Users/liuyan/Desktop/FastAgentFactory/docs/trace_system_engineering.md)：Trace 系统工程设计。
+- [docs/basic_capability_construction.md](docs/basic_capability_construction.md)：基础能力、Contract、Builder 与 RuntimeKernel 接入规范。
+- [docs/runtime_render_pipeline.md](docs/runtime_render_pipeline.md)：runtime events 与前端渲染链路。

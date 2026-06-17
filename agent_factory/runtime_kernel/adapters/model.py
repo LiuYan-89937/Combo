@@ -5,10 +5,9 @@ import re
 from collections.abc import Sequence
 from typing import Any, Literal, Protocol
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.context_system.compression import is_context_summary_message
 from agent_factory.models import (
     ChatModelSettings,
     get_main_model,
@@ -16,6 +15,7 @@ from agent_factory.models import (
     get_task_model,
     get_task_model_settings,
 )
+from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 
 
@@ -94,13 +94,14 @@ class LangChainModelServiceAdapter:
         if model is None:
             raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
         bound_model = _bind_tools(model, tools or [])
+        envelope = build_runtime_model_input(
+            state=state,
+            prompt_binding=prompt_binding or {},
+            messages=messages or [],
+            tools=tools or [],
+        )
         response = bound_model.invoke(
-            _messages_for_state(
-                state=state,
-                prompt_binding=prompt_binding or {},
-                messages=messages or [],
-                tools=tools or [],
-            )
+            envelope.messages
         )
         text = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
         tool_calls = _tool_calls_from_response(response)
@@ -113,6 +114,7 @@ class LangChainModelServiceAdapter:
                 "model_role": settings.role,
                 "model": settings.model or "",
                 "tool_count": len(tools or []),
+                **envelope.diagnostics(),
             },
         )
 
@@ -131,55 +133,6 @@ def _bind_tools(model: Any, tools: list[BaseTool]) -> Any:
     return model.bind_tools(tools, tool_choice="auto")
 
 
-def _messages_for_state(
-    *,
-    state: Any,
-    prompt_binding: dict[str, Any],
-    messages: list[Any],
-    tools: list[BaseTool],
-) -> list[Any]:
-    system_parts = []
-    template = str(prompt_binding.get("template") or "").strip()
-    if template:
-        system_parts.append(template)
-    else:
-        system_parts.append("You are the generated Agent runtime model. Answer the user directly and concisely.")
-    if tools:
-        system_parts.append(_tool_protocol_instruction(tools))
-    summary_text = _conversation_summary_text(messages)
-    if summary_text:
-        system_parts.append(summary_text)
-    context_text = _llm_context_text(state)
-    if context_text:
-        system_parts.append(context_text)
-    normalized_messages = [
-        message
-        for message in messages
-        if isinstance(message, BaseMessage) and not is_context_summary_message(message)
-    ]
-    if not normalized_messages:
-        user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "")
-        if user_input:
-            normalized_messages = [HumanMessage(content=user_input)]
-    return [SystemMessage(content="\n\n".join(system_parts)), *normalized_messages]
-
-
-def _conversation_summary_text(messages: list[Any]) -> str:
-    summaries = [
-        str(getattr(message, "content", "") or "").strip()
-        for message in messages
-        if is_context_summary_message(message)
-    ]
-    summaries = [summary for summary in summaries if summary]
-    if not summaries:
-        return ""
-    return (
-        "Internal compressed conversation memory. Use it only to maintain continuity. "
-        "Do not quote, restate, or expose this summary to the user unless they explicitly ask for the prior conversation:\n"
-        + "\n\n".join(summaries[-3:])
-    )
-
-
 def strip_internal_snapshot_blocks(value: str) -> str:
     """Remove private context snapshots only when text is leaving the model as user-visible output."""
     if not value:
@@ -188,16 +141,6 @@ def strip_internal_snapshot_blocks(value: str) -> str:
     text = _INTERNAL_SESSION_SNAPSHOT_OPEN_RE.sub("", text)
     lines = [line.rstrip() for line in text.splitlines()]
     return "\n".join(line for line in lines if line.strip()).strip()
-
-
-def _tool_protocol_instruction(tools: list[BaseTool]) -> str:
-    tool_names = ", ".join(tool.name for tool in tools)
-    return (
-        "Tool protocol: when a tool is needed, use the chat model's native tool_call mechanism only. "
-        "Do not write tool calls as plain text, XML, JSON, markdown, or pseudo syntax. "
-        "Use exact argument names from the tool schema. After receiving a tool observation, continue from the observation. "
-        f"Available tools: {tool_names}."
-    )
 
 
 def _tool_calls_from_response(response: Any) -> list[dict[str, Any]]:
@@ -238,29 +181,6 @@ def _tool_call_args(value: Any) -> dict[str, Any]:
             return {}
         return dict(parsed) if isinstance(parsed, dict) else {}
     return {}
-
-
-def _llm_context_text(state: Any) -> str:
-    context = getattr(getattr(state, "context", None), "model_context", {}) or {}
-    frame = context.get("llm_context_frame") if isinstance(context, dict) else None
-    if not isinstance(frame, dict):
-        return ""
-    text = str(frame.get("text") or "").strip()
-    if text:
-        return text
-    items = frame.get("items")
-    if not isinstance(items, list):
-        return ""
-    lines = []
-    for item in items[:8]:
-        if not isinstance(item, dict):
-            continue
-        content = str(item.get("content") or "").strip()
-        if content:
-            lines.append(f"- {content}")
-    if not lines:
-        return ""
-    return "Context that may help this response. Use only what is relevant and do not mention where it came from:\n" + "\n".join(lines)
 
 
 def _content_to_text(content: Any) -> str:

@@ -231,50 +231,6 @@
       ],
       "title": "PackageValidationIssue",
       "type": "object"
-    },
-    "PackageValidationNextAction": {
-      "additionalProperties": false,
-      "properties": {
-        "kind": {
-          "default": "continue",
-          "enum": [
-            "continue",
-            "repair_files",
-            "ask_user",
-            "finalize_ready"
-          ],
-          "title": "Kind",
-          "type": "string"
-        },
-        "target_files": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Target Files",
-          "type": "array"
-        },
-        "recommended_skill": {
-          "default": "",
-          "title": "Recommended Skill",
-          "type": "string"
-        },
-        "recommended_resources": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Recommended Resources",
-          "type": "array"
-        },
-        "repair_bundles": {
-          "items": {
-            "$ref": "#/$defs/PackageRepairBundle"
-          },
-          "title": "Repair Bundles",
-          "type": "array"
-        }
-      },
-      "title": "PackageValidationNextAction",
-      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -332,9 +288,6 @@
       "default": "",
       "title": "Summary",
       "type": "string"
-    },
-    "next_action": {
-      "$ref": "#/$defs/PackageValidationNextAction"
     },
     "issues": {
       "items": {

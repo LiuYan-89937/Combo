@@ -48,7 +48,7 @@ def assemble_context_frame(
 def _frame_text(items: list[ContextCandidate]) -> str:
     if not items:
         return ""
-    lines = ["Context that may help this response. Use only what is relevant and do not mention where it came from:"]
+    lines = ["Runtime evidence for this turn. Use only what is directly relevant:"]
     for item in items:
         lines.append(f"- {item.content.strip()}")
     return "\n".join(lines)

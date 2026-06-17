@@ -12,15 +12,17 @@ from agent_factory.runtime_kernel.adapters.model import (
     _bind_tools,
     _configured_model_for_role,
     _content_to_text,
-    _messages_for_state,
     strip_internal_snapshot_blocks,
     _tool_calls_from_response,
 )
+from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
+    cached_input_token_count_from_usage_metadata,
     count_messages_tokens,
     context_window_payload,
+    output_token_count_from_usage_metadata,
     token_count_from_usage_metadata,
 )
 
@@ -65,18 +67,19 @@ class ModelOperationService:
     ) -> ModelInvocationResult:
         model, metadata = self._resolve_model()
         tool_list = list(tools or [])
-        request_messages = _messages_for_state(
+        envelope = build_runtime_model_input(
             state=state,
             prompt_binding=prompt_binding or {},
             messages=messages or [],
             tools=tool_list,
+            node_id=node_id,
         )
         _emit_context_window(
             state=state,
             services=services,
             node_id=node_id,
             model=model,
-            messages=request_messages,
+            messages=envelope.messages,
             tools=tool_list,
             source="model_operation.before_call",
         )
@@ -85,11 +88,11 @@ class ModelOperationService:
             services=services,
             node_id=node_id,
             operation="tool_bound_chat",
-            payload={"model_role": self.model_role, "tool_count": len(tool_list)},
+            payload={"model_role": self.model_role, **envelope.diagnostics()},
         )
         _emit(emit_event, "model_call_started", {"operation": "tool_bound_chat", "model_role": self.model_role})
         try:
-            response = _bind_tools(model, tool_list).invoke(request_messages)
+            response = _bind_tools(model, tool_list).invoke(envelope.messages)
         except Exception as exc:
             _emit(emit_event, "model_call_failed", {"operation": "tool_bound_chat", "error": str(exc)})
             _finish_trace_span(
@@ -105,6 +108,13 @@ class ModelOperationService:
         text = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
         tool_calls = _tool_calls_from_response(response)
         usage_metadata = getattr(response, "usage_metadata", None) or {}
+        cache_metrics = _model_cache_metrics_payload(
+            state=state,
+            node_id=node_id,
+            model_metadata=metadata,
+            usage_metadata=usage_metadata,
+            input_diagnostics=envelope.diagnostics(),
+        )
         _emit(
             emit_event,
             "model_call_completed",
@@ -112,8 +122,10 @@ class ModelOperationService:
                 "operation": "tool_bound_chat",
                 "tool_call_count": len(tool_calls),
                 "usage_metadata": usage_metadata,
+                "model_input": envelope.diagnostics(),
             },
         )
+        _emit(emit_event, "model_cache_metrics", cache_metrics)
         _emit_provider_usage_context_window(
             state=state,
             services=services,
@@ -127,7 +139,12 @@ class ModelOperationService:
             span_id=trace_span_id,
             operation="tool_bound_chat",
             status="completed",
-            payload={"tool_call_count": len(tool_calls), "usage_metadata": usage_metadata},
+            payload={
+                "tool_call_count": len(tool_calls),
+                "usage_metadata": usage_metadata,
+                "model_input": envelope.diagnostics(),
+                "model_cache": cache_metrics,
+            },
         )
         return ModelInvocationResult(
             ai_message=response if isinstance(response, BaseMessage) else None,
@@ -139,6 +156,7 @@ class ModelOperationService:
                 "tool_count": len(tool_list),
                 "usage_metadata": usage_metadata,
                 "provider_input_tokens": token_count_from_usage_metadata(usage_metadata),
+                **envelope.diagnostics(),
             },
         )
 
@@ -159,12 +177,18 @@ class ModelOperationService:
         node_id: str | None = None,
     ) -> BaseModel:
         model, metadata = self._resolve_model()
-        request_messages = list(prebuilt_messages) if prebuilt_messages is not None else _messages_for_state(
-            state=state,
-            prompt_binding=prompt_binding or {},
-            messages=messages or [],
-            tools=[],
-        )
+        envelope = None
+        if prebuilt_messages is not None:
+            request_messages = list(prebuilt_messages)
+        else:
+            envelope = build_runtime_model_input(
+                state=state,
+                prompt_binding=prompt_binding or {},
+                messages=messages or [],
+                tools=[],
+                node_id=node_id,
+            )
+            request_messages = envelope.messages
         attempts = max(1, int(max_attempts))
         last_error: Exception | None = None
         operation_context = {**metadata, **(operation_metadata or {})}
@@ -206,7 +230,11 @@ class ModelOperationService:
                     span_id=trace_span_id,
                     operation="structured_json",
                     status="completed",
-                    payload={"attempt": attempt, "schema_name": output_model.__name__},
+                    payload={
+                        "attempt": attempt,
+                        "schema_name": output_model.__name__,
+                        "model_input": envelope.diagnostics() if envelope is not None else {},
+                    },
                 )
                 return parsed
             except Exception as exc:
@@ -259,6 +287,41 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
         return
     emit_event({"event_type": event_type, **payload})
+
+
+def _model_cache_metrics_payload(
+    *,
+    state: Any,
+    node_id: str | None,
+    model_metadata: dict[str, Any],
+    usage_metadata: dict[str, Any],
+    input_diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    input_tokens = token_count_from_usage_metadata(usage_metadata)
+    output_tokens = output_token_count_from_usage_metadata(usage_metadata)
+    cached_input_tokens = cached_input_token_count_from_usage_metadata(usage_metadata)
+    hit_ratio = None
+    if input_tokens and cached_input_tokens is not None:
+        hit_ratio = round(float(cached_input_tokens) / float(input_tokens), 6)
+    return {
+        "version": "runtime_model_cache_metrics.v0",
+        "node_id": node_id,
+        "agent_id": str(getattr(getattr(state, "run", None), "agent_id", "") or ""),
+        "session_id": str(getattr(getattr(state, "run", None), "session_id", "") or ""),
+        "run_id": str(getattr(getattr(state, "run", None), "run_id", "") or ""),
+        "pattern_id": str(getattr(getattr(state, "run", None), "pattern_id", "") or ""),
+        "model_role": model_metadata.get("model_role"),
+        "model": model_metadata.get("model"),
+        "provider_cache": {
+            "available": cached_input_tokens is not None,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "hit_ratio": hit_ratio,
+            "source": "usage_metadata.input_token_details.cache_read" if cached_input_tokens is not None else None,
+        },
+        "model_input": input_diagnostics,
+    }
 
 
 def _start_trace_span(

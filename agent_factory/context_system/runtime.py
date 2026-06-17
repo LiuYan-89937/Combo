@@ -121,6 +121,51 @@ class ContextSystemRuntime:
                 compression_threshold_tokens=policy.compression.trigger_token_threshold,
                 source="context_prepare.after_compression",
             )
+        reused_frame = _reusable_turn_evidence_frame(state=working_state, node_id=node_id)
+        if reused_frame is not None:
+            retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
+            retrieval_report.selected_count = len(reused_frame.items)
+            retrieval_report.token_estimate = reused_frame.token_estimate
+            injection_report = ContextInjectionReport(
+                status="completed" if reused_frame.text else "skipped",
+                node_id=node_id,
+                item_count=len(reused_frame.items),
+                token_estimate=reused_frame.token_estimate,
+            )
+            updated = _state_with_turn_evidence(
+                state=working_state,
+                node_id=node_id,
+                frame=reused_frame,
+            )
+            emit_context_event(
+                services=services,
+                state=updated,
+                event_type="context_retrieval_completed",
+                node_id=node_id,
+                payload={**retrieval_report.model_dump(mode="json"), "reuse": True},
+            )
+            emit_context_event(
+                services=services,
+                state=updated,
+                event_type="context_assembly_completed",
+                node_id=node_id,
+                payload={**injection_report.model_dump(mode="json"), "reuse": True},
+            )
+            emit_context_event(
+                services=services,
+                state=updated,
+                event_type="context_injection_completed",
+                node_id=node_id,
+                payload={**injection_report.model_dump(mode="json"), "reuse": True},
+            )
+            return ContextPreparationResult(
+                state=updated,
+                messages=working_messages,
+                frame=reused_frame,
+                messages_changed=messages_changed,
+                retrieval_report=retrieval_report,
+                injection_report=injection_report,
+            )
         query = self._query_for_state(state=working_state, node_id=node_id, impl=impl, messages=working_messages)
         candidates, retrieval_report = self._retrieve(
             query=query,
@@ -146,13 +191,7 @@ class ContextSystemRuntime:
             item_count=len(frame.items),
             token_estimate=frame.token_estimate,
         )
-        updated = working_state.model_copy(deep=True)
-        updated.context.model_context = {
-            **updated.context.model_context,
-            "llm_context_frame": frame.model_dump(mode="json"),
-            node_id: frame.model_dump(mode="json"),
-        }
-        updated.context.assembly_log.append(f"system_context_prepare:{node_id}")
+        updated = _state_with_turn_evidence(state=working_state, node_id=node_id, frame=frame)
         emit_context_event(
             services=services,
             state=updated,
@@ -322,6 +361,53 @@ class ContextSystemRuntime:
 
 def default_context_runtime(config: ContextContractConfig | None = None) -> ContextSystemRuntime:
     return ContextSystemRuntime(config=config or ContextContractConfig())
+
+
+def _reusable_turn_evidence_frame(*, state: Any, node_id: str) -> LLMContextFrame | None:
+    model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
+    evidence = model_context.get("runtime_turn_evidence") if isinstance(model_context, dict) else None
+    if not isinstance(evidence, dict):
+        return None
+    if evidence.get("run_id") != getattr(getattr(state, "run", None), "run_id", None):
+        return None
+    if evidence.get("current_user_input") != getattr(getattr(state, "conversation", None), "current_user_input", None):
+        return None
+    entries = evidence.get("entries")
+    if not isinstance(entries, dict):
+        return None
+    entry = entries.get(node_id)
+    if not isinstance(entry, dict):
+        return None
+    frame = entry.get("frame")
+    if not isinstance(frame, dict):
+        return None
+    return LLMContextFrame.model_validate(frame)
+
+
+def _state_with_turn_evidence(*, state: Any, node_id: str, frame: LLMContextFrame) -> Any:
+    updated = state.model_copy(deep=True)
+    frame_payload = frame.model_dump(mode="json")
+    model_context = dict(updated.context.model_context)
+    evidence = dict(model_context.get("runtime_turn_evidence") or {})
+    entries = dict(evidence.get("entries") or {})
+    entries[node_id] = {
+        "node_id": node_id,
+        "frame": frame_payload,
+    }
+    evidence = {
+        "version": "runtime_turn_evidence.v0",
+        "run_id": updated.run.run_id,
+        "current_user_input": updated.conversation.current_user_input,
+        "entries": entries,
+    }
+    updated.context.model_context = {
+        **model_context,
+        "llm_context_frame": frame_payload,
+        node_id: frame_payload,
+        "runtime_turn_evidence": evidence,
+    }
+    updated.context.assembly_log.append(f"system_context_prepare:{node_id}")
+    return updated
 
 
 def _compression_trigger_count(

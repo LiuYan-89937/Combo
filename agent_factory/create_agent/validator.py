@@ -15,7 +15,6 @@ from agent_factory.create_agent.repair_policy import CreateAgentRepairPolicy
 from agent_factory.create_agent.models import (
     PackageToolProbeState,
     PackageValidationIssue,
-    PackageValidationNextAction,
     PackageValidationReport,
 )
 from agent_factory.create_agent.runtime_path_repair import find_runtime_path_repairs
@@ -61,13 +60,6 @@ class CreateAgentPackageValidator:
                 PackageValidationReport(
                     package_root=str(root),
                     summary="agent_package.json is missing.",
-                    next_action=PackageValidationNextAction(
-                        kind="repair_files",
-                        target_files=["agent_package.json"],
-                        recommended_skill=repair_bundle.recommended_skill,
-                        recommended_resources=repair_bundle.recommended_resources,
-                        repair_bundles=[repair_bundle],
-                    ),
                     issues=[
                         PackageValidationIssue(
                             where="package.manifest",
@@ -174,7 +166,6 @@ def _passed(root: Path, *, scope: ValidationScope, changed_files: list[str], sum
         validation_scope=scope,  # type: ignore[arg-type]
         changed_files=changed_files,
         summary=summary,
-        next_action=PackageValidationNextAction(kind="finalize_ready" if scope == "full_static" else "continue"),
     )
 
 
@@ -193,13 +184,6 @@ def _failed(
         validation_scope=scope,  # type: ignore[arg-type]
         changed_files=changed_files,
         summary=f"{where} failed: {type(exc).__name__}: {exc}",
-        next_action=PackageValidationNextAction(
-            kind="repair_files",
-            target_files=target_files,
-            recommended_skill=repair_bundle.recommended_skill,
-            recommended_resources=repair_bundle.recommended_resources,
-            repair_bundles=[repair_bundle],
-        ),
         issues=[
             PackageValidationIssue(
                 where=where,
@@ -249,13 +233,6 @@ def _package_load_schema_report(
         validation_scope=scope,  # type: ignore[arg-type]
         changed_files=changed_files,
         summary="package.load.schema failed: package files do not match executable runtime schemas.",
-        next_action=PackageValidationNextAction(
-            kind="repair_files",
-            target_files=target_files,
-            recommended_skill=issues[0].recommended_skill,
-            recommended_resources=issues[0].recommended_resources,
-            repair_bundles=[repair_bundle],
-        ),
         issues=issues,
     )
 
@@ -476,13 +453,6 @@ def _manifest_shape_report(
         PackageValidationReport(
             package_root=str(root),
             summary=f"package.manifest_contracts failed: {summary}",
-            next_action=PackageValidationNextAction(
-                kind="repair_files",
-                target_files=target_files,
-                recommended_skill=repair_bundle.recommended_skill,
-                recommended_resources=repair_bundle.recommended_resources,
-                repair_bundles=[repair_bundle],
-            ),
             issues=[issue],
         ),
         scope=scope,
@@ -530,13 +500,6 @@ def _runtime_path_report(
         PackageValidationReport(
             package_root=str(root),
             summary="runtime_contracts.path failed: runtime contract paths must be package-relative.",
-            next_action=PackageValidationNextAction(
-                kind="repair_files",
-                target_files=target_files,
-                recommended_skill=bundles[0].recommended_skill,
-                recommended_resources=bundles[0].recommended_resources,
-                repair_bundles=bundles,
-            ),
             issues=issues,
         ),
         scope=scope,
@@ -696,13 +659,6 @@ def _workspace_hygiene(root: Path, changed_files: list[str]) -> PackageValidatio
             return PackageValidationReport(
                 package_root=str(root),
                 summary=f"{relative} is not parseable: {type(exc).__name__}: {exc}",
-                next_action=PackageValidationNextAction(
-                    kind="repair_files",
-                    target_files=[relative],
-                    recommended_skill=repair_bundle.recommended_skill,
-                    recommended_resources=repair_bundle.recommended_resources,
-                    repair_bundles=[repair_bundle],
-                ),
                 issues=[
                     PackageValidationIssue(
                         where="workspace_hygiene.parse",
@@ -783,13 +739,6 @@ def _json_syntax_report(
                 PackageValidationReport(
                     package_root=str(root),
                     summary=f"JSON syntax error in {relative_path}: {error_msg}",
-                    next_action=PackageValidationNextAction(
-                        kind="repair_files",
-                        target_files=[relative_path],
-                        recommended_skill=repair_bundle.recommended_skill,
-                        recommended_resources=repair_bundle.recommended_resources,
-                        repair_bundles=[repair_bundle],
-                    ),
                     issues=[
                         PackageValidationIssue(
                             where="json_syntax",
@@ -822,13 +771,6 @@ def _json_syntax_report(
                 PackageValidationReport(
                     package_root=str(root),
                     summary=f"JSON schema validation error in {relative_path}",
-                    next_action=PackageValidationNextAction(
-                        kind="repair_files",
-                        target_files=[relative_path],
-                        recommended_skill=repair_bundle.recommended_skill,
-                        recommended_resources=repair_bundle.recommended_resources,
-                        repair_bundles=[repair_bundle],
-                    ),
                     issues=[
                         PackageValidationIssue(
                             where="json_schema",
@@ -893,13 +835,6 @@ def _python_syntax(root: Path, changed_files: list[str]) -> PackageValidationRep
             return PackageValidationReport(
                 package_root=str(root),
                 summary=f"{relative} failed Python syntax validation: {type(exc).__name__}: {exc}",
-                next_action=PackageValidationNextAction(
-                    kind="repair_files",
-                    target_files=[relative],
-                    recommended_skill=repair_bundle.recommended_skill,
-                    recommended_resources=repair_bundle.recommended_resources,
-                    repair_bundles=[repair_bundle],
-                ),
                 issues=[
                     PackageValidationIssue(
                         where="python_syntax.compile",
@@ -1484,13 +1419,6 @@ def _issues_report(
         PackageValidationReport(
             package_root=str(root),
             summary=summary,
-            next_action=PackageValidationNextAction(
-                kind="repair_files",
-                target_files=target_files,
-                recommended_skill=issues[0].recommended_skill if issues else "",
-                recommended_resources=issues[0].recommended_resources if issues else [],
-                repair_bundles=[repair_bundle],
-            ),
             issues=[
                 issue if issue.repair_bundle is not None else issue.model_copy(update={"repair_bundle": repair_bundle})
                 for issue in issues
@@ -1575,14 +1503,10 @@ def _semantic_completeness_report(
         PackageValidationReport(
             package_root=str(root),
             summary="Semantic completeness check failed: " + "; ".join(issue.summary for issue in issues[:3]),
-            next_action=PackageValidationNextAction(
-                kind="repair_files",
-                target_files=target_files,
-                recommended_skill=issues[0].recommended_skill,
-                recommended_resources=issues[0].recommended_resources,
-                repair_bundles=[repair_bundle],
-            ),
-            issues=issues,
+            issues=[
+                issue if issue.repair_bundle is not None else issue.model_copy(update={"repair_bundle": repair_bundle})
+                for issue in issues
+            ],
         ),
         scope=scope,
         changed_files=changed_files,

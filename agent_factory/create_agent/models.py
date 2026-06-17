@@ -313,16 +313,6 @@ class ValidationIssueDigest(BaseModel):
         return f"repair_{self.issue_id}"
 
 
-class PackageValidationNextAction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["continue", "repair_files", "ask_user", "finalize_ready"] = "continue"
-    target_files: list[str] = Field(default_factory=list)
-    recommended_skill: str = ""
-    recommended_resources: list[str] = Field(default_factory=list)
-    repair_bundles: list[PackageRepairBundle] = Field(default_factory=list)
-
-
 class PackageValidationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -341,7 +331,6 @@ class PackageValidationReport(BaseModel):
     cached: bool = False
     skipped: bool = False
     summary: str = ""
-    next_action: PackageValidationNextAction = Field(default_factory=PackageValidationNextAction)
     issues: list[PackageValidationIssue] = Field(default_factory=list)
 
     def to_digest(self) -> "PackageValidationDigest":
@@ -353,7 +342,6 @@ class PackageValidationReport(BaseModel):
             cached=self.cached,
             skipped=self.skipped,
             summary=_compact_text(self.summary, TEXT_SUMMARY_LIMIT),
-            next_action=self.next_action,
             issues=[issue.to_digest() for issue in self.issues[:8]],
         )
 
@@ -376,7 +364,6 @@ class PackageValidationDigest(BaseModel):
     cached: bool = False
     skipped: bool = False
     summary: str = ""
-    next_action: PackageValidationNextAction = Field(default_factory=PackageValidationNextAction)
     issues: list[ValidationIssueDigest] = Field(default_factory=list)
 
 

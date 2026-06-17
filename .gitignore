@@ -1,4 +1,5 @@
 .env
+.DS_Store
 .agentfactory/
 .agent_runtime/
 .venv/

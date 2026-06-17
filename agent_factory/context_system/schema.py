@@ -6,21 +6,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ContextSourceId = Literal[
-    "recent_messages",
     "cross_session_memory",
     "resources",
     "artifacts",
-    "tool_metadata",
     "scheduler",
     "knowledge",
     "trace",
 ]
 ContextCandidateKind = Literal[
-    "recent_message",
     "memory",
     "resource",
     "artifact",
-    "tool",
     "scheduler",
     "knowledge",
     "trace",
@@ -42,10 +38,8 @@ class RetrievalPolicy(BaseModel):
     enabled: bool = True
     source_ids: list[ContextSourceId] = Field(
         default_factory=lambda: [
-            "recent_messages",
             "cross_session_memory",
             "resources",
-            "tool_metadata",
             "scheduler",
         ]
     )
@@ -71,10 +65,8 @@ class AssemblyPolicy(BaseModel):
     max_tokens_total: int = Field(default=1200, ge=100, le=32000)
     per_source_limits: dict[str, int] = Field(
         default_factory=lambda: {
-            "recent_messages": 4,
             "cross_session_memory": 4,
             "resources": 4,
-            "tool_metadata": 4,
             "scheduler": 3,
             "artifacts": 3,
             "knowledge": 6,

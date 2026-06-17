@@ -114,11 +114,9 @@
         "source_ids": {
           "items": {
             "enum": [
-              "recent_messages",
               "cross_session_memory",
               "resources",
               "artifacts",
-              "tool_metadata",
               "scheduler",
               "knowledge",
               "trace"

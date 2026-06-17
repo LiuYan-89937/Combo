@@ -49,6 +49,7 @@
     "model_message_completed",
     "model_call_completed",
     "model_call_failed",
+    "model_cache_metrics",
     "tool_call_proposed",
     "tool_approval_requested",
     "tool_approval_resolved",

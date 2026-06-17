@@ -1,10 +1,4 @@
 {
   "version": "enabled_skills.v0",
-  "skills": [
-    {
-      "skill_id": "weather",
-      "path": "skills/weather",
-      "enabled": true
-    }
-  ]
+  "skills": []
 }

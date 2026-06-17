@@ -126,6 +126,34 @@ def token_count_from_usage_metadata(usage: Any) -> int | None:
     return None
 
 
+def output_token_count_from_usage_metadata(usage: Any) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    for key in ("output_tokens", "completion_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+    return None
+
+
+def cached_input_token_count_from_usage_metadata(usage: Any) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    for details_key in ("input_token_details", "prompt_tokens_details"):
+        details = usage.get(details_key)
+        if not isinstance(details, dict):
+            continue
+        for key in ("cache_read", "cached_tokens"):
+            value = details.get(key)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float):
+                return int(value)
+    return None
+
+
 def _model_role_from_services(services: Any | None) -> str:
     if services is None:
         return "main"

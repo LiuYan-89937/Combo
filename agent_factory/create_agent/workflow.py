@@ -138,7 +138,7 @@ class CreateAgentWorkflow:
         if action.action != "finalize":
             return {"done": False}
         report = workspace.read_validation()
-        ready_error = _finalize_ready_error(workspace=workspace, report=report)
+        ready_error = _publish_readiness_error(workspace=workspace, report=report)
         if ready_error:
             workspace.write_action(CreateAgentAction())
             return {
@@ -280,7 +280,7 @@ def _has_control_action(tool_calls: list[dict[str, Any]]) -> bool:
     return any(str(call.get("name") or "") == "create_agent_control" for call in tool_calls)
 
 
-def _finalize_ready_error(*, workspace: CreateAgentWorkspace, report: PackageValidationReport | None) -> str:
+def _publish_readiness_error(*, workspace: CreateAgentWorkspace, report: PackageValidationReport | None) -> str:
     active = workspace.read_system_state().active_stage()
     if active is None or active.system_id != "validation_publish":
         return (

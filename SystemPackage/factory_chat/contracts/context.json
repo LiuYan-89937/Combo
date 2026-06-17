@@ -15,10 +15,8 @@
       "retrieval": {
         "enabled": true,
         "source_ids": [
-          "recent_messages",
           "cross_session_memory",
           "resources",
-          "tool_metadata",
           "scheduler"
         ],
         "max_candidates": 24,
@@ -28,10 +26,8 @@
         "max_items_total": 8,
         "max_tokens_total": 1200,
         "per_source_limits": {
-          "recent_messages": 4,
           "cross_session_memory": 4,
           "resources": 4,
-          "tool_metadata": 4,
           "scheduler": 3,
           "artifacts": 3,
           "knowledge": 6,

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-
-from agent_factory.context_system.compression import estimate_text_tokens, is_context_summary_message
+from agent_factory.context_system.compression import estimate_text_tokens
 from agent_factory.context_system.schema import ContextCandidate, ContextQuery
 
 
@@ -30,30 +28,6 @@ class ContextSourceRuntime:
         self.services = services
         self.resources = dict(resources or {})
         self.factory_values = dict(factory_values or {})
-
-
-class RecentMessagesSource:
-    source_id = "recent_messages"
-
-    def retrieve(self, *, query: ContextQuery, runtime_context: ContextSourceRuntime) -> list[ContextCandidate]:
-        candidates: list[ContextCandidate] = []
-        for index, message in enumerate(runtime_context.messages[-8:]):
-            if is_context_summary_message(message):
-                continue
-            content = _message_text(message)
-            if not content:
-                continue
-            candidates.append(
-                ContextCandidate(
-                    candidate_id=f"recent:{index}",
-                    source_id=self.source_id,
-                    kind="recent_message",
-                    content=f"{_message_role(message)}: {content}",
-                    score=0.65,
-                    token_estimate=estimate_text_tokens(content),
-                )
-            )
-        return candidates
 
 
 class CrossSessionMemorySource:
@@ -109,34 +83,6 @@ class ResourcesSource:
         return candidates
 
 
-class ToolMetadataSource:
-    source_id = "tool_metadata"
-
-    def retrieve(self, *, query: ContextQuery, runtime_context: ContextSourceRuntime) -> list[ContextCandidate]:
-        registry = getattr(runtime_context.services, "tool_registry", None) if runtime_context.services else None
-        if registry is None or not hasattr(registry, "model_tools"):
-            return []
-        candidates: list[ContextCandidate] = []
-        for tool in registry.model_tools():
-            name = str(getattr(tool, "name", "") or "")
-            description = str(getattr(tool, "description", "") or "")
-            if not name:
-                continue
-            text = f"{name}: {description}".strip()
-            candidates.append(
-                ContextCandidate(
-                    candidate_id=f"tool:{name}",
-                    source_id=self.source_id,
-                    kind="tool",
-                    content=text,
-                    score=0.4,
-                    token_estimate=estimate_text_tokens(text),
-                    metadata={"tool_id": name},
-                )
-            )
-        return candidates
-
-
 class SchedulerContextSource:
     source_id = "scheduler"
 
@@ -171,34 +117,13 @@ class EmptyContextSource:
 
 def default_context_sources() -> dict[str, ContextSource]:
     return {
-        "recent_messages": RecentMessagesSource(),
         "cross_session_memory": CrossSessionMemorySource(),
         "resources": ResourcesSource(),
         "artifacts": EmptyContextSource("artifacts"),
-        "tool_metadata": ToolMetadataSource(),
         "scheduler": SchedulerContextSource(),
         "knowledge": EmptyContextSource("knowledge"),
         "trace": EmptyContextSource("trace"),
     }
-
-
-def _message_role(message: Any) -> str:
-    if isinstance(message, HumanMessage):
-        return "user"
-    if isinstance(message, AIMessage):
-        return "assistant"
-    if isinstance(message, ToolMessage):
-        return "tool"
-    if isinstance(message, SystemMessage):
-        return "system"
-    return str(getattr(message, "type", "message"))
-
-
-def _message_text(message: Any) -> str:
-    content = getattr(message, "content", message)
-    if isinstance(content, str):
-        return content.strip()
-    return str(content).strip()
 
 
 def _safe_preview(value: Any) -> str:
