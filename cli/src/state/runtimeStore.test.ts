@@ -1,4 +1,5 @@
 import {describe, expect, it, vi} from 'vitest';
+import {contextActivityStatusLabel, memoryActivityStatusLabel} from './renderProjection.js';
 import {createRuntimeStore} from './runtimeStore.js';
 import {type FactoryEvent} from '../protocol.js';
 
@@ -281,7 +282,7 @@ describe('RuntimeStore', () => {
 		}));
 
 		expect(store.getSnapshot().memoryActivity.status).toBe('writing');
-		expect(store.getSnapshot().memoryActivity.label).toContain('后台写入中');
+		expect(memoryActivityStatusLabel(store.getSnapshot().memoryActivity)).toContain('后台写入中');
 		expect(store.getSnapshot().memoryActivity.jobId).toBe('memory-job-1');
 
 		vi.advanceTimersByTime(7999);
@@ -311,7 +312,7 @@ describe('RuntimeStore', () => {
 		}));
 
 		expect(store.getSnapshot().memoryActivity.status).toBe('completed');
-		expect(store.getSnapshot().memoryActivity.label).toContain('已更新');
+		expect(memoryActivityStatusLabel(store.getSnapshot().memoryActivity)).toContain('已更新');
 
 		vi.advanceTimersByTime(3000);
 		expect(store.getSnapshot().memoryActivity.status).toBe('idle');
@@ -333,8 +334,8 @@ describe('RuntimeStore', () => {
 		}));
 
 		expect(store.getSnapshot().contextActivity.status).toBe('completed');
-		expect(store.getSnapshot().contextActivity.label).toContain('上下文已注入');
-		expect(store.getSnapshot().contextActivity.detail).toBe('3 items');
+		expect(contextActivityStatusLabel(store.getSnapshot().contextActivity)).toContain('上下文已注入');
+		expect(store.getSnapshot().contextActivity.payload.item_count).toBe(3);
 
 		vi.advanceTimersByTime(2500);
 		expect(store.getSnapshot().contextActivity.status).toBe('idle');
@@ -391,7 +392,7 @@ describe('RuntimeStore', () => {
 		}));
 
 		expect(store.getSnapshot().contextActivity.status).toBe('skipped');
-		expect(store.getSnapshot().contextActivity.label).toContain('跳过');
+		expect(contextActivityStatusLabel(store.getSnapshot().contextActivity)).toContain('跳过');
 
 		vi.advanceTimersByTime(2500);
 		expect(store.getSnapshot().contextActivity.status).toBe('idle');
@@ -410,7 +411,7 @@ describe('RuntimeStore', () => {
 
 		vi.advanceTimersByTime(10_000);
 		expect(store.getSnapshot().contextActivity.status).toBe('running');
-		expect(store.getSnapshot().contextActivity.label).toContain('压缩中');
+		expect(contextActivityStatusLabel(store.getSnapshot().contextActivity)).toContain('压缩中');
 
 		store.dispatch(event('context_compression_completed', {
 			payload: {node_id: 'answer', status: 'completed'}

@@ -1,5 +1,5 @@
 import {type FactoryEvent, type FactoryMode} from '../protocol.js';
-import {withTimelineItems} from './timeline.js';
+import {withRenderProjection} from './renderProjection.js';
 
 export type ModelStream = {
 	streamId: string;
@@ -43,9 +43,9 @@ export type RunActivity = {
 	timestamp: string;
 	stageId: string | null;
 	nodeId: string | null;
-	label: string;
-	detail: string;
-	color: ActivityColor;
+	nodeLabel: string | null;
+	message: string | null;
+	payload: Record<string, unknown>;
 };
 
 export type ToolLifecycle = 'proposed' | 'approval' | 'started' | 'completed' | 'failed' | 'observed';
@@ -61,13 +61,6 @@ export type ToolActivity = {
 	toolName: string;
 	status: ToolLifecycle;
 	approvalState: 'pending' | 'approved' | 'rejected' | 'custom' | 'trusted' | null;
-	argsPreview: string | null;
-	resultPreview: string | null;
-	stdoutPreview: string | null;
-	stderrPreview: string | null;
-	exitCode: number | null;
-	durationMs: number | null;
-	searchText: string;
 	payload: Record<string, unknown>;
 };
 
@@ -75,8 +68,8 @@ export type MemoryActivityStatus = 'idle' | 'writing' | 'completed' | 'failed';
 
 export type MemoryActivity = {
 	status: MemoryActivityStatus;
-	label: string;
-	detail: string | null;
+	eventType: FactoryEvent['event_type'] | null;
+	payload: Record<string, unknown>;
 	jobId: string | null;
 	namespace: string | null;
 	updatedAt: string | null;
@@ -86,8 +79,8 @@ export type ContextActivityStatus = 'idle' | 'running' | 'completed' | 'failed' 
 
 export type ContextActivity = {
 	status: ContextActivityStatus;
-	label: string;
-	detail: string | null;
+	eventType: FactoryEvent['event_type'] | null;
+	payload: Record<string, unknown>;
 	nodeId: string | null;
 	updatedAt: string | null;
 };
@@ -109,8 +102,8 @@ export type SchedulerActivity = {
 	runId: string | null;
 	targetType: string | null;
 	status: string | null;
-	detail: string;
 	reportPath: string | null;
+	payload: Record<string, unknown>;
 };
 
 export type KnowledgeActivity = {
@@ -121,8 +114,8 @@ export type KnowledgeActivity = {
 	mode: string | null;
 	phase: string | null;
 	status: string | null;
-	detail: string;
 	reportPath: string | null;
+	payload: Record<string, unknown>;
 };
 
 export type SpanRecord = {
@@ -158,7 +151,7 @@ export type TimelineItem = {
 	body: string;
 	kind: 'message' | 'tool' | 'scheduler' | 'knowledge' | 'activity' | 'error';
 	role: TranscriptRole | null;
-	source: 'transcript' | 'tool' | 'scheduler' | 'knowledge' | 'runtime_activity' | 'runtime_error';
+	source: 'transcript' | 'tool' | 'scheduler' | 'knowledge' | 'interrupt' | 'runtime_activity' | 'runtime_error';
 	turnId: string | null;
 	eventType: FactoryEvent['event_type'] | null;
 	active?: boolean;
@@ -296,7 +289,7 @@ export class RuntimeStore {
 		if ('event_type' in action && isImmediateEvent(action.event_type)) {
 			this.flushStreamEvents();
 		}
-		this.state = withTimelineItems(reduceRuntimeAction(this.state, action));
+		this.state = withRenderProjection(reduceRuntimeAction(this.state, action));
 		if ('event_type' in action && isMemoryWriteEvent(action.event_type)) {
 			this.scheduleMemoryActivityClear(
 				this.state.memoryActivity.updatedAt,
@@ -349,7 +342,7 @@ export class RuntimeStore {
 			next = reduceRuntimeEvent(next, event);
 		}
 		this.pendingStreamEvents = [];
-		this.state = withTimelineItems(next);
+		this.state = withRenderProjection(next);
 		this.notify();
 	}
 
@@ -576,13 +569,14 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'tool_call_proposed':
 		case 'tool_call_started':
 		case 'tool_call_completed':
+		case 'tool_contract_invalid':
 		case 'tool_call_failed':
 		case 'tool_observation_available':
-			return appendToolTranscript({
+			return {
 				...base,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				toolActivities: upsertToolActivities(base.toolActivities, toolActivitiesForEvent(event))
-			}, event);
+			};
 		case 'tool_approval_resolved':
 			return {
 				...base,
@@ -633,7 +627,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			case 'knowledge_source_removed':
 			case 'knowledge_source_reindex_requested':
 				return {
-					...appendKnowledgeTranscript(base, event),
+					...base,
 					knowledgeActivities: [...base.knowledgeActivities.slice(-19), knowledgeActivityForEvent(event)],
 					recentActivities: appendRunActivity(base.recentActivities, event)
 				};
@@ -657,7 +651,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'scheduler_seed_unchanged':
 		case 'scheduler_seed_failed':
 			return {
-				...appendSchedulerTranscript(base, event),
+				...base,
 				schedulerActivities: [...base.schedulerActivities.slice(-19), schedulerActivityForEvent(event)],
 				recentActivities: appendRunActivity(base.recentActivities, event)
 			};
@@ -690,22 +684,22 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				errorMessageFromEvent(event, `node failed: ${event.node_label ?? event.node_id ?? '-'}`)
 			);
 		case 'interrupt_requested':
-			return appendInterruptTranscript({
+			return {
 				...base,
 				runStatus: 'interrupted',
 				pendingInterrupt: base.pendingInterrupt ?? event,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
-			}, event);
+			};
 		case 'tool_approval_requested':
-			return appendInterruptTranscript({
+			return {
 				...base,
 				toolActivities: upsertToolActivities(base.toolActivities, toolActivitiesForEvent(event)),
 				runStatus: 'interrupted',
 				pendingInterrupt: event,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
-			}, event);
+			};
 		case 'runtime_resumed':
 			return {
 				...base,
@@ -1004,14 +998,15 @@ function completeModelStream(state: RuntimeState, event: FactoryEvent): RuntimeS
 	if (!streamId) {
 		return state;
 	}
+	const completedContent = String(event.payload?.content ?? '');
 	const current = state.modelStreams[streamId] ?? {
 		streamId,
 		nodeId: event.node_id ?? null,
-		content: String(event.payload?.content ?? ''),
+		content: completedContent,
 		active: false,
 		completedAt: event.timestamp
 	};
-	const content = current.content || String(event.payload?.content ?? '');
+	const content = completedContent || current.content;
 	const next = {
 		...state,
 		modelStreams: {
@@ -1051,7 +1046,6 @@ function toolActivitiesForEvent(event: FactoryEvent): ToolActivity[] {
 
 function toolActivity(event: FactoryEvent, payloadOverride?: Record<string, unknown>): ToolActivity {
 	const payload = payloadOverride ?? event.payload ?? {};
-	const normalizedPayload = normalizeToolPayload(payload);
 	return {
 		activityKey: toolActivityKey(event, payload),
 		eventType: event.event_type,
@@ -1060,16 +1054,9 @@ function toolActivity(event: FactoryEvent, payloadOverride?: Record<string, unkn
 		stageId: event.stage_id ?? null,
 		nodeId: event.node_id ?? null,
 		toolCallId: payloadToolCallId(payload) || null,
-		toolName: normalizedPayload.toolName,
+		toolName: toolNameFromPayload(payload),
 		status: lifecycleForToolEvent(event.event_type),
 		approvalState: approvalState(payload),
-		argsPreview: normalizedPayload.argsPreview,
-		resultPreview: normalizedPayload.resultPreview,
-		stdoutPreview: normalizedPayload.stdoutPreview,
-		stderrPreview: normalizedPayload.stderrPreview,
-		exitCode: normalizedPayload.exitCode,
-		durationMs: normalizedPayload.durationMs,
-		searchText: normalizedPayload.searchText,
 		payload
 	};
 }
@@ -1132,7 +1119,6 @@ function unwrapApprovalResolutionPayload(payload: Record<string, unknown>): Reco
 
 function mergeToolActivity(existing: ToolActivity, incoming: ToolActivity): ToolActivity {
 	const mergedPayload = {...existing.payload, ...incoming.payload};
-	const normalizedPayload = normalizeToolPayload(mergedPayload);
 	return {
 		...incoming,
 		createdAt: existing.createdAt,
@@ -1142,13 +1128,6 @@ function mergeToolActivity(existing: ToolActivity, incoming: ToolActivity): Tool
 		toolName: incoming.toolName === '-' ? existing.toolName : incoming.toolName,
 		status: nextToolStatus(existing.status, incoming.status),
 		approvalState: incoming.approvalState ?? existing.approvalState,
-		argsPreview: incoming.argsPreview ?? existing.argsPreview ?? normalizedPayload.argsPreview,
-		resultPreview: incoming.resultPreview ?? existing.resultPreview ?? normalizedPayload.resultPreview,
-		stdoutPreview: incoming.stdoutPreview ?? existing.stdoutPreview ?? normalizedPayload.stdoutPreview,
-		stderrPreview: incoming.stderrPreview ?? existing.stderrPreview ?? normalizedPayload.stderrPreview,
-		exitCode: incoming.exitCode ?? existing.exitCode ?? normalizedPayload.exitCode,
-		durationMs: incoming.durationMs ?? existing.durationMs ?? normalizedPayload.durationMs,
-		searchText: [existing.searchText, incoming.searchText, normalizedPayload.searchText].filter(Boolean).join('\n'),
 		payload: incoming.eventType === 'tool_observation_available' ? {...mergedPayload, observation: incoming.payload} : mergedPayload
 	};
 }
@@ -1198,58 +1177,26 @@ function isRuntimeRequestHeartbeat(event: FactoryEvent): boolean {
 }
 
 function runActivity(event: FactoryEvent): RunActivity | null {
-	const payload = event.payload ?? {};
 	const eventType = event.event_type;
-	const toolPayload = normalizeToolPayload(payload);
-	const node = event.node_id ?? event.stage_id ?? '-';
-	if (eventType.startsWith('tool_')) {
+	if (
+		eventType.startsWith('tool_')
+		|| eventType.startsWith('model_')
+		|| eventType.startsWith('scheduler_')
+		|| eventType.startsWith('stage_')
+		|| eventType.startsWith('node_')
+		|| eventType.startsWith('run_')
+		|| eventType.includes('interrupt')
+		|| eventType.startsWith('runtime_')
+	) {
 		return {
 			activityKey: `${event.event_id}:activity`,
 			eventType,
 			timestamp: event.timestamp,
 			stageId: event.stage_id ?? null,
 			nodeId: event.node_id ?? null,
-			label: labelForToolLifecycle(lifecycleForToolEvent(eventType)),
-			detail: `${toolPayload.toolName}${toolPayload.argsPreview ? ` ${toolPayload.argsPreview}` : ''}`,
-			color: colorForEvent(eventType)
-		};
-	}
-	if (eventType.startsWith('model_')) {
-		return {
-			activityKey: `${event.event_id}:activity`,
-			eventType,
-			timestamp: event.timestamp,
-			stageId: event.stage_id ?? null,
-			nodeId: event.node_id ?? null,
-			label: eventType === 'model_call_started' ? 'model thinking' : eventType === 'model_message_completed' ? 'model answered' : 'model update',
-			detail: String(payload.prompt_id ?? node),
-			color: colorForEvent(eventType)
-		};
-	}
-	if (eventType.startsWith('scheduler_')) {
-		return {
-			activityKey: `${event.event_id}:activity`,
-			eventType,
-			timestamp: event.timestamp,
-			stageId: event.stage_id ?? null,
-			nodeId: event.node_id ?? null,
-			label: readableEventType(eventType),
-			detail: schedulerActivityDetail(event.payload ?? {}),
-			color: colorForEvent(eventType)
-		};
-	}
-	if (eventType.startsWith('stage_') || eventType.startsWith('node_') || eventType.startsWith('run_') || eventType.includes('interrupt') || eventType.startsWith('runtime_')) {
-		return {
-			activityKey: `${event.event_id}:activity`,
-			eventType,
-			timestamp: event.timestamp,
-			stageId: event.stage_id ?? null,
-			nodeId: event.node_id ?? null,
-			label: readableEventType(eventType),
-			detail: eventType.endsWith('failed') || eventType === 'run_failed'
-				? firstLine(errorMessageFromEvent(event, readableEventType(eventType)))
-				: event.message ?? String(payload.type ?? payload.status ?? event.node_label ?? node),
-			color: colorForEvent(eventType)
+			nodeLabel: event.node_label ?? null,
+			message: event.message ?? null,
+			payload: event.payload ?? {}
 		};
 	}
 	return null;
@@ -1281,7 +1228,7 @@ function resourceLikeActivityDetail(payload: Record<string, unknown>, fallback: 
 }
 
 function lifecycleForToolEvent(eventType: FactoryEvent['event_type']): ToolLifecycle {
-	if (eventType === 'tool_call_failed') {
+	if (eventType === 'tool_call_failed' || eventType === 'tool_contract_invalid') {
 		return 'failed';
 	}
 	if (eventType === 'tool_observation_available') {
@@ -1311,44 +1258,6 @@ function nextToolStatus(previous: ToolLifecycle, incoming: ToolLifecycle): ToolL
 	return rank[incoming] >= rank[previous] ? incoming : previous;
 }
 
-function labelForToolLifecycle(status: ToolLifecycle): string {
-	const labels: Record<ToolLifecycle, string> = {
-		proposed: 'tool proposed',
-		approval: 'tool approval',
-		started: 'tool running',
-		completed: 'tool completed',
-		failed: 'tool failed',
-		observed: 'observation'
-	};
-	return labels[status];
-}
-
-function readableEventType(eventType: string): string {
-	return eventType.replaceAll('_', ' ');
-}
-
-function colorForEvent(eventType: string): ActivityColor {
-	if (eventType.endsWith('failed') || eventType === 'run_failed' || eventType === 'error') {
-		return 'red';
-	}
-	if (eventType.includes('interrupt') || eventType.includes('approval')) {
-		return 'yellow';
-	}
-	if (eventType.endsWith('completed')) {
-		return 'green';
-	}
-	if (eventType.includes('model')) {
-		return 'cyan';
-	}
-	if (eventType.includes('tool')) {
-		return 'yellow';
-	}
-	if (eventType.includes('scheduler')) {
-		return 'magenta';
-	}
-	return 'blue';
-}
-
 function schedulerActivityForEvent(event: FactoryEvent): SchedulerActivity {
 	const payload = event.payload ?? {};
 	return {
@@ -1358,36 +1267,9 @@ function schedulerActivityForEvent(event: FactoryEvent): SchedulerActivity {
 		runId: stringValue(payload.run_id) || null,
 		targetType: stringValue(payload.target_type) || null,
 		status: stringValue(payload.status) || null,
-		detail: schedulerActivityDetail(payload),
-		reportPath: stringValue(payload.report_path) || null
+		reportPath: stringValue(payload.report_path) || null,
+		payload
 	};
-}
-
-function schedulerActivityDetail(payload: Record<string, unknown>): string {
-	const target = stringValue(payload.target_type);
-	const status = stringValue(payload.status);
-	const job = stringValue(payload.job_id);
-	const error = stringValue(payload.error_summary);
-	const report = stringValue(payload.report_path);
-	const summary = stringValue(payload.summary);
-	const completedCount = numberValue(payload.completed_count);
-	const nested = recordValue(payload.payload) ?? {};
-	const listedCount = numberValue(nested.count);
-	const consecutiveFailures = numberValue(nested.consecutive_failures);
-	const threshold = numberValue(nested.threshold);
-	const parts = [
-		status ? `status=${status}` : null,
-		target ? `target=${target}` : null,
-		job ? `job=${shortValue(job, 10)}` : null,
-		typeof listedCount === 'number' ? `items=${listedCount}` : null,
-		typeof completedCount === 'number' ? `count=${completedCount}` : null,
-		typeof consecutiveFailures === 'number' ? `failures=${consecutiveFailures}` : null,
-		typeof threshold === 'number' ? `threshold=${threshold}` : null,
-		summary ? `summary=${shortValue(summary, 80)}` : null,
-		error ? `error=${shortValue(error, 80)}` : null,
-		report ? `report=${shortValue(report, 48)}` : null
-	].filter((item): item is string => Boolean(item));
-	return parts.join(' ');
 }
 
 function knowledgeActivityForEvent(event: FactoryEvent): KnowledgeActivity {
@@ -1400,45 +1282,16 @@ function knowledgeActivityForEvent(event: FactoryEvent): KnowledgeActivity {
 		mode: stringValue(payload.mode) || null,
 		phase: stringValue(payload.phase) || null,
 		status: stringValue(payload.status) || null,
-		detail: knowledgeActivityDetail(payload),
-		reportPath: stringValue(payload.report_path) || null
+		reportPath: stringValue(payload.report_path) || null,
+		payload
 	};
-}
-
-function knowledgeActivityDetail(payload: Record<string, unknown>): string {
-	const status = stringValue(payload.status);
-	const mode = stringValue(payload.mode);
-	const phase = stringValue(payload.phase);
-	const source = stringValue(payload.source_id);
-	const message = stringValue(payload.message);
-	const error = recordValue(payload.error);
-	const progress = recordValue(payload.progress);
-	const counts = recordValue(payload.counts);
-	const current = numberValue(progress?.current);
-	const total = numberValue(progress?.total);
-	const percent = numberValue(progress?.percent);
-	const documents = numberValue(counts?.documents_loaded) ?? numberValue(counts?.documents_discovered);
-	const chunks = numberValue(counts?.chunks_created);
-	const parts = [
-		status ? `status=${status}` : null,
-		mode ? `mode=${mode}` : null,
-		phase ? `phase=${phase}` : null,
-		source ? `source=${shortValue(source, 16)}` : null,
-		typeof percent === 'number' ? `${percent}%` : null,
-		typeof current === 'number' && typeof total === 'number' ? `${current}/${total}` : null,
-		typeof documents === 'number' ? `docs=${documents}` : null,
-		typeof chunks === 'number' ? `chunks=${chunks}` : null,
-		error ? `error=${shortValue(stringValue(error.message) || compactValue(error, 120), 80)}` : null,
-		message ? shortValue(message, 80) : null
-	].filter((item): item is string => Boolean(item));
-	return parts.join(' ');
 }
 
 function idleMemoryActivity(): MemoryActivity {
 	return {
 		status: 'idle',
-		label: '',
-		detail: null,
+		eventType: null,
+		payload: {},
 		jobId: null,
 		namespace: null,
 		updatedAt: null
@@ -1448,8 +1301,8 @@ function idleMemoryActivity(): MemoryActivity {
 function idleContextActivity(): ContextActivity {
 	return {
 		status: 'idle',
-		label: '',
-		detail: null,
+		eventType: null,
+		payload: {},
 		nodeId: null,
 		updatedAt: null
 	};
@@ -1472,12 +1325,10 @@ function memoryActivityForEvent(event: FactoryEvent): MemoryActivity {
 	const jobId = stringValue(payload.job_id) || null;
 	const namespace = memoryNamespaceLabel(payload.namespace);
 	const status = memoryActivityStatusForEvent(event.event_type);
-	const label = memoryActivityLabelForEvent(event.event_type, payload);
-	const detail = memoryActivityDetail(payload);
 	return {
 		status,
-		label,
-		detail,
+		eventType: event.event_type,
+		payload,
 		jobId,
 		namespace,
 		updatedAt: event.timestamp
@@ -1494,50 +1345,6 @@ function memoryActivityStatusForEvent(eventType: FactoryEvent['event_type']): Me
 	return 'writing';
 }
 
-function memoryActivityLabelForEvent(eventType: FactoryEvent['event_type'], payload: Record<string, unknown>): string {
-	if (eventType === 'memory_write_queued') {
-		return '跨会话记忆后台写入中';
-	}
-	if (eventType === 'memory_segment_prepared') {
-		return '跨会话记忆片段整理中';
-	}
-	if (eventType === 'memory_extraction_completed') {
-		return '跨会话记忆整理中';
-	}
-	if (eventType === 'memory_write_completed') {
-		const status = stringValue(payload.status);
-		return status === 'noop' ? '跨会话记忆无需更新' : '跨会话记忆已更新';
-	}
-	if (eventType === 'memory_write_queued_failed') {
-		return '跨会话记忆未入队';
-	}
-	if (eventType === 'memory_write_failed') {
-		return '跨会话记忆写入失败';
-	}
-	return '跨会话记忆处理中';
-}
-
-function memoryActivityDetail(payload: Record<string, unknown>): string | null {
-	const error = stringValue(payload.error);
-	if (error) {
-		return error;
-	}
-	const intent = stringValue(payload.intent);
-	if (intent) {
-		return `intent=${intent}`;
-	}
-	const actionCount = numberValue(payload.action_count);
-	if (actionCount !== null) {
-		return `actions=${actionCount}`;
-	}
-	const reportStatus = stringValue(payload.status);
-	if (reportStatus && reportStatus !== 'queued') {
-		return reportStatus;
-	}
-	const jobId = stringValue(payload.job_id);
-	return jobId ? shortValue(jobId, 10) : null;
-}
-
 function memoryNamespaceLabel(value: unknown): string | null {
 	if (Array.isArray(value)) {
 		const text = value.map(item => String(item)).filter(Boolean).join('/');
@@ -1551,8 +1358,8 @@ function contextActivityForEvent(event: FactoryEvent): ContextActivity {
 	const payload = event.payload ?? {};
 	return {
 		status: contextActivityStatusForEvent(event.event_type),
-		label: contextActivityLabelForEvent(event.event_type),
-		detail: contextActivityDetail(payload),
+		eventType: event.event_type,
+		payload,
 		nodeId: stringValue(payload.node_id) || event.node_id || null,
 		updatedAt: event.timestamp
 	};
@@ -1585,69 +1392,6 @@ function contextActivityStatusForEvent(eventType: FactoryEvent['event_type']): C
 		return 'completed';
 	}
 	return 'completed';
-}
-
-function contextActivityLabelForEvent(eventType: FactoryEvent['event_type']): string {
-	if (eventType === 'context_prepare_started') {
-		return '上下文准备中';
-	}
-	if (eventType === 'context_prepare_completed') {
-		return '上下文已准备';
-	}
-	if (eventType === 'context_prepare_failed') {
-		return '上下文准备失败';
-	}
-	if (eventType === 'context_compression_started') {
-		return '上下文压缩中';
-	}
-	if (eventType === 'context_compression_completed') {
-		return '上下文压缩完成';
-	}
-	if (eventType === 'context_compression_failed') {
-		return '上下文压缩失败';
-	}
-	if (eventType === 'context_compression_skipped') {
-		return '上下文压缩跳过';
-	}
-	if (eventType === 'context_window_updated') {
-		return '上下文窗口更新';
-	}
-	if (eventType === 'context_retrieval_completed') {
-		return '上下文检索完成';
-	}
-	if (eventType === 'context_assembly_completed') {
-		return '上下文组装完成';
-	}
-	return '上下文已注入';
-}
-
-function contextActivityDetail(payload: Record<string, unknown>): string | null {
-	const error = stringValue(payload.error);
-	if (error) {
-		return shortValue(error, 42);
-	}
-	const itemCount = numberValue(payload.item_count);
-	if (itemCount !== null) {
-		return `${itemCount} items`;
-	}
-	const tokenCount = numberValue(payload.token_count);
-	const windowTokens = numberValue(payload.context_window_tokens);
-	const thresholdTokens = numberValue(payload.compression_threshold_tokens);
-	if (tokenCount !== null && windowTokens !== null) {
-		return `${formatCompactNumber(tokenCount)}/${formatCompactNumber(windowTokens)}`;
-	}
-	if (tokenCount !== null && thresholdTokens !== null) {
-		return `${formatCompactNumber(tokenCount)} tokens @${formatCompactNumber(thresholdTokens)}`;
-	}
-	const selectedCount = numberValue(payload.selected_count);
-	if (selectedCount !== null) {
-		return `${selectedCount} selected`;
-	}
-	const tokenEstimate = numberValue(payload.token_estimate_after) ?? numberValue(payload.token_estimate);
-	if (tokenEstimate !== null) {
-		return `${tokenEstimate} tokens`;
-	}
-	return null;
 }
 
 function isMemoryWriteEvent(eventType: FactoryEvent['event_type']): boolean {
@@ -1712,47 +1456,18 @@ function approvalState(payload: Record<string, unknown>): ToolActivity['approval
 	return null;
 }
 
-function normalizeToolPayload(payload: Record<string, unknown>): {
-	toolName: string;
-	argsPreview: string | null;
-	resultPreview: string | null;
-	stdoutPreview: string | null;
-	stderrPreview: string | null;
-	exitCode: number | null;
-	durationMs: number | null;
-	searchText: string;
-} {
+function toolNameFromPayload(payload: Record<string, unknown>): string {
 	const message = recordValue(payload.message);
 	const resourceCheck = recordValue(payload.resource_check);
-	const rawResult = payload.result ?? payload.output ?? payload.content ?? message?.content ?? resourceCheck?.raw_result ?? resourceCheck?.result_summary;
-	const result = parseJsonLike(rawResult);
+	const result = parseJsonLike(payload.result ?? payload.output ?? payload.content ?? message?.content ?? resourceCheck?.raw_result ?? resourceCheck?.result_summary);
 	const resultRecord = recordValue(result);
 	const observation = recordValue(resultRecord?.type === 'tool_observation' ? resultRecord : resultRecord?.observation);
-	const outputRecord = recordValue(observation?.output) ?? resultRecord;
-	const args = payload.arguments ?? payload.args ?? payload.tool_args ?? observation?.arguments ?? resourceCheck?.arguments ?? message?.args;
-	const toolName = stringValue(payload.tool_name) || stringValue(payload.name) || stringValue(observation?.tool_id) || stringValue(message?.name) || stringValue(resourceCheck?.tool_name) || '-';
-	const stdoutPreview = textPreview(outputRecord?.stdout ?? outputRecord?.out);
-	const stderrPreview = textPreview(outputRecord?.stderr ?? outputRecord?.err);
-	const resultPreview = textPreview(
-		resourceCheck?.result_summary
-		?? observation?.message
-		?? outputRecord?.result_summary
-		?? outputSummary(outputRecord)
-		?? rawResult
-	);
-	const exitCode = numberValue(outputRecord?.exit_code ?? outputRecord?.returncode ?? payload.exit_code);
-	const durationMs = numberValue(payload.duration_ms ?? outputRecord?.duration_ms);
-	const argsPreview = args === undefined ? null : compactValue(args, 360);
-	return {
-		toolName,
-		argsPreview,
-		resultPreview,
-		stdoutPreview,
-		stderrPreview,
-		exitCode,
-		durationMs,
-		searchText: [toolName, argsPreview, resultPreview, stdoutPreview, stderrPreview, compactValue(payload, 800)].filter(Boolean).join('\n')
-	};
+	return stringValue(payload.tool_name)
+		|| stringValue(payload.name)
+		|| stringValue(observation?.tool_id)
+		|| stringValue(message?.name)
+		|| stringValue(resourceCheck?.tool_name)
+		|| '-';
 }
 
 function parseJsonLike(value: unknown): unknown {
@@ -1881,270 +1596,6 @@ function upsertAssistantTranscript(
 			...state.transcript.slice(existingIndex + 1)
 		]
 	};
-}
-
-function appendToolTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	return event.event_type === 'tool_call_failed'
-		? appendTranscript(state, {
-			id: `tool-error-${event.event_id}`,
-			role: 'tool',
-			timestamp: event.timestamp,
-			title: 'Tool Failed',
-			content: normalizeToolPayload(event.payload ?? {}).resultPreview ?? compactValue(event.payload, 1000),
-			eventType: event.event_type,
-			metadata: event.payload ?? {}
-		})
-		: state;
-}
-
-function appendInterruptTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	const payload = event.payload ?? {};
-	const interruptType = String(payload.type ?? event.event_type);
-	if (interruptType === 'tool_approval') {
-		return state;
-	}
-	if (isAssistantDialogueInterrupt(payload)) {
-		return appendAssistantInterruptTranscript(state, event, interruptType);
-	}
-	const requests = (payload.requests as Array<Record<string, unknown>> | undefined) ?? [];
-	const requestLines = requests.map((item, index) => {
-		const tool = String(item.tool_name ?? '-');
-		const summary = String(item.summary ?? compactValue(item.args ?? item.arguments ?? {}, 360));
-		return `${index + 1}. ${tool} ${summary}`.trim();
-	});
-	const content = requestLines.length ? requestLines.join('\n') : compactValue(payload, 1200);
-	return appendTranscript(state, {
-		id: `interrupt-${event.event_id}`,
-		role: 'interrupt',
-		timestamp: event.timestamp,
-		title: `Interrupt / ${interruptType}`,
-		content,
-		eventType: event.event_type,
-		metadata: payload
-	});
-}
-
-function appendAssistantInterruptTranscript(state: RuntimeState, event: FactoryEvent, interruptType: string): RuntimeState {
-	const payload = event.payload ?? {};
-	const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
-	const message = typeof payload.message === 'string' ? payload.message.trim() : '';
-	const content = [message, summary && summary !== message ? summary : null].filter((item): item is string => Boolean(item)).join('\n\n');
-	return appendTranscript(state, {
-		id: `assistant-interrupt-${event.event_id}`,
-		role: 'assistant',
-		timestamp: event.timestamp,
-		title: String(payload.title ?? 'Assistant question'),
-		content: content || compactValue(payload, 1200),
-		eventType: event.event_type,
-		metadata: {...payload, interrupt_type: interruptType}
-	});
-}
-
-function isAssistantDialogueInterrupt(payload: Record<string, unknown>): boolean {
-	return payload.presentation === 'assistant_dialogue';
-}
-
-function appendKnowledgeTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	if (event.event_type === 'knowledge_source_preview_available') {
-		const preview = recordValue(event.payload?.preview);
-		const lines = [
-			`来源：${stringValue(preview?.display_name) || stringValue(preview?.source_id) || '-'}`,
-			`类型：${stringValue(preview?.source_type) || '-'}`,
-			`模式：${stringValue(preview?.mount_mode) || '-'}`,
-			`文档数：${numberValue(preview?.estimated_documents) ?? 0}`,
-			`需要 embedding：${preview?.requires_embedding ? 'yes' : 'no'}`,
-			stringValue(preview?.uri) ? `路径：${stringValue(preview?.uri)}` : null
-		].filter((item): item is string => Boolean(item));
-		return appendTranscript(state, {
-			id: `knowledge-preview-${event.event_id}`,
-			role: 'knowledge',
-			timestamp: event.timestamp,
-			title: `Knowledge / preview`,
-			content: lines.join('\n') || compactValue(event.payload, 1200),
-			eventType: event.event_type,
-			metadata: event.payload ?? {}
-		});
-	}
-	if (event.event_type === 'knowledge_source_ready' || event.event_type === 'knowledge_ingestion_completed' || event.event_type === 'knowledge_ingestion_failed' || event.event_type === 'knowledge_source_removed') {
-		const payload = event.payload ?? {};
-		const counts = recordValue(payload.counts) ?? {};
-		const error = recordValue(payload.error);
-		const lines = [
-			`source：${stringValue(payload.source_id) || '-'}`,
-			stringValue(payload.mode) ? `mode：${stringValue(payload.mode)}` : null,
-			stringValue(payload.status) ? `status：${stringValue(payload.status)}` : null,
-			typeof numberValue(counts.documents_loaded) === 'number' ? `documents：${numberValue(counts.documents_loaded)}` : null,
-			typeof numberValue(counts.chunks_created) === 'number' ? `chunks：${numberValue(counts.chunks_created)}` : null,
-			stringValue(payload.report_path) ? `report：${stringValue(payload.report_path)}` : null,
-			error ? `error：${stringValue(error.message) || compactValue(error, 300)}` : null
-		].filter((item): item is string => Boolean(item));
-		return appendTranscript(state, {
-			id: `knowledge-result-${event.event_id}`,
-			role: 'knowledge',
-			timestamp: event.timestamp,
-			title: `Knowledge / ${event.event_type.replace(/^knowledge_/, '').replaceAll('_', ' ')}`,
-			content: lines.join('\n') || compactValue(event.payload, 1200),
-			eventType: event.event_type,
-			metadata: payload
-		});
-	}
-	return state;
-}
-
-function appendSchedulerTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	if (event.event_type === 'scheduler_jobs_listed') {
-		return appendSchedulerJobsTranscript(state, event);
-	}
-	if (event.event_type === 'scheduler_job_described') {
-		return appendSchedulerJobDescriptionTranscript(state, event);
-	}
-	if (event.event_type === 'scheduler_runs_listed') {
-		return appendSchedulerRunsTranscript(state, event);
-	}
-	if (event.event_type === 'scheduler_job_auto_paused') {
-		return appendSchedulerAutoPausedTranscript(state, event);
-	}
-	return appendSchedulerFeedbackTranscript(state, event);
-}
-
-function appendSchedulerFeedbackTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	if (event.event_type !== 'scheduler_feedback_completed' && event.event_type !== 'scheduler_feedback_failed') {
-		return state;
-	}
-	const payload = event.payload ?? {};
-	const summary = stringValue(payload.summary);
-	const error = stringValue(payload.error_summary);
-	const task = stringValue(payload.task_content);
-	const completedAt = stringValue(payload.completed_at);
-	const count = numberValue(payload.completed_count);
-	const lines = [
-		task ? `任务：${task}` : null,
-		completedAt ? `完成时间：${completedAt}` : null,
-		typeof count === 'number' ? `完成次数：${count}` : null,
-		summary ? `总结：${summary}` : null,
-		error ? `错误：${error}` : null
-	].filter((item): item is string => Boolean(item));
-	return appendTranscript(state, {
-		id: `scheduler-feedback-${event.event_id}`,
-		role: 'scheduler',
-		timestamp: event.timestamp,
-		title: `Scheduler / ${stringValue(payload.job_id) || '-'}`,
-		content: lines.join('\n') || compactValue(payload, 1200),
-		eventType: event.event_type,
-		metadata: payload
-	});
-}
-
-function appendSchedulerJobsTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	const payload = recordValue(event.payload?.payload) ?? {};
-	const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
-	const lines = jobs.length
-		? jobs.slice(0, 20).map(item => schedulerJobLine(recordValue(item))).filter(Boolean)
-		: ['暂无定时任务'];
-	return appendTranscript(state, {
-		id: `scheduler-jobs-${event.event_id}`,
-		role: 'scheduler',
-		timestamp: event.timestamp,
-		title: 'Scheduler / jobs',
-		content: lines.join('\n'),
-		eventType: event.event_type,
-		metadata: event.payload ?? {}
-	});
-}
-
-function appendSchedulerJobDescriptionTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	const payload = recordValue(event.payload?.payload) ?? {};
-	const job = recordValue(payload.job);
-	const runs = Array.isArray(payload.recent_runs) ? payload.recent_runs : [];
-	const lines = [
-		schedulerJobLine(job),
-		...runs.slice(0, 8).map(item => schedulerRunLine(recordValue(item))).filter(Boolean)
-	].filter((item): item is string => Boolean(item));
-	return appendTranscript(state, {
-		id: `scheduler-job-${event.event_id}`,
-		role: 'scheduler',
-		timestamp: event.timestamp,
-		title: `Scheduler / ${stringValue(job?.job_id) || stringValue(event.payload?.job_id) || '-'}`,
-		content: lines.join('\n') || compactValue(event.payload, 1200),
-		eventType: event.event_type,
-		metadata: event.payload ?? {}
-	});
-}
-
-function appendSchedulerRunsTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	const payload = recordValue(event.payload?.payload) ?? {};
-	const runs = Array.isArray(payload.runs) ? payload.runs : [];
-	const lines = runs.length
-		? runs.slice(0, 20).map(item => schedulerRunLine(recordValue(item))).filter(Boolean)
-		: ['暂无执行记录'];
-	return appendTranscript(state, {
-		id: `scheduler-runs-${event.event_id}`,
-		role: 'scheduler',
-		timestamp: event.timestamp,
-		title: 'Scheduler / runs',
-		content: lines.join('\n'),
-		eventType: event.event_type,
-		metadata: event.payload ?? {}
-	});
-}
-
-function appendSchedulerAutoPausedTranscript(state: RuntimeState, event: FactoryEvent): RuntimeState {
-	const payload = event.payload ?? {};
-	const detail = recordValue(payload.payload) ?? {};
-	const lines = [
-		`任务 ${stringValue(payload.job_id) || '-'} 已自动暂停`,
-		stringValue(detail.reason) ? `原因：${stringValue(detail.reason)}` : null,
-		typeof numberValue(detail.consecutive_failures) === 'number' ? `连续失败：${numberValue(detail.consecutive_failures)}` : null,
-		typeof numberValue(detail.threshold) === 'number' ? `阈值：${numberValue(detail.threshold)}` : null,
-		stringValue(payload.report_path) ? `report：${stringValue(payload.report_path)}` : null
-	].filter((item): item is string => Boolean(item));
-	return appendTranscript(state, {
-		id: `scheduler-auto-paused-${event.event_id}`,
-		role: 'scheduler',
-		timestamp: event.timestamp,
-		title: `Scheduler / auto paused`,
-		content: lines.join('\n'),
-		eventType: event.event_type,
-		metadata: payload
-	});
-}
-
-function schedulerJobLine(job: Record<string, unknown> | null | undefined): string | null {
-	if (!job) {
-		return null;
-	}
-	const target = recordValue(job.target);
-	const enabled = job.enabled === false ? 'paused' : 'enabled';
-	const task = stringValue(job.task_content) || stringValue(job.job_id) || '-';
-	const schedule = [stringValue(job.schedule_type), stringValue(job.schedule_expr)].filter(Boolean).join(' ');
-	const failurePolicy = recordValue(job.failure_policy);
-	const threshold = numberValue(failurePolicy?.max_consecutive_failures);
-	const failureText = failurePolicy?.enabled === false
-		? 'auto-pause=off'
-		: typeof threshold === 'number'
-			? `auto-pause=${threshold} failures`
-			: null;
-	return [
-		shortValue(stringValue(job.job_id), 10),
-		enabled,
-		stringValue(target?.target_type),
-		schedule,
-		failureText,
-		task
-	].filter(Boolean).join(' | ');
-}
-
-function schedulerRunLine(run: Record<string, unknown> | null | undefined): string | null {
-	if (!run) {
-		return null;
-	}
-	return [
-		shortValue(stringValue(run.run_id), 10),
-		stringValue(run.status),
-		stringValue(run.target_type),
-		stringValue(run.completed_at) || stringValue(run.started_at) || stringValue(run.scheduled_at),
-		shortValue(stringValue(run.error_summary) || stringValue(run.output_summary), 80)
-	].filter(Boolean).join(' | ');
 }
 
 function transcriptFromSession(session: Record<string, unknown>, mode: FactoryMode | null): TranscriptItem[] {

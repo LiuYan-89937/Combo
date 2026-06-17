@@ -1,5 +1,6 @@
 import React from 'react';
 import {Box, Text} from 'ink';
+import {contextActivityStatusLabel, memoryActivityStatusLabel} from '../state/renderProjection.js';
 import {useStoreSelector} from '../state/useStoreSelector.js';
 
 export function LiveStatusLine() {
@@ -27,8 +28,8 @@ export function LiveStatusLine() {
 		currentNodeId ? `node ${shortId(currentNodeId)}` : null
 	].filter((item): item is string => Boolean(item));
 	const activityParts = [
-		memoryActivity.status !== 'idle' ? `memory ${memoryActivity.label}` : null,
-		contextActivity.status !== 'idle' ? `context ${contextActivity.label}` : null,
+		memoryActivity.status !== 'idle' ? `memory ${memoryActivityStatusLabel(memoryActivity)}` : null,
+		contextActivity.status !== 'idle' ? `context ${contextActivityStatusLabel(contextActivity)}` : null,
 		latestKnowledgeActivity ? `knowledge ${knowledgeStatusLabel(latestKnowledgeActivity)}` : null,
 		contextWindow.updatedAt ? `ctx ${contextWindowSummary(contextWindow)}` : null
 	].filter((item): item is string => Boolean(item));

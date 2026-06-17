@@ -138,15 +138,23 @@ class RuntimeAgentPackageCommandMixin:
         if pending is None:
             self._emit_error(command, "no pending create-agent interrupt to resume")
             return
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=command.request_id,
+            session_id=self._session_id(),
+            mode="create_agent",
+            graph_id="create_agent_react",
+            producer_type="factory_runtime",
+        )
         try:
             run = self.create_agent_runtime.resume_stream(
                 session_id=pending.session_id,
                 resume_payload=command.payload,
                 request_id=command.request_id,
             )
-            self._consume_create_agent_stream(run=run, normalizer=pending.normalizer)
+            self._consume_create_agent_stream(run=run)
         except Exception as exc:
-            pending.normalizer.emit_run_failed(exc)
+            normalizer.emit_run_failed(exc)
 
     def cancel_runtime_request(self, command: FactoryFrontendCommand) -> None:
         reason = str(command.payload.get("reason") or "user_cancelled")
@@ -222,20 +230,10 @@ class RuntimeAgentPackageCommandMixin:
                 )
                 normalizer.emit_interrupt(json_safe(interrupt_payload))
                 return
-            if stream_mode == "messages":
-                normalizer.emit_message_chunk(chunk)
-            elif stream_mode == "debug":
-                normalizer.emit_debug_event(json_safe(chunk))
-            elif stream_mode == "custom":
-                normalizer.emit_custom_event(json_safe(chunk))
-            elif stream_mode == "updates":
-                normalizer.runtime_event(
-                    "debug_patch",
-                    span_id=normalizer.run_span_id,
-                    payload={"agent_package_update": json_safe(chunk)},
-                )
-            elif stream_mode == "runtime_final":
+            if stream_mode == "runtime_final":
                 final_state = chunk
+                continue
+            normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="agent_package_update")
         if terminal_event_seen:
             return
         if final_state is None:
@@ -297,7 +295,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=agent_session_id,
                 request_id=command.request_id,
             )
-            self._consume_create_agent_stream(run=run, normalizer=normalizer)
+            self._consume_create_agent_stream(run=run)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
@@ -346,29 +344,14 @@ class RuntimeAgentPackageCommandMixin:
         self.session_manager.save(self.session_record)
         return self.session_record.create_agent_session_id
 
-    def _consume_create_agent_stream(self, *, run: Any, normalizer: RuntimeEventNormalizer) -> None:
+    def _consume_create_agent_stream(self, *, run: Any) -> None:
         for stream_mode, chunk in run.events:
-            if stream_mode == "frontend_event":
-                item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-                if item.event_type == "interrupt_requested":
-                    self.pending_create_agent_run = PendingCreateAgentRun(
-                        session_id=run.session_id,
-                        normalizer=normalizer,
-                    )
-                self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
-                if item.event_type == "interrupt_requested":
-                    return
-                continue
-            if stream_mode == "messages":
-                normalizer.emit_message_chunk(chunk)
-            elif stream_mode == "custom":
-                normalizer.emit_custom_event(json_safe(chunk))
-            elif stream_mode == "updates":
-                normalizer.runtime_event(
-                    "debug_patch",
-                    span_id=normalizer.run_span_id,
-                    payload={"create_agent_update": json_safe(chunk)},
-                )
+            if stream_mode != "frontend_event":
+                raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
+            item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            if item.event_type in {"interrupt_requested", "tool_approval_requested"}:
+                self.pending_create_agent_run = PendingCreateAgentRun(session_id=run.session_id)
+            self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
 
 
 def _frontend_scoped_agent_event(
@@ -394,4 +377,3 @@ def _interrupt_id_from_payload(payload: Any) -> str | None:
         return None
     interrupt_id = str(payload.get("interrupt_id") or "").strip()
     return interrupt_id or None
-

@@ -28,4 +28,3 @@ class PendingAgentPackageRun:
 @dataclass(slots=True)
 class PendingCreateAgentRun:
     session_id: str
-    normalizer: RuntimeEventNormalizer

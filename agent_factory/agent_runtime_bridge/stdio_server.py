@@ -20,7 +20,7 @@ from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.package_runtime import register_package_patterns
 from agent_factory.package_runtime.approval_resume import tool_approval_resume_context
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
-from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner
+from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
@@ -304,16 +304,17 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
         normalizer.session_id = run_context.session_id
         final_state = None
         interrupted = False
-        for stream_mode, chunk in facade.instance.controller.stream(
-            compiled.compiled_app,
-            run_context.state,
-            thread_id=run_context.thread_id,
-        ):
-            if _handle_stream_item(normalizer, stream_mode, chunk):
-                interrupted = True
-                break
-            if stream_mode == "runtime_final":
-                final_state = chunk
+        with scheduler_tool_approval_override(job=job, tool_id="graph_run"):
+            for stream_mode, chunk in facade.instance.controller.stream(
+                compiled.compiled_app,
+                run_context.state,
+                thread_id=run_context.thread_id,
+            ):
+                if _handle_stream_item(normalizer, stream_mode, chunk):
+                    interrupted = True
+                    break
+                if stream_mode == "runtime_final":
+                    final_state = chunk
         if interrupted:
             normalizer.emit_run_failed(RuntimeError("scheduled graph run requires interrupt handling"))
             return {"status": "failed", "error": "scheduled graph run requires interrupt handling"}
@@ -348,31 +349,27 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
 
 
 def _scheduler_event_sink(payload: SchedulerEventPayload) -> None:
-    _write_event(
-        event(
-            payload.event_type,
-            mode="agent_package",
-            graph_id="agent_package_scheduler",
-            producer_type="agent_runtime",
-            payload={key: value for key, value in payload.model_dump(mode="json").items() if key != "event_type"},
-        )
+    normalizer = RuntimeEventNormalizer(
+        emit=_write_event,
+        request_id=None,
+        session_id=None,
+        mode="agent_package",
+        graph_id="agent_package_scheduler",
+        producer_type="agent_runtime",
     )
+    normalizer.emit_custom_event({"type": "scheduler_event", "payload": payload.model_dump(mode="json")})
 
 
 def _knowledge_event_sink(payload: dict[str, Any]) -> None:
-    event_type = str(payload.get("event_type") or "")
-    if event_type not in KNOWLEDGE_EVENT_TYPES:
-        event_type = "knowledge_ingestion_progress"
-    _write_event(
-        event(
-            event_type,  # type: ignore[arg-type]
-            mode="agent_package",
-            graph_id="agent_package_knowledge",
-            producer_type="agent_runtime",
-            severity="error" if event_type.endswith("failed") else None,
-            payload={key: value for key, value in payload.items() if key != "event_type"},
-        )
+    normalizer = RuntimeEventNormalizer(
+        emit=_write_event,
+        request_id=None,
+        session_id=None,
+        mode="agent_package",
+        graph_id="agent_package_knowledge",
+        producer_type="agent_runtime",
     )
+    normalizer.emit_custom_event({"type": "knowledge_event", "payload": _normalized_knowledge_payload(payload)})
 
 
 def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], runtime: CompiledRuntime) -> int:
@@ -610,14 +607,7 @@ def _handle_stream_item(normalizer: RuntimeEventNormalizer, stream_mode: str, ch
     if interrupt_payload is not None:
         normalizer.emit_interrupt(json_safe(interrupt_payload))
         return True
-    if stream_mode == "messages":
-        normalizer.emit_message_chunk(chunk)
-    elif stream_mode == "debug":
-        normalizer.emit_debug_event(json_safe(chunk))
-    elif stream_mode == "custom":
-        normalizer.emit_custom_event(json_safe(chunk))
-    elif stream_mode == "updates":
-        normalizer.runtime_event("debug_patch", span_id=normalizer.run_span_id, payload={"agent_package_update": json_safe(chunk)})
+    normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="agent_package_update")
     return False
 
 
@@ -635,6 +625,13 @@ def _extract_interrupt_payload(chunk: Any) -> Any | None:
         return None
     first = interrupts[0]
     return interrupt_payload(first)
+
+
+def _normalized_knowledge_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(payload.get("event_type") or "")
+    if event_type in KNOWLEDGE_EVENT_TYPES:
+        return payload
+    return {**payload, "event_type": "knowledge_ingestion_progress"}
 
 
 def _write_event(item: FactoryFrontendEvent) -> None:

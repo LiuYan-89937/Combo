@@ -16,7 +16,8 @@ from agent_factory.create_agent.tooling import CreateAgentToolEnvironmentBuilder
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workflow import CreateAgentWorkflow
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
+from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe as frontend_json_safe
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.session import build_factory_checkpointer_handle
 
@@ -137,12 +138,25 @@ class CreateAgentRuntime:
                 }
             )
 
-        model_trace = _ModelTraceAccumulator(record_trace)
-        run_started = _runtime_event(
-            "run_started",
+        pending_events: list[FactoryFrontendEvent] = []
+
+        def emit_frontend(item: FactoryFrontendEvent) -> None:
+            pending_events.append(item)
+
+        def drain_events() -> Iterator[tuple[str, FactoryFrontendEvent]]:
+            while pending_events:
+                yield "frontend_event", pending_events.pop(0)
+
+        normalizer = RuntimeEventNormalizer(
+            emit=emit_frontend,
             request_id=request_id,
             session_id=session_id,
+            mode="create_agent",
             graph_id=graph_id,
+            producer_type=graph_id,
+        )
+        model_trace = _ModelTraceAccumulator(record_trace)
+        normalizer.emit_run_started(
             payload={
                 "workspace_path": str(workspace.root),
                 "status": "started",
@@ -150,13 +164,21 @@ class CreateAgentRuntime:
                 "graph_kind": graph_kind,
             },
         )
-        record_trace("lifecycle", {"event_type": "run_started", "payload": _json_safe(run_started.payload)})
-        yield "frontend_event", run_started
-        node_started = _runtime_event(
+        record_trace(
+            "lifecycle",
+            {
+                "event_type": "run_started",
+                "payload": {
+                    "workspace_path": str(workspace.root),
+                    "status": "started",
+                    "intent": _json_safe(intent),
+                    "graph_kind": graph_kind,
+                },
+            },
+        )
+        yield from drain_events()
+        normalizer.runtime_event(
             "node_started",
-            request_id=request_id,
-            session_id=session_id,
-            graph_id=graph_id,
             node_id=graph_id,
             node_label=node_label,
             payload={"workspace_path": str(workspace.root), "graph_kind": graph_kind},
@@ -167,10 +189,10 @@ class CreateAgentRuntime:
                 "event_type": "node_started",
                 "node_id": graph_id,
                 "node_label": node_label,
-                "payload": _json_safe(node_started.payload),
+                "payload": {"workspace_path": str(workspace.root), "graph_kind": graph_kind},
             },
         )
-        yield "frontend_event", node_started
+        yield from drain_events()
         try:
             tool_env = self.tool_environment_builder.build(workspace_root=workspace.root, mode=graph_kind)
             if graph_kind == "manufacture":
@@ -197,15 +219,9 @@ class CreateAgentRuntime:
             else:
                 resume_update = _manufacture_resume_update(workspace=workspace, resume_payload=resume_payload) if graph_kind == "manufacture" else {}
                 stream_input = Command(resume=resume_payload, update=resume_update or None)
-                resumed = _runtime_event(
-                    "runtime_resumed",
-                    request_id=request_id,
-                    session_id=session_id,
-                    graph_id=graph_id,
-                    payload=resume_payload,
-                )
+                normalizer.emit_runtime_resumed(resume_payload)
                 record_trace("lifecycle", {"event_type": "runtime_resumed", "payload": _json_safe(resume_payload)})
-                yield "frontend_event", resumed
+                yield from drain_events()
             final_state: dict[str, Any] | None = None
             for stream_mode, chunk in workflow.stream(
                 stream_input,
@@ -214,19 +230,13 @@ class CreateAgentRuntime:
             ):
                 interrupt_payload = extract_interrupt_payload(chunk)
                 if interrupt_payload is not None:
-                    interrupted = _runtime_event(
-                        "interrupt_requested",
-                        request_id=request_id,
-                        session_id=session_id,
-                        graph_id=graph_id,
-                        payload=interrupt_payload,
-                    )
+                    normalizer.emit_interrupt(frontend_json_safe(interrupt_payload))
                     record_trace(
                         "lifecycle",
                         {"event_type": "interrupt_requested", "payload": _json_safe(interrupt_payload)},
                     )
                     model_trace.flush()
-                    yield "frontend_event", interrupted
+                    yield from drain_events()
                     return
                 if stream_mode == "values" and isinstance(chunk, dict):
                     final_state = chunk
@@ -240,19 +250,16 @@ class CreateAgentRuntime:
                         continue
                     for record in _tool_trace_records(chunk):
                         record_trace("tool_call", record)
-                yield stream_mode, chunk
+                normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="create_agent_update")
+                yield from drain_events()
             model_trace.flush()
             if not final_state:
                 raise RuntimeError("create-agent workflow did not produce final state")
             if final_state.get("done"):
-                message_completed = _runtime_event(
-                    "model_message_completed",
-                    request_id=request_id,
-                    session_id=session_id,
-                    graph_id=graph_id,
+                normalizer.emit_final_message_if_needed(
+                    str(final_state.get("final_answer") or ""),
                     node_id=graph_id,
-                    node_label=node_label,
-                    payload={"content": str(final_state.get("final_answer") or "")},
+                    reason="run_completed",
                 )
                 record_trace(
                     "lifecycle",
@@ -260,15 +267,11 @@ class CreateAgentRuntime:
                         "event_type": "model_message_completed",
                         "node_id": graph_id,
                         "node_label": node_label,
-                        "payload": _json_safe(message_completed.payload),
+                        "payload": {"content_length": len(str(final_state.get("final_answer") or ""))},
                     },
                 )
-                yield "frontend_event", message_completed
-                node_completed = _runtime_event(
+                normalizer.runtime_event(
                     "node_completed",
-                    request_id=request_id,
-                    session_id=session_id,
-                    graph_id=graph_id,
                     node_id=graph_id,
                     node_label=node_label,
                     payload={"workspace_path": str(workspace.root), "status": "completed"},
@@ -279,15 +282,10 @@ class CreateAgentRuntime:
                         "event_type": "node_completed",
                         "node_id": graph_id,
                         "node_label": node_label,
-                        "payload": _json_safe(node_completed.payload),
+                        "payload": {"workspace_path": str(workspace.root), "status": "completed"},
                     },
                 )
-                yield "frontend_event", node_completed
-                run_completed = _runtime_event(
-                    "run_completed",
-                    request_id=request_id,
-                    session_id=session_id,
-                    graph_id=graph_id,
+                normalizer.emit_run_completed(
                     payload={
                         "status": "completed",
                         "workspace_path": str(workspace.root),
@@ -295,21 +293,30 @@ class CreateAgentRuntime:
                         "agent_session": {"session_id": session_id},
                     },
                 )
-                record_trace("lifecycle", {"event_type": "run_completed", "payload": _json_safe(run_completed.payload)})
-                yield "frontend_event", run_completed
+                record_trace(
+                    "lifecycle",
+                    {
+                        "event_type": "run_completed",
+                        "payload": {
+                            "status": "completed",
+                            "workspace_path": str(workspace.root),
+                            "graph_kind": graph_kind,
+                            "agent_session": {"session_id": session_id},
+                        },
+                    },
+                )
+                yield from drain_events()
                 return
             raise RuntimeError("create-agent workflow stopped before completion")
         except Exception as exc:
             model_trace.flush()
-            node_failed = _runtime_event(
+            failure_payload = {"message": f"{type(exc).__name__}: {exc}", "workspace_path": str(workspace.root)}
+            normalizer.runtime_event(
                 "node_failed",
-                request_id=request_id,
-                session_id=session_id,
-                graph_id=graph_id,
                 node_id=graph_id,
                 node_label=node_label,
                 severity="error",
-                payload={"message": f"{type(exc).__name__}: {exc}", "workspace_path": str(workspace.root)},
+                payload=failure_payload,
             )
             record_trace(
                 "lifecycle",
@@ -318,57 +325,20 @@ class CreateAgentRuntime:
                     "node_id": graph_id,
                     "node_label": node_label,
                     "success": False,
-                    "payload": _json_safe(node_failed.payload),
+                    "payload": _json_safe(failure_payload),
                 },
             )
-            yield "frontend_event", node_failed
-            run_failed = _runtime_event(
-                "run_failed",
-                request_id=request_id,
-                session_id=session_id,
-                graph_id=graph_id,
-                severity="error",
-                message=f"{type(exc).__name__}: {exc}",
-                payload={"message": f"{type(exc).__name__}: {exc}", "workspace_path": str(workspace.root)},
-            )
+            normalizer.emit_run_failed(exc)
             record_trace(
                 "lifecycle",
                 {
                     "event_type": "run_failed",
                     "success": False,
                     "message": f"{type(exc).__name__}: {exc}",
-                    "payload": _json_safe(run_failed.payload),
+                    "payload": _json_safe(failure_payload),
                 },
             )
-            yield "frontend_event", run_failed
-
-
-def _runtime_event(
-    event_type: str,
-    *,
-    request_id: str,
-    session_id: str,
-    payload: dict[str, Any],
-    graph_id: str = "create_agent_react",
-    node_id: str | None = None,
-    node_label: str | None = None,
-    severity: str | None = None,
-    message: str | None = None,
-) -> FactoryFrontendEvent:
-    return event(
-        event_type,  # type: ignore[arg-type]
-        request_id=request_id,
-        session_id=session_id,
-        mode="create_agent",
-        graph_id=graph_id,
-        producer_type=graph_id,
-        node_id=node_id,
-        node_label=node_label,
-        node_kind=graph_id if node_id else None,
-        severity=severity,
-        message=message,
-        payload=payload,
-    )
+            yield from drain_events()
 
 
 def _manufacture_resume_update(*, workspace: CreateAgentWorkspace, resume_payload: dict[str, Any]) -> dict[str, Any]:

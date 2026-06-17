@@ -30,6 +30,7 @@ class ModelStreamState:
     span_id: str
     parent_span_id: str | None
     content: str = ""
+    input_mode: str = "unknown"
     completed: bool = False
 
 
@@ -185,6 +186,25 @@ class RuntimeEventNormalizer:
             parent_span_id=self.run_span_id,
             payload={key: value for key, value in json_safe(payload).items() if key not in {"event_type", "span_id"}},
         )
+
+    def emit_stream_item(self, stream_mode: str, chunk: Any, *, updates_payload_key: str) -> bool:
+        if stream_mode == "messages":
+            self.emit_message_chunk(chunk)
+            return True
+        if stream_mode == "debug":
+            self.emit_debug_event(json_safe(chunk))
+            return True
+        if stream_mode == "custom":
+            self.emit_custom_event(json_safe(chunk))
+            return True
+        if stream_mode == "updates":
+            self.runtime_event(
+                "debug_patch",
+                span_id=self.run_span_id,
+                payload={updates_payload_key: json_safe(chunk)},
+            )
+            return True
+        return False
 
     def _emit_memory_event(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -422,7 +442,7 @@ class RuntimeEventNormalizer:
         if not content:
             return
         stream = self._model_stream(node_id or "model")
-        content = _delta_for_stream(stream, content, is_chunk=_is_message_chunk(message_chunk))
+        content = _delta_for_stream(stream, content)
         if not content:
             return
         stream.content += content
@@ -432,7 +452,7 @@ class RuntimeEventNormalizer:
             stage_id=self.current_stage_id,
             span_id=stream.span_id,
             parent_span_id=stream.parent_span_id,
-            payload={"stream_id": stream.stream_id, "delta": content},
+            payload={"stream_id": stream.stream_id, "delta": content, "content_mode": "delta"},
         )
 
     def emit_model_activity_from_patch(self, node_id: str, stage_id: str | None, patch: dict[str, Any]) -> None:
@@ -512,11 +532,15 @@ class RuntimeEventNormalizer:
             or getattr(conversation, "assistant_draft", None)
             or ""
         ).strip()
+        node_id = _optional_str(getattr(getattr(final_state, "execution", None), "current_node", None)) or "final_answer"
+        self.emit_final_message_if_needed(text, node_id=node_id, reason=reason)
+
+    def emit_final_message_if_needed(self, text: str, *, node_id: str, reason: str) -> None:
+        text = text.strip()
         if not text:
             return
         if any((stream.content or "").strip() for stream in self.model_streams.values()):
             return
-        node_id = _optional_str(getattr(getattr(final_state, "execution", None), "current_node", None)) or "final_answer"
         stream_id = uuid.uuid4().hex
         self.runtime_event(
             "model_message_completed",
@@ -527,6 +551,7 @@ class RuntimeEventNormalizer:
             payload={
                 "stream_id": stream_id,
                 "content": text,
+                "content_mode": "snapshot",
                 "completion_reason": reason,
                 "completion_inferred": True,
             },
@@ -551,6 +576,7 @@ class RuntimeEventNormalizer:
             payload={
                 "stream_id": stream.stream_id,
                 "content": stream.content,
+                "content_mode": "snapshot",
                 "completion_reason": reason,
                 "completion_inferred": True,
             },
@@ -878,17 +904,25 @@ def _content_to_text(content: Any) -> str:
     return str(content) if content else ""
 
 
-def _is_message_chunk(value: Any) -> bool:
-    return value.__class__.__name__.endswith("Chunk")
-
-
-def _delta_for_stream(stream: ModelStreamState, content: str, *, is_chunk: bool) -> str:
-    if is_chunk or not stream.content:
+def _delta_for_stream(stream: ModelStreamState, content: str) -> str:
+    if not stream.content:
         return content
-    if content == stream.content or stream.content.endswith(content):
+    if stream.input_mode == "snapshot":
+        if content == stream.content:
+            return ""
+        if content.startswith(stream.content):
+            return content[len(stream.content) :]
+        stream.input_mode = "delta"
+        return content
+    if stream.input_mode == "delta":
+        return content
+    if content == stream.content:
+        stream.input_mode = "snapshot"
         return ""
     if content.startswith(stream.content):
+        stream.input_mode = "snapshot"
         return content[len(stream.content) :]
+    stream.input_mode = "delta"
     return content
 
 

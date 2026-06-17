@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import bounded_int
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     SYSTEM_CHAT_PACKAGE_ID,
@@ -135,17 +135,15 @@ class RuntimeSchedulerCommandMixin:
         )
 
     def _emit_scheduler_event(self, payload: SchedulerEventPayload) -> None:
-        self.emit(
-            event(
-                payload.event_type,
-                session_id=self._session_id(),
-                mode=self.mode,
-                graph_id="factory_scheduler",
-                producer_type="factory_runtime",
-                severity="error" if payload.event_type.endswith("failed") else None,
-                payload={key: value for key, value in payload.model_dump(mode="json").items() if key != "event_type"},
-            )
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=None,
+            session_id=self._session_id(),
+            mode=self.mode,
+            graph_id="factory_scheduler",
+            producer_type="factory_runtime",
         )
+        normalizer.emit_custom_event({"type": "scheduler_event", "payload": payload.model_dump(mode="json")})
 
     def _scheduler_tool_runner(self, tool_id: str, arguments: dict[str, Any], job: Any, _run: Any) -> dict[str, Any]:
         tools = {tool.name: tool for tool in self._factory_tools()}
@@ -212,7 +210,7 @@ class RuntimeSchedulerCommandMixin:
                 session_id=agent_session_id,
                 request_id=None,
             )
-            self._consume_create_agent_stream(run=run, normalizer=normalizer)
+            self._consume_create_agent_stream(run=run)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}

@@ -4,6 +4,7 @@ import {PythonBridge} from './bridge/PythonBridge.js';
 import {commandSuggestions, factoryToolGroups} from './commands.js';
 import {buildResumePayload} from './interrupts.js';
 import {command, type FactoryCommand, type FactoryEvent, type FactoryMode} from './protocol.js';
+import {contextActivityStatusLabel} from './state/renderProjection.js';
 import {createRuntimeStore} from './state/runtimeStore.js';
 import {RuntimeStoreProvider, useStoreSelector} from './state/useStoreSelector.js';
 import {Composer} from './views/Composer.js';
@@ -237,7 +238,7 @@ function ConnectedComposer({onSubmit, onCancel}: {onSubmit: (value: string) => v
 	const agentPackagePickerOpen = useStoreSelector(state => state.agentPackagePickerOpen);
 	const agentSessionPickerOpen = useStoreSelector(state => state.agentSessionPickerOpen);
 	const contextCompressionRunning = useStoreSelector(
-		state => state.contextActivity.status === 'running' && state.contextActivity.label === '上下文压缩中'
+		state => state.contextActivity.status === 'running' && contextActivityStatusLabel(state.contextActivity) === '上下文压缩中'
 	);
 	const choiceInterrupt = isChoiceInterrupt(pendingInterrupt);
 	const inputDisabled = runStatus === 'running' || sessionPickerOpen || agentPackagePickerOpen || agentSessionPickerOpen || contextCompressionRunning;

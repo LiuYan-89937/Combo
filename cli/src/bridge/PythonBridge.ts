@@ -4,7 +4,7 @@ import {existsSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execa, type ResultPromise} from 'execa';
-import {type FactoryCommand, type FactoryEvent, eventSchema} from '../protocol.js';
+import {factoryProtocolVersion, type FactoryCommand, type FactoryEvent, eventSchema} from '../protocol.js';
 
 type EventHandler = (event: FactoryEvent) => void;
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -103,7 +103,7 @@ function resolvePythonExecutable(): string {
 function errorEvent(message: string): FactoryEvent {
 	return {
 		event_id: randomUUID(),
-		protocol_version: 'factory_frontend.v1',
+		protocol_version: factoryProtocolVersion,
 		event_type: 'error',
 		producer_type: 'typescript_cli',
 		request_id: null,
@@ -129,7 +129,7 @@ function errorEvent(message: string): FactoryEvent {
 function diagnosticEvent(message: string): FactoryEvent {
 	return {
 		event_id: randomUUID(),
-		protocol_version: 'factory_frontend.v1',
+		protocol_version: factoryProtocolVersion,
 		event_type: 'debug_patch',
 		producer_type: 'typescript_cli',
 		request_id: null,
@@ -156,7 +156,7 @@ function stdoutDiagnosticEvent(line: string): FactoryEvent {
 	const truncated = truncateDiagnosticLine(line);
 	return {
 		event_id: randomUUID(),
-		protocol_version: 'factory_frontend.v1',
+		protocol_version: factoryProtocolVersion,
 		event_type: 'debug_patch',
 		producer_type: 'typescript_cli',
 		request_id: null,
