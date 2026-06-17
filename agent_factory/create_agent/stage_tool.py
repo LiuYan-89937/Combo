@@ -173,6 +173,7 @@ def _output(*, action: str, message: str, state: SystemManufacturingState, works
         "message": message,
         "state": state.working_set(),
         "active_focus": active.to_digest() if active else None,
+        "task_analysis": workspace.read_task_analysis().model_dump(mode="json"),
         "latest_validation": _latest_validation_digest(workspace=workspace, state=state),
         "updated_at": datetime.now(UTC).isoformat(),
         "warnings": _stage_warnings(workspace=workspace, state=state),

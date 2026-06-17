@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import py_compile
+import re
+import sys
 from hashlib import sha256
 from typing import Any
 
@@ -22,6 +25,7 @@ from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlan
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_contracts.schema import (
     AgentPackageManifest,
+    DependenciesContract,
     REQUIRED_AGENT_PACKAGE_CONTRACTS,
     SchedulerSeedContract,
     ToolsContract,
@@ -884,6 +888,7 @@ def _package_file_contract_report(
     issues.extend(_runtime_pattern_alignment_issues(package))
     issues.extend(_manifest_asset_index_issues(root, manifest, package_tools))
     issues.extend(_tools_contract_issues(package))
+    issues.extend(_tool_dependency_issues(root, package, package_tools))
     issues.extend(_assembly_tool_issues(package, package_tools))
     inherited_mcp_tools = _inherited_mcp_tool_ids()
     issues.extend(_tool_access_issues(package, package_tools, inherited_mcp_tools))
@@ -1206,6 +1211,23 @@ def _package_tool_probe_report(
                 repair_hint="Repair the package tool using the probe observation, then run create_agent_probe_tool call again.",
                 details=record.model_dump(mode="json"),
             ))
+            continue
+        if record.probe_kind != "success_path" or record.only_error_handling_verified or not record.tool_returned_business_output:
+            issues.append(_probe_issue(
+                tool_id=tool_id,
+                summary=f"package tool {tool_id} lacks successful-path probe evidence",
+                actual=(
+                    f"probe_kind={record.probe_kind}, "
+                    f"only_error_handling_verified={record.only_error_handling_verified}, "
+                    f"tool_returned_business_output={record.tool_returned_business_output}"
+                ),
+                repair_hint=(
+                    "Run create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', "
+                    "arguments=..., prompt=..., tool_goal=...) with realistic successful-path inputs. "
+                    "If no successful input is available, ask the user for the missing resource instead of publishing."
+                ),
+                details=record.model_dump(mode="json"),
+            ))
     if not issues:
         return None
     return _issues_report(
@@ -1335,6 +1357,137 @@ def _tools_contract_issues(package: Any) -> list[PackageValidationIssue]:
                 recommended_skill="09-tools-system",
             ))
     return issues
+
+
+def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
+    if not package_tools:
+        return []
+    contract = package.contracts.get("dependencies")
+    if not isinstance(contract, DependenciesContract):
+        return []
+    declared = _declared_requirement_names(contract.config.python_requirements)
+    imports_by_tool = _package_tool_external_imports(root=root, tool_ids=set(package_tools))
+    issues: list[PackageValidationIssue] = []
+    for tool_id, imports in sorted(imports_by_tool.items()):
+        missing = sorted(module for module in imports if _normalize_requirement_name(module) not in declared)
+        if not missing:
+            continue
+        source_files = sorted({path for module in missing for path in imports[module]})
+        issues.append(_contract_issue(
+            where="dependencies.package_tool_imports",
+            summary=f"package tool {tool_id} imports undeclared Python dependencies",
+            message=(
+                f"tools/{tool_id} imports third-party modules not declared in "
+                f"contracts/dependencies.json config.python_requirements: {', '.join(missing)}"
+            ),
+            path="contracts/dependencies.json",
+            expected="Every non-stdlib package tool import is declared in dependencies.config.python_requirements.",
+            actual=", ".join(missing),
+            repair_hint=(
+                "Add the required Python distributions to contracts/dependencies.json config.python_requirements. "
+                "Use the imported module name as the starting point unless the Python distribution name is known to differ."
+            ),
+            target_files=["contracts/dependencies.json", *source_files],
+            recommended_skill="02-model-system",
+            details={
+                "tool_id": tool_id,
+                "missing_imports": missing,
+                "declared_python_requirements": list(contract.config.python_requirements),
+                "source_files": source_files,
+            },
+        ))
+    return issues
+
+
+def _package_tool_external_imports(*, root: Path, tool_ids: set[str]) -> dict[str, dict[str, list[str]]]:
+    result: dict[str, dict[str, list[str]]] = {}
+    tools_root = root / "tools"
+    for tool_id in sorted(tool_ids):
+        tool_root = tools_root / tool_id
+        if not tool_root.is_dir():
+            continue
+        for source in sorted(tool_root.glob("**/*.py")):
+            modules = _external_imports_for_file(root=root, source=source)
+            if not modules:
+                continue
+            relative = _relative(root, source)
+            bucket = result.setdefault(tool_id, {})
+            for module in modules:
+                bucket.setdefault(module, []).append(relative)
+    return result
+
+
+def _external_imports_for_file(*, root: Path, source: Path) -> set[str]:
+    try:
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    except SyntaxError:
+        return set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = _top_level_module(alias.name)
+                if _is_external_tool_import(root=root, source=source, module=top):
+                    modules.add(top)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                continue
+            top = _top_level_module(node.module or "")
+            if _is_external_tool_import(root=root, source=source, module=top):
+                modules.add(top)
+    return modules
+
+
+def _top_level_module(value: str) -> str:
+    return str(value or "").split(".", 1)[0].strip()
+
+
+def _is_external_tool_import(*, root: Path, source: Path, module: str) -> bool:
+    if not module:
+        return False
+    if module == "__future__":
+        return False
+    if module == "agent_factory":
+        return False
+    if module in sys.builtin_module_names:
+        return False
+    stdlib_modules = getattr(sys, "stdlib_module_names", set())
+    if module in stdlib_modules:
+        return False
+    if _local_module_exists(root=root, source=source, module=module):
+        return False
+    return True
+
+
+def _local_module_exists(*, root: Path, source: Path, module: str) -> bool:
+    candidates = [
+        source.parent / f"{module}.py",
+        source.parent / module / "__init__.py",
+        root / f"{module}.py",
+        root / module / "__init__.py",
+    ]
+    return any(candidate.exists() for candidate in candidates)
+
+
+def _declared_requirement_names(requirements: list[str]) -> set[str]:
+    names: set[str] = set()
+    for requirement in requirements:
+        name = _requirement_name(requirement)
+        if name:
+            names.add(name)
+    return names
+
+
+def _requirement_name(requirement: str) -> str:
+    text = str(requirement or "").strip().split(";", 1)[0].strip()
+    if " @ " in text:
+        text = text.split(" @ ", 1)[0].strip()
+    match = re.match(r"([A-Za-z0-9_.-]+)", text)
+    return _normalize_requirement_name(match.group(1)) if match else ""
+
+
+def _normalize_requirement_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", str(value or "").strip().lower())
 
 
 def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
@@ -1499,7 +1652,7 @@ def _probe_issue(
         summary=summary,
         message=summary,
         path=f"tools/{tool_id}",
-        expected="Generated package tools have fresh successful create_agent_probe_tool evidence before publish.",
+        expected="Generated package tools have fresh successful-path create_agent_probe_tool evidence before publish.",
         actual=actual,
         repair_hint=repair_hint,
         target_files=[f"tools/{tool_id}/manifest.json", f"tools/{tool_id}/tool.py", "assembly_spec.json"],

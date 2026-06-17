@@ -15,11 +15,13 @@ from agent_factory.create_agent.models import (
     RESOURCES_FILE,
     SKILL_GATEWAY_STATE_FILE,
     SYSTEM_STATE_FILE,
+    TASK_ANALYSIS_FILE,
     TOOL_PROBE_FILE,
     VALIDATION_FILE,
     VALIDATION_STATE_FILE,
     CreateAgentAction,
     CreateAgentPublishDecision,
+    CreateAgentTaskAnalysis,
     PackageToolProbeState,
     PackageValidationReport,
     PackageValidationState,
@@ -44,14 +46,20 @@ class CreateAgentWorkspace:
             raise ValueError("create-agent session id must not be empty")
         return cls(factory_artifact_path("create_agent_workspaces", safe_session_id))
 
-    def initialize(self, *, user_input: str) -> None:
+    def initialize(self, *, user_input: str, task_analysis: CreateAgentTaskAnalysis | None = None) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.factory_dir.mkdir(parents=True, exist_ok=True)
+        if task_analysis is not None:
+            self.write_task_analysis(task_analysis)
+        elif not self.task_analysis_path.exists():
+            self.write_task_analysis(CreateAgentTaskAnalysis(intent_summary=" ".join(str(user_input or "").split())[:240]))
+        analysis = self.read_task_analysis()
         if not self.package_manifest_path().exists():
             materialize_empty_agent_package(
                 self.root,
                 factory_run_id=self.root.name,
                 user_input=user_input,
+                pattern_id=analysis.selected_pattern_id,
             )
         if not self.system_state_path.exists():
             self.write_system_state(initial_system_manufacturing_state())
@@ -104,6 +112,10 @@ class CreateAgentWorkspace:
         return self.root / SKILL_GATEWAY_STATE_FILE
 
     @property
+    def task_analysis_path(self) -> Path:
+        return self.root / TASK_ANALYSIS_FILE
+
+    @property
     def request_path(self) -> Path:
         return self.factory_dir / "request.txt"
 
@@ -122,6 +134,17 @@ class CreateAgentWorkspace:
 
     def write_system_state(self, state: SystemManufacturingState) -> None:
         self._write_json(self.system_state_path, state.model_dump(mode="json"))
+
+    def read_task_analysis(self) -> CreateAgentTaskAnalysis:
+        return _read_managed_model(
+            self.task_analysis_path,
+            CreateAgentTaskAnalysis,
+            missing=CreateAgentTaskAnalysis(),
+            owner_tool="create-agent task analysis",
+        ) or CreateAgentTaskAnalysis()
+
+    def write_task_analysis(self, analysis: CreateAgentTaskAnalysis) -> None:
+        self._write_json(self.task_analysis_path, analysis.model_dump(mode="json"))
 
     def read_action(self) -> CreateAgentAction:
         return _read_managed_model(

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import BaseMessage, SystemMessage
@@ -157,11 +158,14 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "当你新增或修改 package tool 后，必须使用 create_agent_probe_tool(action='inspect') 查看可探测工具，"
-            "再用 create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., tool_goal=...) 进行真实工具探测。"
+            "再用 create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', arguments=..., prompt=..., tool_goal=...) 进行真实工具探测。"
             "arguments 是目标 package tool 的真实调用输入；如果你暂时只提供 prompt，probe 只会用 task_model 做一次短的参数推断，"
             "随后仍由系统直接通过 ToolExecutionGateway 执行目标工具。"
             "工具行为证据来自真实 arguments、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"
+            "错误路径 probe 只能作为补充证据；final validation 要求每个 package tool 至少有一次 fresh success-path probe。"
             "如果 full validation 报 package_tool_probe issue，先 probe 或按 probe observation 修复工具，再显式调用 create_agent_validate。"
+            "如果 package tool 源码 import 了非 stdlib、非 package-local、非 agent_factory 的 Python 模块，"
+            "必须同步更新 contracts/dependencies.json 的 config.python_requirements。"
         ),
         (
             "MCP inherited candidate 不需要额外继承工具调用。"
@@ -174,7 +178,7 @@ def _invariant_system_prompt_text() -> str:
             "然后再次显式调用 create_agent_validate。"
         ),
         (
-            ".factory/system_state.json 和 .factory/validation.json 只能通过 create_agent_stage inspect 获取摘要，不要直接读写；"
+            ".factory/system_state.json、.factory/task_analysis.json 和 .factory/validation.json 只能通过 create_agent_stage inspect 获取摘要，不要直接读写；"
             ".factory/action.json 和 .factory/publish_decision.json 只能通过 create_agent_control(action='inspect') 获取摘要。"
             "如果通用 read 被拒绝，不要再次用 read 访问 managed file。"
         ),
@@ -210,7 +214,33 @@ def _dynamic_system_context_text(
     state: Mapping[str, Any],
 ) -> str:
     publish_confirmation = _publish_confirmation_context(state.get("publish_confirmation_response"))
-    return publish_confirmation
+    task_analysis = _task_analysis_context(state)
+    return "\n\n".join(item for item in [task_analysis, publish_confirmation] if item)
+
+
+def _task_analysis_context(state: Mapping[str, Any]) -> str:
+    workspace_path = str(state.get("workspace_path") or "").strip()
+    if not workspace_path:
+        return ""
+    path = Path(workspace_path) / ".factory" / "task_analysis.json"
+    if not path.is_file():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    selected_pattern_id = str(payload.get("selected_pattern_id") or "").strip()
+    return (
+        "Create-agent task analysis completed before scaffolding:\n"
+        f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+        "The selected_pattern_id is the authoritative baseline runtime pattern for this workspace. "
+        "If package files do not match it, repair agent_package.json, assembly_spec.json, and render_manifest.json before adding unrelated capability work."
+        + (
+            " For plan_and_execute, configure planner, executor, final_answer, and runtime_plan bindings instead of encoding dynamic planning only in a single react prompt."
+            if selected_pattern_id == "plan_and_execute"
+            else ""
+        )
+    )
 
 
 def _stable_tool_names(tools: list[BaseTool]) -> list[str]:

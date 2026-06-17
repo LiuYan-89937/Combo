@@ -430,13 +430,13 @@ date
 构建 runtime 镜像：
 
 ```bash
-DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
+docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
 ```
 
 可指定基础镜像和 Debian 镜像源：
 
 ```bash
-DOCKER_BUILDKIT=1 docker build -t agentfactory-runtime-python:3.12 \
+docker build -t agentfactory-runtime-python:3.12 \
   --build-arg PYTHON_BASE_IMAGE=python:3.12-slim \
   --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian \
   --build-arg DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security \

@@ -42,6 +42,7 @@ Guides adding executable package tools and their ToolSpec declarations.
 - ToolSpec objects must be objects, not string references.
 - Package tool entrypoints return the standard tool envelope; output_schema validates only envelope.output.
 - Package tool code must use the `resources` argument for declared runtime selectors such as `runtime_root`; do not rely on `os.getcwd()` as the main resource contract.
+- When tool.py imports non-stdlib Python modules that are not package-local and not `agent_factory`, update `contracts/dependencies.json` `config.python_requirements` in the same capability increment.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
 - After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.

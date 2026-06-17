@@ -40,6 +40,7 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 - Leave default model/dependency/sandbox contracts as-is when the request does not require changes.
 - Do not invent provider credentials, account ids, API keys, endpoints, or local paths.
 - Declare dependencies and sandbox resources only for capabilities that are actually implemented in package files.
+- Every non-stdlib, non-package-local, non-`agent_factory` Python import used by package tools must be represented in `contracts/dependencies.json` `config.python_requirements`.
 - If an external resource is required but not confirmed, ask the user before writing concrete config.
 
 ## Boundaries

@@ -17,7 +17,16 @@ PACKAGE_ASSET_DIRECTORIES = (
     "artifacts",
 )
 
-def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, user_input: str = "") -> None:
+SUPPORTED_SCAFFOLD_PATTERNS = {"react_agent", "plan_and_execute"}
+
+
+def materialize_empty_agent_package(
+    root: str | Path,
+    *,
+    factory_run_id: str,
+    user_input: str = "",
+    pattern_id: str = "react_agent",
+) -> None:
     package_root = Path(root).expanduser().resolve()
     package_root.mkdir(parents=True, exist_ok=True)
     for relative in PACKAGE_ASSET_DIRECTORIES:
@@ -25,6 +34,7 @@ def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, us
     manifest_path = package_root / "agent_package.json"
     if manifest_path.exists():
         return
+    selected_pattern_id = _selected_pattern_id(pattern_id)
     manifest_agent = _agent_identity(user_input=user_input)
     assembly_agent = _assembly_agent_identity(user_input=user_input)
     contracts = base_contract_paths()
@@ -33,7 +43,7 @@ def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, us
         AgentPackageManifest(
             factory_run_id=factory_run_id,
             agent=manifest_agent,
-            runtime={"pattern_id": "react_agent"},
+            runtime={"pattern_id": selected_pattern_id},
             assembly_spec_path="assembly_spec.json",
             render_manifest_path="render_manifest.json",
             resources_path="resources.json",
@@ -46,10 +56,10 @@ def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, us
         package_root / "assembly_spec.json",
         AgentAssemblySpec(
             agent=assembly_agent,
-            runtime={"pattern_id": "react_agent"},
+            runtime={"pattern_id": selected_pattern_id},
         ).model_dump(mode="json", exclude_none=True),
     )
-    _write_json(package_root / "render_manifest.json", _default_render_manifest().model_dump(mode="json"))
+    _write_json(package_root / "render_manifest.json", _default_render_manifest(selected_pattern_id).model_dump(mode="json"))
     _write_json(package_root / "resources.json", {})
     _write_json(package_root / "sandbox_contract.json", {"version": "sandbox_contract.v0", "resources": {}})
     for contract_key in sorted(contracts):
@@ -71,10 +81,10 @@ def _assembly_agent_identity(*, user_input: str) -> dict[str, Any]:
     }
 
 
-def _default_render_manifest() -> RenderManifest:
+def _default_render_manifest(pattern_id: str) -> RenderManifest:
     pattern = PatternRegistry(
         builtins_dir=Path(__file__).resolve().parents[1] / "runtime_kernel" / "patterns" / "builtins"
-    ).get("react_agent")
+    ).get(_selected_pattern_id(pattern_id))
     return RenderManifest(
         graph_id=pattern.pattern_id,
         nodes={
@@ -82,6 +92,11 @@ def _default_render_manifest() -> RenderManifest:
             for node in pattern.nodes
         },
     )
+
+
+def _selected_pattern_id(pattern_id: str) -> str:
+    value = str(pattern_id or "").strip()
+    return value if value in SUPPORTED_SCAFFOLD_PATTERNS else "react_agent"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

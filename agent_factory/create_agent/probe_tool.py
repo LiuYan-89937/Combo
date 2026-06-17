@@ -37,6 +37,10 @@ class PackageToolProbeEvaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     summary: str = ""
+    probe_kind: str = "unknown"
+    goal_satisfied: bool | None = None
+    tool_returned_business_output: bool = False
+    only_error_handling_verified: bool = False
 
 
 class PackageToolProbeArguments(BaseModel):
@@ -52,7 +56,7 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
         description=(
             "Inspect package-owned tools generated in this create-agent workspace, then probe one generated tool by "
             "executing it through ToolExecutionGateway. Prefer call with explicit arguments; prompt can be supplied "
-            "for user-facing context and optional argument inference."
+            "for user-facing context and optional argument inference. Final validation requires a fresh success-path probe."
         ),
         entrypoint="agent_factory.create_agent.probe_tool:run",
         input_schema={
@@ -74,6 +78,12 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
                     "type": "object",
                     "additionalProperties": True,
                     "description": "Optional concrete package tool arguments. If omitted, a short task-model call may infer arguments from prompt and tool schema.",
+                },
+                "probe_kind": {
+                    "type": "string",
+                    "enum": ["auto", "success_path", "error_path"],
+                    "default": "auto",
+                    "description": "Declare whether this probe is intended to exercise a successful business path or an error path. Use auto if unsure.",
                 },
             },
             "required": ["action"],
@@ -111,6 +121,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             prompt=str(arguments.get("prompt") or "").strip(),
             tool_goal=str(arguments.get("tool_goal") or "").strip(),
             arguments=arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else None,
+            requested_probe_kind=str(arguments.get("probe_kind") or "auto").strip(),
         )
     raise ValueError(f"unsupported probe action: {action}")
 
@@ -154,6 +165,7 @@ def _inspect(workspace: CreateAgentWorkspace) -> dict[str, Any]:
                 "required": bool(tools),
                 "current_package_digest": current_digest,
                 "guidance": "Call each generated package tool once with realistic arguments before final validation. Prompt and tool_goal provide human-readable context.",
+                "publish_gate": "A probe that only verifies error handling is not sufficient for publish readiness.",
                 "input_mode": "direct_tool_execution_with_optional_prompt_to_arguments",
             },
             "diagnostics": [_diagnostic_payload(item) for item in discovery.diagnostics],
@@ -169,6 +181,7 @@ def _call(
     prompt: str,
     tool_goal: str,
     arguments: dict[str, Any] | None,
+    requested_probe_kind: str,
 ) -> dict[str, Any]:
     if not tool_id:
         raise ValueError("tool_id is required for probe call")
@@ -188,6 +201,7 @@ def _call(
         prompt=prompt,
         tool_goal=tool_goal,
         arguments=arguments,
+        requested_probe_kind=requested_probe_kind,
     )
     after = package_fingerprint(workspace.root)
     record = _record_from_direct_probe(
@@ -226,6 +240,10 @@ def _call(
                 "message": record.message,
                 "prompt": record.prompt,
                 "tool_goal": record.tool_goal,
+                "probe_kind": record.probe_kind,
+                "goal_satisfied": record.goal_satisfied,
+                "tool_returned_business_output": record.tool_returned_business_output,
+                "only_error_handling_verified": record.only_error_handling_verified,
                 "arguments": record.arguments,
                 "tool_calls": record.tool_calls,
                 "output_summary": record.output_summary,
@@ -272,6 +290,7 @@ def _run_direct_probe(
     prompt: str,
     tool_goal: str,
     arguments: dict[str, Any] | None,
+    requested_probe_kind: str,
 ) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -299,6 +318,7 @@ def _run_direct_probe(
         return {
             "prompt": prompt,
             "tool_goal": tool_goal,
+            "requested_probe_kind": requested_probe_kind if requested_probe_kind in {"success_path", "error_path"} else "auto",
             "arguments": resolved_arguments,
             "status": "failed",
             "observation": {},
@@ -311,6 +331,7 @@ def _run_direct_probe(
         return {
             "prompt": prompt,
             "tool_goal": tool_goal,
+            "requested_probe_kind": requested_probe_kind if requested_probe_kind in {"success_path", "error_path"} else "auto",
             "arguments": resolved_arguments,
             "status": "failed",
             "observation": {},
@@ -335,6 +356,7 @@ def _run_direct_probe(
     return {
         "prompt": prompt,
         "tool_goal": tool_goal,
+        "requested_probe_kind": requested_probe_kind if requested_probe_kind in {"success_path", "error_path"} else "auto",
         "arguments": resolved_arguments,
         "status": "completed" if observation_payload.get("status") == "completed" and not errors else "failed",
         "observation": observation_payload,
@@ -485,8 +507,26 @@ def _record_from_direct_probe(
         tool_goal=tool_goal,
         direct_probe=direct_probe,
     )
+    probe_kind = _normalized_probe_kind(
+        requested=direct_probe.get("requested_probe_kind"),
+        evaluation=evaluation_payload,
+        observation=observation,
+        output_payload=output_payload,
+    )
+    tool_returned_business_output = _tool_returned_business_output(
+        evaluation=evaluation_payload,
+        output_payload=output_payload,
+    )
+    only_error_handling_verified = _only_error_handling_verified(
+        evaluation=evaluation_payload,
+        probe_kind=probe_kind,
+        output_payload=output_payload,
+        observation=observation,
+    )
     evaluator = str(evaluation_payload.get("evaluator") or "")
     summary = str(evaluation_payload.get("summary") or "")
+    goal_satisfied = evaluation_payload.get("goal_satisfied")
+    goal_satisfied_value = goal_satisfied if isinstance(goal_satisfied, bool) else None
     final_answer = _probe_final_answer(spec=spec, observation=observation, summary=summary)
     tool_was_called = bool(observation)
     contract_passed = (
@@ -498,6 +538,7 @@ def _record_from_direct_probe(
     )
     return PackageToolProbeRecord(
         tool_id=tool_id,
+        probe_kind=probe_kind,
         prompt=prompt,
         tool_goal=tool_goal,
         arguments=arguments,
@@ -514,11 +555,80 @@ def _record_from_direct_probe(
         observation_output=_probe_observation_output(output_payload=output_payload, direct_probe=direct_probe),
         final_answer=final_answer[:2000],
         summary=summary[:1000],
+        goal_satisfied=goal_satisfied_value,
+        tool_returned_business_output=tool_returned_business_output,
+        only_error_handling_verified=only_error_handling_verified,
         evaluator=evaluator,
         evaluation=evaluation_payload,
         errors=[str(item)[:500] for item in [*probe_errors, *errors][:8]],
         probed_at=datetime.now(UTC).isoformat(),
     )
+
+
+def _normalized_probe_kind(
+    *,
+    requested: Any,
+    evaluation: dict[str, Any],
+    observation: dict[str, Any],
+    output_payload: dict[str, Any],
+) -> str:
+    value = str(evaluation.get("probe_kind") or "").strip()
+    if value in {"success_path", "error_path"}:
+        return value
+    requested_value = str(requested or "").strip()
+    if requested_value in {"success_path", "error_path"}:
+        return requested_value
+    return "error_path" if _output_contains_error(output_payload) or _observation_message_looks_error(observation) else "success_path"
+
+
+def _tool_returned_business_output(*, evaluation: dict[str, Any], output_payload: dict[str, Any]) -> bool:
+    value = evaluation.get("tool_returned_business_output")
+    if isinstance(value, bool) and value and not _output_contains_error(output_payload):
+        return True
+    return _has_substantive_non_error_output(output_payload)
+
+
+def _only_error_handling_verified(
+    *,
+    evaluation: dict[str, Any],
+    probe_kind: str,
+    output_payload: dict[str, Any],
+    observation: dict[str, Any],
+) -> bool:
+    if _output_contains_error(output_payload) or _observation_message_looks_error(observation):
+        return True
+    value = evaluation.get("only_error_handling_verified")
+    if isinstance(value, bool):
+        return value
+    if probe_kind == "error_path":
+        return True
+    return _output_contains_error(output_payload) or _observation_message_looks_error(observation)
+
+
+def _output_contains_error(output_payload: dict[str, Any]) -> bool:
+    for key, value in output_payload.items():
+        key_text = str(key).lower()
+        if key_text in {"error", "errors", "exception", "traceback"} and value:
+            return True
+    return False
+
+
+def _observation_message_looks_error(observation: dict[str, Any]) -> bool:
+    message = str(observation.get("message") or "").strip().lower()
+    if not message:
+        return False
+    markers = ("error", "failed", "failure", "exception", "not found", "missing", "不存在", "失败", "错误")
+    return any(marker in message for marker in markers)
+
+
+def _has_substantive_non_error_output(output_payload: dict[str, Any]) -> bool:
+    for key, value in output_payload.items():
+        if str(key).lower() in {"error", "errors", "exception", "traceback"}:
+            continue
+        if value in ("", None, [], {}):
+            continue
+        return True
+    return False
 
 
 def _package_digest(root: Path) -> str:
@@ -566,7 +676,10 @@ def _evaluate_probe_observation(
         SystemMessage(
             content=(
                 "You summarize a generated package tool probe from a direct ToolExecutionGateway observation. "
-                "Return concise JSON only. The JSON must contain one field: summary. "
+                "Return concise JSON only. The JSON must contain fields summary, probe_kind, goal_satisfied, "
+                "tool_returned_business_output, and only_error_handling_verified. "
+                "probe_kind must be success_path when the probe exercised the tool's intended successful business behavior, "
+                "error_path when it only verified rejection/error handling, or unknown if unclear. "
                 "The summary should say whether the final answer appears to satisfy the tool goal. "
                 "If no tool goal is provided, summarize whether the final answer is useful for the business prompt."
             )
@@ -616,6 +729,10 @@ def _probe_record_summary(record: PackageToolProbeRecord, *, current_digest: str
     return {
         "status": record.status,
         "stale": record.package_digest != current_digest,
+        "probe_kind": record.probe_kind,
+        "goal_satisfied": record.goal_satisfied,
+        "tool_returned_business_output": record.tool_returned_business_output,
+        "only_error_handling_verified": record.only_error_handling_verified,
         "observation_status": record.observation_status,
         "contract_status": record.contract_status,
         "message": record.message,

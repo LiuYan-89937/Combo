@@ -12,6 +12,7 @@ from langgraph.types import Command
 from agent_factory.create_agent.assist_workflow import CreateAgentAssistWorkflow
 from agent_factory.create_agent.intent import classify_create_agent_intent
 from agent_factory.create_agent.models import CreateAgentPublishDecision
+from agent_factory.create_agent.task_analysis import analyze_create_agent_task
 from agent_factory.create_agent.tooling import CreateAgentToolEnvironmentBuilder
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workflow import CreateAgentWorkflow
@@ -58,8 +59,10 @@ class CreateAgentRuntime:
         )
         graph_kind = "manufacture" if intent.intent == "manufacture_agent" else "assist"
         self._active_graph_by_session[resolved_session_id] = graph_kind
+        task_analysis = None
         if graph_kind == "manufacture":
-            workspace.initialize(user_input=user_input)
+            task_analysis = analyze_create_agent_task(user_input=user_input, model=self.model)
+            workspace.initialize(user_input=user_input, task_analysis=task_analysis)
         else:
             workspace.root.mkdir(parents=True, exist_ok=True)
         return CreateAgentStreamRun(
@@ -72,7 +75,10 @@ class CreateAgentRuntime:
                 workspace=workspace,
                 resume_payload=None,
                 graph_kind=graph_kind,
-                intent=intent.model_dump(mode="json"),
+                intent={
+                    **intent.model_dump(mode="json"),
+                    **({"task_analysis": task_analysis.model_dump(mode="json")} if task_analysis is not None else {}),
+                },
             ),
         )
 

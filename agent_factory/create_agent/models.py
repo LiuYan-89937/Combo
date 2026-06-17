@@ -14,6 +14,7 @@ ACTION_FILE = ".factory/action.json"
 VALIDATION_FILE = ".factory/validation.json"
 VALIDATION_STATE_FILE = ".factory/validation_state.json"
 TOOL_PROBE_FILE = ".factory/tool_probe.json"
+TASK_ANALYSIS_FILE = ".factory/task_analysis.json"
 PUBLISH_FILE = ".factory/publish.json"
 PUBLISH_DECISION_FILE = ".factory/publish_decision.json"
 RESOURCES_FILE = ".factory/resources.json"
@@ -45,6 +46,21 @@ class CreateAgentIntentDecision(BaseModel):
 
     intent: Literal["manufacture_agent", "workspace_assist", "chat"]
     rationale: str = ""
+
+
+class CreateAgentTaskAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["create_agent_task_analysis.v0"] = "create_agent_task_analysis.v0"
+    intent_summary: str = ""
+    capability_goals: list[str] = Field(default_factory=list)
+    interaction_style: str = ""
+    requires_dynamic_plan: bool = False
+    selected_pattern_id: Literal["react_agent", "plan_and_execute"] = "react_agent"
+    selection_reason: str = ""
+    manufacturing_notes: list[str] = Field(default_factory=list)
+    available_patterns: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class SystemStageStatus(str, Enum):
@@ -164,13 +180,28 @@ class SystemManufacturingState(BaseModel):
         if not target:
             raise ValueError("focus_id must not be empty")
         found = False
+        target_order = 0
+        active_order = 0
+        for stage in self.stages:
+            if stage.system_id == target:
+                target_order = stage.stage_order
+            if stage.system_id == self.active_focus_id:
+                active_order = stage.stage_order
         stages: list[SystemStage] = []
         for stage in self.stages:
             if stage.system_id == target:
                 stages.append(stage.model_copy(update={"status": status}))
                 found = True
-            else:
-                stages.append(stage)
+                continue
+            next_status = stage.status
+            if stage.status == SystemStageStatus.in_progress:
+                if active_order and target_order and stage.stage_order < target_order:
+                    next_status = SystemStageStatus.done
+                elif stage.stage_order > target_order:
+                    next_status = SystemStageStatus.pending
+                else:
+                    next_status = SystemStageStatus.pending
+            stages.append(stage.model_copy(update={"status": next_status}) if next_status != stage.status else stage)
         if not found:
             raise ValueError(f"unknown create-agent focus_id: {focus_id}")
         return self.model_copy(
@@ -382,6 +413,7 @@ class PackageToolProbeRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tool_id: str
+    probe_kind: Literal["unknown", "success_path", "error_path"] = "unknown"
     prompt: str = ""
     tool_goal: str = ""
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -396,6 +428,9 @@ class PackageToolProbeRecord(BaseModel):
     observation_output: dict[str, Any] = Field(default_factory=dict)
     final_answer: str = ""
     summary: str = ""
+    goal_satisfied: bool | None = None
+    tool_returned_business_output: bool = False
+    only_error_handling_verified: bool = False
     evaluator: str = ""
     evaluation: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)

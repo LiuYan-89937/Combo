@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 ARG PYTHON_BASE_IMAGE=python:3.12-slim
 FROM ${PYTHON_BASE_IMAGE}
 
@@ -22,9 +21,7 @@ RUN set -eux; \
             "$file"; \
     done
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    $APT_GET update \
+RUN $APT_GET update \
     && $APT_GET install -y --no-install-recommends \
         bash \
         ca-certificates \
@@ -34,14 +31,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         gawk \
         grep \
         procps \
-        sed
+        sed \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md /opt/agentfactory/
 RUN mkdir -p /opt/agentfactory/agent_factory \
     && touch /opt/agentfactory/agent_factory/__init__.py
 
-RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    python -m pip install --upgrade pip \
+RUN python -m pip install --upgrade pip \
     && python -m pip install -e /opt/agentfactory
 
 COPY agent_factory /opt/agentfactory/agent_factory

@@ -18,6 +18,7 @@ from agent_factory.create_agent.models import (
     PUBLISH_DECISION_FILE,
     SKILL_GATEWAY_STATE_FILE,
     SYSTEM_STATE_FILE,
+    TASK_ANALYSIS_FILE,
     TOOL_PROBE_FILE,
     VALIDATION_FILE,
     VALIDATION_STATE_FILE,
@@ -127,6 +128,7 @@ class CreateAgentToolEnvironmentBuilder:
                 PUBLISH_FILE,
                 PUBLISH_DECISION_FILE,
                 SKILL_GATEWAY_STATE_FILE,
+                TASK_ANALYSIS_FILE,
                 ".factory/manufacturing_trace.json",
                 ".factory/tool_outputs",
                 ".agent_runtime",
@@ -139,6 +141,10 @@ class CreateAgentToolEnvironmentBuilder:
                 SYSTEM_STATE_FILE: {
                     "read_tool": CREATE_AGENT_STAGE_TOOL_ID,
                     "write_tool": CREATE_AGENT_STAGE_TOOL_ID,
+                },
+                TASK_ANALYSIS_FILE: {
+                    "read_tool": CREATE_AGENT_STAGE_TOOL_ID,
+                    "write_tool": "create-agent task analysis",
                 },
             }
         if mode == "manufacture":
