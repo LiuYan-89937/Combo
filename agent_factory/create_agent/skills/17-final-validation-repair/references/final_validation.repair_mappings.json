@@ -73,7 +73,7 @@
     "replace_strategy": "replace_array_item",
     "expected_shape": {
       "binding_id": "snake_case_binding_id",
-      "binding_type": "prompt|tool_access|model_operation|policy_profile|strategy_profile|output_formatter|custom",
+      "binding_type": "prompt|tool_access|model_operation|strategy_profile|output_formatter|custom",
       "target": {
         "node_id": "pattern_node_id",
         "impl": "node.impl"

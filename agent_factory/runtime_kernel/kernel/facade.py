@@ -42,10 +42,6 @@ from agent_factory.runtime_kernel.nodes.standard import (
     CognitiveRouteNode,
     CognitiveStructuredNode,
     FinalizeNode,
-    GovernanceApprovalGateNode,
-    GovernancePostcheckNode,
-    GovernancePrecheckNode,
-    GovernanceRefusalGateNode,
     IngressNode,
     OperationalResourceProbeNode,
     OperationalToolCallNode,
@@ -62,7 +58,6 @@ from agent_factory.runtime_kernel.persistence import (
     LangGraphStoreConfig,
     LangGraphStoreFactory,
 )
-from agent_factory.runtime_kernel.policy import PolicyEngine
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.state import (
     ContextState,
@@ -95,10 +90,6 @@ class RuntimeKernelFacade:
         node_registry = NodeRegistry()
         for impl in [
             IngressNode(),
-            GovernancePrecheckNode(),
-            GovernancePostcheckNode(),
-            GovernanceApprovalGateNode(),
-            GovernanceRefusalGateNode(),
             CognitiveClarifyNode(),
             CognitivePlanNode(),
             CognitiveRouteNode(),
@@ -163,7 +154,6 @@ class RuntimeKernelFacade:
             memory_system=memory_runtime,
             context_system=default_context_runtime(),
             context_engine=ContextEngine(),
-            policy_engine=PolicyEngine(),
             observability_manager=ObservabilityManager(),
             checkpointer=checkpointer,
             bookmark_store=InMemoryBookmarkStore(),

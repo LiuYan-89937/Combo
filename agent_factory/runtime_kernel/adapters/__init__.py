@@ -4,7 +4,6 @@ from agent_factory.runtime_kernel.adapters.model import (
     ModelServiceAdapter,
     ScriptedModelService,
 )
-from agent_factory.runtime_kernel.adapters.policy import PolicyEngineAdapter
 from agent_factory.runtime_kernel.adapters.tool import InMemoryToolRegistry, ToolRegistryAdapter
 
 __all__ = [
@@ -12,7 +11,6 @@ __all__ = [
     "InMemoryToolRegistry",
     "LangChainModelServiceAdapter",
     "ModelServiceAdapter",
-    "PolicyEngineAdapter",
     "ScriptedModelService",
     "ToolRegistryAdapter",
 ]

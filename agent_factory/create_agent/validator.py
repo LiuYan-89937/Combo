@@ -18,7 +18,6 @@ from agent_factory.create_agent.models import (
     PackageValidationReport,
 )
 from agent_factory.create_agent.runtime_path_repair import find_runtime_path_repairs
-from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_contracts.schema import (
@@ -29,6 +28,7 @@ from agent_factory.runtime_contracts.schema import (
 )
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
+from agent_factory.runtime_kernel.planning import PLAN_AND_EXECUTE_PATTERN_ID, RUNTIME_PLAN_TOOL_ID
 from agent_factory.tooling.builtins.registry import get_builtin_tool_ids
 from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.skills.schema import SkillGatewayState
@@ -36,6 +36,8 @@ from agent_factory.tooling.skills.schema import SkillGatewayState
 
 ValidationScope = str
 REPAIR_POLICY = CreateAgentRepairPolicy()
+CREATE_AGENT_RUNTIME_PATTERN_ID = "react_agent"
+CREATE_AGENT_RUNTIME_PATTERN_IDS = {CREATE_AGENT_RUNTIME_PATTERN_ID, PLAN_AND_EXECUTE_PATTERN_ID}
 
 
 class CreateAgentPackageValidator:
@@ -125,7 +127,6 @@ class CreateAgentPackageValidator:
         if scope == "runtime_contract_build":
             return _passed(root, scope=scope, changed_files=changed, summary="Runtime contract build checks passed.")
         try:
-            register_package_patterns(facade=compiler.facade, package=package, runtime_build=runtime_build)
             binding_target_report = _binding_target_report(
                 root,
                 package,
@@ -137,7 +138,7 @@ class CreateAgentPackageValidator:
                 return binding_target_report
             compiler.compile(package.assembly_spec, runtime_build=runtime_build)
         except Exception as exc:
-            return _failed(root, "assembly.compile", exc, ["assembly_spec.json", "patterns", "bindings"], scope=scope, changed_files=changed)
+            return _failed(root, "assembly.compile", exc, ["assembly_spec.json"], scope=scope, changed_files=changed)
         if scope != "full_static":
             return _passed(root, scope=scope, changed_files=changed, summary="Assembly compile checks passed.")
         # Full static: semantic completeness gate
@@ -375,7 +376,7 @@ def _tool_spec_repair_template() -> dict[str, Any]:
 def _node_binding_expected_shape() -> dict[str, Any]:
     return {
         "binding_id": "snake_case_binding_id",
-        "binding_type": "prompt|tool_access|model_operation|policy_profile|strategy_profile|output_formatter|custom",
+        "binding_type": "prompt|tool_access|model_operation|strategy_profile|output_formatter|custom",
         "target": {"node_id": "pattern_node_id", "impl": "node.impl"},
         "payload": {},
     }
@@ -880,6 +881,7 @@ def _package_file_contract_report(
                 target_files=[_relative(root, Path(manifest_path))],
                 recommended_skill="10-package-tool-system",
             ))
+    issues.extend(_runtime_pattern_alignment_issues(package))
     issues.extend(_manifest_asset_index_issues(root, manifest, package_tools))
     issues.extend(_tools_contract_issues(package))
     issues.extend(_assembly_tool_issues(package, package_tools))
@@ -895,6 +897,26 @@ def _package_file_contract_report(
         changed_files=changed_files,
         summary="Package file contract check failed: " + "; ".join(issue.summary for issue in issues[:3]),
     )
+
+
+def _runtime_pattern_alignment_issues(package: Any) -> list[PackageValidationIssue]:
+    manifest_pattern = str((getattr(package.manifest, "runtime", {}) or {}).get("pattern_id") or "")
+    assembly_pattern = str(getattr(getattr(package.assembly_spec, "runtime", None), "pattern_id", "") or "")
+    if manifest_pattern == assembly_pattern:
+        return []
+    return [
+        _contract_issue(
+            where="package.runtime_pattern_alignment",
+            summary="agent_package.json runtime pattern does not match assembly_spec.json runtime pattern",
+            message="The package manifest and assembly spec must point to the same built-in runtime pattern.",
+            path="agent_package.json",
+            expected="agent_package.json.runtime.pattern_id equals assembly_spec.json.runtime.pattern_id.",
+            actual=f"agent_package.json={manifest_pattern or '<empty>'}; assembly_spec.json={assembly_pattern or '<empty>'}",
+            repair_hint="Update agent_package.json.runtime.pattern_id or assembly_spec.json.runtime.pattern_id so they match.",
+            target_files=["agent_package.json", "assembly_spec.json", "render_manifest.json"],
+            recommended_skill="01-package-identity-system",
+        )
+    ]
 
 
 def _binding_target_report(
@@ -919,6 +941,22 @@ def _binding_target_report(
 
 def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageValidationIssue]:
     pattern_id = str(getattr(getattr(package.assembly_spec, "runtime", None), "pattern_id", "") or "")
+    if pattern_id not in CREATE_AGENT_RUNTIME_PATTERN_IDS:
+        return [
+            _contract_issue(
+                where="assembly.binding_target.pattern",
+                summary="create-agent currently supports only built-in react_agent and plan_and_execute runtime patterns",
+                message=(
+                    "Use a supported built-in runtime pattern and express capability through prompt bindings, tool access, package tools, knowledge, memory, scheduler, and resources."
+                ),
+                path="assembly_spec.json",
+                expected='assembly_spec.runtime.pattern_id is "react_agent" or "plan_and_execute".',
+                actual=pattern_id or "<empty>",
+                repair_hint='Set assembly_spec.runtime.pattern_id to "react_agent" for direct ReAct or "plan_and_execute" for planned execution.',
+                target_files=["assembly_spec.json", "agent_package.json"],
+                recommended_skill="12-assembly-pattern-system",
+            )
+        ]
     try:
         pattern = pattern_registry.get(pattern_id)
     except Exception as exc:
@@ -928,10 +966,10 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
                 summary=f"assembly runtime pattern {pattern_id or '<empty>'} is not available",
                 message=f"Cannot validate binding targets because the runtime pattern cannot be loaded: {type(exc).__name__}: {exc}",
                 path="assembly_spec.json",
-                expected="assembly_spec.runtime.pattern_id references a built-in or package-registered pattern.",
+                expected="assembly_spec.runtime.pattern_id references a supported built-in runtime pattern.",
                 actual=pattern_id or "<empty>",
-                repair_hint="Use an available runtime pattern id or add the referenced package pattern asset.",
-                target_files=["assembly_spec.json", "patterns/"],
+                repair_hint='Set assembly_spec.runtime.pattern_id to "react_agent" or "plan_and_execute".',
+                target_files=["assembly_spec.json"],
                 recommended_skill="12-assembly-pattern-system",
             )
         ]
@@ -999,7 +1037,96 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
                 "payload": {"prompt_id": prompt_id, "template": "<system prompt>", "variables": []},
             },
         ))
+    if pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
+        issues.extend(_plan_and_execute_binding_issues(package))
     return issues
+
+
+def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssue]:
+    bindings = list(package.assembly_spec.bindings.node_bindings)
+    issues: list[PackageValidationIssue] = []
+    for node_id in ("planner", "executor", "final_answer"):
+        if not _has_binding(bindings, node_id=node_id, binding_type="prompt"):
+            issues.append(_missing_plan_binding_issue(node_id=node_id, binding_type="prompt"))
+        if not _has_binding(bindings, node_id=node_id, binding_type="model_operation"):
+            issues.append(_missing_plan_binding_issue(node_id=node_id, binding_type="model_operation"))
+    planner_tools = _tool_access_for_node(bindings, node_id="planner")
+    if planner_tools != [RUNTIME_PLAN_TOOL_ID]:
+        issues.append(_contract_issue(
+            where="assembly.plan_and_execute.planner_tools",
+            summary="plan_and_execute planner must only expose runtime_plan",
+            message="The planner creates dynamic plan state and must not call business tools.",
+            path="assembly_spec.json",
+            expected='planner tool_access.allowed_tool_ids is ["runtime_plan"].',
+            actual=", ".join(planner_tools) if planner_tools else "<missing>",
+            repair_hint='Add planner tool_access with only "runtime_plan".',
+            target_files=["assembly_spec.json"],
+            recommended_skill="12-assembly-pattern-system",
+        ))
+    executor_tools = _tool_access_for_node(bindings, node_id="executor")
+    if RUNTIME_PLAN_TOOL_ID not in executor_tools:
+        issues.append(_contract_issue(
+            where="assembly.plan_and_execute.executor_tools",
+            summary="plan_and_execute executor must expose runtime_plan",
+            message="The executor updates dynamic plan state through runtime_plan while executing current steps.",
+            path="assembly_spec.json",
+            expected='executor tool_access.allowed_tool_ids includes "runtime_plan".',
+            actual=", ".join(executor_tools) if executor_tools else "<missing>",
+            repair_hint='Add "runtime_plan" to executor tool_access.allowed_tool_ids.',
+            target_files=["assembly_spec.json"],
+            recommended_skill="12-assembly-pattern-system",
+        ))
+    final_tools = _tool_access_for_node(bindings, node_id="final_answer")
+    if final_tools:
+        issues.append(_contract_issue(
+            where="assembly.plan_and_execute.final_answer_tools",
+            summary="plan_and_execute final_answer must not expose tools",
+            message="The final_answer node summarizes completed plan state and evidence without additional tool calls.",
+            path="assembly_spec.json",
+            expected="no tool_access binding for final_answer, or an empty allowed_tool_ids list.",
+            actual=", ".join(final_tools),
+            repair_hint="Remove final_answer tool_access or clear final_answer allowed_tool_ids.",
+            target_files=["assembly_spec.json"],
+            recommended_skill="12-assembly-pattern-system",
+        ))
+    return issues
+
+
+def _has_binding(bindings: list[Any], *, node_id: str, binding_type: str) -> bool:
+    for binding in bindings:
+        target = getattr(binding, "target", None)
+        if str(getattr(target, "node_id", "") or "") != node_id:
+            continue
+        if binding.binding_type == binding_type:
+            return True
+    return False
+
+
+def _tool_access_for_node(bindings: list[Any], *, node_id: str) -> list[str]:
+    ids: list[str] = []
+    for binding in bindings:
+        if binding.binding_type != "tool_access":
+            continue
+        target = getattr(binding, "target", None)
+        if str(getattr(target, "node_id", "") or "") != node_id:
+            continue
+        payload = getattr(binding, "payload", None)
+        ids.extend(str(item) for item in (getattr(payload, "allowed_tool_ids", []) or []))
+    return ids
+
+
+def _missing_plan_binding_issue(*, node_id: str, binding_type: str) -> PackageValidationIssue:
+    return _contract_issue(
+        where="assembly.plan_and_execute.binding",
+        summary=f"plan_and_execute {node_id} is missing {binding_type} binding",
+        message=f"The plan_and_execute pattern requires {node_id} to have a {binding_type} binding.",
+        path="assembly_spec.json",
+        expected=f"{node_id} has a {binding_type} binding targeting cognitive.answer.",
+        actual="missing",
+        repair_hint=f"Add a {binding_type} binding for {node_id}.",
+        target_files=["assembly_spec.json"],
+        recommended_skill="12-assembly-pattern-system",
+    )
 
 
 def _binding_target_issue(
@@ -1100,18 +1227,6 @@ def _manifest_asset_index_issues(root: Path, manifest: Any, package_tools: dict[
         expected=expected_tools,
         recommended_skill="10-package-tool-system",
     ))
-    for field_name, directory, skill in (
-        ("prompts", "prompts", "12-assembly-pattern-system"),
-        ("patterns", "patterns", "12-assembly-pattern-system"),
-    ):
-        expected = _asset_files(root / directory)
-        issues.extend(_asset_index_issues(
-            root,
-            field_name=field_name,
-            declared=set(getattr(manifest, field_name, []) or []),
-            expected=expected,
-            recommended_skill=skill,
-        ))
     return issues
 
 
@@ -1225,6 +1340,9 @@ def _tools_contract_issues(package: Any) -> list[PackageValidationIssue]:
 def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
     legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools)
+    pattern_id = str(getattr(getattr(package.assembly_spec, "runtime", None), "pattern_id", "") or "")
+    if pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
+        legal_tool_ids.add(RUNTIME_PLAN_TOOL_ID)
     blocked_ids = _manufacturing_tool_ids()
     for binding in package.assembly_spec.bindings.node_bindings:
         if binding.binding_type != "tool_access":
@@ -1294,17 +1412,6 @@ def _scheduler_package_tool_ids(package: Any, package_tools: dict[str, Any]) -> 
             if tool_id in package_tools:
                 ids.append(tool_id)
     return ids
-
-
-def _asset_files(directory: Path) -> set[str]:
-    if not directory.is_dir():
-        return set()
-    root = directory.parent
-    return {
-        path.relative_to(root).as_posix()
-        for path in directory.rglob("*")
-        if path.is_file() and path.name not in {".DS_Store"} and "__pycache__" not in path.parts
-    }
 
 
 def _tool_spec_mismatches(left: Any, right: Any) -> list[str]:
@@ -1449,31 +1556,6 @@ def _semantic_completeness_report(
     """Check that the package has actual logic, not just empty scaffold defaults."""
     issues: list[PackageValidationIssue] = []
 
-    # Check 1: Pattern has real nodes (not just ingress→finalize)
-    for pattern in package.patterns:
-        nodes = pattern.nodes if hasattr(pattern, "nodes") else []
-        node_types = set()
-        for node in nodes:
-            if hasattr(node, "type"):
-                node_types.add(str(node.type))
-            elif isinstance(node, dict):
-                node_types.add(str(node.get("type", "")))
-        non_terminal_types = node_types - {"reserved", "terminal"}
-        if not non_terminal_types and len(nodes) <= 2:
-            issues.append(PackageValidationIssue(
-                where="semantic.pattern_logic",
-                summary=f"Pattern '{pattern.pattern_id}' only has ingress→finalize with no operational logic",
-                message="The pattern must include cognitive or operational nodes (e.g. tool_call, answer, route) to be functional.",
-                path="patterns/main.yaml",
-                expected="Pattern with >2 nodes including at least one cognitive or operational node",
-                actual=f"Pattern has {len(nodes)} nodes, types: {sorted(node_types)}",
-                repair_hint="Add operational.tool_call and cognitive.answer nodes to the pattern. Load skill 12-assembly-pattern-system for guidance.",
-                target_files=["patterns/main.yaml", "assembly_spec.json"],
-                recommended_skill="12-assembly-pattern-system",
-            ))
-            break
-
-    # Check 2: Assembly bindings non-empty
     bindings = package.assembly_spec.bindings
     bindings_dict = bindings.model_dump(mode="json") if hasattr(bindings, "model_dump") else (dict(bindings) if bindings else {})
     has_bindings = any(v for v in bindings_dict.values() if v)

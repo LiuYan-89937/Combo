@@ -15,7 +15,6 @@ from agent_factory.runtime_contracts.builtins import (
     default_knowledge_contract,
     default_memory_contract,
     default_model_contract,
-    default_node_provider_contract,
     default_render_contract,
     default_resources_contract,
     default_sandbox_contract,
@@ -27,7 +26,6 @@ from agent_factory.runtime_contracts.builtins import (
     default_trace_contract,
 )
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
-from agent_factory.runtime_kernel.node_providers.package import PackageNodeManifest
 from agent_factory.runtime_render import RenderManifest
 from agent_factory.tooling.spec import ToolSpec
 
@@ -46,7 +44,6 @@ RESOURCE_IDS = {
     "08-knowledge-system": "knowledge_system",
     "09-tools-system": "tools_system",
     "10-package-tool-system": "package_tool_system",
-    "11-node-provider-system": "node_provider_system",
     "12-assembly-pattern-system": "assembly_pattern_system",
     "13-render-event-system": "render_event_system",
     "14-scheduler-system": "scheduler_system",
@@ -57,7 +54,6 @@ RESOURCE_IDS = {
 CAPABILITY_EXAMPLE_SKILLS = frozenset(
     {
         "10-package-tool-system",
-        "11-node-provider-system",
         "12-assembly-pattern-system",
         "15-scheduler-seed-system",
         "17-final-validation-repair",
@@ -131,13 +127,6 @@ def main() -> None:
             title="Package tool manifest",
             files=_package_tool_example_files(),
         ),
-        "11-node-provider-system": _export(
-            title="Node provider contract and package node manifest",
-            files={
-                "contracts/node_provider.json": (type(default_node_provider_contract()), default_node_provider_contract()),
-                "nodes/<node_id>/manifest.json": (PackageNodeManifest, _package_node_example()),
-            },
-        ),
         "12-assembly-pattern-system": _export(
             title="Assembly spec capability increment",
             files={
@@ -180,6 +169,10 @@ def main() -> None:
             _write_json(example_path, payload["example"])
         elif example_path.exists():
             example_path.unlink()
+    _write_json(
+        SKILLS_ROOT / "12-assembly-pattern-system" / "examples" / "assembly_spec.plan_and_execute.json",
+        _plan_and_execute_assembly_example().model_dump(mode="json", exclude_none=True),
+    )
 
 
 def _export(*, title: str, files: dict[str, tuple[type[Any], Any]]) -> dict[str, Any]:
@@ -386,15 +379,6 @@ def _tool_spec_example() -> ToolSpec:
     )
 
 
-def _package_node_example() -> PackageNodeManifest:
-    return PackageNodeManifest(
-        impl_id="package.example_node",
-        node_type="operational",
-        entrypoint="nodes/example_node/node.py:run",
-        description="Package node description.",
-    )
-
-
 def _assembly_with_tool_binding_example() -> AgentAssemblySpec:
     return AgentAssemblySpec.model_validate(
         {
@@ -455,6 +439,114 @@ def _assembly_with_tool_binding_example() -> AgentAssemblySpec:
             "output": {"citations_required": False, "format": "text"},
         }
     )
+
+
+def _plan_and_execute_assembly_example() -> AgentAssemblySpec:
+    return AgentAssemblySpec.model_validate(
+        {
+            "schema_version": "0.1",
+            "agent": {
+                "id": "generated_agent",
+                "name": "Generated Agent",
+                "description": "Generated RuntimeKernel AgentPackage.",
+                "version": "0.1.0",
+            },
+            "runtime": {
+                "pattern_id": "plan_and_execute",
+                "user_config": {},
+                "agent_config": {},
+            },
+            "bindings": {
+                "node_bindings": [
+                    {
+                        "binding_id": "planner_prompt",
+                        "binding_type": "prompt",
+                        "target": {"node_id": "planner", "impl": "cognitive.answer"},
+                        "payload": {
+                            "prompt_id": "planner_prompt",
+                            "template": "Create a concise dynamic plan for the user request, then call runtime_plan create_plan. Do not execute business tools from planner.",
+                            "variables": [],
+                        },
+                    },
+                    {
+                        "binding_id": "planner_tools",
+                        "binding_type": "tool_access",
+                        "target": {"node_id": "planner", "impl": "cognitive.answer"},
+                        "payload": {"allowed_tool_ids": ["runtime_plan"], "approval_policy": "standard"},
+                    },
+                    {
+                        "binding_id": "planner_model",
+                        "binding_type": "model_operation",
+                        "target": {"node_id": "planner", "impl": "cognitive.answer"},
+                        "payload": {
+                            "operation": "tool_bound_chat",
+                            "model_role": "main",
+                            "output_schema": {"type": "object", "additionalProperties": True},
+                            "write_target": {"section": "context"},
+                            "max_attempts": 3,
+                            "prompt_id": "planner_prompt",
+                        },
+                    },
+                    {
+                        "binding_id": "executor_prompt",
+                        "binding_type": "prompt",
+                        "target": {"node_id": "executor", "impl": "cognitive.answer"},
+                        "payload": {
+                            "prompt_id": "executor_prompt",
+                            "template": "Execute the current dynamic plan step using available tools when useful. Update step status through runtime_plan.",
+                            "variables": [],
+                        },
+                    },
+                    {
+                        "binding_id": "executor_tools",
+                        "binding_type": "tool_access",
+                        "target": {"node_id": "executor", "impl": "cognitive.answer"},
+                        "payload": {"allowed_tool_ids": ["runtime_plan", "package_action"], "approval_policy": "standard"},
+                    },
+                    {
+                        "binding_id": "executor_model",
+                        "binding_type": "model_operation",
+                        "target": {"node_id": "executor", "impl": "cognitive.answer"},
+                        "payload": {
+                            "operation": "tool_bound_chat",
+                            "model_role": "main",
+                            "output_schema": {"type": "object", "additionalProperties": True},
+                            "write_target": {"section": "context"},
+                            "max_attempts": 3,
+                            "prompt_id": "executor_prompt",
+                        },
+                    },
+                    {
+                        "binding_id": "final_answer_prompt",
+                        "binding_type": "prompt",
+                        "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
+                        "payload": {
+                            "prompt_id": "final_answer_prompt",
+                            "template": "Summarize the completed dynamic plan and evidence for the user. Do not call tools.",
+                            "variables": [],
+                        },
+                    },
+                    {
+                        "binding_id": "final_answer_model",
+                        "binding_type": "model_operation",
+                        "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
+                        "payload": {
+                            "operation": "tool_bound_chat",
+                            "model_role": "main",
+                            "output_schema": {"type": "object", "additionalProperties": True},
+                            "write_target": {"section": "context"},
+                            "max_attempts": 3,
+                            "prompt_id": "final_answer_prompt",
+                        },
+                    },
+                ],
+            },
+            "tools": [_tool_spec_example().model_dump(mode="json", exclude_none=True)],
+            "output": {"citations_required": False, "format": "text"},
+        }
+    )
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

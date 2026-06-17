@@ -140,8 +140,6 @@ class CreateAgentRepairPolicy:
             return "12-assembly-pattern-system"
         if "tools/" in targets:
             return "10-package-tool-system"
-        if "nodes/" in targets:
-            return "11-node-provider-system"
         return "01-package-identity-system"
 
     def recommended_resources(self, skill: str, target_files: list[str]) -> list[str]:
@@ -157,12 +155,6 @@ class CreateAgentRepairPolicy:
                 f"references/{artifact}.schema.json",
                 f"examples/{artifact}.capability.json",
                 f"references/{artifact}.repair_hints.md",
-            ]
-        if skill == "11-node-provider-system":
-            return [
-                "references/node_provider_system.schema.json",
-                "examples/node_provider_system.capability.json",
-                "references/node_provider_system.repair_hints.md",
             ]
         if skill == "12-assembly-pattern-system":
             return [
@@ -204,7 +196,6 @@ class CreateAgentRepairPolicy:
             ("contracts/trace", "16-trace-artifact-system"),
             ("contracts/artifact", "16-trace-artifact-system"),
             ("contracts/render", "13-render-event-system"),
-            ("contracts/node_provider", "11-node-provider-system"),
         ]
         for needle, skill in pairs:
             if needle in targets:

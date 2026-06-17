@@ -13,12 +13,6 @@ from agent_factory.runtime_render import RenderManifest, default_node_render_spe
 
 PACKAGE_ASSET_DIRECTORIES = (
     "tools",
-    "nodes",
-    "prompts",
-    "policies",
-    "strategies",
-    "formatters",
-    "patterns",
     "knowledge",
     "artifacts",
 )
@@ -45,7 +39,6 @@ def materialize_empty_agent_package(root: str | Path, *, factory_run_id: str, us
             resources_path="resources.json",
             sandbox_contract_path="sandbox_contract.json",
             contracts=contracts,
-            patterns=[],
             tools=[],
         ).model_dump(mode="json", exclude_none=True),
     )

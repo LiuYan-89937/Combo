@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -55,6 +55,46 @@ class ToolState(BaseModel):
     tool_failures: list[dict[str, Any]] = Field(default_factory=list)
     approval_queue: list[dict[str, Any]] = Field(default_factory=list)
     last_tool_result: dict[str, Any] | None = None
+
+
+class PlanStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str
+    title: str
+    objective: str
+    status: Literal["pending", "in_progress", "completed", "failed", "skipped"] = "pending"
+    depends_on: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    tool_hints: list[str] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    result_summary: str | None = None
+    created_by: str = "runtime_plan"
+    updated_at: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    kind: str
+    step_id: str | None = None
+    reason: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class PlanState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = "plan_state.v0"
+    goal: str = ""
+    status: Literal["empty", "active", "completed", "failed", "cancelled"] = "empty"
+    current_step_id: str | None = None
+    steps: list[PlanStep] = Field(default_factory=list)
+    events: list[PlanEvent] = Field(default_factory=list)
+    last_execution: dict[str, Any] | None = None
 
 
 class PolicyState(BaseModel):
@@ -120,6 +160,7 @@ class RuntimeState(BaseModel):
     conversation: ConversationState = Field(default_factory=ConversationState)
     context: ContextState = Field(default_factory=ContextState)
     tools: ToolState = Field(default_factory=ToolState)
+    plan: PlanState = Field(default_factory=PlanState)
     policy: PolicyState = Field(default_factory=PolicyState)
     execution: ExecutionState = Field(default_factory=ExecutionState)
     observability: ObservabilityState = Field(default_factory=ObservabilityState)

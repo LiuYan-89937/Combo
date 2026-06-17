@@ -33,17 +33,6 @@ class ModelInvocationResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class PolicyDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["allowed", "blocked", "interrupted"] = "allowed"
-    reason: str | None = None
-    approval_required: bool = False
-    interrupt_required: bool = False
-    interrupt_type: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class ToolExecutionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

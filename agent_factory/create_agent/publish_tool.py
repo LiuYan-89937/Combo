@@ -12,7 +12,6 @@ from agent_factory.create_agent.mcp_inheritance import materialize_referenced_fa
 from agent_factory.create_agent.models import PUBLISH_FILE
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
-from agent_factory.package_runtime import register_package_patterns
 from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
@@ -195,7 +194,6 @@ def _assert_runtime_ready(package_root: Path) -> None:
         package,
         base_services=compiler.facade.instance.services,
     )
-    register_package_patterns(facade=compiler.facade, package=package, runtime_build=runtime_build)
     compiler.compile(package.assembly_spec, runtime_build=runtime_build)
 
 

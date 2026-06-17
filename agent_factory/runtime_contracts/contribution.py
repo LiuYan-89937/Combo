@@ -162,7 +162,6 @@ def _service_slots(services: RuntimeServices) -> dict[str, Any]:
         "knowledge_runtime": None,
         "context_system": None,
         "context_engine": services.context_engine,
-        "policy_engine": services.policy_engine,
         "observability_manager": services.observability_manager,
         "checkpointer": None,
         "harness_bridge": services.harness_bridge,

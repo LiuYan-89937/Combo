@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
-from agent_factory.runtime_kernel.patterns.loader import PatternLoader
-from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
 from agent_factory.runtime_render import RenderManifest
 
 
@@ -22,7 +20,6 @@ class LoadedAgentPackage:
     resources: dict[str, Any]
     sandbox_contract: dict[str, Any]
     contracts: dict[str, dict[str, Any]]
-    patterns: list[GraphPatternSpec]
 
 
 class AgentPackageLoader:
@@ -43,11 +40,6 @@ class AgentPackageLoader:
             key: _json_object(_read_package_file(package_root, value), f"contracts.{key}")
             for key, value in manifest.contracts.items()
         }
-        pattern_loader = PatternLoader()
-        patterns = [
-            pattern_loader.load_path(_package_file_path(package_root, value))
-            for value in manifest.patterns
-        ]
         return LoadedAgentPackage(
             package_root=package_root,
             manifest_path=manifest_path,
@@ -57,7 +49,6 @@ class AgentPackageLoader:
             resources=resources,
             sandbox_contract=sandbox_contract,
             contracts=contracts,
-            patterns=patterns,
         )
 
 

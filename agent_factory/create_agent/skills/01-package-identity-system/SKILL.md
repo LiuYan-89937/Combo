@@ -19,9 +19,9 @@ Guides AgentPackage manifest identity and package-level references after scaffol
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
-- The user request changes agent id, name, description, version, runtime pattern, or manifest resource indexes.
+- The user request changes agent id, name, description, version, or package tool indexes.
 - Validator reports missing or invalid manifest references.
-- A new package file is intentionally introduced and must be indexed in the manifest.
+- A new package tool manifest is intentionally introduced and must be indexed in `agent_package.json.tools`.
 
 ## Focus Files
 - `agent_package.json`
@@ -36,8 +36,8 @@ Guides AgentPackage manifest identity and package-level references after scaffol
 ## Capability Write Guidance
 - Keep `factory_run_id` only at the top level of `agent_package.json`; do not put it inside `agent_package.json.agent` or `assembly_spec.json.agent`.
 - Do not rewrite the scaffolded contracts list unless adding or repairing a real package reference.
-- If manifest arrays such as prompts/tools/patterns stay empty, that is acceptable unless the package actually adds those assets.
-- When an asset is added, index the package-relative path in the correct manifest field and ensure the file exists.
+- The scaffold defaults to the built-in `react_agent` runtime. If the assembly switches to `plan_and_execute`, keep `agent_package.json.runtime.pattern_id` aligned with `assembly_spec.json.runtime.pattern_id`.
+- Only package tools are indexed in `agent_package.json.tools`; when a package tool is added, index its package-relative manifest path and ensure the file exists.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.

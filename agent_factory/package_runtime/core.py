@@ -106,7 +106,6 @@ class PackageRuntimeCore:
             base_services=facade.instance.services,
             runtime_root=self.runtime_root,
         )
-        register_package_patterns(facade=facade, package=self.package, runtime_build=runtime_build)
         compiled = AgentAssemblyCompiler(facade=facade).compile(
             self.package.assembly_spec,
             runtime_build=runtime_build,
@@ -422,19 +421,6 @@ class PackageRuntimeCore:
     def _emit_background_or_noop(self, item: FactoryFrontendEvent) -> None:
         if self.emit_background is not None:
             self.emit_background(item)
-
-
-def register_package_patterns(
-    *,
-    facade: RuntimeKernelFacade,
-    package: LoadedAgentPackage,
-    runtime_build: Any | None = None,
-) -> None:
-    if runtime_build is not None and getattr(runtime_build, "node_providers", None):
-        facade.register_node_providers(runtime_build.node_providers)
-    for pattern in package.patterns:
-        facade.instance.pattern_registry.register(pattern)
-
 
 def host_runtime_package_view(
     package: LoadedAgentPackage,

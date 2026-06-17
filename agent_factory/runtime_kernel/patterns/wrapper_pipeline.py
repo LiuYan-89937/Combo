@@ -195,9 +195,6 @@ def run_pre_hooks(state: RuntimeState, context: NodeExecutionContext) -> tuple[R
             )
             updated.context.assembly_log.append(f"pre_operational:{context.node_id}")
             patch["context"] = updated.context.model_dump(mode="json")
-        elif context.impl.startswith("governance.") and point == "pre_governance":
-            updated.policy.checks.append({"hook": point, "node_id": context.node_id})
-            patch["policy"] = updated.policy.model_dump(mode="json")
         elif context.impl.startswith("terminal.") and point == "pre_terminal":
             updated.observability.debug_refs.append({"kind": "hook", "phase": point, "node_id": context.node_id})
             patch["observability"] = updated.observability.model_dump(mode="json")
@@ -209,7 +206,7 @@ def run_post_hooks(state: RuntimeState, context: NodeExecutionContext) -> dict[s
     debug_refs: list[dict[str, Any]] = []
     for hook in sorted(context.hook_bindings, key=lambda item: int(item.get("order", 0))):
         point = hook.get("hook_point")
-        if point in {"post_cognitive", "post_operational", "post_governance", "post_terminal"}:
+        if point in {"post_cognitive", "post_operational", "post_terminal"}:
             debug_refs.append({"kind": "hook", "phase": point, "node_id": context.node_id})
         elif point == "on_interrupt" and (state.policy.interrupted or state.execution.interrupted):
             debug_refs.append({"kind": "hook", "phase": point, "node_id": context.node_id})

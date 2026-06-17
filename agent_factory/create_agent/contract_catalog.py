@@ -11,7 +11,6 @@ from agent_factory.runtime_contracts.builtins import (
     default_knowledge_contract,
     default_memory_contract,
     default_model_contract,
-    default_node_provider_contract,
     default_render_contract,
     default_resources_contract,
     default_sandbox_contract,
@@ -135,12 +134,6 @@ _CONTRACT_CATALOG = {
         default_factory=default_model_contract,
         recommended_skill="02-model-system",
         recommended_resources=system_resources("model_system"),
-    ),
-    "node_provider": _item(
-        "node_provider",
-        default_factory=default_node_provider_contract,
-        recommended_skill="11-node-provider-system",
-        recommended_resources=system_resources("node_provider_system"),
     ),
     "render": _item(
         "render",

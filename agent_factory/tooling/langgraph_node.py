@@ -306,7 +306,12 @@ def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, lis
         if not isinstance(message, AIMessage):
             continue
         calls = getattr(message, "tool_calls", None) or []
-        normalized = [_normalize_tool_call(item, index=index) for index, item in enumerate(calls)]
+        origin_node_id = _message_origin_node_id(message)
+        origin_impl = _message_origin_impl(message)
+        normalized = [
+            _normalize_tool_call(item, index=index, origin_node_id=origin_node_id, origin_impl=origin_impl)
+            for index, item in enumerate(calls)
+        ]
         unresolved = [
             call
             for call in normalized
@@ -387,6 +392,11 @@ def tool_observation_message(
     message: str,
     arguments: dict[str, Any],
     retryable: bool,
+    output: dict[str, Any] | None = None,
+    evidence: dict[str, Any] | None = None,
+    execution_status: str | None = None,
+    contract_status: str | None = None,
+    errors: list[str] | None = None,
 ) -> ToolMessage:
     return _tool_message(
         tool_id=tool_id,
@@ -399,6 +409,11 @@ def tool_observation_message(
             message=message,
             arguments=arguments,
             retryable=retryable,
+            output=output,
+            evidence=evidence,
+            execution_status=execution_status,
+            contract_status=contract_status,
+            errors=errors,
         ),
     )
 
@@ -438,7 +453,7 @@ def _replace_latest_ai_tool_calls(
             response_metadata=dict(target.response_metadata),
             name=target.name,
             id=target.id,
-            tool_calls=[dict(item) for item in tool_calls],
+            tool_calls=[_langchain_tool_call(item) for item in tool_calls],
         )
         break
     return replaced
@@ -464,7 +479,13 @@ def _tool_concurrent(tool: BaseTool) -> bool:
     return bool(agent_factory.get("concurrent", True))
 
 
-def _normalize_tool_call(item: Any, *, index: int) -> dict[str, Any]:
+def _normalize_tool_call(
+    item: Any,
+    *,
+    index: int,
+    origin_node_id: str = "",
+    origin_impl: str = "",
+) -> dict[str, Any]:
     if not isinstance(item, dict):
         return {}
     name = str(item.get("name") or item.get("tool_id") or "")
@@ -473,6 +494,27 @@ def _normalize_tool_call(item: Any, *, index: int) -> dict[str, Any]:
         "name": name,
         "args": dict(args) if isinstance(args, dict) else {},
         "id": str(item.get("id") or item.get("tool_call_id") or f"call_{index}_{name}"),
+        "type": "tool_call",
+        "origin_node_id": str(item.get("origin_node_id") or origin_node_id or ""),
+        "origin_impl": str(item.get("origin_impl") or origin_impl or ""),
+    }
+
+
+def _message_origin_node_id(message: AIMessage) -> str:
+    kwargs = getattr(message, "additional_kwargs", None)
+    return str(kwargs.get("agent_factory_origin_node_id") or "") if isinstance(kwargs, dict) else ""
+
+
+def _message_origin_impl(message: AIMessage) -> str:
+    kwargs = getattr(message, "additional_kwargs", None)
+    return str(kwargs.get("agent_factory_origin_impl") or "") if isinstance(kwargs, dict) else ""
+
+
+def _langchain_tool_call(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": str(item.get("name") or ""),
+        "args": dict(item.get("args") or {}),
+        "id": str(item.get("id") or item.get("name") or ""),
         "type": "tool_call",
     }
 
@@ -556,6 +598,10 @@ def _observation_payload(
     arguments: dict[str, Any],
     retryable: bool,
     output: dict[str, Any] | None = None,
+    evidence: dict[str, Any] | None = None,
+    execution_status: str | None = None,
+    contract_status: str | None = None,
+    errors: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "tool_observation",
@@ -566,8 +612,8 @@ def _observation_payload(
         "retryable": retryable,
         "arguments": arguments,
         "output": output,
-        "evidence": {},
-        "execution_status": "completed" if status == "completed" else "failed",
-        "contract_status": "valid",
-        "errors": [] if status == "completed" else [message],
+        "evidence": evidence or {},
+        "execution_status": execution_status or ("completed" if status == "completed" else "failed"),
+        "contract_status": contract_status or "valid",
+        "errors": errors if errors is not None else ([] if status == "completed" else [message]),
     }

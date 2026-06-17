@@ -195,8 +195,7 @@ def _manufacturing_guidance(active: Any) -> dict[str, Any]:
     }
     if focus_id == "capability_implementation":
         guidance["active_focus_instruction"] = (
-            "Implement requested runtime capability now. Prefer package tools, scheduler seeds, knowledge, and assembly bindings; "
-            "custom nodes are only for behavior that cannot be expressed with the standard react pattern plus tools."
+            "Implement requested runtime capability now with package tools, scheduler seeds, knowledge, memory, resources, and assembly bindings for the selected built-in runtime pattern."
         )
         guidance["max_capability_examples_before_write"] = 1
     elif focus_id == "requirement_focus":

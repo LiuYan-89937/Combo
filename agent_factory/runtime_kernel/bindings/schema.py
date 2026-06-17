@@ -13,7 +13,6 @@ ServiceKind = Literal[
     "memory_system",
     "knowledge_runtime",
     "context_engine",
-    "policy_engine",
     "observability_manager",
     "trace_recorder",
     "trace_reader",
@@ -28,8 +27,6 @@ HookPoint = Literal[
     "post_cognitive",
     "pre_operational",
     "post_operational",
-    "pre_governance",
-    "post_governance",
     "pre_terminal",
     "post_terminal",
     "on_interrupt",
@@ -40,7 +37,6 @@ BindingType = Literal[
     "prompt",
     "tool_access",
     "model_operation",
-    "policy_profile",
     "strategy_profile",
     "output_formatter",
     "custom",
@@ -160,13 +156,6 @@ class ModelOperationBindingPayload(BaseModel):
             raise ValueError("model_operation.structured_method must not be empty")
         return method
 
-class PolicyProfileBindingPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    profile_id: str
-    rules: dict[str, Any] = Field(default_factory=dict)
-
-
 class StrategyProfileBindingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -195,7 +184,6 @@ StandardNodeBindingPayload = (
     PromptBindingPayload
     | ToolAccessBindingPayload
     | ModelOperationBindingPayload
-    | PolicyProfileBindingPayload
     | StrategyProfileBindingPayload
     | OutputFormatterBindingPayload
     | CustomBindingPayload
@@ -256,7 +244,6 @@ def _payload_model_for_binding_type(binding_type: Any) -> type[BaseModel] | None
         "prompt": PromptBindingPayload,
         "tool_access": ToolAccessBindingPayload,
         "model_operation": ModelOperationBindingPayload,
-        "policy_profile": PolicyProfileBindingPayload,
         "strategy_profile": StrategyProfileBindingPayload,
         "output_formatter": OutputFormatterBindingPayload,
         "custom": CustomBindingPayload,

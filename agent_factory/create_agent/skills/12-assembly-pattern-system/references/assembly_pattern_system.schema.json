@@ -179,8 +179,6 @@
             "post_cognitive",
             "pre_operational",
             "post_operational",
-            "pre_governance",
-            "post_governance",
             "pre_terminal",
             "post_terminal",
             "on_interrupt",
@@ -328,7 +326,6 @@
             "prompt",
             "tool_access",
             "model_operation",
-            "policy_profile",
             "strategy_profile",
             "output_formatter",
             "custom"
@@ -349,9 +346,6 @@
             },
             {
               "$ref": "#/$defs/ModelOperationBindingPayload"
-            },
-            {
-              "$ref": "#/$defs/PolicyProfileBindingPayload"
             },
             {
               "$ref": "#/$defs/StrategyProfileBindingPayload"
@@ -500,25 +494,6 @@
       "title": "PatternNodeWrapperSpec",
       "type": "object"
     },
-    "PolicyProfileBindingPayload": {
-      "additionalProperties": false,
-      "properties": {
-        "profile_id": {
-          "title": "Profile Id",
-          "type": "string"
-        },
-        "rules": {
-          "additionalProperties": true,
-          "title": "Rules",
-          "type": "object"
-        }
-      },
-      "required": [
-        "profile_id"
-      ],
-      "title": "PolicyProfileBindingPayload",
-      "type": "object"
-    },
     "PromptBindingPayload": {
       "additionalProperties": false,
       "properties": {
@@ -597,7 +572,6 @@
             "memory_system",
             "knowledge_runtime",
             "context_engine",
-            "policy_engine",
             "observability_manager",
             "trace_recorder",
             "trace_reader",

@@ -93,18 +93,19 @@ def _history_messages(*, state: Any, messages: list[Any]) -> list[Any]:
 
 
 def _dynamic_evidence_text(*, state: Any, node_id: str | None) -> str:
+    plan_text = _plan_evidence_text(state)
     model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
     frame = _turn_evidence_frame(model_context=model_context, node_id=node_id)
     if not isinstance(frame, dict):
         frame = model_context.get("llm_context_frame") if isinstance(model_context, dict) else None
     if not isinstance(frame, dict):
-        return ""
+        return plan_text
     text = str(frame.get("text") or "").strip()
     if text:
-        return text
+        return "\n\n".join(item for item in [plan_text, text] if item)
     items = frame.get("items")
     if not isinstance(items, list):
-        return ""
+        return plan_text
     lines: list[str] = []
     for item in items:
         if not isinstance(item, dict):
@@ -112,7 +113,30 @@ def _dynamic_evidence_text(*, state: Any, node_id: str | None) -> str:
         content = str(item.get("content") or "").strip()
         if content:
             lines.append(f"- {content}")
-    return "\n".join(lines)
+    context_text = "\n".join(lines)
+    return "\n\n".join(item for item in [plan_text, context_text] if item)
+
+
+def _plan_evidence_text(state: Any) -> str:
+    plan = getattr(state, "plan", None)
+    if plan is None or getattr(plan, "status", "empty") == "empty":
+        return ""
+    lines = [
+        "Current dynamic plan state:",
+        f"- Goal: {getattr(plan, 'goal', '')}",
+        f"- Status: {getattr(plan, 'status', '')}",
+        f"- Current step: {getattr(plan, 'current_step_id', None) or 'none'}",
+    ]
+    for step in list(getattr(plan, "steps", []) or [])[:12]:
+        lines.append(
+            "- "
+            + f"{getattr(step, 'step_id', '')}: {getattr(step, 'status', '')}; "
+            + f"{getattr(step, 'title', '')}; {getattr(step, 'objective', '')}"
+        )
+        result = getattr(step, "result_summary", None)
+        if result:
+            lines.append(f"  result: {result}")
+    return "\n".join(line for line in lines if line.strip())
 
 
 def _turn_evidence_frame(*, model_context: dict[str, Any], node_id: str | None) -> dict[str, Any] | None:

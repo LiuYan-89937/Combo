@@ -17,7 +17,6 @@ from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWor
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.package_runtime import register_package_patterns
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
 from agent_factory.scheduler_system.events import SchedulerEventPayload
@@ -153,7 +152,6 @@ class BridgeRuntimeState:
             base_services=facade.instance.services,
             runtime_root=RUNTIME_ROOT,
         )
-        register_package_patterns(facade=facade, package=package, runtime_build=runtime_build)
         compiler = AgentAssemblyCompiler(facade=facade)
         compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
         self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)

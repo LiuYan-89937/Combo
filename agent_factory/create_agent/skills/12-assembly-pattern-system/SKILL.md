@@ -1,6 +1,6 @@
 ---
 name: 12-assembly-pattern-system
-description: Guides assembly bindings, runtime behavior, and optional custom patterns.
+description: Guides built-in runtime assembly bindings and runtime behavior.
 metadata:
   system_id: assembly_pattern_system
   stage_order: 12
@@ -9,7 +9,7 @@ metadata:
 # Assembly Pattern System
 
 ## Role
-Guides assembly bindings, runtime behavior, and optional custom patterns.
+Guides built-in runtime assembly bindings and runtime behavior.
 
 ## Baseline Package Assumption
 - The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
@@ -19,13 +19,13 @@ Guides assembly bindings, runtime behavior, and optional custom patterns.
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
-- The produced agent needs its runtime prompt, model operation, tool access, bindings, output behavior, or optional custom pattern updated.
-- Package tools/nodes must be connected to the react_agent runtime.
+- The produced agent needs its runtime prompt, model operation, tool access, bindings, or output behavior updated.
+- Package tools/nodes must be connected to a supported built-in runtime.
 - Validator reports assembly compile or binding schema issues.
 
 ## Focus Files
 - `assembly_spec.json`
-- `patterns/`
+- `render_manifest.json`
 
 ## Manufacturing Protocol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
@@ -35,7 +35,11 @@ Guides assembly bindings, runtime behavior, and optional custom patterns.
 5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- The runtime system prompt belongs in assembly_spec.json prompt bindings unless the package explicitly adds prompt files and manifest indexing.
+- Supported runtime patterns are `react_agent` and `plan_and_execute`.
+- Use `react_agent` for direct ReAct behavior.
+- Use `plan_and_execute` only when the agent should create and maintain a dynamic per-run plan before and during execution.
+- For `plan_and_execute`, do not write concrete plan steps into AgentPackage files. Configure planner, executor, and final_answer prompts/tool access; runtime creates the actual plan through `runtime_plan`.
+- The runtime system prompt belongs in assembly_spec.json prompt bindings.
 - Do not rewrite the whole assembly just to compare it with examples; edit the binding or tool section required by the capability.
 - Keep prompt, tool_access, and model_operation bindings coherent for the same target node.
 - Use complete examples for object shape only when adding or repairing bindings.
@@ -59,6 +63,7 @@ Guides assembly bindings, runtime behavior, and optional custom patterns.
 Examples:
 - `examples/assembly_pattern_system.capability.json`
 - `examples/assembly_spec.with_tools_and_bindings.json`
+- `examples/assembly_spec.plan_and_execute.json`
 
 Repair references:
 - `references/assembly_pattern_system.repair_hints.md`

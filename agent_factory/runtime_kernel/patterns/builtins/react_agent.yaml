@@ -9,13 +9,12 @@ metadata:
   use_when:
     - The Agent needs to reason, call tools, observe results, and continue iterating.
     - User tasks are open-ended or may require different tool paths per request.
-    - The Agent benefits from knowledge retrieval, policy checks, and postcheck before commit.
+    - The Agent benefits from a compact ReAct loop with tool observations folded back into the model.
   avoid_when:
-    - The Agent should always ask a fixed clarification sequence before any action.
     - The work is a rigid workflow with deterministic stages and little dynamic tool choice.
   selection_notes:
     - This is the default choice for CLI-first agents with dynamic ReAct behavior.
-    - Prefer clarify_then_act when action should never start before missing required inputs are resolved.
+    - Missing information should be requested by the answer node in natural language.
   tags:
     - react
     - tool-use
@@ -26,21 +25,12 @@ nodes:
   - id: ingress
     type: reserved
     impl: ingress
-  - id: precheck
-    type: governance
-    impl: governance.precheck
-  - id: approval_gate
-    type: governance
-    impl: governance.approval_gate
   - id: answer
     type: cognitive
     impl: cognitive.answer
   - id: tool_exec
     type: operational
     impl: operational.tool_call
-  - id: postcheck
-    type: governance
-    impl: governance.postcheck
   - id: commit
     type: terminal
     impl: terminal.commit
@@ -49,25 +39,13 @@ nodes:
     impl: finalize
 edges:
   - from: ingress
-    to: precheck
-    when: always
-  - from: precheck
-    to: finalize
-    when: policy.blocked
-  - from: precheck
-    to: approval_gate
-    when: policy.approval_required
-  - from: precheck
-    to: answer
-    when: always
-  - from: approval_gate
     to: answer
     when: always
   - from: answer
     to: tool_exec
     when: model.requests_tool
   - from: answer
-    to: postcheck
+    to: commit
     when: model.ready_to_answer
   - from: tool_exec
     to: answer
@@ -81,20 +59,10 @@ edges:
   - from: tool_exec
     to: finalize
     when: policy.blocked
-  - from: postcheck
-    to: finalize
-    when: policy.blocked
-  - from: postcheck
-    to: finalize
-    when: policy.approval_required
-  - from: postcheck
-    to: commit
-    when: always
   - from: commit
     to: finalize
     when: always
 interrupt_points:
-  - precheck
   - tool_exec
 termination:
   success_nodes:
@@ -105,7 +73,6 @@ constraints:
     - reserved
     - cognitive
     - operational
-    - governance
     - terminal
     - sub_graph
   required_capabilities: []

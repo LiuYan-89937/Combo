@@ -57,7 +57,6 @@ REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
         "model",
         "knowledge",
         "memory",
-        "node_provider",
         "render",
         "resources",
         "sandbox",
@@ -98,13 +97,7 @@ class AgentPackageManifest(BaseModel):
     resources_path: str
     sandbox_contract_path: str
     contracts: dict[str, str] = Field(default_factory=dict)
-    bindings: dict[str, str] = Field(default_factory=dict)
-    patterns: list[str] = Field(default_factory=list)
-    prompts: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
-    policies: list[str] = Field(default_factory=list)
-    strategies: list[str] = Field(default_factory=list)
-    formatters: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_referenced_paths(self) -> "AgentPackageManifest":
@@ -122,11 +115,8 @@ class AgentPackageManifest(BaseModel):
             if not key.strip():
                 raise ValueError("contracts keys must be non-empty")
             _validate_package_relative_path(value, field_name=f"contracts.{key}")
-        for key, value in self.bindings.items():
-            _validate_package_relative_path(value, field_name=f"bindings.{key}")
-        for field_name in ("patterns", "prompts", "tools", "policies", "strategies", "formatters"):
-            for value in getattr(self, field_name):
-                _validate_package_relative_path(value, field_name=field_name)
+        for value in self.tools:
+            _validate_package_relative_path(value, field_name="tools")
         return self
 
 

@@ -87,53 +87,11 @@
       "title": "Contracts",
       "type": "object"
     },
-    "bindings": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "title": "Bindings",
-      "type": "object"
-    },
-    "patterns": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Patterns",
-      "type": "array"
-    },
-    "prompts": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Prompts",
-      "type": "array"
-    },
     "tools": {
       "items": {
         "type": "string"
       },
       "title": "Tools",
-      "type": "array"
-    },
-    "policies": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Policies",
-      "type": "array"
-    },
-    "strategies": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Strategies",
-      "type": "array"
-    },
-    "formatters": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Formatters",
       "type": "array"
     }
   },

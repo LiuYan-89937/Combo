@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import ToolMessage
+
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
+from agent_factory.runtime_kernel.planning import (
+    PLAN_AND_EXECUTE_PATTERN_ID,
+    RUNTIME_PLAN_TOOL_ID,
+    execute_runtime_plan_action,
+)
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.tooling.langgraph_node import (
     build_tool_node_runner,
@@ -17,7 +24,7 @@ class OperationalToolCallNode:
     node_type = "operational"
     supports_interrupt = True
     supports_subgraph_slot = True
-    writable_sections = {"tools", "policy", "execution", "observability"}
+    writable_sections = {"tools", "plan", "policy", "execution", "observability"}
 
     def execute(
         self,
@@ -27,13 +34,22 @@ class OperationalToolCallNode:
         _ai_message, tool_calls = latest_ai_tool_calls(context.graph_messages)
         if not tool_calls:
             return {"execution": {"current_node": context.node_id, "route_decision": "tool.completed"}}
+        origin_node_id = _origin_node_id(state, tool_calls)
+        runtime_plan_calls, delegated_calls = _partition_runtime_plan_calls(tool_calls)
+        allowed_for_origin = _tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
+        runtime_plan_messages, plan_patch, working_state = _execute_runtime_plan_calls(
+            state,
+            runtime_plan_calls,
+            allowed_tool_ids=allowed_for_origin,
+        )
 
         registry = context.services.tool_registry
-        if registry is None or not hasattr(registry, "model_tools"):
-            messages = _tool_registry_missing_messages(tool_calls)
+        if delegated_calls and (registry is None or not hasattr(registry, "model_tools")):
+            messages = [*runtime_plan_messages, *_tool_registry_missing_messages(delegated_calls)]
             _results, failures, _policy_patch, route_decision = tool_messages_to_runtime_patch(messages)
             return {
                 "messages": messages,
+                **plan_patch,
                 "tools": {
                     "tool_failures": [*state.tools.tool_failures, *failures],
                     "pending_tool_call": None,
@@ -42,25 +58,32 @@ class OperationalToolCallNode:
                 "execution": {"current_node": context.node_id, "route_decision": route_decision},
             }
 
-        visible_tool_ids = _visible_tool_ids(context, registry)
-        visible_tools = list(registry.model_tools(visible_tool_ids))
-        runner = build_tool_node_runner(
-            visible_tools,
-            node_id=context.node_id,
-            name=context.node_id,
-            allowed_tool_ids=set(visible_tool_ids),
-            known_tool_ids=set(registry.list_tool_ids()) if hasattr(registry, "list_tool_ids") else set(visible_tool_ids),
-            emit_event=context.emit_event,
-        )
-        output = runner.invoke(
-            {"messages": context.graph_messages, "runtime": state.model_dump(mode="json")},
-            config=context.graph_config,
-            runtime=context.graph_runtime,
-        )
-        messages = output.get("messages") or []
+        visible_tool_ids = _visible_tool_ids(state, context, registry, origin_node_id=origin_node_id)
+        visible_tools = list(registry.model_tools(visible_tool_ids)) if delegated_calls else []
+        messages: list[ToolMessage] = list(runtime_plan_messages)
+        if delegated_calls:
+            runner = build_tool_node_runner(
+                visible_tools,
+                node_id=context.node_id,
+                name=context.node_id,
+                allowed_tool_ids=set(visible_tool_ids),
+                known_tool_ids=set(registry.list_tool_ids()) if hasattr(registry, "list_tool_ids") else set(visible_tool_ids),
+                emit_event=context.emit_event,
+            )
+            output = runner.invoke(
+                {
+                    "messages": _messages_with_tool_calls(context.graph_messages, delegated_calls),
+                    "runtime": working_state.model_dump(mode="json"),
+                },
+                config=context.graph_config,
+                runtime=context.graph_runtime,
+            )
+            messages.extend(output.get("messages") or [])
         results, failures, policy_patch, route_decision = tool_messages_to_runtime_patch(messages)
+        route_decision = _caller_route_decision(state, origin_node_id, route_decision)
         patch: dict[str, Any] = {
             "messages": messages,
+            **plan_patch,
             "tools": {
                 "tool_results": [*state.tools.tool_results, *results],
                 "tool_failures": [*state.tools.tool_failures, *failures],
@@ -78,7 +101,19 @@ class OperationalToolCallNode:
         return patch
 
 
-def _visible_tool_ids(context: NodeExecutionContext, registry: Any) -> list[str]:
+def _visible_tool_ids(
+    state: RuntimeState,
+    context: NodeExecutionContext,
+    registry: Any,
+    *,
+    origin_node_id: str,
+) -> list[str]:
+    if state.run.pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
+        return [
+            tool_id
+            for tool_id in _tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
+            if tool_id != RUNTIME_PLAN_TOOL_ID
+        ]
     return _merge_tool_ids([*_allowed_tool_ids(context), *_system_tool_ids(registry)])
 
 
@@ -100,6 +135,24 @@ def _tool_access_ids(bindings: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     for binding in bindings:
         if binding.get("binding_type") != "tool_access":
+            continue
+        payload = dict(binding.get("payload") or {})
+        for item in payload.get("allowed_tool_ids", []) or []:
+            tool_id = str(item)
+            if tool_id and tool_id not in seen:
+                ids.append(tool_id)
+                seen.add(tool_id)
+    return ids
+
+
+def _tool_access_ids_for_node(bindings: list[dict[str, Any]], *, node_id: str) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for binding in bindings:
+        if binding.get("binding_type") != "tool_access":
+            continue
+        target = dict(binding.get("target") or {})
+        if str(target.get("node_id") or "") != node_id:
             continue
         payload = dict(binding.get("payload") or {})
         for item in payload.get("allowed_tool_ids", []) or []:
@@ -137,3 +190,109 @@ def _tool_registry_missing_messages(tool_calls: list[dict[str, Any]]):
             )
         )
     return messages
+
+
+def _origin_node_id(state: RuntimeState, tool_calls: list[dict[str, Any]]) -> str:
+    origins = {str(call.get("origin_node_id") or "") for call in tool_calls}
+    origins.discard("")
+    if len(origins) == 1:
+        return next(iter(origins))
+    if state.run.pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
+        raise RuntimeError("plan_and_execute tool calls must carry exactly one origin_node_id")
+    return ""
+
+
+def _partition_runtime_plan_calls(tool_calls: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    runtime_plan_calls: list[dict[str, Any]] = []
+    delegated_calls: list[dict[str, Any]] = []
+    for call in tool_calls:
+        if str(call.get("name") or "") == RUNTIME_PLAN_TOOL_ID:
+            runtime_plan_calls.append(call)
+        else:
+            delegated_calls.append(call)
+    return runtime_plan_calls, delegated_calls
+
+
+def _execute_runtime_plan_calls(
+    state: RuntimeState,
+    calls: list[dict[str, Any]],
+    *,
+    allowed_tool_ids: list[str],
+) -> tuple[list[ToolMessage], dict[str, Any], RuntimeState]:
+    messages: list[ToolMessage] = []
+    working_state = state
+    plan_changed = False
+    for call in calls:
+        arguments = dict(call.get("args") or {})
+        if RUNTIME_PLAN_TOOL_ID not in set(allowed_tool_ids):
+            messages.append(
+                tool_observation_message(
+                    status="tool_not_allowed",
+                    tool_id=RUNTIME_PLAN_TOOL_ID,
+                    tool_call_id=str(call.get("id") or RUNTIME_PLAN_TOOL_ID),
+                    message="runtime_plan is not visible to this node.",
+                    arguments=arguments,
+                    retryable=False,
+                    errors=["runtime_plan is not visible to this node."],
+                )
+            )
+            continue
+        result = execute_runtime_plan_action(working_state, arguments)
+        status = "completed" if result.status == "completed" else "execution_failed"
+        if result.status == "completed":
+            working_state = working_state.model_copy(update={"plan": result.plan}, deep=True)
+            plan_changed = True
+        messages.append(
+            tool_observation_message(
+                status=status,
+                tool_id=RUNTIME_PLAN_TOOL_ID,
+                tool_call_id=str(call.get("id") or RUNTIME_PLAN_TOOL_ID),
+                message=result.message,
+                arguments=arguments,
+                retryable=result.status != "completed",
+                output={"plan": result.plan.model_dump(mode="json")},
+                evidence={"runtime_state_section": "plan"},
+                execution_status="completed" if result.status == "completed" else "failed",
+                contract_status="valid",
+                errors=[] if result.status == "completed" else [result.message],
+            )
+        )
+    return messages, {"plan": working_state.plan.model_dump(mode="json")} if plan_changed else {}, working_state
+
+
+def _messages_with_tool_calls(messages: list[Any], tool_calls: list[dict[str, Any]]) -> list[Any]:
+    from langchain_core.messages import AIMessage
+
+    updated = list(messages)
+    for index in range(len(updated) - 1, -1, -1):
+        message = updated[index]
+        if not isinstance(message, AIMessage):
+            continue
+        updated[index] = AIMessage(
+            content=message.content,
+            additional_kwargs=dict(message.additional_kwargs),
+            response_metadata=dict(message.response_metadata),
+            name=message.name,
+            id=message.id,
+            tool_calls=[
+                {
+                    "name": str(call.get("name") or ""),
+                    "args": dict(call.get("args") or {}),
+                    "id": str(call.get("id") or call.get("name") or ""),
+                    "type": "tool_call",
+                }
+                for call in tool_calls
+            ],
+        )
+        break
+    return updated
+
+
+def _caller_route_decision(state: RuntimeState, origin_node_id: str, route_decision: str) -> str:
+    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+        return route_decision
+    if route_decision == "policy.blocked":
+        return route_decision
+    if origin_node_id in {"planner", "executor"}:
+        return f"tool.return.{origin_node_id}"
+    return route_decision

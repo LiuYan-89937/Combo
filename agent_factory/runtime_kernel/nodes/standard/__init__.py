@@ -1,4 +1,3 @@
-from agent_factory.runtime_kernel.nodes.standard.approval_gate import GovernanceApprovalGateNode
 from agent_factory.runtime_kernel.nodes.standard.answer import CognitiveAnswerNode
 from agent_factory.runtime_kernel.nodes.standard.clarify import CognitiveClarifyNode
 from agent_factory.runtime_kernel.nodes.standard.close import TerminalCloseNode
@@ -6,9 +5,6 @@ from agent_factory.runtime_kernel.nodes.standard.commit import TerminalCommitNod
 from agent_factory.runtime_kernel.nodes.standard.finalize import FinalizeNode
 from agent_factory.runtime_kernel.nodes.standard.ingress import IngressNode
 from agent_factory.runtime_kernel.nodes.standard.plan import CognitivePlanNode
-from agent_factory.runtime_kernel.nodes.standard.postcheck import GovernancePostcheckNode
-from agent_factory.runtime_kernel.nodes.standard.precheck import GovernancePrecheckNode
-from agent_factory.runtime_kernel.nodes.standard.refusal_gate import GovernanceRefusalGateNode
 from agent_factory.runtime_kernel.nodes.standard.resource_probe import OperationalResourceProbeNode
 from agent_factory.runtime_kernel.nodes.standard.review import CognitiveReviewNode
 from agent_factory.runtime_kernel.nodes.standard.route import CognitiveRouteNode
@@ -23,10 +19,6 @@ __all__ = [
     "CognitiveStructuredNode",
     "CognitiveAnswerNode",
     "FinalizeNode",
-    "GovernanceApprovalGateNode",
-    "GovernancePostcheckNode",
-    "GovernancePrecheckNode",
-    "GovernanceRefusalGateNode",
     "IngressNode",
     "OperationalResourceProbeNode",
     "OperationalToolCallNode",

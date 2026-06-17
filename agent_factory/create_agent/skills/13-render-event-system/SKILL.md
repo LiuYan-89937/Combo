@@ -19,8 +19,7 @@ Guides render manifest and render contract updates for user-visible runtime expe
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
-- The package adds nodes, changes user-visible node labels/status text, or needs different render behavior.
-- A custom pattern/node changes what should be visible to users.
+- The package changes user-visible runtime node labels/status text or switches runtime pattern.
 - Validator reports render manifest or render contract issues.
 
 ## Focus Files
@@ -37,7 +36,8 @@ Guides render manifest and render contract updates for user-visible runtime expe
 ## Capability Write Guidance
 - Do not compare the default react_agent render_manifest.json with examples; the scaffold default is already valid.
 - If the package still uses default react_agent nodes, leave render files as-is.
-- When new nodes are added, add only the corresponding render node specs and keep graph_id aligned with runtime pattern_id.
+- If the assembly switches to `plan_and_execute`, update render_manifest.json so graph_id is `plan_and_execute` and nodes match the selected built-in pattern.
+- Keep graph_id aligned with the selected built-in runtime.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.

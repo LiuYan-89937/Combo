@@ -10,15 +10,11 @@ def required_services_for_pattern(pattern: GraphPatternSpec) -> list[str]:
     for node in pattern.nodes:
         if node.impl.startswith("cognitive."):
             required.update({"model_operation_service", "context_engine", "context_system"})
-        elif node.impl == "governance.precheck" or node.impl == "governance.postcheck":
-            required.add("policy_engine")
         elif node.impl.startswith("operational.tool_call"):
             required.add("tool_registry")
         for wrapper in node.wrappers:
             if wrapper.id.startswith("context."):
                 required.add("context_engine")
-            elif wrapper.id.startswith("policy."):
-                required.add("policy_engine")
             elif wrapper.id.startswith("tool."):
                 required.add("tool_registry")
     for capability in pattern.constraints.required_capabilities:
@@ -28,8 +24,6 @@ def required_services_for_pattern(pattern: GraphPatternSpec) -> list[str]:
             required.add("knowledge_runtime")
         elif capability == "context":
             required.add("context_engine")
-        elif capability == "policy":
-            required.add("policy_engine")
         elif capability == "harness":
             required.add("harness_bridge")
     return sorted(required)

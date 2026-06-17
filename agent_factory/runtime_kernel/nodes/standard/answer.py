@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
+from agent_factory.runtime_kernel.planning import PLAN_AND_EXECUTE_PATTERN_ID, RUNTIME_PLAN_TOOL_ID, runtime_plan_model_tool
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
@@ -25,7 +26,7 @@ class CognitiveAnswerNode:
         model_operation_service = context.services.model_operation_service
         if model_operation_service is None:
             raise RuntimeKernelError("cognitive.answer requires model_operation_service.")
-        visible_tools = _visible_tools(context)
+        visible_tools = _visible_tools(context, state)
         result = model_operation_service.tool_bound_chat(
             state=state,
             prompt_binding=binding_payload,
@@ -51,8 +52,9 @@ class CognitiveAnswerNode:
         ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
         tool_calls = _message_tool_calls(ai_message) or list(result.tool_calls or [])
         if tool_calls:
+            tool_calls = [_with_origin(call, context) for call in tool_calls]
             return {
-                "messages": [AIMessage(content=result.assistant_draft or "", tool_calls=tool_calls)],
+                "messages": [_ai_message_with_origin(result.assistant_draft or "", tool_calls, context)],
                 **_context_token_budget_patch(result.metadata, context.node_id),
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
@@ -145,15 +147,23 @@ def _message_tool_calls(message: AIMessage | None) -> list[dict[str, Any]]:
     return [dict(item) for item in calls if isinstance(item, dict)]
 
 
-def _visible_tools(context: NodeExecutionContext) -> list[Any]:
+def _visible_tools(context: NodeExecutionContext, state: RuntimeState) -> list[Any]:
     registry = context.services.tool_registry
+    allowed_tool_ids = _model_visible_tool_ids(context, state, registry)
+    tools: list[Any] = []
     if registry is None or not hasattr(registry, "model_tools"):
-        return []
-    allowed_tool_ids = _model_visible_tool_ids(context, registry)
-    return list(registry.model_tools(allowed_tool_ids))
+        registry_tools = []
+    else:
+        registry_tools = list(registry.model_tools(allowed_tool_ids))
+    tools.extend(registry_tools)
+    if _runtime_plan_visible(context=context, state=state, allowed_tool_ids=allowed_tool_ids):
+        tools.append(runtime_plan_model_tool())
+    return tools
 
 
-def _model_visible_tool_ids(context: NodeExecutionContext, registry: Any) -> list[str]:
+def _model_visible_tool_ids(context: NodeExecutionContext, state: RuntimeState, registry: Any) -> list[str]:
+    if _is_plan_and_execute_node(context, state):
+        return _tool_access_ids(context.bindings)
     return _merge_tool_ids([*_allowed_tool_ids(context), *_system_tool_ids(registry)])
 
 
@@ -194,3 +204,36 @@ def _merge_tool_ids(tool_ids: list[str]) -> list[str]:
             items.append(item)
             seen.add(item)
     return items
+
+
+def _runtime_plan_visible(*, context: NodeExecutionContext, state: RuntimeState, allowed_tool_ids: list[str]) -> bool:
+    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+        return False
+    if context.node_id not in {"planner", "executor"}:
+        return False
+    return RUNTIME_PLAN_TOOL_ID in set(allowed_tool_ids)
+
+
+def _is_plan_and_execute_node(context: NodeExecutionContext, state: RuntimeState) -> bool:
+    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+        return False
+    return context.node_id in {"planner", "executor", "final_answer"}
+
+
+def _with_origin(call: dict[str, Any], context: NodeExecutionContext) -> dict[str, Any]:
+    return {
+        **dict(call),
+        "origin_node_id": context.node_id,
+        "origin_impl": context.impl,
+    }
+
+
+def _ai_message_with_origin(content: str, tool_calls: list[dict[str, Any]], context: NodeExecutionContext) -> AIMessage:
+    return AIMessage(
+        content=content,
+        tool_calls=tool_calls,
+        additional_kwargs={
+            "agent_factory_origin_node_id": context.node_id,
+            "agent_factory_origin_impl": context.impl,
+        },
+    )
