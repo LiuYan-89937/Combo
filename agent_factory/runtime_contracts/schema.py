@@ -10,6 +10,7 @@ from agent_factory.knowledge_system import KnowledgeContractConfig
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
+from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
 
 
 ContractType = Literal[
@@ -165,6 +166,7 @@ class ToolsContractConfig(BaseModel):
     package_tools_enabled: bool = True
     instance_extensions_enabled: bool = True
     instance_extension_root: str = ".agent_runtime/extensions"
+    approval_policy: ToolApprovalPolicyConfig | None = None
 
     @field_validator("builtin_tool_ids")
     @classmethod

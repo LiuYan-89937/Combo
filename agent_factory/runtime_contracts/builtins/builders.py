@@ -49,6 +49,7 @@ from agent_factory.runtime_kernel.persistence import (
     LangGraphStoreFactory,
 )
 from agent_factory.runtime_kernel.types import ToolExecutionResult
+from agent_factory.tooling.approval_policy import resolve_tool_approval_policy
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
@@ -173,6 +174,7 @@ class ToolsContractBuilder:
                 provider_runtime_resources=runtime_resources,
                 tool_runtime_resources=tool_runtime_resources,
             ),
+            approval_policy=resolve_tool_approval_policy(config.approval_policy),
             allowed_python_roots=[instance_extension_root],
             mcp_clients=mcp_clients,
         )

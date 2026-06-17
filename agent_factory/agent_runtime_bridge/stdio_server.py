@@ -18,7 +18,6 @@ from agent_factory.runtime_protocol.completion import runtime_completed, runtime
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.package_runtime import register_package_patterns
-from agent_factory.package_runtime.approval_resume import tool_approval_resume_context
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
 from agent_factory.scheduler_system.events import SchedulerEventPayload
@@ -484,17 +483,16 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
         payload.get("runtime_request")
     ).timeout_seconds
     final_state = None
-    with tool_approval_resume_context(resume_payload):
-        for stream_mode, chunk in facade.instance.controller.stream_resume(
-            compiled.compiled_app,
-            run_context.state,
-            thread_id=run_context.thread_id,
-            resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
-        ):
-            if _handle_stream_item(normalizer, stream_mode, chunk):
-                return 0
-            if stream_mode == "runtime_final":
-                final_state = chunk
+    for stream_mode, chunk in facade.instance.controller.stream_resume(
+        compiled.compiled_app,
+        run_context.state,
+        thread_id=run_context.thread_id,
+        resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
+    ):
+        if _handle_stream_item(normalizer, stream_mode, chunk):
+            return 0
+        if stream_mode == "runtime_final":
+            final_state = chunk
     if final_state is None:
         normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
         return 1

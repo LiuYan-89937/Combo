@@ -20,7 +20,6 @@ from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runne
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
-from agent_factory.package_runtime.approval_resume import tool_approval_resume_context
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 
@@ -231,17 +230,16 @@ class PackageRuntimeCore:
             payload.get("runtime_request")
         ).timeout_seconds
         final_state = None
-        with tool_approval_resume_context(resume_payload):
-            for stream_mode, chunk in facade.instance.controller.stream_resume(
-                compiled.compiled_app,
-                run_context.state,
-                thread_id=run_context.thread_id,
-                resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
-            ):
-                if _handle_stream_item(normalizer, stream_mode, chunk):
-                    return 0
-                if stream_mode == "runtime_final":
-                    final_state = chunk
+        for stream_mode, chunk in facade.instance.controller.stream_resume(
+            compiled.compiled_app,
+            run_context.state,
+            thread_id=run_context.thread_id,
+            resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
+        ):
+            if _handle_stream_item(normalizer, stream_mode, chunk):
+                return 0
+            if stream_mode == "runtime_final":
+                final_state = chunk
         if final_state is None:
             normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
             return 1

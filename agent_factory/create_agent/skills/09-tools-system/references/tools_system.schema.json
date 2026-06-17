@@ -1,5 +1,59 @@
 {
   "$defs": {
+    "ToolApprovalPolicyConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "default": "standard",
+          "enum": [
+            "standard",
+            "strict",
+            "allow_all",
+            "custom"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "low": {
+          "default": "ask_on_risk",
+          "enum": [
+            "allow",
+            "ask",
+            "ask_on_risk",
+            "ask_unless_allowed",
+            "deny"
+          ],
+          "title": "Low",
+          "type": "string"
+        },
+        "medium": {
+          "default": "ask_unless_allowed",
+          "enum": [
+            "allow",
+            "ask",
+            "ask_on_risk",
+            "ask_unless_allowed",
+            "deny"
+          ],
+          "title": "Medium",
+          "type": "string"
+        },
+        "high": {
+          "default": "ask",
+          "enum": [
+            "allow",
+            "ask",
+            "ask_on_risk",
+            "ask_unless_allowed",
+            "deny"
+          ],
+          "title": "High",
+          "type": "string"
+        }
+      },
+      "title": "ToolApprovalPolicyConfig",
+      "type": "object"
+    },
     "ToolsContractConfig": {
       "additionalProperties": false,
       "properties": {
@@ -39,6 +93,17 @@
           "default": ".agent_runtime/extensions",
           "title": "Instance Extension Root",
           "type": "string"
+        },
+        "approval_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolApprovalPolicyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "ToolsContractConfig",

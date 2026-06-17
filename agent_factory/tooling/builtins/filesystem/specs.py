@@ -53,7 +53,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "properties": {
                 "path": {"type": "string", "description": "要写入的文件路径。"},
                 "content": {"type": "string", "description": "完整文件内容。"},
-                "create_dirs": {"type": "boolean", "default": False, "description": "是否创建缺失目录。"},
+                "create_dirs": {"type": "boolean", "default": True, "description": "是否创建缺失父目录；默认创建。"},
             },
             "required": ["path", "content"],
             "additionalProperties": False,

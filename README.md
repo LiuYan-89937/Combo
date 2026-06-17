@@ -119,6 +119,15 @@ AGENTFACTORY_COMPRESSION_MODEL=
 AGENTFACTORY_CONTEXT_WINDOW_TOKENS=1000000
 ```
 
+工具审批策略可按环境调整：
+
+```bash
+AGENTFACTORY_TOOL_APPROVAL_MODE=standard
+AGENTFACTORY_TOOL_APPROVAL_LOW=
+AGENTFACTORY_TOOL_APPROVAL_MEDIUM=
+AGENTFACTORY_TOOL_APPROVAL_HIGH=
+```
+
 跨会话记忆语义检索需要 embedding：
 
 ```bash
@@ -333,6 +342,36 @@ ToolProvider
 - `summary` 用于面向模型和前端的短摘要。
 
 内置工具包括 filesystem、process、scheduler、knowledge、resource_set、tool_output、network、skill 和 MCP provider 编译出的工具。中高风险工具可触发审批。
+
+工具审批由 ToolGateway 的统一策略控制。`.env` 是全局默认；AgentPackage 只有在 `contracts/tools.json` 的 `config.approval_policy` 显式写出字段时才覆盖：
+
+```json
+{
+  "mode": "custom",
+  "low": "ask_on_risk",
+  "medium": "allow",
+  "high": "ask"
+}
+```
+
+`standard` 等价于低风险 `ask_on_risk`、中风险 `ask_unless_allowed`、高风险 `ask`。
+包内不写 `approval_policy` 时继承 `.env`；只写单个风险级时只覆盖该风险级。
+
+策略值：
+
+```text
+allow                不审批，除非风险 evaluator 明确 deny
+ask                  总是审批
+ask_on_risk          evaluator 要求 ask/uncertain 时审批
+ask_unless_allowed   evaluator 明确 allow 时不审批，否则审批
+deny                 直接拒绝
+```
+
+本地调试时如果希望所有非 deny 工具都不弹审批：
+
+```bash
+AGENTFACTORY_TOOL_APPROVAL_MODE=allow_all
+```
 
 ## Skill 与 MCP
 

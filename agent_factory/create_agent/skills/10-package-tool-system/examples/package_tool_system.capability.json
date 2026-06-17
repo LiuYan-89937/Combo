@@ -95,12 +95,9 @@
     "call": {
       "action": "call",
       "tool_id": "package_action",
-      "arguments": {
-        "query": "sample user request"
-      },
       "prompt": "Please run the package action for this sample user request and tell me whether it succeeded.",
       "tool_goal": "Return a useful final answer after the package action runs and records its state."
     },
-    "note": "Use realistic package tool arguments. The prompt and tool_goal are probe context for humans and optional summary."
+    "note": "Use realistic package tool input. Probe output is evidence for whether the main model should rewrite the package tool."
   }
 }

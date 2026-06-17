@@ -27,7 +27,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     content = arguments.get("content")
     if not isinstance(content, str):
         raise ValueError("content must be a string")
-    create_dirs = bool(arguments.get("create_dirs", False))
+    create_dirs = bool(arguments.get("create_dirs", True))
     root, allow_external = filesystem_boundary(resources)
     target = resolve_path(path=path, root=root, allow_external=allow_external)
     assert_not_protected_write_path(target, root=root, resources=resources)

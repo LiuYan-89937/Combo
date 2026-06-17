@@ -250,6 +250,12 @@ def _schema_for(model_or_type: type[Any], *, title: str) -> dict[str, Any]:
             "type": "string",
             "title": title,
         }
+    if model_or_type is list:
+        return {
+            "type": "array",
+            "title": title,
+            "items": {},
+        }
     return {
         "type": "object",
         "title": title,
@@ -295,6 +301,7 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
             "required": ["result"],
             "additionalProperties": True,
         },
+        resources={"runtime_root": "runtime_root"},
         risk_level="low",
     )
     return {
@@ -302,13 +309,24 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
         "tools/package_action/tool.py": (
             str,
             (
-                "from agent_factory.tooling.envelope import tool_envelope\n\n\n"
+                "from agent_factory.tooling.envelope import tool_envelope\n"
+                "from pathlib import Path\n"
+                "import json\n\n\n"
+                "def _state_path(resources):\n"
+                "    return Path(str(resources[\"runtime_root\"])) / \"state\" / \"package_action.json\"\n\n\n"
                 "def run(arguments, resources):\n"
                 "    query = str(arguments.get(\"query\") or \"\").strip()\n"
+                "    path = _state_path(resources)\n"
+                "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+                "    history = []\n"
+                "    if path.is_file():\n"
+                "        history = json.loads(path.read_text(encoding=\"utf-8\"))\n"
+                "    history.append({\"query\": query})\n"
+                "    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n"
                 "    result = query if query else \"No query provided.\"\n"
                 "    return tool_envelope(\n"
                 "        {\"result\": result},\n"
-                "        evidence={\"tool_id\": \"package_action\"},\n"
+                "        evidence={\"tool_id\": \"package_action\", \"state_path\": str(path)},\n"
                 "        summary=\"Package action completed.\",\n"
                 "    )\n"
             ),
@@ -326,7 +344,22 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
                 },
             },
         ),
+        "agent_package.json#tools": (list, ["tools/package_action/manifest.json"]),
         "assembly_spec.json#tools_item": (ToolSpec, tool_spec),
+        "probe_after_write": (
+            dict,
+            {
+                "tool": "create_agent_probe_tool",
+                "inspect": {"action": "inspect"},
+                "call": {
+                    "action": "call",
+                    "tool_id": "package_action",
+                    "prompt": "Please run the package action for this sample user request and tell me whether it succeeded.",
+                    "tool_goal": "Return a useful final answer after the package action runs and records its state.",
+                },
+                "note": "Use realistic package tool input. Probe output is evidence for whether the main model should rewrite the package tool.",
+            },
+        ),
     }
 
 

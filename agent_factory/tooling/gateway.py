@@ -20,6 +20,11 @@ from agent_factory.tooling.builtins.resource_set.resource_set import (
     auto_record_path,
 )
 from agent_factory.models import get_compression_model
+from agent_factory.tooling.approval_policy import (
+    ToolApprovalPolicyConfig,
+    default_tool_approval_policy,
+    tool_approval_policy_action,
+)
 from agent_factory.tooling.resource_context import build_tool_resource_context
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
@@ -75,6 +80,7 @@ class ToolExecutionGateway:
     hard_risk_evaluator: ToolRiskEvaluator | None = None
     llm_risk_prompt: str | None = None
     approval_handler: ToolApprovalHandler | None = None
+    approval_policy: ToolApprovalPolicyConfig = field(default_factory=default_tool_approval_policy)
     max_revisions: int = 5
     output_store: ToolOutputStore | None = None
     output_policy: ToolOutputPolicy = field(default_factory=default_tool_output_policy)
@@ -215,6 +221,8 @@ class ToolExecutionGateway:
         """Return the human approval request this call would need, without executing it."""
         if self.approval_handler is not None:
             return None
+        if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(self.spec.id):
+            return None
         input_errors = self.input_schema.errors_for(arguments)
         if input_errors:
             return None
@@ -224,7 +232,7 @@ class ToolExecutionGateway:
             return None
         risk_context_resources = build_tool_resource_context(tool_resources)
         normalized_arguments, risk = self._evaluate_risk(arguments, risk_context_resources)
-        if _risk_policy_action(self.spec, risk) != "ask":
+        if tool_approval_policy_action(spec=self.spec, risk=risk, policy=self.approval_policy) != "ask":
             return None
         return ToolApprovalRequest(
             tool_call_id=tool_call_id or "",
@@ -296,7 +304,7 @@ class ToolExecutionGateway:
         return arguments, merge_risk_results(results, base_risk_level=self.spec.risk_level)
 
     def _approval(self, arguments: dict[str, Any], risk: ToolRiskResult) -> ToolApprovalDecision:
-        policy_action = _risk_policy_action(self.spec, risk)
+        policy_action = tool_approval_policy_action(spec=self.spec, risk=risk, policy=self.approval_policy)
         if policy_action == "deny":
             return ToolApprovalDecision(action="deny", revision_guidance=_risk_guidance(risk))
         if policy_action == "allow":
@@ -395,20 +403,6 @@ def default_tool_max_revisions() -> int:
     except ValueError:
         return 5
     return max(value, 1)
-
-
-def _risk_policy_action(spec: ToolSpec, risk: ToolRiskResult) -> Literal["allow", "ask", "deny"]:
-    if risk.action == "deny":
-        return "deny"
-    if spec.risk_level == "high":
-        return "ask"
-    if spec.risk_level == "medium":
-        if risk.action == "allow":
-            return "allow"
-        return "ask"
-    if risk.action in {"ask", "uncertain"}:
-        return "ask"
-    return "allow"
 
 
 def _risk_guidance(risk: ToolRiskResult) -> str:

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from agent_factory.tooling.entrypoint import ToolEntrypointLoader
 from agent_factory.tooling.entrypoints import EntrypointAdapterRegistry, MCPToolClient
 from agent_factory.tooling.execution_context import current_tool_call
+from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig, default_tool_approval_policy
 from agent_factory.tooling.gateway import (
     ToolApprovalHandler,
     ToolExecutionGateway,
@@ -38,6 +39,7 @@ class ToolCompiler:
         package_root: str | Path | None = None,
         resources: Mapping[str, Any] | None = None,
         approval_handler: ToolApprovalHandler | None = None,
+        approval_policy: ToolApprovalPolicyConfig | None = None,
         max_revisions: int | None = None,
         entrypoint_loader: ToolEntrypointLoader | None = None,
         allowed_python_roots: list[str | Path] | None = None,
@@ -53,6 +55,7 @@ class ToolCompiler:
         )
         self.resources = resources or {}
         self.approval_handler = approval_handler
+        self.approval_policy = approval_policy or default_tool_approval_policy()
         self.max_revisions = max_revisions or default_tool_max_revisions()
         self.output_store = _output_store_from_resources(self.resources)
         self.output_policy = default_tool_output_policy()
@@ -75,6 +78,7 @@ class ToolCompiler:
             hard_risk_evaluator=hard_risk_evaluator,
             llm_risk_prompt=llm_risk_prompt,
             approval_handler=self.approval_handler,
+            approval_policy=self.approval_policy,
             max_revisions=self.max_revisions,
             output_store=self.output_store,
             output_policy=self.output_policy,
