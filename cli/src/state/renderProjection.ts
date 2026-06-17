@@ -268,6 +268,16 @@ function runActivityProjection(item: RuntimeState['recentActivities'][number]): 
 			color: colorForEvent(eventType)
 		};
 	}
+	if (eventType === 'run_started') {
+		const pattern = selectedRuntimePattern(payload);
+		if (pattern) {
+			return {
+				label: 'Selected runtime pattern',
+				detail: pattern,
+				color: 'cyan'
+			};
+		}
+	}
 	return {
 		label: readableEventType(eventType),
 		detail: eventType.endsWith('failed') || eventType === 'run_failed'
@@ -275,6 +285,24 @@ function runActivityProjection(item: RuntimeState['recentActivities'][number]): 
 			: item.message ?? String(payload.type ?? payload.status ?? item.nodeLabel ?? node),
 		color: colorForEvent(eventType)
 	};
+}
+
+function selectedRuntimePattern(payload: Record<string, unknown>): string {
+	const directId = stringValue(payload.selected_runtime_pattern_id);
+	const detail = recordValue(payload.selected_runtime_pattern);
+	const patternId = directId || stringValue(detail?.pattern_id);
+	if (!patternId) {
+		return '';
+	}
+	const reason = firstLine(stringValue(detail?.selection_reason));
+	const dynamicPlan = typeof detail?.requires_dynamic_plan === 'boolean'
+		? `dynamic_plan=${detail.requires_dynamic_plan ? 'yes' : 'no'}`
+		: '';
+	return [
+		`pattern_id=${patternId}`,
+		dynamicPlan,
+		reason ? `reason: ${shortTimelineValue(reason, 160)}` : null
+	].filter((item): item is string => Boolean(item)).join('\n');
 }
 
 const richSchedulerEventTypes = new Set<FactoryEvent['event_type']>([

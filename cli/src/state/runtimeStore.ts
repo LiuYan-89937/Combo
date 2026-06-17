@@ -526,7 +526,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				runStatus: 'running',
 				pendingInterrupt: null,
 				helpVisible: false,
-				logs: [...base.logs, 'run started']
+				logs: [...base.logs, runStartedLog(event)]
 			};
 		case 'runtime_options_changed': {
 			const options = (event.payload?.options ?? {}) as Record<string, unknown>;
@@ -1170,6 +1170,14 @@ function appendRunActivity(current: RunActivity[], event: FactoryEvent): RunActi
 		return current;
 	}
 	return [...current.slice(-39), activity];
+}
+
+function runStartedLog(event: FactoryEvent): string {
+	const selectedPattern = stringValue(
+		event.payload?.selected_runtime_pattern_id
+			?? (event.payload?.selected_runtime_pattern as Record<string, unknown> | undefined)?.pattern_id
+	);
+	return selectedPattern ? `run started: selected runtime pattern ${selectedPattern}` : 'run started';
 }
 
 function isRuntimeRequestHeartbeat(event: FactoryEvent): boolean {

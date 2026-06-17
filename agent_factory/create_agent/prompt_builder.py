@@ -130,7 +130,7 @@ def _invariant_system_prompt_text() -> str:
             "需要用户补充资源或决策时，必须调用 create_agent_control(action=ask_user, message=...)；"
             "不要直接写 .factory/action.json，不要输出表单。"
             "提问前必须先对照 Runtime Capability Inventory：未出现在 confirmed runtime tools、"
-            "inherited extension candidates 或 verified package tools 中的能力，不能承诺已支持，"
+            "package-authorable runtime capabilities、inherited extension candidates 或 verified package tools 中的能力，不能承诺已支持，"
             "也不能直接向用户索要该能力的账号、token 或配置。"
         ),
         "不要硬编码业务资源。用户提供的信息优先；公开信息可通过已绑定工具发现；secret 只能由用户提供。",

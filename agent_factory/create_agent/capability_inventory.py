@@ -17,6 +17,38 @@ class CapabilityItem(BaseModel):
     runtime_inheritable: bool = False
 
 
+def _default_package_authoring_capabilities() -> list[CapabilityItem]:
+    return [
+        CapabilityItem(
+            id="package_python_tool",
+            source="package_authoring",
+            description=(
+                "Produced agents can gain local Python-script capabilities by authoring package tools "
+                "under tools/<tool_id>/ with a manifest, declared schemas, dependencies, resources, and a successful probe."
+            ),
+            runtime_inheritable=True,
+        ),
+        CapabilityItem(
+            id="package_resource_state_operations",
+            source="package_authoring",
+            description=(
+                "Package tools can read and update declared package resources, state files, knowledge files, "
+                "and artifacts through package-relative paths and resource bindings."
+            ),
+            runtime_inheritable=True,
+        ),
+        CapabilityItem(
+            id="package_api_wrapper_tool",
+            source="package_authoring",
+            description=(
+                "Package tools can wrap user-confirmed external APIs or services when endpoints, credentials, "
+                "network needs, dependencies, and approval behavior are declared explicitly."
+            ),
+            runtime_inheritable=True,
+        ),
+    ]
+
+
 class SchedulerCapabilities(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -33,11 +65,12 @@ class CapabilityInventory(BaseModel):
     manufacturing_tools: list[CapabilityItem] = Field(default_factory=list)
     factory_extension_tools: list[CapabilityItem] = Field(default_factory=list)
     runtime_builtin_candidates: list[CapabilityItem] = Field(default_factory=list)
+    package_authoring_capabilities: list[CapabilityItem] = Field(default_factory=_default_package_authoring_capabilities)
     inherited_extension_candidates: list[CapabilityItem] = Field(default_factory=list)
     scheduler_capabilities: SchedulerCapabilities = Field(default_factory=SchedulerCapabilities)
     boundary_note: str = (
-        "Capabilities not present in confirmed runtime tools, inherited extension candidates, "
-        "or verified package tools are not supported yet. Do not promise them, and do not ask "
+        "Capabilities not present in confirmed runtime tools, package-authorable runtime capabilities, "
+        "inherited extension candidates, or verified package tools are not supported yet. Do not promise them, and do not ask "
         "the user for accounts, tokens, or configuration for them as if they already exist."
     )
 
@@ -88,6 +121,9 @@ def render_static_capability_inventory(inventory: dict[str, Any] | CapabilityInv
         "Runtime builtin candidates (usable only if the produced package declares them in contracts/tools.json):",
         *_item_lines(value.runtime_builtin_candidates, empty="none"),
         "",
+        "Package-authorable runtime capabilities (supported when implemented, validated, and probed in the produced package):",
+        *_item_lines(value.package_authoring_capabilities, empty="none"),
+        "",
         "Inherited MCP/Skill extension candidates (candidate only until tools_system chooses to inherit them):",
         *_item_lines(value.inherited_extension_candidates, empty="none"),
         "",
@@ -133,12 +169,18 @@ def _item_lines(items: list[CapabilityItem], *, empty: str) -> list[str]:
         return [f"- {empty}"]
     lines: list[str] = []
     for item in items[:24]:
-        suffix = "runtime-inheritable candidate" if item.runtime_inheritable else "manufacturing only"
+        suffix = _item_suffix(item)
         description = f" | {item.description}" if item.description else ""
         lines.append(f"- {item.id} [{item.source}; {suffix}]{description}")
     if len(items) > 24:
         lines.append(f"- ... {len(items) - 24} more")
     return lines
+
+
+def _item_suffix(item: CapabilityItem) -> str:
+    if item.source == "package_authoring":
+        return "runtime capability after package implementation"
+    return "runtime-inheritable candidate" if item.runtime_inheritable else "manufacturing only"
 
 
 def _compact(value: Any, *, limit: int) -> str:

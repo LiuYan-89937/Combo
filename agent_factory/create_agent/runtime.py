@@ -162,12 +162,14 @@ class CreateAgentRuntime:
             producer_type=graph_id,
         )
         model_trace = _ModelTraceAccumulator(record_trace)
+        selected_pattern_payload = _selected_runtime_pattern_payload(intent)
         normalizer.emit_run_started(
             payload={
                 "workspace_path": str(workspace.root),
                 "status": "started",
                 "intent": intent,
                 "graph_kind": graph_kind,
+                **selected_pattern_payload,
             },
         )
         record_trace(
@@ -179,6 +181,7 @@ class CreateAgentRuntime:
                     "status": "started",
                     "intent": _json_safe(intent),
                     "graph_kind": graph_kind,
+                    **_json_safe(selected_pattern_payload),
                 },
             },
         )
@@ -421,6 +424,27 @@ def _message_stream_source(chunk: Any) -> dict[str, Any]:
             "triggers": metadata.get("langgraph_triggers"),
         }
     return {}
+
+
+def _selected_runtime_pattern_payload(intent: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(intent, dict):
+        return {}
+    raw_analysis = intent.get("task_analysis")
+    if not isinstance(raw_analysis, dict):
+        return {}
+    pattern_id = str(raw_analysis.get("selected_pattern_id") or "").strip()
+    if not pattern_id:
+        return {}
+    return {
+        "selected_runtime_pattern_id": pattern_id,
+        "selected_runtime_pattern": {
+            "pattern_id": pattern_id,
+            "selection_reason": str(raw_analysis.get("selection_reason") or "").strip(),
+            "requires_dynamic_plan": bool(raw_analysis.get("requires_dynamic_plan")),
+            "intent_summary": str(raw_analysis.get("intent_summary") or "").strip(),
+            "source": "create_agent_task_analysis",
+        },
+    }
 
 
 class _ModelTraceAccumulator:
