@@ -126,6 +126,18 @@ def path_risk_result(
                 "dedicated_tool": dedicated_tool,
             },
         ).model_dump(mode="json")
+    if is_write_like and _is_read_only_write_path(resolved, root=root, resources=tool_resources):
+        return ToolRiskResult(
+            action="deny",
+            risk_level="high",
+            reasons=["path is read-only runtime input and cannot be modified through generic filesystem tools"],
+            facts={
+                "path": path_value,
+                "resolved_path": str(resolved),
+                "filesystem_root": str(root),
+                "read_only_runtime_input": True,
+            },
+        ).model_dump(mode="json")
     if is_write_like and not _is_allowed_write_path(resolved, root=root, resources=tool_resources):
         return ToolRiskResult(
             action="deny",
@@ -165,6 +177,8 @@ def assert_not_protected_write_path(path: Path, *, root: Path, resources: dict[s
         raise PermissionError(f"path is managed by a dedicated write tool: {path}")
     if _is_protected_write_path(path, root=root, resources=resources):
         raise PermissionError(f"path is managed by a dedicated control tool: {path}")
+    if _is_read_only_write_path(path, root=root, resources=resources):
+        raise PermissionError(f"path is read-only runtime input: {path}")
     if not _is_allowed_write_path(path, root=root, resources=resources):
         raise PermissionError(f"path is outside configured allowed_write_paths: {path}")
 
@@ -193,6 +207,14 @@ def _is_protected_write_path(path: Path, *, root: Path, resources: dict[str, Any
         if path == resolved or resolved in path.parents:
             return True
     return False
+
+
+def _is_read_only_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
+    config = resources.get("filesystem", {})
+    values = config.get("read_only_paths", []) if isinstance(config, dict) else []
+    if not isinstance(values, list):
+        return False
+    return _path_matches_focus_files(path, root=root, focus_files=values)
 
 
 def _managed_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any] | None:

@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from agent_factory.create_agent.capability_inventory import (
     render_static_capability_inventory,
 )
+from agent_factory.runtime_attachments import format_attachments_for_model
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,7 +225,8 @@ def _dynamic_system_context_text(
 ) -> str:
     publish_confirmation = _publish_confirmation_context(state.get("publish_confirmation_response"))
     task_analysis = _task_analysis_context(state)
-    return "\n\n".join(item for item in [task_analysis, publish_confirmation] if item)
+    attachments = format_attachments_for_model(state.get("runtime_attachments"))
+    return "\n\n".join(item for item in [task_analysis, attachments, publish_confirmation] if item)
 
 
 def _task_analysis_context(state: Mapping[str, Any]) -> str:

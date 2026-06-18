@@ -1,17 +1,36 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryFrontendEvent, FactoryMode, event
+from agent_factory.factory_graph.frontend_bridge.protocol import (
+    FactoryFrontendCommand,
+    FactoryFrontendEvent,
+    FactoryMode,
+    event,
+)
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     PendingAgentPackageRun,
     PendingCreateAgentRun,
     SYSTEM_CHAT_PACKAGE_ID,
 )
+from agent_factory.runtime_attachments import (
+    AttachmentImportError,
+    attachment_import_error_payload,
+    redact_attachment_markers,
+)
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeStreamConsumeResult:
+    status: str
+    terminal_event: FactoryFrontendEvent | None = None
+    message: str = ""
+    payload: dict[str, Any] | None = None
 
 
 class RuntimeAgentPackageCommandMixin:
@@ -106,6 +125,8 @@ class RuntimeAgentPackageCommandMixin:
                 request_id=command.request_id,
             )
             self._consume_agent_package_stream(package_id=package_id, run=run, normalizer=normalizer)
+        except AttachmentImportError as exc:
+            _emit_attachment_import_failed(normalizer, exc)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
@@ -158,7 +179,11 @@ class RuntimeAgentPackageCommandMixin:
 
     def cancel_runtime_request(self, command: FactoryFrontendCommand) -> None:
         reason = str(command.payload.get("reason") or "user_cancelled")
-        cancelled = self.agent_package_runtime.cancel_active_requests(reason=reason) if self.agent_package_runtime else 0
+        cancelled = (
+            self.agent_package_runtime.cancel_active_requests(reason=reason)
+            if self.agent_package_runtime
+            else 0
+        )
         self.pending_agent_package_run = None
         if self.pending_create_agent_run is not None:
             cancelled += 1
@@ -183,17 +208,19 @@ class RuntimeAgentPackageCommandMixin:
         normalizer: RuntimeEventNormalizer,
         frontend_mode: FactoryMode | None = None,
         frontend_session_id: str | None = None,
-    ) -> None:
+    ) -> RuntimeStreamConsumeResult:
         final_state = None
-        terminal_event_seen = False
+        terminal_event: FactoryFrontendEvent | None = None
         for stream_mode, chunk in run.events:
             if stream_mode == "frontend_event":
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
                 agent_session_id = item.session_id
                 if agent_session_id:
                     run.session["session_id"] = agent_session_id
+                    if frontend_mode == "chat":
+                        self._remember_system_chat_agent_session_id(agent_session_id)
                 if item.event_type in {"run_completed", "run_failed"}:
-                    terminal_event_seen = True
+                    terminal_event = item
                 if item.event_type == "run_completed" and frontend_mode == "chat":
                     self._sync_system_chat_session_summary(item)
                 if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
@@ -208,7 +235,7 @@ class RuntimeAgentPackageCommandMixin:
                     )
                 self.emit(_frontend_scoped_agent_event(item, mode=frontend_mode, session_id=frontend_session_id))
                 if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
-                    return
+                    return RuntimeStreamConsumeResult(status="interrupted", terminal_event=item)
                 continue
             if stream_mode == "stderr":
                 normalizer.runtime_event(
@@ -229,19 +256,23 @@ class RuntimeAgentPackageCommandMixin:
                     interrupt_id=_interrupt_id_from_payload(interrupt_payload),
                 )
                 normalizer.emit_interrupt(json_safe(interrupt_payload))
-                return
+                return RuntimeStreamConsumeResult(status="interrupted")
             if stream_mode == "runtime_final":
                 final_state = chunk
                 continue
             normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="agent_package_update")
-        if terminal_event_seen:
-            return
+        if terminal_event is not None:
+            return RuntimeStreamConsumeResult(
+                status="failed" if terminal_event.event_type == "run_failed" else "completed",
+                terminal_event=terminal_event,
+            )
         if final_state is None:
             raise RuntimeError("agent package runtime did not produce a final state")
         if not runtime_completed(final_state):
+            message = runtime_error_message(final_state, command="agent package runtime")
             normalizer.complete_open_model_streams(reason="run_failed")
-            normalizer.emit_run_failed(RuntimeError(runtime_error_message(final_state, command="agent package runtime")))
-            return
+            normalizer.emit_run_failed(RuntimeError(message))
+            return RuntimeStreamConsumeResult(status="failed", message=message)
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_run_completed(
             {
@@ -251,9 +282,11 @@ class RuntimeAgentPackageCommandMixin:
                 "agent_session": run.session,
             }
         )
+        return RuntimeStreamConsumeResult(status="completed")
 
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
-        agent_session_id = self._ensure_system_chat_agent_session(message)
+        redacted_message = redact_attachment_markers(message)
+        agent_session_id = self._planned_system_chat_agent_session_id()
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=command.request_id,
@@ -269,6 +302,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=agent_session_id,
                 request_id=command.request_id,
             )
+            self._commit_system_chat_request(redacted_message)
             self._consume_agent_package_stream(
                 package_id=SYSTEM_CHAT_PACKAGE_ID,
                 run=run,
@@ -276,11 +310,14 @@ class RuntimeAgentPackageCommandMixin:
                 frontend_mode="chat",
                 frontend_session_id=self._session_id(),
             )
+        except AttachmentImportError as exc:
+            _emit_attachment_import_failed(normalizer, exc)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
     def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
-        agent_session_id = self._ensure_host_create_agent_session(message)
+        redacted_message = redact_attachment_markers(message)
+        agent_session_id = self._planned_host_create_agent_session_id()
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=command.request_id,
@@ -295,7 +332,10 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=agent_session_id,
                 request_id=command.request_id,
             )
+            self._commit_host_create_agent_request(redacted_message, session_id=agent_session_id)
             self._consume_create_agent_stream(run=run)
+        except AttachmentImportError as exc:
+            _emit_attachment_import_failed(normalizer, exc)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
@@ -308,50 +348,66 @@ class RuntimeAgentPackageCommandMixin:
                 agent_session.get("session_id") or self.session_record.chat_agent_package_session_id or ""
             ) or None
             try:
-                self.session_record.chat_turn_count = int(agent_session.get("turn_count") or self.session_record.chat_turn_count)
+                self.session_record.chat_turn_count = int(
+                    agent_session.get("turn_count")
+                    or self.session_record.chat_turn_count
+                )
             except (TypeError, ValueError):
                 pass
         self.session_manager.save(self.session_record)
 
-    def _ensure_system_chat_agent_session(self, first_user_input: str) -> str:
-        if self.session_record is None:
-            self.start_session(FactoryFrontendCommand(type="start_session"))
-        self.session_record = self.session_manager.remember_first_user_input(
-            self.session_record.session_id,
-            first_user_input,
-        )
-        agent_session = self.agent_package_runtime.ensure_session(
-            SYSTEM_CHAT_PACKAGE_ID,
-            session_id=self.session_record.chat_agent_package_session_id,
-            first_user_input=first_user_input,
-        )
-        agent_session_id = str(agent_session.get("session_id") or "")
-        if agent_session_id != self.session_record.chat_agent_package_session_id:
-            self.session_record.chat_agent_package_session_id = agent_session_id
-            self.session_manager.save(self.session_record)
-        return agent_session_id
+    def _planned_system_chat_agent_session_id(self) -> str | None:
+        return self.session_record.chat_agent_package_session_id if self.session_record is not None else None
 
-    def _ensure_host_create_agent_session(self, first_user_input: str) -> str:
+    def _commit_system_chat_request(self, first_user_input: str) -> None:
+        self._remember_factory_first_user_input(first_user_input)
+
+    def _remember_system_chat_agent_session_id(self, session_id: str) -> None:
         if self.session_record is None:
             self.start_session(FactoryFrontendCommand(type="start_session"))
-        self.session_record = self.session_manager.remember_first_user_input(
-            self.session_record.session_id,
-            first_user_input,
-        )
-        if not self.session_record.create_agent_session_id:
-            self.session_record.create_agent_session_id = uuid4().hex
+        if self.session_record.chat_agent_package_session_id != session_id:
+            self.session_record.chat_agent_package_session_id = session_id
+            self.session_manager.save(self.session_record)
+
+    def _planned_host_create_agent_session_id(self) -> str:
+        if self.session_record is not None and self.session_record.create_agent_session_id:
+            return self.session_record.create_agent_session_id
+        return uuid4().hex
+
+    def _commit_host_create_agent_request(self, first_user_input: str, *, session_id: str) -> None:
+        self._remember_factory_first_user_input(first_user_input)
+        if self.session_record.create_agent_session_id != session_id:
+            self.session_record.create_agent_session_id = session_id
         self.session_record.create_agent_turn_count += 1
         self.session_manager.save(self.session_record)
-        return self.session_record.create_agent_session_id
 
-    def _consume_create_agent_stream(self, *, run: Any) -> None:
+    def _remember_factory_first_user_input(self, first_user_input: str) -> None:
+        if self.session_record is None:
+            self.start_session(FactoryFrontendCommand(type="start_session"))
+        self.session_record = self.session_manager.remember_first_user_input(
+            self.session_record.session_id,
+            first_user_input,
+        )
+
+    def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
+        terminal_event: FactoryFrontendEvent | None = None
         for stream_mode, chunk in run.events:
             if stream_mode != "frontend_event":
                 raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            if item.event_type in {"run_completed", "run_failed"}:
+                terminal_event = item
             if item.event_type in {"interrupt_requested", "tool_approval_requested"}:
                 self.pending_create_agent_run = PendingCreateAgentRun(session_id=run.session_id)
+                self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
+                return RuntimeStreamConsumeResult(status="interrupted", terminal_event=item)
             self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
+        if terminal_event is not None:
+            return RuntimeStreamConsumeResult(
+                status="failed" if terminal_event.event_type == "run_failed" else "completed",
+                terminal_event=terminal_event,
+            )
+        raise RuntimeError("create-agent runtime stream ended without a terminal event")
 
 
 def _frontend_scoped_agent_event(
@@ -366,6 +422,17 @@ def _frontend_scoped_agent_event(
     if session_id is not None:
         updates["session_id"] = session_id
     return item.model_copy(update=updates) if updates else item
+
+
+def _emit_attachment_import_failed(normalizer: RuntimeEventNormalizer, exc: AttachmentImportError) -> None:
+    payload = attachment_import_error_payload(exc)
+    normalizer.runtime_event(
+        "run_failed",
+        span_id=normalizer.run_span_id,
+        severity="error",
+        message=payload["message"],
+        payload=payload,
+    )
 
 
 def _interrupt_id_from_event(item: FactoryFrontendEvent) -> str | None:

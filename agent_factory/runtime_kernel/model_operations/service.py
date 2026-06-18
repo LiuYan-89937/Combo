@@ -26,6 +26,8 @@ from agent_factory.context_system.token_counter import (
     token_count_from_usage_metadata,
 )
 
+_DEFAULT_STRUCTURED_METHOD = "json_mode"
+
 
 class ModelOperationService:
     """Kernel-level model operations used by generated Agent runtimes.
@@ -191,8 +193,22 @@ class ModelOperationService:
             request_messages = envelope.messages
         attempts = max(1, int(max_attempts))
         last_error: Exception | None = None
-        operation_context = {**metadata, **(operation_metadata or {})}
+        effective_structured_method = _effective_structured_method(
+            requested=structured_method,
+            model_metadata=metadata,
+        )
+        operation_context = {
+            **metadata,
+            "structured_output_method": effective_structured_method,
+            **(operation_metadata or {}),
+        }
         schema_payload = _schema_payload(output_model)
+        request_messages = _structured_request_messages(
+            messages=request_messages,
+            output_model=output_model,
+            output_json_schema=schema_payload,
+            structured_method=effective_structured_method,
+        )
         trace_span_id = _start_trace_span(
             state=state,
             services=services,
@@ -210,7 +226,7 @@ class ModelOperationService:
                 structured_model = _structured_model(
                     model=model,
                     output_model=output_model,
-                    method=structured_method,
+                    method=effective_structured_method,
                     config_tags=config_tags,
                 )
                 result = structured_model.invoke(request_messages)
@@ -276,11 +292,15 @@ class ModelOperationService:
 
     def _resolve_model(self) -> tuple[Any, dict[str, Any]]:
         if self._model is not None:
-            return self._model, {"model_role": self.model_role, "model": "injected"}
+            return self._model, {"model_role": self.model_role, "model": "injected", "structured_output_method": ""}
         model, settings = _configured_model_for_role(self.model_role)
         if model is None:
             raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
-        return model, {"model_role": settings.role, "model": settings.model or ""}
+        return model, {
+            "model_role": settings.role,
+            "model": settings.model or "",
+            "structured_output_method": settings.structured_output_method or "",
+        }
 
 
 def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
@@ -387,11 +407,49 @@ def _structured_model(
     return structured
 
 
+def _effective_structured_method(*, requested: str | None, model_metadata: dict[str, Any]) -> str:
+    method = str(requested or model_metadata.get("structured_output_method") or "").strip()
+    return method or _DEFAULT_STRUCTURED_METHOD
+
+
+def _structured_request_messages(
+    *,
+    messages: list[Any],
+    output_model: type[BaseModel],
+    output_json_schema: str,
+    structured_method: str,
+) -> list[Any]:
+    if structured_method != "json_mode":
+        return messages
+    return [
+        *messages,
+        HumanMessage(
+            content=_structured_json_mode_instruction(
+                output_model=output_model,
+                output_json_schema=output_json_schema,
+            )
+        ),
+    ]
+
+
 def _schema_payload(output_model: type[BaseModel]) -> str:
     try:
         return json.dumps(output_model.model_json_schema(), ensure_ascii=False, sort_keys=True)
     except Exception:
         return output_model.__name__
+
+
+def _structured_json_mode_instruction(
+    *,
+    output_model: type[BaseModel],
+    output_json_schema: str,
+) -> str:
+    return (
+        "Return JSON only. Do not include markdown fences, comments, or explanatory text.\n"
+        "The JSON response must validate against the schema below.\n"
+        f"Schema name: {output_model.__name__}\n"
+        f"Output JSON schema:\n{output_json_schema}"
+    )
 
 
 def _structured_retry_instruction(

@@ -23,6 +23,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     messages: Annotated[list[BaseMessage], add_messages]
     request: str
     workspace_path: str
+    runtime_attachments: list[dict[str, Any]]
     iteration: int
     validation: dict[str, Any]
     publish_confirmation_response: dict[str, Any]

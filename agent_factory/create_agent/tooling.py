@@ -45,6 +45,7 @@ from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolO
 from agent_factory.tooling.providers import BuiltinToolProvider, ToolProviderContext, ToolProviderResult
 from agent_factory.tooling.registry import ToolRegistry
 from agent_factory.paths import factory_artifact_path
+from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 from agent_factory.tooling.skills import (
     SKILL_TOOL_ID,
     SkillRegistry,
@@ -123,6 +124,9 @@ class CreateAgentToolEnvironmentBuilder:
         filesystem_resource = runtime_resources.get("filesystem")
         if isinstance(filesystem_resource, dict) and mode == "manufacture":
             filesystem_resource[CREATE_AGENT_STAGE_CONTEXT_RESOURCE] = runtime_resources[CREATE_AGENT_STAGE_CONTEXT_RESOURCE]
+            read_only_paths = filesystem_resource.setdefault("read_only_paths", [])
+            if isinstance(read_only_paths, list):
+                read_only_paths.append(f".factory/{ATTACHMENT_INPUT_DIR}")
             filesystem_resource["protected_write_paths"] = [
                 ACTION_FILE,
                 SYSTEM_STATE_FILE,

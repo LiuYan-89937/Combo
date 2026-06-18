@@ -228,6 +228,22 @@ def resolve_cwd(*, cwd: str | None, root: Path, allow_external: bool) -> Path:
     return resolved
 
 
+def is_read_only_process_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
+    config = resources.get("process_runtime", {})
+    values = config.get("read_only_paths", []) if isinstance(config, dict) else []
+    if not isinstance(values, list):
+        return False
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        requested = Path(value).expanduser()
+        candidate = requested if requested.is_absolute() else root / requested
+        resolved = candidate.resolve(strict=False)
+        if path == resolved or resolved in path.parents:
+            return True
+    return False
+
+
 def required_string(arguments: dict[str, Any], key: str) -> str:
     value = arguments.get(key)
     if not isinstance(value, str) or not value.strip():

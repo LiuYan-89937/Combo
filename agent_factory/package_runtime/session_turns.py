@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_factory.runtime_attachments import format_attachments_for_session_input
 from agent_factory.trace_system import runtime_trace_ref
 
 
@@ -36,3 +37,37 @@ def resume_user_input(payload: Any) -> str | None:
         decision = str(approval.get("decision") or approval.get("action") or "").strip()
         return decision or None
     return None
+
+
+def session_user_input_from_state(
+    state: Any,
+    *,
+    fallback_user_input: str | None = None,
+    fallback_attachments: Any = None,
+) -> str | None:
+    attachments = _runtime_attachments_from_state(state)
+    if attachments is None:
+        attachments = fallback_attachments
+    return format_attachments_for_session_input(
+        _current_user_input_from_state(state) or fallback_user_input,
+        attachments,
+    )
+
+
+def _current_user_input_from_state(state: Any) -> str | None:
+    conversation = getattr(state, "conversation", None)
+    if conversation is None:
+        return None
+    value = getattr(conversation, "current_user_input", None)
+    return str(value).strip() or None if value is not None else None
+
+
+def _runtime_attachments_from_state(state: Any) -> list[dict[str, Any]] | None:
+    runtime_config = getattr(state, "runtime_config", None)
+    user_config = getattr(runtime_config, "user_config", None)
+    if not isinstance(user_config, dict):
+        return None
+    attachments = user_config.get("attachments")
+    if not isinstance(attachments, list):
+        return None
+    return [dict(item) for item in attachments if isinstance(item, dict)]

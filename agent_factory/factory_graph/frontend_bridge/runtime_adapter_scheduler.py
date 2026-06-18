@@ -8,6 +8,11 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     SYSTEM_CHAT_PACKAGE_ID,
 )
+from agent_factory.runtime_attachments import (
+    AttachmentImportError,
+    attachment_import_error_payload,
+    redact_attachment_markers,
+)
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.scheduler_system import (
     SchedulerExecutor,
@@ -166,7 +171,8 @@ class RuntimeSchedulerCommandMixin:
         if mode == "create_agent":
             return self._run_scheduled_create_agent(message)
         package_id = SYSTEM_CHAT_PACKAGE_ID
-        agent_session_id = self._ensure_system_chat_agent_session(message)
+        redacted_message = redact_attachment_markers(message)
+        agent_session_id = self._planned_system_chat_agent_session_id()
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=None,
@@ -182,20 +188,36 @@ class RuntimeSchedulerCommandMixin:
                 session_id=agent_session_id,
                 request_id=None,
             )
-            self._consume_agent_package_stream(
+            self._commit_system_chat_request(redacted_message)
+            consume_result = self._consume_agent_package_stream(
                 package_id=package_id,
                 run=run,
                 normalizer=normalizer,
                 frontend_mode=mode,  # type: ignore[arg-type]
                 frontend_session_id=self._session_id(),
             )
+        except AttachmentImportError as exc:
+            payload = attachment_import_error_payload(exc)
+            normalizer.runtime_event(
+                "run_failed",
+                span_id=normalizer.run_span_id,
+                severity="error",
+                message=payload["message"],
+                payload=payload,
+            )
+            return {"status": "failed", "error": payload["message"], "payload": payload}
         except Exception as exc:
             normalizer.emit_run_failed(exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        if consume_result.status == "failed":
+            return _scheduled_failure_result(consume_result, fallback="factory scheduled chat run failed")
+        if consume_result.status == "interrupted":
+            return {"status": "interrupted", "output_summary": f"factory scheduled {mode} run requested user input"}
         return {"status": "completed", "output_summary": f"factory scheduled {mode} run completed"}
 
     def _run_scheduled_create_agent(self, message: str) -> dict[str, Any]:
-        agent_session_id = self._ensure_host_create_agent_session(message)
+        redacted_message = redact_attachment_markers(message)
+        agent_session_id = self._planned_host_create_agent_session_id()
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=None,
@@ -210,11 +232,24 @@ class RuntimeSchedulerCommandMixin:
                 session_id=agent_session_id,
                 request_id=None,
             )
-            self._consume_create_agent_stream(run=run)
+            self._commit_host_create_agent_request(redacted_message, session_id=agent_session_id)
+            consume_result = self._consume_create_agent_stream(run=run)
+        except AttachmentImportError as exc:
+            payload = attachment_import_error_payload(exc)
+            normalizer.runtime_event(
+                "run_failed",
+                span_id=normalizer.run_span_id,
+                severity="error",
+                message=payload["message"],
+                payload=payload,
+            )
+            return {"status": "failed", "error": payload["message"], "payload": payload}
         except Exception as exc:
             normalizer.emit_run_failed(exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
-        if self.pending_create_agent_run is not None:
+        if consume_result.status == "failed":
+            return _scheduled_failure_result(consume_result, fallback="factory scheduled create-agent run failed")
+        if consume_result.status == "interrupted" or self.pending_create_agent_run is not None:
             return {"status": "interrupted", "output_summary": "scheduled create-agent run requested user input"}
         return {"status": "completed", "output_summary": "factory scheduled create_agent run completed"}
 
@@ -228,3 +263,16 @@ class RuntimeSchedulerCommandMixin:
         if self.scheduler_runtime is None:
             return {}
         return {"scheduler_runtime": self.scheduler_runtime}
+
+
+def _scheduled_failure_result(result: Any, *, fallback: str) -> dict[str, Any]:
+    terminal_event = getattr(result, "terminal_event", None)
+    payload = getattr(terminal_event, "payload", None)
+    payload = payload if isinstance(payload, dict) else {}
+    message = str(
+        payload.get("message")
+        or getattr(terminal_event, "message", None)
+        or getattr(result, "message", None)
+        or fallback
+    )
+    return {"status": "failed", "error": message, "payload": payload}

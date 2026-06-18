@@ -8,6 +8,7 @@ from agent_factory.tooling.builtins import (
     get_builtin_tool_specs,
 )
 from agent_factory.tooling.providers.base import ToolProviderContext, ToolProviderResult
+from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 
 
 class BuiltinToolProvider:
@@ -36,13 +37,27 @@ def _runtime_resources(context: ToolProviderContext) -> dict[str, object]:
     resources = dict(context.resources)
     root = str(resources.get("builtin_workspace_root") or "/workdir")
     allow_external = bool(resources.get("builtin_allow_external_paths", False))
+    read_only_paths = _read_only_paths(resources, root=root)
     return {
         "filesystem": {
             "root": root,
             "allow_external": allow_external,
+            "read_only_paths": read_only_paths,
         },
         "process_runtime": {
             "root": root,
             "allow_external": allow_external,
+            "read_only_paths": read_only_paths,
         },
     }
+
+
+def _read_only_paths(resources: dict[str, object], *, root: str) -> list[str]:
+    configured = resources.get("builtin_read_only_paths")
+    values = (
+        [str(item) for item in configured if isinstance(item, str) and item.strip()]
+        if isinstance(configured, list)
+        else []
+    )
+    default_input_path = f"{root.rstrip('/')}/{ATTACHMENT_INPUT_DIR}"
+    return [*values, default_input_path]

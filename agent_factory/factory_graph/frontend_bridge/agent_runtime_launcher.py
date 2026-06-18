@@ -10,6 +10,7 @@ import subprocess
 from typing import Any
 
 from agent_factory.paths import project_root
+from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 from agent_factory.runtime_contracts import LoadedAgentPackage
 
 
@@ -32,15 +33,19 @@ MODEL_ENV_ALLOWLIST = (
     "AGENTFACTORY_LLM_TEMPERATURE",
     "AGENTFACTORY_LLM_TIMEOUT_SECONDS",
     "AGENTFACTORY_LLM_THINKING",
+    "AGENTFACTORY_STRUCTURED_OUTPUT_METHOD",
+    "AGENTFACTORY_LLM_STRUCTURED_OUTPUT_METHOD",
     "AGENTFACTORY_TASK_MODEL",
     "AGENTFACTORY_TASK_TEMPERATURE",
     "AGENTFACTORY_TASK_THINKING",
+    "AGENTFACTORY_TASK_STRUCTURED_OUTPUT_METHOD",
     "AGENTFACTORY_COMPRESSION_MODEL",
     "AGENTFACTORY_COMPRESSION_API_KEY",
     "AGENTFACTORY_COMPRESSION_BASE_URL",
     "AGENTFACTORY_COMPRESSION_TEMPERATURE",
     "AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS",
     "AGENTFACTORY_COMPRESSION_THINKING",
+    "AGENTFACTORY_COMPRESSION_STRUCTURED_OUTPUT_METHOD",
     "AGENTFACTORY_CONTEXT_WINDOW_TOKENS",
     "AGENTFACTORY_EMBEDDING_PROVIDER",
     "AGENTFACTORY_EMBEDDING_MODEL",
@@ -109,6 +114,8 @@ class DockerAgentRuntimeLauncher:
         network = self._network_mode(sandbox)
         extension_root = extension_root or runtime_root / "extensions"
         extension_root.mkdir(parents=True, exist_ok=True)
+        input_files_root = workdir_root / ATTACHMENT_INPUT_DIR
+        input_files_root.mkdir(parents=True, exist_ok=True)
         service_env = self._service_environment(sandbox)
         env = {**self._environment(sandbox), **service_env}
         if mcp_gateway_url:
@@ -129,6 +136,8 @@ class DockerAgentRuntimeLauncher:
             "-v",
             f"{workdir_root.resolve()}:/workdir:rw",
             "-v",
+            f"{input_files_root.resolve()}:/workdir/{ATTACHMENT_INPUT_DIR}:ro",
+            "-v",
             f"{runtime_root.resolve()}:/runtime:rw",
             "-v",
             f"{extension_root.resolve()}:/runtime/extensions:rw",
@@ -147,7 +156,7 @@ class DockerAgentRuntimeLauncher:
             resolved_image=resolved_image,
             network=network,
             extension_root=extension_root,
-            mount_count=5 + 1 + len(contract_mounts),
+            mount_count=6 + 1 + len(contract_mounts),
             service_env=service_env,
             preflight={
                 "status": "ok",
@@ -157,7 +166,7 @@ class DockerAgentRuntimeLauncher:
                 "image_check": IMAGE_INSPECT_COMMAND_LABEL,
                 "network": network,
                 "extension_root": str(extension_root),
-                "mount_count": 5 + 1 + len(contract_mounts),
+                "mount_count": 6 + 1 + len(contract_mounts),
                 "service_env_keys": sorted(service_env),
                 "mcp_gateway_url": mcp_gateway_url,
             },

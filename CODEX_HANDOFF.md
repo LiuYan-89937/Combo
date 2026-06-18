@@ -33,6 +33,55 @@ The current direction is:
 4. Package tools should be verified by real probe execution, preferably inside the same Docker/runtime shape as a published agent.
 5. Frontend rendering should consume unified runtime events rather than guessing from raw internal state.
 
+## Runtime External Attachments
+
+The agreed upload syntax is explicit: `@/absolute/or/relative/file/path@`. Do not infer attachments from natural-language text.
+
+Current contract:
+
+- Every non-empty `@...@` marker is treated as reserved attachment syntax.
+- Relative paths resolve from the project root.
+- The source file is copied into a request-scoped runtime input directory before the model sees it.
+- Original host paths are removed from the user message before runtime/model handoff.
+- The model receives only attachment metadata with the runtime `path`, display name, MIME type, size, digest, scope, and read-only access.
+- Runtime filenames/display names sanitize path separators and non-printable control characters.
+- Multiple attachments are imported transactionally: if one copy fails, already copied files from that import are rolled back.
+- Attachment import failures are surfaced before FactorySession request commit, so bad paths do not advance chat/create-agent turn counters.
+- Optional limits are controlled by:
+  - `AGENTFACTORY_ATTACHMENT_MAX_FILES`
+  - `AGENTFACTORY_ATTACHMENT_MAX_FILE_BYTES`
+  - `AGENTFACTORY_ATTACHMENT_MAX_TOTAL_BYTES`
+
+Runtime paths:
+
+- Docker AgentPackage: `/workdir/input_files/<request_id>/<attachment_id>/<filename>`
+- Host SystemPackage: host runtime workdir `input_files/<request_id>/<attachment_id>/<filename>`
+- create-agent: `.factory/input_files/<request_id>/<attachment_id>/<filename>`
+
+Implementation files:
+
+- `agent_factory/runtime_attachments.py`
+- `agent_factory/factory_graph/frontend_bridge/agent_package_runtime.py`
+- `agent_factory/factory_graph/frontend_bridge/agent_runtime_launcher.py`
+- `agent_factory/package_runtime/core.py`
+- `agent_factory/agent_runtime_bridge/stdio_server.py`
+- `agent_factory/runtime_kernel/model_inputs.py`
+- `agent_factory/create_agent/runtime.py`
+- `agent_factory/create_agent/prompt_builder.py`
+- `agent_factory/create_agent/assist_workflow.py`
+- `agent_factory/tooling/builtins/filesystem/common.py`
+- `agent_factory/tooling/builtins/process/bash.py`
+- `agent_factory/tooling/builtins/process/manager.py`
+- `agent_factory/tooling/providers/builtin.py`
+- `agent_factory/create_agent/tooling.py`
+
+Still needs real validation:
+
+- Run a Docker AgentPackage with an attachment marker and confirm the file is readable through `/workdir/input_files/...`.
+- Run a Host SystemPackage with an attachment marker and confirm the runtime path is valid.
+- Run create-agent with an attachment marker and confirm `.factory/input_files/...` is available to tools.
+- Confirm interrupt/resume behavior does not assume old request-scoped attachment paths still exist.
+
 ## Important Recent Work
 
 ### Runtime Session / Trace / Stdio
@@ -260,39 +309,24 @@ Still needs real validation:
 - Confirm internal session snapshot does not leak.
 - Confirm large schema/tool output does not flood normal transcript.
 
-## Known Recently Discussed Next Feature: File Reference Mechanism
+## Runtime Attachment Safety Boundary
 
-The user raised a new issue:
+The user raised this issue:
 
 > If the user provides a file path outside the workspace, what happens?
 
-Current behavior:
+The current answer is the explicit attachment path described near the top of this handoff: `@/path/to/file@`.
+
+Do not solve this by allowing generic tools to read arbitrary host paths. External files must first be copied into a controlled runtime input directory and exposed to the model as runtime-local read-only paths.
+
+Important boundaries:
 
 - Built-in filesystem tools reject paths outside configured root.
+- Built-in bash/process tools reject `input_files` as a process working directory.
 - In create-agent, root is the create-agent workspace.
 - In published-agent Docker runtime, builtin filesystem root is usually `/workdir`.
 - Host paths like `/Users/admin/.../paper.pdf` are not automatically visible inside Docker.
 - Tool approval does not bypass filesystem root boundaries.
-
-Desired next design:
-
-Introduce a controlled file reference mechanism instead of allowing arbitrary external paths.
-
-Suggested design direction:
-
-1. Frontend/runtime accepts user-provided file references as structured attachments/resources.
-2. External files are copied or mounted into a controlled workspace area, probably `/workdir/input_files/...` or runtime artifact/resource space.
-3. The LLM receives stable package/runtime-relative references, not raw host paths.
-4. File references should carry metadata:
-   - original display name
-   - stable runtime path
-   - MIME/type if available
-   - size/hash if available
-   - permission/source evidence
-5. The LLM should use the safe runtime path.
-6. If the path is not imported, tools should fail with a user-facing request to import/attach the file, not repeatedly try raw host paths.
-
-This should be designed as infrastructure, not business-specific logic.
 
 ## Current Safety Boundary For Files
 

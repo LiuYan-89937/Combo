@@ -3,11 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import os
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from agent_factory.models.openai_compat import ThinkingCompatibleChatOpenAI
+
+StructuredOutputMethod = Literal["function_calling", "json_mode", "json_schema"]
+_STRUCTURED_OUTPUT_METHODS: set[str] = {"function_calling", "json_mode", "json_schema"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +22,7 @@ class ChatModelSettings:
     temperature: float | None = None
     timeout_seconds: float | None = None
     thinking: str | None = None
+    structured_output_method: StructuredOutputMethod | None = None
 
     @property
     def available(self) -> bool:
@@ -100,6 +104,7 @@ def _main_settings() -> ChatModelSettings:
         temperature=_env_float("AGENTFACTORY_LLM_TEMPERATURE"),
         timeout_seconds=_env_float("AGENTFACTORY_LLM_TIMEOUT_SECONDS"),
         thinking=_env_choice("AGENTFACTORY_LLM_THINKING", {"enabled", "disabled"}),
+        structured_output_method=_structured_method_setting("AGENTFACTORY_LLM_STRUCTURED_OUTPUT_METHOD"),
     )
 
 
@@ -112,6 +117,7 @@ def _task_settings() -> ChatModelSettings:
         temperature=_env_float("AGENTFACTORY_TASK_TEMPERATURE"),
         timeout_seconds=_env_float("AGENTFACTORY_LLM_TIMEOUT_SECONDS"),
         thinking=_env_choice("AGENTFACTORY_TASK_THINKING", {"enabled", "disabled"}),
+        structured_output_method=_structured_method_setting("AGENTFACTORY_TASK_STRUCTURED_OUTPUT_METHOD"),
     )
 
 
@@ -124,6 +130,7 @@ def _compression_settings() -> ChatModelSettings:
         temperature=_env_float("AGENTFACTORY_COMPRESSION_TEMPERATURE"),
         timeout_seconds=_env_float("AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS"),
         thinking=_env_choice("AGENTFACTORY_COMPRESSION_THINKING", {"enabled", "disabled"}),
+        structured_output_method=_structured_method_setting("AGENTFACTORY_COMPRESSION_STRUCTURED_OUTPUT_METHOD"),
     )
 
 
@@ -145,6 +152,13 @@ def _env_choice(name: str, allowed: set[str]) -> str | None:
     if normalized in allowed:
         return normalized
     return None
+
+
+def _structured_method_setting(role_env_name: str) -> StructuredOutputMethod | None:
+    value = _env_choice(role_env_name, _STRUCTURED_OUTPUT_METHODS)
+    if value is None:
+        value = _env_choice("AGENTFACTORY_STRUCTURED_OUTPUT_METHOD", _STRUCTURED_OUTPUT_METHODS)
+    return value  # type: ignore[return-value]
 
 
 def _thinking_extra_body(thinking: str | None) -> dict[str, Any] | None:

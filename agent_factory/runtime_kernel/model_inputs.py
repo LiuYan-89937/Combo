@@ -8,6 +8,8 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
+from agent_factory.runtime_attachments import format_attachments_for_model
+
 
 DEFAULT_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
 RUNTIME_REACT_PROTOCOL = (
@@ -94,18 +96,19 @@ def _history_messages(*, state: Any, messages: list[Any]) -> list[Any]:
 
 def _dynamic_evidence_text(*, state: Any, node_id: str | None) -> str:
     plan_text = _plan_evidence_text(state)
+    attachments_text = _runtime_attachments_text(state)
     model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
     frame = _turn_evidence_frame(model_context=model_context, node_id=node_id)
     if not isinstance(frame, dict):
         frame = model_context.get("llm_context_frame") if isinstance(model_context, dict) else None
     if not isinstance(frame, dict):
-        return plan_text
+        return "\n\n".join(item for item in [plan_text, attachments_text] if item)
     text = str(frame.get("text") or "").strip()
     if text:
-        return "\n\n".join(item for item in [plan_text, text] if item)
+        return "\n\n".join(item for item in [plan_text, attachments_text, text] if item)
     items = frame.get("items")
     if not isinstance(items, list):
-        return plan_text
+        return "\n\n".join(item for item in [plan_text, attachments_text] if item)
     lines: list[str] = []
     for item in items:
         if not isinstance(item, dict):
@@ -114,7 +117,14 @@ def _dynamic_evidence_text(*, state: Any, node_id: str | None) -> str:
         if content:
             lines.append(f"- {content}")
     context_text = "\n".join(lines)
-    return "\n\n".join(item for item in [plan_text, context_text] if item)
+    return "\n\n".join(item for item in [plan_text, attachments_text, context_text] if item)
+
+
+def _runtime_attachments_text(state: Any) -> str:
+    user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
+    if not isinstance(user_config, dict):
+        return ""
+    return format_attachments_for_model(user_config.get("attachments"))
 
 
 def _plan_evidence_text(state: Any) -> str:

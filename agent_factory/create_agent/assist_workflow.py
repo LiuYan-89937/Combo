@@ -11,6 +11,7 @@ from langgraph.graph.message import add_messages
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
+from agent_factory.runtime_attachments import format_attachments_for_model
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
 
@@ -18,6 +19,7 @@ from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_
 class CreateAgentAssistState(TypedDict, total=False):
     messages: Annotated[list[BaseMessage], add_messages]
     workspace_path: str
+    runtime_attachments: list[dict[str, Any]]
     done: bool
     final_answer: str
     tool_rounds: int
@@ -90,19 +92,23 @@ class CreateAgentAssistWorkflow:
 
 def _messages_with_system(state: CreateAgentAssistState, tools: list[BaseTool]) -> list[BaseMessage]:
     workspace = CreateAgentWorkspace(state["workspace_path"])
+    attachments = format_attachments_for_model(state.get("runtime_attachments"))
     system = SystemMessage(
         content="\n\n".join(
-            [
+            item
+            for item in [
                 "你是 FastAgentFactory 的 /create-agent 辅助模式。",
                 "当前图只用于问答、查看 workspace、解释已有状态；不能创建、修改、验证或推进 AgentPackage。",
                 "如果用户要求创建、继续、修复、验证或制造 AgentPackage，说明该请求需要进入 manufacture graph，而不是在辅助模式中执行。",
                 "如果用户询问当前工作区，直接说明 workspace path；package 文件若存在，位于 workspace 根目录。",
                 "所有文件查看行为都必须通过已绑定只读工具和 Gateway 完成。",
+                attachments,
                 f"Workspace: {workspace.root}",
                 f"Package manifest: {workspace.package_manifest_path()}",
                 f"Package manifest exists: {workspace.package_manifest_path().exists()}",
                 f"Read-only assist tools: {', '.join(tool.name for tool in tools) if tools else 'none'}",
             ]
+            if item
         )
     )
     return [system, *list(state.get("messages") or [])]

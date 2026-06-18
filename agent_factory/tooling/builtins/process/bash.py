@@ -5,6 +5,7 @@ from typing import Any
 
 from agent_factory.tooling.builtins.process.manager import (
     PROCESS_MANAGER,
+    is_read_only_process_path,
     output_limit,
     process_runtime_boundary,
     required_string,
@@ -67,6 +68,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise FileNotFoundError(str(cwd))
     if not cwd.is_dir():
         raise NotADirectoryError(str(cwd))
+    if is_read_only_process_path(cwd, root=root, resources=resources):
+        raise PermissionError(f"cwd is read-only runtime input: {cwd}")
     return tool_envelope(PROCESS_MANAGER.start(
         command=command,
         cwd=cwd,
@@ -87,6 +90,17 @@ def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRis
             risk_level="high",
             reasons=[f"cwd is outside the configured process runtime boundary: {exc}"],
             facts={"process_root": str(root)},
+        )
+    if is_read_only_process_path(cwd, root=root, resources=tool_resources):
+        return ToolRiskResult(
+            action="deny",
+            risk_level="high",
+            reasons=["cwd is read-only runtime input and cannot be used as a process working directory"],
+            facts={
+                "cwd": str(cwd),
+                "process_root": str(root),
+                "read_only_runtime_input": True,
+            },
         )
     return ToolRiskResult(
         action="inherit",

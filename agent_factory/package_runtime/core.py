@@ -27,7 +27,9 @@ from agent_factory.package_runtime.session_turns import (
     resume_user_input,
     session_final_answer,
     session_trace_ref,
+    session_user_input_from_state,
 )
+from agent_factory.runtime_attachments import merge_attachments_into_user_config
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -80,7 +82,7 @@ class PackageRuntimeCore:
         if command_type == "shutdown":
             self.shutdown()
             return 0
-        normalizer.emit_run_started({"command": command_type})
+        normalizer.emit_run_started({"command": command_type, "attachment_count": _attachment_count(payload)})
         try:
             if command_type == "list_sessions":
                 return self._list_sessions(normalizer)
@@ -166,7 +168,10 @@ class PackageRuntimeCore:
         session_config = dict(compiled.runtime_config["session_config"])
         if payload.get("session_id"):
             session_config["session_id"] = str(payload["session_id"])
-        user_config = _merged_config(compiled.runtime_config["user_config"], payload.get("user_config"))
+        user_config = merge_attachments_into_user_config(
+            _merged_config(compiled.runtime_config["user_config"], payload.get("user_config")),
+            payload.get("attachments"),
+        )
         run_context = facade.prepare_run_context(
             compiled.compiled_app,
             user_input=message,
@@ -204,10 +209,15 @@ class PackageRuntimeCore:
             return 1
         if not runtime_completed(final_state):
             return _emit_failed_runtime_final(normalizer, final_state, command="run_message")
+        session_user_input = session_user_input_from_state(
+            final_state,
+            fallback_user_input=run_context.first_user_input,
+            fallback_attachments=user_config.get("attachments"),
+        )
         agent_session = run_context.session_manager.touch_turn(
             run_context.session_id,
-            first_user_input=run_context.first_user_input,
-            user_input=run_context.first_user_input,
+            first_user_input=session_user_input,
+            user_input=session_user_input,
             final_answer=session_final_answer(final_state),
             status=final_state.execution.finish_status,
             trace_ref=session_trace_ref(compiled, final_state),
@@ -263,9 +273,14 @@ class PackageRuntimeCore:
             return 1
         if not runtime_completed(final_state):
             return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
+        session_user_input = session_user_input_from_state(
+            final_state,
+            fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
+        )
         agent_session = run_context.session_manager.touch_turn(
             session_id,
-            user_input=resume_user_input(resume_payload),
+            first_user_input=session_user_input,
+            user_input=session_user_input,
             final_answer=session_final_answer(final_state),
             status=final_state.execution.finish_status,
             trace_ref=session_trace_ref(compiled, final_state),
@@ -498,6 +513,11 @@ def _merged_config(base: dict[str, Any], override: Any) -> dict[str, Any]:
     if isinstance(override, dict):
         result.update(override)
     return result
+
+
+def _attachment_count(payload: dict[str, Any]) -> int:
+    attachments = payload.get("attachments")
+    return len(attachments) if isinstance(attachments, list) else 0
 
 
 def _emit_pending_checkpoint_interrupt(normalizer: RuntimeEventNormalizer, compiled_app: Any, thread_id: str) -> bool:

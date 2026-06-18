@@ -21,6 +21,12 @@ from agent_factory.factory_graph.frontend_bridge.event_normalizer import Runtime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.session import build_factory_checkpointer_handle
+from agent_factory.paths import project_root
+from agent_factory.runtime_attachments import (
+    ATTACHMENT_INPUT_DIR,
+    import_marked_attachments,
+    safe_attachment_scope_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +57,17 @@ class CreateAgentRuntime:
         request_id: str | None,
     ) -> CreateAgentStreamRun:
         resolved_session_id = session_id or uuid4().hex
+        resolved_request_id = request_id or uuid4().hex
         workspace = CreateAgentWorkspace.for_session(resolved_session_id)
+        attachment_scope = safe_attachment_scope_id(resolved_request_id)
+        attachment_result = import_marked_attachments(
+            user_input,
+            storage_root=workspace.root / ".factory" / ATTACHMENT_INPUT_DIR / attachment_scope,
+            runtime_path_root=f".factory/{ATTACHMENT_INPUT_DIR}/{attachment_scope}",
+            base_dir=project_root(),
+            scope=attachment_scope,
+        )
+        user_input = attachment_result.message
         intent = classify_create_agent_intent(
             user_input=user_input,
             workspace=workspace,
@@ -71,10 +87,11 @@ class CreateAgentRuntime:
             events=self._events(
                 user_input=user_input,
                 session_id=resolved_session_id,
-                request_id=request_id,
+                request_id=resolved_request_id,
                 workspace=workspace,
                 resume_payload=None,
                 graph_kind=graph_kind,
+                attachments=attachment_result.attachments,
                 intent={
                     **intent.model_dump(mode="json"),
                     **({"task_analysis": task_analysis.model_dump(mode="json")} if task_analysis is not None else {}),
@@ -91,16 +108,18 @@ class CreateAgentRuntime:
     ) -> CreateAgentStreamRun:
         workspace = CreateAgentWorkspace.for_session(session_id)
         graph_kind = self._active_graph_by_session.get(session_id, "manufacture")
+        resolved_request_id = request_id or uuid4().hex
         return CreateAgentStreamRun(
             session_id=session_id,
             workspace=workspace,
             events=self._events(
                 user_input="",
                 session_id=session_id,
-                request_id=request_id,
+                request_id=resolved_request_id,
                 workspace=workspace,
                 resume_payload=resume_payload or {},
                 graph_kind=graph_kind,
+                attachments=[],
                 intent=None,
             ),
         )
@@ -114,6 +133,7 @@ class CreateAgentRuntime:
         workspace: CreateAgentWorkspace,
         resume_payload: dict[str, Any] | None,
         graph_kind: str,
+        attachments: list[dict[str, Any]],
         intent: dict[str, Any] | None,
     ) -> Iterator[tuple[str, Any]]:
         request_id = request_id or uuid4().hex
@@ -169,6 +189,7 @@ class CreateAgentRuntime:
                 "status": "started",
                 "intent": intent,
                 "graph_kind": graph_kind,
+                "attachment_count": len(attachments),
                 **selected_pattern_payload,
             },
         )
@@ -181,6 +202,7 @@ class CreateAgentRuntime:
                     "status": "started",
                     "intent": _json_safe(intent),
                     "graph_kind": graph_kind,
+                    "attachment_count": len(attachments),
                     **_json_safe(selected_pattern_payload),
                 },
             },
@@ -221,6 +243,7 @@ class CreateAgentRuntime:
                 stream_input = {
                     "request": user_input,
                     "workspace_path": str(workspace.root),
+                    "runtime_attachments": attachments,
                     "iteration": 0,
                     "done": False,
                     "messages": [HumanMessage(content=user_input)],

@@ -19,6 +19,12 @@ from agent_factory.mcp_gateway import HostMCPGatewayManager
 from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.paths import factory_artifact_path, project_root
+from agent_factory.runtime_attachments import (
+    ATTACHMENT_INPUT_DIR,
+    AttachmentImportResult,
+    import_marked_attachments,
+    safe_attachment_scope_id,
+)
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     AgentRuntimeLaunchError,
@@ -137,13 +143,21 @@ class AgentPackageRuntimeManager:
         user_config: dict[str, Any] | None = None,
     ) -> AgentPackageStreamRun:
         package = self.loader.load_path(self._manifest_path(package_id))
+        resolved_request_id = request_id or uuid4().hex
+        attachment_result = self._prepare_runtime_attachments(
+            package_id=package_id,
+            package=package,
+            user_input=user_input,
+            request_id=resolved_request_id,
+        )
         command = {
             "type": "run_message",
-            "request_id": request_id or uuid4().hex,
+            "request_id": resolved_request_id,
             "payload": {
-                "message": user_input,
+                "message": attachment_result.message,
                 "session_id": session_id,
                 "user_config": dict(user_config or {}),
+                "attachments": attachment_result.attachments,
                 "runtime_request": self.request_policy.as_payload(),
             },
         }
@@ -157,6 +171,30 @@ class AgentPackageRuntimeManager:
             package=package,
             session={"session_id": session_id} if session_id else {},
             events=self._container_events(package_id, package=package, command=command),
+        )
+
+    def _prepare_runtime_attachments(
+        self,
+        *,
+        package_id: str,
+        package: LoadedAgentPackage,
+        user_input: str,
+        request_id: str,
+    ) -> AttachmentImportResult:
+        runtime_root = _host_runtime_root(package_id)
+        workdir_root = runtime_root / "workdir"
+        attachment_scope = safe_attachment_scope_id(request_id)
+        runtime_path_root = (
+            str(workdir_root / ATTACHMENT_INPUT_DIR / attachment_scope)
+            if _is_host_system_package(package)
+            else f"/workdir/{ATTACHMENT_INPUT_DIR}/{attachment_scope}"
+        )
+        return import_marked_attachments(
+            user_input,
+            storage_root=workdir_root / ATTACHMENT_INPUT_DIR / attachment_scope,
+            runtime_path_root=runtime_path_root,
+            base_dir=project_root(),
+            scope=attachment_scope,
         )
 
     def resume_stream(
@@ -731,7 +769,11 @@ def _is_host_system_package(package: LoadedAgentPackage) -> bool:
 
 
 def _extensions_summary(package_id: str, *, package: LoadedAgentPackage | None = None) -> dict[str, str]:
-    host_root = _extension_root_for_package(package_id, package) if package is not None else _host_runtime_root(package_id) / "extensions"
+    host_root = (
+        _extension_root_for_package(package_id, package)
+        if package is not None
+        else _host_runtime_root(package_id) / "extensions"
+    )
     return {
         "host_root": str(host_root),
         "container_root": "/runtime/extensions",

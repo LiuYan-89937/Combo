@@ -33,6 +33,7 @@ def ensure_dependencies(
     config = contract.config
     package_digest = _file_digest(package_root / "agent_package.json")
     dependencies_digest = _file_digest(package_root / "contracts" / "dependencies.json")
+    runtime_environment = _runtime_environment()
     report = {
         "status": "skipped",
         "phase": "load_contract",
@@ -43,6 +44,7 @@ def ensure_dependencies(
         "python_requirements": list(config.python_requirements),
         "system_packages": list(config.system_packages),
         "system_binaries": list(config.system_binaries),
+        "runtime_environment": runtime_environment,
         "checks": [],
         "installs": [],
         "errors": [],
@@ -53,24 +55,6 @@ def ensure_dependencies(
         return _write_report(artifacts_root, report)
     marker_path = _dependency_marker_path(runtime_root)
     marker = _read_marker(marker_path)
-    if (
-        marker.get("package_digest") == package_digest
-        and marker.get("dependencies_digest") == dependencies_digest
-        and marker.get("status") == "complete"
-    ):
-        report["status"] = "complete"
-        report["phase"] = "cache_hit"
-        report["used_cache"] = True
-        report["duration_ms"] = _duration_ms(started_at)
-        report["checks"].append(
-            {
-                "phase": "cache",
-                "status": "complete",
-                "package_digest": package_digest,
-                "dependencies_digest": dependencies_digest,
-            }
-        )
-        return _write_report(artifacts_root, report)
     report["phase"] = "validate"
     parsed_python: list[Requirement] = []
     for requirement in config.python_requirements:
@@ -94,28 +78,55 @@ def ensure_dependencies(
             {
                 "package_digest": package_digest,
                 "dependencies_digest": dependencies_digest,
+                "runtime_environment": runtime_environment,
                 "status": report["status"],
             },
         )
         return _write_report(artifacts_root, report)
-    missing_python = [str(requirement) for requirement in parsed_python if not _python_requirement_available(requirement)]
-    missing_system_packages = _missing_system_packages(config.system_packages)
-    missing_system_binaries = [
-        binary
-        for binary in config.system_binaries
-        if binary and shutil.which(binary) is None
-    ]
-    report["checks"].append(
-        {
-            "phase": "dependency_check",
-            "status": "complete",
-            "python_missing": missing_python,
-            "system_packages_missing": missing_system_packages,
-            "system_binaries_missing": missing_system_binaries,
-            "package_digest": package_digest,
-            "dependencies_digest": dependencies_digest,
-        }
+    check = _dependency_check(
+        config=config,
+        parsed_python=parsed_python,
+        package_digest=package_digest,
+        dependencies_digest=dependencies_digest,
+        phase="dependency_check",
     )
+    report["checks"].append(check)
+    marker_matches = _marker_matches(
+        marker,
+        package_digest=package_digest,
+        dependencies_digest=dependencies_digest,
+        runtime_environment=runtime_environment,
+    )
+    if marker_matches and not _has_missing_dependencies(check):
+        report["status"] = "complete"
+        report["phase"] = "cache_hit"
+        report["used_cache"] = True
+        report["duration_ms"] = _duration_ms(started_at)
+        report["checks"].append(
+            {
+                "phase": "cache",
+                "status": "complete",
+                "package_digest": package_digest,
+                "dependencies_digest": dependencies_digest,
+                "runtime_environment": runtime_environment,
+            }
+        )
+        return _write_report(artifacts_root, report)
+    if marker_matches:
+        report["phase"] = "cache_stale"
+        report["checks"].append(
+            {
+                "phase": "cache",
+                "status": "stale",
+                "reason": "cached dependency marker no longer matches current runtime availability",
+                "missing": _missing_from_check(check),
+                "package_digest": package_digest,
+                "dependencies_digest": dependencies_digest,
+                "runtime_environment": runtime_environment,
+            }
+        )
+    missing_python = list(check["python_missing"])
+    missing_system_packages = list(check["system_packages_missing"])
     if missing_system_packages:
         update = _run("system_update", ["apt-get", "update"], timeout_seconds=120)
         report["installs"].append({"kind": "system_update", **update})
@@ -126,19 +137,27 @@ def ensure_dependencies(
                 report["errors"].append({"where": "dependency.system_packages", "message": "system dependency installation failed"})
         else:
             report["errors"].append({"where": "dependency.system_packages", "message": "apt-get update failed"})
-    if missing_system_binaries:
-        report["errors"].append(
-            {
-                "where": "dependency.system_binaries",
-                "message": "required system binaries are missing",
-                "binaries": missing_system_binaries,
-            }
-        )
     if missing_python:
         install = _run("python_install", [sys.executable, "-m", "pip", "install", *missing_python], timeout_seconds=300)
         report["installs"].append({"kind": "python_install", **install})
         if install["exit_code"] != 0:
             report["errors"].append({"where": "dependency.python_requirements", "message": "python dependency installation failed"})
+    post_check = _dependency_check(
+        config=config,
+        parsed_python=parsed_python,
+        package_digest=package_digest,
+        dependencies_digest=dependencies_digest,
+        phase="post_install_check",
+    )
+    report["checks"].append(post_check)
+    if _has_missing_dependencies(post_check):
+        report["errors"].append(
+            {
+                "where": "dependency.post_install",
+                "message": "dependencies remain unavailable after initialization",
+                "evidence": _missing_from_check(post_check),
+            }
+        )
     report["status"] = "failed" if report["errors"] else "complete"
     report["phase"] = report["status"]
     report["duration_ms"] = _duration_ms(started_at)
@@ -147,10 +166,79 @@ def ensure_dependencies(
         {
             "package_digest": package_digest,
             "dependencies_digest": dependencies_digest,
+            "runtime_environment": runtime_environment,
             "status": report["status"],
         },
     )
     return _write_report(artifacts_root, report)
+
+
+def _dependency_check(
+    *,
+    config: Any,
+    parsed_python: list[Requirement],
+    package_digest: str,
+    dependencies_digest: str,
+    phase: str,
+) -> dict[str, Any]:
+    missing_python = [
+        str(requirement)
+        for requirement in parsed_python
+        if not _python_requirement_available(requirement)
+    ]
+    missing_system_packages = _missing_system_packages(config.system_packages)
+    missing_system_binaries = [
+        binary
+        for binary in config.system_binaries
+        if binary and shutil.which(binary) is None
+    ]
+    return {
+        "phase": phase,
+        "status": "missing" if missing_python or missing_system_packages or missing_system_binaries else "complete",
+        "python_missing": missing_python,
+        "system_packages_missing": missing_system_packages,
+        "system_binaries_missing": missing_system_binaries,
+        "package_digest": package_digest,
+        "dependencies_digest": dependencies_digest,
+    }
+
+
+def _has_missing_dependencies(check: dict[str, Any]) -> bool:
+    return any(
+        bool(check.get(key))
+        for key in ("python_missing", "system_packages_missing", "system_binaries_missing")
+    )
+
+
+def _missing_from_check(check: dict[str, Any]) -> dict[str, list[str]]:
+    return {
+        "python": [str(item) for item in check.get("python_missing") or []],
+        "system_packages": [str(item) for item in check.get("system_packages_missing") or []],
+        "system_binaries": [str(item) for item in check.get("system_binaries_missing") or []],
+    }
+
+
+def _marker_matches(
+    marker: dict[str, Any],
+    *,
+    package_digest: str,
+    dependencies_digest: str,
+    runtime_environment: dict[str, str],
+) -> bool:
+    return (
+        marker.get("package_digest") == package_digest
+        and marker.get("dependencies_digest") == dependencies_digest
+        and marker.get("runtime_environment") == runtime_environment
+        and marker.get("status") == "complete"
+    )
+
+
+def _runtime_environment() -> dict[str, str]:
+    return {
+        "python_executable": sys.executable,
+        "python_version": sys.version.split()[0],
+        "sys_prefix": sys.prefix,
+    }
 
 
 def _python_requirement_available(requirement: Requirement) -> bool:
