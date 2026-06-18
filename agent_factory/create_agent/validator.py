@@ -4,23 +4,22 @@ import ast
 import json
 from pathlib import Path
 import py_compile
-import re
 import sys
-from hashlib import sha256
 from typing import Any
 
 from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
-from agent_factory.create_agent.mcp_inheritance import factory_mcp_tool_ids
-from agent_factory.create_agent.repair_policy import CreateAgentRepairPolicy
+from agent_factory.create_agent.contract_catalog import contract_resources, contract_skill, system_resources
+from agent_factory.create_agent.mcp_inheritance import factory_mcp_tool_ids, materialized_package_mcp_tool_ids
+from agent_factory.create_agent.package_paths import is_transient_package_path
+from agent_factory.create_agent.validation_state import package_digest
 from agent_factory.create_agent.models import (
     PackageToolProbeState,
     PackageValidationIssue,
     PackageValidationReport,
 )
-from agent_factory.create_agent.runtime_path_repair import find_runtime_path_repairs
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_contracts.schema import (
@@ -32,6 +31,7 @@ from agent_factory.runtime_contracts.schema import (
 )
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
+from agent_factory.runtime_kernel.activation import normalize_plan_and_execute_activation
 from agent_factory.runtime_kernel.planning import PLAN_AND_EXECUTE_PATTERN_ID, RUNTIME_PLAN_TOOL_ID
 from agent_factory.tooling.builtins.registry import get_builtin_tool_ids
 from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
@@ -39,7 +39,6 @@ from agent_factory.tooling.skills.schema import SkillGatewayState
 
 
 ValidationScope = str
-REPAIR_POLICY = CreateAgentRepairPolicy()
 CREATE_AGENT_RUNTIME_PATTERN_ID = "react_agent"
 CREATE_AGENT_RUNTIME_PATTERN_IDS = {CREATE_AGENT_RUNTIME_PATTERN_ID, PLAN_AND_EXECUTE_PATTERN_ID}
 
@@ -61,7 +60,6 @@ class CreateAgentPackageValidator:
             return _passed(root, scope=scope, changed_files=changed, summary="Workspace hygiene checks passed.")
         manifest_path = root / "agent_package.json"
         if not manifest_path.exists():
-            repair_bundle = REPAIR_POLICY.manifest_missing_bundle()
             return _with_scope(
                 PackageValidationReport(
                     package_root=str(root),
@@ -76,9 +74,8 @@ class CreateAgentPackageValidator:
                             actual="missing",
                             repair_hint="Create agent_package.json with package-relative contract and assembly references.",
                             target_files=["agent_package.json"],
-                            recommended_skill=repair_bundle.recommended_skill,
-                            recommended_resources=repair_bundle.recommended_resources,
-                            repair_bundle=repair_bundle,
+                            recommended_skill=_recommended_skill("package.manifest", ["agent_package.json"]),
+                            recommended_resources=_recommended_resources("01-package-identity-system", ["agent_package.json"]),
                         )
                     ],
                 ),
@@ -183,7 +180,7 @@ def _failed(
     scope: ValidationScope,
     changed_files: list[str],
 ) -> PackageValidationReport:
-    repair_bundle = REPAIR_POLICY.generic_bundle(where=where, target_files=target_files, exc=exc)
+    recommended_skill = _recommended_skill(where, target_files)
     return PackageValidationReport(
         package_root=str(root),
         validation_scope=scope,  # type: ignore[arg-type]
@@ -195,13 +192,12 @@ def _failed(
                 summary=f"{type(exc).__name__}: {exc}",
                 message=str(exc),
                 path=target_files[0] if target_files else "",
-                expected=REPAIR_POLICY.expected_for_where(where),
+                expected=_expected_for_where(where),
                 actual=f"{type(exc).__name__}: {exc}",
-                repair_hint=REPAIR_POLICY.repair_hint(where),
+                repair_hint=_repair_hint_for_where(where),
                 target_files=target_files,
-                recommended_skill=repair_bundle.recommended_skill,
-                recommended_resources=repair_bundle.recommended_resources,
-                repair_bundle=repair_bundle,
+                recommended_skill=recommended_skill,
+                recommended_resources=_recommended_resources(recommended_skill, target_files),
                 details=_exception_details(exc),
             )
         ],
@@ -224,15 +220,6 @@ def _package_load_schema_report(
             issues.append(issue)
     if not issues:
         return None
-    target_files = sorted({target for issue in issues for target in issue.target_files})
-    repair_bundle = REPAIR_POLICY.generic_bundle(
-        where="package.load.schema",
-        target_files=target_files or ["agent_package.json"],
-        exc=exc,
-    )
-    for index, issue in enumerate(issues):
-        if issue.repair_bundle is None:
-            issues[index] = issue.model_copy(update={"repair_bundle": repair_bundle})
     return PackageValidationReport(
         package_root=str(root),
         validation_scope=scope,  # type: ignore[arg-type]
@@ -257,11 +244,11 @@ def _schema_repair_issue_from_pydantic_error(error: dict[str, Any]) -> PackageVa
             path="assembly_spec.json",
             expected="AgentAssemblySpec.tools is an array of ToolSpec objects.",
             actual=_compact_actual(input_value),
-            repair_hint="Replace the invalid tools item with a complete ToolSpec object and ensure the package tool manifest uses the same shape.",
+            repair_hint="Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') so ToolSpec, manifest, package index, dependencies, and assembly tool access stay aligned.",
             target_files=["assembly_spec.json", "tools/"],
             recommended_skill="12-assembly-pattern-system",
             recommended_resources=[
-                "examples/assembly_spec.with_tools_and_bindings.json",
+                "examples/assembly_pattern_system.capability.json",
             ],
             schema_path="AgentAssemblySpec.tools[]",
             invalid_value_path=invalid_path,
@@ -280,11 +267,11 @@ def _schema_repair_issue_from_pydantic_error(error: dict[str, Any]) -> PackageVa
             path="assembly_spec.json",
             expected="BindingSet.node_bindings is an array of NodeBinding objects with binding_id, binding_type, target, and payload.",
             actual=_compact_actual(input_value),
-            repair_hint="Move node_id/provider_id style fields into target or payload, and replace the invalid binding with a complete NodeBinding object.",
+            repair_hint="Regenerate built-in pattern bindings through create_agent_authoring(action='configure_pattern_assembly') instead of hand-writing NodeBinding objects.",
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
             recommended_resources=[
-                "examples/assembly_spec.with_tools_and_bindings.json",
+                "examples/assembly_pattern_system.capability.json",
                 "references/final_validation.repair_mappings.json",
             ],
             schema_path="AgentAssemblySpec.bindings.node_bindings[]",
@@ -302,7 +289,7 @@ def _schema_repair_issue_from_pydantic_error(error: dict[str, Any]) -> PackageVa
             path="agent_package.json",
             expected="agent_package.json contracts is an object mapping required contract keys to package-relative paths.",
             actual=_compact_actual(input_value),
-            repair_hint="Rewrite the manifest contract reference and create the referenced file when it is missing.",
+            repair_hint="Restore scaffold-owned manifest contract references through package scaffold regeneration or create_agent_authoring reset_contract for malformed scaffold contracts; do not hand-write ad hoc contract paths.",
             target_files=["agent_package.json"],
             recommended_skill="01-package-identity-system",
             recommended_resources=["references/package_identity.schema.json"],
@@ -351,29 +338,32 @@ def _tool_spec_expected_shape() -> dict[str, Any]:
 
 def _tool_spec_repair_template() -> dict[str, Any]:
     return {
-        "id": "<tool_id>",
-        "description": "<specific runtime capability>",
-        "entrypoint": "python:tools/<tool_id>/tool.py:run",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
+        "tool": "create_agent_authoring",
+        "arguments": {
+            "action": "upsert_package_tool",
+            "tool_spec": {
+                "id": "<tool_id>",
+                "description": "<specific runtime capability>",
+                "entrypoint": "python:tools/<tool_id>/tool.py:run",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+                "resources": {},
+                "risk_level": "low",
+                "risk_evaluator": {"llm_mode": "disabled"},
+                "concurrent": True,
             },
-            "required": ["query"],
-            "additionalProperties": False,
+            "tool_source": "<complete tool.py source>",
+            "python_requirements": [],
+            "expose_to_nodes": ["answer"],
         },
-        "output_schema": {
-            "type": "object",
-            "properties": {
-                "result": {"type": "string"},
-            },
-            "required": ["result"],
-            "additionalProperties": True,
-        },
-        "resources": {},
-        "risk_level": "low",
-        "risk_evaluator": {"llm_mode": "disabled"},
-        "concurrent": True,
     }
 
 
@@ -388,12 +378,14 @@ def _node_binding_expected_shape() -> dict[str, Any]:
 
 def _node_binding_repair_template() -> dict[str, Any]:
     return {
-        "binding_id": "<node_id>_tools",
-        "binding_type": "tool_access",
-        "target": {"node_id": "<node_id>", "impl": "cognitive.answer"},
-        "payload": {
+        "tool": "create_agent_authoring",
+        "arguments": {
+            "action": "configure_pattern_assembly",
+            "pattern_id": "react_agent",
+            "prompts": {
+                "answer": "<runtime system prompt>",
+            },
             "allowed_tool_ids": ["<tool_id>"],
-            "approval_policy": "standard",
         },
     }
 
@@ -422,24 +414,19 @@ def _manifest_shape_report(
     ]
     if not missing_contracts and not missing_files:
         return None
-    targets = REPAIR_POLICY.manifest_contract_targets(
-        missing_contracts=missing_contracts,
-        missing_files=missing_files,
+    target_files = sorted(
+        {
+            "agent_package.json",
+            *(f"contracts/{contract_key}.json" for contract_key in missing_contracts),
+            *(relative_path for _contract_key, relative_path in missing_files),
+        }
     )
-    target_files = sorted({"agent_package.json", *(target.target_file for target in targets)})
     summary_parts = []
     if missing_contracts:
         summary_parts.append("missing required contracts: " + ", ".join(missing_contracts))
     if missing_files:
         summary_parts.append("missing referenced package files: " + ", ".join(path for _key, path in missing_files))
     summary = "; ".join(summary_parts)
-    repair_bundle = REPAIR_POLICY.manifest_contract_bundle(
-        missing_contracts=missing_contracts,
-        missing_files=missing_files,
-        target_files=target_files,
-        targets=targets,
-        summary=summary,
-    )
     issue = PackageValidationIssue(
         where="package.manifest_contracts",
         summary=summary,
@@ -447,12 +434,14 @@ def _manifest_shape_report(
         path="agent_package.json",
         expected="agent_package.json declares all RuntimeKernel required contracts and every referenced file exists.",
         actual=summary,
-        repair_hint="Repair agent_package.json and the referenced package files using validator targets and recommended skill resources, then rerun validation.",
+        repair_hint="Restore the scaffolded required contract files or regenerate the package structure through the deterministic scaffold/authoring path.",
         target_files=target_files,
-        recommended_skill=repair_bundle.recommended_skill,
-        recommended_resources=repair_bundle.recommended_resources,
-        repair_bundle=repair_bundle,
-        details={"missing_contracts": missing_contracts, "missing_files": repair_bundle.inputs["missing_files"]},
+        recommended_skill="01-package-identity-system",
+        recommended_resources=list(system_resources("package_identity")),
+        details={
+            "missing_contracts": missing_contracts,
+            "missing_files": [{"contract_key": key, "target_file": path} for key, path in missing_files],
+        },
     )
     return _with_scope(
         PackageValidationReport(
@@ -471,36 +460,9 @@ def _runtime_path_report(
     scope: ValidationScope,
     changed_files: list[str],
 ) -> PackageValidationReport | None:
-    repairs = find_runtime_path_repairs(
-        package_root=root,
-        contract_paths=package.manifest.contracts,
-        contracts=package.contracts,
-    )
-    if not repairs:
+    issues = _runtime_path_issues(root, package)
+    if not issues:
         return None
-    bundles = [REPAIR_POLICY.runtime_path_bundle(repair.to_input()) for repair in repairs]
-    issues = []
-    for repair, bundle in zip(repairs, bundles, strict=True):
-        issues.append(
-            PackageValidationIssue(
-                where="runtime_contracts.path",
-                summary=f"{repair.contract_key}.{repair.field_path} escapes package workspace",
-                message=(
-                    f"{repair.contract_key}.{repair.field_path} is {repair.current_value!r}; "
-                    f"use package-relative {repair.replacement_value!r}."
-                ),
-                path=repair.target_file,
-                expected="Runtime contract filesystem paths resolve inside the package workspace.",
-                actual=repair.current_value,
-                repair_hint="Apply the machine repair bundle to normalize runtime contract paths.",
-                target_files=[repair.target_file],
-                recommended_skill=bundle.recommended_skill,
-                recommended_resources=bundle.recommended_resources,
-                repair_bundle=bundle,
-                details=repair.to_input(),
-            )
-        )
-    target_files = sorted({repair.target_file for repair in repairs})
     return _with_scope(
         PackageValidationReport(
             package_root=str(root),
@@ -510,6 +472,75 @@ def _runtime_path_report(
         scope=scope,
         changed_files=changed_files,
     )
+
+
+RUNTIME_CONTRACT_PATH_FIELDS: dict[str, tuple[str, ...]] = {
+    "artifact": ("config.root", "config.index_path"),
+    "knowledge": ("config.root", "config.catalog_path", "config.rag_store.path"),
+    "memory": (
+        "config.memory_system.store.path",
+        "config.memory_system.background.journal_root",
+    ),
+    "scheduler": ("config.store_path",),
+    "session": ("config.session_root", "config.checkpoint_path"),
+    "tools": ("config.instance_extension_root",),
+    "trace": ("config.root",),
+}
+
+
+def _runtime_path_issues(root: Path, package: Any) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    for contract_key, fields in sorted(RUNTIME_CONTRACT_PATH_FIELDS.items()):
+        payload = package.contracts.get(contract_key)
+        if payload is None:
+            continue
+        contract_payload = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        if not isinstance(contract_payload, dict):
+            continue
+        target_file = package.manifest.contracts.get(contract_key, f"contracts/{contract_key}.json")
+        for field_path in fields:
+            current = _get_nested_value(contract_payload, field_path)
+            if not isinstance(current, str) or _path_resolves_inside(root, current):
+                continue
+            issues.append(
+                PackageValidationIssue(
+                    where="runtime_contracts.path",
+                    summary=f"{contract_key}.{field_path} escapes package workspace",
+                    message=f"{contract_key}.{field_path} is {current!r}; runtime paths must stay package-relative.",
+                    path=target_file,
+                    expected="Runtime contract filesystem paths resolve inside the package workspace.",
+                    actual=current,
+                    repair_hint="Restore the scaffolded package-relative runtime path for this contract or reconfigure the capability through its deterministic authoring path.",
+                    target_files=[target_file],
+                    recommended_skill=_recommended_skill("runtime_contracts.path", [target_file]),
+                    recommended_resources=_recommended_resources(_recommended_skill("runtime_contracts.path", [target_file]), [target_file]),
+                    details={"contract_key": contract_key, "field_path": field_path, "current_value": current},
+                )
+            )
+    return issues
+
+
+def _get_nested_value(payload: dict[str, Any], field_path: str) -> Any:
+    value: Any = payload
+    for part in field_path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _path_resolves_inside(root: Path, value: str) -> bool:
+    raw = value.strip()
+    if not raw:
+        return False
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _runtime_contract_build_report(
@@ -552,7 +583,7 @@ def _runtime_contract_issue_from_pydantic_error(package: Any, error: dict[str, A
             path=_contract_path(package, "scheduler_seed"),
             expected="SchedulerSeedContract graph_run targets use payload.message to describe the scheduled agent run.",
             actual=_compact_actual(input_value),
-            repair_hint="Rewrite the scheduler seed target payload with a message field, then call create_agent_validate with the appropriate scope.",
+            repair_hint="Regenerate this scheduler seed with create_agent_authoring(action='upsert_scheduler_seed') using a graph_run target payload that includes message.",
             target_files=[_contract_path(package, "scheduler_seed")],
             recommended_skill="15-scheduler-seed-system",
             recommended_resources=[
@@ -571,13 +602,26 @@ def _runtime_contract_issue_from_pydantic_error(package: Any, error: dict[str, A
                 }
             },
             repair_template={
-                "target": {
-                    "target_type": "graph_run",
-                    "payload": {
-                        "message": "<scheduled task instruction from task_content/user request>",
-                        "thread_policy": "new_thread_per_run",
+                "tool": "create_agent_authoring",
+                "arguments": {
+                    "action": "upsert_scheduler_seed",
+                    "seed": {
+                        "seed_id": "<seed_id>",
+                        "title": "<schedule title>",
+                        "human_schedule": "<human schedule>",
+                        "schedule_type": "cron",
+                        "schedule_expr": "<cron expression>",
+                        "timezone": "<timezone>",
+                        "target": {
+                            "target_type": "graph_run",
+                            "payload": {
+                                "message": "<scheduled task instruction from task_content/user request>",
+                                "thread_policy": "new_thread_per_run",
+                            },
+                        },
+                        "task_content": "<scheduled task instruction>",
                     },
-                }
+                },
             },
             replace_strategy="replace_object",
             details={"pydantic_error": error},
@@ -590,7 +634,7 @@ def _runtime_contract_issue_from_pydantic_error(package: Any, error: dict[str, A
             path=_contract_path(package, "scheduler_seed"),
             expected="contracts/scheduler_seed.json follows scheduler_seed_contract.v0.",
             actual=_compact_actual(input_value),
-            repair_hint="Repair only contracts/scheduler_seed.json using scheduler seed validator evidence.",
+            repair_hint="Regenerate the scheduler seed through create_agent_authoring(action='upsert_scheduler_seed') using the validator evidence.",
             target_files=[_contract_path(package, "scheduler_seed")],
             recommended_skill="15-scheduler-seed-system",
             recommended_resources=[
@@ -656,11 +700,7 @@ def _workspace_hygiene(root: Path, changed_files: list[str]) -> PackageValidatio
             elif path.suffix in {".yaml", ".yml"}:
                 yaml.load(path.read_text(encoding="utf-8"))
         except Exception as exc:
-            repair_bundle = REPAIR_POLICY.generic_bundle(
-                where="workspace_hygiene.parse",
-                target_files=[relative],
-                exc=exc,
-            )
+            recommended_skill = _recommended_skill("workspace_hygiene.parse", [relative])
             return PackageValidationReport(
                 package_root=str(root),
                 summary=f"{relative} is not parseable: {type(exc).__name__}: {exc}",
@@ -674,9 +714,8 @@ def _workspace_hygiene(root: Path, changed_files: list[str]) -> PackageValidatio
                         actual=f"{type(exc).__name__}: {exc}",
                         repair_hint="Repair the file syntax before continuing package validation.",
                         target_files=[relative],
-                        recommended_skill=repair_bundle.recommended_skill,
-                        recommended_resources=repair_bundle.recommended_resources,
-                        repair_bundle=repair_bundle,
+                        recommended_skill=recommended_skill,
+                        recommended_resources=_recommended_resources(recommended_skill, [relative]),
                         details=_exception_details(exc),
                     )
                 ],
@@ -733,12 +772,7 @@ def _json_syntax_report(
             # Extract helpful error context
             error_msg = str(exc)
             repair_hint = _json_error_repair_hint(error_msg)
-
-            repair_bundle = REPAIR_POLICY.generic_bundle(
-                where="json_syntax",
-                target_files=[relative_path],
-                exc=exc,
-            )
+            recommended_skill = _recommended_skill("json_syntax", [relative_path])
 
             return _with_scope(
                 PackageValidationReport(
@@ -754,9 +788,8 @@ def _json_syntax_report(
                             actual=f"JSONDecodeError: {error_msg}",
                             repair_hint=repair_hint,
                             target_files=[relative_path],
-                            recommended_skill=repair_bundle.recommended_skill,
-                            recommended_resources=repair_bundle.recommended_resources,
-                            repair_bundle=repair_bundle,
+                            recommended_skill=recommended_skill,
+                            recommended_resources=_recommended_resources(recommended_skill, [relative_path]),
                             details={"line": getattr(exc, "lineno", None), "column": getattr(exc, "colno", None)},
                         )
                     ],
@@ -766,11 +799,7 @@ def _json_syntax_report(
             )
         except ValidationError as exc:
             # Pydantic schema validation failed
-            repair_bundle = REPAIR_POLICY.generic_bundle(
-                where="json_schema",
-                target_files=[relative_path],
-                exc=exc,
-            )
+            recommended_skill = _recommended_skill("json_schema", [relative_path])
 
             return _with_scope(
                 PackageValidationReport(
@@ -784,11 +813,10 @@ def _json_syntax_report(
                             path=relative_path,
                             expected=f"Valid {model_class.__name__} schema",
                             actual=f"ValidationError: {exc}",
-                            repair_hint=f"Fix the JSON structure to match {model_class.__name__} schema. Common issues: missing required fields, wrong field types, extra fields not allowed.",
+                            repair_hint=_json_schema_repair_hint(relative_path),
                             target_files=[relative_path],
-                            recommended_skill=repair_bundle.recommended_skill,
-                            recommended_resources=repair_bundle.recommended_resources,
-                            repair_bundle=repair_bundle,
+                            recommended_skill=recommended_skill,
+                            recommended_resources=_recommended_resources(recommended_skill, [relative_path]),
                             details=_exception_details(exc),
                         )
                     ],
@@ -819,6 +847,23 @@ def _json_error_repair_hint(error_msg: str) -> str:
     return "Fix JSON syntax. Common issues: trailing commas, extra/missing braces, unescaped quotes, missing commas."
 
 
+def _json_schema_repair_hint(relative_path: str) -> str:
+    if relative_path == "agent_package.json":
+        return "Use create_agent_authoring(action='set_identity') or create_agent_authoring(action='configure_pattern_assembly') for manifest-owned fields; reset malformed scaffold contract files with create_agent_authoring(action='reset_contract', contract_key=...)."
+    if relative_path == "assembly_spec.json":
+        return "Regenerate built-in pattern assembly through create_agent_authoring(action='configure_pattern_assembly') so prompt, model_operation, tool_access, render, and activation stay coherent."
+    if relative_path == "resources.json" or relative_path == "contracts/resources.json":
+        return "Regenerate runtime resources through create_agent_authoring(action='upsert_resources') instead of hand-editing resource contract shape."
+    if relative_path == "contracts/scheduler_seed.json":
+        return "Regenerate scheduler seeds through create_agent_authoring(action='upsert_scheduler_seed') instead of hand-editing scheduler seed contract shape."
+    if relative_path == "contracts/state.json":
+        return "Regenerate package state through create_agent_authoring(action='upsert_state') so contract, schema, and initial state stay aligned."
+    if relative_path.startswith("contracts/"):
+        contract_key = Path(relative_path).stem
+        return f"Reset scaffold-owned contract shape with create_agent_authoring(action='reset_contract', contract_key='{contract_key}') unless a capability-specific authoring action applies."
+    return "Repair only the validator-indicated target path. Prefer create_agent_authoring for stable package surfaces; use generic file edits only for capability content not covered by authoring actions."
+
+
 def _python_syntax(root: Path, changed_files: list[str]) -> PackageValidationReport | None:
     candidates = [root / item for item in changed_files if item.endswith(".py")]
     if not candidates and (root / "tools").exists():
@@ -832,11 +877,7 @@ def _python_syntax(root: Path, changed_files: list[str]) -> PackageValidationRep
             py_compile.compile(str(path), doraise=True)
         except Exception as exc:
             relative = _relative(root, path)
-            repair_bundle = REPAIR_POLICY.generic_bundle(
-                where="python_syntax.compile",
-                target_files=[relative],
-                exc=exc,
-            )
+            recommended_skill = _recommended_skill("python_syntax.compile", [relative])
             return PackageValidationReport(
                 package_root=str(root),
                 summary=f"{relative} failed Python syntax validation: {type(exc).__name__}: {exc}",
@@ -850,9 +891,8 @@ def _python_syntax(root: Path, changed_files: list[str]) -> PackageValidationRep
                         actual=f"{type(exc).__name__}: {exc}",
                         repair_hint="Fix the generated Python entrypoint syntax and keep dependencies declared in the package.",
                         target_files=[relative],
-                        recommended_skill=repair_bundle.recommended_skill,
-                        recommended_resources=repair_bundle.recommended_resources,
-                        repair_bundle=repair_bundle,
+                        recommended_skill=recommended_skill,
+                        recommended_resources=_recommended_resources(recommended_skill, [relative]),
                         details=_exception_details(exc),
                     )
                 ],
@@ -885,6 +925,7 @@ def _package_file_contract_report(
                 target_files=[_relative(root, Path(manifest_path))],
                 recommended_skill="10-package-tool-system",
             ))
+    issues.extend(_agent_identity_alignment_issues(package))
     issues.extend(_runtime_pattern_alignment_issues(package))
     issues.extend(_manifest_asset_index_issues(root, manifest, package_tools))
     issues.extend(_tools_contract_issues(package))
@@ -892,6 +933,7 @@ def _package_file_contract_report(
     issues.extend(_assembly_tool_issues(package, package_tools))
     inherited_mcp_tools = _inherited_mcp_tool_ids()
     issues.extend(_tool_access_issues(package, package_tools, inherited_mcp_tools))
+    issues.extend(_mcp_inheritance_materialization_issues(root, package, inherited_mcp_tools))
     issues.extend(_scheduler_tool_target_issues(package, package_tools, inherited_mcp_tools))
     if not issues:
         return None
@@ -917,9 +959,50 @@ def _runtime_pattern_alignment_issues(package: Any) -> list[PackageValidationIss
             path="agent_package.json",
             expected="agent_package.json.runtime.pattern_id equals assembly_spec.json.runtime.pattern_id.",
             actual=f"agent_package.json={manifest_pattern or '<empty>'}; assembly_spec.json={assembly_pattern or '<empty>'}",
-            repair_hint="Update agent_package.json.runtime.pattern_id or assembly_spec.json.runtime.pattern_id so they match.",
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') with the selected built-in pattern so manifest, assembly, and render stay aligned.",
             target_files=["agent_package.json", "assembly_spec.json", "render_manifest.json"],
             recommended_skill="01-package-identity-system",
+        )
+    ]
+
+
+def _agent_identity_alignment_issues(package: Any) -> list[PackageValidationIssue]:
+    manifest_agent = getattr(package.manifest, "agent", None)
+    assembly_agent = getattr(package.assembly_spec, "agent", None)
+    fields = ("id", "name", "description", "version")
+    mismatches = [
+        field
+        for field in fields
+        if str(getattr(manifest_agent, field, "") or "") != str(getattr(assembly_agent, field, "") or "")
+    ]
+    if not mismatches:
+        return []
+    manifest_payload = {field: getattr(manifest_agent, field, None) for field in fields}
+    assembly_payload = {field: getattr(assembly_agent, field, None) for field in fields}
+    return [
+        _contract_issue(
+            where="package.agent_identity_alignment",
+            summary="agent_package.json agent identity does not match assembly_spec.json agent identity",
+            message="The package manifest and assembly spec must describe the same produced Agent identity.",
+            path="agent_package.json",
+            expected="agent_package.json.agent equals assembly_spec.json.agent for id, name, description, and version.",
+            actual=f"mismatched fields: {', '.join(mismatches)}",
+            repair_hint="Use create_agent_authoring(action='set_identity') so agent_package.json and assembly_spec.json identity stay aligned.",
+            target_files=["agent_package.json", "assembly_spec.json"],
+            recommended_skill="01-package-identity-system",
+            expected_shape={"agent": manifest_payload},
+            repair_template={
+                "tool": "create_agent_authoring",
+                "arguments": {
+                    "action": "set_identity",
+                    "agent": manifest_payload,
+                },
+            },
+            details={
+                "mismatched_fields": mismatches,
+                "agent_package_json_agent": manifest_payload,
+                "assembly_spec_json_agent": assembly_payload,
+            },
         )
     ]
 
@@ -957,7 +1040,7 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
                 path="assembly_spec.json",
                 expected='assembly_spec.runtime.pattern_id is "react_agent" or "plan_and_execute".',
                 actual=pattern_id or "<empty>",
-                repair_hint='Set assembly_spec.runtime.pattern_id to "react_agent" for direct ReAct or "plan_and_execute" for planned execution.',
+                repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') with react_agent or plan_and_execute.",
                 target_files=["assembly_spec.json", "agent_package.json"],
                 recommended_skill="12-assembly-pattern-system",
             )
@@ -973,7 +1056,7 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
                 path="assembly_spec.json",
                 expected="assembly_spec.runtime.pattern_id references a supported built-in runtime pattern.",
                 actual=pattern_id or "<empty>",
-                repair_hint='Set assembly_spec.runtime.pattern_id to "react_agent" or "plan_and_execute".',
+                repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') with react_agent or plan_and_execute.",
                 target_files=["assembly_spec.json"],
                 recommended_skill="12-assembly-pattern-system",
             )
@@ -994,7 +1077,7 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
                 actual=f"{node_id or '<empty>'}.{impl or '<empty>'}",
                 summary=f"binding {binding.binding_id} targets unknown pattern node {node_id or '<empty>'}",
                 message=f"The selected pattern {pattern.pattern_id} has no node id {node_id or '<empty>'}.",
-                repair_template={"target": {"node_id": "<pattern_node_id>", "impl": "<pattern_node_impl>"}},
+                repair_template=_node_binding_repair_template(),
             ))
             continue
         if impl != actual_impl:
@@ -1005,7 +1088,7 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
                 actual=impl or "<empty>",
                 summary=f"binding {binding.binding_id} target impl does not match pattern node {node_id}",
                 message=f"The selected pattern {pattern.pattern_id} defines node {node_id} with impl {actual_impl}, but the binding targets {impl or '<empty>'}.",
-                repair_template={"target": {"node_id": node_id, "impl": actual_impl}},
+                repair_template=_node_binding_repair_template(),
             ))
             continue
         if binding.binding_type == "prompt":
@@ -1035,12 +1118,7 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
             actual="missing prompt binding for model_operation.prompt_id",
             summary=f"model_operation binding {binding.binding_id} references missing prompt_id {prompt_id}",
             message="Prompt bindings are node-scoped; model_operation.prompt_id must resolve to a prompt binding on the same pattern node and impl.",
-            repair_template={
-                "binding_id": f"{node_id}_prompt",
-                "binding_type": "prompt",
-                "target": {"node_id": node_id, "impl": impl},
-                "payload": {"prompt_id": prompt_id, "template": "<system prompt>", "variables": []},
-            },
+            repair_template=_node_binding_repair_template(),
         ))
     if pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
         issues.extend(_plan_and_execute_binding_issues(package))
@@ -1050,6 +1128,22 @@ def _binding_target_issues(package: Any, pattern_registry: Any) -> list[PackageV
 def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssue]:
     bindings = list(package.assembly_spec.bindings.node_bindings)
     issues: list[PackageValidationIssue] = []
+    activation = getattr(package.assembly_spec.runtime, "agent_config", {}).get("activation")
+    if not _valid_plan_activation(activation):
+        issues.append(_contract_issue(
+            where="assembly.plan_and_execute.activation",
+            summary="plan_and_execute activation is missing or incomplete",
+            message=(
+                "The plan_and_execute runtime needs activation guidance so casual or incomplete inputs do not "
+                "start planner/executor work."
+            ),
+            path="assembly_spec.json",
+            expected="runtime.agent_config.activation has workflow_goal, start_when, and ask_when_missing.",
+            actual="missing or incomplete",
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute with activation.",
+            target_files=["assembly_spec.json"],
+            recommended_skill="12-assembly-pattern-system",
+        ))
     for node_id in ("planner", "executor", "final_answer"):
         if not _has_binding(bindings, node_id=node_id, binding_type="prompt"):
             issues.append(_missing_plan_binding_issue(node_id=node_id, binding_type="prompt"))
@@ -1064,7 +1158,7 @@ def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssu
             path="assembly_spec.json",
             expected='planner tool_access.allowed_tool_ids is ["runtime_plan"].',
             actual=", ".join(planner_tools) if planner_tools else "<missing>",
-            repair_hint='Add planner tool_access with only "runtime_plan".',
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute so planner/executor/final_answer bindings are regenerated coherently.",
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
         ))
@@ -1077,7 +1171,7 @@ def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssu
             path="assembly_spec.json",
             expected='executor tool_access.allowed_tool_ids includes "runtime_plan".',
             actual=", ".join(executor_tools) if executor_tools else "<missing>",
-            repair_hint='Add "runtime_plan" to executor tool_access.allowed_tool_ids.',
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute so executor tool access includes runtime_plan coherently.",
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
         ))
@@ -1090,11 +1184,15 @@ def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssu
             path="assembly_spec.json",
             expected="no tool_access binding for final_answer, or an empty allowed_tool_ids list.",
             actual=", ".join(final_tools),
-            repair_hint="Remove final_answer tool_access or clear final_answer allowed_tool_ids.",
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute so final_answer has no runtime tools.",
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
         ))
     return issues
+
+
+def _valid_plan_activation(value: Any) -> bool:
+    return bool(normalize_plan_and_execute_activation(value))
 
 
 def _has_binding(bindings: list[Any], *, node_id: str, binding_type: str) -> bool:
@@ -1128,7 +1226,7 @@ def _missing_plan_binding_issue(*, node_id: str, binding_type: str) -> PackageVa
         path="assembly_spec.json",
         expected=f"{node_id} has a {binding_type} binding targeting cognitive.answer.",
         actual="missing",
-        repair_hint=f"Add a {binding_type} binding for {node_id}.",
+        repair_hint="Regenerate plan_and_execute bindings through create_agent_authoring(action='configure_pattern_assembly').",
         target_files=["assembly_spec.json"],
         recommended_skill="12-assembly-pattern-system",
     )
@@ -1154,7 +1252,7 @@ def _binding_target_issue(
         repair_hint="Align binding.target with the selected runtime pattern node table, then rerun create_agent_validate.",
         target_files=["assembly_spec.json"],
         recommended_skill="12-assembly-pattern-system",
-        recommended_resources=["examples/assembly_spec.with_tools_and_bindings.json"],
+        recommended_resources=["examples/assembly_pattern_system.capability.json"],
         schema_path="AgentAssemblySpec.bindings.node_bindings[].target",
         invalid_value_path=f"assembly_spec.json:/bindings/node_bindings/{index}/target",
         expected_shape={
@@ -1181,7 +1279,7 @@ def _package_tool_probe_report(
         return None
     state = _read_probe_state(root)
     latest = state.latest_by_tool()
-    current_digest = _package_digest(root)
+    current_digest = package_digest(root)
     issues: list[PackageValidationIssue] = []
     scheduler_tool_ids = set(_scheduler_package_tool_ids(package, package_tools))
     required_tool_ids = sorted(set(package_tools) | scheduler_tool_ids)
@@ -1271,7 +1369,7 @@ def _asset_index_issues(
             path="agent_package.json",
             expected=f"agent_package.json.{field_name} indexes every generated {field_name} asset.",
             actual=", ".join(missing),
-            repair_hint=f"Add the missing package-relative asset paths to agent_package.json.{field_name}.",
+            repair_hint="Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') so the manifest index stays aligned.",
             target_files=["agent_package.json", *missing],
             recommended_skill=recommended_skill,
         ))
@@ -1283,7 +1381,7 @@ def _asset_index_issues(
             path="agent_package.json",
             expected=f"Every agent_package.json.{field_name} entry exists in the package.",
             actual=", ".join(dangling),
-            repair_hint=f"Create the referenced files or remove stale entries from agent_package.json.{field_name}.",
+            repair_hint="Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') or remove the stale package tool with create_agent_authoring(action='remove_package_tool', tool_id=...).",
             target_files=["agent_package.json", *dangling],
             recommended_skill=recommended_skill,
         ))
@@ -1303,7 +1401,7 @@ def _assembly_tool_issues(package: Any, package_tools: dict[str, Any]) -> list[P
                 path="assembly_spec.json",
                 expected="assembly_spec.tools contains a ToolSpec object for every package tool manifest.",
                 actual=f"missing {tool_id}",
-                repair_hint="Add the package tool ToolSpec object to assembly_spec.json tools.",
+                repair_hint="Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') so assembly_spec.tools matches the package tool manifest.",
                 target_files=["assembly_spec.json", f"tools/{tool_id}/manifest.json"],
                 recommended_skill="12-assembly-pattern-system",
             ))
@@ -1317,7 +1415,7 @@ def _assembly_tool_issues(package: Any, package_tools: dict[str, Any]) -> list[P
                 path="assembly_spec.json",
                 expected="assembly_spec.tools ToolSpec fields match tools/<id>/manifest.json.",
                 actual=", ".join(mismatches),
-                repair_hint="Copy the canonical ToolSpec shape from the package tool manifest into assembly_spec.json.",
+                repair_hint="Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') so assembly_spec.tools and the package tool manifest match.",
                 target_files=["assembly_spec.json", f"tools/{tool_id}/manifest.json"],
                 recommended_skill="12-assembly-pattern-system",
             ))
@@ -1340,7 +1438,7 @@ def _tools_contract_issues(package: Any) -> list[PackageValidationIssue]:
                 path="contracts/tools.json",
                 expected="contracts/tools.json builtin_tool_ids contains only runtime builtin tool ids.",
                 actual=tool_id,
-                repair_hint="Remove create-agent manufacturing tool ids from contracts/tools.json.",
+                repair_hint="Regenerate runtime tool exposure through create_agent_authoring(action='configure_pattern_assembly') without create-agent manufacturing tool ids.",
                 target_files=["contracts/tools.json"],
                 recommended_skill="09-tools-system",
             ))
@@ -1352,7 +1450,7 @@ def _tools_contract_issues(package: Any) -> list[PackageValidationIssue]:
                 path="contracts/tools.json",
                 expected="contracts/tools.json builtin_tool_ids contains implemented runtime builtin tool ids.",
                 actual=tool_id,
-                repair_hint="Use an implemented runtime builtin tool id or remove the stale builtin reference.",
+                repair_hint="Regenerate runtime tool exposure through create_agent_authoring(action='configure_pattern_assembly') with implemented runtime builtin, package, or inherited MCP tool ids only.",
                 target_files=["contracts/tools.json"],
                 recommended_skill="09-tools-system",
             ))
@@ -1365,33 +1463,62 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
     contract = package.contracts.get("dependencies")
     if not isinstance(contract, DependenciesContract):
         return []
-    declared = _declared_requirement_names(contract.config.python_requirements)
     imports_by_tool = _package_tool_external_imports(root=root, tool_ids=set(package_tools))
     issues: list[PackageValidationIssue] = []
     for tool_id, imports in sorted(imports_by_tool.items()):
-        missing = sorted(module for module in imports if _normalize_requirement_name(module) not in declared)
-        if not missing:
+        external_imports = sorted(imports)
+        if not external_imports or contract.config.python_requirements:
             continue
-        source_files = sorted({path for module in missing for path in imports[module]})
+        source_files = sorted({path for module in external_imports for path in imports[module]})
         issues.append(_contract_issue(
             where="dependencies.package_tool_imports",
             summary=f"package tool {tool_id} imports undeclared Python dependencies",
             message=(
-                f"tools/{tool_id} imports third-party modules not declared in "
-                f"contracts/dependencies.json config.python_requirements: {', '.join(missing)}"
+                f"tools/{tool_id} imports third-party modules but contracts/dependencies.json "
+                f"config.python_requirements is empty. External imports: {', '.join(external_imports)}"
             ),
             path="contracts/dependencies.json",
-            expected="Every non-stdlib package tool import is declared in dependencies.config.python_requirements.",
-            actual=", ".join(missing),
+            expected="Package tools with external imports declare installable Python distributions in dependencies.config.python_requirements.",
+            actual="python_requirements is empty",
             repair_hint=(
-                "Add the required Python distributions to contracts/dependencies.json config.python_requirements. "
-                "Use the imported module name as the starting point unless the Python distribution name is known to differ."
+                "Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') with the required installable distributions in requirements, then probe it in Docker."
             ),
             target_files=["contracts/dependencies.json", *source_files],
-            recommended_skill="02-model-system",
+            recommended_skill="10-package-tool-system",
+            expected_shape={
+                "type": "dependencies",
+                "version": "dependencies_contract.v0",
+                "enabled": True,
+                "config": {
+                    "python_requirements": ["<installable-distribution-name>"],
+                    "system_packages": [],
+                    "system_binaries": [],
+                    "install_mode": "sandbox_init",
+                },
+            },
+            repair_template={
+                "tool": "create_agent_authoring",
+                "arguments": {
+                    "action": "upsert_package_tool",
+                    "tool_spec": {
+                        "id": tool_id,
+                        "description": "<specific runtime capability>",
+                        "entrypoint": f"python:tools/{tool_id}/tool.py:run",
+                        "input_schema": {"type": "object", "additionalProperties": True},
+                        "output_schema": {"type": "object", "additionalProperties": True},
+                        "resources": {},
+                        "risk_level": "low",
+                        "risk_evaluator": {"llm_mode": "disabled"},
+                        "concurrent": True,
+                    },
+                    "tool_source": "<current corrected tool.py source>",
+                    "python_requirements": ["<installable-distribution-name>"],
+                    "expose_to_nodes": ["answer"],
+                },
+            },
             details={
                 "tool_id": tool_id,
-                "missing_imports": missing,
+                "external_imports": external_imports,
                 "declared_python_requirements": list(contract.config.python_requirements),
                 "source_files": source_files,
             },
@@ -1469,27 +1596,6 @@ def _local_module_exists(*, root: Path, source: Path, module: str) -> bool:
     return any(candidate.exists() for candidate in candidates)
 
 
-def _declared_requirement_names(requirements: list[str]) -> set[str]:
-    names: set[str] = set()
-    for requirement in requirements:
-        name = _requirement_name(requirement)
-        if name:
-            names.add(name)
-    return names
-
-
-def _requirement_name(requirement: str) -> str:
-    text = str(requirement or "").strip().split(";", 1)[0].strip()
-    if " @ " in text:
-        text = text.split(" @ ", 1)[0].strip()
-    match = re.match(r"([A-Za-z0-9_.-]+)", text)
-    return _normalize_requirement_name(match.group(1)) if match else ""
-
-
-def _normalize_requirement_name(value: str) -> str:
-    return re.sub(r"[-_.]+", "-", str(value or "").strip().lower())
-
-
 def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
     legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools)
@@ -1510,7 +1616,7 @@ def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_m
                     path="assembly_spec.json",
                     expected="Only runtime builtin tools, package tools, and inherited MCP tools are exposed to produced agents.",
                     actual=tool_id,
-                    repair_hint="Remove create-agent manufacturing tool ids from tool_access allowed_tool_ids.",
+                    repair_hint="Regenerate pattern assembly through create_agent_authoring(action='configure_pattern_assembly') without create-agent manufacturing tool ids.",
                     target_files=["assembly_spec.json"],
                     recommended_skill="12-assembly-pattern-system",
                 ))
@@ -1522,11 +1628,63 @@ def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_m
                     path="assembly_spec.json",
                     expected="tool_access.allowed_tool_ids contains runtime builtin, generated package, or inherited MCP tool ids.",
                     actual=tool_id,
-                    repair_hint="Use an implemented runtime builtin tool id, add a package tool manifest with the same id, or reference an available inherited MCP candidate.",
+                    repair_hint="Use create_agent_authoring(action='configure_pattern_assembly') with implemented runtime builtin, generated package, or inherited MCP tool ids. If the tool should be package-owned, create it through create_agent_authoring(action='upsert_package_tool') first.",
                     target_files=["assembly_spec.json", "contracts/tools.json", "tools/"],
                     recommended_skill="09-tools-system",
                 ))
     return issues
+
+
+def _mcp_inheritance_materialization_issues(root: Path, package: Any, inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
+    referenced = _referenced_tool_access_ids(package)
+    referenced_candidates = sorted(tool_id for tool_id in referenced if tool_id in inherited_mcp_tools)
+    if not referenced_candidates:
+        return []
+    try:
+        materialized = materialized_package_mcp_tool_ids(root)
+    except Exception as exc:
+        return [
+            _contract_issue(
+                where="mcp_inheritance.inspect",
+                summary="referenced MCP tool inheritance could not be inspected",
+                message=f"Unable to inspect package MCP extension materialization: {type(exc).__name__}: {exc}",
+                path="extensions/mcp_servers.json",
+                expected="Referenced factory MCP candidates are materialized into the package extension config before validation.",
+                actual=f"{type(exc).__name__}: {exc}",
+                repair_hint="Call create_agent_authoring(action='materialize_mcp_inheritance') after configuring MCP tool access, then rerun create_agent_validate.",
+                target_files=["contracts/tools.json", "extensions/mcp_servers.json"],
+                recommended_skill="09-tools-system",
+            )
+        ]
+    missing = sorted(set(referenced_candidates) - set(materialized))
+    if not missing:
+        return []
+    return [
+        _contract_issue(
+            where="mcp_inheritance.materialized",
+            summary="referenced MCP tools have not been inherited into the package",
+            message=f"tool_access references factory MCP candidates that are not materialized in package extensions: {', '.join(missing)}",
+            path="extensions/mcp_servers.json",
+            expected="create_agent_authoring(action='materialize_mcp_inheritance') has written the package MCP server config.",
+            actual=", ".join(missing),
+            repair_hint="Call create_agent_authoring(action='materialize_mcp_inheritance') before full_static validation or publish.",
+            target_files=["contracts/tools.json", "extensions/mcp_servers.json"],
+            recommended_skill="09-tools-system",
+            repair_template={
+                "tool": "create_agent_authoring",
+                "arguments": {"action": "materialize_mcp_inheritance"},
+            },
+        )
+    ]
+
+
+def _referenced_tool_access_ids(package: Any) -> set[str]:
+    ids: set[str] = set()
+    for binding in package.assembly_spec.bindings.node_bindings:
+        if binding.binding_type != "tool_access":
+            continue
+        ids.update(str(tool_id).strip() for tool_id in (getattr(binding.payload, "allowed_tool_ids", []) or []) if str(tool_id).strip())
+    return ids
 
 
 def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
@@ -1547,7 +1705,7 @@ def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any], i
                 path="contracts/scheduler_seed.json",
                 expected="scheduler_seed.target.payload.tool_id is executable.",
                 actual=tool_id,
-                repair_hint="Change the scheduler target to a valid tool id or add the missing package tool.",
+                repair_hint="Regenerate the scheduler seed through create_agent_authoring(action='upsert_scheduler_seed') after creating the referenced package tool or choosing an executable runtime tool id.",
                 target_files=["contracts/scheduler_seed.json", "tools/"],
                 recommended_skill="15-scheduler-seed-system",
             ))
@@ -1576,6 +1734,7 @@ def _tool_spec_mismatches(left: Any, right: Any) -> list[str]:
 
 def _manufacturing_tool_ids() -> set[str]:
     return {
+        "create_agent_authoring",
         "create_agent_control",
         "create_agent_stage",
         "create_agent_probe_tool",
@@ -1601,40 +1760,43 @@ def _read_probe_state(root: Path) -> PackageToolProbeState:
         return PackageToolProbeState()
 
 
-def _package_digest(root: Path) -> str:
-    fingerprint: dict[str, str] = {}
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        relative = path.relative_to(root).as_posix()
-        parts = relative.split("/")
-        if not relative or parts[0] == ".factory" or "__pycache__" in parts or relative.endswith(".pyc") or relative == ".DS_Store":
-            continue
-        fingerprint[relative] = sha256(path.read_bytes()).hexdigest()
-    return sha256(json.dumps(fingerprint, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-
-
 def _contract_issue(
     *,
     where: str,
     summary: str,
     message: str,
+    severity: str = "blocking",
     path: str,
     expected: str,
     actual: str,
     repair_hint: str,
     target_files: list[str],
     recommended_skill: str,
+    recommended_resources: list[str] | None = None,
+    schema_path: str = "",
+    invalid_value_path: str = "",
+    expected_shape: dict[str, Any] | None = None,
+    repair_template: dict[str, Any] | None = None,
+    replace_strategy: str = "",
     details: dict[str, Any] | None = None,
 ) -> PackageValidationIssue:
     return PackageValidationIssue(
         where=where,
         summary=summary,
         message=message,
+        severity=severity,  # type: ignore[arg-type]
         path=path,
         expected=expected,
         actual=actual,
         repair_hint=repair_hint,
         target_files=target_files,
         recommended_skill=recommended_skill,
+        recommended_resources=recommended_resources or [],
+        schema_path=schema_path,
+        invalid_value_path=invalid_value_path,
+        expected_shape=expected_shape or {},
+        repair_template=repair_template or {},
+        replace_strategy=replace_strategy,  # type: ignore[arg-type]
         details=details or {},
     )
 
@@ -1669,20 +1831,11 @@ def _issues_report(
     changed_files: list[str],
     summary: str,
 ) -> PackageValidationReport:
-    target_files = sorted({target for issue in issues for target in issue.target_files})
-    repair_bundle = REPAIR_POLICY.generic_bundle(
-        where=issues[0].where if issues else "package_file_contract",
-        target_files=target_files,
-        exc=ValueError(summary),
-    )
     return _with_scope(
         PackageValidationReport(
             package_root=str(root),
             summary=summary,
-            issues=[
-                issue if issue.repair_bundle is not None else issue.model_copy(update={"repair_bundle": repair_bundle})
-                for issue in issues
-            ],
+            issues=issues,
         ),
         scope=scope,
         changed_files=changed_files,
@@ -1697,6 +1850,98 @@ def _relative(root: Path, path: Path) -> str:
 
 def _exception_details(exc: Exception) -> dict[str, Any]:
     return {"exception_type": type(exc).__name__}
+
+
+def _recommended_skill(where: str, target_files: list[str]) -> str:
+    targets = " ".join(target_files)
+    if where == "assembly.compile":
+        return "12-assembly-pattern-system"
+    if "tools/" in targets:
+        return "10-package-tool-system"
+    if where == "runtime_contracts.build" or where.startswith("runtime_contracts."):
+        return _skill_for_targets(target_files)
+    if where == "python_syntax.compile":
+        return "10-package-tool-system" if "tools/" in targets else "17-final-validation-repair"
+    return _skill_for_targets(target_files) if target_files else "17-final-validation-repair"
+
+
+def _recommended_resources(skill: str, target_files: list[str]) -> list[str]:
+    del target_files
+    if skill == "01-package-identity-system":
+        return [
+            "references/package_identity.schema.json",
+            "references/package_identity.repair_hints.md",
+        ]
+    if skill == "10-package-tool-system":
+        return [
+            "references/package_tool_system.schema.json",
+            "examples/package_tool_system.capability.json",
+            "references/package_tool_system.repair_hints.md",
+        ]
+    if skill == "12-assembly-pattern-system":
+        return [
+            "references/assembly_pattern_system.schema.json",
+            "examples/assembly_pattern_system.capability.json",
+            "references/assembly_pattern_system.repair_hints.md",
+        ]
+    artifact = {
+        "02-model-system": "model_system",
+        "03-session-system": "session_system",
+        "04-state-system": "state_system",
+        "05-resources-system": "resources_system",
+        "06-context-system": "context_system",
+        "07-memory-system": "memory_system",
+        "08-knowledge-system": "knowledge_system",
+        "09-tools-system": "tools_system",
+        "13-render-event-system": "render_event_system",
+        "14-scheduler-system": "scheduler_system",
+        "15-scheduler-seed-system": "scheduler_seed_system",
+        "16-trace-artifact-system": "trace_artifact_system",
+        "17-final-validation-repair": "final_validation",
+    }.get(skill, skill.replace("-", "_"))
+    return [f"references/{artifact}.repair_hints.md"]
+
+
+def _skill_for_targets(target_files: list[str]) -> str:
+    targets = " ".join(target_files)
+    pairs = [
+        ("contracts/model", "02-model-system"),
+        ("contracts/dependencies", "02-model-system"),
+        ("contracts/session", "03-session-system"),
+        ("contracts/state", "04-state-system"),
+        ("contracts/resources", "05-resources-system"),
+        ("contracts/context", "06-context-system"),
+        ("contracts/memory", "07-memory-system"),
+        ("contracts/knowledge", "08-knowledge-system"),
+        ("contracts/tools", "10-package-tool-system"),
+        ("contracts/scheduler_seed", "15-scheduler-seed-system"),
+        ("contracts/scheduler", "14-scheduler-system"),
+        ("contracts/trace", "16-trace-artifact-system"),
+        ("contracts/artifact", "16-trace-artifact-system"),
+        ("contracts/render", "13-render-event-system"),
+        ("agent_package.json", "01-package-identity-system"),
+        ("assembly_spec.json", "12-assembly-pattern-system"),
+    ]
+    for needle, skill in pairs:
+        if needle in targets:
+            return skill
+    return "17-final-validation-repair"
+
+
+def _expected_for_where(where: str) -> str:
+    return {
+        "package.load": "AgentPackageLoader can load agent_package.json and referenced package files.",
+        "runtime_contracts.build": "RuntimeBuildPlanner can build all declared RuntimeContracts.",
+        "assembly.compile": "AgentAssemblyCompiler can compile the declared assembly and patterns.",
+    }.get(where, "validation check passes")
+
+
+def _repair_hint_for_where(where: str) -> str:
+    return {
+        "package.load": "Repair manifest paths and package structure, then rerun package validation.",
+        "runtime_contracts.build": "Repair contract schema through create_agent_authoring. For scaffold-owned contracts, use create_agent_authoring(action='reset_contract', contract_key=...).",
+        "assembly.compile": "Repair assembly through create_agent_authoring or the target files indicated by validator evidence.",
+    }.get(where, "Repair the target files indicated by the validation issue.")
 
 
 def _semantic_completeness_report(
@@ -1720,7 +1965,7 @@ def _semantic_completeness_report(
             path="assembly_spec.json",
             expected="assembly_spec.bindings with model and/or tool service bindings",
             actual="bindings are empty or all null",
-            repair_hint="Add model_service and tool_service bindings in assembly_spec.json. Load skill 12-assembly-pattern-system.",
+            repair_hint="Configure the selected built-in pattern through create_agent_authoring(action='configure_pattern_assembly').",
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
         ))
@@ -1728,20 +1973,11 @@ def _semantic_completeness_report(
     if not issues:
         return None
 
-    target_files = sorted({f for issue in issues for f in issue.target_files})
-    repair_bundle = REPAIR_POLICY.generic_bundle(
-        where="semantic_completeness",
-        target_files=target_files,
-        exc=ValueError("; ".join(issue.summary for issue in issues)),
-    )
     return _with_scope(
         PackageValidationReport(
             package_root=str(root),
             summary="Semantic completeness check failed: " + "; ".join(issue.summary for issue in issues[:3]),
-            issues=[
-                issue if issue.repair_bundle is not None else issue.model_copy(update={"repair_bundle": repair_bundle})
-                for issue in issues
-            ],
+            issues=issues,
         ),
         scope=scope,
         changed_files=changed_files,

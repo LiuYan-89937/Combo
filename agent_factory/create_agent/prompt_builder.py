@@ -13,7 +13,6 @@ from langchain_core.tools import BaseTool
 from agent_factory.create_agent.capability_inventory import (
     render_static_capability_inventory,
 )
-from agent_factory.create_agent.prompt_context import project_messages_for_prompt
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +47,7 @@ def build_create_agent_prompt(
     )
     stable_system_text = "\n\n".join([invariant_text, stable_environment_text])
     dynamic_system_text = _dynamic_system_context_text(state=state)
-    projected_messages = project_messages_for_prompt(list(state.get("messages") or []))
+    projected_messages = list(state.get("messages") or [])
     stable_system = SystemMessage(content=stable_system_text)
     messages = [
         stable_system,
@@ -123,7 +122,7 @@ def _invariant_system_prompt_text() -> str:
             "必须通过 create_agent_stage(action='inspect') 查看制造 focus；"
             "需要切换阶段时，只有你可以显式调用 create_agent_stage(action='set_focus', focus_id=..., reason=...)。"
             "validator 只提供证据和建议，不会自动推进或回退 focus。"
-            "不要直接写 .factory/system_state.json。active focus target files 是读取边界；"
+            "不要直接写 .factory/system_state.json。active focus target files 是制造建议上下文，不是读写权限模型；"
             "baseline scaffold 和 baseline contracts 只由代码生成和 validator 负责，不由你逐个审计。"
         ),
         (
@@ -143,34 +142,42 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
-            "你的职责是读取当前能力目标文件，根据用户需求做一个能力增量编辑，然后显式调用 create_agent_validate。"
+            "你的职责是根据用户需求完成一个完整能力增量闭环，然后显式调用 create_agent_validate。"
+            "身份、内置 pattern assembly、package tool、scheduler seed、runtime resources、package knowledge、package state 这些稳定包面必须优先调用 create_agent_authoring，"
+            "不要手动散写多个 package 文件后等待 validator 教你修。"
+            "如果 validator 指向 scaffold-owned contract 结构损坏，优先用 create_agent_authoring(action='reset_contract', contract_key=...) 重置默认契约。"
+            "业务代码内容、知识正文、资源值和自然语言 prompt 内容由你提供给 authoring 工具。"
         ),
         (
             "skill gateway 只服务能力写法和 validator 修复。正常生产路径：describe 一个相关 skill，读取一个相关 capability example，"
             "然后开始写文件。schema 不是常规资料；只有 validator issue 指向 schema_path、example 缺少关键字段、"
             "或同一路径修复后再次失败时，才读取 schema fragment。full schema content 是最后手段，必须提供 reason。"
-            "不要直接 read_resource，不存在 read_source action；不要通过项目源码 inspect 或 shell 推断 schema。"
+            "读取 skill 资源只能通过 skill(action='read_resource', ...)；不存在 read_source action；不要通过项目源码 inspect 或 shell 推断 schema。"
         ),
         (
             "通用 bash 不在 create-agent 默认工具集中。系统不会自动运行 validator。"
-            "完成一组连贯文件修改后，必须显式调用 create_agent_validate(scope='current_focus', reason=...)。"
+            "完成一个完整能力增量后，必须显式调用 create_agent_validate(scope='current_focus', reason=...)。"
             "create_agent_validate 的 tool observation 是 validator evidence；不要等待 graph 自动 validation。"
         ),
         (
             "当你新增或修改 package tool 后，必须使用 create_agent_probe_tool(action='inspect') 查看可探测工具，"
             "再用 create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', arguments=..., prompt=..., tool_goal=...) 进行真实工具探测。"
-            "arguments 是目标 package tool 的真实调用输入；如果你暂时只提供 prompt，probe 只会用 task_model 做一次短的参数推断，"
-            "随后仍由系统直接通过 ToolExecutionGateway 执行目标工具。"
-            "工具行为证据来自真实 arguments、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"
+            "arguments 是目标 package tool 的真实调用输入；prompt 和 tool_goal 只用于用户可见测试说明和结果摘要。"
+            "系统会在 Docker runtime 镜像内完成 dependency sandbox_init，并通过 ToolExecutionGateway 执行目标工具。"
+            "工具行为证据来自真实 arguments、Docker runtime dependency report、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"
+            "如果 probe 返回 docker_preflight、runtime_image_missing、docker_cli_missing 或 docker_daemon_unavailable，这是制造环境问题，"
+            "不要通过反复改 package 文件尝试修复；应向用户说明需要可用 Docker runtime 后再继续 probe。"
             "错误路径 probe 只能作为补充证据；final validation 要求每个 package tool 至少有一次 fresh success-path probe。"
             "如果 full validation 报 package_tool_probe issue，先 probe 或按 probe observation 修复工具，再显式调用 create_agent_validate。"
-            "如果 package tool 源码 import 了非 stdlib、非 package-local、非 agent_factory 的 Python 模块，"
-            "必须同步更新 contracts/dependencies.json 的 config.python_requirements。"
+            "package tool 源码、manifest、agent_package tools index、contracts/tools.json、contracts/dependencies.json 和 assembly tool access "
+            "属于同一个能力增量，必须通过 create_agent_authoring(action='upsert_package_tool') 一次写入；"
+            "如果源码 import 了非 stdlib、非 package-local、非 agent_factory 的 Python 模块，把 installable requirements 传给该工具。"
         ),
         (
             "MCP inherited candidate 不需要额外继承工具调用。"
             "如果 produced Agent 需要使用某个 inherited MCP 工具，把该工具 id 加入 assembly_spec 的 tool_access.allowed_tool_ids，"
-            "系统会在 full_static validation/publish 前自动把对应 MCP server 配置写入 package extensions。"
+            "然后调用 create_agent_authoring(action='materialize_mcp_inheritance') 把对应 MCP server 配置确定性写入 package extensions。"
+            "create_agent_validate、probe 和 publish 都不会修改 MCP 继承文件；如果 full_static validation 之后 package 指纹变化，必须重新 validation。"
         ),
         (
             "validator evidence 只来自 create_agent_validate tool observation 或 create_agent_stage inspect 的 latest validation digest。"
@@ -183,8 +190,10 @@ def _invariant_system_prompt_text() -> str:
             "如果通用 read 被拒绝，不要再次用 read 访问 managed file。"
         ),
         (
-            "不要读取 contracts/ 进行全量巡检。只读取 active focus target files 或 validator issue target_files。"
-            "如果 write/edit observation 中出现 outside_focus=true，只有 validator evidence 指向该文件时才继续。"
+            "不要把读取文件当成制造进度。优先读取当前要编辑或 validator 指向的文件；"
+            "如需解释 tool observation 或确认跨文件契约，可以读取相关 package 文件。"
+            "如果 write/edit observation 中出现 outside_focus=true，把它当作提醒，而不是权限失败；"
+            "确认该写入属于当前能力增量后继续。"
             "制造期 read/write/edit/glob/grep/bash 等工具不得默认暴露给最终子 Agent；"
             "运行期工具必须在 tools_system/package_tool_system 中做来源决策。"
         ),
@@ -230,13 +239,20 @@ def _task_analysis_context(state: Mapping[str, Any]) -> str:
     except Exception:
         return ""
     selected_pattern_id = str(payload.get("selected_pattern_id") or "").strip()
+    digest = {
+        "selected_pattern_id": selected_pattern_id,
+        "requires_dynamic_plan": bool(payload.get("requires_dynamic_plan")),
+        "intent_summary": str(payload.get("intent_summary") or ""),
+        "capability_goals": payload.get("capability_goals") if isinstance(payload.get("capability_goals"), list) else [],
+    }
     return (
         "Create-agent task analysis completed before scaffolding:\n"
-        f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+        f"{json.dumps(digest, ensure_ascii=False, sort_keys=True)}\n"
         "The selected_pattern_id is the authoritative baseline runtime pattern for this workspace. "
-        "If package files do not match it, repair agent_package.json, assembly_spec.json, and render_manifest.json before adding unrelated capability work."
+        "If package files do not match it, call create_agent_authoring(action='configure_pattern_assembly') before adding unrelated capability work."
         + (
-            " For plan_and_execute, configure planner, executor, final_answer, and runtime_plan bindings instead of encoding dynamic planning only in a single react prompt."
+            " For plan_and_execute, configure planner, executor, final_answer, runtime_plan bindings, and activation. "
+            "Activation must state the workflow goal, what concrete user input starts the workflow, and what to ask when that input is missing."
             if selected_pattern_id == "plan_and_execute"
             else ""
         )

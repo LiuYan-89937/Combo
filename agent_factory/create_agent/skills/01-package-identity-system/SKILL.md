@@ -30,13 +30,14 @@ Guides AgentPackage manifest identity and package-level references after scaffol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
+4. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
+5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Keep `factory_run_id` only at the top level of `agent_package.json`; do not put it inside `agent_package.json.agent` or `assembly_spec.json.agent`.
+- Set produced package identity with create_agent_authoring(action="set_identity"). It keeps `agent_package.json.agent` and `assembly_spec.json.agent` identical for id, name, description, and version.
 - Do not rewrite the scaffolded contracts list unless adding or repairing a real package reference.
-- The scaffold defaults to the built-in `react_agent` runtime. If the assembly switches to `plan_and_execute`, keep `agent_package.json.runtime.pattern_id` aligned with `assembly_spec.json.runtime.pattern_id`.
+- The scaffold uses the runtime pattern selected by task analysis. If assembly files no longer match that selected pattern, use create_agent_authoring(action="configure_pattern_assembly").
 - Only package tools are indexed in `agent_package.json.tools`; when a package tool is added, index its package-relative manifest path and ensure the file exists.
 
 ## Boundaries

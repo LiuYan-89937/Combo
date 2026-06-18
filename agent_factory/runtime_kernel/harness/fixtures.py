@@ -10,7 +10,6 @@ class FixtureBundle(BaseModel):
 
     model_service: object | None = None
     tool_registry: object | None = None
-    policy_engine: object | None = None
     memory_store: object | None = None
     checkpointer: object | None = None
     approval_responses: list[dict[str, Any]] = Field(default_factory=list)

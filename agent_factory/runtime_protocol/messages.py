@@ -32,7 +32,10 @@ def incomplete_tool_call_ids(messages: Sequence[Any]) -> list[str]:
 
 def _tool_calls(message: Any) -> list[Any]:
     if isinstance(message, AIMessage):
-        return list(getattr(message, "tool_calls", None) or [])
+        return [
+            *list(getattr(message, "tool_calls", None) or []),
+            *list(getattr(message, "invalid_tool_calls", None) or []),
+        ]
     if not isinstance(message, dict):
         return []
     if _message_type(message) != "ai":
@@ -40,7 +43,15 @@ def _tool_calls(message: Any) -> list[Any]:
     calls = message.get("tool_calls")
     if calls is None and isinstance(message.get("data"), dict):
         calls = message["data"].get("tool_calls")
-    return list(calls or []) if isinstance(calls, list) else []
+    invalid_calls = message.get("invalid_tool_calls")
+    if invalid_calls is None and isinstance(message.get("data"), dict):
+        invalid_calls = message["data"].get("invalid_tool_calls")
+    items: list[Any] = []
+    if isinstance(calls, list):
+        items.extend(calls)
+    if isinstance(invalid_calls, list):
+        items.extend(invalid_calls)
+    return items
 
 
 def _tool_call_id(call: Any) -> str:

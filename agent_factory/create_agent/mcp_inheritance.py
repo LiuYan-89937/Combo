@@ -28,7 +28,7 @@ class MCPInheritanceResult:
             "changed_files": self.changed_files,
             "inherited_tool_ids": self.inherited_tool_ids,
             "inherited_server_ids": self.inherited_server_ids,
-            "diagnostics": self.diagnostics,
+            "diagnostics": _json_safe(self.diagnostics),
         }
 
 
@@ -103,6 +103,26 @@ def factory_mcp_tool_ids() -> set[str]:
     return discover_factory_mcp_inventory().tool_ids
 
 
+def materialized_package_mcp_tool_ids(package_root: str | Path) -> set[str]:
+    root = Path(package_root).expanduser().resolve()
+    manifest = _read_json(root / "agent_package.json")
+    tools_contract_path = root / str((manifest.get("contracts") or {}).get("tools") or "contracts/tools.json")
+    tools_contract = _read_json(tools_contract_path)
+    config = tools_contract.get("config") if isinstance(tools_contract.get("config"), dict) else {}
+    extension_root = str(config.get("instance_extension_root") or PACKAGE_EXTENSION_ROOT).strip() or PACKAGE_EXTENSION_ROOT
+    mcp_path = root / extension_root / "mcp_servers.json"
+    if not mcp_path.is_file():
+        return set()
+    package_config = MCPServersConfig.model_validate(_read_json(mcp_path))
+    package_server_ids = {server.server_id for server in package_config.servers if server.enabled}
+    inventory = discover_factory_mcp_inventory()
+    return {
+        tool_id
+        for tool_id, server_id in inventory.tool_to_server.items()
+        if server_id in package_server_ids
+    }
+
+
 def _referenced_tool_ids(assembly_path: Path) -> set[str]:
     payload = _read_json(assembly_path)
     ids: set[str] = set()
@@ -174,3 +194,18 @@ def _relative(root: Path, path: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return path.name
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump(mode="json")
+        except Exception:
+            return str(value)
+    return str(value)

@@ -34,17 +34,20 @@ Guides adding executable package tools and their ToolSpec declarations.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
+4. When a package tool capability is ready, pass the complete ToolSpec, tool source, dependency list, and exposure targets to create_agent_authoring(action="upsert_package_tool"), then call create_agent_validate with the appropriate scope.
+5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- Add the complete package tool as a coherent unit: tool.py, manifest ToolSpec, agent_package.json tools index, contracts/tools.json enablement, and assembly tool access.
+- Add the complete package tool through create_agent_authoring(action="upsert_package_tool"); do not manually scatter writes across tool.py, manifest ToolSpec, agent_package.json tools index, contracts/tools.json, dependencies, and assembly tool access.
+- Remove stale package tools through create_agent_authoring(action="remove_package_tool", tool_id=...); do not manually delete tool directories or manifest index entries.
 - ToolSpec objects must be objects, not string references.
 - Package tool entrypoints return the standard tool envelope; output_schema validates only envelope.output.
 - Package tool code must use the `resources` argument for declared runtime selectors such as `runtime_root`; do not rely on `os.getcwd()` as the main resource contract.
-- When tool.py imports non-stdlib Python modules that are not package-local and not `agent_factory`, update `contracts/dependencies.json` `config.python_requirements` in the same capability increment.
+- When tool.py imports non-stdlib Python modules that are not package-local and not `agent_factory`, pass installable distributions as `python_requirements` to create_agent_authoring.
+- create_agent_authoring rejects package tool writes before any files are changed when third-party imports exist but `python_requirements` is empty.
+- Use installable Python distribution names in `python_requirements`; if an import name differs from the distribution name, determine the correct distribution from package documentation or validator evidence instead of guessing.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
-- After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. Include prompt and tool_goal as human-readable probe context.
+- After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. Probe runs inside the Docker runtime image, performs dependency sandbox_init, and returns the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 
 ## Boundaries

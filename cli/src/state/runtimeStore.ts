@@ -626,11 +626,11 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			case 'knowledge_source_ready':
 			case 'knowledge_source_removed':
 			case 'knowledge_source_reindex_requested':
-				return {
+				return appendOptionalTranscript({
 					...base,
 					knowledgeActivities: [...base.knowledgeActivities.slice(-19), knowledgeActivityForEvent(event)],
 					recentActivities: appendRunActivity(base.recentActivities, event)
-				};
+				}, transcriptItemForKnowledgeEvent(event));
 			case 'scheduler_job_created':
 		case 'scheduler_job_updated':
 		case 'scheduler_job_deleted':
@@ -684,13 +684,13 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				errorMessageFromEvent(event, `node failed: ${event.node_label ?? event.node_id ?? '-'}`)
 			);
 		case 'interrupt_requested':
-			return {
+			return appendOptionalTranscript({
 				...base,
 				runStatus: 'interrupted',
 				pendingInterrupt: base.pendingInterrupt ?? event,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
-			};
+			}, transcriptItemForInterrupt(event));
 		case 'tool_approval_requested':
 			return {
 				...base,
@@ -983,6 +983,9 @@ function appendModelDelta(state: RuntimeState, event: FactoryEvent): RuntimeStat
 			}
 		}
 	};
+	if (event.payload?.visible_to_user === false) {
+		return next;
+	}
 	return upsertAssistantTranscript(next, {
 		streamId,
 		timestamp: event.timestamp,
@@ -1019,6 +1022,9 @@ function completeModelStream(state: RuntimeState, event: FactoryEvent): RuntimeS
 			}
 		}
 	};
+	if (event.payload?.visible_to_user === false) {
+		return next;
+	}
 	return upsertAssistantTranscript(next, {
 		streamId,
 		timestamp: event.timestamp,
@@ -1560,6 +1566,10 @@ function appendTranscript(state: RuntimeState, item: TranscriptItem): RuntimeSta
 	return {...state, transcript: [...state.transcript.slice(-199), item]};
 }
 
+function appendOptionalTranscript(state: RuntimeState, item: TranscriptItem | null): RuntimeState {
+	return item ? appendTranscript(state, item) : state;
+}
+
 function upsertAssistantTranscript(
 	state: RuntimeState,
 	{
@@ -1603,6 +1613,57 @@ function upsertAssistantTranscript(
 			item,
 			...state.transcript.slice(existingIndex + 1)
 		]
+	};
+}
+
+function transcriptItemForInterrupt(event: FactoryEvent): TranscriptItem | null {
+	const payload = event.payload ?? {};
+	if (stringValue(payload.presentation) !== 'assistant_dialogue') {
+		return null;
+	}
+	const message = stringValue(payload.message);
+	const summary = stringValue(payload.summary);
+	const content = [message, summary].filter(Boolean).join('\n\n');
+	if (!content) {
+		return null;
+	}
+	return {
+		id: `interrupt-${event.event_id}`,
+		role: 'assistant',
+		timestamp: event.timestamp,
+		title: stringValue(payload.title) || '补充信息',
+		content,
+		eventType: event.event_type,
+		metadata: payload
+	};
+}
+
+function transcriptItemForKnowledgeEvent(event: FactoryEvent): TranscriptItem | null {
+	if (event.event_type !== 'knowledge_source_preview_available') {
+		return null;
+	}
+	const payload = event.payload ?? {};
+	const preview = recordValue(payload.preview) ?? payload;
+	const displayName = stringValue(preview.display_name) || stringValue(payload.source_id) || 'knowledge source';
+	const mode = stringValue(payload.mode);
+	const status = stringValue(payload.status);
+	const estimatedDocuments = preview.estimated_documents;
+	const requiresEmbedding = preview.requires_embedding;
+	const lines = [
+		`来源：${displayName}`,
+		mode ? `模式：${mode}` : '',
+		status ? `状态：${status}` : '',
+		typeof estimatedDocuments === 'number' ? `预计文档数：${estimatedDocuments}` : '',
+		typeof requiresEmbedding === 'boolean' ? `需要向量化：${requiresEmbedding ? '是' : '否'}` : ''
+	].filter(Boolean);
+	return {
+		id: `knowledge-${event.event_id}`,
+		role: 'knowledge',
+		timestamp: event.timestamp,
+		title: 'Knowledge / preview',
+		content: lines.join('\n'),
+		eventType: event.event_type,
+		metadata: payload
 	};
 }
 

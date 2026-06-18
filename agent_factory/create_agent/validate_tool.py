@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from agent_factory.create_agent.control_tool import CREATE_AGENT_WORKSPACE_RESOURCE
-from agent_factory.create_agent.mcp_inheritance import MCPInheritanceResult, materialize_referenced_factory_mcp
 from agent_factory.create_agent.models import PackageValidationState
 from agent_factory.create_agent.validation_state import (
     changed_files,
@@ -25,7 +24,7 @@ def build_create_agent_validate_tool_spec() -> ToolSpec:
     return ToolSpec(
         id=CREATE_AGENT_VALIDATE_TOOL_ID,
         description=(
-            "Run create-agent package validation explicitly. Use after a coherent package file change batch, "
+            "Run create-agent package validation explicitly. Use after a complete capability increment, "
             "and use scope='full_static' before finalize/publish."
         ),
         entrypoint="agent_factory.create_agent.validate_tool:run",
@@ -55,7 +54,6 @@ def build_create_agent_validate_tool_spec() -> ToolSpec:
                 "validation_state_path": {"type": "string"},
                 "package_fingerprint": {"type": "object", "additionalProperties": {"type": "string"}},
                 "probe_digest": {"type": "string"},
-                "mcp_inheritance": {"type": "object", "additionalProperties": True},
                 "report": {"type": "object", "additionalProperties": True},
             },
             "required": [
@@ -84,7 +82,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     active = workspace.read_system_state().active_stage()
     active_focus_id = active.system_id if active else ""
     scope = _validation_scope(requested_scope=requested_scope, active_validation_focus=active.validation_focus if active else "")
-    mcp_inheritance = _materialize_mcp_for_validation(workspace) if scope == "full_static" else MCPInheritanceResult()
     previous_state = workspace.read_validation_state()
     current_fingerprint = package_fingerprint(workspace.root)
     current_probe_digest = tool_probe_digest(workspace)
@@ -109,7 +106,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "validation_state_path": str(workspace.validation_state_path),
             "package_fingerprint": current_fingerprint,
             "probe_digest": current_probe_digest,
-            "mcp_inheritance": mcp_inheritance.model_dump(),
             "report": report.model_dump(mode="json"),
         },
         summary=f"Validation {report.status}: {report.validation_scope}. {report.summary}",
@@ -162,18 +158,3 @@ def _validation_scope(*, requested_scope: str, active_validation_focus: str) -> 
     if requested_scope == "full_static":
         return "full_static"
     return validation_scope_for_focus(active_validation_focus)
-
-
-def _materialize_mcp_for_validation(workspace: CreateAgentWorkspace) -> MCPInheritanceResult:
-    try:
-        return materialize_referenced_factory_mcp(workspace.root)
-    except Exception as exc:
-        return MCPInheritanceResult(
-            diagnostics=[
-                {
-                    "level": "warning",
-                    "message": "MCP inheritance materialization skipped before validation",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            ]
-        )

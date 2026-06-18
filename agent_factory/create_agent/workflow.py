@@ -60,6 +60,12 @@ class CreateAgentWorkflow:
         return graph.compile(checkpointer=checkpointer)
 
     def _supervisor(self, state: CreateAgentGraphState) -> dict[str, Any]:
+        _ai_message, unresolved_tool_calls = latest_ai_tool_calls(state.get("messages") or [])
+        if unresolved_tool_calls:
+            return {
+                "publish_confirmation_response": {},
+                "done": False,
+            }
         model = self.model or get_main_model()
         if model is None:
             raise RuntimeError("main model is not configured for create-agent")

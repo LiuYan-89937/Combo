@@ -31,17 +31,18 @@ Guides built-in runtime assembly bindings and runtime behavior.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
+4. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
+5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Supported runtime patterns are `react_agent` and `plan_and_execute`.
 - Use `react_agent` for direct ReAct behavior.
 - Use `plan_and_execute` only when the agent should create and maintain a dynamic per-run plan before and during execution.
-- For `plan_and_execute`, do not write concrete plan steps into AgentPackage files. Configure planner, executor, and final_answer prompts/tool access; runtime creates the actual plan through `runtime_plan`.
-- The runtime system prompt belongs in assembly_spec.json prompt bindings.
-- Do not rewrite the whole assembly just to compare it with examples; edit the binding or tool section required by the capability.
-- Keep prompt, tool_access, and model_operation bindings coherent for the same target node.
+- Configure built-in pattern bindings with create_agent_authoring(action="configure_pattern_assembly"). Provide prompt text and allowed tool ids; the tool writes coherent prompt, tool_access, model_operation, render, and runtime pattern references.
+- For `plan_and_execute`, also provide `activation` with `workflow_goal`, `start_when`, and `ask_when_missing`. This lets the runtime stop casual or incomplete inputs before planner/executor begin.
+- For `plan_and_execute`, do not write concrete plan steps into AgentPackage files. Runtime creates the actual plan through `runtime_plan`.
+- The runtime system prompt belongs in assembly prompt bindings produced by create_agent_authoring.
+- Do not manually rewrite the whole assembly just to compare it with examples; use create_agent_authoring unless repairing a specific validator target path.
 - Use complete examples for object shape only when adding or repairing bindings.
 
 ## Boundaries
@@ -62,8 +63,6 @@ Guides built-in runtime assembly bindings and runtime behavior.
 
 Examples:
 - `examples/assembly_pattern_system.capability.json`
-- `examples/assembly_spec.with_tools_and_bindings.json`
-- `examples/assembly_spec.plan_and_execute.json`
 
 Repair references:
 - `references/assembly_pattern_system.repair_hints.md`

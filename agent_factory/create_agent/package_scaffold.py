@@ -25,7 +25,7 @@ def materialize_empty_agent_package(
     *,
     factory_run_id: str,
     user_input: str = "",
-    pattern_id: str = "react_agent",
+    pattern_id: str,
 ) -> None:
     package_root = Path(root).expanduser().resolve()
     package_root.mkdir(parents=True, exist_ok=True)
@@ -88,7 +88,12 @@ def _default_render_manifest(pattern_id: str) -> RenderManifest:
     return RenderManifest(
         graph_id=pattern.pattern_id,
         nodes={
-            node.id: default_node_render_spec(node_id=node.id, node_type=node.type, impl=node.impl)
+            node.id: default_node_render_spec(
+                node_id=node.id,
+                node_type=node.type,
+                impl=node.impl,
+                pattern_id=pattern.pattern_id,
+            )
             for node in pattern.nodes
         },
     )
@@ -96,7 +101,9 @@ def _default_render_manifest(pattern_id: str) -> RenderManifest:
 
 def _selected_pattern_id(pattern_id: str) -> str:
     value = str(pattern_id or "").strip()
-    return value if value in SUPPORTED_SCAFFOLD_PATTERNS else "react_agent"
+    if value not in SUPPORTED_SCAFFOLD_PATTERNS:
+        raise ValueError(f"unsupported scaffold pattern_id: {value or '<empty>'}")
+    return value
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

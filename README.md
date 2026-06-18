@@ -205,7 +205,7 @@ python -m agent_factory.factory_graph.frontend_bridge.stdio_server
   -> create-agent workspace
   -> 代码生成空 AgentPackage
   -> LLM 读取当前包文件和少量 capability example
-  -> LLM 通过受控文件工具编辑包
+  -> LLM 通过 create_agent_authoring 写稳定包面，必要时用通用文件工具写非结构化内容
   -> LLM 显式调用 create_agent_validate
   -> 如有 package tool，LLM 调用 create_agent_probe_tool 做真实工具 probe
   -> LLM 修复并再次 validate
@@ -223,7 +223,7 @@ python -m agent_factory.factory_graph.frontend_bridge.stdio_server
 - 文件写入只受通用安全边界限制，不按阶段锁死 owned files。
 - schema 是 repair 工具，不是正常生产路径的阅读材料。
 - package tool 必须能被加载、真实 probe，并留下 observation。
-- MCP candidate 由系统在 validation/publish 前按 `tool_access.allowed_tool_ids` 轻量继承。
+- MCP candidate 由 `create_agent_authoring(action="materialize_mcp_inheritance")` 按 `tool_access.allowed_tool_ids` 轻量继承；validate/probe/publish 不修改继承文件。
 - 发布前必须有最新 `full_static` validation passed，且包 fingerprint 未变化。
 
 制造工作区位于：

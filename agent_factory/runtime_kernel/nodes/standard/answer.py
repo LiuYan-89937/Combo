@@ -52,7 +52,6 @@ class CognitiveAnswerNode:
         ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
         tool_calls = _message_tool_calls(ai_message) or list(result.tool_calls or [])
         if tool_calls:
-            tool_calls = [_with_origin(call, context) for call in tool_calls]
             return {
                 "messages": [_ai_message_with_origin(result.assistant_draft or "", tool_calls, context)],
                 **_context_token_budget_patch(result.metadata, context.node_id),
@@ -70,6 +69,9 @@ class CognitiveAnswerNode:
             }
         final_answer = result.final_answer or result.assistant_draft or ""
         response_message = AIMessage(content=final_answer)
+        route_decision = result.route_decision or "model.ready_to_answer"
+        if _plan_and_execute_planner_waiting_for_input(context=context, state=state):
+            route_decision = "subgraph.need_more_input"
         return {
             "messages": [response_message],
             **_context_token_budget_patch(result.metadata, context.node_id),
@@ -79,7 +81,7 @@ class CognitiveAnswerNode:
             },
             "execution": {
                 "current_node": context.node_id,
-                "route_decision": result.route_decision or "model.ready_to_answer",
+                "route_decision": route_decision,
             },
         }
 
@@ -220,12 +222,12 @@ def _is_plan_and_execute_node(context: NodeExecutionContext, state: RuntimeState
     return context.node_id in {"planner", "executor", "final_answer"}
 
 
-def _with_origin(call: dict[str, Any], context: NodeExecutionContext) -> dict[str, Any]:
-    return {
-        **dict(call),
-        "origin_node_id": context.node_id,
-        "origin_impl": context.impl,
-    }
+def _plan_and_execute_planner_waiting_for_input(*, context: NodeExecutionContext, state: RuntimeState) -> bool:
+    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+        return False
+    if context.node_id != "planner":
+        return False
+    return getattr(state.plan, "status", "empty") == "empty"
 
 
 def _ai_message_with_origin(content: str, tool_calls: list[dict[str, Any]], context: NodeExecutionContext) -> AIMessage:

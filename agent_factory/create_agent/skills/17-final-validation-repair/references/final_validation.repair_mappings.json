@@ -2,166 +2,89 @@
   "package.load.schema.assembly_tools": {
     "when": "validator issue schema_path is AgentAssemblySpec.tools[] or Pydantic error mentions tools.N model_type",
     "target_files": [
-      "assembly_spec.json",
       "tools/<tool_id>/manifest.json",
       "tools/<tool_id>/tool.py",
-      "contracts/tools.json"
+      "agent_package.json",
+      "assembly_spec.json",
+      "contracts/tools.json",
+      "contracts/dependencies.json"
     ],
-    "replace_strategy": "replace_array_item",
-    "expected_shape": {
-      "id": "snake_case_tool_id",
-      "description": "What the runtime tool does.",
-      "entrypoint": "python:tools/snake_case_tool_id/tool.py:run",
-      "input_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "output_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": true
-      },
-      "resources": {},
-      "risk_level": "low",
-      "risk_evaluator": {
-        "llm_mode": "disabled"
-      },
-      "concurrent": true
+    "preferred_repair": {
+      "tool": "create_agent_authoring",
+      "arguments": {
+        "action": "upsert_package_tool",
+        "tool_spec": {
+          "id": "<tool_id>",
+          "description": "<specific runtime capability>",
+          "entrypoint": "python:tools/<tool_id>/tool.py:run",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          },
+          "resources": {},
+          "risk_level": "low",
+          "risk_evaluator": {
+            "llm_mode": "disabled"
+          },
+          "concurrent": true
+        },
+        "tool_source": "<complete tool.py source>",
+        "python_requirements": [],
+        "expose_to_nodes": [
+          "answer"
+        ]
+      }
     },
-    "repair_template": {
-      "id": "<tool_id>",
-      "description": "<specific runtime capability>",
-      "entrypoint": "python:tools/<tool_id>/tool.py:run",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "additionalProperties": false
-      },
-      "output_schema": {
-        "type": "object",
-        "properties": {
-          "result": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "result"
-        ],
-        "additionalProperties": true
-      },
-      "resources": {},
-      "risk_level": "low",
-      "risk_evaluator": {
-        "llm_mode": "disabled"
-      },
-      "concurrent": true
-    }
+    "rule": "Repair the package tool through authoring so manifest, package index, dependencies, assembly tools, and tool access stay aligned."
   },
   "package.load.schema.node_binding": {
     "when": "validator issue schema_path is AgentAssemblySpec.bindings.node_bindings[] or Pydantic error mentions bindings.node_bindings.N missing target/payload",
     "target_files": [
-      "assembly_spec.json"
+      "agent_package.json",
+      "assembly_spec.json",
+      "render_manifest.json"
     ],
-    "replace_strategy": "replace_array_item",
-    "expected_shape": {
-      "binding_id": "snake_case_binding_id",
-      "binding_type": "prompt|tool_access|model_operation|strategy_profile|output_formatter|custom",
-      "target": {
-        "node_id": "pattern_node_id",
-        "impl": "node.impl"
-      },
-      "payload": {}
-    },
-    "repair_templates": {
-      "prompt": {
-        "binding_id": "<node_id>_prompt",
-        "binding_type": "prompt",
-        "target": {
-          "node_id": "<node_id>",
-          "impl": "cognitive.answer"
+    "preferred_repair": {
+      "tool": "create_agent_authoring",
+      "arguments": {
+        "action": "configure_pattern_assembly",
+        "pattern_id": "react_agent",
+        "prompts": {
+          "answer": "<runtime system prompt>"
         },
-        "payload": {
-          "prompt_id": "<prompt_id>",
-          "template": "<prompt text>",
-          "variables": []
-        }
-      },
-      "tool_access": {
-        "binding_id": "<node_id>_tools",
-        "binding_type": "tool_access",
-        "target": {
-          "node_id": "<node_id>",
-          "impl": "cognitive.answer"
-        },
-        "payload": {
-          "allowed_tool_ids": [
-            "<tool_id>"
-          ],
-          "approval_policy": "standard"
-        }
-      },
-      "model_operation": {
-        "binding_id": "<node_id>_model_operation",
-        "binding_type": "model_operation",
-        "target": {
-          "node_id": "<node_id>",
-          "impl": "cognitive.answer"
-        },
-        "payload": {
-          "operation": "tool_bound_chat",
-          "model_role": "main",
-          "output_schema": {
-            "type": "object",
-            "properties": {
-              "answer": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "answer"
-            ],
-            "additionalProperties": true
-          },
-          "write_target": {
-            "section": "context"
-          },
-          "max_attempts": 3
-        }
+        "allowed_tool_ids": [
+          "<tool_id>"
+        ]
       }
-    }
+    },
+    "rule": "For built-in patterns, regenerate coherent bindings through authoring instead of hand-writing node_bindings."
   },
   "extra_forbidden.node_id_provider_id": {
     "when": "validator issue reports extra_forbidden for node_id, impl, provider_id, or similar fields inside a binding item",
-    "replace_strategy": "replace_object",
-    "rule": "Move node identity into target. Move provider-specific configuration into payload.config or the binding-type-specific payload.",
-    "before": {
-      "binding_id": "bad_binding",
-      "binding_type": "custom",
-      "node_id": "answer",
-      "provider_id": "custom_provider",
-      "payload": {}
-    },
-    "after": {
-      "binding_id": "good_binding",
-      "binding_type": "custom",
-      "target": {
-        "node_id": "answer",
-        "impl": "cognitive.answer"
-      },
-      "payload": {
-        "extension_id": "custom_provider",
-        "schema_version": "v0",
-        "purpose": "Describe why the custom binding is needed.",
-        "config": {}
+    "target_files": [
+      "agent_package.json",
+      "assembly_spec.json",
+      "render_manifest.json"
+    ],
+    "preferred_repair": {
+      "tool": "create_agent_authoring",
+      "arguments": {
+        "action": "configure_pattern_assembly",
+        "pattern_id": "react_agent",
+        "prompts": {
+          "answer": "<runtime system prompt>"
+        },
+        "allowed_tool_ids": [
+          "<tool_id>"
+        ]
       }
-    }
+    },
+    "rule": "Do not keep provider_id or node_id as top-level binding fields. For built-in patterns, regenerate bindings through authoring."
   }
 }

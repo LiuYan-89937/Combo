@@ -42,7 +42,6 @@ class HarnessBridge:
             update={
                 "model_service": fixture.model_service or services.model_service,
                 "tool_registry": fixture.tool_registry or services.tool_registry,
-                "policy_engine": fixture.policy_engine or services.policy_engine,
                 "memory_store": fixture.memory_store or services.memory_store,
                 "checkpointer": fixture.checkpointer or services.checkpointer,
             }

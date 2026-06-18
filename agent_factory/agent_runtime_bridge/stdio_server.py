@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import errno
 import json
 import sys
 from pathlib import Path
@@ -17,13 +18,20 @@ from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWor
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
+from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig
+from agent_factory.runtime_kernel.session import AgentSessionConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
+from agent_factory.memory_system import default_agent_memory_config
+from agent_factory.package_runtime.session_turns import (
+    resume_user_input,
+    session_final_answer,
+    session_trace_ref,
+)
 
 
 PACKAGE_ROOT = Path("/package")
@@ -144,8 +152,12 @@ class BridgeRuntimeState:
         )
         package = self._load_package()
         facade = RuntimeKernelFacade(
-            checkpointer_config=LangGraphCheckpointerConfig(backend="memory"),
-            memory_store_config=LangGraphStoreConfig(backend="memory"),
+            checkpointer_config=LangGraphCheckpointerConfig(
+                backend="sqlite",
+                path=RUNTIME_ROOT / "checkpoints" / "agent.sqlite",
+            ),
+            memory_system_config=_runtime_memory_config(),
+            session_config=AgentSessionConfig(root=RUNTIME_ROOT / "sessions"),
         )
         runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
             package,
@@ -187,6 +199,8 @@ def main() -> int:
     state = BridgeRuntimeState()
     exit_code = 0
     for line in sys.stdin:
+        if _STDOUT_WRITER.closed:
+            break
         if not line.strip():
             continue
         try:
@@ -216,6 +230,8 @@ def main() -> int:
                 )
             )
             exit_code = 1
+        if _STDOUT_WRITER.closed:
+            break
     return exit_code
 
 
@@ -325,6 +341,10 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
         agent_session = run_context.session_manager.touch_turn(
             run_context.session_id,
             first_user_input=run_context.first_user_input,
+            user_input=run_context.first_user_input,
+            final_answer=session_final_answer(final_state),
+            status=final_state.execution.finish_status,
+            trace_ref=session_trace_ref(compiled, final_state),
         )
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_run_completed(
@@ -420,6 +440,10 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
     agent_session = run_context.session_manager.touch_turn(
         run_context.session_id,
         first_user_input=run_context.first_user_input,
+        user_input=run_context.first_user_input,
+        final_answer=session_final_answer(final_state),
+        status=final_state.execution.finish_status,
+        trace_ref=session_trace_ref(compiled, final_state),
     )
     normalizer.complete_open_model_streams(reason="run_completed")
     normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
@@ -498,7 +522,13 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
         return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
     normalizer.complete_open_model_streams(reason="run_completed")
     normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
-    agent_session = run_context.session_manager.touch_turn(session_id)
+    agent_session = run_context.session_manager.touch_turn(
+        session_id,
+        user_input=resume_user_input(resume_payload),
+        final_answer=session_final_answer(final_state),
+        status=final_state.execution.finish_status,
+        trace_ref=session_trace_ref(compiled, final_state),
+    )
     normalizer.emit_run_completed(
         {
             "status": "completed",
@@ -514,7 +544,7 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
 def _list_sessions(normalizer: RuntimeEventNormalizer, package: LoadedAgentPackage) -> int:
     session_contract = package.contracts.get("session") if isinstance(package.contracts, dict) else None
     session_config = session_contract.get("config", {}) if isinstance(session_contract, dict) else {}
-    session_root = Path(str(session_config.get("session_root") or "/runtime/sessions"))
+    session_root = _runtime_path(str(session_config.get("session_root") or ".agent_runtime/sessions"))
     sessions = []
     for path in sorted(session_root.glob("*.json")):
         try:
@@ -631,8 +661,59 @@ def _normalized_knowledge_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _write_event(item: FactoryFrontendEvent) -> None:
-    sys.stdout.write(item.model_dump_json() + "\n")
-    sys.stdout.flush()
+    _STDOUT_WRITER.write(item)
+
+
+class _JsonLineWriter:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def write(self, item: FactoryFrontendEvent) -> None:
+        if self.closed:
+            return
+        try:
+            sys.stdout.write(item.model_dump_json() + "\n")
+            sys.stdout.flush()
+        except BrokenPipeError:
+            self.closed = True
+        except OSError as exc:
+            if exc.errno != errno.EPIPE:
+                raise
+            self.closed = True
+
+
+def _runtime_memory_config():
+    config = default_agent_memory_config()
+    return config.model_copy(
+        update={
+            "store": config.store.model_copy(
+                update={"path": str(RUNTIME_ROOT / "memory" / "agent.sqlite")}
+            ),
+            "background": config.background.model_copy(
+                update={"journal_root": str(RUNTIME_ROOT / "memory" / "jobs")}
+            ),
+        },
+        deep=True,
+    )
+
+
+def _runtime_path(value: str) -> Path:
+    raw = str(value or "").strip() or ".agent_runtime"
+    if raw == "/runtime":
+        return RUNTIME_ROOT
+    if raw.startswith("/runtime/"):
+        return RUNTIME_ROOT / raw.removeprefix("/runtime/")
+    if raw == ".agent_runtime":
+        return RUNTIME_ROOT
+    if raw.startswith(".agent_runtime/"):
+        return RUNTIME_ROOT / raw.removeprefix(".agent_runtime/")
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return PACKAGE_ROOT / path
+
+
+_STDOUT_WRITER = _JsonLineWriter()
 
 
 if __name__ == "__main__":

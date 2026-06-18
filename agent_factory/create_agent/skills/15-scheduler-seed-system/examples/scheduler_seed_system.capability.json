@@ -1,10 +1,10 @@
 {
-  "type": "scheduler_seed",
-  "version": "scheduler_seed_contract.v0",
-  "enabled": true,
-  "config": {
-    "seeds": [
-      {
+  "purpose": "Create or update scheduler seed configuration through the deterministic authoring tool.",
+  "authoring_call": {
+    "tool": "create_agent_authoring",
+    "arguments": {
+      "action": "upsert_scheduler_seed",
+      "seed": {
         "seed_id": "daily_runtime_task",
         "title": "Daily runtime task",
         "human_schedule": "Every weekday at 09:00 Asia/Shanghai",
@@ -34,6 +34,14 @@
         "timeout_seconds": 900,
         "unattended_policy": "deny_if_approval_required"
       }
+    },
+    "writes": [
+      "contracts/scheduler_seed.json"
     ]
-  }
+  },
+  "rules": [
+    "Do not hand-write contracts/scheduler_seed.json during normal production.",
+    "Only create scheduler seeds after the schedule and task content are known or confirmed.",
+    "Use graph_run when the scheduled task should run the agent itself."
+  ]
 }

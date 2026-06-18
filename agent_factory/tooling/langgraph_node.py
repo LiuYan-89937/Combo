@@ -81,7 +81,9 @@ class AgentFactoryToolNode:
         if ai_message is None or not tool_calls:
             return {self.messages_key: []}
         outputs: list[ToolMessage] = []
-        for batch in _tool_call_batches(tool_calls, self._concurrent_by_name):
+        invalid_calls, executable_calls = _partition_invalid_tool_calls(tool_calls)
+        outputs.extend(_invalid_tool_call_messages(invalid_calls))
+        for batch in _tool_call_batches(executable_calls, self._concurrent_by_name):
             approval_requests = self._approval_requests_for_batch(batch)
             if approval_requests:
                 decision = interrupt(_batch_approval_payload(approval_requests))
@@ -305,7 +307,10 @@ def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, lis
             continue
         if not isinstance(message, AIMessage):
             continue
-        calls = getattr(message, "tool_calls", None) or []
+        calls = [
+            *list(getattr(message, "tool_calls", None) or []),
+            *list(getattr(message, "invalid_tool_calls", None) or []),
+        ]
         origin_node_id = _message_origin_node_id(message)
         origin_impl = _message_origin_impl(message)
         normalized = [
@@ -319,6 +324,41 @@ def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, lis
         ]
         return message, unresolved
     return None, []
+
+
+def _partition_invalid_tool_calls(tool_calls: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    invalid: list[dict[str, Any]] = []
+    executable: list[dict[str, Any]] = []
+    for call in tool_calls:
+        if call.get("invalid_tool_call"):
+            invalid.append(dict(call))
+        else:
+            executable.append(dict(call))
+    return invalid, executable
+
+
+def _invalid_tool_call_messages(tool_calls: Sequence[dict[str, Any]]) -> list[ToolMessage]:
+    messages: list[ToolMessage] = []
+    for call in tool_calls:
+        tool_id = str(call.get("name") or "")
+        tool_call_id = str(call.get("id") or tool_id)
+        raw_args = str(call.get("raw_args") or "")
+        error = str(call.get("error") or "").strip()
+        details = "The model emitted an invalid native tool call. Retry the same intent with valid JSON tool arguments."
+        if error:
+            details = f"{details} Parser error: {error}"
+        messages.append(
+            tool_observation_message(
+                status="invalid_tool_call",
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                message=details,
+                arguments={"raw_args": raw_args} if raw_args else {},
+                retryable=True,
+                errors=[error] if error else [],
+            )
+        )
+    return messages
 
 
 def _complete_tool_message_set(
@@ -490,6 +530,7 @@ def _normalize_tool_call(
         return {}
     name = str(item.get("name") or item.get("tool_id") or "")
     args = item.get("args") or item.get("arguments") or {}
+    invalid = str(item.get("type") or "") == "invalid_tool_call"
     return {
         "name": name,
         "args": dict(args) if isinstance(args, dict) else {},
@@ -497,6 +538,9 @@ def _normalize_tool_call(
         "type": "tool_call",
         "origin_node_id": str(item.get("origin_node_id") or origin_node_id or ""),
         "origin_impl": str(item.get("origin_impl") or origin_impl or ""),
+        "invalid_tool_call": invalid,
+        "raw_args": args if invalid and isinstance(args, str) else "",
+        "error": str(item.get("error") or "") if invalid else "",
     }
 
 

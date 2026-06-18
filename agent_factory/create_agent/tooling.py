@@ -6,6 +6,10 @@ from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
 
+from agent_factory.create_agent.authoring_tool import (
+    CREATE_AGENT_AUTHORING_TOOL_ID,
+    build_create_agent_authoring_tool_spec,
+)
 from agent_factory.create_agent.capability_inventory import build_capability_inventory
 from agent_factory.create_agent.control_tool import (
     CREATE_AGENT_CONTROL_TOOL_ID,
@@ -147,6 +151,31 @@ class CreateAgentToolEnvironmentBuilder:
                     "write_tool": "create-agent task analysis",
                 },
             }
+            filesystem_resource["managed_write_paths"] = {
+                "agent_package.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "assembly_spec.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "render_manifest.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "resources.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/tools.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/dependencies.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/resources.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/scheduler_seed.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/artifact.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/context.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/knowledge.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/model.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/sandbox.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/scheduler.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/session.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/state.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/memory.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/render.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "contracts/trace.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "extensions/mcp_servers.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "tools": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "knowledge": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "state": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+            }
         if mode == "manufacture":
             skill_registry = _create_agent_skill_registry(
                 runtime_resources.get("skills"),
@@ -169,6 +198,7 @@ class CreateAgentToolEnvironmentBuilder:
                 set(
                     [
                         *provider_result.system_tool_ids,
+                        CREATE_AGENT_AUTHORING_TOOL_ID,
                         CREATE_AGENT_CONTROL_TOOL_ID,
                         CREATE_AGENT_STAGE_TOOL_ID,
                         CREATE_AGENT_PROBE_TOOL_ID,
@@ -179,6 +209,7 @@ class CreateAgentToolEnvironmentBuilder:
             )
             extra_specs = [
                 build_create_agent_control_tool_spec(),
+                build_create_agent_authoring_tool_spec(),
                 build_create_agent_stage_tool_spec(),
                 build_create_agent_probe_tool_spec(),
                 build_create_agent_validate_tool_spec(),

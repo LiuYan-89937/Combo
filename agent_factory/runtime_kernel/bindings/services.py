@@ -18,7 +18,6 @@ class RuntimeServices(BaseModel):
     knowledge_runtime: object | None = None
     context_system: object | None = None
     context_engine: object | None = None
-    policy_engine: object | None = None
     observability_manager: object | None = None
     checkpointer: object | None = None
     harness_bridge: object | None = None

@@ -4,8 +4,10 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from agent_factory.create_agent.validator import ValidationScope
+from agent_factory.create_agent.package_paths import is_transient_package_path
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+
+ValidationScope = str
 
 
 def package_fingerprint(root: Path) -> dict[str, str]:
@@ -18,6 +20,11 @@ def package_fingerprint(root: Path) -> dict[str, str]:
             continue
         fingerprint[relative] = sha256(path.read_bytes()).hexdigest()
     return fingerprint
+
+
+def package_digest(root: Path) -> str:
+    fingerprint = package_fingerprint(root)
+    return sha256(json.dumps(fingerprint, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def changed_files(previous: dict[str, str], current: dict[str, str]) -> list[str]:
@@ -52,11 +59,4 @@ def validation_scope_for_focus(validation_focus: str) -> ValidationScope:
 
 
 def _ignore_path(relative: str) -> bool:
-    parts = relative.split("/")
-    return (
-        not relative
-        or parts[0] == ".factory"
-        or "__pycache__" in parts
-        or relative.endswith(".pyc")
-        or relative == ".DS_Store"
-    )
+    return is_transient_package_path(relative)

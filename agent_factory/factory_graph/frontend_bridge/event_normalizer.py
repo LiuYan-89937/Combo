@@ -14,10 +14,13 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryMode,
     event,
 )
+from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_blocks
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
 NODE_EVENT_TYPES: set[str] = {"model_cache_metrics"}
+TOOL_EVENT_INLINE_JSON_LIMIT = 6000
+TOOL_EVENT_PREVIEW_CHARS = 1200
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -30,6 +33,7 @@ class ModelStreamState:
     span_id: str
     parent_span_id: str | None
     content: str = ""
+    raw_content: str = ""
     input_mode: str = "unknown"
     completed: bool = False
 
@@ -50,6 +54,7 @@ class RuntimeEventNormalizer:
     started_nodes: set[str] = field(default_factory=set)
     completed_nodes: set[str] = field(default_factory=set)
     model_streams: dict[str, ModelStreamState] = field(default_factory=dict)
+    node_visibility: dict[str, bool] = field(default_factory=dict)
     current_stage_id: str | None = None
     pending_tool_call_ids_by_name: dict[str, list[str]] = field(default_factory=dict)
     proposed_tool_call_ids: set[str] = field(default_factory=set)
@@ -124,7 +129,7 @@ class RuntimeEventNormalizer:
             stage_id=stage_id,
             span_id=node_span_id,
             parent_span_id=self._stage_span_or_run(stage_id),
-            payload={"patch": patch},
+            payload={"patch": _frontend_debug_patch(patch)},
         )
         self.emit_model_activity_from_patch(node_id, stage_id, patch)
         self._emit_tool_proposals(node_id, stage_id, node_span_id, patch)
@@ -359,6 +364,8 @@ class RuntimeEventNormalizer:
             self.completed_nodes.add(node_id)
         source_protocol_version = _optional_str(payload.get("protocol_version"))
         render_payload = dict(payload.get("payload") or {})
+        if "visible_to_user" in render_payload:
+            self.node_visibility[node_id] = bool(render_payload.get("visible_to_user"))
         if source_protocol_version:
             render_payload["source_protocol_version"] = source_protocol_version
         self.runtime_event(
@@ -413,7 +420,9 @@ class RuntimeEventNormalizer:
                 "tool_observation_available",
             }:
                 continue
-            item_payload = {key: value for key, value in json_safe(item).items() if key != "event_type"}
+            item_payload = _compact_tool_activity_payload(
+                {key: value for key, value in json_safe(item).items() if key != "event_type"}
+            )
             if event_type == "tool_call_proposed" and not self._remember_tool_proposal(item_payload):
                 continue
             tool_span_id = uuid.uuid4().hex
@@ -438,21 +447,31 @@ class RuntimeEventNormalizer:
             return
         if isinstance(message_chunk, ToolMessage):
             return
-        content = _content_to_text(getattr(message_chunk, "content", ""))
-        if not content:
+        incoming = _content_to_text(getattr(message_chunk, "content", ""))
+        if not incoming:
             return
         stream = self._model_stream(node_id or "model")
-        content = _delta_for_stream(stream, content)
-        if not content:
+        raw_delta = _delta_for_stream(stream, incoming)
+        if not raw_delta:
             return
-        stream.content += content
+        stream.raw_content += raw_delta
+        public_content = strip_internal_snapshot_blocks(stream.raw_content)
+        public_delta = _public_delta_for_stream(stream.content, public_content)
+        stream.content = public_content
+        if not public_delta:
+            return
         self.runtime_event(
             "model_stream_delta",
             node_id=node_id,
             stage_id=self.current_stage_id,
             span_id=stream.span_id,
             parent_span_id=stream.parent_span_id,
-            payload={"stream_id": stream.stream_id, "delta": content, "content_mode": "delta"},
+            payload={
+                "stream_id": stream.stream_id,
+                "delta": public_delta,
+                "content_mode": "delta",
+                "visible_to_user": self._node_visible_to_user(node_id),
+            },
         )
 
     def emit_model_activity_from_patch(self, node_id: str, stage_id: str | None, patch: dict[str, Any]) -> None:
@@ -536,10 +555,10 @@ class RuntimeEventNormalizer:
         self.emit_final_message_if_needed(text, node_id=node_id, reason=reason)
 
     def emit_final_message_if_needed(self, text: str, *, node_id: str, reason: str) -> None:
-        text = text.strip()
+        text = strip_internal_snapshot_blocks(text)
         if not text:
             return
-        if any((stream.content or "").strip() for stream in self.model_streams.values()):
+        if self._has_visible_model_stream_content():
             return
         stream_id = uuid.uuid4().hex
         self.runtime_event(
@@ -554,6 +573,7 @@ class RuntimeEventNormalizer:
                 "content_mode": "snapshot",
                 "completion_reason": reason,
                 "completion_inferred": True,
+                "visible_to_user": self._node_visible_to_user(node_id),
             },
         )
 
@@ -579,7 +599,19 @@ class RuntimeEventNormalizer:
                 "content_mode": "snapshot",
                 "completion_reason": reason,
                 "completion_inferred": True,
+                "visible_to_user": self._node_visible_to_user(stream.node_id),
             },
+        )
+
+    def _node_visible_to_user(self, node_id: str | None) -> bool:
+        if not node_id:
+            return True
+        return self.node_visibility.get(node_id, True)
+
+    def _has_visible_model_stream_content(self) -> bool:
+        return any(
+            (stream.content or "").strip() and self._node_visible_to_user(stream.node_id)
+            for stream in self.model_streams.values()
         )
 
     def _normalize_approval_request(self, request: Any) -> dict[str, Any]:
@@ -799,9 +831,20 @@ def _tool_message_event_type(message: dict[str, Any]) -> FactoryFrontendEventTyp
     return "tool_call_completed"
 
 
+def _frontend_debug_patch(patch: dict[str, Any]) -> dict[str, Any]:
+    compacted = json_safe(patch)
+    if not isinstance(compacted, dict):
+        return {"value": compacted}
+    messages = compacted.get("messages")
+    if isinstance(messages, list):
+        compacted["messages"] = [
+            _frontend_tool_message(item) if isinstance(item, dict) and item.get("type") == "ToolMessage" else item
+            for item in messages
+        ]
+    return compacted
+
+
 def _frontend_tool_message(message: dict[str, Any]) -> dict[str, Any]:
-    if str(message.get("name") or "") != "skill":
-        return message
     content = message.get("content")
     if not isinstance(content, str):
         return message
@@ -811,11 +854,93 @@ def _frontend_tool_message(message: dict[str, Any]) -> dict[str, Any]:
         return message
     if not isinstance(payload, dict):
         return message
-    compacted = _compact_skill_observation(payload)
+    compacted = (
+        _compact_skill_observation(payload)
+        if str(message.get("name") or "") == "skill"
+        else _compact_tool_observation(payload)
+    )
     updated = dict(message)
     updated["content"] = json.dumps(compacted, ensure_ascii=False, sort_keys=True)
     updated["content_omitted"] = compacted is not payload
     return updated
+
+
+def _compact_tool_activity_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    compacted = dict(payload)
+    for key in ("observation", "result"):
+        value = compacted.get(key)
+        if isinstance(value, dict):
+            compacted[key] = _compact_tool_observation(value)
+    output = compacted.get("output")
+    if isinstance(output, dict):
+        compacted["output"] = _compact_tool_output(output, parent=compacted)
+    return compacted
+
+
+def _compact_tool_observation(payload: dict[str, Any]) -> dict[str, Any]:
+    if len(_json_text(payload)) <= TOOL_EVENT_INLINE_JSON_LIMIT:
+        return payload
+    compacted: dict[str, Any] = {
+        key: value
+        for key, value in payload.items()
+        if key
+        in {
+            "type",
+            "status",
+            "tool_id",
+            "tool_call_id",
+            "message",
+            "retryable",
+            "execution_status",
+            "contract_status",
+            "output_summary",
+            "output_ref",
+            "output_truncated",
+            "errors",
+            "user_instruction",
+        }
+    }
+    if isinstance(payload.get("arguments"), dict):
+        compacted["arguments"] = _compact_value(payload["arguments"])
+    if isinstance(payload.get("evidence"), dict):
+        compacted["evidence"] = _compact_value(payload["evidence"])
+    if isinstance(payload.get("output"), dict):
+        compacted["output"] = _compact_tool_output(payload["output"], parent=payload)
+    compacted["content_omitted"] = True
+    compacted["omission_reason"] = "tool_observation_exceeded_frontend_inline_limit"
+    compacted["original_chars"] = len(_json_text(payload))
+    return compacted
+
+
+def _compact_tool_output(output: dict[str, Any], *, parent: dict[str, Any]) -> dict[str, Any]:
+    if len(_json_text(output)) <= TOOL_EVENT_INLINE_JSON_LIMIT:
+        return output
+    compact: dict[str, Any] = {}
+    output_ref = parent.get("output_ref")
+    if isinstance(output_ref, dict):
+        compact["output_ref"] = output_ref
+    tool_output_compacted = output.get("_tool_output_compacted")
+    if isinstance(tool_output_compacted, dict):
+        compact["_tool_output_compacted"] = tool_output_compacted
+    compressed = output.get("compressed_output")
+    if isinstance(compressed, str) and compressed.strip():
+        compact["compressed_output"] = _preview_text(compressed, TOOL_EVENT_PREVIEW_CHARS)
+    else:
+        compact["preview"] = _preview_text(_json_text(output), TOOL_EVENT_PREVIEW_CHARS)
+    compact["content_omitted"] = True
+    compact["omission_reason"] = "tool_output_exceeded_frontend_inline_limit"
+    compact["original_chars"] = len(_json_text(output))
+    return compact
+
+
+def _compact_value(value: Any) -> Any:
+    if len(_json_text(value)) <= TOOL_EVENT_PREVIEW_CHARS:
+        return value
+    return {
+        "preview": _preview_text(_json_text(value), TOOL_EVENT_PREVIEW_CHARS),
+        "content_omitted": True,
+        "original_chars": len(_json_text(value)),
+    }
 
 
 def _compact_skill_observation(payload: dict[str, Any]) -> dict[str, Any]:
@@ -904,26 +1029,52 @@ def _content_to_text(content: Any) -> str:
     return str(content) if content else ""
 
 
+def _json_text(value: Any) -> str:
+    try:
+        return json.dumps(json_safe(value), ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(value)
+
+
+def _preview_text(value: str, limit: int) -> str:
+    normalized = " ".join(str(value or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit]
+
+
 def _delta_for_stream(stream: ModelStreamState, content: str) -> str:
-    if not stream.content:
+    if not stream.raw_content:
         return content
     if stream.input_mode == "snapshot":
-        if content == stream.content:
+        if content == stream.raw_content:
             return ""
-        if content.startswith(stream.content):
-            return content[len(stream.content) :]
+        if content.startswith(stream.raw_content):
+            return content[len(stream.raw_content) :]
         stream.input_mode = "delta"
         return content
     if stream.input_mode == "delta":
         return content
-    if content == stream.content:
+    if content == stream.raw_content:
         stream.input_mode = "snapshot"
         return ""
-    if content.startswith(stream.content):
+    if content.startswith(stream.raw_content):
         stream.input_mode = "snapshot"
-        return content[len(stream.content) :]
+        return content[len(stream.raw_content) :]
     stream.input_mode = "delta"
     return content
+
+
+def _public_delta_for_stream(previous: str, current: str) -> str:
+    if not current:
+        return ""
+    if not previous:
+        return current
+    if current == previous:
+        return ""
+    if current.startswith(previous):
+        return current[len(previous) :]
+    return ""
 
 
 def _optional_str(value: Any) -> str | None:

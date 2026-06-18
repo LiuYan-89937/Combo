@@ -8,8 +8,8 @@ from uuid import uuid4
 from typing import Any
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
-from agent_factory.create_agent.mcp_inheritance import materialize_referenced_factory_mcp
 from agent_factory.create_agent.models import PUBLISH_FILE
+from agent_factory.create_agent.package_paths import is_transient_package_path, normalize_package_relative
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.paths import factory_artifact_path
@@ -23,6 +23,18 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, 
 
 CREATE_AGENT_PUBLISH_TOOL_ID = "create_agent_publish"
 CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE = "create_agent_package_registry"
+PACKAGE_ASSET_DIRS = {
+    "artifacts",
+    "extensions",
+    "formatters",
+    "knowledge",
+    "patterns",
+    "policies",
+    "prompts",
+    "resources",
+    "strategies",
+    "tools",
+}
 
 
 def build_create_agent_publish_tool_spec() -> ToolSpec:
@@ -82,7 +94,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if not confirmation:
         raise ValueError("confirmation is required")
     registry_root = _registry_root(resources)
-    materialize_referenced_factory_mcp(workspace.root)
     _assert_publish_ready(workspace)
 
     package = AgentPackageLoader().load_path(workspace.package_manifest_path())
@@ -93,8 +104,9 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     staging_root.mkdir(parents=True, exist_ok=True)
     if staging.exists():
         shutil.rmtree(staging)
-    shutil.copytree(workspace.root, staging, ignore=_copy_ignore)
+    _copy_publishable_package(workspace.root, staging)
     _assert_runtime_ready(staging)
+    _prune_transient_paths(staging)
 
     registry_root.mkdir(parents=True, exist_ok=True)
     backup = _safe_child(registry_root, f".publish_backup_{package_id}_{uuid4().hex}")
@@ -198,7 +210,7 @@ def _assert_runtime_ready(package_root: Path) -> None:
 
 
 def _package_id(package: Any) -> str:
-    value = str(getattr(package.assembly_spec.agent, "id", "") or "").strip()
+    value = str(getattr(package.manifest.agent, "id", "") or "").strip()
     if not value or value in {".", ".."} or "/" in value or "\\" in value:
         raise ValueError(f"invalid package id: {value!r}")
     return value
@@ -229,9 +241,89 @@ def _safe_child(root: Path, child: str) -> Path:
     return target
 
 
-def _copy_ignore(directory: str, names: list[str]) -> set[str]:
-    ignored = {"__pycache__", ".DS_Store"}
-    if Path(directory).name == ".":
-        ignored.update({PUBLISH_FILE})
-    ignored.update(name for name in names if name in {".factory", ".agent_runtime"})
-    return ignored
+def _copy_publishable_package(source: Path, target: Path) -> None:
+    manifest = _read_manifest_payload(source)
+    publishable_files, publishable_dirs = _publishable_paths(manifest)
+    target.mkdir(parents=True, exist_ok=True)
+    for path in sorted(item for item in source.rglob("*") if item.is_file()):
+        relative = path.relative_to(source).as_posix()
+        if not _is_publishable(relative, publishable_files=publishable_files, publishable_dirs=publishable_dirs):
+            continue
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+
+
+def _read_manifest_payload(root: Path) -> dict[str, Any]:
+    path = root / "agent_package.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError("agent_package.json must be readable before publish") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("agent_package.json must contain a JSON object")
+    return payload
+
+
+def _publishable_paths(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
+    files = {"agent_package.json"}
+    dirs: set[str] = set()
+    for key in ("assembly_spec_path", "render_manifest_path", "resources_path", "sandbox_contract_path"):
+        _add_manifest_file(files, manifest.get(key))
+    contracts = manifest.get("contracts")
+    if isinstance(contracts, dict):
+        for value in contracts.values():
+            _add_manifest_file(files, value)
+    for key in ("bindings", "patterns", "prompts", "tools", "policies", "strategies", "formatters"):
+        value = manifest.get(key)
+        if isinstance(value, list):
+            for item in value:
+                _add_manifest_file(files, item)
+                _add_asset_dir_for_manifest_path(dirs, item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                _add_manifest_file(files, item)
+                _add_asset_dir_for_manifest_path(dirs, item)
+    return files, dirs | PACKAGE_ASSET_DIRS
+
+
+def _add_manifest_file(files: set[str], value: Any) -> None:
+    if not isinstance(value, str) or not value.strip():
+        return
+    relative = normalize_package_relative(value)
+    if relative and not is_transient_package_path(relative):
+        files.add(relative)
+
+
+def _add_asset_dir_for_manifest_path(dirs: set[str], value: Any) -> None:
+    if not isinstance(value, str) or not value.strip():
+        return
+    relative = normalize_package_relative(value)
+    parts = relative.split("/")
+    if parts and parts[0] in PACKAGE_ASSET_DIRS:
+        dirs.add(parts[0] if len(parts) == 1 else "/".join(parts[:-1]))
+
+
+def _is_publishable(relative: str, *, publishable_files: set[str], publishable_dirs: set[str]) -> bool:
+    normalized = normalize_package_relative(relative)
+    if normalized == normalize_package_relative(PUBLISH_FILE):
+        return False
+    if is_transient_package_path(normalized):
+        return False
+    if normalized in publishable_files:
+        return True
+    return any(normalized == directory or normalized.startswith(f"{directory}/") for directory in publishable_dirs)
+
+
+def _prune_transient_paths(root: Path) -> None:
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if not is_transient_package_path(relative):
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()

@@ -57,7 +57,7 @@ def _input_schema() -> dict[str, Any]:
                 "description": (
                     "Skill Gateway action. Use describe before read_resource for the same current_system. "
                     "list/search/describe expose metadata only. "
-                    "load returns SKILL.md for one active system. list_loaded returns loaded state. "
+                    "load returns SKILL.md for one tracked manufacturing focus. list_loaded returns loaded state. "
                     "read_resource reads one referenced skill resource. "
                     "read_repair_resources reads validator-recommended resources as a compact bundle."
                 ),
@@ -91,7 +91,7 @@ def _input_schema() -> dict[str, Any]:
             },
             "current_system": {
                 "type": "string",
-                "description": "Required for describe/load/list_loaded/read_resource. Use the active system_id.",
+                "description": "Required for describe/load/list_loaded/read_resource. Use the manufacturing focus or system id whose skill state should be tracked; it is advisory state, not a stage gate.",
             },
             "reason": {
                 "type": "string",
@@ -167,5 +167,5 @@ def _tool_description(registry: SkillRegistry) -> str:
     ]
     if skill_names:
         lines.append("Enabled skills: " + ", ".join(skill_names[:40]))
-    lines.append("Call action=list or action=search to inspect available skills for the active system.")
+    lines.append("Call action=list or action=search to inspect available skills.")
     return "\n".join(lines)

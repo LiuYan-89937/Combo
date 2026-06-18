@@ -30,13 +30,13 @@ Guides runtime tools contract changes and tool access declarations.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
+4. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
+5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Do not expose create-agent manufacturing tools as produced-agent runtime tools.
 - Declare only tools that are available through RuntimeKernel built-ins, package files, or inherited MCP candidates.
-- To use an inherited MCP candidate, add its tool id to `assembly_spec.json` tool_access; system validation materializes the matching MCP server config into package extensions.
+- To use an inherited MCP candidate, include its tool id through create_agent_authoring pattern assembly tool access, then call create_agent_authoring(action="materialize_mcp_inheritance") before validation.
 - Keep contracts/tools.json aligned with assembly_spec tool_access bindings and package tool manifests.
 - If a required runtime tool is unavailable in built-ins, package tools, or inherited MCP candidates, state the limitation or ask for confirmed integration resources.
 

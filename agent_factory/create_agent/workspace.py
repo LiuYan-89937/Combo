@@ -46,13 +46,10 @@ class CreateAgentWorkspace:
             raise ValueError("create-agent session id must not be empty")
         return cls(factory_artifact_path("create_agent_workspaces", safe_session_id))
 
-    def initialize(self, *, user_input: str, task_analysis: CreateAgentTaskAnalysis | None = None) -> None:
+    def initialize(self, *, user_input: str, task_analysis: CreateAgentTaskAnalysis) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.factory_dir.mkdir(parents=True, exist_ok=True)
-        if task_analysis is not None:
-            self.write_task_analysis(task_analysis)
-        elif not self.task_analysis_path.exists():
-            self.write_task_analysis(CreateAgentTaskAnalysis(intent_summary=" ".join(str(user_input or "").split())[:240]))
+        self.write_task_analysis(task_analysis)
         analysis = self.read_task_analysis()
         if not self.package_manifest_path().exists():
             materialize_empty_agent_package(
@@ -136,12 +133,18 @@ class CreateAgentWorkspace:
         self._write_json(self.system_state_path, state.model_dump(mode="json"))
 
     def read_task_analysis(self) -> CreateAgentTaskAnalysis:
-        return _read_managed_model(
+        analysis = _read_managed_model(
             self.task_analysis_path,
             CreateAgentTaskAnalysis,
-            missing=CreateAgentTaskAnalysis(),
+            missing=None,
             owner_tool="create-agent task analysis",
-        ) or CreateAgentTaskAnalysis()
+        )
+        if analysis is None:
+            raise ValueError(
+                f"missing managed create-agent task analysis: {self.task_analysis_path}. "
+                "Start a new /create-agent manufacture run so task analysis can select a runtime pattern."
+            )
+        return analysis
 
     def write_task_analysis(self, analysis: CreateAgentTaskAnalysis) -> None:
         self._write_json(self.task_analysis_path, analysis.model_dump(mode="json"))

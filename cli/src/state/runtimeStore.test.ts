@@ -43,6 +43,20 @@ describe('RuntimeStore', () => {
 		vi.useRealTimers();
 	});
 
+	it('keeps non-user-visible model streams out of the transcript', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('model_stream_delta', {payload: {stream_id: 's1', delta: 'hidden', visible_to_user: false}}));
+		store.dispatch(event('model_message_completed', {payload: {stream_id: 's1', content: 'hidden', visible_to_user: false}}));
+
+		expect(store.getSnapshot().modelStreams.s1?.content).toBe('hidden');
+		expect(store.getSnapshot().transcript.some(item => item.content === 'hidden')).toBe(false);
+
+		store.destroy();
+		vi.useRealTimers();
+	});
+
 	it('rebuilds transcript from session snapshot messages', () => {
 		const store = createRuntimeStore();
 		store.dispatch(event('session_started', {

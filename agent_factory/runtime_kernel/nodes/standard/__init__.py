@@ -4,6 +4,7 @@ from agent_factory.runtime_kernel.nodes.standard.close import TerminalCloseNode
 from agent_factory.runtime_kernel.nodes.standard.commit import TerminalCommitNode
 from agent_factory.runtime_kernel.nodes.standard.finalize import FinalizeNode
 from agent_factory.runtime_kernel.nodes.standard.ingress import IngressNode
+from agent_factory.runtime_kernel.nodes.standard.intent_gate import CognitiveIntentGateNode
 from agent_factory.runtime_kernel.nodes.standard.plan import CognitivePlanNode
 from agent_factory.runtime_kernel.nodes.standard.resource_probe import OperationalResourceProbeNode
 from agent_factory.runtime_kernel.nodes.standard.review import CognitiveReviewNode
@@ -19,6 +20,7 @@ __all__ = [
     "CognitiveStructuredNode",
     "CognitiveAnswerNode",
     "FinalizeNode",
+    "CognitiveIntentGateNode",
     "IngressNode",
     "OperationalResourceProbeNode",
     "OperationalToolCallNode",

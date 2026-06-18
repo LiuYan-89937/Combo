@@ -701,7 +701,7 @@ system.cross_session_memory_inject
   retrieve -> rank -> inject into runtime.context.model_context.cross_session_memory
 ```
 
-Factory 在模型调用前使用同一套检索、排序和注入 pipeline，把结果作为 `prompt_context.cross_session_memory` 进入提示词上下文。`factory_chat` 也必须走这条统一路径；后续 chat/free 模式承担测试模块对话入口时，不能绕过记忆、工具、MCP/Skill 或事件系统。
+Factory 在模型调用前使用同一套检索、排序和注入 pipeline，把结果注入当前模型调用的 system/model context。`factory_chat` 也必须走这条统一路径；后续 chat/free 模式承担测试模块对话入口时，不能绕过记忆、工具、MCP/Skill 或事件系统。
 
 注入文本必须低噪声：
 

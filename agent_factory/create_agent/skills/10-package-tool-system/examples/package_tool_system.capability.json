@@ -1,91 +1,60 @@
 {
-  "tools/package_action/manifest.json": {
-    "id": "package_action",
-    "description": "Performs one package-defined runtime action.",
-    "entrypoint": "python:tools/package_action/tool.py:run",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string"
-        }
+  "purpose": "Create or update a package tool through the deterministic authoring tool.",
+  "authoring_call": {
+    "tool": "create_agent_authoring",
+    "arguments": {
+      "action": "upsert_package_tool",
+      "tool_spec": {
+        "id": "package_action",
+        "description": "Performs one package-defined runtime action.",
+        "entrypoint": "python:tools/package_action/tool.py:run",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "result"
+          ],
+          "additionalProperties": true
+        },
+        "resources": {
+          "runtime_root": "runtime_root"
+        },
+        "risk_level": "low",
+        "risk_evaluator": {
+          "llm_mode": "disabled"
+        },
+        "concurrent": true
       },
-      "required": [
-        "query"
-      ],
-      "additionalProperties": false
+      "tool_source": "from agent_factory.tooling.envelope import tool_envelope\nfrom pathlib import Path\nimport json\n\n\ndef _state_path(resources):\n    return Path(str(resources[\"runtime_root\"])) / \"state\" / \"package_action.json\"\n\n\ndef run(arguments, resources):\n    query = str(arguments.get(\"query\") or \"\").strip()\n    path = _state_path(resources)\n    path.parent.mkdir(parents=True, exist_ok=True)\n    history = []\n    if path.is_file():\n        history = json.loads(path.read_text(encoding=\"utf-8\"))\n    history.append({\"query\": query})\n    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n    result = query if query else \"No query provided.\"\n    return tool_envelope(\n        {\"result\": result},\n        evidence={\"tool_id\": \"package_action\", \"state_path\": str(path)},\n        summary=\"Package action completed.\",\n    )\n",
+      "python_requirements": [],
+      "expose_to_nodes": [
+        "answer"
+      ]
     },
-    "output_schema": {
-      "type": "object",
-      "properties": {
-        "result": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "result"
-      ],
-      "additionalProperties": true
-    },
-    "resources": {
-      "runtime_root": "runtime_root"
-    },
-    "risk_level": "low",
-    "risk_evaluator": {
-      "llm_mode": "disabled"
-    },
-    "concurrent": true
-  },
-  "tools/package_action/tool.py": "from agent_factory.tooling.envelope import tool_envelope\nfrom pathlib import Path\nimport json\n\n\ndef _state_path(resources):\n    return Path(str(resources[\"runtime_root\"])) / \"state\" / \"package_action.json\"\n\n\ndef run(arguments, resources):\n    query = str(arguments.get(\"query\") or \"\").strip()\n    path = _state_path(resources)\n    path.parent.mkdir(parents=True, exist_ok=True)\n    history = []\n    if path.is_file():\n        history = json.loads(path.read_text(encoding=\"utf-8\"))\n    history.append({\"query\": query})\n    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n    result = query if query else \"No query provided.\"\n    return tool_envelope(\n        {\"result\": result},\n        evidence={\"tool_id\": \"package_action\", \"state_path\": str(path)},\n        summary=\"Package action completed.\",\n    )\n",
-  "contracts/tools.json": {
-    "type": "tools",
-    "version": "tools_contract.v0",
-    "enabled": true,
-    "config": {
-      "builtin_tools_enabled": true,
-      "builtin_tool_ids": [],
-      "package_tools_enabled": true
-    }
-  },
-  "agent_package.json#tools": [
-    "tools/package_action/manifest.json"
-  ],
-  "assembly_spec.json#tools_item": {
-    "id": "package_action",
-    "description": "Performs one package-defined runtime action.",
-    "entrypoint": "python:tools/package_action/tool.py:run",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "query"
-      ],
-      "additionalProperties": false
-    },
-    "output_schema": {
-      "type": "object",
-      "properties": {
-        "result": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "result"
-      ],
-      "additionalProperties": true
-    },
-    "resources": {
-      "runtime_root": "runtime_root"
-    },
-    "risk_level": "low",
-    "risk_evaluator": {
-      "llm_mode": "disabled"
-    },
-    "concurrent": true
+    "writes": [
+      "tools/package_action/manifest.json",
+      "tools/package_action/tool.py",
+      "agent_package.json",
+      "assembly_spec.json",
+      "contracts/tools.json",
+      "contracts/dependencies.json"
+    ]
   },
   "probe_after_write": {
     "tool": "create_agent_probe_tool",
@@ -96,8 +65,16 @@
       "action": "call",
       "tool_id": "package_action",
       "prompt": "Please run the package action for this sample user request and tell me whether it succeeded.",
-      "tool_goal": "Return a useful final answer after the package action runs and records its state."
-    },
-    "note": "Use realistic package tool input. Probe output is evidence for whether the main model should rewrite the package tool."
-  }
+      "tool_goal": "Return a useful final answer after the package action runs and records its state.",
+      "arguments": {
+        "query": "sample request"
+      }
+    }
+  },
+  "rules": [
+    "Do not manually update agent_package.json, assembly_spec.json, contracts/tools.json, or contracts/dependencies.json for package tool registration during normal production.",
+    "Declare external Python dependencies in python_requirements when the source imports third-party packages.",
+    "Remove stale package tools through create_agent_authoring(action=\"remove_package_tool\", tool_id=...).",
+    "Use resources passed to the tool entrypoint for runtime paths instead of assuming os.getcwd()."
+  ]
 }

@@ -509,18 +509,40 @@ def _host_runtime_root(package_id: str) -> Path:
 
 def _host_session_root(*, package_id: str, package: LoadedAgentPackage, configured: str) -> Path:
     value = configured.strip()
+    runtime_root = _host_runtime_root(package_id)
     if value == "/runtime":
-        return _host_runtime_root(package_id)
+        return runtime_root.resolve()
     if value.startswith("/runtime/"):
-        return (_host_runtime_root(package_id) / value.removeprefix("/runtime/")).resolve()
+        return _root_relative_path(
+            runtime_root,
+            Path(value.removeprefix("/runtime/")),
+            field_path="session.config.session_root",
+        )
     if value == ".agent_runtime":
-        return _host_runtime_root(package_id)
+        return runtime_root.resolve()
     if value.startswith(".agent_runtime/"):
-        return (_host_runtime_root(package_id) / value.removeprefix(".agent_runtime/")).resolve()
+        return _root_relative_path(
+            runtime_root,
+            Path(value.removeprefix(".agent_runtime/")),
+            field_path="session.config.session_root",
+        )
     path = Path(value).expanduser()
     if path.is_absolute():
-        return path.resolve()
-    return (package.package_root / path).resolve()
+        raise ValueError(
+            "session.config.session_root must be package-relative or use /runtime/... "
+            f"when a runtime workspace is mounted; got {value!r}"
+        )
+    return _root_relative_path(package.package_root, path, field_path="session.config.session_root")
+
+
+def _root_relative_path(root_path: Path, path: Path, *, field_path: str) -> Path:
+    root = root_path.resolve()
+    target = (root / path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{field_path} must resolve inside its runtime workspace; got {str(path)!r}") from exc
+    return target
 
 
 def _default_package_root() -> Path:

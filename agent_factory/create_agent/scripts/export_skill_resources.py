@@ -5,7 +5,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.create_agent.models import PackageValidationReport, SystemManufacturingState, initial_system_manufacturing_state
 from agent_factory.create_agent.package_scaffold import materialize_empty_agent_package
 from agent_factory.runtime_contracts.builtins import (
@@ -124,13 +123,13 @@ def main() -> None:
             files={"contracts/tools.json": (type(default_tools_contract()), default_tools_contract())},
         ),
         "10-package-tool-system": _export(
-            title="Package tool manifest",
+            title="Package tool authoring call",
             files=_package_tool_example_files(),
         ),
         "12-assembly-pattern-system": _export(
-            title="Assembly spec capability increment",
+            title="Assembly pattern authoring call",
             files={
-                "assembly_spec.json": (AgentAssemblySpec, _assembly_with_tool_binding_example()),
+                "assembly_pattern_authoring": (dict, _assembly_pattern_authoring_example()),
             },
         ),
         "13-render-event-system": _export(
@@ -145,8 +144,8 @@ def main() -> None:
             files={"contracts/scheduler.json": (type(default_scheduler_contract()), default_scheduler_contract())},
         ),
         "15-scheduler-seed-system": _export(
-            title="Scheduler seed contract",
-            files={"contracts/scheduler_seed.json": (type(default_scheduler_seed_contract()), _scheduler_seed_capability_example())},
+            title="Scheduler seed authoring call",
+            files={"scheduler_seed_authoring": (dict, _scheduler_seed_capability_example())},
         ),
         "16-trace-artifact-system": _export(
             title="Trace and artifact contracts",
@@ -169,11 +168,6 @@ def main() -> None:
             _write_json(example_path, payload["example"])
         elif example_path.exists():
             example_path.unlink()
-    _write_json(
-        SKILLS_ROOT / "12-assembly-pattern-system" / "examples" / "assembly_spec.plan_and_execute.json",
-        _plan_and_execute_assembly_example().model_dump(mode="json", exclude_none=True),
-    )
-
 
 def _export(*, title: str, files: dict[str, tuple[type[Any], Any]]) -> dict[str, Any]:
     if len(files) == 1:
@@ -196,11 +190,13 @@ def _export(*, title: str, files: dict[str, tuple[type[Any], Any]]) -> dict[str,
 
 
 def _scheduler_seed_capability_example() -> Any:
-    contract = default_scheduler_seed_contract()
-    config = type(contract.config).model_validate(
-        {
-            "seeds": [
-                {
+    return {
+        "purpose": "Create or update scheduler seed configuration through the deterministic authoring tool.",
+        "authoring_call": {
+            "tool": "create_agent_authoring",
+            "arguments": {
+                "action": "upsert_scheduler_seed",
+                "seed": {
                     "seed_id": "daily_runtime_task",
                     "title": "Daily runtime task",
                     "human_schedule": "Every weekday at 09:00 Asia/Shanghai",
@@ -222,15 +218,16 @@ def _scheduler_seed_capability_example() -> Any:
                     "max_concurrent_runs": 1,
                     "timeout_seconds": 900,
                     "unattended_policy": "deny_if_approval_required",
-                }
-            ]
-        }
-    )
-    return contract.model_copy(
-        update={
-            "config": config
-        }
-    )
+                },
+            },
+            "writes": ["contracts/scheduler_seed.json"],
+        },
+        "rules": [
+            "Do not hand-write contracts/scheduler_seed.json during normal production.",
+            "Only create scheduler seeds after the schedule and task content are known or confirmed.",
+            "Use graph_run when the scheduled task should run the agent itself.",
+        ],
+    }
 
 
 def _schema_for(model_or_type: type[Any], *, title: str) -> dict[str, Any]:
@@ -269,6 +266,7 @@ def _scaffold_example_files() -> dict[str, Any]:
             package_root,
             factory_run_id=SCAFFOLD_RUN_ID,
             user_input=SCAFFOLD_USER_INPUT,
+            pattern_id="react_agent",
         )
         result: dict[str, Any] = {}
         for path in sorted(item for item in package_root.rglob("*") if item.is_file()):
@@ -297,60 +295,68 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
         resources={"runtime_root": "runtime_root"},
         risk_level="low",
     )
+    source = (
+        "from agent_factory.tooling.envelope import tool_envelope\n"
+        "from pathlib import Path\n"
+        "import json\n\n\n"
+        "def _state_path(resources):\n"
+        "    return Path(str(resources[\"runtime_root\"])) / \"state\" / \"package_action.json\"\n\n\n"
+        "def run(arguments, resources):\n"
+        "    query = str(arguments.get(\"query\") or \"\").strip()\n"
+        "    path = _state_path(resources)\n"
+        "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    history = []\n"
+        "    if path.is_file():\n"
+        "        history = json.loads(path.read_text(encoding=\"utf-8\"))\n"
+        "    history.append({\"query\": query})\n"
+        "    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n"
+        "    result = query if query else \"No query provided.\"\n"
+        "    return tool_envelope(\n"
+        "        {\"result\": result},\n"
+        "        evidence={\"tool_id\": \"package_action\", \"state_path\": str(path)},\n"
+        "        summary=\"Package action completed.\",\n"
+        "    )\n"
+    )
     return {
-        "tools/package_action/manifest.json": (ToolSpec, tool_spec),
-        "tools/package_action/tool.py": (
-            str,
-            (
-                "from agent_factory.tooling.envelope import tool_envelope\n"
-                "from pathlib import Path\n"
-                "import json\n\n\n"
-                "def _state_path(resources):\n"
-                "    return Path(str(resources[\"runtime_root\"])) / \"state\" / \"package_action.json\"\n\n\n"
-                "def run(arguments, resources):\n"
-                "    query = str(arguments.get(\"query\") or \"\").strip()\n"
-                "    path = _state_path(resources)\n"
-                "    path.parent.mkdir(parents=True, exist_ok=True)\n"
-                "    history = []\n"
-                "    if path.is_file():\n"
-                "        history = json.loads(path.read_text(encoding=\"utf-8\"))\n"
-                "    history.append({\"query\": query})\n"
-                "    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n"
-                "    result = query if query else \"No query provided.\"\n"
-                "    return tool_envelope(\n"
-                "        {\"result\": result},\n"
-                "        evidence={\"tool_id\": \"package_action\", \"state_path\": str(path)},\n"
-                "        summary=\"Package action completed.\",\n"
-                "    )\n"
-            ),
-        ),
-        "contracts/tools.json": (
-            type(default_tools_contract()),
-            {
-                "type": "tools",
-                "version": "tools_contract.v0",
-                "enabled": True,
-                "config": {
-                    "builtin_tools_enabled": True,
-                    "builtin_tool_ids": [],
-                    "package_tools_enabled": True,
-                },
-            },
-        ),
-        "agent_package.json#tools": (list, ["tools/package_action/manifest.json"]),
-        "assembly_spec.json#tools_item": (ToolSpec, tool_spec),
-        "probe_after_write": (
+        "package_tool_authoring": (
             dict,
             {
-                "tool": "create_agent_probe_tool",
-                "inspect": {"action": "inspect"},
-                "call": {
-                    "action": "call",
-                    "tool_id": "package_action",
-                    "prompt": "Please run the package action for this sample user request and tell me whether it succeeded.",
-                    "tool_goal": "Return a useful final answer after the package action runs and records its state.",
+                "purpose": "Create or update a package tool through the deterministic authoring tool.",
+                "authoring_call": {
+                    "tool": "create_agent_authoring",
+                    "arguments": {
+                        "action": "upsert_package_tool",
+                        "tool_spec": tool_spec.model_dump(mode="json", exclude_none=True),
+                        "tool_source": source,
+                        "python_requirements": [],
+                        "expose_to_nodes": ["answer"],
+                    },
+                    "writes": [
+                        "tools/package_action/manifest.json",
+                        "tools/package_action/tool.py",
+                        "agent_package.json",
+                        "assembly_spec.json",
+                        "contracts/tools.json",
+                        "contracts/dependencies.json",
+                    ],
                 },
-                "note": "Use realistic package tool input. Probe output is evidence for whether the main model should rewrite the package tool.",
+                "probe_after_write": {
+                    "tool": "create_agent_probe_tool",
+                    "inspect": {"action": "inspect"},
+                    "call": {
+                        "action": "call",
+                        "tool_id": "package_action",
+                        "prompt": "Please run the package action for this sample user request and tell me whether it succeeded.",
+                        "tool_goal": "Return a useful final answer after the package action runs and records its state.",
+                        "arguments": {"query": "sample request"},
+                    },
+                },
+                "rules": [
+                    "Do not manually update agent_package.json, assembly_spec.json, contracts/tools.json, or contracts/dependencies.json for package tool registration during normal production.",
+                    "Declare external Python dependencies in python_requirements when the source imports third-party packages.",
+                    "Remove stale package tools through create_agent_authoring(action=\"remove_package_tool\", tool_id=...).",
+                    "Use resources passed to the tool entrypoint for runtime paths instead of assuming os.getcwd().",
+                ],
             },
         ),
     }
@@ -369,182 +375,46 @@ def _manufacturing_control_example() -> SystemManufacturingState:
     )
 
 
-def _tool_spec_example() -> ToolSpec:
-    return ToolSpec(
-        id="package_action",
-        description="Performs one package-defined runtime action.",
-        entrypoint="python:tools/package_action/tool.py:run",
-        input_schema={"type": "object", "additionalProperties": True},
-        output_schema={"type": "object", "additionalProperties": True},
-    )
-
-
-def _assembly_with_tool_binding_example() -> AgentAssemblySpec:
-    return AgentAssemblySpec.model_validate(
-        {
-            "schema_version": "0.1",
-            "agent": {
-                "id": "generated_agent",
-                "name": "Generated Agent",
-                "description": "Generated RuntimeKernel AgentPackage.",
-                "version": "0.1.0",
-            },
-            "runtime": {
+def _assembly_pattern_authoring_example() -> dict[str, Any]:
+    return {
+        "purpose": "Configure the selected built-in runtime pattern through the deterministic authoring tool.",
+        "react_agent": {
+            "tool": "create_agent_authoring",
+            "arguments": {
+                "action": "configure_pattern_assembly",
                 "pattern_id": "react_agent",
-                "user_config": {},
-                "agent_config": {},
+                "prompts": {
+                    "answer": "Answer the user using the package knowledge, runtime context, and approved tools. Ask a concise follow-up only when required information is missing.",
+                },
+                "allowed_tool_ids": ["package_action"],
             },
-            "bindings": {
-                "node_bindings": [
-                    {
-                        "binding_id": "answer_prompt",
-                        "binding_type": "prompt",
-                        "target": {"node_id": "answer", "impl": "cognitive.answer"},
-                        "payload": {
-                            "prompt_id": "answer_prompt",
-                            "template": "Use the user's request, runtime context, and approved tools to produce a useful answer.",
-                            "variables": [],
-                        },
-                    },
-                    {
-                        "binding_id": "answer_tool_access",
-                        "binding_type": "tool_access",
-                        "target": {"node_id": "answer", "impl": "cognitive.answer"},
-                        "payload": {
-                            "allowed_tool_ids": ["package_action"],
-                            "approval_policy": "standard",
-                        },
-                    },
-                    {
-                        "binding_id": "answer_model_operation",
-                        "binding_type": "model_operation",
-                        "target": {"node_id": "answer", "impl": "cognitive.answer"},
-                        "payload": {
-                            "operation": "tool_bound_chat",
-                            "model_role": "main",
-                            "output_schema": {
-                                "type": "object",
-                                "properties": {"answer": {"type": "string"}},
-                                "required": ["answer"],
-                                "additionalProperties": True,
-                            },
-                            "write_target": {"section": "context"},
-                            "max_attempts": 3,
-                            "prompt_id": "answer_prompt",
-                        },
-                    },
-                ],
-            },
-            "tools": [_tool_spec_example().model_dump(mode="json", exclude_none=True)],
-            "output": {"citations_required": False, "format": "text"},
-        }
-    )
-
-
-def _plan_and_execute_assembly_example() -> AgentAssemblySpec:
-    return AgentAssemblySpec.model_validate(
-        {
-            "schema_version": "0.1",
-            "agent": {
-                "id": "generated_agent",
-                "name": "Generated Agent",
-                "description": "Generated RuntimeKernel AgentPackage.",
-                "version": "0.1.0",
-            },
-            "runtime": {
+            "writes": ["agent_package.json", "assembly_spec.json", "render_manifest.json"],
+        },
+        "plan_and_execute": {
+            "tool": "create_agent_authoring",
+            "arguments": {
+                "action": "configure_pattern_assembly",
                 "pattern_id": "plan_and_execute",
-                "user_config": {},
-                "agent_config": {},
+                "prompts": {
+                    "planner": "Create and maintain a concise execution plan with runtime_plan. Do not call business tools from the planner.",
+                    "executor": "Execute the current plan step with approved tools, then update runtime_plan with the result.",
+                    "final_answer": "Summarize the completed plan and deliver the final user-facing answer.",
+                },
+                "activation": {
+                    "workflow_goal": "complete the user's multi-step workflow",
+                    "start_when": "the user supplies the concrete input needed to begin the workflow",
+                    "ask_when_missing": "Please provide the input needed to start this workflow.",
+                },
+                "allowed_tool_ids": ["package_action"],
             },
-            "bindings": {
-                "node_bindings": [
-                    {
-                        "binding_id": "planner_prompt",
-                        "binding_type": "prompt",
-                        "target": {"node_id": "planner", "impl": "cognitive.answer"},
-                        "payload": {
-                            "prompt_id": "planner_prompt",
-                            "template": "Create a concise dynamic plan for the user request, then call runtime_plan create_plan. Do not execute business tools from planner.",
-                            "variables": [],
-                        },
-                    },
-                    {
-                        "binding_id": "planner_tools",
-                        "binding_type": "tool_access",
-                        "target": {"node_id": "planner", "impl": "cognitive.answer"},
-                        "payload": {"allowed_tool_ids": ["runtime_plan"], "approval_policy": "standard"},
-                    },
-                    {
-                        "binding_id": "planner_model",
-                        "binding_type": "model_operation",
-                        "target": {"node_id": "planner", "impl": "cognitive.answer"},
-                        "payload": {
-                            "operation": "tool_bound_chat",
-                            "model_role": "main",
-                            "output_schema": {"type": "object", "additionalProperties": True},
-                            "write_target": {"section": "context"},
-                            "max_attempts": 3,
-                            "prompt_id": "planner_prompt",
-                        },
-                    },
-                    {
-                        "binding_id": "executor_prompt",
-                        "binding_type": "prompt",
-                        "target": {"node_id": "executor", "impl": "cognitive.answer"},
-                        "payload": {
-                            "prompt_id": "executor_prompt",
-                            "template": "Execute the current dynamic plan step using available tools when useful. Update step status through runtime_plan.",
-                            "variables": [],
-                        },
-                    },
-                    {
-                        "binding_id": "executor_tools",
-                        "binding_type": "tool_access",
-                        "target": {"node_id": "executor", "impl": "cognitive.answer"},
-                        "payload": {"allowed_tool_ids": ["runtime_plan", "package_action"], "approval_policy": "standard"},
-                    },
-                    {
-                        "binding_id": "executor_model",
-                        "binding_type": "model_operation",
-                        "target": {"node_id": "executor", "impl": "cognitive.answer"},
-                        "payload": {
-                            "operation": "tool_bound_chat",
-                            "model_role": "main",
-                            "output_schema": {"type": "object", "additionalProperties": True},
-                            "write_target": {"section": "context"},
-                            "max_attempts": 3,
-                            "prompt_id": "executor_prompt",
-                        },
-                    },
-                    {
-                        "binding_id": "final_answer_prompt",
-                        "binding_type": "prompt",
-                        "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-                        "payload": {
-                            "prompt_id": "final_answer_prompt",
-                            "template": "Summarize the completed dynamic plan and evidence for the user. Do not call tools.",
-                            "variables": [],
-                        },
-                    },
-                    {
-                        "binding_id": "final_answer_model",
-                        "binding_type": "model_operation",
-                        "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-                        "payload": {
-                            "operation": "tool_bound_chat",
-                            "model_role": "main",
-                            "output_schema": {"type": "object", "additionalProperties": True},
-                            "write_target": {"section": "context"},
-                            "max_attempts": 3,
-                            "prompt_id": "final_answer_prompt",
-                        },
-                    },
-                ],
-            },
-            "tools": [_tool_spec_example().model_dump(mode="json", exclude_none=True)],
-            "output": {"citations_required": False, "format": "text"},
-        }
-    )
+            "writes": ["agent_package.json", "assembly_spec.json", "render_manifest.json"],
+        },
+        "rules": [
+            "Do not hand-write node_bindings for built-in patterns during normal production.",
+            "Use package tool ids only after the tool exists or will be created through create_agent_authoring.",
+            "Do not write concrete plan steps into AgentPackage files; plan state is runtime state managed by runtime_plan.",
+        ],
+    }
 
 
 def _write_json(path: Path, payload: Any) -> None:

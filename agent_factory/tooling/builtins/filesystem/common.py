@@ -88,12 +88,18 @@ def path_risk_result(
             reasons=[f"path is outside the configured filesystem boundary: {exc}"],
             facts={"path": path_value, "filesystem_root": str(root)},
         ).model_dump(mode="json")
+    is_write_like = default_action != "allow"
     managed_path = _managed_path_spec(resolved, root=root, resources=tool_resources)
-    protected = managed_path is not None or _is_protected_write_path(resolved, root=root, resources=tool_resources)
+    managed_write_path = _managed_write_path_spec(resolved, root=root, resources=tool_resources) if is_write_like else None
+    protected = (
+        managed_path is not None
+        or managed_write_path is not None
+        or _is_protected_write_path(resolved, root=root, resources=tool_resources)
+    )
     if protected:
-        is_write_like = default_action != "allow"
         tool_key = "write_tool" if is_write_like else "read_tool"
-        dedicated_tool = str((managed_path or {}).get(tool_key) or (managed_path or {}).get("tool") or "").strip()
+        path_spec = managed_write_path or managed_path or {}
+        dedicated_tool = str(path_spec.get(tool_key) or path_spec.get("tool") or "").strip()
         reason = (
             "path is managed by a dedicated control tool and cannot be modified through generic filesystem tools"
             if is_write_like
@@ -120,7 +126,6 @@ def path_risk_result(
                 "dedicated_tool": dedicated_tool,
             },
         ).model_dump(mode="json")
-    is_write_like = default_action != "allow"
     if is_write_like and not _is_allowed_write_path(resolved, root=root, resources=tool_resources):
         return ToolRiskResult(
             action="deny",
@@ -132,20 +137,6 @@ def path_risk_result(
                 "filesystem_root": str(root),
             },
         ).model_dump(mode="json")
-    if not is_write_like:
-        read_block = _read_focus_block_reason(resolved, root=root, resources=tool_resources)
-        if read_block:
-            return ToolRiskResult(
-                action="deny",
-                risk_level="low",
-                reasons=[read_block],
-                facts={
-                    "path": path_value,
-                    "resolved_path": str(resolved),
-                    "filesystem_root": str(root),
-                    "required_next_action": "read active capability target files, write a capability increment, or stop for validation",
-                },
-            ).model_dump(mode="json")
     focus_facts = _focus_write_facts(resolved, root=root, resources=tool_resources) if is_write_like else {}
     sensitive = _is_sensitive_path(resolved)
     reasons = []
@@ -170,6 +161,8 @@ def path_risk_result(
 
 
 def assert_not_protected_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> None:
+    if _managed_write_path_spec(path, root=root, resources=resources) is not None:
+        raise PermissionError(f"path is managed by a dedicated write tool: {path}")
     if _is_protected_write_path(path, root=root, resources=resources):
         raise PermissionError(f"path is managed by a dedicated control tool: {path}")
     if not _is_allowed_write_path(path, root=root, resources=resources):
@@ -218,6 +211,22 @@ def _managed_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> 
     return None
 
 
+def _managed_write_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any] | None:
+    config = resources.get("filesystem", {})
+    values = config.get("managed_write_paths", {}) if isinstance(config, dict) else {}
+    if not isinstance(values, dict):
+        return None
+    for raw_path, raw_spec in values.items():
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        requested = Path(raw_path).expanduser()
+        candidate = requested if requested.is_absolute() else root / requested
+        resolved = candidate.resolve(strict=False)
+        if path == resolved or resolved in path.parents:
+            return raw_spec if isinstance(raw_spec, dict) else {}
+    return None
+
+
 def _is_allowed_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
     config = resources.get("filesystem", {})
     values = config.get("allowed_write_paths", []) if isinstance(config, dict) else []
@@ -238,25 +247,6 @@ def _path_matches_focus_files(path: Path, *, root: Path, focus_files: list[Any])
         if path == resolved or resolved in path.parents:
             return True
     return False
-
-
-def _read_focus_block_reason(path: Path, *, root: Path, resources: dict[str, Any]) -> str:
-    stage_context = stage_context_from_resources(resources)
-    if stage_context is None:
-        return ""
-    active = stage_context.active_stage()
-    if active is None:
-        return ""
-    relative = _relative_path_text(path, root=root)
-    if relative != "contracts" and not relative.startswith("contracts/"):
-        return ""
-    focus_files = stage_context.active_focus_files()
-    if _path_matches_focus_files(path, root=root, focus_files=focus_files):
-        return ""
-    return (
-        f"contracts scaffold audit is not part of active focus {active.system_id!r}. "
-        "Baseline contracts are produced by scaffold and checked by validator."
-    )
 
 
 def _focus_write_facts(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any]:

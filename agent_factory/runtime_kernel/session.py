@@ -6,7 +6,18 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class AgentSessionTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    created_at: str
+    user_input: str | None = None
+    final_answer: str | None = None
+    status: str | None = None
+    trace_ref: dict[str, str] | None = None
 
 
 class AgentSessionRecord(BaseModel):
@@ -20,6 +31,8 @@ class AgentSessionRecord(BaseModel):
     first_user_input: str | None = None
     display_title: str | None = None
     turn_count: int = 0
+    turns: list[AgentSessionTurn] = Field(default_factory=list)
+    runtime_refs: dict[str, str] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +55,7 @@ class AgentSessionManager:
             updated_at=now,
             first_user_input=(first_user_input or "").strip() or None,
             display_title=_display_title(first_user_input),
+            runtime_refs=_runtime_refs(self.config.root),
         )
         self.save(record)
         return record
@@ -71,13 +85,35 @@ class AgentSessionManager:
             records.append(record)
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
 
-    def touch_turn(self, session_id: str, *, first_user_input: str | None = None) -> AgentSessionRecord:
+    def touch_turn(
+        self,
+        session_id: str,
+        *,
+        first_user_input: str | None = None,
+        user_input: str | None = None,
+        final_answer: str | None = None,
+        status: str | None = None,
+        trace_ref: dict[str, str] | None = None,
+    ) -> AgentSessionRecord:
         record = self.load(session_id)
         if not record.first_user_input:
             record.first_user_input = (first_user_input or "").strip() or None
         if not record.display_title:
             record.display_title = _display_title(record.first_user_input)
+        if not record.runtime_refs:
+            record.runtime_refs = _runtime_refs(self.config.root)
         record.turn_count += 1
+        turn_input = (user_input or first_user_input or "").strip() or None
+        record.turns.append(
+            AgentSessionTurn(
+                index=record.turn_count,
+                created_at=_now(),
+                user_input=turn_input,
+                final_answer=(final_answer or "").strip() or None,
+                status=(status or "").strip() or None,
+                trace_ref=trace_ref or None,
+            )
+        )
         self.save(record)
         return record
 
@@ -96,3 +132,17 @@ def _display_title(value: str | None, *, limit: int = 42) -> str | None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _runtime_refs(session_root: Path) -> dict[str, str]:
+    root = session_root.expanduser().resolve()
+    runtime_root = root.parent if root.name == "sessions" else root
+    return {
+        "runtime_root": str(runtime_root),
+        "sessions": str(root),
+        "checkpoints": str(runtime_root / "checkpoints"),
+        "tool_outputs": str(runtime_root / "tool_outputs" / "records"),
+        "state": str(runtime_root / "state"),
+        "memory": str(runtime_root / "memory"),
+        "trace": str(runtime_root / "trace"),
+    }

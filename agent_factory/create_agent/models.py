@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 SYSTEM_STATE_FILE = ".factory/system_state.json"
@@ -42,10 +42,18 @@ class CreateAgentAction(BaseModel):
 
 
 class CreateAgentIntentDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     intent: Literal["manufacture_agent", "workspace_assist", "chat"]
     rationale: str = ""
+    reasoning: str = ""
+    confidence: float | None = None
+
+    @model_validator(mode="after")
+    def _normalize_rationale(self) -> "CreateAgentIntentDecision":
+        if not self.rationale and self.reasoning:
+            self.rationale = self.reasoning
+        return self
 
 
 class CreateAgentTaskAnalysis(BaseModel):
@@ -56,7 +64,8 @@ class CreateAgentTaskAnalysis(BaseModel):
     capability_goals: list[str] = Field(default_factory=list)
     interaction_style: str = ""
     requires_dynamic_plan: bool = False
-    selected_pattern_id: Literal["react_agent", "plan_and_execute"] = "react_agent"
+    selected_pattern_id: Literal["react_agent", "plan_and_execute"]
+    reasoning: str = ""
     selection_reason: str = ""
     manufacturing_notes: list[str] = Field(default_factory=list)
     available_patterns: list[str] = Field(default_factory=list)
@@ -222,44 +231,6 @@ class SystemManufacturingState(BaseModel):
         }
 
 
-class PackageRepairTarget(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    contract_key: str = ""
-    target_file: str
-    recommended_skill: str = ""
-    recommended_resources: list[str] = Field(default_factory=list)
-
-
-class PackageRepairBundle(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    bundle_id: str
-    kind: Literal[
-        "manifest_missing",
-        "missing_required_contracts",
-        "missing_referenced_files",
-        "runtime_path_contract_repair",
-        "runtime_contract_build",
-        "assembly_compile",
-        "python_syntax",
-        "generic_repair",
-    ]
-    repair_action: Literal[
-        "normalize_runtime_contract_paths",
-        "read_skill_resources",
-        "repair_files",
-        "fix_python_syntax",
-    ]
-    machine_applicable: bool = False
-    target_files: list[str] = Field(default_factory=list)
-    targets: list[PackageRepairTarget] = Field(default_factory=list)
-    recommended_skill: str = ""
-    recommended_resources: list[str] = Field(default_factory=list)
-    inputs: dict[str, Any] = Field(default_factory=dict)
-    summary: str = ""
-
-
 class PackageValidationIssue(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -274,13 +245,18 @@ class PackageValidationIssue(BaseModel):
     target_files: list[str] = Field(default_factory=list)
     recommended_skill: str = ""
     recommended_resources: list[str] = Field(default_factory=list)
-    repair_bundle: PackageRepairBundle | None = None
     schema_path: str = ""
     invalid_value_path: str = ""
     expected_shape: dict[str, Any] = Field(default_factory=dict)
     repair_template: dict[str, Any] = Field(default_factory=dict)
     replace_strategy: Literal["", "replace_object", "replace_array_item", "rewrite_file"] = ""
     details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("expected_shape", "repair_template", "details", mode="before")
+    @classmethod
+    def _dict_fields_json_safe(cls, value: Any) -> dict[str, Any]:
+        safe = _json_safe_value(value)
+        return safe if isinstance(safe, dict) else {}
 
     def repair_issue_id(self) -> str:
         return self.to_digest().repair_issue_id()
@@ -426,6 +402,8 @@ class PackageToolProbeRecord(BaseModel):
     message: str = ""
     output_summary: str = ""
     observation_output: dict[str, Any] = Field(default_factory=dict)
+    dependency_report: dict[str, Any] = Field(default_factory=dict)
+    runtime_paths: dict[str, Any] = Field(default_factory=dict)
     final_answer: str = ""
     summary: str = ""
     goal_satisfied: bool | None = None
@@ -435,6 +413,20 @@ class PackageToolProbeRecord(BaseModel):
     evaluation: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     probed_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    @field_validator("arguments", "observation_output", "dependency_report", "runtime_paths", "evaluation", mode="before")
+    @classmethod
+    def _probe_dict_fields_json_safe(cls, value: Any) -> dict[str, Any]:
+        safe = _json_safe_value(value)
+        return safe if isinstance(safe, dict) else {}
+
+    @field_validator("tool_calls", mode="before")
+    @classmethod
+    def _tool_calls_json_safe(cls, value: Any) -> list[dict[str, Any]]:
+        safe = _json_safe_value(value)
+        if not isinstance(safe, list):
+            return []
+        return [item if isinstance(item, dict) else {"value": item} for item in safe]
 
 
 class PackageToolProbeState(BaseModel):
@@ -469,10 +461,10 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
             "requirement_focus",
             1,
             "Requirement focus",
-            [RESOURCES_FILE, "agent_package.json", "resources.json"],
+            [RESOURCES_FILE, "agent_package.json", "assembly_spec.json", "resources.json"],
             [],
             "workspace_hygiene",
-            "Clarify user intent, missing resources, secrets, schedules, and manufacturable capability boundaries.",
+            "Clarify user intent, package identity, missing resources, secrets, schedules, and manufacturable capability boundaries.",
         ),
         _stage(
             "capability_implementation",
@@ -483,6 +475,7 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
                 "resources.json",
                 "tools/",
                 "knowledge/",
+                "contracts/dependencies.json",
                 "contracts/tools.json",
                 "contracts/scheduler_seed.json",
                 "contracts/knowledge.json",
@@ -575,3 +568,15 @@ def _compact_issue_details(details: dict[str, Any]) -> dict[str, Any]:
         "recommended_skill": str(details.get("recommended_skill") or ""),
         "recommended_resources": [str(item) for item in recommended_resources[:8]],
     }
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)

@@ -77,7 +77,6 @@
 - Tool Orchestrator
 - Memory Engine
 - Knowledge Engine
-- Policy Engine
 - Interrupt / Approval Manager
 - Checkpoint Manager
 - Observability Manager
@@ -92,7 +91,6 @@
 - memory adapter
 - knowledge adapter
 - context adapter
-- policy adapter
 - harness adapter
 
 作用是把不同实现统一接入 Kernel。
@@ -117,7 +115,6 @@
 - Context State
 - Tool State
 - Memory State
-- Policy State
 - Execution State
 - Observability State
 
@@ -135,12 +132,9 @@ Kernel 提供受控标准节点目录，Graph Pattern DSL 只能引用标准节�
 建议的第一批标准节点：
 
 - `ingress`
-- `context`
-- `policy_precheck`
-- `model`
-- `tool`
-- `observation`
-- `policy_postcheck`
+- `answer`
+- `tool_exec`
+- `commit`
 - `finalize`
 
 记忆不再通过专用业务节点实现。会话内记忆统一使用 LangGraph `messages` channel + checkpointer，跨会话记忆统一使用 LangGraph `BaseStore`。
@@ -174,7 +168,6 @@ Kernel 需要统一的能力挂接对象，至少包括：
 - memory binding
 - knowledge binding
 - context binding
-- policy binding
 - harness binding
 
 每种 binding 都应该有统一生命周期和统一编译接口。
@@ -254,22 +247,7 @@ Kernel 需要统一的能力挂接对象，至少包括：
 - citation 输出
 - freshness 管理
 
-### 6.8 Policy Engine
-
-职责：
-
-- 风险控制
-- 审批前置
-- 拒答条件
-- 输出后检查
-
-建议至少有 3 个切面：
-
-- `pre-model policy`
-- `pre-tool policy`
-- `pre-output policy`
-
-### 6.9 Interrupt / Approval Manager
+### 6.8 Interrupt / Approval Manager
 
 职责：
 
@@ -278,7 +256,7 @@ Kernel 需要统一的能力挂接对象，至少包括：
 - interrupt payload
 - resume token / resume command
 
-### 6.10 Checkpoint Manager
+### 6.9 Checkpoint Manager
 
 职责：
 
@@ -287,7 +265,7 @@ Kernel 需要统一的能力挂接对象，至少包括：
 - 从 checkpoint 恢复
 - 支持 harness 对恢复流程做断言
 
-### 6.11 Observability Manager
+### 6.10 Observability Manager
 
 职责：
 
@@ -297,13 +275,13 @@ Kernel 需要统一的能力挂接对象，至少包括：
 - structured events
 - debug snapshot
 
-### 6.12 Harness Bridge
+### 6.11 Harness Bridge
 
 职责：
 
 - 让 harness 通过统一入口驱动 Kernel
 - 注入 fixture
-- 验证 graph path / tool call / context / policy 行为
+- 验证 graph path / tool call / context 行为
 
 ---
 
@@ -353,21 +331,20 @@ Kernel 对 Pattern 的支持必须包括：
 
 8. 实现 Context Engine
 9. 实现 Tool Orchestrator
-10. 实现 Policy Engine
-11. 实现 Memory Engine
-12. 实现 Knowledge Engine
+10. 实现 Memory Engine
+11. 实现 Knowledge Engine
 
 ### Phase D: Runtime Control
 
-13. 实现 Execution Controller
-14. 实现 Interrupt / Approval Manager
-15. 实现 Checkpoint Manager
+12. 实现 Execution Controller
+13. 实现 Interrupt / Approval Manager
+14. 实现 Checkpoint Manager
 
 ### Phase E: Quality And Operations
 
-16. 实现 Observability Manager
-17. 实现 Harness Bridge
-18. 完成 Kernel 级别测试基线
+15. 实现 Observability Manager
+16. 实现 Harness Bridge
+17. 完成 Kernel 级别测试基线
 
 ---
 
@@ -395,7 +372,7 @@ Kernel 对 Pattern 的支持必须包括：
 
 ### Capability System 验收
 
-- tools / memory / context / policy / knowledge 都有统一挂载方式
+- tools / memory / context / knowledge 都有统一挂载方式
 - 不同 Agent 不需要改 Kernel 内核语义
 
 ### Observability 验收

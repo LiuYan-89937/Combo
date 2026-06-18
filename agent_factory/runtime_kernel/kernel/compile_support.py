@@ -47,7 +47,12 @@ def resolve_render_manifest(pattern: GraphPatternSpec, render_manifest: RenderMa
         manifest = RenderManifest(
             graph_id=pattern.pattern_id,
             nodes={
-                node.id: default_node_render_spec(node_id=node.id, node_type=node.type, impl=node.impl)
+                node.id: default_node_render_spec(
+                    node_id=node.id,
+                    node_type=node.type,
+                    impl=node.impl,
+                    pattern_id=pattern.pattern_id,
+                )
                 for node in pattern.nodes
             },
         )

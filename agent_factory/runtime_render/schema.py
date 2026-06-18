@@ -82,7 +82,13 @@ def validate_render_manifest(manifest: RenderManifest, node_ids: set[str]) -> Re
     return manifest
 
 
-def default_node_render_spec(*, node_id: str, node_type: str, impl: str) -> NodeRenderSpec:
+def default_node_render_spec(
+    *,
+    node_id: str,
+    node_type: str,
+    impl: str,
+    pattern_id: str = "",
+) -> NodeRenderSpec:
     label = node_id.replace("_", " ").title()
     return NodeRenderSpec(
         node_id=node_id,
@@ -91,5 +97,11 @@ def default_node_render_spec(*, node_id: str, node_type: str, impl: str) -> Node
         purpose=f"Execute runtime node {node_id}.",
         doing=f"Running implementation {impl}.",
         expected_output=f"Validated state patch from {node_id}.",
-        visible_to_user=True,
+        visible_to_user=default_node_visible_to_user(pattern_id=pattern_id, node_id=node_id),
     )
+
+
+def default_node_visible_to_user(*, pattern_id: str, node_id: str) -> bool:
+    if pattern_id == "plan_and_execute" and node_id in {"planner", "executor"}:
+        return False
+    return True

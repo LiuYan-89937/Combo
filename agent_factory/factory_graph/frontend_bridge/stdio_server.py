@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import sys
 import threading
@@ -33,6 +34,8 @@ def main() -> None:
         )
     )
     for line in sys.stdin:
+        if writer.closed:
+            break
         raw = line.strip()
         if not raw:
             continue
@@ -42,7 +45,7 @@ def main() -> None:
             writer.write(event("error", message=f"invalid command: {exc}"))
             continue
         should_continue = dispatcher.handle(command)
-        if not should_continue:
+        if not should_continue or writer.closed:
             break
     dispatcher.join()
 
@@ -56,6 +59,8 @@ class _CommandDispatcher:
         self._active_request_id: str | None = None
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
+        if self.writer.closed:
+            return False
         if command.type == "shutdown":
             self.adapter.handle(command)
             return False
@@ -83,6 +88,8 @@ class _CommandDispatcher:
             thread.join(timeout=0.2)
 
     def _start_long_running(self, command: FactoryFrontendCommand) -> bool:
+        if self.writer.closed:
+            return False
         with self._lock:
             if self._active_thread is not None and self._active_thread.is_alive():
                 self.writer.write(
@@ -121,6 +128,12 @@ class _CommandDispatcher:
 class _JsonLineWriter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
 
     def write(self, payload: Any) -> None:
         if hasattr(payload, "model_dump"):
@@ -128,8 +141,17 @@ class _JsonLineWriter:
         else:
             data = payload
         with self._lock:
-            sys.stdout.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
-            sys.stdout.flush()
+            if self._closed:
+                return
+            try:
+                sys.stdout.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
+                sys.stdout.flush()
+            except BrokenPipeError:
+                self._closed = True
+            except OSError as exc:
+                if exc.errno != errno.EPIPE:
+                    raise
+                self._closed = True
 
 
 if __name__ == "__main__":

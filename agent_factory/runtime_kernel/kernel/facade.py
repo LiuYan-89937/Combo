@@ -37,6 +37,7 @@ from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.nodes.standard import (
     CognitiveAnswerNode,
     CognitiveClarifyNode,
+    CognitiveIntentGateNode,
     CognitivePlanNode,
     CognitiveReviewNode,
     CognitiveRouteNode,
@@ -74,6 +75,7 @@ from agent_factory.runtime_kernel.state_contracts import PackageStateManager, St
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
 from agent_factory.runtime_render import RenderManifest
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS
+from agent_factory.trace_system import runtime_trace_ref
 
 
 class RuntimeKernelFacade:
@@ -91,6 +93,7 @@ class RuntimeKernelFacade:
         for impl in [
             IngressNode(),
             CognitiveClarifyNode(),
+            CognitiveIntentGateNode(),
             CognitivePlanNode(),
             CognitiveRouteNode(),
             CognitiveStructuredNode(),
@@ -243,7 +246,14 @@ class RuntimeKernelFacade:
         )
         result = self.instance.controller.run(compiled, run_context.state, thread_id=run_context.thread_id)
         if runtime_completed(result):
-            run_context.session_manager.touch_turn(run_context.session_id, first_user_input=run_context.first_user_input)
+            run_context.session_manager.touch_turn(
+                run_context.session_id,
+                first_user_input=run_context.first_user_input,
+                user_input=run_context.first_user_input,
+                final_answer=_session_final_answer(result),
+                status=result.execution.finish_status,
+                trace_ref=_session_trace_ref(compiled, result),
+            )
         return result
 
     def stream(
@@ -268,7 +278,14 @@ class RuntimeKernelFacade:
                 final_state = item[1]
             yield item
         if runtime_completed(final_state):
-            run_context.session_manager.touch_turn(run_context.session_id, first_user_input=run_context.first_user_input)
+            run_context.session_manager.touch_turn(
+                run_context.session_id,
+                first_user_input=run_context.first_user_input,
+                user_input=run_context.first_user_input,
+                final_answer=_session_final_answer(final_state),
+                status=final_state.execution.finish_status,
+                trace_ref=_session_trace_ref(compiled, final_state),
+            )
 
     def prepare_run_context(
         self,
@@ -365,7 +382,12 @@ class RuntimeKernelFacade:
                 final_state = item[1]
             yield item
         if runtime_completed(final_state):
-            run_context.session_manager.touch_turn(run_context.session_id)
+            run_context.session_manager.touch_turn(
+                run_context.session_id,
+                final_answer=_session_final_answer(final_state),
+                status=final_state.execution.finish_status,
+                trace_ref=_session_trace_ref(compiled, final_state),
+            )
 
     def prepare_resume_context(
         self,
@@ -395,3 +417,25 @@ class RuntimeKernelFacade:
             session_id=session.session_id,
             first_user_input=session.first_user_input or "",
         )
+
+
+def _session_final_answer(state: RuntimeState | None) -> str | None:
+    if state is None:
+        return None
+    conversation = getattr(state, "conversation", None)
+    if conversation is None:
+        return None
+    return str(
+        getattr(conversation, "final_answer", None)
+        or getattr(conversation, "assistant_draft", None)
+        or ""
+    ).strip() or None
+
+
+def _session_trace_ref(compiled: CompiledKernelApp, state: RuntimeState | None) -> dict[str, str] | None:
+    if state is None:
+        return None
+    trace_id = str(getattr(getattr(state, "observability", None), "trace_id", "") or "").strip()
+    run_id = str(getattr(getattr(state, "run", None), "run_id", "") or "").strip()
+    recorder = getattr(compiled.services, "trace_recorder", None)
+    return runtime_trace_ref(recorder=recorder, trace_id=trace_id, run_id=run_id)

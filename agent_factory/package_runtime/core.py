@@ -13,14 +13,21 @@ from agent_factory.runtime_contracts import LoadedAgentPackage, RuntimeBuildPlan
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
-from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
+from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig
+from agent_factory.runtime_kernel.session import AgentSessionConfig
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
+from agent_factory.memory_system import default_agent_memory_config
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
+from agent_factory.package_runtime.session_turns import (
+    resume_user_input,
+    session_final_answer,
+    session_trace_ref,
+)
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -97,9 +104,17 @@ class PackageRuntimeCore:
             node_kind="system",
             payload={"manifest": str(self.package.manifest_path)},
         )
+        runtime_root = _runtime_workspace_root(
+            runtime_root=self.runtime_root,
+            package_root=self.package.package_root,
+        )
         facade = RuntimeKernelFacade(
-            checkpointer_config=LangGraphCheckpointerConfig(backend="memory"),
-            memory_store_config=LangGraphStoreConfig(backend="memory"),
+            checkpointer_config=LangGraphCheckpointerConfig(
+                backend="sqlite",
+                path=runtime_root / "checkpoints" / "agent.sqlite",
+            ),
+            memory_system_config=_runtime_memory_config(runtime_root),
+            session_config=AgentSessionConfig(root=runtime_root / "sessions"),
         )
         runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
             self.package,
@@ -192,6 +207,10 @@ class PackageRuntimeCore:
         agent_session = run_context.session_manager.touch_turn(
             run_context.session_id,
             first_user_input=run_context.first_user_input,
+            user_input=run_context.first_user_input,
+            final_answer=session_final_answer(final_state),
+            status=final_state.execution.finish_status,
+            trace_ref=session_trace_ref(compiled, final_state),
         )
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
@@ -244,7 +263,13 @@ class PackageRuntimeCore:
             return 1
         if not runtime_completed(final_state):
             return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
-        agent_session = run_context.session_manager.touch_turn(session_id)
+        agent_session = run_context.session_manager.touch_turn(
+            session_id,
+            user_input=resume_user_input(resume_payload),
+            final_answer=session_final_answer(final_state),
+            status=final_state.execution.finish_status,
+            trace_ref=session_trace_ref(compiled, final_state),
+        )
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
         normalizer.emit_run_completed(
@@ -261,7 +286,11 @@ class PackageRuntimeCore:
     def _list_sessions(self, normalizer: RuntimeEventNormalizer) -> int:
         session_contract = self.package.contracts.get("session") if isinstance(self.package.contracts, dict) else None
         session_config = session_contract.get("config", {}) if isinstance(session_contract, dict) else {}
-        session_root = Path(str(session_config.get("session_root") or ".agent_runtime/sessions"))
+        session_root = _runtime_session_root(
+            runtime_root=self.runtime_root,
+            package_root=self.package.package_root,
+            configured=str(session_config.get("session_root") or ".agent_runtime/sessions"),
+        )
         sessions = []
         for path in sorted(session_root.glob("*.json")):
             try:
@@ -362,6 +391,10 @@ class PackageRuntimeCore:
             agent_session = run_context.session_manager.touch_turn(
                 run_context.session_id,
                 first_user_input=run_context.first_user_input,
+                user_input=run_context.first_user_input,
+                final_answer=session_final_answer(final_state),
+                status=final_state.execution.finish_status,
+                trace_ref=session_trace_ref(runtime.compiled, final_state),
             )
             normalizer.complete_open_model_streams(reason="run_completed")
             normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
@@ -504,6 +537,65 @@ def _emit_failed_runtime_final(normalizer: RuntimeEventNormalizer, final_state: 
     normalizer.complete_open_model_streams(reason="run_failed")
     normalizer.emit_run_failed(RuntimeError(runtime_error_message(final_state, command=command)))
     return 1
+
+
+def _runtime_session_root(*, runtime_root: Path | None, package_root: Path, configured: str) -> Path:
+    value = configured.strip() or ".agent_runtime/sessions"
+    if runtime_root is not None:
+        if value == "/runtime":
+            return runtime_root.resolve()
+        if value.startswith("/runtime/"):
+            return _root_relative_path(
+                runtime_root,
+                Path(value.removeprefix("/runtime/")),
+                field_path="session.config.session_root",
+            )
+        if value == ".agent_runtime":
+            return runtime_root.resolve()
+        if value.startswith(".agent_runtime/"):
+            return _root_relative_path(
+                runtime_root,
+                Path(value.removeprefix(".agent_runtime/")),
+                field_path="session.config.session_root",
+            )
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        raise ValueError(
+            "session.config.session_root must be package-relative or use /runtime/... "
+            f"when a runtime workspace is mounted; got {value!r}"
+        )
+    return _root_relative_path(package_root, path, field_path="session.config.session_root")
+
+
+def _root_relative_path(root_path: Path, path: Path, *, field_path: str) -> Path:
+    root = root_path.resolve()
+    target = (root / path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{field_path} must resolve inside its runtime workspace; got {str(path)!r}") from exc
+    return target
+
+
+def _runtime_workspace_root(*, runtime_root: Path | None, package_root: Path) -> Path:
+    if runtime_root is not None:
+        return runtime_root
+    return (package_root / ".agent_runtime").resolve()
+
+
+def _runtime_memory_config(runtime_root: Path):
+    config = default_agent_memory_config()
+    return config.model_copy(
+        update={
+            "store": config.store.model_copy(
+                update={"path": str(runtime_root / "memory" / "agent.sqlite")}
+            ),
+            "background": config.background.model_copy(
+                update={"journal_root": str(runtime_root / "memory" / "jobs")}
+            ),
+        },
+        deep=True,
+    )
 
 
 def _extract_interrupt_payload(chunk: Any) -> Any | None:

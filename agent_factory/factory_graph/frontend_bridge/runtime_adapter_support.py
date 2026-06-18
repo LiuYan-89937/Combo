@@ -11,13 +11,42 @@ def session_payload(record: Any | None) -> dict[str, Any]:
     payload["first_user_input"] = first_user_input
     payload["display_title"] = payload.get("display_title") or display_title(first_user_input)
     mode = payload.get("current_mode")
+    messages = _messages_from_turns(payload.get("turns"))
     payload["snapshot"] = {
         "mode": mode,
-        "messages": [],
+        "messages": messages,
         "pending_interrupt": None,
         "recent_tool_activities": [],
     }
     return payload
+
+
+def _messages_from_turns(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    messages: list[dict[str, Any]] = []
+    for turn in value[-6:]:
+        if not isinstance(turn, dict):
+            continue
+        if str(turn.get("user_input") or "").strip():
+            messages.append(
+                {
+                    "role": "user",
+                    "content": str(turn["user_input"]),
+                    "turn_index": turn.get("index"),
+                    "created_at": turn.get("created_at"),
+                }
+            )
+        if str(turn.get("final_answer") or "").strip():
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": str(turn["final_answer"]),
+                    "turn_index": turn.get("index"),
+                    "created_at": turn.get("created_at"),
+                }
+            )
+    return messages
 
 
 def display_title(value: str | None, *, limit: int = 42) -> str | None:

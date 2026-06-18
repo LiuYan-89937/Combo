@@ -29,13 +29,14 @@ Guides session and checkpoint contract changes for produced agents.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
+4. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
+5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Leave the scaffolded session contract as-is unless the user capability requires different persistence behavior.
 - Do not choose external storage backends, paths, or credentials without confirmation.
 - Keep session config aligned with runtime-supported backends already available to the package.
+- Do not hand-edit contracts/session.json during normal production; scaffold defaults are the supported session baseline.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.

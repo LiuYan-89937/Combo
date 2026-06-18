@@ -32,14 +32,15 @@ Guides package state contract and produced-agent state files.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When adding a capability, update all required package surfaces in one coherent step, then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only the target files and paths indicated by validator evidence; do not start a broad schema audit.
+4. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
+5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Create state files only when a real implemented capability needs package state.
 - Define state shape from the capability, not from a business-specific hardcoded example.
 - Keep initial state empty or user-confirmed; do not fabricate user data.
 - When package tools mutate state, align their behavior with the state schema and initial file.
+- Write package state contract, schema, and initial state with create_agent_authoring(action="upsert_state") instead of generic filesystem write.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.

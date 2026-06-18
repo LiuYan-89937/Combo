@@ -64,6 +64,7 @@ ALLOWED_CONTAINER_ROOTS = (
 class DockerAgentRuntimePlan:
     command: list[str]
     image: str
+    resolved_image: str
     network: str
     extension_root: Path
     mount_count: int
@@ -97,7 +98,7 @@ class DockerAgentRuntimeLauncher:
         sandbox = dict(package.sandbox_contract or {})
         image = str(sandbox.get("image") or DEFAULT_RUNTIME_IMAGE)
         self._assert_daemon_available(docker)
-        self._assert_image_available(docker, image)
+        resolved_image = self._resolve_image_reference(docker, image)
         resources_path = package.package_root / package.manifest.resources_path
         if not resources_path.is_file():
             raise AgentRuntimeLaunchError(
@@ -139,10 +140,11 @@ class DockerAgentRuntimeLauncher:
                 command.extend(["-v", mount_arg])
         for key, value in env.items():
             command.extend(["-e", f"{key}={value}"])
-        command.extend([image, "python", "-m", "agent_factory.agent_runtime_bridge.stdio_server"])
+        command.extend([resolved_image, "python", "-m", "agent_factory.agent_runtime_bridge.stdio_server"])
         return DockerAgentRuntimePlan(
             command=command,
             image=image,
+            resolved_image=resolved_image,
             network=network,
             extension_root=extension_root,
             mount_count=5 + 1 + len(contract_mounts),
@@ -151,6 +153,7 @@ class DockerAgentRuntimeLauncher:
                 "status": "ok",
                 "docker": docker,
                 "image": image,
+                "resolved_image": resolved_image,
                 "image_check": IMAGE_INSPECT_COMMAND_LABEL,
                 "network": network,
                 "extension_root": str(extension_root),
@@ -214,7 +217,7 @@ class DockerAgentRuntimeLauncher:
                 suggested_action="Start Docker Desktop and retry.",
             )
 
-    def _assert_image_available(self, docker: str, image: str) -> None:
+    def _resolve_image_reference(self, docker: str, image: str) -> str:
         try:
             result = subprocess.run(
                 [docker, "image", "inspect", image],
@@ -232,6 +235,9 @@ class DockerAgentRuntimeLauncher:
             ) from exc
         if result.returncode != 0:
             detail = _docker_error_text(result)
+            resolved = self._image_id_from_exact_reference(docker, image)
+            if resolved:
+                return resolved
             why = "runtime_image_missing" if _looks_like_missing_image(detail) else "runtime_image_inspect_failed"
             suggested_action = (
                 _runtime_image_build_suggestion()
@@ -244,6 +250,34 @@ class DockerAgentRuntimeLauncher:
                 message=f"Docker runtime image preflight failed for {image}: {detail or 'unknown docker error'}",
                 suggested_action=suggested_action,
             )
+        return image
+
+    def _image_id_from_exact_reference(self, docker: str, image: str) -> str:
+        try:
+            result = subprocess.run(
+                [
+                    docker,
+                    "image",
+                    "ls",
+                    "--filter",
+                    f"reference={image}",
+                    "--format",
+                    "{{.ID}}",
+                    "--no-trunc",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return ""
+        if result.returncode != 0:
+            return ""
+        ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if len(ids) != 1:
+            return ""
+        return ids[0]
 
     def _network_mode(self, sandbox: dict[str, Any]) -> str:
         policy = sandbox.get("network_policy") if isinstance(sandbox.get("network_policy"), dict) else {}

@@ -212,6 +212,7 @@ def _default_render_manifest_for_pattern(pattern: GraphPatternSpec) -> RenderMan
                 node_id=node.id,
                 node_type=node.type,
                 impl=node.impl,
+                pattern_id=pattern.pattern_id,
             )
             for node in pattern.nodes
         },

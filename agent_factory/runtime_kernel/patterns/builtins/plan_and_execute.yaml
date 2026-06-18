@@ -27,6 +27,9 @@ nodes:
   - id: ingress
     type: reserved
     impl: ingress
+  - id: intent_gate
+    type: cognitive
+    impl: cognitive.intent_gate
   - id: planner
     type: cognitive
     impl: cognitive.answer
@@ -47,14 +50,23 @@ nodes:
     impl: finalize
 edges:
   - from: ingress
-    to: planner
+    to: intent_gate
     when: always
+  - from: intent_gate
+    to: planner
+    when: intent.start_workflow
+  - from: intent_gate
+    to: commit
+    when: intent.wait_for_input
   - from: planner
     to: tool_exec
     when: model.requests_tool
   - from: planner
     to: executor
     when: model.ready_to_answer
+  - from: planner
+    to: commit
+    when: subgraph.need_more_input
   - from: executor
     to: tool_exec
     when: model.requests_tool
