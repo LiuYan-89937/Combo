@@ -27,6 +27,8 @@ class CreateAgentGraphState(TypedDict, total=False):
     iteration: int
     validation: dict[str, Any]
     publish_confirmation_response: dict[str, Any]
+    graph_kind: str
+    evolution_context: dict[str, Any]
     done: bool
     final_answer: str
 
@@ -36,6 +38,7 @@ class CreateAgentWorkflow:
     tools: list[BaseTool]
     model: Any | None = None
     capability_inventory: dict[str, Any] | None = None
+    workflow_kind: Literal["manufacture", "evolution"] = "manufacture"
 
     def compile(self, *, checkpointer: Any | None = None):
         graph = StateGraph(CreateAgentGraphState)
@@ -70,11 +73,22 @@ class CreateAgentWorkflow:
         model = self.model or get_main_model()
         if model is None:
             raise RuntimeError("main model is not configured for create-agent")
-        prompt_payload = build_create_agent_prompt(
-            state,
-            self.tools,
-            capability_inventory=self.capability_inventory or {},
-        )
+        if self.workflow_kind == "evolution":
+            from agent_factory.evolution.prompt_builder import build_evolution_prompt
+
+            prompt_payload = build_evolution_prompt(
+                state,
+                self.tools,
+                capability_inventory=self.capability_inventory or {},
+            )
+            node_id = "evolution_supervisor"
+        else:
+            prompt_payload = build_create_agent_prompt(
+                state,
+                self.tools,
+                capability_inventory=self.capability_inventory or {},
+            )
+            node_id = "create_agent_supervisor"
         messages = prompt_payload.messages
         prompt_binding, chat_messages = _operation_prompt(messages)
         result = ModelOperationService(role="main", model=model).tool_bound_chat(
@@ -82,7 +96,7 @@ class CreateAgentWorkflow:
             prompt_binding=prompt_binding,
             messages=chat_messages,
             tools=self.tools,
-            node_id="create_agent_supervisor",
+            node_id=node_id,
         )
         _emit_model_cache_metrics(
             state=state,
@@ -109,6 +123,8 @@ class CreateAgentWorkflow:
 
     def _control_gate(self, state: CreateAgentGraphState) -> dict[str, Any]:
         workspace = CreateAgentWorkspace(state["workspace_path"])
+        if self.workflow_kind == "evolution":
+            return self._evolution_control_gate(state, workspace)
         publish_report = workspace.read_publish_report()
         if publish_report.get("status") == "available":
             package_id = str(publish_report.get("package_id") or "").strip()
@@ -206,6 +222,49 @@ class CreateAgentWorkflow:
             "messages": [HumanMessage(content=resume_text)],
             "publish_confirmation_response": publish_response,
             "done": False,
+        }
+
+    def _evolution_control_gate(self, state: CreateAgentGraphState, workspace: CreateAgentWorkspace) -> dict[str, Any]:
+        action = workspace.read_action()
+        if action.action == "ask_user":
+            answer = interrupt(
+                {
+                    "type": "agent_evolution_question",
+                    "presentation": "assistant_dialogue",
+                    "resume_kind": "answer",
+                    "title": "补充进化信息",
+                    "message": action.message or "请补充进化这个已发布 AgentPackage 所需的信息。",
+                    "workspace_path": str(workspace.root),
+                    "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
+                }
+            )
+            workspace.write_action(CreateAgentAction())
+            previous_report = workspace.read_validation() or PackageValidationReport(
+                package_root=str(workspace.root),
+                validation_scope="workspace_hygiene",
+                skipped=True,
+                summary="Validation skipped while waiting for user input.",
+            )
+            return {
+                "messages": [HumanMessage(content=_resume_text(answer))],
+                "validation": previous_report.to_digest().model_dump(mode="json"),
+                "done": False,
+            }
+        if action.action != "finalize":
+            return {"done": False}
+        report = workspace.read_validation()
+        ready_error = _publish_readiness_error(workspace=workspace, report=report)
+        if ready_error:
+            workspace.write_action(CreateAgentAction())
+            return {
+                "messages": [SystemMessage(content=ready_error)],
+                "done": False,
+            }
+        workspace.write_action(CreateAgentAction())
+        return {
+            "validation": report.to_digest().model_dump(mode="json"),
+            "done": True,
+            "final_answer": "AgentPackage 进化已通过 full_static validation，准备自动发布。",
         }
 
     def _route_after_supervisor(self, state: CreateAgentGraphState) -> Literal["tools", "control_gate"]:

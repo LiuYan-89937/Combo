@@ -19,7 +19,7 @@ from agent_factory.runtime_kernel.persistence import (
 )
 
 
-FactorySessionMode = Literal["chat", "create_agent"]
+FactorySessionMode = Literal["chat", "create_agent", "evolve_agent"]
 FactoryCheckpointerBackend = Literal["sqlite", "memory"]
 
 DEFAULT_SESSION_ROOT = ".agentfactory/sessions"

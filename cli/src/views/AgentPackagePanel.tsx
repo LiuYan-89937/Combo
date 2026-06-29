@@ -18,6 +18,7 @@ export function AgentPackagePanel({
 }) {
 	const active = useStoreSelector(state => state.agentPackagePickerOpen);
 	const packages = useStoreSelector(state => state.agentPackages);
+	const purpose = useStoreSelector(state => state.agentPackagePickerPurpose);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 	const pageStart = Math.floor(selectedIndex / PAGE_SIZE) * PAGE_SIZE;
@@ -42,7 +43,7 @@ export function AgentPackagePanel({
 			return;
 		}
 		const selectedPackageId = packageId(packages[selectedIndex]);
-		if (deleteTarget && (key.return || input === 'd')) {
+		if (purpose === 'run' && deleteTarget && (key.return || input === 'd')) {
 			if (selectedPackageId && selectedPackageId === deleteTarget) {
 				onDelete?.(selectedPackageId);
 			}
@@ -53,7 +54,7 @@ export function AgentPackagePanel({
 			onRefresh?.();
 			return;
 		}
-		if (input === 'd') {
+		if (purpose === 'run' && input === 'd') {
 			if (selectedPackageId) {
 				setDeleteTarget(selectedPackageId);
 			}
@@ -87,12 +88,12 @@ export function AgentPackagePanel({
 	}
 
 	return (
-		<Section title={`Agent Packages (${packages.length})`} color="cyan">
+		<Section title={`${purpose === 'evolution' ? 'Select Agent To Evolve' : 'Agent Packages'} (${packages.length})`} color="cyan">
 			{packages.length === 0 ? (
 				<Muted>没有发现 `.agentfactory/packages/*/agent_package.json`。</Muted>
 			) : (
 				<>
-					<Muted>Enter 进入 / ↑↓ 或 j k 移动 / d 删除 / r 刷新 / Esc 或 q 关闭</Muted>
+					<Muted>{purpose === 'evolution' ? 'Enter 选择 / ↑↓ 或 j k 移动 / r 刷新 / Esc 或 q 关闭' : 'Enter 进入 / ↑↓ 或 j k 移动 / d 删除 / r 刷新 / Esc 或 q 关闭'}</Muted>
 					{deleteTarget && <Text color="red">再次按 Enter 或 d 删除 {deleteTarget}；Esc 取消。</Text>}
 					<Box flexDirection="column" marginTop={1}>
 						{visiblePackages.map((item, offset) => {

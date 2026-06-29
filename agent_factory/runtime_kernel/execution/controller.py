@@ -218,6 +218,23 @@ class ExecutionController:
                 agent_id=state.run.agent_id,
                 session_id=state.run.session_id,
             )
+            if (
+                event_type == "run_failed"
+                and isinstance(payload, dict)
+                and str(payload.get("where") or "").startswith("runtime.")
+            ):
+                trace_recorder.suppress_trace(
+                    trace_id=state.observability.trace_id,
+                    run_id=state.run.run_id,
+                    reason="runtime_finalize_failure",
+                    payload={
+                        "event_type": event_type,
+                        "error": state.execution.last_error,
+                        "where": payload.get("where"),
+                        "finish_status": payload.get("finish_status"),
+                    },
+                )
+                return
             trace_recorder.record_event(
                 trace_id=state.observability.trace_id,
                 run_id=state.run.run_id,

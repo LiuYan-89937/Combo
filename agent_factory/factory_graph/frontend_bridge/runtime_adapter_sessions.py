@@ -88,8 +88,8 @@ class RuntimeSessionCommandMixin:
 
     def send_message(self, command: FactoryFrontendCommand) -> None:
         self._ensure_session(command)
-        if self.mode not in {"chat", "create_agent"}:
-            self._emit_error(command, "enter /chat or /create-agent before sending messages")
+        if self.mode not in {"chat", "create_agent", "evolve_agent"}:
+            self._emit_error(command, "enter /chat, /create-agent, or /evolve-agent before sending messages")
             return
         message = (command.message or "").strip()
         if not message:
@@ -100,8 +100,10 @@ class RuntimeSessionCommandMixin:
             return
         if self.mode == "chat":
             self._run_chat(command, message)
-        else:
+        elif self.mode == "create_agent":
             self._run_create_agent(command, message)
+        else:
+            self._run_evolve_agent(command, message)
 
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
         if self.pending_create_agent_run is not None:

@@ -43,6 +43,7 @@ class MCPServerConfig(BaseModel):
     args: list[str] = Field(default_factory=list)
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    source: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     required: bool = False
     tool_id_prefix: str | None = None

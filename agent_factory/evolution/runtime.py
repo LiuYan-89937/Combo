@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
+import json
+from pathlib import Path
+import shutil
+from typing import Any
+from uuid import uuid4
+
+from langchain_core.messages import HumanMessage
+
+from agent_factory.create_agent.models import CreateAgentAction, initial_system_manufacturing_state
+from agent_factory.create_agent.tooling import CreateAgentToolEnvironmentBuilder
+from agent_factory.create_agent.validation_state import package_fingerprint
+from agent_factory.create_agent.workflow import CreateAgentWorkflow
+from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.evolution.trace_gate import decide_trace_relevance
+from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
+from agent_factory.paths import factory_artifact_path
+from agent_factory.runtime_contracts import AgentPackageLoader
+from agent_factory.trace_system.diagnostics import TraceDiagnostics
+from agent_factory.trace_system.projector import TraceProjector
+from agent_factory.trace_system.reader import TraceReader
+from agent_factory.trace_system.schema import RepairTracePack, TraceRunFilter
+
+
+@dataclass(frozen=True, slots=True)
+class AgentEvolutionStreamRun:
+    package_id: str
+    trace_id: str | None
+    events: Iterator[tuple[str, Any]]
+
+
+class AgentEvolutionRuntime:
+    def __init__(
+        self,
+        *,
+        package_root: str | Path | None = None,
+        runtime_root: str | Path | None = None,
+        model: Any | None = None,
+        tool_environment_builder: CreateAgentToolEnvironmentBuilder | None = None,
+        checkpointer: Any | None = None,
+    ) -> None:
+        self.package_root = Path(package_root).expanduser() if package_root else factory_artifact_path("packages")
+        self.runtime_root = Path(runtime_root).expanduser() if runtime_root else factory_artifact_path("agent_runtime")
+        self.model = model
+        self.tool_environment_builder = tool_environment_builder or CreateAgentToolEnvironmentBuilder()
+        self.checkpointer = checkpointer
+
+    def stream(
+        self,
+        *,
+        package_id: str,
+        user_input: str,
+        request_id: str | None,
+        session_id: str | None,
+    ) -> AgentEvolutionStreamRun:
+        safe_package_id = _safe_id(package_id, label="package_id")
+        trace_id = self.latest_failed_trace_id(safe_package_id)
+        return AgentEvolutionStreamRun(
+            package_id=safe_package_id,
+            trace_id=trace_id,
+            events=self._events(
+                package_id=safe_package_id,
+                trace_id=trace_id,
+                user_input=user_input,
+                request_id=request_id or uuid4().hex,
+                session_id=session_id,
+            ),
+        )
+
+    def latest_failed_trace_id(self, package_id: str) -> str | None:
+        safe_package_id = _safe_id(package_id, label="package_id")
+        reader = TraceReader(self.runtime_root / safe_package_id / "trace")
+        runs = reader.list_runs(TraceRunFilter(status=["failed"], limit=1))
+        if not runs:
+            return None
+        return runs[0].trace_id
+
+    def _events(
+        self,
+        *,
+        package_id: str,
+        trace_id: str | None,
+        user_input: str,
+        request_id: str,
+        session_id: str | None,
+    ) -> Iterator[tuple[str, Any]]:
+        pending_events: list[FactoryFrontendEvent] = []
+
+        def emit_frontend(item: FactoryFrontendEvent) -> None:
+            pending_events.append(item)
+
+        def drain_events() -> Iterator[tuple[str, FactoryFrontendEvent]]:
+            while pending_events:
+                yield "frontend_event", pending_events.pop(0)
+
+        normalizer = RuntimeEventNormalizer(
+            emit=emit_frontend,
+            request_id=request_id,
+            session_id=session_id,
+            mode="evolve_agent",
+            graph_id="agent_evolution",
+            producer_type="agent_evolution",
+        )
+        package_path = _safe_child(self.package_root, package_id)
+        backup_path: Path | None = None
+        before_fingerprint: dict[str, str] = {}
+        normalizer.emit_run_started({"package_id": package_id, "trace_id": trace_id})
+        yield from drain_events()
+        try:
+            if not package_path.is_dir():
+                raise RuntimeError(f"agent package not found: {package_id}")
+            workspace = CreateAgentWorkspace(package_path)
+            _ensure_evolution_managed_files(workspace)
+            backup_path = _backup_package(package_path, package_id=package_id)
+            before_fingerprint = package_fingerprint(package_path)
+            package = AgentPackageLoader().load_path(package_path / "agent_package.json")
+            if trace_id:
+                repair_pack = _repair_pack(self.runtime_root, package_id=package_id, trace_id=trace_id)
+                error_pack = _error_only_pack(repair_pack)
+                trace_gate = decide_trace_relevance(user_goal=user_input, error_pack=error_pack)
+                trace_context = trace_gate.model_dump(mode="json")
+                provided_error_pack = error_pack if trace_gate.provide_trace else {}
+            else:
+                error_pack = {}
+                provided_error_pack = {}
+                trace_context = {
+                    "provided": False,
+                    "reason": "no failed trace is available for this package; evolution will use the user goal and package state only",
+                }
+            tool_env = self.tool_environment_builder.build(workspace_root=package_path, mode="evolution")
+            normalizer.runtime_event(
+                "node_started",
+                node_id="agent_evolution",
+                node_label="Agent Evolution",
+                node_kind="create_agent_workflow",
+                payload={
+                    "package_id": package_id,
+                    "trace_id": trace_id,
+                    "package_path": str(package_path),
+                    "tool_ids": tool_env.tool_ids,
+                    "extension_report": tool_env.extension_report,
+                    "trace_gate": trace_context,
+                },
+            )
+            yield from drain_events()
+            workflow = CreateAgentWorkflow(
+                tools=tool_env.tools,
+                model=self.model,
+                capability_inventory=tool_env.capability_inventory,
+                workflow_kind="evolution",
+            ).compile(checkpointer=self.checkpointer)
+            stream_input = {
+                "request": user_input,
+                "workspace_path": str(package_path),
+                "runtime_attachments": [],
+                "graph_kind": "evolution",
+                "evolution_context": {
+                    "package_id": package_id,
+                    "package_path": str(package_path),
+                    "package_summary": _package_summary(package_id, package_path, package),
+                    "trace_gate": trace_context,
+                    **({"error_pack": provided_error_pack} if provided_error_pack else {}),
+                },
+                "iteration": 0,
+                "done": False,
+                "messages": [HumanMessage(content=user_input)],
+            }
+            final_state: dict[str, Any] | None = None
+            config = {"configurable": {"thread_id": f"{session_id or request_id}:evolution:{package_id}"}}
+            for stream_mode, chunk in workflow.stream(
+                stream_input,
+                config=config,
+                stream_mode=["messages", "custom", "values"],
+            ):
+                interrupt_payload = extract_interrupt_payload(chunk)
+                if interrupt_payload is not None:
+                    normalizer.emit_interrupt(interrupt_payload)
+                    yield from drain_events()
+                    return
+                if stream_mode == "values" and isinstance(chunk, dict):
+                    final_state = chunk
+                    continue
+                normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="evolution_update")
+                yield from drain_events()
+            if not final_state:
+                raise RuntimeError("agent evolution workflow did not produce final state")
+            if not final_state.get("done"):
+                raise RuntimeError("agent evolution workflow stopped before completion")
+            changed_files = _changed_files(before_fingerprint, package_fingerprint(package_path))
+            report_path = _write_evolution_publish_report(
+                package_path=package_path,
+                package_id=package_id,
+                trace_id=trace_id,
+                user_input=user_input,
+                summary=str(final_state.get("final_answer") or ""),
+                changed_files=changed_files,
+                validation=final_state.get("validation") if isinstance(final_state.get("validation"), dict) else {},
+            )
+            if backup_path is not None:
+                shutil.rmtree(backup_path, ignore_errors=True)
+            normalizer.runtime_event(
+                "node_completed",
+                node_id="agent_evolution",
+                node_label="Agent Evolution",
+                node_kind="create_agent_workflow",
+                payload={"package_id": package_id, "changed_files": changed_files, "report_path": str(report_path)},
+            )
+            normalizer.emit_final_message_if_needed(
+                str(final_state.get("final_answer") or "AgentPackage 进化已完成并自动发布。"),
+                node_id="agent_evolution",
+                reason="run_completed",
+            )
+            normalizer.emit_run_completed(
+                {
+                    "status": "published",
+                    "package_id": package_id,
+                    "trace_id": trace_id,
+                    "changed_files": changed_files,
+                    "report_path": str(report_path),
+                }
+            )
+            yield from drain_events()
+        except Exception as exc:
+            if backup_path is not None and backup_path.exists():
+                _restore_package(backup_path, package_path)
+            normalizer.emit_run_failed(exc)
+            yield from drain_events()
+
+
+def _ensure_evolution_managed_files(workspace: CreateAgentWorkspace) -> None:
+    workspace.root.mkdir(parents=True, exist_ok=True)
+    workspace.factory_dir.mkdir(parents=True, exist_ok=True)
+    if not workspace.system_state_path.exists():
+        workspace.write_system_state(initial_system_manufacturing_state())
+    workspace.write_action(CreateAgentAction())
+    if not workspace.resources_path.exists():
+        workspace._write_json(workspace.resources_path, {"version": "resource_facts.v0", "facts": []})
+
+
+def _repair_pack(runtime_root: Path, *, package_id: str, trace_id: str) -> RepairTracePack:
+    diagnostics = TraceDiagnostics(TraceProjector(TraceReader(runtime_root / package_id / "trace")))
+    return diagnostics.build_repair_pack(trace_id)
+
+
+def _error_only_pack(pack: RepairTracePack) -> dict[str, Any]:
+    return {
+        "trace_id": pack.trace_id,
+        "run_id": pack.run_id,
+        "status": pack.status,
+        "failed_node": pack.failed_node,
+        "failed_span_id": pack.failed_span_id,
+        "failure_category": pack.failure_category,
+        "error_chain": [item.model_dump(mode="json") for item in pack.error_chain],
+        "suspected_root_causes": pack.suspected_root_causes,
+        "repair_targets": pack.repair_targets,
+    }
+
+
+def _package_summary(package_id: str, package_path: Path, package: Any) -> dict[str, Any]:
+    return {
+        "package_id": package_id,
+        "package_path": str(package_path),
+        "agent_id": package.assembly_spec.agent.id,
+        "agent_name": package.assembly_spec.agent.name,
+        "agent_description": package.assembly_spec.agent.description,
+        "pattern_id": package.assembly_spec.runtime.pattern_id,
+        "tool_ids": [tool.id for tool in package.assembly_spec.tools],
+        "contract_keys": sorted(package.contracts.keys()),
+    }
+
+
+def _backup_package(package_path: Path, *, package_id: str) -> Path:
+    root = package_path.parent / ".evolution_backups"
+    root.mkdir(parents=True, exist_ok=True)
+    backup_path = root / f"{package_id}-{uuid4().hex}"
+    shutil.copytree(package_path, backup_path)
+    return backup_path
+
+
+def _restore_package(backup_path: Path, package_path: Path) -> None:
+    if package_path.exists():
+        shutil.rmtree(package_path)
+    shutil.copytree(backup_path, package_path)
+    shutil.rmtree(backup_path, ignore_errors=True)
+
+
+def _changed_files(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    keys = sorted(set(before) | set(after))
+    return [key for key in keys if before.get(key) != after.get(key)]
+
+
+def _write_evolution_publish_report(
+    *,
+    package_path: Path,
+    package_id: str,
+    trace_id: str | None,
+    user_input: str,
+    summary: str,
+    changed_files: list[str],
+    validation: dict[str, Any],
+) -> Path:
+    now = datetime.now(UTC).isoformat()
+    report_path = package_path / "package_report.json"
+    previous: dict[str, Any] = {}
+    if report_path.is_file():
+        try:
+            value = json.loads(report_path.read_text(encoding="utf-8"))
+            previous = value if isinstance(value, dict) else {}
+        except Exception:
+            previous = {}
+    evolution_history = list(previous.get("evolution_history") or []) if isinstance(previous.get("evolution_history"), list) else []
+    evolution_history.append(
+        {
+            "version": "agent_evolution_publish.v0",
+            "package_id": package_id,
+            "trace_id": trace_id,
+            "user_goal": user_input,
+            "summary": summary,
+            "changed_files": changed_files,
+            "validation": validation,
+            "published_at": now,
+        }
+    )
+    report = {
+        **previous,
+        "version": previous.get("version") or "agent_package_publish_report.v0",
+        "status": "available",
+        "package_id": package_id,
+        "package_path": str(package_path),
+        "manifest_path": str(package_path / "agent_package.json"),
+        "published_at": now,
+        "package_fingerprint": package_fingerprint(package_path),
+        "last_evolution": evolution_history[-1],
+        "evolution_history": evolution_history[-20:],
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return report_path
+
+
+def _safe_id(value: str, *, label: str) -> str:
+    raw = str(value).strip()
+    if not raw:
+        raise RuntimeError(f"{label} must not be empty")
+    if raw in {".", ".."} or "/" in raw or "\\" in raw:
+        raise RuntimeError(f"invalid {label}: {value}")
+    return raw
+
+
+def _safe_child(root: Path, child: str) -> Path:
+    target = (root / child).resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"path escapes root: {child}") from exc
+    return target

@@ -5,6 +5,7 @@ from agent_factory.trace_system.projector import TraceProjector
 from agent_factory.trace_system.reader import TraceReadError, TraceReader
 from agent_factory.trace_system.recorder import TraceRecorder
 from agent_factory.trace_system.references import runtime_trace_ref
+from agent_factory.trace_system.runtime_log import RuntimeLogStore
 from agent_factory.trace_system.schema import (
     RepairTracePack,
     TraceContractConfig,
@@ -36,6 +37,7 @@ __all__ = [
     "TraceReader",
     "TraceReferenceIndexItem",
     "TraceRecorder",
+    "RuntimeLogStore",
     "TraceReferenceRecord",
     "TraceRunFilter",
     "TraceSpanNode",

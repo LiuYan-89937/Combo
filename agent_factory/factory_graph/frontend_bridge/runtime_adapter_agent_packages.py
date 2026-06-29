@@ -48,10 +48,14 @@ class RuntimeAgentPackageCommandMixin:
 
     def select_agent_package(self, command: FactoryFrontendCommand) -> None:
         package_id = str(command.payload.get("package_id") or "").strip()
+        purpose = str(command.payload.get("purpose") or "").strip()
         if not package_id:
             self._emit_error(command, "select_agent_package requires package_id")
             return
         package_info = self.agent_package_runtime.package_summary(package_id)
+        if purpose == "evolution":
+            self._select_evolution_agent_package(command, package_id=package_id, package_info=package_info)
+            return
         sessions = self.agent_package_runtime.list_sessions(package_id)
         self.mode = "agent_package"
         self.emit(
@@ -61,6 +65,37 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=self._session_id(),
                 mode="agent_package",
                 payload={"package": package_info, "sessions": sessions},
+            )
+        )
+
+    def _select_evolution_agent_package(
+        self,
+        command: FactoryFrontendCommand,
+        *,
+        package_id: str,
+        package_info: dict[str, Any],
+    ) -> None:
+        self._ensure_session(command)
+        self.mode = "evolve_agent"
+        self.evolution_package_id = package_id
+        self.session_record = self.session_manager.set_mode(self.session_record.session_id, self.mode)
+        trace_payload: dict[str, Any] = {}
+        try:
+            trace_payload["latest_failed_trace_id"] = self.evolution_runtime.latest_failed_trace_id(package_id)
+        except Exception as exc:
+            trace_payload["latest_failed_trace_error"] = f"{type(exc).__name__}: {exc}"
+        self.emit(
+            event(
+                "agent_package_selected",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="evolve_agent",
+                payload={
+                    "package": package_info,
+                    "sessions": [],
+                    "purpose": "evolution",
+                    **trace_payload,
+                },
             )
         )
 
@@ -129,6 +164,66 @@ class RuntimeAgentPackageCommandMixin:
             _emit_attachment_import_failed(normalizer, exc)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
+
+    def run_agent_evolution(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or self.evolution_package_id or "").strip()
+        message = str(command.payload.get("message") or command.message or "").strip()
+        if not package_id:
+            self._emit_error(command, "run_agent_evolution requires package_id")
+            return
+        if not message:
+            self._emit_error(command, "run_agent_evolution requires message")
+            return
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=command.request_id,
+            session_id=self._session_id(),
+            mode="evolve_agent",
+            graph_id="agent_evolution",
+            producer_type="factory_runtime",
+        )
+        try:
+            run = self.evolution_runtime.stream(
+                package_id=package_id,
+                user_input=message,
+                request_id=command.request_id,
+                session_id=self._session_id(),
+            )
+            self._consume_evolution_stream(run=run)
+        except Exception as exc:
+            normalizer.emit_run_failed(exc)
+
+    def _run_evolve_agent(self, command: FactoryFrontendCommand, message: str) -> None:
+        package_id = self.evolution_package_id or str(command.payload.get("package_id") or "").strip()
+        if not package_id:
+            self._emit_error(command, "select an agent with /evolve-agent before sending evolution requests")
+            return
+        self._remember_factory_first_user_input(message)
+        self.run_agent_evolution(
+            FactoryFrontendCommand(
+                type="run_agent_evolution",
+                request_id=command.request_id,
+                session_id=command.session_id,
+                message=message,
+                payload={"package_id": package_id, "message": message},
+            )
+        )
+
+    def _consume_evolution_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
+        terminal_event: FactoryFrontendEvent | None = None
+        for stream_mode, chunk in run.events:
+            if stream_mode != "frontend_event":
+                continue
+            item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            if item.event_type in {"run_completed", "run_failed"}:
+                terminal_event = item
+            self.emit(_frontend_scoped_agent_event(item, mode="evolve_agent", session_id=self._session_id()))
+        if terminal_event is not None:
+            return RuntimeStreamConsumeResult(
+                status="failed" if terminal_event.event_type == "run_failed" else "completed",
+                terminal_event=terminal_event,
+            )
+        raise RuntimeError("agent evolution runtime stream ended without a terminal event")
 
     def _resume_agent_package_interrupt(self, command: FactoryFrontendCommand) -> None:
         pending = self.pending_agent_package_run

@@ -42,6 +42,7 @@ from agent_factory.runtime_kernel.patterns.wrapper_pipeline import (
 )
 from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
 from agent_factory.runtime_kernel.state_contracts import PackageStateManager
+from agent_factory.runtime_kernel.trace_policy import classify_node_failure
 from agent_factory.runtime_kernel.wrappers import NodeWrapperRegistry
 from agent_factory.runtime_render import NodeRenderSpec
 
@@ -242,6 +243,19 @@ def make_wrapped_runner(
             location = failed.execution.last_error_location or node.id
             finish_state(failed, status="failed", error=str(exc), location=location)
             run_system_on_error(wrappers=system_wrappers, state=failed, context=context, error=exc)
+            failure = classify_node_failure(node_impl=node.impl, error=exc)
+            if trace_recorder is not None and failure.domain == "runtime_kernel":
+                trace_recorder.suppress_trace(
+                    trace_id=failed.observability.trace_id,
+                    run_id=failed.run.run_id,
+                    reason=failure.reason,
+                    payload={
+                        "node_id": node.id,
+                        "node_impl": node.impl,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
             emit_state_event(
                 services,
                 failed,

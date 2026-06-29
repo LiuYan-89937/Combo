@@ -78,6 +78,13 @@ export function App() {
 			return;
 		}
 		if (value === '/run-agent-package' || value === '/run_agent_package') {
+			store.dispatch({ui_type: 'set_agent_package_picker_purpose', purpose: 'run'});
+			store.dispatch({ui_type: 'set_agent_package_picker_open', open: true});
+			send(command('list_agent_packages'));
+			return;
+		}
+		if (value === '/evolve-agent' || value === '/evolve_agent') {
+			store.dispatch({ui_type: 'set_agent_package_picker_purpose', purpose: 'evolution'});
 			store.dispatch({ui_type: 'set_agent_package_picker_open', open: true});
 			send(command('list_agent_packages'));
 			return;
@@ -182,6 +189,21 @@ export function App() {
 			}));
 			return;
 		}
+		if (state.mode === 'evolve_agent') {
+			const packageId = activePackageId(state.activeAgentPackage);
+			if (!packageId) {
+				store.dispatch({ui_type: 'notice', message: 'select an agent first with /evolve-agent'});
+				return;
+			}
+			store.dispatch({ui_type: 'local_user_message', message: value});
+			send(command('run_agent_evolution', {
+				payload: {
+					package_id: packageId,
+					message: value
+				}
+			}));
+			return;
+		}
 		store.dispatch({ui_type: 'local_user_message', message: value});
 		send(command('send_message', {message: value}));
 	}
@@ -201,7 +223,10 @@ export function App() {
 				<AgentPackagePanel
 					onClose={() => store.dispatch({ui_type: 'set_agent_package_picker_open', open: false})}
 					onRefresh={() => send(command('list_agent_packages'))}
-					onSelect={packageId => send(command('select_agent_package', {payload: {package_id: packageId}}))}
+					onSelect={packageId => {
+						const purpose = store.getSnapshot().agentPackagePickerPurpose;
+						send(command('select_agent_package', {payload: {package_id: packageId, purpose}}));
+					}}
 					onDelete={packageId => send(command('delete_agent_package', {payload: {package_id: packageId}}))}
 				/>
 				<AgentSessionPanel
@@ -255,7 +280,7 @@ function ConnectedComposer({onSubmit, onCancel}: {onSubmit: (value: string) => v
 }
 
 function modeLabel(mode: FactoryMode): string {
-	return mode === 'create_agent' ? 'create-agent' : mode === 'agent_package' ? 'agent-package' : mode;
+	return mode === 'create_agent' ? 'create-agent' : mode === 'evolve_agent' ? 'evolve-agent' : mode === 'agent_package' ? 'agent-package' : mode;
 }
 
 function activePackageId(value: Record<string, unknown> | null): string {

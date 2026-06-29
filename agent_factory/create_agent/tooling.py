@@ -91,7 +91,12 @@ class CreateAgentToolEnvironmentBuilder:
     def __init__(self, *, extension_manager: FactoryExtensionManager | None = None) -> None:
         self.extension_manager = extension_manager or FactoryExtensionManager()
 
-    def build(self, *, workspace_root: str | Path, mode: Literal["manufacture", "assist"] = "manufacture") -> CreateAgentToolEnvironment:
+    def build(
+        self,
+        *,
+        workspace_root: str | Path,
+        mode: Literal["manufacture", "assist", "evolution"] = "manufacture",
+    ) -> CreateAgentToolEnvironment:
         workspace = Path(workspace_root).expanduser().resolve()
         create_agent_workspace = CreateAgentWorkspace(workspace)
         extension_root = default_factory_extension_root()
@@ -103,26 +108,27 @@ class CreateAgentToolEnvironmentBuilder:
                 "builtin_allow_external_paths": False,
             },
         )
-        builtin_tool_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if mode == "manufacture" else CREATE_AGENT_ASSIST_TOOL_IDS
+        authoring_mode = mode in {"manufacture", "evolution"}
+        builtin_tool_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if authoring_mode else CREATE_AGENT_ASSIST_TOOL_IDS
         builtin_result = BuiltinToolProvider(tool_ids=builtin_tool_ids).discover(context)
-        if mode == "manufacture":
+        if authoring_mode:
             extension_result, extension_report = self.extension_manager.discover(context=context)
         else:
             extension_result = ToolProviderResult()
             extension_report = FactoryExtensionLoadReport(extension_root=str(extension_root))
-        provider_result = builtin_result.merge(extension_result) if mode == "manufacture" else builtin_result
+        provider_result = builtin_result.merge(extension_result) if authoring_mode else builtin_result
         runtime_resources = {
             **builtin_result.runtime_resources,
-            **(extension_result.runtime_resources if mode == "manufacture" else {}),
+            **(extension_result.runtime_resources if authoring_mode else {}),
             CREATE_AGENT_WORKSPACE_RESOURCE: {"root": str(workspace)},
             CREATE_AGENT_STAGE_CONTEXT_RESOURCE: stage_context_payload(workspace),
             TOOL_OUTPUT_STORE_RESOURCE: ToolOutputStore(workspace / ".factory" / "tool_outputs"),
         }
-        if mode == "manufacture":
+        if authoring_mode:
             runtime_resources[RESOURCE_SET_STORE_KEY] = ResourceSetStore()
             runtime_resources[CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE] = str(factory_artifact_path("packages"))
         filesystem_resource = runtime_resources.get("filesystem")
-        if isinstance(filesystem_resource, dict) and mode == "manufacture":
+        if isinstance(filesystem_resource, dict) and authoring_mode:
             filesystem_resource[CREATE_AGENT_STAGE_CONTEXT_RESOURCE] = runtime_resources[CREATE_AGENT_STAGE_CONTEXT_RESOURCE]
             read_only_paths = filesystem_resource.setdefault("read_only_paths", [])
             if isinstance(read_only_paths, list):
@@ -180,7 +186,7 @@ class CreateAgentToolEnvironmentBuilder:
                 "knowledge": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "state": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
             }
-        if mode == "manufacture":
+        if authoring_mode:
             skill_registry = _create_agent_skill_registry(
                 runtime_resources.get("skills"),
                 gateway_state=_load_skill_gateway_state(create_agent_workspace.skill_gateway_state_path),
@@ -207,7 +213,7 @@ class CreateAgentToolEnvironmentBuilder:
                         CREATE_AGENT_STAGE_TOOL_ID,
                         CREATE_AGENT_PROBE_TOOL_ID,
                         CREATE_AGENT_VALIDATE_TOOL_ID,
-                        CREATE_AGENT_PUBLISH_TOOL_ID,
+                        *([CREATE_AGENT_PUBLISH_TOOL_ID] if mode == "manufacture" else []),
                     ]
                 )
             )
@@ -217,7 +223,7 @@ class CreateAgentToolEnvironmentBuilder:
                 build_create_agent_stage_tool_spec(),
                 build_create_agent_probe_tool_spec(),
                 build_create_agent_validate_tool_spec(),
-                build_create_agent_publish_tool_spec(),
+                *([build_create_agent_publish_tool_spec()] if mode == "manufacture" else []),
                 *skill_specs,
             ]
         else:
@@ -228,7 +234,7 @@ class CreateAgentToolEnvironmentBuilder:
                 extra_specs=extra_specs,
             )
         )
-        extension_specs = _stable_specs(extension_result.tool_specs) if mode == "manufacture" else []
+        extension_specs = _stable_specs(extension_result.tool_specs) if authoring_mode else []
         capability_inventory = build_capability_inventory(
             manufacturing_specs=specs,
             extension_specs=extension_specs,
@@ -238,7 +244,7 @@ class CreateAgentToolEnvironmentBuilder:
             package_root=workspace,
             resources=runtime_resources,
             allowed_python_roots=[extension_root],
-            mcp_clients=self.extension_manager.mcp_tool_clients() if mode == "manufacture" else {},
+            mcp_clients=self.extension_manager.mcp_tool_clients() if authoring_mode else {},
         )
         tools = _stable_tools(compiler.compile_many(registry.all()))
         return CreateAgentToolEnvironment(

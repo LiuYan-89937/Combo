@@ -57,6 +57,7 @@ from agent_factory.tooling.providers import BuiltinToolProvider, PackageToolProv
 from agent_factory.tooling.registry import ToolRegistry
 from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
 from agent_factory.trace_system import JSONLTraceStore, TraceDiagnostics, TraceProjector, TraceReader, TraceRecorder
+from agent_factory.trace_system.runtime_log import RuntimeLogStore
 
 
 class SessionContractBuilder:
@@ -270,6 +271,7 @@ class TraceContractBuilder:
             package_id=context.package.package_root.name,
             producer_type=producer_type,
             max_inline_payload_chars=config.max_inline_payload_chars,
+            runtime_log_store=RuntimeLogStore(context.runtime_root / "logs" / "runtime_kernel.jsonl"),
         )
         reader = TraceReader(config.root)
         projector = TraceProjector(reader)

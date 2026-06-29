@@ -383,6 +383,15 @@ Skill 是制造期和运行期的协议知识来源，按 describe / read_resour
 
 MCP 通过统一 provider 暴露成 ToolSpec。宿主机 MCP 可以通过 MCP gateway 提供给 Docker 子 Agent，子 Agent 镜像不需要重复安装 Node 依赖。
 
+项目内置的工厂扩展位于 `SystemPackage/extensions/`，本机运行覆盖层位于 `.agentfactory/factory/extensions/`。create-agent 制造期会先加载内置层，再加载本机覆盖层；同一个 MCP `server_id` 在本机覆盖层中可替换内置配置。
+
+内置联网研究能力使用 BigOpenLLMSearch：
+
+- GitHub：`https://github.com/LiuYan-89937/WebSearchApi`
+- MCP 启动入口：`npx -y bigopen-llm-search`
+- 工具前缀：`bigopen_*`
+- 默认搜索后端：`SEARXNG_AUTO_START=true` + `DEFAULT_SEARCH_ENGINE=searxng`
+
 ## 上下文、记忆、知识
 
 ContextSystem 负责模型调用前的 turn evidence 和会话压缩，不再把工具表、最近消息等动态内容塞进稳定 system prompt。

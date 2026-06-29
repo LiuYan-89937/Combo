@@ -9,6 +9,8 @@
         "answer": "Answer the user using the package knowledge, runtime context, and approved tools. Ask a concise follow-up only when required information is missing."
       },
       "allowed_tool_ids": [
+        "knowledge",
+        "scheduler",
         "package_action"
       ]
     },
@@ -24,7 +26,7 @@
       "action": "configure_pattern_assembly",
       "pattern_id": "plan_and_execute",
       "prompts": {
-        "planner": "Create and maintain a concise execution plan with runtime_plan. Do not call business tools from the planner.",
+        "planner": "Create and maintain a concise execution plan with runtime_plan and inherited runtime capabilities when useful.",
         "executor": "Execute the current plan step with approved tools, then update runtime_plan with the result.",
         "final_answer": "Summarize the completed plan and deliver the final user-facing answer."
       },
@@ -34,6 +36,8 @@
         "ask_when_missing": "Please provide the input needed to start this workflow."
       },
       "allowed_tool_ids": [
+        "knowledge",
+        "scheduler",
         "package_action"
       ]
     },

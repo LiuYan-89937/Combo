@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -80,6 +81,12 @@ class JSONLTraceStore:
                     }
                 )
             )
+
+    def delete_trace(self, trace_id: str) -> None:
+        with self._lock:
+            trace_dir = self._trace_dir(trace_id)
+            if trace_dir.exists():
+                shutil.rmtree(trace_dir)
 
     def manifest_for(self, trace_id: str) -> TraceManifest | None:
         with self._lock:

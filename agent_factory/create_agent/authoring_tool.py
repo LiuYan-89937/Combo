@@ -29,6 +29,7 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, 
 
 
 CREATE_AGENT_AUTHORING_TOOL_ID = "create_agent_authoring"
+DEFAULT_INHERITED_RUNTIME_TOOL_IDS = ("knowledge", "scheduler")
 CREATE_AGENT_AUTHORING_ACTIONS = {
     "reset_contract",
     "materialize_mcp_inheritance",
@@ -452,26 +453,28 @@ def _materialize_mcp_inheritance(workspace: CreateAgentWorkspace) -> dict[str, A
 
 
 def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool_ids: list[str]) -> dict[str, Any]:
+    inherited_tool_ids = _default_inherited_tool_ids(allowed_tool_ids)
     if pattern_id == "react_agent":
         answer_prompt = str(prompts.get("answer") or prompts.get("answer_prompt") or "Answer the user using package capabilities and approved tools when useful.")
         return {
             "services": [],
             "node_bindings": [
                 _prompt_binding("answer", "cognitive.answer", "answer_prompt", answer_prompt),
-                _tool_access_binding("answer", "cognitive.answer", allowed_tool_ids),
+                _tool_access_binding("answer", "cognitive.answer", inherited_tool_ids),
                 _model_binding("answer", "cognitive.answer", "answer_prompt"),
             ],
             "hooks": [],
         }
-    planner_prompt = str(prompts.get("planner") or "Create and maintain a concise dynamic plan with runtime_plan. Do not call business tools from planner.")
+    planner_prompt = str(prompts.get("planner") or "Create and maintain a concise dynamic plan with runtime_plan.")
     executor_prompt = str(prompts.get("executor") or "Execute the current plan step using available tools when useful, then update runtime_plan.")
     final_prompt = str(prompts.get("final_answer") or "Summarize completed plan evidence for the user. Do not call tools.")
-    executor_tools = ["runtime_plan", *[tool_id for tool_id in allowed_tool_ids if tool_id != "runtime_plan"]]
+    executor_tools = ["runtime_plan", *[tool_id for tool_id in inherited_tool_ids if tool_id != "runtime_plan"]]
+    planner_tools = ["runtime_plan", *[tool_id for tool_id in inherited_tool_ids if tool_id != "runtime_plan"]]
     return {
         "services": [],
         "node_bindings": [
             _prompt_binding("planner", "cognitive.answer", "planner_prompt", planner_prompt),
-            _tool_access_binding("planner", "cognitive.answer", ["runtime_plan"]),
+            _tool_access_binding("planner", "cognitive.answer", planner_tools),
             _model_binding("planner", "cognitive.answer", "planner_prompt"),
             _prompt_binding("executor", "cognitive.answer", "executor_prompt", executor_prompt),
             _tool_access_binding("executor", "cognitive.answer", executor_tools),
@@ -499,6 +502,10 @@ def _tool_access_binding(node_id: str, impl: str, allowed_tool_ids: list[str]) -
         "target": {"node_id": node_id, "impl": impl},
         "payload": {"allowed_tool_ids": _unique_strings(allowed_tool_ids), "approval_policy": "standard"},
     }
+
+
+def _default_inherited_tool_ids(allowed_tool_ids: list[str]) -> list[str]:
+    return _unique_strings([*DEFAULT_INHERITED_RUNTIME_TOOL_IDS, *allowed_tool_ids])
 
 
 def _model_binding(node_id: str, impl: str, prompt_id: str) -> dict[str, Any]:

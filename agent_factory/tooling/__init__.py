@@ -40,6 +40,7 @@ def __getattr__(name: str) -> Any:
         "FACTORY_EXTENSION_ROOT_ENV",
         "FactoryExtensionLoadReport",
         "FactoryExtensionManager",
+        "default_builtin_factory_extension_root",
         "default_factory_extension_root",
     }:
         return getattr(importlib.import_module("agent_factory.tooling.factory_extensions"), name)
@@ -71,6 +72,7 @@ __all__ = [
     "ToolRegistry",
     "ToolSpec",
     "compile_json_schema",
+    "default_builtin_factory_extension_root",
     "default_factory_extension_root",
     "get_factory_base_tool_ids",
     "get_factory_model_tools",

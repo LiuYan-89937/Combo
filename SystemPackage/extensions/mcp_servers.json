@@ -4,9 +4,10 @@
     {
       "server_id": "bigopen_llm_search",
       "transport": "stdio",
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/Users/admin/Desktop/FastAgentFactory/.agentfactory/factory/mcp_servers/BigOpenLLMSearch/dist/index.js"
+        "-y",
+        "bigopen-llm-search"
       ],
       "env": {
         "SEARXNG_URL": "http://127.0.0.1:8888",
@@ -15,6 +16,11 @@
         "DEFAULT_SEARCH_ENGINE": "searxng",
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost"
+      },
+      "source": {
+        "type": "github",
+        "url": "https://github.com/LiuYan-89937/WebSearchApi",
+        "package": "bigopen-llm-search"
       },
       "enabled": true,
       "required": false,

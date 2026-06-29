@@ -6,6 +6,7 @@ from typing import Any
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.create_agent.runtime import CreateAgentRuntime
+from agent_factory.evolution import AgentEvolutionRuntime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryMode, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_agent_packages import RuntimeAgentPackageCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_scheduler import RuntimeSchedulerCommandMixin
@@ -39,6 +40,8 @@ class FactoryRuntimeAdapter(
     pending_create_agent_run: PendingCreateAgentRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
     create_agent_runtime: CreateAgentRuntime | None = None
+    evolution_runtime: AgentEvolutionRuntime | None = None
+    evolution_package_id: str | None = None
     scheduler_runtime: SchedulerRuntime | None = None
     background_workers: RuntimeBackgroundWorkerManager | None = None
 
@@ -50,6 +53,8 @@ class FactoryRuntimeAdapter(
             self.agent_package_runtime = AgentPackageRuntimeManager()
         if self.create_agent_runtime is None:
             self.create_agent_runtime = CreateAgentRuntime()
+        if self.evolution_runtime is None:
+            self.evolution_runtime = AgentEvolutionRuntime()
         self.agent_package_runtime.set_emit(self.emit)
         if scheduler_enabled_from_env():
             self._start_factory_scheduler()
@@ -94,6 +99,7 @@ _COMMAND_HANDLERS: dict[str, str] = {
     "delete_agent_package": "delete_agent_package",
     "list_agent_package_sessions": "list_agent_package_sessions",
     "run_agent_package": "run_agent_package",
+    "run_agent_evolution": "run_agent_evolution",
     "resume_interrupt": "resume_interrupt",
     "cancel_runtime_request": "cancel_runtime_request",
 }

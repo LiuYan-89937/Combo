@@ -3,6 +3,7 @@
   "modes": [
     "chat",
     "create_agent",
+    "evolve_agent",
     "agent_package"
   ],
   "command_types": [
@@ -18,6 +19,7 @@
     "delete_agent_package",
     "list_agent_package_sessions",
     "run_agent_package",
+    "run_agent_evolution",
     "resume_interrupt",
     "cancel_runtime_request",
     "set_options",

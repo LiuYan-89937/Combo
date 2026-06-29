@@ -166,6 +166,7 @@ export type RuntimeState = {
 	sessionPickerOpen: boolean;
 	agentPackages: Array<Record<string, unknown>>;
 	agentPackagePickerOpen: boolean;
+	agentPackagePickerPurpose: 'run' | 'evolution';
 	activeAgentPackage: Record<string, unknown> | null;
 	agentPackageSessions: Array<Record<string, unknown>>;
 	agentSessionPickerOpen: boolean;
@@ -204,6 +205,7 @@ export type RuntimeAction =
 	| {ui_type: 'set_tool_grep'; query: string}
 	| {ui_type: 'set_session_picker_open'; open: boolean}
 	| {ui_type: 'set_agent_package_picker_open'; open: boolean}
+	| {ui_type: 'set_agent_package_picker_purpose'; purpose: 'run' | 'evolution'}
 	| {ui_type: 'set_agent_session_picker_open'; open: boolean}
 	| {ui_type: 'select_agent_session'; sessionId: string | null}
 	| {ui_type: 'clear_agent_package_selection'}
@@ -229,6 +231,7 @@ export function createInitialRuntimeState(): RuntimeState {
 		sessionPickerOpen: false,
 		agentPackages: [],
 		agentPackagePickerOpen: false,
+		agentPackagePickerPurpose: 'run',
 		activeAgentPackage: null,
 		agentPackageSessions: [],
 		agentSessionPickerOpen: false,
@@ -398,6 +401,9 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 	if (action.ui_type === 'set_agent_package_picker_open') {
 		return {...state, agentPackagePickerOpen: action.open};
 	}
+	if (action.ui_type === 'set_agent_package_picker_purpose') {
+		return {...state, agentPackagePickerPurpose: action.purpose};
+	}
 	if (action.ui_type === 'set_agent_session_picker_open') {
 		return {...state, agentSessionPickerOpen: action.open};
 	}
@@ -416,6 +422,7 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 			agentPackageSessions: [],
 			activeAgentSessionId: null,
 			agentPackagePickerOpen: false,
+			agentPackagePickerPurpose: 'run',
 			agentSessionPickerOpen: false
 		}, []);
 	}
@@ -480,14 +487,16 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 		case 'agent_package_selected': {
 			const selectedPackage = (event.payload?.package ?? null) as Record<string, unknown> | null;
 			const sessions = (event.payload?.sessions as Array<Record<string, unknown>>) ?? [];
+			const mode = event.mode === 'evolve_agent' ? 'evolve_agent' : 'agent_package';
 			return resetSessionScopedProjection({
 				...base,
-				mode: 'agent_package',
+				mode,
 				activeAgentPackage: selectedPackage,
 				agentPackageSessions: sessions,
 				activeAgentSessionId: null,
 				agentPackagePickerOpen: false,
-				agentSessionPickerOpen: true,
+				agentPackagePickerPurpose: 'run',
+				agentSessionPickerOpen: mode === 'agent_package',
 				helpVisible: false,
 				logs: [...base.logs, `agent package selected: ${String(selectedPackage?.package_id ?? '-')}`]
 			}, []);

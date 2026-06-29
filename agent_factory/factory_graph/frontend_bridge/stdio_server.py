@@ -16,6 +16,7 @@ LONG_RUNNING_COMMANDS = {
     "send_message",
     "resume_interrupt",
     "run_agent_package",
+    "run_agent_evolution",
     "scheduler_manage",
 }
 

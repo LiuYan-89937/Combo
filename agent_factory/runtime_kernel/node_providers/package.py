@@ -7,12 +7,14 @@ import inspect
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.trace_policy import AgentPackageExecutionError
 from agent_factory.runtime_kernel.types import ToolExecutionResult
 from agent_factory.tooling.schema_compiler import compile_json_schema
 
@@ -154,7 +156,10 @@ class PackageNodeImplementation:
     def execute(self, state: RuntimeState, context: NodeExecutionContext) -> dict[str, Any]:
         context.services.validate_required(list(self.manifest.required_services))
         input_payload = _input_payload(state=state, context=context, manifest=self.manifest)
-        self._input_schema.validate(input_payload)
+        try:
+            self._input_schema.validate(input_payload)
+        except Exception as exc:
+            raise AgentPackageExecutionError(f"package node {self.impl_id} input schema validation failed: {exc}") from exc
         runtime_context = NodeRuntimeContext(
             node_id=context.node_id,
             impl_id=self.impl_id,
@@ -170,12 +175,19 @@ class PackageNodeImplementation:
                 tool_access=tuple(self.manifest.tool_access),
                 tool_registry=context.services.tool_registry,
                 state=state,
+                emit_event=context.emit_event,
             ),
         )
-        output = self._entrypoint(input_payload, runtime_context)
+        try:
+            output = self._entrypoint(input_payload, runtime_context)
+        except Exception as exc:
+            raise AgentPackageExecutionError(f"package node {self.impl_id} failed: {exc}") from exc
         if not isinstance(output, dict):
-            raise RuntimeKernelError(f"package node {self.impl_id} output must be a dict")
-        self._output_schema.validate(output)
+            raise AgentPackageExecutionError(f"package node {self.impl_id} output must be a dict")
+        try:
+            self._output_schema.validate(output)
+        except Exception as exc:
+            raise AgentPackageExecutionError(f"package node {self.impl_id} output schema validation failed: {exc}") from exc
         return output
 
 
@@ -247,20 +259,119 @@ def _tool_executor(
     tool_access: tuple[str, ...],
     tool_registry: Any | None,
     state: RuntimeState,
+    emit_event: Callable[[dict[str, Any]], None],
 ) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
     def execute(tool_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        tool_call_id = f"package_{uuid4().hex}"
         if tool_id not in tool_access:
+            _emit_tool_event(
+                emit_event,
+                event_type="tool_failed",
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                status="failed",
+                error=f"package node {impl_id} is not allowed to execute tool: {tool_id}",
+            )
             raise RuntimeKernelError(f"package node {impl_id} is not allowed to execute tool: {tool_id}")
         if tool_registry is None or not hasattr(tool_registry, "execute"):
+            _emit_tool_event(
+                emit_event,
+                event_type="tool_failed",
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                status="failed",
+                error="tool_registry service is not available",
+            )
             raise RuntimeKernelError("tool_registry service is not available")
-        result = tool_registry.execute(tool_id, arguments, state=state)
+        _emit_tool_event(
+            emit_event,
+            event_type="tool_started",
+            tool_id=tool_id,
+            tool_call_id=tool_call_id,
+            arguments=arguments,
+            status="running",
+        )
+        try:
+            result = tool_registry.execute(tool_id, arguments, state=state)
+        except Exception as exc:
+            _emit_tool_event(
+                emit_event,
+                event_type="tool_failed",
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
         if isinstance(result, ToolExecutionResult):
-            return result.model_dump(mode="json")
+            payload = result.model_dump(mode="json")
+            _emit_package_tool_result(
+                emit_event=emit_event,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                result=payload,
+            )
+            return payload
         if isinstance(result, dict):
+            _emit_package_tool_result(
+                emit_event=emit_event,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                result=result,
+            )
             return result
+        _emit_tool_event(
+            emit_event,
+            event_type="tool_failed",
+            tool_id=tool_id,
+            tool_call_id=tool_call_id,
+            arguments=arguments,
+            status="failed",
+            error="tool execution result must be a ToolExecutionResult or dict",
+        )
         raise RuntimeKernelError("tool execution result must be a ToolExecutionResult or dict")
 
     return execute
+
+
+def _emit_package_tool_result(
+    *,
+    emit_event: Callable[[dict[str, Any]], None],
+    tool_id: str,
+    tool_call_id: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    status = str(result.get("status") or result.get("execution_status") or "completed")
+    event_type = "tool_completed" if status == "completed" else "tool_failed"
+    error = result.get("error")
+    message = str(result.get("observation_summary") or result.get("message") or error or "")
+    output = result.get("output") if isinstance(result.get("output"), dict) else result
+    _emit_tool_event(
+        emit_event,
+        event_type=event_type,
+        tool_id=tool_id,
+        tool_call_id=tool_call_id,
+        arguments=arguments,
+        status="completed" if event_type == "tool_completed" else "failed",
+        result=result,
+        output=output,
+        observation=result,
+        error=None if event_type == "tool_completed" else str(error or message or "tool failed"),
+        message=message,
+    )
+
+
+def _emit_tool_event(emit_event: Callable[[dict[str, Any]], None], **payload: Any) -> None:
+    try:
+        emit_event(payload)
+    except Exception:
+        return
 
 
 def _load_package_node(package_root: Path, manifest_path: Path) -> PackageNodeImplementation:

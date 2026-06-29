@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.trace_system.schema import TraceFactRecord, TraceReferenceRecord
+from agent_factory.trace_system.runtime_log import RuntimeLogStore
 from agent_factory.trace_system.store import JSONLTraceStore
 
 
@@ -18,12 +19,15 @@ class TraceRecorder:
         package_id: str | None = None,
         producer_type: str = "agent_runtime",
         max_inline_payload_chars: int = 12000,
+        runtime_log_store: RuntimeLogStore | None = None,
     ) -> None:
         self.store = store
         self.package_id = package_id
         self.producer_type = producer_type
         self.max_inline_payload_chars = max_inline_payload_chars
+        self.runtime_log_store = runtime_log_store
         self._active_spans_by_run: dict[str, list[str]] = defaultdict(list)
+        self._suppressed_traces: set[str] = set()
         self.last_error: str | None = None
 
     def ensure_trace(
@@ -34,6 +38,8 @@ class TraceRecorder:
         agent_id: str | None = None,
         session_id: str | None = None,
     ) -> None:
+        if trace_id in self._suppressed_traces:
+            return
         self._safe(
             self.store.ensure_trace,
             trace_id=trace_id,
@@ -55,6 +61,8 @@ class TraceRecorder:
         payload: dict[str, Any] | None = None,
         status: str | None = None,
     ) -> None:
+        if trace_id in self._suppressed_traces:
+            return
         self.ensure_trace(trace_id=trace_id, run_id=run_id)
         self._safe(
             self.store.append_fact,
@@ -81,6 +89,8 @@ class TraceRecorder:
         node_id: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> str:
+        if trace_id in self._suppressed_traces:
+            return ""
         self.ensure_trace(trace_id=trace_id, run_id=run_id)
         span_id = uuid4().hex
         parent_span_id = self.current_span_id(run_id)
@@ -115,6 +125,8 @@ class TraceRecorder:
         node_id: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        if trace_id in self._suppressed_traces or not span_id:
+            return
         stack = self._active_spans_by_run.get(run_id)
         parent_span_id = None
         if stack:
@@ -150,6 +162,8 @@ class TraceRecorder:
         uri: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if trace_id in self._suppressed_traces:
+            return
         self._safe(
             self.store.append_reference,
             TraceReferenceRecord(
@@ -163,7 +177,41 @@ class TraceRecorder:
         )
 
     def finish_trace(self, *, trace_id: str, status: str) -> None:
+        if trace_id in self._suppressed_traces:
+            return
         self._safe(self.store.finish_trace, trace_id=trace_id, status=status)
+
+    def suppress_trace(
+        self,
+        *,
+        trace_id: str,
+        run_id: str,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        self._suppressed_traces.add(trace_id)
+        self._active_spans_by_run.pop(run_id, None)
+        self._safe(self.store.delete_trace, trace_id)
+        self.record_runtime_issue(
+            event_type="agent_trace_suppressed",
+            payload={
+                "trace_id": trace_id,
+                "run_id": run_id,
+                "reason": reason,
+                "package_id": self.package_id,
+                "producer_type": self.producer_type,
+                **(payload or {}),
+            },
+        )
+
+    def record_runtime_issue(self, *, event_type: str, payload: dict[str, Any]) -> None:
+        if self.runtime_log_store is None:
+            return
+        self._safe(
+            self.runtime_log_store.append,
+            event_type=event_type,
+            payload=self._clip_payload(payload),
+        )
 
     def manifest_for(self, trace_id: str) -> dict[str, Any] | None:
         manifest = self.store.manifest_for(trace_id)
