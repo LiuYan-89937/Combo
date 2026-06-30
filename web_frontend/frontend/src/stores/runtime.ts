@@ -25,6 +25,39 @@ import type {
 // 事件去重集合
 const processedEventIds = new Set<string>()
 
+function toolPayloadMessage(payload: Record<string, any> | undefined): Record<string, any> {
+  const message = payload?.message
+  return message && typeof message === 'object' ? message : {}
+}
+
+function toolPayloadContent(payload: Record<string, any> | undefined): Record<string, any> {
+  const message = toolPayloadMessage(payload)
+  const content = message.content
+  if (typeof content !== 'string' || content.trim() === '') return {}
+  try {
+    const parsed = JSON.parse(content)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function toolPayloadValue(payload: Record<string, any> | undefined, keys: string[]): any {
+  const message = toolPayloadMessage(payload)
+  const content = toolPayloadContent(payload)
+  for (const key of keys) {
+    if (payload?.[key] != null && payload[key] !== '') return payload[key]
+    if (message?.[key] != null && message[key] !== '') return message[key]
+    if (content?.[key] != null && content[key] !== '') return content[key]
+  }
+  return null
+}
+
+function toolPayloadArguments(payload: Record<string, any> | undefined): Record<string, any> {
+  const value = toolPayloadValue(payload, ['arguments', 'args'])
+  return value && typeof value === 'object' ? value : {}
+}
+
 export const useRuntimeStore = defineStore('runtime', {
   state: (): RuntimeViewState => ({
     protocolVersion: 'factory_frontend.v1',
@@ -275,6 +308,8 @@ export const useRuntimeStore = defineStore('runtime', {
       } else if (type === 'tool_call_completed') {
         this._handleToolCallCompleted(event)
       } else if (type === 'tool_call_failed') {
+        this._handleToolCallFailed(event)
+      } else if (type === 'tool_contract_invalid') {
         this._handleToolCallFailed(event)
       } else if (type === 'tool_observation_available') {
         this._handleToolObservation(event)
@@ -603,25 +638,7 @@ export const useRuntimeStore = defineStore('runtime', {
      * Tool handlers
      */
     _handleToolCallProposed(event: FactoryFrontendEvent) {
-      const toolCallId = event.payload?.tool_call_id
-      const toolName = event.payload?.tool_name
-      if (!toolCallId || !toolName) return
-
-      const activity: ToolActivity = {
-        activityKey: toolCallId,
-        eventType: event.event_type,
-        timestamp: event.timestamp,
-        createdAt: event.timestamp,
-        stageId: event.stage_id || null,
-        nodeId: event.node_id || null,
-        toolCallId,
-        toolName,
-        status: 'proposed',
-        approvalState: null,
-        payload: event.payload || {},
-      }
-      this.tools.push(activity)
-      this._upsertTurnTool(activity)
+      this._upsertToolActivityFromEvent(event, 'proposed')
     },
 
     _handleToolApprovalRequested(event: FactoryFrontendEvent) {
@@ -631,11 +648,14 @@ export const useRuntimeStore = defineStore('runtime', {
       // 更新工具状态为 approval
       const requests = event.payload?.requests || []
       requests.forEach((req: any) => {
-        const tool = this.tools.find((t) => t.toolCallId === req.tool_call_id)
-        if (tool) {
-          tool.status = 'approval'
-          tool.approvalState = 'pending'
-          this._upsertTurnTool(tool)
+        const approvalEvent = {
+          ...event,
+          payload: { ...(event.payload || {}), ...req },
+        } satisfies FactoryFrontendEvent
+        const activity = this._upsertToolActivityFromEvent(approvalEvent, 'approval')
+        if (activity) {
+          activity.approvalState = 'pending'
+          this._upsertTurnTool(activity)
         }
       })
     },
@@ -654,43 +674,19 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleToolCallStarted(event: FactoryFrontendEvent) {
-      const toolCallId = event.payload?.tool_call_id
-      const tool = this.tools.find((t) => t.toolCallId === toolCallId)
-      if (tool) {
-        tool.status = 'started'
-        tool.payload = { ...tool.payload, ...event.payload }
-        this._upsertTurnTool(tool)
-      }
+      this._upsertToolActivityFromEvent(event, 'started')
     },
 
     _handleToolCallCompleted(event: FactoryFrontendEvent) {
-      const toolCallId = event.payload?.tool_call_id
-      const tool = this.tools.find((t) => t.toolCallId === toolCallId)
-      if (tool) {
-        tool.status = 'completed'
-        tool.payload = { ...tool.payload, ...event.payload }
-        this._upsertTurnTool(tool)
-      }
+      this._upsertToolActivityFromEvent(event, 'completed')
     },
 
     _handleToolCallFailed(event: FactoryFrontendEvent) {
-      const toolCallId = event.payload?.tool_call_id
-      const tool = this.tools.find((t) => t.toolCallId === toolCallId)
-      if (tool) {
-        tool.status = 'failed'
-        tool.payload = { ...tool.payload, ...event.payload }
-        this._upsertTurnTool(tool)
-      }
+      this._upsertToolActivityFromEvent(event, 'failed')
     },
 
     _handleToolObservation(event: FactoryFrontendEvent) {
-      const toolCallId = event.payload?.tool_call_id
-      const tool = this.tools.find((t) => t.toolCallId === toolCallId)
-      if (tool) {
-        tool.status = 'observed'
-        tool.payload = { ...tool.payload, ...event.payload }
-        this._upsertTurnTool(tool)
-      }
+      this._upsertToolActivityFromEvent(event, 'observed')
     },
 
     /**
@@ -1047,6 +1043,48 @@ export const useRuntimeStore = defineStore('runtime', {
       } else {
         turn.assistantMessages.push(item)
       }
+    },
+
+    _upsertToolActivityFromEvent(
+      event: FactoryFrontendEvent,
+      status: ToolActivity['status'],
+    ): ToolActivity | null {
+      const payload = event.payload || {}
+      const toolCallId = toolPayloadValue(payload, ['tool_call_id', 'toolCallId'])
+      const toolName = toolPayloadValue(payload, ['tool_name', 'tool_id', 'name'])
+      const activityKey = String(toolCallId || event.span_id || event.event_id)
+      const existingIndex = this.tools.findIndex((item) => (
+        item.activityKey === activityKey ||
+        Boolean(toolCallId && item.toolCallId === String(toolCallId))
+      ))
+      const existing = existingIndex >= 0 ? this.tools[existingIndex] : null
+      const activity: ToolActivity = {
+        activityKey: existing?.activityKey || activityKey,
+        eventType: event.event_type,
+        timestamp: event.timestamp,
+        createdAt: existing?.createdAt || event.timestamp,
+        stageId: event.stage_id || existing?.stageId || null,
+        nodeId: event.node_id || existing?.nodeId || null,
+        toolCallId: toolCallId ? String(toolCallId) : existing?.toolCallId || null,
+        toolName: toolName ? String(toolName) : existing?.toolName || '工具调用',
+        status,
+        approvalState: existing?.approvalState || null,
+        payload: {
+          ...(existing?.payload || {}),
+          ...payload,
+          arguments: {
+            ...toolPayloadArguments(existing?.payload || {}),
+            ...toolPayloadArguments(payload),
+          },
+        },
+      }
+      if (existingIndex >= 0) {
+        this.tools[existingIndex] = activity
+      } else {
+        this.tools.push(activity)
+      }
+      this._upsertTurnTool(activity)
+      return activity
     },
 
     _upsertTurnTool(tool: ToolActivity) {

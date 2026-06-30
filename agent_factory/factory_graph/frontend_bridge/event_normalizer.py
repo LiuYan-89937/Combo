@@ -18,10 +18,35 @@ from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
+RUNTIME_TOOL_EXECUTION_NODES = {FACTORY_TOOLS_NODE, "tool_exec"}
 INTERNAL_MODEL_MESSAGE_NODES = {"intent_gate"}
 NODE_EVENT_TYPES: set[str] = {"model_cache_metrics"}
 TOOL_EVENT_INLINE_JSON_LIMIT = 6000
 TOOL_EVENT_PREVIEW_CHARS = 1200
+TOOL_OBSERVATION_TEXT_KEYS = frozenset(
+    {
+        "arguments",
+        "chunk_count",
+        "compressed_output",
+        "content",
+        "contract_status",
+        "document_id",
+        "errors",
+        "evidence",
+        "execution_status",
+        "message",
+        "output",
+        "output_ref",
+        "output_summary",
+        "output_truncated",
+        "results",
+        "retryable",
+        "status",
+        "tool_call_id",
+        "tool_id",
+        "type",
+    }
+)
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -451,9 +476,9 @@ class RuntimeEventNormalizer:
         if "nostream" in set(metadata.get("tags", [])):
             return
         node_id = str(metadata.get("langgraph_node") or "")
-        if node_id == FACTORY_TOOLS_NODE:
+        if node_id in RUNTIME_TOOL_EXECUTION_NODES:
             return
-        if isinstance(message_chunk, ToolMessage):
+        if _is_tool_message_like(message_chunk):
             return
         incoming = _content_to_text(getattr(message_chunk, "content", ""))
         if not incoming:
@@ -593,6 +618,8 @@ class RuntimeEventNormalizer:
         text = strip_internal_snapshot_blocks(text)
         if not text:
             return
+        if _looks_like_tool_observation_text(text):
+            return
         if self._has_visible_model_stream_content():
             return
         stream_id = uuid.uuid4().hex
@@ -620,6 +647,9 @@ class RuntimeEventNormalizer:
 
     def _complete_model_stream(self, stream: ModelStreamState, *, reason: str) -> None:
         if stream.completed:
+            return
+        if stream.node_id in RUNTIME_TOOL_EXECUTION_NODES or _looks_like_tool_observation_text(stream.content):
+            stream.completed = True
             return
         stream.completed = True
         self.runtime_event(
@@ -780,7 +810,7 @@ class RuntimeEventNormalizer:
                 continue
             tool_span_id = uuid.uuid4().hex
             event_type = _tool_message_event_type(message)
-            payload = {"message": _frontend_tool_message(message)}
+            payload = _frontend_tool_message_event_payload(message)
             self.runtime_event(
                 event_type,
                 node_id=node_id,
@@ -943,6 +973,45 @@ def _frontend_tool_message(message: dict[str, Any]) -> dict[str, Any]:
     return updated
 
 
+def _frontend_tool_message_event_payload(message: dict[str, Any]) -> dict[str, Any]:
+    frontend_message = _frontend_tool_message(message)
+    content_payload = _tool_message_content_payload(frontend_message)
+    tool_call_id = (
+        _optional_str(frontend_message.get("tool_call_id"))
+        or _optional_str(content_payload.get("tool_call_id"))
+    )
+    tool_name = (
+        _optional_str(frontend_message.get("name"))
+        or _optional_str(content_payload.get("tool_id"))
+        or _optional_str(content_payload.get("tool_name"))
+    )
+    payload: dict[str, Any] = {
+        "message": frontend_message,
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "tool_id": tool_name,
+        "status": content_payload.get("status") or frontend_message.get("status"),
+    }
+    arguments = content_payload.get("arguments")
+    if isinstance(arguments, dict):
+        payload["arguments"] = _compact_value(arguments)
+    for key in ("output_summary", "output_ref", "output_truncated", "content_omitted", "omission_reason"):
+        if key in content_payload:
+            payload[key] = content_payload[key]
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _tool_message_content_payload(message: dict[str, Any]) -> dict[str, Any]:
+    content = message.get("content")
+    if not isinstance(content, str):
+        return {}
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _compact_tool_activity_payload(payload: dict[str, Any]) -> dict[str, Any]:
     compacted = dict(payload)
     for key in ("observation", "result"):
@@ -1091,6 +1160,55 @@ def _patch_has_ai_message(patch: dict[str, Any]) -> bool:
         if isinstance(message, dict) and message.get("type") == "AIMessage":
             return True
     return False
+
+
+def _is_tool_message_like(value: Any) -> bool:
+    if isinstance(value, ToolMessage):
+        return True
+    class_name = value.__class__.__name__
+    if class_name in {"ToolMessage", "ToolMessageChunk"}:
+        return True
+    if isinstance(value, dict):
+        return value.get("type") in {"ToolMessage", "ToolMessageChunk", "tool"} or value.get("role") == "tool"
+    message_type = getattr(value, "type", None)
+    role = getattr(value, "role", None)
+    return message_type in {"tool", "ToolMessage", "ToolMessageChunk"} or role == "tool"
+
+
+def _looks_like_tool_observation_text(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    try:
+        payload = json.loads(normalized)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        return _looks_like_tool_observation_payload(payload)
+    return _looks_like_keyed_tool_observation_text(normalized)
+
+
+def _looks_like_tool_observation_payload(payload: dict[str, Any]) -> bool:
+    if payload.get("type") == "tool_observation":
+        return True
+    keys = {str(key) for key in payload.keys()}
+    if {"tool_id", "tool_call_id"}.issubset(keys):
+        return True
+    if "output_ref" in keys or "output_summary" in keys:
+        return True
+    return len(keys & TOOL_OBSERVATION_TEXT_KEYS) >= 3 and ("status" in keys or "content" in keys or "output" in keys)
+
+
+def _looks_like_keyed_tool_observation_text(text: str) -> bool:
+    keys: set[str] = set()
+    for line in text.splitlines()[:20]:
+        stripped = line.strip()
+        if not stripped or ":" not in stripped:
+            continue
+        key = stripped.split(":", 1)[0].strip().strip("\"'")
+        if key.isidentifier():
+            keys.add(key)
+    return len(keys & TOOL_OBSERVATION_TEXT_KEYS) >= 3 and ("status" in keys or "content" in keys)
 
 
 def _content_to_text(content: Any) -> str:

@@ -71,6 +71,16 @@
               :message="message"
               streaming
             />
+
+            <div
+              v-if="toolActivityHint"
+              class="tool-activity-inline"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="tool-activity-spinner" aria-hidden="true"></span>
+              <span>{{ toolActivityHint }}</span>
+            </div>
           </div>
         </n-scrollbar>
       </div>
@@ -107,7 +117,7 @@ import PlanPanel from '@/components/plan/PlanPanel.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import type { TranscriptItem } from '@/types/protocol'
+import type { ToolActivity, TranscriptItem } from '@/types/protocol'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -163,10 +173,32 @@ const untrackedActiveStreamMessages = computed<TranscriptItem[]>(() => {
     }))
 })
 const hasApprovalRequests = computed(() => runtimeStore.currentApprovalRequests.length > 0)
+const runningToolActivities = computed(() => {
+  return runtimeStore.tools.filter((tool) => isToolActivityRunning(tool))
+})
+const toolActivityHint = computed(() => {
+  if (!runtimeStore.hasActiveRun || runningToolActivities.value.length === 0) return ''
+  if (runningToolActivities.value.some((tool) => tool.status === 'approval')) return '等待工具确认'
+  if (runningToolActivities.value.some((tool) => isKnowledgeRetrievalTool(tool))) return '知识库检索中'
+  return runningToolActivities.value.length > 1
+    ? `${runningToolActivities.value.length} 个工具调用中`
+    : '工具调用中'
+})
 
 function isMessageStreaming(streamId?: string): boolean {
   if (!streamId) return false
   return Boolean(runtimeStore.modelStreams[streamId]?.active)
+}
+
+function isToolActivityRunning(tool: ToolActivity): boolean {
+  return tool.status === 'proposed' || tool.status === 'approval' || tool.status === 'started'
+}
+
+function isKnowledgeRetrievalTool(tool: ToolActivity): boolean {
+  const name = String(tool.toolName || '').toLowerCase()
+  if (name !== 'knowledge') return false
+  const action = String(tool.payload?.arguments?.action || '').toLowerCase()
+  return !action || ['search', 'open', 'read', 'list_documents', 'describe_source', 'list_sources'].includes(action)
 }
 
 function handleSend(message: string, attachments: any[]) {
@@ -221,7 +253,7 @@ watch(
 
 // 监听流式输出，自动滚动
 watch(
-  () => activeStreams.value.map((s) => s.content).join(''),
+  () => [activeStreams.value.map((s) => s.content).join(''), toolActivityHint.value].join(''),
   () => {
     nextTick(() => {
       scrollToBottom()
@@ -376,6 +408,36 @@ onMounted(() => {
 
 .messages-list {
   padding: 16px 0;
+}
+
+.tool-activity-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 16px 12px 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--n-border-color);
+  border-radius: 6px;
+  color: var(--n-text-color-2);
+  background: var(--n-color);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.tool-activity-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 1px solid var(--n-border-color);
+  border-top-color: var(--n-text-color-1);
+  border-radius: 50%;
+  animation: tool-activity-spin 0.8s linear infinite;
+}
+
+@keyframes tool-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .approval-section {
