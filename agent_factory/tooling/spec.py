@@ -50,6 +50,7 @@ class ToolRiskContext(BaseModel):
     base_risk_level: ToolRiskLevel
     arguments: dict[str, Any] = Field(default_factory=dict)
     resources: dict[str, Any] = Field(default_factory=dict)
+    tool_call: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolRiskResult(BaseModel):

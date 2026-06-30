@@ -58,6 +58,7 @@ class RuntimeEventNormalizer:
     current_stage_id: str | None = None
     pending_tool_call_ids_by_name: dict[str, list[str]] = field(default_factory=dict)
     proposed_tool_call_ids: set[str] = field(default_factory=set)
+    last_plan_fingerprint: str | None = None
 
     def runtime_event(
         self,
@@ -123,6 +124,7 @@ class RuntimeEventNormalizer:
         node_span_id = self._node_span(node_id, stage_id)
         if stage_id:
             self._ensure_stage_started(stage_id)
+        self.emit_plan_updates_from_chunk({node_id: patch})
         self.runtime_event(
             "debug_patch",
             node_id=node_id,
@@ -203,6 +205,7 @@ class RuntimeEventNormalizer:
             self.emit_custom_event(json_safe(chunk))
             return True
         if stream_mode == "updates":
+            self.emit_plan_updates_from_chunk(chunk)
             self.runtime_event(
                 "debug_patch",
                 span_id=self.run_span_id,
@@ -489,6 +492,33 @@ class RuntimeEventNormalizer:
                 stage_id=stage_id,
                 span_id=span_id,
                 parent_span_id=self._node_span(node_id, stage_id),
+                payload=payload,
+            )
+
+    def emit_plan_updates_from_chunk(self, chunk: Any) -> None:
+        for node_id, patch in _iter_update_patches(chunk):
+            plan = _plan_from_update_patch(patch)
+            if plan is None:
+                continue
+            if _plan_is_empty(plan):
+                continue
+            fingerprint = _json_text(plan)
+            if fingerprint == self.last_plan_fingerprint:
+                continue
+            self.last_plan_fingerprint = fingerprint
+            stage_id = _stage_id_from_patch(patch) or self.current_stage_id
+            if stage_id:
+                self._ensure_stage_started(stage_id)
+            source_node_id = node_id or _source_node_id_from_patch(patch) or "runtime_plan"
+            node_span_id = self._node_span(source_node_id, stage_id)
+            payload = dict(plan)
+            payload["source_node_id"] = source_node_id
+            self.runtime_event(
+                "plan_updated",
+                node_id=source_node_id,
+                stage_id=stage_id,
+                span_id=node_span_id,
+                parent_span_id=self._stage_span_or_run(stage_id),
                 payload=payload,
             )
 
@@ -801,6 +831,47 @@ class RuntimeEventNormalizer:
 
 def _stage_id_from_patch(patch: dict[str, Any]) -> str | None:
     return None
+
+
+def _iter_update_patches(chunk: Any) -> list[tuple[str, dict[str, Any]]]:
+    safe_chunk = json_safe(chunk)
+    if not isinstance(safe_chunk, dict):
+        return []
+    if _plan_from_update_patch(safe_chunk) is not None:
+        return [(_source_node_id_from_patch(safe_chunk) or "", safe_chunk)]
+    patches: list[tuple[str, dict[str, Any]]] = []
+    for node_id, patch in safe_chunk.items():
+        if not isinstance(patch, dict):
+            continue
+        patches.append((str(node_id), patch))
+    return patches
+
+
+def _plan_from_update_patch(patch: dict[str, Any]) -> dict[str, Any] | None:
+    plan = patch.get("plan")
+    if isinstance(plan, dict):
+        return plan
+    runtime = patch.get("runtime")
+    if not isinstance(runtime, dict):
+        return None
+    runtime_plan = runtime.get("plan")
+    if isinstance(runtime_plan, dict):
+        return runtime_plan
+    return None
+
+
+def _plan_is_empty(plan: dict[str, Any]) -> bool:
+    return str(plan.get("status") or "empty") == "empty" and not plan.get("steps")
+
+
+def _source_node_id_from_patch(patch: dict[str, Any]) -> str | None:
+    runtime = patch.get("runtime")
+    if not isinstance(runtime, dict):
+        return None
+    execution = runtime.get("execution")
+    if not isinstance(execution, dict):
+        return None
+    return _optional_str(execution.get("current_node"))
 
 
 def _canonical_tool_event_type(event_type: str) -> str:

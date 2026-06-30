@@ -12,24 +12,6 @@
       "expected_output": "Runtime state contains the latest user input.",
       "visible_to_user": false
     },
-    "precheck": {
-      "node_id": "precheck",
-      "label": "Precheck",
-      "kind": "governance",
-      "purpose": "Apply lightweight policy checks before answering.",
-      "doing": "Evaluating whether the request may proceed.",
-      "expected_output": "The turn is either allowed, blocked, or sent to approval.",
-      "visible_to_user": false
-    },
-    "approval_gate": {
-      "node_id": "approval_gate",
-      "label": "Approval Gate",
-      "kind": "governance",
-      "purpose": "Pause for human approval when policy requires it.",
-      "doing": "Waiting for an approval decision.",
-      "expected_output": "The approved request continues to the answer node.",
-      "visible_to_user": true
-    },
     "answer": {
       "node_id": "answer",
       "label": "Answer",
@@ -47,15 +29,6 @@
       "doing": "Validating and running tool calls.",
       "expected_output": "Tool observation messages are returned to the model.",
       "visible_to_user": true
-    },
-    "postcheck": {
-      "node_id": "postcheck",
-      "label": "Postcheck",
-      "kind": "governance",
-      "purpose": "Apply final policy checks before committing the response.",
-      "doing": "Reviewing the completed response.",
-      "expected_output": "The response is allowed or blocked.",
-      "visible_to_user": false
     },
     "commit": {
       "node_id": "commit",

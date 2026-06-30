@@ -10,16 +10,25 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
 from agent_factory.create_agent.models import CreateAgentAction, initial_system_manufacturing_state
+from agent_factory.create_agent.runtime import (
+    _ModelTraceAccumulator,
+    _is_model_cache_chunk,
+    _json_safe,
+    _tool_trace_records,
+)
 from agent_factory.create_agent.tooling import CreateAgentToolEnvironmentBuilder
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workflow import CreateAgentWorkflow
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.evolution.trace_gate import decide_trace_relevance
+from agent_factory.evolution.target_gate import decide_evolution_target
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
+from agent_factory.factory_graph.session import build_factory_checkpointer_handle
 from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_contracts import AgentPackageLoader
 from agent_factory.trace_system.diagnostics import TraceDiagnostics
@@ -33,6 +42,17 @@ class AgentEvolutionStreamRun:
     package_id: str
     trace_id: str | None
     events: Iterator[tuple[str, Any]]
+
+
+@dataclass(slots=True)
+class _EvolutionRunContext:
+    package_id: str
+    trace_id: str | None
+    user_input: str
+    package_path: Path
+    graph_thread_id: str
+    backup_path: Path | None
+    before_fingerprint: dict[str, str]
 
 
 class AgentEvolutionRuntime:
@@ -49,7 +69,8 @@ class AgentEvolutionRuntime:
         self.runtime_root = Path(runtime_root).expanduser() if runtime_root else factory_artifact_path("agent_runtime")
         self.model = model
         self.tool_environment_builder = tool_environment_builder or CreateAgentToolEnvironmentBuilder()
-        self.checkpointer = checkpointer
+        self.checkpointer = checkpointer or build_factory_checkpointer_handle().saver
+        self._active_runs: dict[str, _EvolutionRunContext] = {}
 
     def stream(
         self,
@@ -70,8 +91,44 @@ class AgentEvolutionRuntime:
                 user_input=user_input,
                 request_id=request_id or uuid4().hex,
                 session_id=session_id,
+                resume_payload=None,
             ),
         )
+
+    def resume_stream(
+        self,
+        *,
+        package_id: str,
+        session_id: str,
+        resume_payload: dict[str, Any] | None,
+        request_id: str | None,
+    ) -> AgentEvolutionStreamRun:
+        safe_package_id = _safe_id(package_id, label="package_id")
+        active_context = self._active_runs.get(_active_run_key(session_id, safe_package_id))
+        if active_context is None:
+            raise RuntimeError(f"no active evolution run to resume: {safe_package_id}")
+        trace_id = active_context.trace_id if active_context is not None else None
+        return AgentEvolutionStreamRun(
+            package_id=safe_package_id,
+            trace_id=trace_id,
+            events=self._events(
+                package_id=safe_package_id,
+                trace_id=trace_id,
+                user_input="",
+                request_id=request_id or uuid4().hex,
+                session_id=session_id,
+                resume_payload=resume_payload or {},
+            ),
+        )
+
+    def cancel_active_requests(self, *, reason: str = "user_cancelled") -> int:
+        del reason
+        active_runs = list(self._active_runs.items())
+        self._active_runs.clear()
+        for _, context in active_runs:
+            if context.backup_path is not None and context.backup_path.exists():
+                _restore_package(context.backup_path, context.package_path)
+        return len(active_runs)
 
     def latest_failed_trace_id(self, package_id: str) -> str | None:
         safe_package_id = _safe_id(package_id, label="package_id")
@@ -89,6 +146,7 @@ class AgentEvolutionRuntime:
         user_input: str,
         request_id: str,
         session_id: str | None,
+        resume_payload: dict[str, Any] | None,
     ) -> Iterator[tuple[str, Any]]:
         pending_events: list[FactoryFrontendEvent] = []
 
@@ -108,22 +166,35 @@ class AgentEvolutionRuntime:
             producer_type="agent_evolution",
         )
         package_path = _safe_child(self.package_root, package_id)
-        backup_path: Path | None = None
-        before_fingerprint: dict[str, str] = {}
-        normalizer.emit_run_started({"package_id": package_id, "trace_id": trace_id})
+        active_run_key = _active_run_key(session_id or request_id, package_id)
+        context = self._active_runs.get(active_run_key) if resume_payload is not None else None
+        if context is None:
+            context = _EvolutionRunContext(
+                package_id=package_id,
+                trace_id=trace_id,
+                user_input=user_input,
+                package_path=package_path,
+                graph_thread_id=_thread_id(f"{session_id or 'sessionless'}:{request_id}", package_id),
+                backup_path=None,
+                before_fingerprint={},
+            )
+        resolved_thread_id = context.graph_thread_id
+        normalizer.emit_run_started({"package_id": package_id, "trace_id": context.trace_id})
         yield from drain_events()
+        workspace = CreateAgentWorkspace(package_path)
         try:
             if not package_path.is_dir():
                 raise RuntimeError(f"agent package not found: {package_id}")
-            workspace = CreateAgentWorkspace(package_path)
             _ensure_evolution_managed_files(workspace)
-            backup_path = _backup_package(package_path, package_id=package_id)
-            before_fingerprint = package_fingerprint(package_path)
+            if resume_payload is None:
+                context.backup_path = _backup_package(package_path, package_id=package_id)
+                context.before_fingerprint = package_fingerprint(package_path)
+                self._active_runs[active_run_key] = context
             package = AgentPackageLoader().load_path(package_path / "agent_package.json")
-            if trace_id:
-                repair_pack = _repair_pack(self.runtime_root, package_id=package_id, trace_id=trace_id)
+            if context.trace_id:
+                repair_pack = _repair_pack(self.runtime_root, package_id=package_id, trace_id=context.trace_id)
                 error_pack = _error_only_pack(repair_pack)
-                trace_gate = decide_trace_relevance(user_goal=user_input, error_pack=error_pack)
+                trace_gate = decide_trace_relevance(user_goal=context.user_input, error_pack=error_pack)
                 trace_context = trace_gate.model_dump(mode="json")
                 provided_error_pack = error_pack if trace_gate.provide_trace else {}
             else:
@@ -133,7 +204,86 @@ class AgentEvolutionRuntime:
                     "provided": False,
                     "reason": "no failed trace is available for this package; evolution will use the user goal and package state only",
                 }
-            tool_env = self.tool_environment_builder.build(workspace_root=package_path, mode="evolution")
+            package_summary = _package_summary(package_id, package_path, package)
+            target_plan = decide_evolution_target(
+                user_goal=context.user_input,
+                package_summary=package_summary,
+                trace_context=trace_context,
+                error_pack=provided_error_pack,
+            )
+            if resume_payload is None:
+                workspace.reset_evolution_trace(
+                    session_id=session_id,
+                    request_id=request_id,
+                    graph_id="agent_evolution",
+                    package_id=package_id,
+                    trace_id=context.trace_id,
+                    target_plan=target_plan.to_context(),
+                )
+            trace_sequence = workspace.evolution_trace_record_count()
+
+            def record_trace(kind: str, payload: dict[str, Any]) -> None:
+                nonlocal trace_sequence
+                trace_sequence += 1
+                workspace.append_evolution_trace_record(
+                    {
+                        "sequence": trace_sequence,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "kind": kind,
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "graph_id": "agent_evolution",
+                        "package_id": package_id,
+                        **payload,
+                    }
+                )
+
+            model_trace = _ModelTraceAccumulator(record_trace)
+            record_trace(
+                "lifecycle",
+                {
+                    "event_type": "run_started",
+                    "payload": {
+                        "package_id": package_id,
+                        "trace_id": context.trace_id,
+                        "package_path": str(package_path),
+                        "trace_gate": _json_safe(trace_context),
+                        "target_plan": _json_safe(target_plan.to_context()),
+                    },
+                },
+            )
+            if target_plan.surface == "runtime_blocker":
+                record_trace(
+                    "lifecycle",
+                    {
+                        "event_type": "runtime_blocked",
+                        "success": False,
+                        "payload": _json_safe(target_plan.to_context()),
+                    },
+                )
+                if context.backup_path is not None:
+                    shutil.rmtree(context.backup_path, ignore_errors=True)
+                self._active_runs.pop(active_run_key, None)
+                normalizer.emit_final_message_if_needed(
+                    "本次进化被运行环境问题阻塞，不能通过修改 AgentPackage 解决。请先处理 runtime/Docker/model infrastructure blocker。",
+                    node_id="agent_evolution",
+                    reason="runtime_blocked",
+                )
+                normalizer.emit_run_completed(
+                    {
+                        "status": "blocked",
+                        "package_id": package_id,
+                        "trace_id": context.trace_id,
+                        "target_plan": target_plan.to_context(),
+                    }
+                )
+                yield from drain_events()
+                return
+            tool_env = self.tool_environment_builder.build(
+                workspace_root=package_path,
+                mode="evolution",
+                evolution_target_plan=target_plan.to_context(),
+            )
             normalizer.runtime_event(
                 "node_started",
                 node_id="agent_evolution",
@@ -141,11 +291,25 @@ class AgentEvolutionRuntime:
                 node_kind="create_agent_workflow",
                 payload={
                     "package_id": package_id,
-                    "trace_id": trace_id,
+                    "trace_id": context.trace_id,
                     "package_path": str(package_path),
                     "tool_ids": tool_env.tool_ids,
                     "extension_report": tool_env.extension_report,
                     "trace_gate": trace_context,
+                    "target_plan": target_plan.to_context(),
+                },
+            )
+            record_trace(
+                "lifecycle",
+                {
+                    "event_type": "node_started",
+                    "node_id": "agent_evolution",
+                    "node_label": "Agent Evolution",
+                    "payload": {
+                        "package_id": package_id,
+                        "tool_ids": tool_env.tool_ids,
+                        "target_plan": _json_safe(target_plan.to_context()),
+                    },
                 },
             )
             yield from drain_events()
@@ -155,24 +319,31 @@ class AgentEvolutionRuntime:
                 capability_inventory=tool_env.capability_inventory,
                 workflow_kind="evolution",
             ).compile(checkpointer=self.checkpointer)
-            stream_input = {
-                "request": user_input,
-                "workspace_path": str(package_path),
-                "runtime_attachments": [],
-                "graph_kind": "evolution",
-                "evolution_context": {
-                    "package_id": package_id,
-                    "package_path": str(package_path),
-                    "package_summary": _package_summary(package_id, package_path, package),
-                    "trace_gate": trace_context,
-                    **({"error_pack": provided_error_pack} if provided_error_pack else {}),
-                },
-                "iteration": 0,
-                "done": False,
-                "messages": [HumanMessage(content=user_input)],
-            }
+            if resume_payload is None:
+                stream_input: Any = {
+                    "request": context.user_input,
+                    "workspace_path": str(package_path),
+                    "runtime_attachments": [],
+                    "graph_kind": "evolution",
+                    "evolution_context": {
+                        "package_id": package_id,
+                        "package_path": str(package_path),
+                        "package_summary": package_summary,
+                        "trace_gate": trace_context,
+                        "target_plan": target_plan.to_context(),
+                        **({"error_pack": provided_error_pack} if provided_error_pack else {}),
+                    },
+                    "iteration": 0,
+                    "done": False,
+                    "messages": [HumanMessage(content=context.user_input)],
+                }
+            else:
+                stream_input = Command(resume=resume_payload)
+                normalizer.emit_runtime_resumed(resume_payload)
+                record_trace("lifecycle", {"event_type": "runtime_resumed", "payload": _json_safe(resume_payload)})
+                yield from drain_events()
             final_state: dict[str, Any] | None = None
-            config = {"configurable": {"thread_id": f"{session_id or request_id}:evolution:{package_id}"}}
+            config = {"configurable": {"thread_id": resolved_thread_id}}
             for stream_mode, chunk in workflow.stream(
                 stream_input,
                 config=config,
@@ -181,35 +352,64 @@ class AgentEvolutionRuntime:
                 interrupt_payload = extract_interrupt_payload(chunk)
                 if interrupt_payload is not None:
                     normalizer.emit_interrupt(interrupt_payload)
+                    record_trace(
+                        "lifecycle",
+                        {"event_type": "interrupt_requested", "payload": _json_safe(interrupt_payload)},
+                    )
+                    model_trace.flush()
                     yield from drain_events()
                     return
                 if stream_mode == "values" and isinstance(chunk, dict):
                     final_state = chunk
                     continue
+                if stream_mode == "messages":
+                    model_trace.accept(chunk)
+                if stream_mode == "custom":
+                    model_trace.flush()
+                    if _is_model_cache_chunk(chunk):
+                        record_trace("model_cache", _json_safe(chunk.get("payload") or {}))
+                        continue
+                    for record in _tool_trace_records(chunk):
+                        record_trace("tool_call", record)
                 normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="evolution_update")
                 yield from drain_events()
+            model_trace.flush()
             if not final_state:
                 raise RuntimeError("agent evolution workflow did not produce final state")
             if not final_state.get("done"):
                 raise RuntimeError("agent evolution workflow stopped before completion")
-            changed_files = _changed_files(before_fingerprint, package_fingerprint(package_path))
+            changed_files = _changed_files(context.before_fingerprint, package_fingerprint(package_path))
             report_path = _write_evolution_publish_report(
                 package_path=package_path,
                 package_id=package_id,
-                trace_id=trace_id,
-                user_input=user_input,
+                trace_id=context.trace_id,
+                user_input=context.user_input,
                 summary=str(final_state.get("final_answer") or ""),
                 changed_files=changed_files,
                 validation=final_state.get("validation") if isinstance(final_state.get("validation"), dict) else {},
             )
-            if backup_path is not None:
-                shutil.rmtree(backup_path, ignore_errors=True)
+            if context.backup_path is not None:
+                shutil.rmtree(context.backup_path, ignore_errors=True)
+            self._active_runs.pop(active_run_key, None)
             normalizer.runtime_event(
                 "node_completed",
                 node_id="agent_evolution",
                 node_label="Agent Evolution",
                 node_kind="create_agent_workflow",
                 payload={"package_id": package_id, "changed_files": changed_files, "report_path": str(report_path)},
+            )
+            record_trace(
+                "lifecycle",
+                {
+                    "event_type": "node_completed",
+                    "node_id": "agent_evolution",
+                    "node_label": "Agent Evolution",
+                    "payload": {
+                        "package_id": package_id,
+                        "changed_files": changed_files,
+                        "report_path": str(report_path),
+                    },
+                },
             )
             normalizer.emit_final_message_if_needed(
                 str(final_state.get("final_answer") or "AgentPackage 进化已完成并自动发布。"),
@@ -220,15 +420,46 @@ class AgentEvolutionRuntime:
                 {
                     "status": "published",
                     "package_id": package_id,
-                    "trace_id": trace_id,
+                    "trace_id": context.trace_id,
                     "changed_files": changed_files,
                     "report_path": str(report_path),
                 }
             )
+            record_trace(
+                "lifecycle",
+                {
+                    "event_type": "run_completed",
+                    "payload": {
+                        "status": "published",
+                        "package_id": package_id,
+                        "trace_id": context.trace_id,
+                        "changed_files": changed_files,
+                        "report_path": str(report_path),
+                    },
+                },
+            )
             yield from drain_events()
         except Exception as exc:
-            if backup_path is not None and backup_path.exists():
-                _restore_package(backup_path, package_path)
+            failed_trace_payload = _evolution_trace_payload_with_record(
+                workspace,
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "kind": "lifecycle",
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "graph_id": "agent_evolution",
+                    "package_id": package_id,
+                    "event_type": "run_failed",
+                    "success": False,
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "payload": {"package_path": str(package_path)},
+                },
+            )
+            if context.backup_path is not None and context.backup_path.exists():
+                _restore_package(context.backup_path, package_path)
+            if failed_trace_payload is not None:
+                _write_evolution_trace_payload(workspace, failed_trace_payload)
+            self._active_runs.pop(active_run_key, None)
             normalizer.emit_run_failed(exc)
             yield from drain_events()
 
@@ -359,3 +590,40 @@ def _safe_child(root: Path, child: str) -> Path:
     except ValueError as exc:
         raise RuntimeError(f"path escapes root: {child}") from exc
     return target
+
+
+def _thread_id(session_id: str, package_id: str) -> str:
+    return f"{session_id}:evolution:{package_id}"
+
+
+def _active_run_key(session_id: str, package_id: str) -> str:
+    return f"{session_id}:evolution-active:{package_id}"
+
+
+def _evolution_trace_payload_with_record(workspace: CreateAgentWorkspace, record: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        path = workspace.manufacturing_trace_path
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        if not isinstance(payload, dict) or payload.get("version") != "agent_evolution_manufacturing_trace.v0":
+            payload = {
+                "version": "agent_evolution_manufacturing_trace.v0",
+                "workspace_path": str(workspace.root),
+                "created_at": datetime.now(UTC).isoformat(),
+                "records": [],
+            }
+        records = payload.get("records")
+        if not isinstance(records, list):
+            records = []
+            payload["records"] = records
+        records.append({"sequence": len(records) + 1, **record})
+        payload["updated_at"] = datetime.now(UTC).isoformat()
+        return payload
+    except Exception:
+        return None
+
+
+def _write_evolution_trace_payload(workspace: CreateAgentWorkspace, payload: dict[str, Any]) -> None:
+    try:
+        workspace._write_json(workspace.manufacturing_trace_path, payload)
+    except Exception:
+        pass

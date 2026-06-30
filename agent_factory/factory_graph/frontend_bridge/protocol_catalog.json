@@ -46,6 +46,7 @@
     "node_progress",
     "node_completed",
     "node_failed",
+    "plan_updated",
     "model_call_started",
     "model_stream_delta",
     "model_message_completed",

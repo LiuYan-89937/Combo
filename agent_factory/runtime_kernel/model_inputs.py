@@ -9,6 +9,10 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from agent_factory.runtime_attachments import format_attachments_for_model
+from agent_factory.runtime_defaults import (
+    DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
+    DEFAULT_BUILTIN_WORKSPACE_ROOT,
+)
 
 
 DEFAULT_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
@@ -17,6 +21,7 @@ RUNTIME_REACT_PROTOCOL = (
     "When tools are available and useful, call them with the model's native tool_call mechanism only. "
     "After a ToolMessage observation, continue from that observation and do not invent hidden tool results."
 )
+EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step with package/domain tools first."
 DYNAMIC_EVIDENCE_HEADER = (
     "Internal runtime evidence for this turn. Use it only when it is directly relevant. "
     "Do not quote, restate, or expose this evidence to the user unless the user explicitly asks for the underlying context:"
@@ -54,7 +59,7 @@ def build_runtime_model_input(
     tools: list[BaseTool],
     node_id: str | None = None,
 ) -> ModelInputEnvelope:
-    stable_system = _stable_system_prompt(prompt_binding=prompt_binding)
+    stable_system = _stable_system_prompt(prompt_binding=prompt_binding, state=state, node_id=node_id)
     history_messages = _history_messages(state=state, messages=messages)
     dynamic_evidence = _dynamic_evidence_text(state=state, node_id=node_id)
     request_messages: list[Any] = [SystemMessage(content=stable_system), *history_messages]
@@ -81,9 +86,50 @@ def build_runtime_model_input(
     )
 
 
-def _stable_system_prompt(*, prompt_binding: dict[str, Any]) -> str:
+def _stable_system_prompt(*, prompt_binding: dict[str, Any], state: Any, node_id: str | None = None) -> str:
     template = str(prompt_binding.get("template") or "").strip() or DEFAULT_AGENT_SYSTEM_PROMPT
-    return "\n\n".join([template, RUNTIME_REACT_PROTOCOL])
+    parts = [template]
+    if node_id == "executor":
+        parts.append(_executor_tool_policy(state))
+    parts.append(RUNTIME_REACT_PROTOCOL)
+    return "\n\n".join(parts)
+
+
+def _executor_tool_policy(state: Any) -> str:
+    workspace_root = _builtin_workspace_root(state)
+    allow_external = _builtin_allow_external_paths(state)
+    boundary = (
+        "External absolute paths are enabled, but prefer workspace paths unless the task explicitly needs an external path."
+        if allow_external
+        else (
+            f"Filesystem and process tools are bounded to workspace root {workspace_root}. "
+            "Use relative paths, or absolute paths under that root. "
+            "Do not use /tmp, host paths, or arbitrary absolute paths."
+        )
+    )
+    return (
+        f"{EXECUTOR_TOOL_POLICY} "
+        "glob, ls, and read may be used to inspect workspace files. "
+        "Call bash, write, edit, or multi_edit only when the available package/runtime tools cannot accomplish "
+        "the current plan step; when doing so, include fallback_reason in the tool arguments explaining the gap. "
+        f"{boundary} Generated files should be written under the workspace root, for example "
+        f"output/report.md or {workspace_root.rstrip('/')}/output/report.md."
+    )
+
+
+def _builtin_workspace_root(state: Any) -> str:
+    session_config = getattr(getattr(state, "runtime_config", None), "session_config", {}) or {}
+    if not isinstance(session_config, dict):
+        return DEFAULT_BUILTIN_WORKSPACE_ROOT
+    value = str(session_config.get("builtin_workspace_root") or DEFAULT_BUILTIN_WORKSPACE_ROOT).strip()
+    return value or DEFAULT_BUILTIN_WORKSPACE_ROOT
+
+
+def _builtin_allow_external_paths(state: Any) -> bool:
+    session_config = getattr(getattr(state, "runtime_config", None), "session_config", {}) or {}
+    if not isinstance(session_config, dict):
+        return DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS
+    return bool(session_config.get("builtin_allow_external_paths", DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS))
 
 
 def _history_messages(*, state: Any, messages: list[Any]) -> list[Any]:
@@ -99,8 +145,8 @@ def _dynamic_evidence_text(*, state: Any, node_id: str | None) -> str:
     attachments_text = _runtime_attachments_text(state)
     model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
     frame = _turn_evidence_frame(model_context=model_context, node_id=node_id)
-    if not isinstance(frame, dict):
-        frame = model_context.get("llm_context_frame") if isinstance(model_context, dict) else None
+    if not isinstance(frame, dict) and isinstance(model_context, dict):
+        frame = _matching_node_frame(model_context.get("llm_context_frame"), node_id=node_id)
     if not isinstance(frame, dict):
         return "\n\n".join(item for item in [plan_text, attachments_text] if item)
     text = str(frame.get("text") or "").strip()
@@ -131,22 +177,46 @@ def _plan_evidence_text(state: Any) -> str:
     plan = getattr(state, "plan", None)
     if plan is None or getattr(plan, "status", "empty") == "empty":
         return ""
+    current_step_id = getattr(plan, "current_step_id", None) or ""
     lines = [
         "Current dynamic plan state:",
         f"- Goal: {getattr(plan, 'goal', '')}",
         f"- Status: {getattr(plan, 'status', '')}",
-        f"- Current step: {getattr(plan, 'current_step_id', None) or 'none'}",
+        f"- Current step: {current_step_id or 'none'}",
+        (
+            "Execution rule: work on the current in_progress step only, use other steps as context, "
+            "and call runtime_plan.complete_step with evidence when the current step is satisfied."
+        ),
     ]
     for step in list(getattr(plan, "steps", []) or [])[:12]:
+        step_id = getattr(step, "step_id", "")
+        marker = " <= current" if current_step_id and step_id == current_step_id else ""
         lines.append(
             "- "
-            + f"{getattr(step, 'step_id', '')}: {getattr(step, 'status', '')}; "
+            + f"{step_id}: {getattr(step, 'status', '')}{marker}; "
             + f"{getattr(step, 'title', '')}; {getattr(step, 'objective', '')}"
         )
+        acceptance = _short_list(getattr(step, "acceptance_criteria", None), limit=3)
+        if acceptance:
+            lines.append(f"  acceptance: {acceptance}")
+        tool_hints = _short_list(getattr(step, "tool_hints", None), limit=6)
+        if tool_hints:
+            lines.append(f"  tool_hints: {tool_hints}")
         result = getattr(step, "result_summary", None)
         if result:
             lines.append(f"  result: {result}")
     return "\n".join(line for line in lines if line.strip())
+
+
+def _short_list(value: Any, *, limit: int) -> str:
+    if not isinstance(value, list):
+        return ""
+    items = [str(item).strip() for item in value if str(item).strip()]
+    if not items:
+        return ""
+    shown = items[:limit]
+    suffix = f"; +{len(items) - limit} more" if len(items) > limit else ""
+    return "; ".join(shown) + suffix
 
 
 def _turn_evidence_frame(*, model_context: dict[str, Any], node_id: str | None) -> dict[str, Any] | None:
@@ -165,6 +235,14 @@ def _turn_evidence_frame(*, model_context: dict[str, Any], node_id: str | None) 
         if isinstance(frame, dict):
             return frame
     return None
+
+
+def _matching_node_frame(value: Any, *, node_id: str | None) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if str(value.get("node_id") or "") != str(node_id or ""):
+        return None
+    return value
 
 
 def _tool_surface_digest(tools: list[BaseTool]) -> str:

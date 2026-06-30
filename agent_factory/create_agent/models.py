@@ -395,6 +395,8 @@ class PackageToolProbeRecord(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     package_digest: str = ""
+    tool_digest: str = ""
+    tool_digest_kind: str = "package_tool_surface.v1"
     status: Literal["passed", "failed"] = "failed"
     observation_status: str = ""
     execution_status: str = ""

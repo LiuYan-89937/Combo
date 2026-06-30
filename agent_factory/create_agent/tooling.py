@@ -76,6 +76,7 @@ CREATE_AGENT_ASSIST_TOOL_IDS = {
 }
 
 CREATE_AGENT_SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
+EVOLUTION_SKILLS_ROOT = Path(__file__).resolve().parents[1] / "evolution" / "skills"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +97,7 @@ class CreateAgentToolEnvironmentBuilder:
         *,
         workspace_root: str | Path,
         mode: Literal["manufacture", "assist", "evolution"] = "manufacture",
+        evolution_target_plan: dict[str, Any] | None = None,
     ) -> CreateAgentToolEnvironment:
         workspace = Path(workspace_root).expanduser().resolve()
         create_agent_workspace = CreateAgentWorkspace(workspace)
@@ -124,6 +126,8 @@ class CreateAgentToolEnvironmentBuilder:
             CREATE_AGENT_STAGE_CONTEXT_RESOURCE: stage_context_payload(workspace),
             TOOL_OUTPUT_STORE_RESOURCE: ToolOutputStore(workspace / ".factory" / "tool_outputs"),
         }
+        if mode == "evolution" and evolution_target_plan is not None:
+            runtime_resources["evolution_target_plan"] = evolution_target_plan
         if authoring_mode:
             runtime_resources[RESOURCE_SET_STORE_KEY] = ResourceSetStore()
             runtime_resources[CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE] = str(factory_artifact_path("packages"))
@@ -190,6 +194,7 @@ class CreateAgentToolEnvironmentBuilder:
             skill_registry = _create_agent_skill_registry(
                 runtime_resources.get("skills"),
                 gateway_state=_load_skill_gateway_state(create_agent_workspace.skill_gateway_state_path),
+                mode=mode,
             )
             if skill_registry.list_metadata():
                 runtime_resources["skills"] = skill_registry.to_resource_payload()
@@ -204,25 +209,27 @@ class CreateAgentToolEnvironmentBuilder:
                 ]
             else:
                 skill_specs = []
+            create_agent_tool_ids = [
+                CREATE_AGENT_AUTHORING_TOOL_ID,
+                CREATE_AGENT_CONTROL_TOOL_ID,
+                CREATE_AGENT_PROBE_TOOL_ID,
+                CREATE_AGENT_VALIDATE_TOOL_ID,
+                *([CREATE_AGENT_STAGE_TOOL_ID, CREATE_AGENT_PUBLISH_TOOL_ID] if mode == "manufacture" else []),
+            ]
             provider_result.system_tool_ids = sorted(
                 set(
                     [
                         *provider_result.system_tool_ids,
-                        CREATE_AGENT_AUTHORING_TOOL_ID,
-                        CREATE_AGENT_CONTROL_TOOL_ID,
-                        CREATE_AGENT_STAGE_TOOL_ID,
-                        CREATE_AGENT_PROBE_TOOL_ID,
-                        CREATE_AGENT_VALIDATE_TOOL_ID,
-                        *([CREATE_AGENT_PUBLISH_TOOL_ID] if mode == "manufacture" else []),
+                        *create_agent_tool_ids,
                     ]
                 )
             )
             extra_specs = [
                 build_create_agent_control_tool_spec(),
                 build_create_agent_authoring_tool_spec(),
-                build_create_agent_stage_tool_spec(),
                 build_create_agent_probe_tool_spec(),
                 build_create_agent_validate_tool_spec(),
+                *([build_create_agent_stage_tool_spec()] if mode == "manufacture" else []),
                 *([build_create_agent_publish_tool_spec()] if mode == "manufacture" else []),
                 *skill_specs,
             ]
@@ -279,7 +286,12 @@ def _unique_specs(result: ToolProviderResult, *, extra_specs=()):
     return specs
 
 
-def _create_agent_skill_registry(existing_payload: Any, *, gateway_state: SkillGatewayState | None = None) -> SkillRegistry:
+def _create_agent_skill_registry(
+    existing_payload: Any,
+    *,
+    gateway_state: SkillGatewayState | None = None,
+    mode: Literal["manufacture", "assist", "evolution"] = "manufacture",
+) -> SkillRegistry:
     registry = (
         SkillRegistry.from_resource_payload(existing_payload)
         if isinstance(existing_payload, dict)
@@ -287,14 +299,19 @@ def _create_agent_skill_registry(existing_payload: Any, *, gateway_state: SkillG
     )
     if gateway_state is not None:
         registry.gateway_state = gateway_state
-    if not CREATE_AGENT_SKILLS_ROOT.is_dir():
-        return registry
-    for child in sorted(item for item in CREATE_AGENT_SKILLS_ROOT.iterdir() if item.is_dir()):
+    roots = [EVOLUTION_SKILLS_ROOT] if mode == "evolution" else [CREATE_AGENT_SKILLS_ROOT]
+    for root in roots:
+        if root.is_dir():
+            _register_skill_root(registry, root)
+    return registry
+
+
+def _register_skill_root(registry: SkillRegistry, root: Path) -> None:
+    for child in sorted(item for item in root.iterdir() if item.is_dir()):
         skill_md = child / "SKILL.md"
         if not skill_md.is_file():
             continue
         registry.register(parse_skill_directory(child))
-    return registry
 
 
 def _load_skill_gateway_state(path: Path) -> SkillGatewayState | None:

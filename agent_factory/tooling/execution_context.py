@@ -10,6 +10,8 @@ from typing import Any, Callable, Iterator
 class CurrentToolCall:
     tool_id: str
     tool_call_id: str
+    origin_node_id: str = ""
+    origin_impl: str = ""
     event_sink: Callable[[dict[str, Any]], None] | None = None
 
 
@@ -33,9 +35,19 @@ def tool_call_context(
     *,
     tool_id: str,
     tool_call_id: str,
+    origin_node_id: str = "",
+    origin_impl: str = "",
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> Iterator[None]:
-    token = _CURRENT_TOOL_CALL.set(CurrentToolCall(tool_id=tool_id, tool_call_id=tool_call_id, event_sink=event_sink))
+    token = _CURRENT_TOOL_CALL.set(
+        CurrentToolCall(
+            tool_id=tool_id,
+            tool_call_id=tool_call_id,
+            origin_node_id=origin_node_id,
+            origin_impl=origin_impl,
+            event_sink=event_sink,
+        )
+    )
     try:
         yield
     finally:

@@ -54,6 +54,7 @@ class ContextSystemRuntime:
         messages: list[Any],
         services: Any = None,
         resources: dict[str, Any] | None = None,
+        enable_dynamic_evidence: bool = True,
     ) -> ContextPreparationResult:
         if not self.config.enabled:
             retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
@@ -120,6 +121,38 @@ class ContextSystemRuntime:
                 count=compressed_count,
                 compression_threshold_tokens=policy.compression.trigger_token_threshold,
                 source="context_prepare.after_compression",
+            )
+        if not enable_dynamic_evidence:
+            retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
+            injection_report = ContextInjectionReport(status="skipped", node_id=node_id)
+            skip_payload = {"reason": "dynamic_evidence_disabled_for_node"}
+            emit_context_event(
+                services=services,
+                state=working_state,
+                event_type="context_retrieval_completed",
+                node_id=node_id,
+                payload={**retrieval_report.model_dump(mode="json"), **skip_payload},
+            )
+            emit_context_event(
+                services=services,
+                state=working_state,
+                event_type="context_assembly_completed",
+                node_id=node_id,
+                payload={**injection_report.model_dump(mode="json"), **skip_payload},
+            )
+            emit_context_event(
+                services=services,
+                state=working_state,
+                event_type="context_injection_completed",
+                node_id=node_id,
+                payload={**injection_report.model_dump(mode="json"), **skip_payload},
+            )
+            return ContextPreparationResult(
+                state=working_state,
+                messages=working_messages,
+                messages_changed=messages_changed,
+                retrieval_report=retrieval_report,
+                injection_report=injection_report,
             )
         reused_frame = _reusable_turn_evidence_frame(state=working_state, node_id=node_id)
         if reused_frame is not None:

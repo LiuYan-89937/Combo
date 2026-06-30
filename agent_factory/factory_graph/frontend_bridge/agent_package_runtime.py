@@ -14,7 +14,10 @@ from uuid import uuid4
 
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
-from agent_factory.runtime_kernel.extensions.loader import AgentInstanceExtensionConfigLoader
+from agent_factory.runtime_kernel.extensions.loader import (
+    AgentInstanceExtensionConfigLoader,
+    default_builtin_agent_extension_root,
+)
 from agent_factory.mcp_gateway import HostMCPGatewayManager
 from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
@@ -609,7 +612,11 @@ def _package_fingerprint(package: LoadedAgentPackage) -> str:
     digest = hashlib.sha256()
     digest.update(str(package.package_root.resolve()).encode("utf-8"))
     _hash_tree(digest, package.package_root)
-    _hash_tree(digest, _extension_root_for_package(package.package_root.name, package))
+    extension_root = _extension_root_for_package(package.package_root.name, package)
+    _hash_tree(digest, extension_root)
+    builtin_extension_root = default_builtin_agent_extension_root()
+    if builtin_extension_root.resolve() != extension_root.resolve():
+        _hash_tree(digest, builtin_extension_root)
     if _is_host_system_package(package):
         digest.update(b"host-system-package")
     else:
@@ -683,32 +690,55 @@ def _extension_root_for_package(package_id: str, package: LoadedAgentPackage) ->
 
 
 def _seed_package_extensions(*, package: LoadedAgentPackage, extension_root: Path) -> None:
-    package_extensions = package.package_root / "extensions"
-    if not package_extensions.is_dir():
-        return
     extension_root.mkdir(parents=True, exist_ok=True)
+    _seed_extension_directory(
+        source_root=default_builtin_agent_extension_root(),
+        extension_root=extension_root,
+        override_existing=False,
+    )
+    _seed_extension_directory(
+        source_root=package.package_root / "extensions",
+        extension_root=extension_root,
+        override_existing=True,
+    )
+
+
+def _seed_extension_directory(
+    *,
+    source_root: Path,
+    extension_root: Path,
+    override_existing: bool,
+) -> None:
+    if not source_root.is_dir():
+        return
+    if source_root.resolve() == extension_root.resolve():
+        return
     _merge_extension_config(
-        source_path=package_extensions / "mcp_servers.json",
+        source_path=source_root / "mcp_servers.json",
         target_path=extension_root / "mcp_servers.json",
         list_key="servers",
         id_key="server_id",
         default_version="mcp_servers.v0",
+        override_existing=override_existing,
     )
     _merge_extension_config(
-        source_path=package_extensions / "enabled_skills.json",
+        source_path=source_root / "enabled_skills.json",
         target_path=extension_root / "enabled_skills.json",
         list_key="skills",
         id_key="skill_id",
         default_version="enabled_skills.v0",
+        override_existing=override_existing,
     )
-    source_skills = package_extensions / "skills"
+    source_skills = source_root / "skills"
     if source_skills.is_dir():
         target_skills = extension_root / "skills"
         target_skills.mkdir(parents=True, exist_ok=True)
         for source_skill in sorted(item for item in source_skills.iterdir() if item.is_dir()):
             target_skill = target_skills / source_skill.name
-            if target_skill.exists():
+            if target_skill.exists() and not override_existing:
                 continue
+            if target_skill.exists():
+                shutil.rmtree(target_skill)
             shutil.copytree(source_skill, target_skill)
 
 
@@ -719,6 +749,7 @@ def _merge_extension_config(
     list_key: str,
     id_key: str,
     default_version: str,
+    override_existing: bool,
 ) -> None:
     source_payload = _read_json_object(source_path)
     source_items = source_payload.get(list_key)
@@ -728,20 +759,24 @@ def _merge_extension_config(
     target_items = target_payload.get(list_key)
     if not isinstance(target_items, list):
         target_items = []
-    existing = {
+    existing = [
         str(item.get(id_key) or "")
         for item in target_items
-        if isinstance(item, dict) and str(item.get(id_key) or "")
-    }
+        if isinstance(item, dict)
+    ]
     merged = list(target_items)
     for item in source_items:
         if not isinstance(item, dict):
             continue
         item_id = str(item.get(id_key) or "")
-        if not item_id or item_id in existing:
+        if not item_id:
+            continue
+        if item_id in existing:
+            if override_existing:
+                merged[existing.index(item_id)] = item
             continue
         merged.append(item)
-        existing.add(item_id)
+        existing.append(item_id)
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(
         json.dumps(

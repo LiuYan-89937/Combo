@@ -2,7 +2,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from agent_factory.runtime_kernel.extensions.loader import AgentInstanceExtensionConfigLoader
+from agent_factory.runtime_kernel.extensions.loader import (
+    AgentInstanceExtensionConfigLoader,
+    default_builtin_agent_extension_root,
+)
 from agent_factory.runtime_kernel.extensions.schema import AgentInstanceExtensionLoadReport
 from agent_factory.mcp_gateway import build_gateway_clients, configured_container_gateway_url
 from agent_factory.tooling.compiler import ToolCompiler
@@ -28,8 +31,16 @@ class AgentInstanceExtensionManager:
         mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
         mcp_tool_clients: Mapping[str, MCPToolClient] | None = None,
         mcp_gateway_url: str | None = None,
+        inherit_builtin_extensions: bool = True,
+        builtin_extension_root: str | Path | None = None,
     ) -> None:
-        self.loader = AgentInstanceExtensionConfigLoader(extension_root)
+        inherited_roots: list[str | Path] = []
+        if inherit_builtin_extensions:
+            inherited_roots.append(builtin_extension_root or default_builtin_agent_extension_root())
+        self.loader = AgentInstanceExtensionConfigLoader(
+            extension_root,
+            inherited_extension_roots=inherited_roots,
+        )
         self.mcp_catalog_clients = dict(mcp_catalog_clients or {})
         self._configured_mcp_tool_clients = dict(mcp_tool_clients or {})
         self._effective_mcp_tool_clients: dict[str, MCPToolClient] = dict(mcp_tool_clients or {})
@@ -51,8 +62,11 @@ class AgentInstanceExtensionManager:
         result = result.merge(SkillProvider(config=bundle.enabled_skills).discover(provider_context))
         report = AgentInstanceExtensionLoadReport(
             extension_root=str(bundle.sources.extension_root),
+            extension_roots=[str(path) for path in bundle.sources.extension_roots],
             mcp_servers_path=str(bundle.sources.mcp_servers_path) if bundle.sources.mcp_servers_path else None,
+            mcp_servers_paths=[str(path) for path in bundle.sources.mcp_servers_paths],
             enabled_skills_path=str(bundle.sources.enabled_skills_path) if bundle.sources.enabled_skills_path else None,
+            enabled_skills_paths=[str(path) for path in bundle.sources.enabled_skills_paths],
             tool_ids=[tool.id for tool in result.tool_specs],
             system_tool_ids=list(result.system_tool_ids),
             prompt_fragment_ids=[fragment.fragment_id for fragment in result.prompt_fragments],
@@ -87,7 +101,7 @@ class AgentInstanceExtensionManager:
         )
         return ToolCompiler(
             package_root=package_root,
-            allowed_python_roots=[bundle.sources.extension_root],
+            allowed_python_roots=bundle.sources.extension_roots or [bundle.sources.extension_root],
             resources={**dict(resources or {}), **extension_result.runtime_resources},
             approval_handler=approval_handler,
             max_revisions=max_revisions,

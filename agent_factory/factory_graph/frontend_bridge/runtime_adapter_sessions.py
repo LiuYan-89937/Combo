@@ -42,12 +42,14 @@ class RuntimeSessionCommandMixin:
         self.session_record = self.session_manager.load(command.session_id)
         self.mode = self.session_record.current_mode
         self.pending_agent_package_run = None
+        self.pending_evolution_run = None
         self._emit_session_event(command.request_id, session_event_type="session_switched")
 
     def new_session(self, command: FactoryFrontendCommand) -> None:
         self.session_record = self.session_manager.create()
         self.mode = None
         self.pending_agent_package_run = None
+        self.pending_evolution_run = None
         self._emit_session_event(command.request_id, session_event_type="session_started")
 
     def set_mode(self, command: FactoryFrontendCommand) -> None:
@@ -95,7 +97,11 @@ class RuntimeSessionCommandMixin:
         if not message:
             self._emit_error(command, "send_message requires message")
             return
-        if self.pending_agent_package_run is not None or self.pending_create_agent_run is not None:
+        if (
+            self.pending_agent_package_run is not None
+            or self.pending_create_agent_run is not None
+            or self.pending_evolution_run is not None
+        ):
             self._emit_error(command, "cannot send a new message while an interrupt is pending")
             return
         if self.mode == "chat":
@@ -108,6 +114,9 @@ class RuntimeSessionCommandMixin:
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
         if self.pending_create_agent_run is not None:
             self._resume_create_agent_interrupt(command)
+            return
+        if self.pending_evolution_run is not None:
+            self._resume_evolution_interrupt(command)
             return
         if self.pending_agent_package_run is None:
             self._emit_error(command, "no pending interrupt to resume")

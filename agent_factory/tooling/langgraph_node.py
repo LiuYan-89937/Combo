@@ -44,10 +44,14 @@ class AgentFactoryToolNode:
         messages_key: str = "messages",
         allowed_tool_ids: set[str] | None = None,
         known_tool_ids: set[str] | None = None,
+        origin_node_id: str = "",
+        origin_impl: str = "",
         emit_event: ToolEventCallback | None = None,
         stream_events: bool = False,
     ) -> None:
         self.node_id = node_id
+        self.origin_node_id = origin_node_id
+        self.origin_impl = origin_impl
         self.messages_key = messages_key
         self.allowed_tool_ids = set(allowed_tool_ids) if allowed_tool_ids is not None else None
         self.known_tool_ids = set(known_tool_ids or {tool.name for tool in tools})
@@ -117,7 +121,14 @@ class AgentFactoryToolNode:
             approval_request = self._approval_request_by_name.get(tool_id)
             if approval_request is None:
                 continue
-            request = approval_request(dict(call.get("args") or {}), tool_call_id=str(call.get("id") or tool_id))
+            tool_call_id = str(call.get("id") or tool_id)
+            with tool_call_context(
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                origin_node_id=self.origin_node_id,
+                origin_impl=self.origin_impl,
+            ):
+                request = approval_request(dict(call.get("args") or {}), tool_call_id=tool_call_id)
             if isinstance(request, dict):
                 requests.append(request)
         return requests
@@ -168,7 +179,13 @@ class AgentFactoryToolNode:
                 "status": "proposed",
             }
         )
-        with tool_call_context(tool_id=tool_id, tool_call_id=tool_call_id, event_sink=self._emit):
+        with tool_call_context(
+            tool_id=tool_id,
+            tool_call_id=tool_call_id,
+            origin_node_id=self.origin_node_id,
+            origin_impl=self.origin_impl,
+            event_sink=self._emit,
+        ):
             result = execute(request)
         if isinstance(result, ToolMessage):
             normalized = _normalize_tool_message(
@@ -229,6 +246,8 @@ def build_tool_node_runner(
     messages_key: str = "messages",
     allowed_tool_ids: set[str] | None = None,
     known_tool_ids: set[str] | None = None,
+    origin_node_id: str = "",
+    origin_impl: str = "",
     emit_event: ToolEventCallback | None = None,
     stream_events: bool = False,
 ) -> AgentFactoryToolNode:
@@ -239,6 +258,8 @@ def build_tool_node_runner(
         messages_key=messages_key,
         allowed_tool_ids=allowed_tool_ids,
         known_tool_ids=known_tool_ids,
+        origin_node_id=origin_node_id,
+        origin_impl=origin_impl,
         emit_event=emit_event,
         stream_events=stream_events,
     )

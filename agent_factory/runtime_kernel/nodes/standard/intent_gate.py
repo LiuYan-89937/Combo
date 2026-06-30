@@ -15,7 +15,7 @@ from agent_factory.runtime_kernel.state import RuntimeState
 class IntentGateDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    decision: Literal["start_workflow", "wait_for_input", "casual"] = "wait_for_input"
+    decision: Literal["start_workflow", "casual"] = "casual"
     user_message: str = ""
     reason: str = ""
 
@@ -55,7 +55,7 @@ class CognitiveIntentGateNode:
             node_id=context.node_id,
         )
         payload = decision.model_dump(mode="json")
-        route = "intent.start_workflow" if decision.decision == "start_workflow" else "intent.wait_for_input"
+        route = "intent.start_workflow" if decision.decision == "start_workflow" else "intent.casual"
         message = _response_text(decision, activation)
         return {
             "messages": [AIMessage(content=message)],
@@ -91,9 +91,8 @@ def _intent_gate_prompt(activation: dict[str, Any]) -> str:
         f"Start workflow when: {start_when}\n"
         f"If required information is missing, ask: {ask_when_missing}\n\n"
         "Decision rules:\n"
-        "- start_workflow: the user provided enough concrete input to begin the workflow.\n"
-        "- wait_for_input: the user wants the workflow but required start input is missing.\n"
-        "- casual: the user is greeting, chatting, or asking a general question that should not start the workflow.\n"
+        "- start_workflow: the user is asking to start the agent's main workflow and provided enough concrete input for that workflow.\n"
+        "- casual: the user is not starting the main workflow. This includes follow-up requests, workspace/tool actions, status questions, greetings, and cases where more discovery or clarification is needed outside the main workflow.\n"
         "Do not invent missing files, URLs, resources, accounts, or user choices."
     )
 
@@ -102,8 +101,4 @@ def _response_text(decision: IntentGateDecision, activation: dict[str, Any]) -> 
     message = decision.user_message.strip()
     if message:
         return message
-    if decision.decision == "casual":
-        goal = str(activation.get("workflow_goal") or "这个工作流").strip()
-        ask = str(activation.get("ask_when_missing") or "请补充开始所需的信息。").strip()
-        return f"你好，我可以帮你完成{goal}。{ask}"
-    return str(activation.get("ask_when_missing") or "请补充开始所需的信息。").strip()
+    return ""

@@ -15,8 +15,11 @@ class AgentInstanceExtensionSources(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     extension_root: Path
+    extension_roots: list[Path] = Field(default_factory=list)
     mcp_servers_path: Path | None = None
+    mcp_servers_paths: list[Path] = Field(default_factory=list)
     enabled_skills_path: Path | None = None
+    enabled_skills_paths: list[Path] = Field(default_factory=list)
 
 
 class AgentInstanceExtensionConfigBundle(BaseModel):
@@ -32,8 +35,11 @@ class AgentInstanceExtensionLoadReport(BaseModel):
 
     version: str = "agent_instance_extension_load.v0"
     extension_root: str
+    extension_roots: list[str] = Field(default_factory=list)
     mcp_servers_path: str | None = None
+    mcp_servers_paths: list[str] = Field(default_factory=list)
     enabled_skills_path: str | None = None
+    enabled_skills_paths: list[str] = Field(default_factory=list)
     tool_ids: list[str] = Field(default_factory=list)
     system_tool_ids: list[str] = Field(default_factory=list)
     prompt_fragment_ids: list[str] = Field(default_factory=list)

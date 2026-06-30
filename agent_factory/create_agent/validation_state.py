@@ -8,6 +8,7 @@ from agent_factory.create_agent.package_paths import is_transient_package_path
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 
 ValidationScope = str
+PACKAGE_TOOL_DIGEST_KIND = "package_tool_surface.v1"
 
 
 def package_fingerprint(root: Path) -> dict[str, str]:
@@ -25,6 +26,23 @@ def package_fingerprint(root: Path) -> dict[str, str]:
 def package_digest(root: Path) -> str:
     fingerprint = package_fingerprint(root)
     return sha256(json.dumps(fingerprint, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def package_tool_fingerprint(root: Path, tool_id: str, *, fingerprint: dict[str, str] | None = None) -> dict[str, str]:
+    if not tool_id or "/" in tool_id or "\\" in tool_id or tool_id in {".", ".."}:
+        return {}
+    package_files = fingerprint if fingerprint is not None else package_fingerprint(root)
+    prefix = f"tools/{tool_id}/"
+    return {path: digest for path, digest in package_files.items() if path.startswith(prefix)}
+
+
+def package_tool_digest(root: Path, tool_id: str, *, fingerprint: dict[str, str] | None = None) -> str:
+    payload = {
+        "kind": PACKAGE_TOOL_DIGEST_KIND,
+        "tool_id": tool_id,
+        "fingerprint": package_tool_fingerprint(root, tool_id, fingerprint=fingerprint),
+    }
+    return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def changed_files(previous: dict[str, str], current: dict[str, str]) -> list[str]:

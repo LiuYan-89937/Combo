@@ -64,6 +64,29 @@ export type ToolActivity = {
 	payload: Record<string, unknown>;
 };
 
+export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped' | string;
+
+export type RuntimePlanStepView = {
+	stepId: string;
+	title: string;
+	objective: string;
+	status: PlanStepStatus;
+	dependsOn: string[];
+	acceptanceCriteria: string[];
+	toolHints: string[];
+	resultSummary: string | null;
+};
+
+export type RuntimePlanView = {
+	version: string;
+	goal: string;
+	status: string;
+	currentStepId: string | null;
+	steps: RuntimePlanStepView[];
+	sourceNodeId: string | null;
+	updatedAt: string;
+};
+
 export type MemoryActivityStatus = 'idle' | 'writing' | 'completed' | 'failed';
 
 export type MemoryActivity = {
@@ -183,6 +206,7 @@ export type RuntimeState = {
 	recentActivities: RunActivity[];
 	modelStreams: Record<string, ModelStream>;
 	toolActivities: ToolActivity[];
+	currentPlan: RuntimePlanView | null;
 	memoryActivity: MemoryActivity;
 	contextActivity: ContextActivity;
 	contextWindow: ContextWindow;
@@ -191,6 +215,7 @@ export type RuntimeState = {
 	debugEvents: FactoryEvent[];
 	pendingInterrupt: FactoryEvent | null;
 	currentRunId: string | null;
+	activeRequestId: string | null;
 	runStatus: 'idle' | 'running' | 'interrupted' | 'completed' | 'failed';
 	helpVisible: boolean;
 	showState: boolean;
@@ -248,6 +273,7 @@ export function createInitialRuntimeState(): RuntimeState {
 		recentActivities: [],
 		modelStreams: {},
 		toolActivities: [],
+		currentPlan: null,
 		memoryActivity: idleMemoryActivity(),
 		contextActivity: idleContextActivity(),
 		contextWindow: emptyContextWindow(),
@@ -256,6 +282,7 @@ export function createInitialRuntimeState(): RuntimeState {
 		debugEvents: [],
 		pendingInterrupt: null,
 		currentRunId: null,
+		activeRequestId: null,
 		runStatus: 'idle',
 		helpVisible: true,
 		showState: false,
@@ -461,6 +488,9 @@ export function reduceRuntimeAction(state: RuntimeState, action: RuntimeAction):
 
 export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): RuntimeState {
 	const base = recordEvent(recordSpan(state, event), event);
+	if (!shouldApplyRequestScopedRuntimeEvent(state, event)) {
+		return base;
+	}
 	switch (event.event_type) {
 		case 'runtime_ready':
 			return {...base, ready: true, logs: [...base.logs, 'runtime bridge ready']};
@@ -528,10 +558,12 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				modelStreams: {},
 				toolActivities: [],
+				currentPlan: null,
 				debugEvents: [],
 				contextWindow: emptyContextWindow(),
 				knowledgeActivities: [],
 				currentRunId: event.run_id ?? null,
+				activeRequestId: event.request_id ?? null,
 				runStatus: 'running',
 				pendingInterrupt: null,
 				helpVisible: false,
@@ -590,6 +622,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			return {
 				...base,
 				runStatus: 'running',
+				activeRequestId: event.request_id ?? base.activeRequestId,
 				pendingInterrupt: isToolApprovalInterrupt(base.pendingInterrupt) ? null : base.pendingInterrupt,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				toolActivities: applyToolApprovalResolution(base.toolActivities, event)
@@ -664,6 +697,12 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				schedulerActivities: [...base.schedulerActivities.slice(-19), schedulerActivityForEvent(event)],
 				recentActivities: appendRunActivity(base.recentActivities, event)
 			};
+		case 'plan_updated':
+			return {
+				...base,
+				currentPlan: planViewForEvent(event),
+				recentActivities: appendRunActivity(base.recentActivities, event)
+			};
 		case 'debug_patch':
 			return {...base, debugEvents: [...base.debugEvents.slice(-30), event]};
 		case 'node_started':
@@ -689,13 +728,14 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			};
 		case 'node_failed':
 			return recordError(
-				{...updateNodeStatus(base, event, 'failed'), runStatus: 'failed', recentActivities: appendRunActivity(base.recentActivities, event)},
+				{...updateNodeStatus(base, event, 'failed'), recentActivities: appendRunActivity(base.recentActivities, event)},
 				errorMessageFromEvent(event, `node failed: ${event.node_label ?? event.node_id ?? '-'}`)
 			);
 		case 'interrupt_requested':
 			return appendOptionalTranscript({
 				...base,
 				runStatus: 'interrupted',
+				activeRequestId: null,
 				pendingInterrupt: base.pendingInterrupt ?? event,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
@@ -705,6 +745,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 				...base,
 				toolActivities: upsertToolActivities(base.toolActivities, toolActivitiesForEvent(event)),
 				runStatus: 'interrupted',
+				activeRequestId: null,
 				pendingInterrupt: event,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, `interrupt: ${String(event.payload?.type ?? event.event_type)}`]
@@ -713,6 +754,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			return {
 				...base,
 				runStatus: 'running',
+				activeRequestId: event.request_id ?? base.activeRequestId,
 				pendingInterrupt: null,
 				recentActivities: appendRunActivity(base.recentActivities, event),
 				logs: [...base.logs, 'runtime resumed']
@@ -736,7 +778,6 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			return recordError(
 				{
 					...updateStageStatus(base, event, 'failed'),
-					runStatus: 'failed',
 					recentActivities: appendRunActivity(base.recentActivities, event)
 				},
 				errorMessageFromEvent(event, `stage failed: ${event.stage_id ?? '-'}`)
@@ -745,6 +786,7 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			return {
 				...base,
 				runStatus: 'completed',
+				activeRequestId: null,
 				currentStageId: null,
 				currentNodeId: null,
 				pendingInterrupt: null,
@@ -754,11 +796,16 @@ export function reduceRuntimeEvent(state: RuntimeState, event: FactoryEvent): Ru
 			};
 		case 'run_failed':
 			return recordError(
-				{...base, runStatus: 'failed', pendingInterrupt: null, recentActivities: appendRunActivity(base.recentActivities, event)},
+				{...base, runStatus: 'failed', activeRequestId: null, pendingInterrupt: null, recentActivities: appendRunActivity(base.recentActivities, event)},
 				errorMessageFromEvent(event, 'run failed')
 			);
 		case 'error':
-			return recordError(base, errorMessageFromEvent(event, 'unknown error'));
+			return recordError(
+				isActiveRequestEvent(base, event)
+					? {...base, runStatus: 'failed', activeRequestId: null, pendingInterrupt: null}
+					: base,
+				errorMessageFromEvent(event, 'unknown error')
+			);
 		default:
 			return base;
 	}
@@ -775,6 +822,7 @@ function resetSessionScopedProjection(state: RuntimeState, transcript: Transcrip
 		recentActivities: [],
 		modelStreams: {},
 		toolActivities: [],
+		currentPlan: null,
 		memoryActivity: idleMemoryActivity(),
 		contextActivity: idleContextActivity(),
 		contextWindow: emptyContextWindow(),
@@ -783,6 +831,7 @@ function resetSessionScopedProjection(state: RuntimeState, transcript: Transcrip
 		debugEvents: [],
 		pendingInterrupt: null,
 		currentRunId: null,
+		activeRequestId: null,
 		runStatus: 'idle',
 		lastError: null,
 		errors: []
@@ -871,6 +920,52 @@ function errorMessageFromEvent(event: FactoryEvent, fallback: string): string {
 		}
 	}
 	return unique.join('\n');
+}
+
+function shouldApplyRequestScopedRuntimeEvent(state: RuntimeState, event: FactoryEvent): boolean {
+	if (!isRequestScopedRuntimeEvent(event)) {
+		return true;
+	}
+	const requestId = event.request_id ?? null;
+	if (!requestId) {
+		return false;
+	}
+	if (event.event_type === 'run_started') {
+		return true;
+	}
+	if (state.activeRequestId === requestId) {
+		return true;
+	}
+	if (state.activeRequestId === null && state.runStatus === 'interrupted' && isResumeRuntimeEvent(event)) {
+		return true;
+	}
+	return false;
+}
+
+function isActiveRequestEvent(state: RuntimeState, event: FactoryEvent): boolean {
+	const requestId = event.request_id ?? null;
+	return Boolean(requestId && state.activeRequestId === requestId);
+}
+
+function isRequestScopedRuntimeEvent(event: FactoryEvent): boolean {
+	const eventType = event.event_type;
+	return (
+		eventType === 'run_started'
+		|| eventType === 'run_completed'
+		|| eventType === 'run_failed'
+		|| eventType === 'runtime_paused'
+		|| eventType === 'runtime_resumed'
+		|| eventType.startsWith('node_')
+		|| eventType.startsWith('stage_')
+		|| eventType.startsWith('model_')
+		|| eventType.startsWith('tool_')
+		|| eventType.startsWith('plan_')
+		|| eventType.startsWith('context_')
+	);
+}
+
+function isResumeRuntimeEvent(event: FactoryEvent): boolean {
+	return event.event_type === 'runtime_resumed' || event.event_type === 'tool_approval_resolved';
 }
 
 function primaryErrorMessage(event: FactoryEvent, payload: Record<string, unknown>, fallback: string): string {
@@ -987,7 +1082,7 @@ function appendModelDelta(state: RuntimeState, event: FactoryEvent): RuntimeStat
 			...state.modelStreams,
 			[streamId]: {
 				...current,
-				content: current.content + String(event.payload?.delta ?? ''),
+				content: mergeModelStreamDelta(current.content, String(event.payload?.delta ?? ''), String(event.payload?.content_mode ?? 'delta')),
 				active: true
 			}
 		}
@@ -1073,6 +1168,44 @@ function toolActivity(event: FactoryEvent, payloadOverride?: Record<string, unkn
 		status: lifecycleForToolEvent(event.event_type),
 		approvalState: approvalState(payload),
 		payload
+	};
+}
+
+function planViewForEvent(event: FactoryEvent): RuntimePlanView {
+	const payload = event.payload ?? {};
+	const rawSteps = Array.isArray(payload.steps) ? payload.steps : [];
+	return {
+		version: stringValue(payload.version) || 'plan_state.v0',
+		goal: stringValue(payload.goal),
+		status: stringValue(payload.status) || 'active',
+		currentStepId: stringValue(payload.current_step_id) || null,
+		steps: rawSteps
+			.map(planStepView)
+			.filter((step): step is RuntimePlanStepView => step !== null),
+		sourceNodeId: stringValue(payload.source_node_id) || (event.node_id ?? null),
+		updatedAt: event.timestamp
+	};
+}
+
+function planStepView(value: unknown): RuntimePlanStepView | null {
+	const record = recordValue(value);
+	if (!record) {
+		return null;
+	}
+	const stepId = stringValue(record.step_id);
+	if (!stepId) {
+		return null;
+	}
+	const title = stringValue(record.title) || stepId;
+	return {
+		stepId,
+		title,
+		objective: stringValue(record.objective),
+		status: stringValue(record.status) || 'pending',
+		dependsOn: stringList(record.depends_on),
+		acceptanceCriteria: stringList(record.acceptance_criteria),
+		toolHints: stringList(record.tool_hints),
+		resultSummary: stringValue(record.result_summary) || null
 	};
 }
 
@@ -1512,6 +1645,15 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
+function stringList(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	return value
+		.map(item => typeof item === 'string' ? item.trim() : '')
+		.filter(Boolean);
+}
+
 function numberValue(value: unknown): number | null {
 	return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -1613,7 +1755,7 @@ function upsertAssistantTranscript(
 	};
 	const existingIndex = state.transcript.findIndex(entry => entry.id === item.id);
 	if (existingIndex < 0) {
-		return appendTranscript(state, item);
+		return appendOrMergeAssistantTranscript(state, item);
 	}
 	return {
 		...state,
@@ -1623,6 +1765,80 @@ function upsertAssistantTranscript(
 			...state.transcript.slice(existingIndex + 1)
 		]
 	};
+}
+
+function appendOrMergeAssistantTranscript(state: RuntimeState, item: TranscriptItem): RuntimeState {
+	const previous = state.transcript.at(-1);
+	if (previous?.role !== 'assistant') {
+		return appendTranscript(state, item);
+	}
+	if (!sameAssistantContent(previous.content, item.content)) {
+		return appendTranscript(state, item);
+	}
+	return {
+		...state,
+		transcript: [
+			...state.transcript.slice(0, -1),
+			{
+				...previous,
+				timestamp: item.timestamp,
+				content: item.content,
+				eventType: item.eventType,
+				active: item.active,
+				metadata: {
+					...(previous.metadata ?? {}),
+					duplicate_stream_id: item.streamId,
+					duplicate_event_type: item.eventType
+				}
+			}
+		]
+	};
+}
+
+function mergeModelStreamDelta(current: string, incoming: string, contentMode: string): string {
+	if (!incoming) {
+		return current;
+	}
+	if (contentMode === 'snapshot') {
+		return incoming;
+	}
+	if (!current) {
+		return incoming;
+	}
+	if (incoming === current) {
+		return current;
+	}
+	if (incoming.startsWith(current)) {
+		return incoming;
+	}
+	const overlap = suffixPrefixOverlap(current, incoming);
+	if (overlap >= 20) {
+		return current + incoming.slice(overlap);
+	}
+	if (incoming.length >= 20 && current.endsWith(incoming)) {
+		return current;
+	}
+	return current + incoming;
+}
+
+function suffixPrefixOverlap(left: string, right: string): number {
+	const limit = Math.min(left.length, right.length);
+	for (let size = limit; size >= 20; size -= 1) {
+		if (left.endsWith(right.slice(0, size))) {
+			return size;
+		}
+	}
+	return 0;
+}
+
+function sameAssistantContent(left: string, right: string): boolean {
+	const normalizedLeft = normalizeTranscriptContent(left);
+	const normalizedRight = normalizeTranscriptContent(right);
+	return Boolean(normalizedLeft) && normalizedLeft === normalizedRight;
+}
+
+function normalizeTranscriptContent(value: string): string {
+	return value.trim().replace(/\s+/g, ' ');
 }
 
 function transcriptItemForInterrupt(event: FactoryEvent): TranscriptItem | null {

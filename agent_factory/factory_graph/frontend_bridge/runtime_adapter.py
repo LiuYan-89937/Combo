@@ -16,6 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     FactoryBridgeOptions,
     PendingAgentPackageRun,
     PendingCreateAgentRun,
+    PendingEvolutionRun,
 )
 from agent_factory.factory_graph.session import FactorySessionManager
 from agent_factory.memory_system.factory import shutdown_factory_memory_worker
@@ -38,6 +39,7 @@ class FactoryRuntimeAdapter(
     mode: FactoryMode | None = None
     pending_agent_package_run: PendingAgentPackageRun | None = None
     pending_create_agent_run: PendingCreateAgentRun | None = None
+    pending_evolution_run: PendingEvolutionRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
     create_agent_runtime: CreateAgentRuntime | None = None
     evolution_runtime: AgentEvolutionRuntime | None = None

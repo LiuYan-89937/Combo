@@ -30,7 +30,11 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, 
 
 CREATE_AGENT_AUTHORING_TOOL_ID = "create_agent_authoring"
 DEFAULT_INHERITED_RUNTIME_TOOL_IDS = ("knowledge", "scheduler")
+DEFAULT_CASUAL_REACT_TOOL_IDS = ("glob", "ls", "read")
+DEFAULT_EXECUTOR_READ_TOOL_IDS = ("glob", "ls", "read")
+DEFAULT_EXECUTOR_FALLBACK_TOOL_IDS = ("bash", "write", "edit")
 CREATE_AGENT_AUTHORING_ACTIONS = {
+    "configure_dependencies",
     "reset_contract",
     "materialize_mcp_inheritance",
     "remove_package_tool",
@@ -44,6 +48,19 @@ CREATE_AGENT_AUTHORING_ACTIONS = {
 }
 SUPPORTED_PATTERN_IDS = {"react_agent", "plan_and_execute"}
 RESETTABLE_CONTRACT_KEYS = frozenset(base_contract_paths())
+REACT_AGENT_PROMPT_KEYS = frozenset({"answer"})
+PLAN_AND_EXECUTE_PROMPT_KEYS = frozenset({"planner", "executor", "final_answer"})
+PLAN_AND_EXECUTE_OPTIONAL_PROMPT_KEYS = frozenset({"casual"})
+
+
+def _prompt_object_schema(keys: frozenset[str], *, optional_keys: frozenset[str] = frozenset()) -> dict[str, Any]:
+    all_keys = sorted(keys | optional_keys)
+    return {
+        "type": "object",
+        "properties": {key: {"type": "string", "minLength": 1} for key in all_keys},
+        "required": sorted(keys),
+        "additionalProperties": False,
+    }
 
 
 def build_create_agent_authoring_tool_spec() -> ToolSpec:
@@ -61,13 +78,32 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "action": {"type": "string", "enum": sorted(CREATE_AGENT_AUTHORING_ACTIONS)},
                 "agent": {"type": "object", "additionalProperties": True},
                 "pattern_id": {"type": "string", "enum": sorted(SUPPORTED_PATTERN_IDS)},
-                "prompts": {"type": "object", "additionalProperties": {"type": "string"}},
-                "activation": {"type": "object", "additionalProperties": {"type": "string"}},
+                "prompts": {
+                    "type": "object",
+                    "description": (
+                        "Pattern-specific prompt templates. react_agent requires answer. "
+                        "plan_and_execute requires planner, executor, and final_answer, and may include casual. "
+                        "Unknown keys are rejected."
+                    ),
+                    "additionalProperties": {"type": "string"},
+                },
+                "activation": {
+                    "type": "object",
+                    "properties": {
+                        key: {"type": "string", "minLength": 1}
+                        for key in sorted(PLAN_AND_EXECUTE_ACTIVATION_FIELDS)
+                    },
+                    "required": sorted(PLAN_AND_EXECUTE_ACTIVATION_FIELDS),
+                    "additionalProperties": False,
+                },
                 "allowed_tool_ids": {"type": "array", "items": {"type": "string"}},
                 "tool_spec": {"type": "object", "additionalProperties": True},
                 "tool_id": {"type": "string"},
                 "tool_source": {"type": "string"},
                 "python_requirements": {"type": "array", "items": {"type": "string"}},
+                "system_packages": {"type": "array", "items": {"type": "string"}},
+                "system_binaries": {"type": "array", "items": {"type": "string"}},
+                "install_mode": {"type": "string", "enum": ["none", "sandbox_init"]},
                 "expose_to_nodes": {"type": "array", "items": {"type": "string"}},
                 "seed": {"type": "object", "additionalProperties": True},
                 "resources": {"type": "object", "additionalProperties": True},
@@ -88,8 +124,47 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     "then": {"required": ["pattern_id", "prompts", "allowed_tool_ids"]},
                 },
                 {
+                    "if": {
+                        "required": ["pattern_id"],
+                        "properties": {
+                            "action": {"const": "configure_pattern_assembly"},
+                            "pattern_id": {"const": "react_agent"},
+                        }
+                    },
+                    "then": {"properties": {"prompts": _prompt_object_schema(REACT_AGENT_PROMPT_KEYS)}},
+                },
+                {
+                    "if": {
+                        "required": ["pattern_id"],
+                        "properties": {
+                            "action": {"const": "configure_pattern_assembly"},
+                            "pattern_id": {"const": "plan_and_execute"},
+                        }
+                    },
+                    "then": {
+                        "required": ["activation"],
+                        "properties": {
+                            "prompts": _prompt_object_schema(
+                                PLAN_AND_EXECUTE_PROMPT_KEYS,
+                                optional_keys=PLAN_AND_EXECUTE_OPTIONAL_PROMPT_KEYS,
+                            )
+                        },
+                    },
+                },
+                {
                     "if": {"properties": {"action": {"const": "upsert_package_tool"}}},
                     "then": {"required": ["tool_spec", "tool_source", "python_requirements", "expose_to_nodes"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "configure_dependencies"}}},
+                    "then": {
+                        "anyOf": [
+                            {"required": ["python_requirements"]},
+                            {"required": ["system_packages"]},
+                            {"required": ["system_binaries"]},
+                            {"required": ["install_mode"]},
+                        ]
+                    },
                 },
                 {"if": {"properties": {"action": {"const": "remove_package_tool"}}}, "then": {"required": ["tool_id"]}},
                 {"if": {"properties": {"action": {"const": "upsert_scheduler_seed"}}}, "then": {"required": ["seed"]}},
@@ -109,6 +184,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "action": {"type": "string"},
                 "changed_files": {"type": "array", "items": {"type": "string"}},
                 "summary": {"type": "string"},
+                "written": {"type": "object", "additionalProperties": True},
             },
             "required": ["action", "changed_files", "summary"],
             "additionalProperties": True,
@@ -125,12 +201,15 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
     if action not in CREATE_AGENT_AUTHORING_ACTIONS:
         raise ValueError(f"unsupported create-agent authoring action: {action}")
+    _assert_evolution_action_allowed(action, resources)
     if action == "set_identity":
         result = _set_identity(workspace, arguments)
     elif action == "configure_pattern_assembly":
         result = _configure_pattern_assembly(workspace, arguments)
     elif action == "upsert_package_tool":
         result = _upsert_package_tool(workspace, arguments)
+    elif action == "configure_dependencies":
+        result = _configure_dependencies(workspace, arguments)
     elif action == "remove_package_tool":
         result = _remove_package_tool(workspace, arguments)
     elif action == "upsert_scheduler_seed":
@@ -146,6 +225,24 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     else:
         result = _upsert_state(workspace, arguments)
     return tool_envelope(result, evidence={"authoring": result}, summary=result["summary"])
+
+
+def _assert_evolution_action_allowed(action: str, resources: dict[str, Any]) -> None:
+    target_plan = resources.get("evolution_target_plan")
+    if not isinstance(target_plan, dict):
+        return
+    allowed = {
+        str(item).strip()
+        for item in (target_plan.get("allowed_authoring_actions") if isinstance(target_plan.get("allowed_authoring_actions"), list) else [])
+        if str(item).strip()
+    }
+    if not allowed or action in allowed:
+        return
+    surface = str(target_plan.get("surface") or "unknown")
+    raise PermissionError(
+        f"create_agent_authoring action {action!r} is outside the evolution target surface {surface!r}; "
+        f"allowed actions: {', '.join(sorted(allowed))}"
+    )
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -181,7 +278,7 @@ def _configure_pattern_assembly(workspace: CreateAgentWorkspace, arguments: dict
     pattern_id = str(arguments.get("pattern_id") or "").strip()
     if pattern_id not in SUPPORTED_PATTERN_IDS:
         raise ValueError("pattern_id must be react_agent or plan_and_execute")
-    prompts = arguments.get("prompts") if isinstance(arguments.get("prompts"), dict) else {}
+    prompts = _pattern_prompts(pattern_id=pattern_id, value=arguments.get("prompts"))
     allowed_tool_ids = _string_list(arguments.get("allowed_tool_ids"))
     manifest_path = workspace.root / "agent_package.json"
     assembly_path = workspace.root / "assembly_spec.json"
@@ -204,10 +301,17 @@ def _configure_pattern_assembly(workspace: CreateAgentWorkspace, arguments: dict
     _write_json(manifest_path, manifest_payload)
     _write_json(assembly_path, assembly_payload)
     _write_json(render_path, render_payload)
+    written = _configured_pattern_written_summary(
+        pattern_id=pattern_id,
+        agent_config=agent_config,
+        prompts=prompts,
+        bindings=assembly_payload.get("bindings") if isinstance(assembly_payload.get("bindings"), dict) else {},
+    )
     return _result(
         "configure_pattern_assembly",
         ["agent_package.json", "assembly_spec.json", "render_manifest.json"],
         f"Configured standard {pattern_id} assembly.",
+        written=written,
     )
 
 
@@ -225,6 +329,32 @@ def _activation_payload(value: Any) -> dict[str, str]:
     return payload
 
 
+def _pattern_prompts(*, pattern_id: str, value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("prompts must be an object")
+    expected = REACT_AGENT_PROMPT_KEYS if pattern_id == "react_agent" else PLAN_AND_EXECUTE_PROMPT_KEYS
+    optional = frozenset() if pattern_id == "react_agent" else PLAN_AND_EXECUTE_OPTIONAL_PROMPT_KEYS
+    actual = {str(key) for key in value}
+    unknown = sorted(actual - expected - optional)
+    missing = sorted(key for key in expected if not str(value.get(key) or "").strip())
+    if unknown:
+        raise ValueError(
+            "unsupported prompt keys for "
+            f"{pattern_id}: {', '.join(unknown)}. Expected keys: {', '.join(sorted(expected))}."
+        )
+    if missing:
+        raise ValueError(
+            "missing required prompt keys for "
+            f"{pattern_id}: {', '.join(missing)}. Expected keys: {', '.join(sorted(expected))}."
+        )
+    prompts = {key: str(value[key]).strip() for key in sorted(expected)}
+    for key in sorted(optional):
+        text = str(value.get(key) or "").strip()
+        if text:
+            prompts[key] = text
+    return prompts
+
+
 def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
     spec = ToolSpec.model_validate(_required_dict(arguments, "tool_spec"))
     tool_id = _package_tool_id(spec.id)
@@ -233,6 +363,8 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
         raise ValueError("tool_source is required")
     ast.parse(source)
     python_requirements = _string_list(arguments.get("python_requirements"))
+    system_packages = _string_list(arguments.get("system_packages"))
+    system_binaries = _string_list(arguments.get("system_binaries"))
     third_party_imports = _third_party_import_roots(source)
     if third_party_imports and not python_requirements:
         raise ValueError(
@@ -259,11 +391,13 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
 
     dependencies = _read_json(dependencies_path)
     dependency_config = dependencies.setdefault("config", {})
-    requirements = dependency_config.setdefault("python_requirements", [])
-    for requirement in python_requirements:
-        _append_unique(requirements, requirement)
-    dependency_config.setdefault("system_packages", [])
-    dependency_config.setdefault("system_binaries", [])
+    _merge_dependency_config(
+        dependency_config,
+        python_requirements=python_requirements,
+        system_packages=system_packages,
+        system_binaries=system_binaries,
+        install_mode=str(arguments.get("install_mode") or "").strip(),
+    )
     dependency_config.setdefault("install_mode", "sandbox_init")
     dependencies_payload = DependenciesContract.model_validate(dependencies).model_dump(mode="json")
 
@@ -288,6 +422,56 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
         "assembly_spec.json",
     ]
     return _result("upsert_package_tool", changed, f"Upserted package tool {tool_id}.")
+
+
+def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
+    dependencies_path = workspace.root / "contracts" / "dependencies.json"
+    dependencies = _read_json(dependencies_path)
+    dependency_config = dependencies.setdefault("config", {})
+    _merge_dependency_config(
+        dependency_config,
+        python_requirements=_string_list(arguments.get("python_requirements")),
+        system_packages=_string_list(arguments.get("system_packages")),
+        system_binaries=_string_list(arguments.get("system_binaries")),
+        install_mode=str(arguments.get("install_mode") or "").strip(),
+    )
+    dependencies_payload = DependenciesContract.model_validate(dependencies).model_dump(mode="json")
+    _write_json(dependencies_path, dependencies_payload)
+    return _result(
+        "configure_dependencies",
+        ["contracts/dependencies.json"],
+        "Updated package dependency contract.",
+        written={"dependencies": dependencies_payload.get("config", {})},
+    )
+
+
+def _merge_dependency_config(
+    config: dict[str, Any],
+    *,
+    python_requirements: list[str],
+    system_packages: list[str],
+    system_binaries: list[str],
+    install_mode: str,
+) -> None:
+    requirements = _dependency_list(config, "python_requirements")
+    for requirement in python_requirements:
+        _append_unique(requirements, requirement)
+    packages = _dependency_list(config, "system_packages")
+    for package in system_packages:
+        _append_unique(packages, package)
+    binaries = _dependency_list(config, "system_binaries")
+    for binary in system_binaries:
+        _append_unique(binaries, binary)
+    if install_mode:
+        config["install_mode"] = install_mode
+
+
+def _dependency_list(config: dict[str, Any], key: str) -> list[Any]:
+    value = config.get(key)
+    if not isinstance(value, list):
+        value = []
+        config[key] = value
+    return value
 
 
 def _remove_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -455,7 +639,7 @@ def _materialize_mcp_inheritance(workspace: CreateAgentWorkspace) -> dict[str, A
 def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool_ids: list[str]) -> dict[str, Any]:
     inherited_tool_ids = _default_inherited_tool_ids(allowed_tool_ids)
     if pattern_id == "react_agent":
-        answer_prompt = str(prompts.get("answer") or prompts.get("answer_prompt") or "Answer the user using package capabilities and approved tools when useful.")
+        answer_prompt = str(prompts["answer"])
         return {
             "services": [],
             "node_bindings": [
@@ -465,11 +649,28 @@ def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool
             ],
             "hooks": [],
         }
-    planner_prompt = str(prompts.get("planner") or "Create and maintain a concise dynamic plan with runtime_plan.")
-    executor_prompt = str(prompts.get("executor") or "Execute the current plan step using available tools when useful, then update runtime_plan.")
-    final_prompt = str(prompts.get("final_answer") or "Summarize completed plan evidence for the user. Do not call tools.")
-    executor_tools = ["runtime_plan", *[tool_id for tool_id in inherited_tool_ids if tool_id != "runtime_plan"]]
-    planner_tools = ["runtime_plan", *[tool_id for tool_id in inherited_tool_ids if tool_id != "runtime_plan"]]
+    planner_prompt = str(prompts["planner"])
+    executor_prompt = str(prompts["executor"])
+    final_prompt = str(prompts["final_answer"])
+    casual_prompt = str(
+        prompts.get("casual")
+        or "Handle non-main-workflow user requests with normal ReAct tool use. Use available tools to inspect workspace context when needed, ask a concise clarification only when tool/context discovery cannot identify a safe target, and do not create or update runtime_plan."
+    )
+    executor_tools = _unique_strings(
+        [
+            "runtime_plan",
+            *[tool_id for tool_id in inherited_tool_ids if tool_id != "runtime_plan"],
+            *DEFAULT_EXECUTOR_READ_TOOL_IDS,
+            *DEFAULT_EXECUTOR_FALLBACK_TOOL_IDS,
+        ]
+    )
+    planner_tools = ["runtime_plan"]
+    casual_tools = _unique_strings(
+        [
+            *DEFAULT_CASUAL_REACT_TOOL_IDS,
+            *[tool_id for tool_id in inherited_tool_ids if tool_id != "runtime_plan"],
+        ]
+    )
     return {
         "services": [],
         "node_bindings": [
@@ -479,6 +680,9 @@ def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool
             _prompt_binding("executor", "cognitive.answer", "executor_prompt", executor_prompt),
             _tool_access_binding("executor", "cognitive.answer", executor_tools),
             _model_binding("executor", "cognitive.answer", "executor_prompt"),
+            _prompt_binding("casual_react", "cognitive.answer", "casual_react_prompt", casual_prompt),
+            _tool_access_binding("casual_react", "cognitive.answer", casual_tools),
+            _model_binding("casual_react", "cognitive.answer", "casual_react_prompt"),
             _prompt_binding("final_answer", "cognitive.answer", "final_answer_prompt", final_prompt),
             _model_binding("final_answer", "cognitive.answer", "final_answer_prompt"),
         ],
@@ -508,6 +712,36 @@ def _default_inherited_tool_ids(allowed_tool_ids: list[str]) -> list[str]:
     return _unique_strings([*DEFAULT_INHERITED_RUNTIME_TOOL_IDS, *allowed_tool_ids])
 
 
+def _configured_pattern_written_summary(
+    *,
+    pattern_id: str,
+    agent_config: dict[str, Any],
+    prompts: dict[str, str],
+    bindings: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "pattern_id": pattern_id,
+        "activation": agent_config.get("activation") if isinstance(agent_config.get("activation"), dict) else None,
+        "prompts": prompts,
+        "tool_access": _tool_access_summary(bindings),
+    }
+
+
+def _tool_access_summary(bindings: dict[str, Any]) -> dict[str, list[str]]:
+    summary: dict[str, list[str]] = {}
+    node_bindings = bindings.get("node_bindings") if isinstance(bindings.get("node_bindings"), list) else []
+    for binding in node_bindings:
+        if not isinstance(binding, dict) or binding.get("binding_type") != "tool_access":
+            continue
+        target = binding.get("target") if isinstance(binding.get("target"), dict) else {}
+        payload = binding.get("payload") if isinstance(binding.get("payload"), dict) else {}
+        node_id = str(target.get("node_id") or "")
+        if not node_id:
+            continue
+        summary[node_id] = _unique_strings(payload.get("allowed_tool_ids") if isinstance(payload.get("allowed_tool_ids"), list) else [])
+    return summary
+
+
 def _model_binding(node_id: str, impl: str, prompt_id: str) -> dict[str, Any]:
     return {
         "binding_id": f"{node_id}_model_operation",
@@ -526,10 +760,23 @@ def _model_binding(node_id: str, impl: str, prompt_id: str) -> dict[str, Any]:
 
 def _add_tool_access(assembly: dict[str, Any], tool_id: str, *, expose_to_nodes: list[str]) -> None:
     pattern_id = str((assembly.get("runtime") or {}).get("pattern_id") or "react_agent")
-    default_nodes = ["executor"] if pattern_id == "plan_and_execute" else ["answer"]
+    default_nodes = ["executor", "casual_react"] if pattern_id == "plan_and_execute" else ["answer"]
     node_ids = expose_to_nodes or default_nodes
+    if pattern_id == "plan_and_execute":
+        valid_nodes = {"executor", "casual_react"}
+        invalid_nodes = sorted({node_id for node_id in node_ids if node_id not in valid_nodes})
+        if invalid_nodes:
+            raise ValueError(
+                "plan_and_execute package tools can only be exposed to executor or casual_react; "
+                f"invalid expose_to_nodes: {', '.join(invalid_nodes)}"
+            )
     bindings = assembly.setdefault("bindings", {}).setdefault("node_bindings", [])
-    impl_by_node = {"answer": "cognitive.answer", "planner": "cognitive.answer", "executor": "cognitive.answer"}
+    impl_by_node = {
+        "answer": "cognitive.answer",
+        "planner": "cognitive.answer",
+        "executor": "cognitive.answer",
+        "casual_react": "cognitive.answer",
+    }
     for node_id in node_ids:
         binding = _find_tool_access_binding(bindings, node_id)
         if binding is None:
@@ -665,5 +912,5 @@ def _upsert_by_key(values: list[Any], payload: dict[str, Any], *, key: str) -> N
     values.append(payload)
 
 
-def _result(action: str, changed_files: list[str], summary: str) -> dict[str, Any]:
-    return {"action": action, "changed_files": changed_files, "summary": summary}
+def _result(action: str, changed_files: list[str], summary: str, **extra: Any) -> dict[str, Any]:
+    return {"action": action, "changed_files": changed_files, "summary": summary, **extra}

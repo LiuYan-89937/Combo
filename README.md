@@ -476,10 +476,12 @@ CLI、chat、create-agent、子 Agent runtime 都通过统一 runtime events 交
 ```text
 run_started
 node_started
-model_streaming
-tool_running
-tool_completed
-tool_failed
+model_call_started
+model_stream_delta
+model_message_completed
+tool_call_started
+tool_call_completed
+tool_call_failed
 tool_approval_requested
 interrupt_requested
 run_completed
@@ -491,6 +493,12 @@ model_cache_metrics
 
 ```text
 agent_factory/factory_graph/frontend_bridge/protocol_catalog.json
+```
+
+Web 前端实现规范见：
+
+```text
+docs/web_frontend_event_protocol.md
 ```
 
 ## Trace
@@ -553,3 +561,4 @@ git diff --check
 
 - [docs/basic_capability_construction.md](docs/basic_capability_construction.md)：基础能力、Contract、Builder 与 RuntimeKernel 接入规范。
 - [docs/runtime_render_pipeline.md](docs/runtime_render_pipeline.md)：runtime events 与前端渲染链路。
+- [docs/web_frontend_event_protocol.md](docs/web_frontend_event_protocol.md)：Web 前端消费 `FactoryFrontendEvent` 的协议与 reducer 规范。

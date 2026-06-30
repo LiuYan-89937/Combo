@@ -14,7 +14,7 @@ from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.create_agent.contract_catalog import contract_resources, contract_skill, system_resources
 from agent_factory.create_agent.mcp_inheritance import factory_mcp_tool_ids, materialized_package_mcp_tool_ids
 from agent_factory.create_agent.package_paths import is_transient_package_path
-from agent_factory.create_agent.validation_state import package_digest
+from agent_factory.create_agent.validation_state import package_fingerprint, package_tool_digest
 from agent_factory.create_agent.models import (
     PackageToolProbeState,
     PackageValidationIssue,
@@ -1144,7 +1144,7 @@ def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssu
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
         ))
-    for node_id in ("planner", "executor", "final_answer"):
+    for node_id in ("planner", "executor", "casual_react", "final_answer"):
         if not _has_binding(bindings, node_id=node_id, binding_type="prompt"):
             issues.append(_missing_plan_binding_issue(node_id=node_id, binding_type="prompt"))
         if not _has_binding(bindings, node_id=node_id, binding_type="model_operation"):
@@ -1172,6 +1172,19 @@ def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssu
             expected='executor tool_access.allowed_tool_ids includes "runtime_plan".',
             actual=", ".join(executor_tools) if executor_tools else "<missing>",
             repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute so executor tool access includes runtime_plan coherently.",
+            target_files=["assembly_spec.json"],
+            recommended_skill="12-assembly-pattern-system",
+        ))
+    casual_tools = _tool_access_for_node(bindings, node_id="casual_react")
+    if RUNTIME_PLAN_TOOL_ID in casual_tools:
+        issues.append(_contract_issue(
+            where="assembly.plan_and_execute.casual_react_tools",
+            summary="plan_and_execute casual_react must not expose runtime_plan",
+            message="The casual_react node handles non-main-workflow ReAct requests and must not mutate the main runtime plan.",
+            path="assembly_spec.json",
+            expected='casual_react tool_access.allowed_tool_ids excludes "runtime_plan".',
+            actual=", ".join(casual_tools),
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute so casual_react bindings are regenerated coherently.",
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
         ))
@@ -1279,7 +1292,7 @@ def _package_tool_probe_report(
         return None
     state = _read_probe_state(root)
     latest = state.latest_by_tool()
-    current_digest = package_digest(root)
+    current_fingerprint = package_fingerprint(root)
     issues: list[PackageValidationIssue] = []
     scheduler_tool_ids = set(_scheduler_package_tool_ids(package, package_tools))
     required_tool_ids = sorted(set(package_tools) | scheduler_tool_ids)
@@ -1293,12 +1306,18 @@ def _package_tool_probe_report(
                 repair_hint="Use create_agent_probe_tool(action='inspect'), then create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., tool_goal=...) with realistic package tool arguments and human-readable probe context.",
             ))
             continue
-        if record.package_digest != current_digest:
+        current_tool_digest = package_tool_digest(root, tool_id, fingerprint=current_fingerprint)
+        if record.tool_digest != current_tool_digest:
             issues.append(_probe_issue(
                 tool_id=tool_id,
                 summary=f"package tool {tool_id} probe is stale",
-                actual="probe package digest does not match current package files",
-                repair_hint="The package changed after the last probe. Call create_agent_probe_tool again for this tool.",
+                actual="probe tool digest does not match current tool files",
+                repair_hint="The tool implementation changed after the last probe. Call create_agent_probe_tool again for this tool.",
+                details={
+                    "recorded_tool_digest": record.tool_digest,
+                    "current_tool_digest": current_tool_digest,
+                    "tool_digest_kind": record.tool_digest_kind,
+                },
             ))
             continue
         if record.status != "passed":

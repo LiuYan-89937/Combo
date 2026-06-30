@@ -12,7 +12,11 @@ describe('RuntimeStore', () => {
 			notifications += 1;
 		});
 
-		store.dispatch(event('model_stream_delta', {payload: {stream_id: 's1', delta: 'hello'}}));
+		store.dispatch(event('run_started', {request_id: 'request-model'}));
+		store.dispatch(event('model_stream_delta', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', delta: 'hello'}
+		}));
 		expect(notifications).toBe(0);
 		expect(store.getSnapshot().modelStreams.s1).toBeUndefined();
 
@@ -31,8 +35,15 @@ describe('RuntimeStore', () => {
 		vi.useFakeTimers();
 		const store = createRuntimeStore();
 
-		store.dispatch(event('model_stream_delta', {payload: {stream_id: 's1', delta: 'hello'}}));
-		store.dispatch(event('model_message_completed', {payload: {stream_id: 's1', content: 'hello'}}));
+		store.dispatch(event('run_started', {request_id: 'request-model'}));
+		store.dispatch(event('model_stream_delta', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', delta: 'hello'}
+		}));
+		store.dispatch(event('model_message_completed', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', content: 'hello'}
+		}));
 
 		const stream = store.getSnapshot().modelStreams.s1;
 		expect(stream?.content).toBe('hello');
@@ -47,14 +58,63 @@ describe('RuntimeStore', () => {
 		vi.useFakeTimers();
 		const store = createRuntimeStore();
 
-		store.dispatch(event('model_stream_delta', {payload: {stream_id: 's1', delta: 'hidden', visible_to_user: false}}));
-		store.dispatch(event('model_message_completed', {payload: {stream_id: 's1', content: 'hidden', visible_to_user: false}}));
+		store.dispatch(event('run_started', {request_id: 'request-model'}));
+		store.dispatch(event('model_stream_delta', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', delta: 'hidden', visible_to_user: false}
+		}));
+		store.dispatch(event('model_message_completed', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', content: 'hidden', visible_to_user: false}
+		}));
 
 		expect(store.getSnapshot().modelStreams.s1?.content).toBe('hidden');
 		expect(store.getSnapshot().transcript.some(item => item.content === 'hidden')).toBe(false);
 
 		store.destroy();
 		vi.useRealTimers();
+	});
+
+	it('does not duplicate snapshot-like content delivered through model deltas', () => {
+		vi.useFakeTimers();
+		const store = createRuntimeStore();
+
+		store.dispatch(event('run_started', {request_id: 'request-model'}));
+		store.dispatch(event('model_stream_delta', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', delta: '进化已完成'}
+		}));
+		vi.advanceTimersByTime(33);
+		store.dispatch(event('model_stream_delta', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', delta: '进化已完成并自动发布'}
+		}));
+		vi.advanceTimersByTime(33);
+
+		expect(store.getSnapshot().modelStreams.s1?.content).toBe('进化已完成并自动发布');
+		expect(store.getSnapshot().transcript.at(-1)?.content).toBe('进化已完成并自动发布');
+
+		store.destroy();
+		vi.useRealTimers();
+	});
+
+	it('merges adjacent duplicate assistant messages from different streams', () => {
+		const store = createRuntimeStore();
+
+		store.dispatch(event('run_started', {request_id: 'request-model'}));
+		store.dispatch(event('model_message_completed', {
+			request_id: 'request-model',
+			payload: {stream_id: 's1', content: '进化已完成并自动发布。'}
+		}));
+		store.dispatch(event('model_message_completed', {
+			request_id: 'request-model',
+			payload: {stream_id: 's2', content: '进化已完成并自动发布。'}
+		}));
+
+		const assistantItems = store.getSnapshot().transcript.filter(item => item.role === 'assistant');
+		expect(assistantItems).toHaveLength(1);
+		expect(assistantItems[0]?.content).toBe('进化已完成并自动发布。');
+		expect(assistantItems[0]?.metadata?.duplicate_stream_id).toBe('s2');
 	});
 
 	it('rebuilds transcript from session snapshot messages', () => {
@@ -86,14 +146,16 @@ describe('RuntimeStore', () => {
 
 	it('clears session scoped projections when switching sessions', () => {
 		const store = createRuntimeStore();
-		store.dispatch(event('run_started'));
+		store.dispatch(event('run_started', {request_id: 'request-1'}));
 		store.dispatch(event('tool_call_proposed', {
+			request_id: 'request-1',
 			payload: {tool_call_id: 'call-1', tool_name: 'ls', arguments: {path: '.'}}
 		}));
 		store.dispatch(event('scheduler_run_completed', {
 			payload: {job_id: 'job-1', run_id: 'run-a', status: 'completed'}
 		}));
 		store.dispatch(event('run_failed', {
+			request_id: 'request-1',
 			payload: {message: 'old failure'}
 		}));
 
@@ -116,6 +178,119 @@ describe('RuntimeStore', () => {
 		expect(snapshot.pendingInterrupt).toBeNull();
 		expect(snapshot.runStatus).toBe('idle');
 		expect(snapshot.errors).toEqual([]);
+	});
+
+	it('ignores unscoped background run events for the interactive run status', () => {
+		const store = createRuntimeStore();
+
+		store.dispatch(event('run_started', {
+			request_id: null,
+			payload: {command: 'scheduler_graph_run'}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.runStatus).toBe('idle');
+		expect(snapshot.activeRequestId).toBeNull();
+		expect(snapshot.events.at(-1)?.event_type).toBe('run_started');
+	});
+
+	it('ignores stale request events after the active request has changed', () => {
+		const store = createRuntimeStore();
+
+		store.dispatch(event('run_started', {request_id: 'request-current', run_id: 'run-current'}));
+		store.dispatch(event('run_completed', {request_id: 'request-old', run_id: 'run-old'}));
+
+		let snapshot = store.getSnapshot();
+		expect(snapshot.runStatus).toBe('running');
+		expect(snapshot.activeRequestId).toBe('request-current');
+
+		store.dispatch(event('run_completed', {request_id: 'request-current', run_id: 'run-current'}));
+		store.dispatch(event('node_started', {
+			request_id: 'request-current',
+			run_id: 'run-current',
+			node_id: 'late-node'
+		}));
+
+		snapshot = store.getSnapshot();
+		expect(snapshot.runStatus).toBe('completed');
+		expect(snapshot.activeRequestId).toBeNull();
+		expect(snapshot.currentNodeId).toBeNull();
+	});
+
+	it('stores structured plan updates for the active request', () => {
+		const store = createRuntimeStore();
+
+		store.dispatch(event('run_started', {request_id: 'request-plan'}));
+		store.dispatch(event('plan_updated', {
+			request_id: 'request-plan',
+			node_id: 'tool_exec',
+			payload: {
+				version: 'plan_state.v0',
+				goal: '分析论文并导出报告',
+				status: 'active',
+				current_step_id: 'step_1',
+				source_node_id: 'tool_exec',
+				steps: [
+					{
+						step_id: 'step_1',
+						title: '读取论文',
+						objective: '提取论文正文',
+						status: 'in_progress',
+						depends_on: [],
+						acceptance_criteria: ['正文可用于分析'],
+						tool_hints: ['pdf_analyzer']
+					},
+					{
+						step_id: 'step_2',
+						title: '导出 PDF',
+						objective: '生成排版 PDF',
+						status: 'pending',
+						depends_on: ['step_1'],
+						acceptance_criteria: [],
+						tool_hints: ['report_to_pdf']
+					}
+				]
+			}
+		}));
+
+		const plan = store.getSnapshot().currentPlan;
+		expect(plan?.goal).toBe('分析论文并导出报告');
+		expect(plan?.currentStepId).toBe('step_1');
+		expect(plan?.steps.map(step => step.title)).toEqual(['读取论文', '导出 PDF']);
+		expect(plan?.steps[0]?.toolHints).toEqual(['pdf_analyzer']);
+	});
+
+	it('ignores stale structured plan updates', () => {
+		const store = createRuntimeStore();
+
+		store.dispatch(event('run_started', {request_id: 'request-current'}));
+		store.dispatch(event('plan_updated', {
+			request_id: 'request-old',
+			payload: {
+				status: 'active',
+				steps: [{step_id: 'step_1', title: '旧计划', objective: '', status: 'in_progress'}]
+			}
+		}));
+
+		expect(store.getSnapshot().currentPlan).toBeNull();
+		expect(store.getSnapshot().events.at(-1)?.event_type).toBe('plan_updated');
+	});
+
+	it('does not treat node failure as a run terminal event', () => {
+		const store = createRuntimeStore();
+
+		store.dispatch(event('run_started', {request_id: 'request-node-failure'}));
+		store.dispatch(event('node_failed', {
+			request_id: 'request-node-failure',
+			node_id: 'tool_exec',
+			payload: {message: 'tool node failed'}
+		}));
+
+		const snapshot = store.getSnapshot();
+		expect(snapshot.runStatus).toBe('running');
+		expect(snapshot.activeRequestId).toBe('request-node-failure');
+		expect(snapshot.nodeStatuses.tool_exec?.status).toBe('failed');
+		expect(snapshot.lastError).toContain('tool node failed');
 	});
 
 	it('summarizes session tool messages instead of showing raw JSON', () => {
@@ -152,7 +327,9 @@ describe('RuntimeStore', () => {
 
 	it('merges tool approval into the proposed tool card without transcript duplication', () => {
 		const store = createRuntimeStore();
+		store.dispatch(event('run_started', {request_id: 'request-approval'}));
 		store.dispatch(event('tool_call_proposed', {
+			request_id: 'request-approval',
 			payload: {
 				tool_call_id: 'call-write-1',
 				tool_name: 'write',
@@ -160,6 +337,7 @@ describe('RuntimeStore', () => {
 			}
 		}));
 		store.dispatch(event('tool_approval_requested', {
+			request_id: 'request-approval',
 			payload: {
 				type: 'tool_approval',
 				requests: [
@@ -173,6 +351,7 @@ describe('RuntimeStore', () => {
 			}
 		}));
 		store.dispatch(event('interrupt_requested', {
+			request_id: 'request-approval',
 			payload: {
 				type: 'tool_approval',
 				requests: [
@@ -195,7 +374,9 @@ describe('RuntimeStore', () => {
 
 	it('renders capability realization interrupts as assistant dialogue', () => {
 		const store = createRuntimeStore();
+		store.dispatch(event('run_started', {request_id: 'request-question'}));
 		store.dispatch(event('interrupt_requested', {
+			request_id: 'request-question',
 			payload: {
 				type: 'assistant_question',
 				presentation: 'assistant_dialogue',
@@ -234,7 +415,9 @@ describe('RuntimeStore', () => {
 
 	it('resolves tool approval without creating a second raw tool activity', () => {
 		const store = createRuntimeStore();
+		store.dispatch(event('run_started', {request_id: 'request-approval'}));
 		store.dispatch(event('tool_call_proposed', {
+			request_id: 'request-approval',
 			payload: {
 				tool_call_id: 'call-write-1',
 				tool_name: 'write',
@@ -242,13 +425,16 @@ describe('RuntimeStore', () => {
 			}
 		}));
 		store.dispatch(event('tool_approval_requested', {
+			request_id: 'request-approval',
 			payload: {
 				type: 'tool_approval',
 				requests: [{tool_call_id: 'call-write-1', tool_name: 'write', args: {path: 'draft.txt'}}]
 			}
 		}));
 		expect(store.getSnapshot().pendingInterrupt?.event_type).toBe('tool_approval_requested');
+		store.dispatch(event('run_started', {request_id: 'request-resume'}));
 		store.dispatch(event('tool_approval_resolved', {
+			request_id: 'request-resume',
 			payload: {action: 'deny', approved: false}
 		}));
 
@@ -262,7 +448,9 @@ describe('RuntimeStore', () => {
 
 	it('marks trusted tool approval without creating a second activity', () => {
 		const store = createRuntimeStore();
+		store.dispatch(event('run_started', {request_id: 'request-approval'}));
 		store.dispatch(event('tool_call_proposed', {
+			request_id: 'request-approval',
 			payload: {
 				tool_call_id: 'call-write-1',
 				tool_name: 'write',
@@ -270,12 +458,15 @@ describe('RuntimeStore', () => {
 			}
 		}));
 		store.dispatch(event('tool_approval_requested', {
+			request_id: 'request-approval',
 			payload: {
 				type: 'tool_approval',
 				requests: [{tool_call_id: 'call-write-1', tool_name: 'write', args: {path: 'draft.txt'}}]
 			}
 		}));
+		store.dispatch(event('run_started', {request_id: 'request-resume'}));
 		store.dispatch(event('tool_approval_resolved', {
+			request_id: 'request-resume',
 			payload: {action: 'trust_tool', approved: true, trust_scope: 'tool'}
 		}));
 
@@ -338,8 +529,10 @@ describe('RuntimeStore', () => {
 	it('shows context activity when context is injected', () => {
 		vi.useFakeTimers();
 		const store = createRuntimeStore();
+		store.dispatch(event('run_started', {request_id: 'request-context'}));
 
 		store.dispatch(event('context_injection_completed', {
+			request_id: 'request-context',
 			payload: {
 				node_id: 'answer',
 				item_count: 3,
@@ -395,8 +588,10 @@ describe('RuntimeStore', () => {
 	it('shows skipped context compression separately from completed compression', () => {
 		vi.useFakeTimers();
 		const store = createRuntimeStore();
+		store.dispatch(event('run_started', {request_id: 'request-context'}));
 
 		store.dispatch(event('context_compression_skipped', {
+			request_id: 'request-context',
 			payload: {
 				node_id: 'answer',
 				status: 'skipped',
@@ -418,8 +613,10 @@ describe('RuntimeStore', () => {
 	it('keeps compression running until a terminal context event arrives', () => {
 		vi.useFakeTimers();
 		const store = createRuntimeStore();
+		store.dispatch(event('run_started', {request_id: 'request-context'}));
 
 		store.dispatch(event('context_compression_started', {
+			request_id: 'request-context',
 			payload: {node_id: 'answer', status: 'started'}
 		}));
 
@@ -428,6 +625,7 @@ describe('RuntimeStore', () => {
 		expect(contextActivityStatusLabel(store.getSnapshot().contextActivity)).toContain('压缩中');
 
 		store.dispatch(event('context_compression_completed', {
+			request_id: 'request-context',
 			payload: {node_id: 'answer', status: 'completed'}
 		}));
 		vi.advanceTimersByTime(2500);

@@ -11,6 +11,10 @@ from agent_factory.memory_system import MemorySystemConfig, default_agent_memory
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
+from agent_factory.runtime_defaults import (
+    DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
+    DEFAULT_BUILTIN_WORKSPACE_ROOT,
+)
 
 
 ContractType = Literal[
@@ -151,8 +155,8 @@ class ToolsContractConfig(BaseModel):
 
     builtin_tools_enabled: bool = True
     builtin_tool_ids: list[str] = Field(default_factory=list)
-    builtin_workspace_root: str = "/workdir"
-    builtin_allow_external_paths: bool = False
+    builtin_workspace_root: str = DEFAULT_BUILTIN_WORKSPACE_ROOT
+    builtin_allow_external_paths: bool = DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS
     package_tools_enabled: bool = True
     instance_extensions_enabled: bool = True
     instance_extension_root: str = ".agent_runtime/extensions"

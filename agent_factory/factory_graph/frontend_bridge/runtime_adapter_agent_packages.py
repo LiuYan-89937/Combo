@@ -11,10 +11,16 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryMode,
     event,
 )
+from agent_factory.factory_graph.frontend_bridge.runtime_events import (
+    INTERRUPT_TERMINAL_EVENT_TYPES,
+    RUN_TERMINAL_EVENT_TYPES,
+    runtime_stream_status,
+)
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     PendingAgentPackageRun,
     PendingCreateAgentRun,
+    PendingEvolutionRun,
     SYSTEM_CHAT_PACKAGE_ID,
 )
 from agent_factory.runtime_attachments import (
@@ -174,6 +180,9 @@ class RuntimeAgentPackageCommandMixin:
         if not message:
             self._emit_error(command, "run_agent_evolution requires message")
             return
+        if self.pending_evolution_run is not None:
+            self._emit_error(command, "cannot evolve an agent while an interrupt is pending")
+            return
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=command.request_id,
@@ -189,7 +198,7 @@ class RuntimeAgentPackageCommandMixin:
                 request_id=command.request_id,
                 session_id=self._session_id(),
             )
-            self._consume_evolution_stream(run=run)
+            self._consume_evolution_stream(package_id=package_id, run=run)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
@@ -209,20 +218,32 @@ class RuntimeAgentPackageCommandMixin:
             )
         )
 
-    def _consume_evolution_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
+    def _consume_evolution_stream(self, *, package_id: str, run: Any) -> RuntimeStreamConsumeResult:
         terminal_event: FactoryFrontendEvent | None = None
         for stream_mode, chunk in run.events:
+            if terminal_event is not None:
+                continue
             if stream_mode != "frontend_event":
                 continue
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-            if item.event_type in {"run_completed", "run_failed"}:
+            if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
+                session_id = self._session_id()
+                if not session_id:
+                    raise RuntimeError("agent evolution interrupt missing session_id")
+                self.pending_evolution_run = PendingEvolutionRun(
+                    package_id=package_id,
+                    session_id=session_id,
+                    trace_id=run.trace_id,
+                    interrupt_id=_interrupt_id_from_event(item),
+                )
+                self.emit(_frontend_scoped_agent_event(item, mode="evolve_agent", session_id=session_id))
                 terminal_event = item
+                continue
             self.emit(_frontend_scoped_agent_event(item, mode="evolve_agent", session_id=self._session_id()))
+            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                terminal_event = item
         if terminal_event is not None:
-            return RuntimeStreamConsumeResult(
-                status="failed" if terminal_event.event_type == "run_failed" else "completed",
-                terminal_event=terminal_event,
-            )
+            return RuntimeStreamConsumeResult(status=runtime_stream_status(terminal_event), terminal_event=terminal_event)
         raise RuntimeError("agent evolution runtime stream ended without a terminal event")
 
     def _resume_agent_package_interrupt(self, command: FactoryFrontendCommand) -> None:
@@ -272,6 +293,31 @@ class RuntimeAgentPackageCommandMixin:
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
+    def _resume_evolution_interrupt(self, command: FactoryFrontendCommand) -> None:
+        pending = self.pending_evolution_run
+        self.pending_evolution_run = None
+        if pending is None:
+            self._emit_error(command, "no pending evolution interrupt to resume")
+            return
+        normalizer = RuntimeEventNormalizer(
+            emit=self.emit,
+            request_id=command.request_id,
+            session_id=self._session_id(),
+            mode="evolve_agent",
+            graph_id="agent_evolution",
+            producer_type="factory_runtime",
+        )
+        try:
+            run = self.evolution_runtime.resume_stream(
+                package_id=pending.package_id,
+                session_id=pending.session_id,
+                resume_payload=command.payload,
+                request_id=command.request_id,
+            )
+            self._consume_evolution_stream(package_id=pending.package_id, run=run)
+        except Exception as exc:
+            normalizer.emit_run_failed(exc)
+
     def cancel_runtime_request(self, command: FactoryFrontendCommand) -> None:
         reason = str(command.payload.get("reason") or "user_cancelled")
         cancelled = (
@@ -279,7 +325,10 @@ class RuntimeAgentPackageCommandMixin:
             if self.agent_package_runtime
             else 0
         )
+        if self.evolution_runtime is not None:
+            cancelled += self.evolution_runtime.cancel_active_requests(reason=reason)
         self.pending_agent_package_run = None
+        self.pending_evolution_run = None
         if self.pending_create_agent_run is not None:
             cancelled += 1
             self.pending_create_agent_run = None
@@ -307,6 +356,8 @@ class RuntimeAgentPackageCommandMixin:
         final_state = None
         terminal_event: FactoryFrontendEvent | None = None
         for stream_mode, chunk in run.events:
+            if terminal_event is not None:
+                continue
             if stream_mode == "frontend_event":
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
                 agent_session_id = item.session_id
@@ -314,11 +365,9 @@ class RuntimeAgentPackageCommandMixin:
                     run.session["session_id"] = agent_session_id
                     if frontend_mode == "chat":
                         self._remember_system_chat_agent_session_id(agent_session_id)
-                if item.event_type in {"run_completed", "run_failed"}:
-                    terminal_event = item
                 if item.event_type == "run_completed" and frontend_mode == "chat":
                     self._sync_system_chat_session_summary(item)
-                if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
+                if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                     session_id = str(agent_session_id or (run.session or {}).get("session_id") or "")
                     if not session_id:
                         raise RuntimeError("agent package interrupt missing session_id")
@@ -329,8 +378,8 @@ class RuntimeAgentPackageCommandMixin:
                         interrupt_id=_interrupt_id_from_event(item),
                     )
                 self.emit(_frontend_scoped_agent_event(item, mode=frontend_mode, session_id=frontend_session_id))
-                if item.event_type in {"tool_approval_requested", "interrupt_requested"}:
-                    return RuntimeStreamConsumeResult(status="interrupted", terminal_event=item)
+                if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES or item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                    terminal_event = item
                 continue
             if stream_mode == "stderr":
                 normalizer.runtime_event(
@@ -357,10 +406,7 @@ class RuntimeAgentPackageCommandMixin:
                 continue
             normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="agent_package_update")
         if terminal_event is not None:
-            return RuntimeStreamConsumeResult(
-                status="failed" if terminal_event.event_type == "run_failed" else "completed",
-                terminal_event=terminal_event,
-            )
+            return RuntimeStreamConsumeResult(status=runtime_stream_status(terminal_event), terminal_event=terminal_event)
         if final_state is None:
             raise RuntimeError("agent package runtime did not produce a final state")
         if not runtime_completed(final_state):
@@ -369,6 +415,7 @@ class RuntimeAgentPackageCommandMixin:
             normalizer.emit_run_failed(RuntimeError(message))
             return RuntimeStreamConsumeResult(status="failed", message=message)
         normalizer.complete_open_model_streams(reason="run_completed")
+        normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
         normalizer.emit_run_completed(
             {
                 "status": final_state.execution.finish_status,
@@ -487,21 +534,21 @@ class RuntimeAgentPackageCommandMixin:
     def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
         terminal_event: FactoryFrontendEvent | None = None
         for stream_mode, chunk in run.events:
+            if terminal_event is not None:
+                continue
             if stream_mode != "frontend_event":
                 raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-            if item.event_type in {"run_completed", "run_failed"}:
-                terminal_event = item
-            if item.event_type in {"interrupt_requested", "tool_approval_requested"}:
+            if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 self.pending_create_agent_run = PendingCreateAgentRun(session_id=run.session_id)
                 self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
-                return RuntimeStreamConsumeResult(status="interrupted", terminal_event=item)
+                terminal_event = item
+                continue
             self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
+            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                terminal_event = item
         if terminal_event is not None:
-            return RuntimeStreamConsumeResult(
-                status="failed" if terminal_event.event_type == "run_failed" else "completed",
-                terminal_event=terminal_event,
-            )
+            return RuntimeStreamConsumeResult(status=runtime_stream_status(terminal_event), terminal_event=terminal_event)
         raise RuntimeError("create-agent runtime stream ended without a terminal event")
 
 

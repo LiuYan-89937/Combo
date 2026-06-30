@@ -13,6 +13,15 @@ from agent_factory.runtime_kernel.state import PlanEvent, PlanState, PlanStep, R
 RUNTIME_PLAN_TOOL_ID = "runtime_plan"
 PLAN_AND_EXECUTE_PATTERN_ID = "plan_and_execute"
 
+
+def is_plan_and_execute_pattern_id(pattern_id: str | None) -> bool:
+    value = str(pattern_id or "").strip()
+    if value == PLAN_AND_EXECUTE_PATTERN_ID:
+        return True
+    namespace, separator, base_pattern_id = value.rpartition("__")
+    return bool(separator and namespace and base_pattern_id == PLAN_AND_EXECUTE_PATTERN_ID)
+
+
 PlanAction = Literal[
     "inspect",
     "create_plan",
@@ -30,11 +39,20 @@ PlanAction = Literal[
 class RuntimePlanStepInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: str
-    objective: str
-    depends_on: list[str] = Field(default_factory=list)
-    acceptance_criteria: list[str] = Field(default_factory=list)
-    tool_hints: list[str] = Field(default_factory=list)
+    title: str = Field(description="Short outcome-oriented plan step title. Do not name the step after a tool call.")
+    objective: str = Field(description="What this step should understand, decide, produce, or verify for the user.")
+    depends_on: list[str] = Field(
+        default_factory=list,
+        description="Step ids that must be completed before this step can be started.",
+    )
+    acceptance_criteria: list[str] = Field(
+        default_factory=list,
+        description="Concrete evidence or output that lets the executor know this step is complete.",
+    )
+    tool_hints: list[str] = Field(
+        default_factory=list,
+        description="Optional tool ids that may help; tools are implementation hints, not the plan objective.",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -79,8 +97,11 @@ def runtime_plan_model_tool() -> StructuredTool:
         func=_placeholder,
         name=RUNTIME_PLAN_TOOL_ID,
         description=(
-            "Manage the current run's dynamic plan state. Use it to inspect, create, start, complete, fail, skip, add, "
-            "revise, complete, or fail plan steps. Do not write the whole plan state directly."
+            "Manage the current run's dynamic plan state. Create outcome-oriented plan steps before execution. "
+            "A plan step should describe an analytical, verification, construction, or delivery objective; "
+            "do not make steps merely a list of tool calls. Put useful tool ids in tool_hints. "
+            "Use it to inspect, create, start, complete, fail, skip, add, revise, complete, or fail plan steps. "
+            "Do not write the whole plan state directly."
         ),
         args_schema=RuntimePlanToolInput,
         infer_schema=False,

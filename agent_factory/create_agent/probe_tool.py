@@ -13,7 +13,7 @@ from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ConfigDict
 
 from agent_factory.create_agent.models import PackageToolProbeRecord
-from agent_factory.create_agent.validation_state import package_digest, package_fingerprint
+from agent_factory.create_agent.validation_state import package_digest, package_fingerprint, package_tool_digest
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import AgentRuntimeLaunchError, DockerAgentRuntimeLauncher
 from agent_factory.models import get_task_model
@@ -139,15 +139,19 @@ def _inspect(workspace: CreateAgentWorkspace) -> dict[str, Any]:
     latest = state.latest_by_tool()
     tools = []
     current_digest = package_digest(workspace.root)
+    current_fingerprint = package_fingerprint(workspace.root)
+    current_tool_digests: dict[str, str] = {}
     for spec in discovery.tool_specs:
         record = latest.get(spec.id)
+        current_tool_digest = package_tool_digest(workspace.root, spec.id, fingerprint=current_fingerprint)
+        current_tool_digests[spec.id] = current_tool_digest
         tools.append(
             {
                 "tool_id": spec.id,
                 "description": spec.description,
                 "input_schema": spec.input_schema,
                 "risk_level": spec.risk_level,
-                "last_probe": _probe_record_summary(record, current_digest=current_digest) if record else None,
+                "last_probe": _probe_record_summary(record, current_tool_digest=current_tool_digest) if record else None,
             }
         )
     return tool_envelope(
@@ -157,9 +161,11 @@ def _inspect(workspace: CreateAgentWorkspace) -> dict[str, Any]:
             "probe": {
                 "required": bool(tools),
                 "current_package_digest": current_digest,
+                "current_tool_digests": current_tool_digests,
                 "guidance": "Call each generated package tool once with realistic arguments before final validation. Prompt and tool_goal provide human-readable context.",
                 "publish_gate": "A probe that only verifies error handling is not sufficient for publish readiness.",
                 "input_mode": "direct_tool_execution_with_optional_prompt_to_arguments",
+                "freshness": "tool_scoped_digest",
             },
             "diagnostics": [_diagnostic_payload(item) for item in discovery.diagnostics],
         },
@@ -251,6 +257,8 @@ def _call(
                 "errors": record.errors,
                 "changed_files": changed_files,
                 "package_digest": record.package_digest,
+                "tool_digest": record.tool_digest,
+                "tool_digest_kind": record.tool_digest_kind,
             },
             "diagnostics": [_diagnostic_payload(item) for item in discovery.diagnostics],
         },
@@ -584,6 +592,7 @@ def _record_from_direct_probe(
             {"tool_id": tool_id, "arguments": arguments}
         ],
         package_digest=package_digest(workspace.root),
+        tool_digest=package_tool_digest(workspace.root, tool_id),
         status="passed" if contract_passed else "failed",
         observation_status=observation_status,
         execution_status=execution_status,
@@ -765,7 +774,9 @@ def _evaluate_probe_observation(
         ),
     ]
     try:
-        structured = model.with_structured_output(PackageToolProbeEvaluation, method="json_mode")
+        structured = model.with_structured_output(PackageToolProbeEvaluation, method="json_mode").with_config(
+            tags=["nostream"]
+        )
         result = _invoke_with_timeout(
             structured,
             evaluation_messages,
@@ -786,10 +797,13 @@ def _evaluate_probe_observation(
         }
 
 
-def _probe_record_summary(record: PackageToolProbeRecord, *, current_digest: str) -> dict[str, Any]:
+def _probe_record_summary(record: PackageToolProbeRecord, *, current_tool_digest: str) -> dict[str, Any]:
     return {
         "status": record.status,
-        "stale": record.package_digest != current_digest,
+        "stale": record.tool_digest != current_tool_digest,
+        "tool_digest": record.tool_digest,
+        "current_tool_digest": current_tool_digest,
+        "tool_digest_kind": record.tool_digest_kind,
         "probe_kind": record.probe_kind,
         "goal_satisfied": record.goal_satisfied,
         "tool_returned_business_output": record.tool_returned_business_output,

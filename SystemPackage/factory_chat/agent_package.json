@@ -31,12 +31,5 @@
     "tools": "contracts/tools.json",
     "trace": "contracts/trace.json"
   },
-  "bindings": {},
-  "prompts": [
-    "prompts/factory_chat.md"
-  ],
-  "tools": [],
-  "policies": [],
-  "strategies": [],
-  "formatters": []
+  "tools": []
 }

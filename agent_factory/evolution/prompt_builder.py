@@ -17,6 +17,7 @@ def build_evolution_messages(
     user_input: str,
     error_pack: dict[str, Any],
     trace_gate: dict[str, Any] | None = None,
+    target_plan: dict[str, Any] | None = None,
     package_summary: dict[str, Any],
     tools: list[Any],
 ) -> list[BaseMessage]:
@@ -39,9 +40,14 @@ def build_evolution_messages(
 - 修改必须是结构性修复：优先修 prompt、contracts、tool 实现、依赖声明、附件处理、上下文策略等真实 package surface。
 - 不做短中长期计划；一次进化就奔着可发布结果。
 - 如果证据不足，做最小必要的 package 检查后给出保守修改，不要凭空硬编码特例。
+- 在第一次修改任何文件前，必须先调用 skill(action="load", name="00-agent-evolution", current_system="agent_evolution", reason=...) 读取进化专用流程。
+- 进化顺序必须是：定向定位修改面 -> 选择唯一 authoring/write 策略 -> 一次性修改相关 surface -> probe/validate -> 根据新证据修复或收束。不要在 dependencies、assembly、tool source 之间来回试错。
+- 系统会提供 evolution_target_plan。它是本轮进化的执行边界：只能优先读取 required_first_reads，只能围绕 target_files 修改，只能调用 allowed_authoring_actions 中的 create_agent_authoring action。
+- 如果 evolution_target_plan.write_strategy 无法表达用户目标，或者 authoring 工具缺少必要字段，停止并报告 authoring gap；不要用 generic edit/write 绕过 managed file protection。
 - 如果新增或修改 package tool，必须使用 create_agent_probe_tool(action="inspect") 和 create_agent_probe_tool(action="call", probe_kind="success_path", ...) 生成 fresh successful-path probe 证据。
 - 如果后续 full_static validation 失败，系统会把验证报告作为新 observation 发给你；你必须继续 ReAct 修复，而不是重复总结失败。
-- 完成修改后停止调用工具，用中文总结：识别的问题、修改的文件、为什么这些修改对应 trace 报错、剩余风险。
+- full_static validation 通过后，必须把中文进化总结放入 create_agent_control(action="finalize", message=...) 并调用它收束本次进化；不要调用 create_agent_stage，它是制造期工具，进化模式不可用。
+- finalize 工具调用完成后不要再生成额外总结或继续调用工具；运行时会使用 finalize 的 message 作为唯一终态摘要。
 
 可用工具：{tool_names}
 """
@@ -51,6 +57,7 @@ def build_evolution_messages(
         "user_evolution_goal": user_input,
         "package_summary": package_summary,
         "trace_gate": trace_gate or {},
+        "evolution_target_plan": target_plan or {},
         **(
             {"failed_trace_error_pack": error_pack}
             if error_pack
@@ -83,6 +90,7 @@ def build_evolution_prompt(
             error_pack=context.get("error_pack") if isinstance(context.get("error_pack"), dict) else {},
             trace_gate=context.get("trace_gate") if isinstance(context.get("trace_gate"), dict) else {},
             package_summary=context.get("package_summary") if isinstance(context.get("package_summary"), dict) else {},
+            target_plan=context.get("target_plan") if isinstance(context.get("target_plan"), dict) else {},
             tools=tools,
         ),
         *list(state.get("messages") or []),

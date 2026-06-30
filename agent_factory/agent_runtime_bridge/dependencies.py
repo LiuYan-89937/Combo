@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -33,6 +35,8 @@ def ensure_dependencies(
     config = contract.config
     package_digest = _file_digest(package_root / "agent_package.json")
     dependencies_digest = _file_digest(package_root / "contracts" / "dependencies.json")
+    cache_paths = _dependency_cache_paths(runtime_root)
+    _ensure_python_cache_on_path(cache_paths)
     runtime_environment = _runtime_environment()
     report = {
         "status": "skipped",
@@ -45,6 +49,7 @@ def ensure_dependencies(
         "system_packages": list(config.system_packages),
         "system_binaries": list(config.system_binaries),
         "runtime_environment": runtime_environment,
+        "dependency_cache": _cache_report(cache_paths),
         "checks": [],
         "installs": [],
         "errors": [],
@@ -128,18 +133,24 @@ def ensure_dependencies(
     missing_python = list(check["python_missing"])
     missing_system_packages = list(check["system_packages_missing"])
     if missing_system_packages:
-        update = _run("system_update", ["apt-get", "update"], timeout_seconds=120)
+        update = _run("system_update", _apt_command(cache_paths, "update"), timeout_seconds=120)
         report["installs"].append({"kind": "system_update", **update})
         if update["exit_code"] == 0:
-            install = _run("system_install", ["apt-get", "install", "-y", *missing_system_packages], timeout_seconds=300)
+            install = _run(
+                "system_install",
+                _apt_command(cache_paths, "install", "-y", *missing_system_packages),
+                timeout_seconds=300,
+            )
             report["installs"].append({"kind": "system_install", **install})
             if install["exit_code"] != 0:
                 report["errors"].append({"where": "dependency.system_packages", "message": "system dependency installation failed"})
         else:
             report["errors"].append({"where": "dependency.system_packages", "message": "apt-get update failed"})
     if missing_python:
-        install = _run("python_install", [sys.executable, "-m", "pip", "install", *missing_python], timeout_seconds=300)
+        install = _run("python_install", _pip_install_command(cache_paths, missing_python), timeout_seconds=300)
         report["installs"].append({"kind": "python_install", **install})
+        _ensure_python_cache_on_path(cache_paths)
+        importlib.invalidate_caches()
         if install["exit_code"] != 0:
             report["errors"].append({"where": "dependency.python_requirements", "message": "python dependency installation failed"})
     post_check = _dependency_check(
@@ -239,6 +250,64 @@ def _runtime_environment() -> dict[str, str]:
         "python_version": sys.version.split()[0],
         "sys_prefix": sys.prefix,
     }
+
+
+def _dependency_cache_paths(runtime_root: Path | None) -> dict[str, Path]:
+    if runtime_root is None:
+        return {}
+    root = runtime_root / "dependency_cache"
+    return {
+        "root": root,
+        "python_site": root / "python_site",
+        "pip_cache": root / "pip",
+        "apt_archives": root / "apt" / "archives",
+        "apt_lists": root / "apt" / "lists",
+    }
+
+
+def _ensure_python_cache_on_path(cache_paths: dict[str, Path]) -> None:
+    python_site = cache_paths.get("python_site")
+    if python_site is None:
+        return
+    python_site.mkdir(parents=True, exist_ok=True)
+    site = str(python_site)
+    if site not in sys.path:
+        sys.path.insert(0, site)
+    pythonpath = [item for item in os.environ.get("PYTHONPATH", "").split(os.pathsep) if item]
+    if site not in pythonpath:
+        os.environ["PYTHONPATH"] = os.pathsep.join([site, *pythonpath])
+
+
+def _cache_report(cache_paths: dict[str, Path]) -> dict[str, str]:
+    return {key: str(path) for key, path in cache_paths.items()}
+
+
+def _pip_install_command(cache_paths: dict[str, Path], requirements: list[str]) -> list[str]:
+    command = [sys.executable, "-m", "pip", "install", "--upgrade"]
+    pip_cache = cache_paths.get("pip_cache")
+    python_site = cache_paths.get("python_site")
+    if pip_cache is not None:
+        pip_cache.mkdir(parents=True, exist_ok=True)
+        command.extend(["--cache-dir", str(pip_cache)])
+    if python_site is not None:
+        python_site.mkdir(parents=True, exist_ok=True)
+        command.extend(["--target", str(python_site)])
+    command.extend(requirements)
+    return command
+
+
+def _apt_command(cache_paths: dict[str, Path], *args: str) -> list[str]:
+    command = ["apt-get"]
+    apt_archives = cache_paths.get("apt_archives")
+    apt_lists = cache_paths.get("apt_lists")
+    if apt_archives is not None:
+        (apt_archives / "partial").mkdir(parents=True, exist_ok=True)
+        command.extend(["-o", f"Dir::Cache::archives={apt_archives}"])
+    if apt_lists is not None:
+        (apt_lists / "partial").mkdir(parents=True, exist_ok=True)
+        command.extend(["-o", f"Dir::State::lists={apt_lists}"])
+    command.extend(args)
+    return command
 
 
 def _python_requirement_available(requirement: Requirement) -> bool:

@@ -18,6 +18,7 @@ ALLOWED_EDGE_CONDITIONS = {
     "model.requests_tool",
     "model.ready_to_answer",
     "intent.start_workflow",
+    "intent.casual",
     "intent.wait_for_input",
     "policy.blocked",
     "tool.completed",

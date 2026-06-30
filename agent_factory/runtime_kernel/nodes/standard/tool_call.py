@@ -6,9 +6,9 @@ from langchain_core.messages import ToolMessage
 
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.planning import (
-    PLAN_AND_EXECUTE_PATTERN_ID,
     RUNTIME_PLAN_TOOL_ID,
     execute_runtime_plan_action,
+    is_plan_and_execute_pattern_id,
 )
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.tooling.langgraph_node import (
@@ -68,6 +68,8 @@ class OperationalToolCallNode:
                 name=context.node_id,
                 allowed_tool_ids=set(visible_tool_ids),
                 known_tool_ids=set(registry.list_tool_ids()) if hasattr(registry, "list_tool_ids") else set(visible_tool_ids),
+                origin_node_id=origin_node_id,
+                origin_impl="cognitive.answer",
                 emit_event=context.emit_event,
             )
             output = runner.invoke(
@@ -80,7 +82,7 @@ class OperationalToolCallNode:
             )
             messages.extend(output.get("messages") or [])
         results, failures, policy_patch, route_decision = tool_messages_to_runtime_patch(messages)
-        route_decision = _caller_route_decision(state, origin_node_id, route_decision)
+        route_decision = _caller_route_decision(working_state, origin_node_id, route_decision)
         patch: dict[str, Any] = {
             "messages": messages,
             **plan_patch,
@@ -108,13 +110,24 @@ def _visible_tool_ids(
     *,
     origin_node_id: str,
 ) -> list[str]:
-    if state.run.pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
-        return [
-            tool_id
-            for tool_id in _tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
-            if tool_id != RUNTIME_PLAN_TOOL_ID
-        ]
+    if is_plan_and_execute_pattern_id(state.run.pattern_id):
+        return _plan_and_execute_delegated_tool_ids(context, registry, origin_node_id=origin_node_id)
     return _merge_tool_ids([*_allowed_tool_ids(context), *_system_tool_ids(registry)])
+
+
+def _plan_and_execute_delegated_tool_ids(
+    context: NodeExecutionContext,
+    registry: Any,
+    *,
+    origin_node_id: str,
+) -> list[str]:
+    node_tool_ids = _tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
+    if origin_node_id in {"executor", "casual_react"}:
+        return _without_tool_id(
+            _merge_tool_ids([*node_tool_ids, *_system_tool_ids(registry)]),
+            RUNTIME_PLAN_TOOL_ID,
+        )
+    return []
 
 
 def _system_tool_ids(registry: Any) -> list[str]:
@@ -174,6 +187,10 @@ def _merge_tool_ids(tool_ids: list[str]) -> list[str]:
     return items
 
 
+def _without_tool_id(tool_ids: list[str], blocked_tool_id: str) -> list[str]:
+    return [tool_id for tool_id in tool_ids if tool_id != blocked_tool_id]
+
+
 def _tool_registry_missing_messages(tool_calls: list[dict[str, Any]]):
     messages = []
     for call in tool_calls:
@@ -197,7 +214,7 @@ def _origin_node_id(state: RuntimeState, tool_calls: list[dict[str, Any]]) -> st
     origins.discard("")
     if len(origins) == 1:
         return next(iter(origins))
-    if state.run.pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
+    if is_plan_and_execute_pattern_id(state.run.pattern_id):
         raise RuntimeError("plan_and_execute tool calls must carry exactly one origin_node_id")
     return ""
 
@@ -289,10 +306,14 @@ def _messages_with_tool_calls(messages: list[Any], tool_calls: list[dict[str, An
 
 
 def _caller_route_decision(state: RuntimeState, origin_node_id: str, route_decision: str) -> str:
-    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+    if not is_plan_and_execute_pattern_id(state.run.pattern_id):
         return route_decision
     if route_decision == "policy.blocked":
         return route_decision
-    if origin_node_id in {"planner", "executor"}:
-        return f"tool.return.{origin_node_id}"
+    if origin_node_id == "planner":
+        if state.plan.status == "active":
+            return "tool.return.executor"
+        return "tool.return.planner"
+    if origin_node_id == "executor":
+        return "tool.return.executor"
     return route_decision

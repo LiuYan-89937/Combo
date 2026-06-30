@@ -6,14 +6,24 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 
-TERMINAL_EVENT_TYPES = {
+RUN_TERMINAL_EVENT_TYPES = {
     "run_completed",
     "run_failed",
+}
+
+INTERRUPT_TERMINAL_EVENT_TYPES = {
     "tool_approval_requested",
     "interrupt_requested",
+}
+
+REQUEST_TERMINAL_EVENT_TYPES = {
+    *RUN_TERMINAL_EVENT_TYPES,
+    *INTERRUPT_TERMINAL_EVENT_TYPES,
     "agent_package_sessions_listed",
     "error",
 }
+
+TERMINAL_EVENT_TYPES = REQUEST_TERMINAL_EVENT_TYPES
 
 
 def node_event(
@@ -120,5 +130,13 @@ def is_terminal_request_event(item: Any, request_id: str) -> bool:
     return (
         isinstance(item, FactoryFrontendEvent)
         and item.request_id == request_id
-        and item.event_type in TERMINAL_EVENT_TYPES
+        and item.event_type in REQUEST_TERMINAL_EVENT_TYPES
     )
+
+
+def runtime_stream_status(item: FactoryFrontendEvent) -> str:
+    if item.event_type in {"run_failed", "error"}:
+        return "failed"
+    if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
+        return "interrupted"
+    return "completed"

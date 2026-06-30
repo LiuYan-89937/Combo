@@ -13,13 +13,19 @@ from agent_factory.tooling.builtins.filesystem.common import (
     write_focus_facts,
 )
 from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.executor_fallback import executor_fallback_risk
+from agent_factory.tooling.risk import merge_risk_results
+from agent_factory.tooling.spec import ToolRiskResult
 
 
 FOCUS_EVIDENCE_KEY = "focus"
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    return path_risk_result(arguments, context, default_action="ask", sensitive_action="ask")
+    path_risk = ToolRiskResult.model_validate(path_risk_result(arguments, context, default_action="ask", sensitive_action="ask"))
+    fallback_risk = executor_fallback_risk(arguments, context)
+    risks = [path_risk, *([fallback_risk] if fallback_risk is not None else [])]
+    return merge_risk_results(risks, base_risk_level="medium").model_dump(mode="json")
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:

@@ -39,8 +39,11 @@ Guides built-in runtime assembly bindings and runtime behavior.
 - Use `react_agent` for direct ReAct behavior.
 - Use `plan_and_execute` only when the agent should create and maintain a dynamic per-run plan before and during execution.
 - Configure built-in pattern bindings with create_agent_authoring(action="configure_pattern_assembly"). Provide prompt text and allowed tool ids; the tool writes coherent prompt, tool_access, model_operation, render, and runtime pattern references.
-- For `plan_and_execute`, also provide `activation` with `workflow_goal`, `start_when`, and `ask_when_missing`. This lets the runtime stop casual or incomplete inputs before planner/executor begin.
+- For `plan_and_execute`, also provide `activation` with `workflow_goal`, `start_when`, and `ask_when_missing`. This lets the runtime route main workflow requests to planner/executor while routing non-main-workflow requests to the casual ReAct path.
 - For `plan_and_execute`, do not write concrete plan steps into AgentPackage files. Runtime creates the actual plan through `runtime_plan`.
+- For `plan_and_execute`, planner prompts should require outcome-oriented plan steps with `objective`, `acceptance_criteria`, and optional `tool_hints`. Do not ask the planner to produce a list of tool calls such as "read file -> write report"; tools belong in `tool_hints`.
+- For `plan_and_execute`, executor and casual ReAct inherit scanned default system/MCP tools at runtime in addition to node-bound package/domain tools. Do not manually add default MCP tool ids such as `bigopen_*` just to make them visible.
+- For `plan_and_execute`, executor receives package/domain tools, `knowledge`, `scheduler`, default system/MCP tools, read-only workspace tools (`glob`, `ls`, `read`), and guarded fallback tools (`bash`, `write`, `edit`). Executor prompts should tell the model to prefer package/domain tools and use guarded fallback tools only when the current plan step cannot be completed through available package/runtime tools.
 - The runtime system prompt belongs in assembly prompt bindings produced by create_agent_authoring.
 - Do not manually rewrite the whole assembly just to compare it with examples; use create_agent_authoring unless repairing a specific validator target path.
 - Use complete examples for object shape only when adding or repairing bindings.

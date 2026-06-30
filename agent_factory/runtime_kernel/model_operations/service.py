@@ -227,7 +227,7 @@ class ModelOperationService:
                     model=model,
                     output_model=output_model,
                     method=effective_structured_method,
-                    config_tags=config_tags,
+                    config_tags=_structured_config_tags(config_tags),
                 )
                 result = structured_model.invoke(request_messages)
                 if isinstance(result, output_model):
@@ -405,6 +405,15 @@ def _structured_model(
     if config_tags and hasattr(structured, "with_config"):
         structured = structured.with_config(tags=list(config_tags))
     return structured
+
+
+def _structured_config_tags(config_tags: list[str] | None) -> list[str]:
+    tags = ["nostream"]
+    for tag in config_tags or []:
+        item = str(tag).strip()
+        if item and item not in tags:
+            tags.append(item)
+    return tags
 
 
 def _effective_structured_method(*, requested: str | None, model_metadata: dict[str, Any]) -> str:

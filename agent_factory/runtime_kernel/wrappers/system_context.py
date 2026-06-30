@@ -7,10 +7,12 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
+from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
 CONTEXT_PREPARE_SYSTEM_WRAPPER_ID = "system.context_prepare"
+PLAN_AND_EXECUTE_DYNAMIC_CONTEXT_NODES = frozenset({"executor", "casual_react"})
 
 
 class ContextPrepareSystemWrapper:
@@ -38,6 +40,7 @@ class ContextPrepareSystemWrapper:
                 messages=list(context.graph_messages or []),
                 services=context.services,
                 resources=getattr(context.services, "runtime_resources", {}) or {},
+                enable_dynamic_evidence=_dynamic_evidence_enabled(state=state, context=context),
             )
         except Exception as exc:
             emit_context_event(
@@ -70,6 +73,12 @@ class ContextPrepareSystemWrapper:
             },
         )
         return result.state, patch
+
+
+def _dynamic_evidence_enabled(*, state: RuntimeState, context: NodeExecutionContext) -> bool:
+    if not is_plan_and_execute_pattern_id(state.run.pattern_id):
+        return True
+    return context.node_id in PLAN_AND_EXECUTE_DYNAMIC_CONTEXT_NODES
 
 
 SYSTEM_CONTEXT_PREPARE_WRAPPER = ContextPrepareSystemWrapper()

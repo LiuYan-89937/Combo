@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agent_factory.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -8,6 +9,12 @@ _INTEGER = {"type": "integer"}
 _BOOLEAN = {"type": "boolean"}
 _PROCESS_RESOURCE = {"process_runtime": "process_runtime"}
 _PROCESS_MODULE = "agent_factory.tooling.builtins.process"
+_CWD_BOUNDARY_DESCRIPTION = (
+    "可选工作目录；必须是当前 process workspace root 内的相对路径，"
+    "或位于 workspace root 内的绝对路径。"
+    f"默认 sandbox workspace root 是 {DEFAULT_BUILTIN_WORKSPACE_ROOT}。"
+    "不要使用 /tmp、宿主机路径或其他任意绝对路径，除非 runtime 显式允许外部路径。"
+)
 
 _PROCESS_STATUS_VALUES = ["running", "completed", "failed", "stopped"]
 _PROCESS_OUTPUT_SCHEMA = {
@@ -43,13 +50,13 @@ _PROCESS_OUTPUT_SCHEMA = {
 PROCESS_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="bash",
-        description="在本地环境启动 Bash 命令，支持前台等待或后台运行；wait 超时只返回状态，不自动终止进程。",
+        description="在 workspace 边界内启动 Bash 命令，支持前台等待或后台运行；wait 超时只返回状态，不自动终止进程。",
         entrypoint="agent_factory.tooling.builtins.process.bash:run",
         input_schema={
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "要执行的 Bash 命令文本。"},
-                "cwd": {"type": "string", "default": ".", "description": "可选工作目录。"},
+                "cwd": {"type": "string", "default": ".", "description": _CWD_BOUNDARY_DESCRIPTION},
                 "mode": {
                     "type": "string",
                     "enum": ["foreground", "background"],
@@ -69,6 +76,10 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                     "maximum": 200000,
                     "default": 12000,
                     "description": "本次返回的 stdout/stderr 尾部最大字符数。",
+                },
+                "fallback_reason": {
+                    "type": "string",
+                    "description": "executor 节点调用时必填：说明为什么当前可用的 package/runtime 工具无法完成此计划步骤，必须退回 Bash。",
                 },
             },
             "required": ["command"],

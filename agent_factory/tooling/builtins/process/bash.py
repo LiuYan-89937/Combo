@@ -12,6 +12,8 @@ from agent_factory.tooling.builtins.process.manager import (
     resolve_cwd,
     wait_seconds,
 )
+from agent_factory.tooling.executor_fallback import executor_fallback_risk
+from agent_factory.tooling.risk import merge_risk_results
 from agent_factory.tooling.spec import ToolRiskResult
 from agent_factory.tooling.envelope import tool_envelope
 
@@ -49,12 +51,15 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
         reasons.append(f"command starts with high-risk binary: {binary}")
     if facts["contains_shell_control"]:
         reasons.append("command contains shell control structure")
-    return ToolRiskResult(
+    command_risk = ToolRiskResult(
         action="ask",
         risk_level="high",
         reasons=reasons,
         facts=facts,
-    ).model_dump(mode="json")
+    )
+    fallback_risk = executor_fallback_risk(arguments, context)
+    risks = [command_risk, *([fallback_risk] if fallback_risk is not None else [])]
+    return merge_risk_results(risks, base_risk_level="high").model_dump(mode="json")
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
@@ -88,7 +93,10 @@ def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRis
         return ToolRiskResult(
             action="deny",
             risk_level="high",
-            reasons=[f"cwd is outside the configured process runtime boundary: {exc}"],
+            reasons=[
+                f"cwd is outside the configured process runtime boundary: {exc}",
+                _process_workspace_guidance(root),
+            ],
             facts={"process_root": str(root)},
         )
     if is_read_only_process_path(cwd, root=root, resources=tool_resources):
@@ -108,4 +116,12 @@ def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRis
             "cwd": str(cwd),
             "process_root": str(root),
         },
+    )
+
+
+def _process_workspace_guidance(root) -> str:
+    return (
+        "Use a relative cwd inside the workspace or an absolute cwd under "
+        f"process root {root}; do not use /tmp, host paths, or arbitrary absolute paths "
+        "unless external paths are explicitly enabled."
     )

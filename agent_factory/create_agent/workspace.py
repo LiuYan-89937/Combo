@@ -224,6 +224,32 @@ class CreateAgentWorkspace:
             },
         )
 
+    def reset_evolution_trace(
+        self,
+        *,
+        session_id: str | None,
+        request_id: str,
+        graph_id: str,
+        package_id: str,
+        trace_id: str | None,
+        target_plan: dict[str, Any],
+    ) -> None:
+        self._write_json(
+            self.manufacturing_trace_path,
+            {
+                "version": "agent_evolution_manufacturing_trace.v0",
+                "session_id": session_id,
+                "request_id": request_id,
+                "graph_id": graph_id,
+                "package_id": package_id,
+                "trace_id": trace_id,
+                "workspace_path": str(self.root),
+                "target_plan": target_plan,
+                "created_at": datetime.now(UTC).isoformat(),
+                "records": [],
+            },
+        )
+
     def append_manufacturing_trace_record(self, record: dict[str, Any]) -> None:
         payload = _read_json_object(self.manufacturing_trace_path)
         if payload.get("version") != "create_agent_manufacturing_trace.v0":
@@ -241,8 +267,34 @@ class CreateAgentWorkspace:
         payload["updated_at"] = datetime.now(UTC).isoformat()
         self._write_json(self.manufacturing_trace_path, payload)
 
+    def append_evolution_trace_record(self, record: dict[str, Any]) -> None:
+        payload = _read_json_object(self.manufacturing_trace_path)
+        if payload.get("version") != "agent_evolution_manufacturing_trace.v0":
+            payload = {
+                "version": "agent_evolution_manufacturing_trace.v0",
+                "workspace_path": str(self.root),
+                "created_at": datetime.now(UTC).isoformat(),
+                "records": [],
+            }
+        records = payload.get("records")
+        if not isinstance(records, list):
+            records = []
+            payload["records"] = records
+        records.append(record)
+        payload["updated_at"] = datetime.now(UTC).isoformat()
+        self._write_json(self.manufacturing_trace_path, payload)
+
     def manufacturing_trace_record_count(self) -> int:
         payload = _read_json_object(self.manufacturing_trace_path)
+        records = payload.get("records")
+        if not isinstance(records, list):
+            return 0
+        return len(records)
+
+    def evolution_trace_record_count(self) -> int:
+        payload = _read_json_object(self.manufacturing_trace_path)
+        if payload.get("version") != "agent_evolution_manufacturing_trace.v0":
+            return 0
         records = payload.get("records")
         if not isinstance(records, list):
             return 0

@@ -13,6 +13,7 @@ import {InterruptChoicePanel, isChoiceInterrupt} from './views/InterruptChoicePa
 import {InterruptPrompt} from './views/InterruptPrompt.js';
 import {AgentPackagePanel, AgentSessionPanel} from './views/AgentPackagePanel.js';
 import {LiveStatusLine} from './views/LiveStatusLine.js';
+import {PlanPanel} from './views/PlanPanel.js';
 import {SessionPanel} from './views/SessionPanel.js';
 import {ShellLayout} from './views/ShellLayout.js';
 import {TimelineView} from './views/TimelineView.js';
@@ -212,6 +213,7 @@ export function App() {
 		<RuntimeStoreProvider store={store}>
 			<ShellLayout>
 				<LiveStatusLine />
+				<PlanPanel />
 				<SessionPanel
 					onClose={() => store.dispatch({ui_type: 'set_session_picker_open', open: false})}
 					onSelect={sessionId => {

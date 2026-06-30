@@ -254,6 +254,7 @@ class ToolExecutionGateway:
             base_risk_level=self.spec.risk_level,
             arguments=arguments,
             resources=risk_context_resources,
+            tool_call=_current_tool_call_context(self.spec.id),
         ).model_dump(mode="json")
         results: list[ToolRiskResult] = []
         if self.hard_risk_evaluator is not None:
@@ -407,6 +408,18 @@ def default_tool_max_revisions() -> int:
 
 def _risk_guidance(risk: ToolRiskResult) -> str:
     return "\n".join(risk.reasons).strip()
+
+
+def _current_tool_call_context(tool_id: str) -> dict[str, Any]:
+    current = current_tool_call()
+    if current is None or current.tool_id != tool_id:
+        return {}
+    return {
+        "tool_id": current.tool_id,
+        "tool_call_id": current.tool_call_id,
+        "origin_node_id": current.origin_node_id,
+        "origin_impl": current.origin_impl,
+    }
 
 
 def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: ToolRiskResult) -> ToolApprovalDecision:

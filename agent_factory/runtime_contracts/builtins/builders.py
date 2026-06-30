@@ -188,7 +188,14 @@ class ToolsContractBuilder:
             model_tools=compiled_tools,
             system_tool_ids=system_tool_ids,
         )
-        return RuntimeContribution(services={"tool_registry": runtime_registry}, diagnostics=diagnostics)
+        return RuntimeContribution(
+            services={"tool_registry": runtime_registry},
+            diagnostics=diagnostics,
+            session_config={
+                "builtin_workspace_root": config.builtin_workspace_root,
+                "builtin_allow_external_paths": config.builtin_allow_external_paths,
+            },
+        )
 
 
 class MemoryContractBuilder:
@@ -271,7 +278,7 @@ class TraceContractBuilder:
             package_id=context.package.package_root.name,
             producer_type=producer_type,
             max_inline_payload_chars=config.max_inline_payload_chars,
-            runtime_log_store=RuntimeLogStore(context.runtime_root / "logs" / "runtime_kernel.jsonl"),
+            runtime_log_store=RuntimeLogStore(_runtime_log_path(context)),
         )
         reader = TraceReader(config.root)
         projector = TraceProjector(reader)
@@ -385,6 +392,11 @@ class ModelContractBuilder:
                 "model_operation_service": ModelOperationService(role=contract.config.role),
             }
         )
+
+
+def _runtime_log_path(context: RuntimeBuildContext) -> Path:
+    runtime_root = context.runtime_root if context.runtime_root is not None else context.package_root / ".agent_runtime"
+    return runtime_root / "logs" / "runtime_kernel.jsonl"
 
 
 class StateContractBuilder:

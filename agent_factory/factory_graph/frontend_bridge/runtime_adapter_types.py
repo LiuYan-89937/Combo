@@ -28,3 +28,11 @@ class PendingAgentPackageRun:
 @dataclass(slots=True)
 class PendingCreateAgentRun:
     session_id: str
+
+
+@dataclass(slots=True)
+class PendingEvolutionRun:
+    package_id: str
+    session_id: str
+    trace_id: str | None = None
+    interrupt_id: str | None = None

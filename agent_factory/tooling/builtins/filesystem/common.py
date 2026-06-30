@@ -85,7 +85,10 @@ def path_risk_result(
         return ToolRiskResult(
             action="deny",
             risk_level="high",
-            reasons=[f"path is outside the configured filesystem boundary: {exc}"],
+            reasons=[
+                f"path is outside the configured filesystem boundary: {exc}",
+                _workspace_path_guidance(root),
+            ],
             facts={"path": path_value, "filesystem_root": str(root)},
         ).model_dump(mode="json")
     is_write_like = default_action != "allow"
@@ -142,7 +145,10 @@ def path_risk_result(
         return ToolRiskResult(
             action="deny",
             risk_level="high",
-            reasons=["path is outside configured allowed_write_paths"],
+            reasons=[
+                "path is outside configured allowed_write_paths",
+                _workspace_path_guidance(root),
+            ],
             facts={
                 "path": path_value,
                 "resolved_path": str(resolved),
@@ -293,6 +299,14 @@ def _relative_path_text(path: Path, *, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
+
+
+def _workspace_path_guidance(root: Path) -> str:
+    return (
+        "Use a relative path inside the workspace or an absolute path under "
+        f"filesystem root {root}; do not use /tmp, host paths, or arbitrary absolute paths "
+        "unless external paths are explicitly enabled."
+    )
 
 
 def _target_focus_for_path(relative_path: str, focuses: dict[Any, Any]) -> str:

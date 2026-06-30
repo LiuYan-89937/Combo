@@ -2,6 +2,8 @@
 
 本文档定义 Factory 和生产出来的 Agent 共用的运行渲染管线。
 
+Web 前端落地请优先读取 [web_frontend_event_protocol.md](web_frontend_event_protocol.md)。当前实际传输协议为 `FactoryFrontendEvent` / `factory_frontend.v1`，事件目录以 `agent_factory/factory_graph/frontend_bridge/protocol_catalog.json` 为准。本文档保留 Runtime 渲染管线的设计背景与节点渲染约束。
+
 目标：
 
 - Factory 与生成 Agent 使用同一套事件协议。

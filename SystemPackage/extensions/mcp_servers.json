@@ -4,11 +4,11 @@
     {
       "server_id": "bigopen_llm_search",
       "transport": "stdio",
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "bigopen-llm-search"
+        "dist/index.js"
       ],
+      "cwd": "/Users/liuyan/Desktop/WebSearchApi",
       "env": {
         "SEARXNG_URL": "http://127.0.0.1:8888",
         "SEARXNG_AUTO_START": "true",
@@ -18,7 +18,8 @@
         "no_proxy": "127.0.0.1,localhost"
       },
       "source": {
-        "type": "github",
+        "type": "local",
+        "path": "/Users/liuyan/Desktop/WebSearchApi",
         "url": "https://github.com/LiuYan-89937/WebSearchApi",
         "package": "bigopen-llm-search"
       },

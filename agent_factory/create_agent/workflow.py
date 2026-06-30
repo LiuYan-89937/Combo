@@ -253,18 +253,19 @@ class CreateAgentWorkflow:
         if action.action != "finalize":
             return {"done": False}
         report = workspace.read_validation()
-        ready_error = _publish_readiness_error(workspace=workspace, report=report)
+        ready_error = _evolution_publish_readiness_error(workspace=workspace, report=report)
         if ready_error:
             workspace.write_action(CreateAgentAction())
             return {
                 "messages": [SystemMessage(content=ready_error)],
                 "done": False,
             }
+        final_answer = action.message.strip() or "AgentPackage 进化已通过 full_static validation，准备自动发布。"
         workspace.write_action(CreateAgentAction())
         return {
             "validation": report.to_digest().model_dump(mode="json"),
             "done": True,
-            "final_answer": "AgentPackage 进化已通过 full_static validation，准备自动发布。",
+            "final_answer": final_answer,
         }
 
     def _route_after_supervisor(self, state: CreateAgentGraphState) -> Literal["tools", "control_gate"]:
@@ -354,6 +355,24 @@ def _publish_readiness_error(*, workspace: CreateAgentWorkspace, report: Package
             "Set focus explicitly with create_agent_stage(action='set_focus', focus_id='validation_publish', reason=...), "
             "then run create_agent_validate(scope='full_static', reason=...)."
         )
+    if report is None:
+        return "Finalize blocked: no validation report exists. Call create_agent_validate(scope='full_static', reason=...) first."
+    if report.status != "passed":
+        return (
+            f"Finalize blocked: latest validation status is {report.status}. "
+            "Repair from the create_agent_validate observation, then call create_agent_validate(scope='full_static', reason=...) again."
+        )
+    validation_state = workspace.read_validation_state()
+    if validation_state is None:
+        return "Finalize blocked: validation fingerprint state is missing. Call create_agent_validate(scope='full_static', reason=...) again."
+    if validation_state.validation_scope != "full_static" or report.validation_scope != "full_static":
+        return "Finalize blocked: latest validation must be full_static. Call create_agent_validate(scope='full_static', reason=...) first."
+    if validation_state.package_fingerprint != package_fingerprint(workspace.root):
+        return "Finalize blocked: package files changed after validation. Call create_agent_validate(scope='full_static', reason=...) again."
+    return ""
+
+
+def _evolution_publish_readiness_error(*, workspace: CreateAgentWorkspace, report: PackageValidationReport | None) -> str:
     if report is None:
         return "Finalize blocked: no validation report exists. Call create_agent_validate(scope='full_static', reason=...) first."
     if report.status != "passed":

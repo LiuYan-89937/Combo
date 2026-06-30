@@ -18,7 +18,9 @@ def classify_create_agent_intent(
     classifier = model or get_task_model() or get_main_model()
     if classifier is None:
         raise RuntimeError("create-agent intent classification requires a configured task or main model")
-    structured = classifier.with_structured_output(CreateAgentIntentDecision, method="json_mode")
+    structured = classifier.with_structured_output(CreateAgentIntentDecision, method="json_mode").with_config(
+        tags=["nostream"]
+    )
     result = structured.invoke(
         [
             SystemMessage(

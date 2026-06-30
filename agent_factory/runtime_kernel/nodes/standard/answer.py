@@ -6,7 +6,11 @@ from langchain_core.messages import AIMessage
 
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
-from agent_factory.runtime_kernel.planning import PLAN_AND_EXECUTE_PATTERN_ID, RUNTIME_PLAN_TOOL_ID, runtime_plan_model_tool
+from agent_factory.runtime_kernel.planning import (
+    RUNTIME_PLAN_TOOL_ID,
+    is_plan_and_execute_pattern_id,
+    runtime_plan_model_tool,
+)
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
@@ -165,8 +169,24 @@ def _visible_tools(context: NodeExecutionContext, state: RuntimeState) -> list[A
 
 def _model_visible_tool_ids(context: NodeExecutionContext, state: RuntimeState, registry: Any) -> list[str]:
     if _is_plan_and_execute_node(context, state):
-        return _tool_access_ids(context.bindings)
+        return _plan_and_execute_model_tool_ids(context, registry)
     return _merge_tool_ids([*_allowed_tool_ids(context), *_system_tool_ids(registry)])
+
+
+def _plan_and_execute_model_tool_ids(context: NodeExecutionContext, registry: Any) -> list[str]:
+    node_tool_ids = _tool_access_ids(context.bindings)
+    if context.node_id == "planner":
+        return node_tool_ids
+    if context.node_id == "executor":
+        return _merge_tool_ids([*node_tool_ids, *_system_tool_ids(registry)])
+    if context.node_id == "casual_react":
+        return _without_tool_id(
+            _merge_tool_ids([*node_tool_ids, *_system_tool_ids(registry)]),
+            RUNTIME_PLAN_TOOL_ID,
+        )
+    if context.node_id == "final_answer":
+        return []
+    return node_tool_ids
 
 
 def _system_tool_ids(registry: Any) -> list[str]:
@@ -208,8 +228,12 @@ def _merge_tool_ids(tool_ids: list[str]) -> list[str]:
     return items
 
 
+def _without_tool_id(tool_ids: list[str], blocked_tool_id: str) -> list[str]:
+    return [tool_id for tool_id in tool_ids if tool_id != blocked_tool_id]
+
+
 def _runtime_plan_visible(*, context: NodeExecutionContext, state: RuntimeState, allowed_tool_ids: list[str]) -> bool:
-    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+    if not is_plan_and_execute_pattern_id(state.run.pattern_id):
         return False
     if context.node_id not in {"planner", "executor"}:
         return False
@@ -217,13 +241,13 @@ def _runtime_plan_visible(*, context: NodeExecutionContext, state: RuntimeState,
 
 
 def _is_plan_and_execute_node(context: NodeExecutionContext, state: RuntimeState) -> bool:
-    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+    if not is_plan_and_execute_pattern_id(state.run.pattern_id):
         return False
-    return context.node_id in {"planner", "executor", "final_answer"}
+    return context.node_id in {"planner", "executor", "casual_react", "final_answer"}
 
 
 def _plan_and_execute_planner_waiting_for_input(*, context: NodeExecutionContext, state: RuntimeState) -> bool:
-    if state.run.pattern_id != PLAN_AND_EXECUTE_PATTERN_ID:
+    if not is_plan_and_execute_pattern_id(state.run.pattern_id):
         return False
     if context.node_id != "planner":
         return False
