@@ -12,12 +12,23 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter import FactoryRuntimeAdapter
 
 
-LONG_RUNNING_COMMANDS = {
+ALWAYS_LONG_RUNNING_COMMANDS = {
     "send_message",
     "resume_interrupt",
     "run_agent_package",
     "run_agent_evolution",
-    "scheduler_manage",
+}
+
+LONG_RUNNING_ACTIONS = {
+    "knowledge_manage": {"confirm_source", "reindex"},
+    "extensions_manage": {"test_mcp"},
+    "scheduler_manage": {"run_now"},
+}
+
+CONCURRENT_READ_COMMANDS = {
+    "list_agent_packages",
+    "list_agent_package_sessions",
+    "load_agent_package_session",
 }
 
 
@@ -68,9 +79,12 @@ class _CommandDispatcher:
         if command.type == "cancel_runtime_request":
             self.adapter.handle(command)
             return True
-        if command.type in LONG_RUNNING_COMMANDS:
+        if _is_long_running_command(command):
             return self._start_long_running(command)
         if self._has_active_request():
+            if _is_concurrent_read_command(command):
+                self.adapter.handle(command)
+                return True
             self.writer.write(
                 event(
                     "error",
@@ -124,6 +138,25 @@ class _CommandDispatcher:
     def _has_active_request(self) -> bool:
         with self._lock:
             return self._active_thread is not None and self._active_thread.is_alive()
+
+
+def _is_long_running_command(command: FactoryFrontendCommand) -> bool:
+    if command.type in ALWAYS_LONG_RUNNING_COMMANDS:
+        return True
+    long_running_actions = LONG_RUNNING_ACTIONS.get(command.type)
+    if not long_running_actions:
+        return False
+    action = str(command.payload.get("action") or "").strip()
+    return action in long_running_actions
+
+
+def _is_concurrent_read_command(command: FactoryFrontendCommand) -> bool:
+    if command.type in CONCURRENT_READ_COMMANDS:
+        return True
+    if command.type == "workspace_manage":
+        action = str(command.payload.get("action") or "").strip()
+        return action in {"roots", "list", "read"}
+    return False
 
 
 class _JsonLineWriter:

@@ -1,0 +1,293 @@
+/**
+ * 协议类型定义
+ * 与后端 FactoryFrontendEvent/Command 协议对应
+ */
+
+// ========== 基础类型 ==========
+
+export type FactoryMode = 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package'
+
+export type RunStatus = 'idle' | 'running' | 'interrupted' | 'completed' | 'failed'
+
+export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped'
+
+export type WorkspaceScope = 'runtime' | 'workdir' | 'artifacts' | 'extensions'
+
+// ========== 命令类型 ==========
+
+export interface FactoryFrontendCommand {
+  type: string
+  request_id: string | null
+  session_id: string | null
+  resume_latest: boolean
+  mode: FactoryMode | null
+  message: string | null
+  payload: Record<string, any>
+  options: Record<string, any>
+}
+
+// ========== 事件类型 ==========
+
+export interface FactoryFrontendEvent {
+  event_id: string
+  protocol_version: string
+  event_type: string
+  producer_type: string
+  request_id: string | null
+  run_id: string | null
+  session_id: string | null
+  thread_id: string | null
+  mode: FactoryMode | null
+  graph_id: string | null
+  node_id: string | null
+  node_label: string | null
+  node_kind: string | null
+  stage_id: string | null
+  span_id: string | null
+  parent_span_id: string | null
+  sequence: number
+  timestamp: string
+  severity: string | null
+  message: string | null
+  payload: Record<string, any>
+}
+
+// ========== 对话相关 ==========
+
+export interface TranscriptItem {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string
+  streamId?: string
+  metadata?: any
+}
+
+export interface ConversationTurn {
+  id: string
+  requestId: string | null
+  status: RunStatus
+  userMessage: TranscriptItem | null
+  assistantMessages: TranscriptItem[]
+  tools: ToolActivity[]
+  startedAt: string
+  completedAt: string | null
+  errorMessage: string | null
+  metadata?: Record<string, any>
+}
+
+// ========== 模型流 ==========
+
+export interface ModelStream {
+  streamId: string
+  nodeId: string | null
+  content: string
+  active: boolean
+  completedAt: string | null
+  visibleToUser: boolean
+}
+
+// ========== 节点和阶段 ==========
+
+export interface NodeViewState {
+  nodeId: string
+  stageId: string | null
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  label: string | null
+  kind: string | null
+  startedAt: string
+  completedAt: string | null
+  failedAt: string | null
+  message: string | null
+  payload: Record<string, any>
+}
+
+export interface StageStatus {
+  stageId: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  nodeId: string | null
+  startedAt: string
+  completedAt: string | null
+  failedAt: string | null
+  lastEventType: string
+  lastMessage: string | null
+}
+
+// ========== 工具活动 ==========
+
+export interface ToolActivity {
+  activityKey: string
+  eventType: string
+  timestamp: string
+  createdAt: string
+  stageId: string | null
+  nodeId: string | null
+  toolCallId: string | null
+  toolName: string
+  status: 'proposed' | 'approval' | 'started' | 'completed' | 'failed' | 'observed'
+  approvalState: 'pending' | 'approved' | 'denied' | 'rejected' | null
+  payload: Record<string, any>
+}
+
+// ========== 计划 ==========
+
+export interface RuntimePlanView {
+  version?: string
+  goal: string
+  status: string
+  current_step_id?: string | null
+  steps: PlanStep[]
+  source_node_id?: string | null
+  updatedAt?: string
+}
+
+export interface PlanStep {
+  step_id: string
+  title: string
+  objective: string | null
+  status: PlanStepStatus
+  result_summary: string | null
+}
+
+// ========== Timeline ==========
+
+export interface TimelineItem {
+  id: string
+  eventType: string
+  timestamp: string
+  spanId: string | null
+  parentSpanId: string | null
+  stageId: string | null
+  nodeId: string | null
+  nodeLabel: string | null
+  message: string | null
+  severity: string | null
+  payload: Record<string, any>
+}
+
+// ========== 工作区 ==========
+
+export interface WorkspaceRootView {
+  scope: WorkspaceScope
+  name?: string
+  path?: string
+  exists: boolean
+}
+
+export interface WorkspaceEntry {
+  scope?: WorkspaceScope
+  path: string
+  name: string
+  kind: 'file' | 'directory'
+  sizeBytes: number | null
+  updatedAt: string | null
+}
+
+export interface WorkspaceFileView {
+  name: string
+  scope?: WorkspaceScope
+  path?: string
+  kind: 'text' | 'binary'
+  content: string
+  sizeBytes: number
+  truncated: boolean
+  payload?: Record<string, any>
+}
+
+// ========== 知识库 ==========
+
+export interface KnowledgeSourceView {
+  name: string
+  status: string
+  documentCount: number | null
+  mode: string | null
+  updatedAt?: string
+  payload: Record<string, any>
+}
+
+export interface KnowledgeDocumentView {
+  documentId?: string
+  name?: string
+  kind?: string
+  title?: string
+  sourceName?: string | null
+  documentType?: string | null
+  uri?: string | null
+  payload: Record<string, any>
+}
+
+export interface KnowledgeSearchResultView {
+  documentId?: string
+  score: number | null
+  preview?: string
+  title?: string
+  content?: string
+  payload: Record<string, any>
+}
+
+// ========== 定时任务 ==========
+
+export interface SchedulerJobView {
+  title: string
+  status: string
+  enabled: boolean
+  schedule: string
+  targetType: string | null
+  payload: Record<string, any>
+}
+
+// ========== 扩展 ==========
+
+export interface ExtensionItemView {
+  name?: string
+  kind: 'mcp' | 'skill'
+  scope?: string
+  status?: string
+  enabled: boolean
+  payload: Record<string, any>
+}
+
+export interface RuntimeActivityView {
+  status: string
+  eventType?: string
+  payload?: Record<string, any>
+}
+
+export interface RuntimeViewState {
+  protocolVersion: string
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting'
+  activeRequestId: string | null
+  runStatus: RunStatus
+  pendingInterrupt: FactoryFrontendEvent | null
+  currentMode: FactoryMode | null
+  activeFactorySessionId: string | null
+  activeAgentSessionId: string | null
+  currentRunId: string | null
+  nodes: Record<string, NodeViewState>
+  stages: Record<string, StageStatus>
+  modelStreams: Record<string, ModelStream>
+  tools: ToolActivity[]
+  currentPlan: RuntimePlanView | null
+  transcript: TranscriptItem[]
+  conversationTurns: ConversationTurn[]
+  timeline: TimelineItem[]
+  debugEvents: FactoryFrontendEvent[]
+  contextActivity: RuntimeActivityView
+  memoryActivity: RuntimeActivityView
+  knowledgeActivity: Record<string, any>[]
+  schedulerActivity: Record<string, any>[]
+  workspaceEntries: WorkspaceEntry[]
+  workspaceRoots: WorkspaceRootView[]
+  workspaceFile: WorkspaceFileView | null
+  knowledgeSources: KnowledgeSourceView[]
+  knowledgeDocuments: KnowledgeDocumentView[]
+  knowledgeResults: KnowledgeSearchResultView[]
+  knowledgeDocument: Record<string, any> | null
+  schedulerJobs: SchedulerJobView[]
+  extensionItems: ExtensionItemView[]
+  extensionTestResult: Record<string, any> | null
+  sessions: any[]
+  agentPackages: any[]
+  selectedAgentPackage: any | null
+  agentSessions: any[]
+}

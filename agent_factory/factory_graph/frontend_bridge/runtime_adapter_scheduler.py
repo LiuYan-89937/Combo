@@ -42,8 +42,19 @@ class RuntimeSchedulerCommandMixin:
                     owner_id=runtime.owner_id,
                     status="listed",
                     payload={"jobs": [job.model_dump(mode="json") for job in jobs], "count": len(jobs)},
-                )
+                ),
+                request_id=command.request_id,
             )
+            return
+        if action == "create":
+            job_payload = command.payload.get("job") if isinstance(command.payload.get("job"), dict) else command.payload
+            job = runtime.create_job(dict(job_payload))
+            self._emit_scheduler_job_snapshot("scheduler_job_created", job, status="created", request_id=command.request_id)
+            return
+        if action == "update":
+            job_payload = command.payload.get("job") if isinstance(command.payload.get("job"), dict) else command.payload
+            job = runtime.upsert_job(dict(job_payload))
+            self._emit_scheduler_job_snapshot("scheduler_job_updated", job, status="updated", request_id=command.request_id)
             return
         if action == "describe":
             if not job_id:
@@ -61,7 +72,8 @@ class RuntimeSchedulerCommandMixin:
                     target_type=target_payload.get("target_type") if isinstance(target_payload, dict) else None,
                     status="described",
                     payload=description,
-                )
+                ),
+                request_id=command.request_id,
             )
             return
         if action == "runs":
@@ -74,26 +86,40 @@ class RuntimeSchedulerCommandMixin:
                     owner_id=runtime.owner_id,
                     status="listed",
                     payload={"runs": [run.model_dump(mode="json") for run in runs], "count": len(runs), "limit": limit},
-                )
+                ),
+                request_id=command.request_id,
             )
             return
         if action == "pause":
             if not job_id:
                 self._emit_error(command, "scheduler pause requires job_id")
                 return
-            runtime.set_job_enabled(job_id, False)
+            job = runtime.set_job_enabled(job_id, False)
+            self._emit_scheduler_job_snapshot("scheduler_job_updated", job, status="paused", request_id=command.request_id)
             return
         if action == "resume":
             if not job_id:
                 self._emit_error(command, "scheduler resume requires job_id")
                 return
-            runtime.set_job_enabled(job_id, True)
+            job = runtime.set_job_enabled(job_id, True)
+            self._emit_scheduler_job_snapshot("scheduler_job_updated", job, status="enabled", request_id=command.request_id)
             return
         if action == "delete":
             if not job_id:
                 self._emit_error(command, "scheduler delete requires job_id")
                 return
-            runtime.delete_job(job_id)
+            deleted = runtime.delete_job(job_id)
+            self._emit_scheduler_event(
+                SchedulerEventPayload(
+                    event_type="scheduler_job_deleted",
+                    job_id=job_id,
+                    owner_type=runtime.owner_type,
+                    owner_id=runtime.owner_id,
+                    status="deleted" if deleted else "missing",
+                    payload={"deleted": deleted},
+                ),
+                request_id=command.request_id,
+            )
             return
         if action == "run_now":
             if not job_id:
@@ -102,6 +128,27 @@ class RuntimeSchedulerCommandMixin:
             runtime.run_now(job_id)
             return
         self._emit_error(command, f"unsupported scheduler action: {action}")
+
+    def _emit_scheduler_job_snapshot(
+        self,
+        event_type: str,
+        job: Any,
+        *,
+        status: str,
+        request_id: str | None = None,
+    ) -> None:
+        self._emit_scheduler_event(
+            SchedulerEventPayload(
+                event_type=event_type,  # type: ignore[arg-type]
+                job_id=job.job_id,
+                owner_type=job.owner_type,
+                owner_id=job.owner_id,
+                target_type=job.target.target_type,
+                status=status,
+                payload={"job": job.model_dump(mode="json")},
+            ),
+            request_id=request_id,
+        )
 
     def _start_factory_scheduler(self) -> None:
         runtime = default_factory_scheduler_runtime(event_sink=self._emit_scheduler_event)
@@ -139,10 +186,10 @@ class RuntimeSchedulerCommandMixin:
             )
         )
 
-    def _emit_scheduler_event(self, payload: SchedulerEventPayload) -> None:
+    def _emit_scheduler_event(self, payload: SchedulerEventPayload, *, request_id: str | None = None) -> None:
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
-            request_id=None,
+            request_id=request_id,
             session_id=self._session_id(),
             mode=self.mode,
             graph_id="factory_scheduler",

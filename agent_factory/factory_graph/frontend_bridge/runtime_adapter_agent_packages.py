@@ -138,6 +138,26 @@ class RuntimeAgentPackageCommandMixin:
             )
         )
 
+    def load_agent_package_session(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        session_id = str(command.payload.get("session_id") or "").strip()
+        if not package_id:
+            self._emit_error(command, "load_agent_package_session requires package_id")
+            return
+        if not session_id:
+            self._emit_error(command, "load_agent_package_session requires session_id")
+            return
+        session = self.agent_package_runtime.load_session(package_id, session_id)
+        self.emit(
+            event(
+                "agent_package_session_loaded",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="agent_package",
+                payload={"package_id": package_id, "session": session},
+            )
+        )
+
     def run_agent_package(self, command: FactoryFrontendCommand) -> None:
         package_id = str(command.payload.get("package_id") or "").strip()
         message = str(command.payload.get("message") or command.message or "").strip()

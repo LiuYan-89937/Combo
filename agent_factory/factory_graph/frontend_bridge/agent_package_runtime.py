@@ -7,11 +7,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import shutil
 import subprocess
 from typing import Any, Iterator
 from uuid import uuid4
 
+from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
+from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.extensions.loader import (
@@ -36,6 +40,14 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
 from agent_factory.factory_graph.frontend_bridge.container_runtime_handle import AgentRuntimeContainerHandle
 from agent_factory.factory_graph.frontend_bridge.runtime_events import node_event, run_failed_event
 from agent_factory.factory_graph.frontend_bridge.system_package_runtime_handle import SystemPackageRuntimeHandle
+from agent_factory.tooling.mcp_runtime import MCPRuntimeManager
+from agent_factory.tooling.providers import (
+    EnabledSkillConfig,
+    EnabledSkillsConfig,
+    MCPServerConfig,
+    MCPServersConfig,
+)
+from agent_factory.tooling.skills import parse_skill_directory
 
 
 DEFAULT_AGENT_PACKAGE_ROOT = ".agentfactory/packages"
@@ -113,6 +125,211 @@ class AgentPackageRuntimeManager:
     def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
         package = self.loader.load_path(self._manifest_path(package_id))
         return self._list_sessions_for_loaded_package(package)
+
+    def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        return self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
+
+    def workspace_roots(self, package_id: str) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        roots = self._workspace_roots(package_id, package)
+        return {
+            "package_id": package_id,
+            "roots": [
+                {"scope": scope, "name": _workspace_scope_label(scope), "exists": path.exists()}
+                for scope, path in roots.items()
+            ],
+        }
+
+    def list_workspace_entries(
+        self,
+        package_id: str,
+        *,
+        scope: str = "workdir",
+        relative_path: str = "",
+    ) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        root = self._workspace_scope_root(package_id, package, scope)
+        target = _safe_workspace_path(root, relative_path)
+        if not target.exists():
+            return {"package_id": package_id, "scope": scope, "path": relative_path, "entries": []}
+        if target.is_file():
+            entries = [_workspace_entry(target, root=root, scope=scope)]
+        else:
+            entries = [_workspace_entry(path, root=root, scope=scope) for path in sorted(target.iterdir(), key=_workspace_sort_key)]
+        return {"package_id": package_id, "scope": scope, "path": relative_path, "entries": entries}
+
+    def read_workspace_file(
+        self,
+        package_id: str,
+        *,
+        scope: str = "workdir",
+        relative_path: str,
+        max_chars: int = 20000,
+    ) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        root = self._workspace_scope_root(package_id, package, scope)
+        target = _safe_workspace_path(root, relative_path)
+        if not target.is_file():
+            raise FileNotFoundError(f"workspace file not found: {relative_path}")
+        stat = target.stat()
+        byte_limit = max(4096, max_chars * 4)
+        with target.open("rb") as handle:
+            data = handle.read(byte_limit + 1)
+        is_binary = b"\x00" in data[:4096]
+        content = ""
+        truncated = stat.st_size > byte_limit
+        if not is_binary:
+            text = data.decode("utf-8", errors="replace")
+            truncated = truncated or len(text) > max_chars
+            content = text[:max_chars]
+        return {
+            "package_id": package_id,
+            "scope": scope,
+            "path": target.relative_to(root).as_posix(),
+            "name": target.name,
+            "kind": "binary" if is_binary else "text",
+            "size_bytes": stat.st_size,
+            "content": content,
+            "truncated": truncated,
+        }
+
+    def extension_config_summary(self, package_id: str) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        extension_root = _extension_root_for_package(package_id, package)
+        if not _is_system_package(package):
+            _seed_package_extensions(package=package, extension_root=extension_root)
+        bundle = _load_extension_bundle(extension_root)
+        return {
+            "package_id": package_id,
+            "mcp_servers": [_public_mcp_server(server.model_dump(mode="json")) for server in bundle.mcp_servers.servers],
+            "skills": [_public_skill(skill.model_dump(mode="json")) for skill in bundle.enabled_skills.skills],
+            "sources": {
+                "extension_root": str(bundle.sources.extension_root),
+                "mcp_servers_paths": [str(path) for path in bundle.sources.mcp_servers_paths],
+                "enabled_skills_paths": [str(path) for path in bundle.sources.enabled_skills_paths],
+            },
+        }
+
+    def extensions_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        extension_root = _extension_root_for_package(package_id, package)
+        if not _is_system_package(package):
+            _seed_package_extensions(package=package, extension_root=extension_root)
+        if action == "list":
+            return self.extension_config_summary(package_id)
+        if action == "upsert_mcp":
+            server = _mcp_server_from_payload(payload.get("server") if isinstance(payload.get("server"), dict) else payload)
+            _save_mcp_server(extension_root, server)
+            self._close_container(package_id)
+            self._close_system(package_id)
+            return {"updated": "mcp", "server": _public_mcp_server(server.model_dump(mode="json")), **self.extension_config_summary(package_id)}
+        if action == "set_mcp_enabled":
+            server_id = _required_config_id(payload, "server_id")
+            server = _set_mcp_server_enabled(extension_root, server_id=server_id, enabled=bool(payload.get("enabled", True)))
+            self._close_container(package_id)
+            self._close_system(package_id)
+            return {"updated": "mcp", "server": _public_mcp_server(server.model_dump(mode="json")), **self.extension_config_summary(package_id)}
+        if action == "remove_mcp":
+            server_id = _required_config_id(payload, "server_id")
+            removed = _remove_mcp_server(extension_root, server_id=server_id)
+            self._close_container(package_id)
+            self._close_system(package_id)
+            return {"updated": "mcp", "removed": removed, **self.extension_config_summary(package_id)}
+        if action == "test_mcp":
+            server = _mcp_server_for_test(extension_root, payload)
+            return {"test": _test_mcp_server(server), **self.extension_config_summary(package_id)}
+        if action == "upsert_skill":
+            skill = _skill_from_payload(payload.get("skill") if isinstance(payload.get("skill"), dict) else payload)
+            _save_enabled_skill(extension_root, skill)
+            self._close_container(package_id)
+            self._close_system(package_id)
+            return {"updated": "skill", "skill": _public_skill(skill.model_dump(mode="json")), **self.extension_config_summary(package_id)}
+        if action == "set_skill_enabled":
+            skill_id = _required_config_id(payload, "skill_id")
+            skill = _set_skill_enabled(extension_root, skill_id=skill_id, enabled=bool(payload.get("enabled", True)))
+            self._close_container(package_id)
+            self._close_system(package_id)
+            return {"updated": "skill", "skill": _public_skill(skill.model_dump(mode="json")), **self.extension_config_summary(package_id)}
+        if action == "remove_skill":
+            skill_id = _required_config_id(payload, "skill_id")
+            removed = _remove_enabled_skill(extension_root, skill_id=skill_id)
+            self._close_container(package_id)
+            self._close_system(package_id)
+            return {"updated": "skill", "removed": removed, **self.extension_config_summary(package_id)}
+        raise ValueError(f"unsupported extensions action: {action}")
+
+    def knowledge_runtime_for_package(self, package_id: str) -> KnowledgeRuntime:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        contract = package.contracts.get("knowledge") if isinstance(package.contracts, dict) else None
+        config_payload = contract.get("config", {}) if isinstance(contract, dict) else {}
+        config = KnowledgeContractConfig.model_validate(config_payload or {})
+        runtime_root = _host_runtime_root(package_id)
+        config = config.model_copy(
+            update={
+                "root": str(_runtime_contract_path(runtime_root, config.root)),
+                "catalog_path": str(_runtime_contract_path(runtime_root, config.catalog_path)),
+                "rag_store": config.rag_store.model_copy(
+                    update={"path": str(_runtime_contract_path(runtime_root, config.rag_store.path))}
+                ),
+            },
+            deep=True,
+        )
+        return KnowledgeRuntime(
+            config=config,
+            owner_type="agent",
+            owner_id=package.assembly_spec.agent.id,
+            catalog=KnowledgeCatalog(config.catalog_path),
+            store=None,
+        )
+
+    def knowledge_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        runtime = self.knowledge_runtime_for_package(package_id)
+        if action == "list_sources":
+            return {"sources": [source.model_dump(mode="json") for source in runtime.list_sources()]}
+        if action == "list_documents":
+            return {
+                "documents": [
+                    document.model_dump(mode="json")
+                    for document in runtime.list_documents(payload.get("source_id"))
+                ]
+            }
+        if action == "search":
+            results = runtime.search(
+                query=str(payload.get("query") or ""),
+                source_id=payload.get("source_id"),
+                mode=str(payload.get("mode") or "auto"),
+                top_k=int(payload.get("top_k") or 8),
+            )
+            return {"results": [result.model_dump(mode="json") for result in results]}
+        if action == "open":
+            return runtime.open(
+                source_id=payload.get("source_id"),
+                document_id=payload.get("document_id"),
+                chunk_id=payload.get("chunk_id"),
+            )
+        if action == "read":
+            return runtime.read(
+                document_id=payload.get("document_id"),
+                chunk_id=payload.get("chunk_id"),
+                max_chars=payload.get("max_chars"),
+            )
+        if action == "prepare_source":
+            source = _normalized_source_payload(payload.get("source") if isinstance(payload.get("source"), dict) else payload)
+            preview = runtime.prepare_source(source)
+            return {"preview": preview.model_dump(mode="json")}
+        if action == "confirm_source":
+            source = _normalized_source_payload(payload.get("source") if isinstance(payload.get("source"), dict) else payload)
+            job = runtime.confirm_source(source)
+            completed = runtime.run_job(job.job_id)
+            return {"job": completed.model_dump(mode="json"), "sources": [item.model_dump(mode="json") for item in runtime.list_sources()]}
+        if action == "remove_source":
+            return {"removed": runtime.remove_source(str(payload.get("source_id") or ""))}
+        if action == "reindex":
+            job = runtime.reindex_source(str(payload.get("source_id") or ""))
+            completed = runtime.run_job(job.job_id)
+            return {"job": completed.model_dump(mode="json")}
+        raise ValueError(f"unsupported knowledge action: {action}")
 
     def ensure_session(
         self,
@@ -543,6 +760,74 @@ class AgentPackageRuntimeManager:
             return system_target
         return user_target
 
+    def _workspace_roots(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Path]:
+        runtime_root = _host_runtime_root(package_id)
+        return {
+            "runtime": runtime_root,
+            "workdir": runtime_root / "workdir",
+            "artifacts": runtime_root / "artifacts",
+            "extensions": _extension_root_for_package(package_id, package),
+        }
+
+    def _workspace_scope_root(self, package_id: str, package: LoadedAgentPackage, scope: str) -> Path:
+        roots = self._workspace_roots(package_id, package)
+        normalized = str(scope or "workdir").strip()
+        if normalized not in roots:
+            raise ValueError(f"unsupported workspace scope: {scope}")
+        return roots[normalized].resolve()
+
+
+def _workspace_scope_label(scope: str) -> str:
+    labels = {
+        "runtime": "Runtime",
+        "workdir": "Workdir",
+        "artifacts": "Artifacts",
+        "extensions": "Extensions",
+    }
+    return labels.get(scope, _humanize_identifier(scope))
+
+
+def _safe_workspace_path(root: Path, relative_path: str | os.PathLike[str] | None) -> Path:
+    resolved_root = root.resolve()
+    raw_path = str(relative_path or "").strip()
+    if not raw_path:
+        return resolved_root
+    path = Path(raw_path)
+    if path.is_absolute():
+        raise ValueError("workspace path must be relative to its selected scope")
+    target = (resolved_root / path).resolve()
+    try:
+        target.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(f"workspace path escapes selected scope: {raw_path}") from exc
+    return target
+
+
+def _workspace_entry(path: Path, *, root: Path, scope: str) -> dict[str, Any]:
+    try:
+        stat = path.stat()
+        size_bytes = stat.st_size if path.is_file() else None
+        updated_at = datetime.fromtimestamp(stat.st_mtime, UTC).isoformat()
+    except OSError:
+        size_bytes = None
+        updated_at = None
+    try:
+        relative_path = path.relative_to(root).as_posix()
+    except ValueError:
+        relative_path = path.name
+    return {
+        "name": path.name,
+        "scope": scope,
+        "path": "" if relative_path == "." else relative_path,
+        "kind": "directory" if path.is_dir() else "file",
+        "size_bytes": size_bytes,
+        "updated_at": updated_at,
+    }
+
+
+def _workspace_sort_key(path: Path) -> tuple[int, str]:
+    return (0 if path.is_dir() else 1, path.name.lower())
+
 
 def _host_runtime_root(package_id: str) -> Path:
     return factory_artifact_path("agent_runtime", package_id)
@@ -815,11 +1100,383 @@ def _extensions_summary(package_id: str, *, package: LoadedAgentPackage | None =
     }
 
 
+def _load_extension_bundle(extension_root: Path) -> Any:
+    return AgentInstanceExtensionConfigLoader(
+        extension_root,
+        inherited_extension_roots=[default_builtin_agent_extension_root()],
+    ).load()
+
+
+def _load_local_mcp_config(extension_root: Path) -> MCPServersConfig:
+    return MCPServersConfig.model_validate(_read_json_object(extension_root / "mcp_servers.json") or {})
+
+
+def _write_local_mcp_config(extension_root: Path, config: MCPServersConfig) -> None:
+    _write_json_object(extension_root / "mcp_servers.json", config.model_dump(mode="json"))
+
+
+def _load_local_skills_config(extension_root: Path) -> EnabledSkillsConfig:
+    return EnabledSkillsConfig.model_validate(_read_json_object(extension_root / "enabled_skills.json") or {})
+
+
+def _write_local_skills_config(extension_root: Path, config: EnabledSkillsConfig) -> None:
+    _write_json_object(extension_root / "enabled_skills.json", config.model_dump(mode="json"))
+
+
+def _save_mcp_server(extension_root: Path, server: MCPServerConfig) -> None:
+    config = _load_local_mcp_config(extension_root)
+    servers = [item for item in config.servers if item.server_id != server.server_id]
+    servers.append(server)
+    _write_local_mcp_config(
+        extension_root,
+        config.model_copy(update={"servers": sorted(servers, key=lambda item: item.server_id)}),
+    )
+
+
+def _set_mcp_server_enabled(extension_root: Path, *, server_id: str, enabled: bool) -> MCPServerConfig:
+    config = _load_local_mcp_config(extension_root)
+    servers: list[MCPServerConfig] = []
+    updated: MCPServerConfig | None = None
+    for server in config.servers:
+        if server.server_id == server_id:
+            updated = server.model_copy(update={"enabled": enabled})
+            servers.append(updated)
+        else:
+            servers.append(server)
+    if updated is None:
+        raise ValueError(f"MCP server is not configured: {server_id}")
+    _write_local_mcp_config(extension_root, config.model_copy(update={"servers": servers}))
+    return updated
+
+
+def _remove_mcp_server(extension_root: Path, *, server_id: str) -> bool:
+    config = _load_local_mcp_config(extension_root)
+    servers = [server for server in config.servers if server.server_id != server_id]
+    removed = len(servers) != len(config.servers)
+    _write_local_mcp_config(extension_root, config.model_copy(update={"servers": servers}))
+    return removed
+
+
+def _save_enabled_skill(extension_root: Path, skill: EnabledSkillConfig) -> None:
+    config = _load_local_skills_config(extension_root)
+    skills = [item for item in config.skills if item.skill_id != skill.skill_id]
+    skills.append(skill)
+    _write_local_skills_config(extension_root, config.model_copy(update={"skills": sorted(skills, key=lambda item: item.skill_id)}))
+
+
+def _set_skill_enabled(extension_root: Path, *, skill_id: str, enabled: bool) -> EnabledSkillConfig:
+    config = _load_local_skills_config(extension_root)
+    skills: list[EnabledSkillConfig] = []
+    updated: EnabledSkillConfig | None = None
+    for skill in config.skills:
+        if skill.skill_id == skill_id:
+            updated = skill.model_copy(update={"enabled": enabled})
+            skills.append(updated)
+        else:
+            skills.append(skill)
+    if updated is None:
+        raise ValueError(f"Skill is not configured: {skill_id}")
+    _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
+    return updated
+
+
+def _remove_enabled_skill(extension_root: Path, *, skill_id: str) -> bool:
+    config = _load_local_skills_config(extension_root)
+    skills = [skill for skill in config.skills if skill.skill_id != skill_id]
+    removed = len(skills) != len(config.skills)
+    _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
+    return removed
+
+
+def _mcp_server_for_test(extension_root: Path, payload: dict[str, Any]) -> MCPServerConfig:
+    server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else payload
+    server_id = str(server_payload.get("server_id") or "").strip()
+    if server_id:
+        bundle = _load_extension_bundle(extension_root)
+        for server in bundle.mcp_servers.servers:
+            if server.server_id == server_id:
+                return server
+    return _mcp_server_from_payload(server_payload)
+
+
+def _mcp_server_from_payload(payload: dict[str, Any]) -> MCPServerConfig:
+    raw = dict(payload or {})
+    display_name = str(raw.get("display_name") or raw.get("name") or "").strip()
+    source = dict(raw.get("source") or {})
+    if display_name:
+        source.setdefault("name", display_name)
+    command = str(raw.get("command") or "").strip()
+    cwd = str(raw.get("cwd") or "").strip() or None
+    server_id = _config_identifier(
+        str(raw.get("server_id") or ""),
+        fallback=display_name or str(source.get("package") or "") or command or "mcp_server",
+    )
+    return MCPServerConfig(
+        server_id=server_id,
+        transport=str(raw.get("transport") or "stdio").strip(),
+        command=command or None,
+        args=_parse_args(raw.get("args")),
+        cwd=cwd,
+        env=_parse_env(raw.get("env")),
+        source=source,
+        enabled=raw.get("enabled", True) is not False,
+        required=bool(raw.get("required")),
+        tool_id_prefix=_optional_identifier(raw.get("tool_id_prefix")),
+        risk_level_default=str(raw.get("risk_level_default") or "medium"),  # type: ignore[arg-type]
+        concurrent_default=bool(raw.get("concurrent_default", False)),
+        timeout_seconds=float(raw.get("timeout_seconds") or 30.0),
+    )
+
+
+def _skill_from_payload(payload: dict[str, Any]) -> EnabledSkillConfig:
+    raw = dict(payload or {})
+    path = str(raw.get("path") or "").strip()
+    if not path:
+        raise ValueError("Skill path is required")
+    source = str(raw.get("source") or "local").strip() or "local"
+    skill_id = str(raw.get("skill_id") or "").strip()
+    if not skill_id:
+        skill_id = _skill_id_from_path(path, fallback=str(raw.get("display_name") or raw.get("name") or "skill"))
+    return EnabledSkillConfig(
+        skill_id=skill_id,
+        enabled=raw.get("enabled", True) is not False,
+        source=source,
+        path=path,
+        required=bool(raw.get("required")),
+    )
+
+
+def _skill_id_from_path(path: str, *, fallback: str) -> str:
+    try:
+        return parse_skill_directory(path).name
+    except Exception:
+        return _config_identifier("", fallback=Path(path).expanduser().name or fallback)
+
+
+def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
+    manager = MCPRuntimeManager(MCPServersConfig(servers=[server.model_copy(update={"enabled": True})]))
+    client = manager.clients().get(server.server_id)
+    if client is None:
+        return {"status": "failed", "message": "MCP server is disabled or unavailable", "tool_count": 0, "tools": []}
+    try:
+        tools = [tool.model_dump(mode="json") for tool in client.list_tools()]
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "message": f"{type(exc).__name__}: {exc}",
+            "tool_count": 0,
+            "tools": [],
+        }
+    return {
+        "status": "ok",
+        "message": f"Discovered {len(tools)} tools.",
+        "tool_count": len(tools),
+        "tools": [
+            {
+                "name": str(tool.get("name") or "tool"),
+                "description": str(tool.get("description") or ""),
+            }
+            for tool in tools
+        ],
+    }
+
+
+def _required_config_id(payload: dict[str, Any], key: str) -> str:
+    value = str(payload.get(key) or "").strip()
+    if not value:
+        raise ValueError(f"{key} is required")
+    return value
+
+
+def _optional_identifier(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return _config_identifier(text, fallback="") if text else None
+
+
+def _config_identifier(value: str, *, fallback: str) -> str:
+    raw = value.strip() or fallback.strip()
+    identifier = re.sub(r"[^a-z0-9_]+", "_", raw.lower()).strip("_")
+    if not identifier:
+        identifier = "item"
+    if identifier[0].isdigit():
+        identifier = f"item_{identifier}"
+    return identifier[:64]
+
+
+def _parse_args(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return shlex.split(text)
+
+
+def _parse_env(value: Any) -> dict[str, str]:
+    if isinstance(value, dict):
+        return {str(key): str(item) for key, item in value.items() if str(key).strip()}
+    env: dict[str, str] = {}
+    for line in str(value or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, item = stripped.split("=", 1)
+        key = key.strip()
+        if key:
+            env[key] = item.strip()
+    return env
+
+
+def _public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
+    server_id = str(payload.get("server_id") or "").strip()
+    source = dict(payload.get("source") or {})
+    enabled = payload.get("enabled", True) is not False
+    env = payload.get("env") if isinstance(payload.get("env"), dict) else {}
+    safe_payload = {
+        "server_id": server_id,
+        "transport": payload.get("transport"),
+        "command": payload.get("command"),
+        "args": list(payload.get("args") or []),
+        "cwd": payload.get("cwd"),
+        "source": source,
+        "enabled": enabled,
+        "required": bool(payload.get("required")),
+        "tool_id_prefix": payload.get("tool_id_prefix"),
+        "risk_level_default": payload.get("risk_level_default"),
+        "timeout_seconds": payload.get("timeout_seconds"),
+        "env_keys": sorted(str(key) for key in env),
+    }
+    return {
+        "kind": "mcp",
+        "name": str(source.get("package") or source.get("name") or _humanize_identifier(server_id) or "MCP server"),
+        "scope": str(source.get("type") or "local"),
+        "status": "enabled" if enabled else "disabled",
+        "enabled": enabled,
+        "transport": payload.get("transport"),
+        "summary": _mcp_server_summary(payload),
+        "payload": safe_payload,
+    }
+
+
+def _public_skill(payload: dict[str, Any]) -> dict[str, Any]:
+    skill_id = str(payload.get("skill_id") or "").strip()
+    enabled = payload.get("enabled", True) is not False
+    return {
+        "kind": "skill",
+        "name": _humanize_identifier(skill_id) or "Skill",
+        "scope": str(payload.get("source") or "local"),
+        "status": "enabled" if enabled else "disabled",
+        "enabled": enabled,
+        "summary": _skill_summary(payload),
+        "payload": {
+            "skill_id": skill_id,
+            "enabled": enabled,
+            "source": payload.get("source"),
+            "path": payload.get("path"),
+            "required": bool(payload.get("required")),
+        },
+    }
+
+
+def _mcp_server_summary(payload: dict[str, Any]) -> str:
+    transport = str(payload.get("transport") or "unknown")
+    command = str(payload.get("command") or "").strip()
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    package = str(source.get("package") or "").strip()
+    if package:
+        return f"{transport} connection from {package}"
+    if command:
+        return f"{transport} connection via {command}"
+    return f"{transport} connection"
+
+
+def _skill_summary(payload: dict[str, Any]) -> str:
+    source = str(payload.get("source") or "local")
+    path = str(payload.get("path") or "").strip()
+    if path:
+        return f"{source} skill at {path}"
+    return f"{source} skill"
+
+
+def _runtime_contract_path(runtime_root: Path, configured: str) -> Path:
+    value = str(configured or "").strip()
+    if not value:
+        raise ValueError("runtime contract path must not be empty")
+    if value == "/runtime":
+        return runtime_root.resolve()
+    if value.startswith("/runtime/"):
+        return _root_relative_path(
+            runtime_root,
+            Path(value.removeprefix("/runtime/")),
+            field_path="runtime contract path",
+        )
+    if value == ".agent_runtime":
+        return runtime_root.resolve()
+    if value.startswith(".agent_runtime/"):
+        return _root_relative_path(
+            runtime_root,
+            Path(value.removeprefix(".agent_runtime/")),
+            field_path="runtime contract path",
+        )
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        raise ValueError(f"runtime contract path must resolve inside runtime workspace; got {value!r}")
+    return _root_relative_path(runtime_root, path, field_path="runtime contract path")
+
+
+def _normalized_source_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    source = dict(payload or {})
+    kind = str(source.get("kind") or source.get("source_kind") or "").strip()
+    source_type = str(source.get("source_type") or _source_type_from_kind(kind) or "filesystem").strip()
+    display_name = str(source.get("display_name") or source.get("name") or source.get("title") or "").strip()
+    metadata = dict(source.get("metadata") or {})
+    if display_name:
+        metadata.setdefault("display_name", display_name)
+        metadata.setdefault("title", display_name)
+    uri = str(source.get("uri") or source.get("path") or source.get("url") or "").strip()
+    if source_type == "manual_note":
+        content = str(source.get("content") or metadata.get("content") or uri).strip()
+        metadata["content"] = content
+        uri = content
+    result = {
+        "source_type": source_type,
+        "mount_mode": str(source.get("mount_mode") or source.get("mode") or "index_only").strip(),
+        "uri": uri,
+        "metadata": metadata,
+    }
+    if display_name:
+        result["display_name"] = display_name
+    source_id = str(source.get("source_id") or "").strip()
+    if source_id:
+        result["source_id"] = source_id
+    return result
+
+
+def _source_type_from_kind(kind: str) -> str | None:
+    if kind in {"folder", "file", "filesystem"}:
+        return "filesystem"
+    if kind in {"url", "web", "web_snapshot"}:
+        return "web_snapshot"
+    if kind in {"note", "manual_note"}:
+        return "manual_note"
+    return None
+
+
+def _humanize_identifier(value: str) -> str:
+    text = re.sub(r"[_\\-]+", " ", str(value or "")).strip()
+    return " ".join(part[:1].upper() + part[1:] for part in text.split())
+
+
 def _read_json_object(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
     return value if isinstance(value, dict) else {}
+
+
+def _write_json_object(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _path_updated_at(path: Path) -> str:

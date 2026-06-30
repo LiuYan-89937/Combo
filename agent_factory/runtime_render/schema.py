@@ -102,6 +102,6 @@ def default_node_render_spec(
 
 
 def default_node_visible_to_user(*, pattern_id: str, node_id: str) -> bool:
-    if pattern_id == "plan_and_execute" and node_id in {"planner", "executor"}:
-        return False
+    if pattern_id == "plan_and_execute":
+        return node_id not in {"ingress", "intent_gate", "planner", "executor", "commit", "finalize"}
     return True

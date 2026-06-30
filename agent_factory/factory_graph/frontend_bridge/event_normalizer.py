@@ -18,6 +18,7 @@ from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
+INTERNAL_MODEL_MESSAGE_NODES = {"intent_gate"}
 NODE_EVENT_TYPES: set[str] = {"model_cache_metrics"}
 TOOL_EVENT_INLINE_JSON_LIMIT = 6000
 TOOL_EVENT_PREVIEW_CHARS = 1200
@@ -318,6 +319,10 @@ class RuntimeEventNormalizer:
             "knowledge_source_ready",
             "knowledge_source_removed",
             "knowledge_source_reindex_requested",
+            "knowledge_sources_listed",
+            "knowledge_documents_listed",
+            "knowledge_search_completed",
+            "knowledge_document_read",
         }:
             return
         self.runtime_event(
@@ -636,6 +641,8 @@ class RuntimeEventNormalizer:
     def _node_visible_to_user(self, node_id: str | None) -> bool:
         if not node_id:
             return True
+        if node_id in INTERNAL_MODEL_MESSAGE_NODES:
+            return False
         return self.node_visibility.get(node_id, True)
 
     def _has_visible_model_stream_content(self) -> bool:
@@ -1115,25 +1122,27 @@ def _preview_text(value: str, limit: int) -> str:
 
 
 def _delta_for_stream(stream: ModelStreamState, content: str) -> str:
-    if not stream.raw_content:
-        return content
-    if stream.input_mode == "snapshot":
-        if content == stream.raw_content:
-            return ""
-        if content.startswith(stream.raw_content):
-            return content[len(stream.raw_content) :]
-        stream.input_mode = "delta"
-        return content
-    if stream.input_mode == "delta":
-        return content
-    if content == stream.raw_content:
-        stream.input_mode = "snapshot"
+    if not content:
         return ""
-    if content.startswith(stream.raw_content):
+    previous = stream.raw_content
+    if not previous:
+        return content
+
+    snapshot_delta = _delta_from_snapshot(previous, content)
+    if snapshot_delta is not None:
         stream.input_mode = "snapshot"
-        return content[len(stream.raw_content) :]
+        return snapshot_delta
+
     stream.input_mode = "delta"
     return content
+
+
+def _delta_from_snapshot(previous: str, content: str) -> str | None:
+    if content == previous:
+        return ""
+    if content.startswith(previous):
+        return content[len(previous) :]
+    return None
 
 
 def _public_delta_for_stream(previous: str, current: str) -> str:

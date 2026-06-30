@@ -20,6 +20,7 @@ REQUEST_TERMINAL_EVENT_TYPES = {
     *RUN_TERMINAL_EVENT_TYPES,
     *INTERRUPT_TERMINAL_EVENT_TYPES,
     "agent_package_sessions_listed",
+    "agent_package_session_loaded",
     "error",
 }
 

@@ -9,6 +9,8 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     SYSTEM_CHAT_PACKAGE_ID,
 )
 
+MESSAGE_MODES = {"chat", "create_agent", "evolve_agent"}
+
 
 class RuntimeSessionCommandMixin:
     def start_session(self, command: FactoryFrontendCommand) -> None:
@@ -57,21 +59,7 @@ class RuntimeSessionCommandMixin:
         if command.mode == "agent_package":
             self._emit_error(command, "use list_agent_packages/select_agent_package to enter agent package mode")
             return
-        self.mode = command.mode
-        self.session_record = self.session_manager.set_mode(self.session_record.session_id, self.mode)
-        self.emit(
-            event(
-                "mode_changed",
-                request_id=command.request_id,
-                session_id=self._session_id(),
-                mode=self.mode,
-                payload={
-                    "mode": self.mode,
-                    **({"package_id": SYSTEM_CHAT_PACKAGE_ID} if self.mode == "chat" else {}),
-                    **({"graph_id": "create_agent_react"} if self.mode == "create_agent" else {}),
-                },
-            )
-        )
+        self._apply_mode(command, command.mode)
 
     def set_options(self, command: FactoryFrontendCommand) -> None:
         self.options = FactoryBridgeOptions(
@@ -90,6 +78,8 @@ class RuntimeSessionCommandMixin:
 
     def send_message(self, command: FactoryFrontendCommand) -> None:
         self._ensure_session(command)
+        if command.mode in MESSAGE_MODES and command.mode != self.mode:
+            self._apply_mode(command, command.mode)
         if self.mode not in {"chat", "create_agent", "evolve_agent"}:
             self._emit_error(command, "enter /chat, /create-agent, or /evolve-agent before sending messages")
             return
@@ -111,6 +101,25 @@ class RuntimeSessionCommandMixin:
         else:
             self._run_evolve_agent(command, message)
 
+    def _apply_mode(self, command: FactoryFrontendCommand, mode: str | None) -> None:
+        if self.session_record is None:
+            self._ensure_session(command)
+        self.mode = mode
+        self.session_record = self.session_manager.set_mode(self.session_record.session_id, self.mode)
+        self.emit(
+            event(
+                "mode_changed",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode=self.mode,
+                payload={
+                    "mode": self.mode,
+                    **({"package_id": SYSTEM_CHAT_PACKAGE_ID} if self.mode == "chat" else {}),
+                    **({"graph_id": "create_agent_react"} if self.mode == "create_agent" else {}),
+                },
+            )
+        )
+
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
         if self.pending_create_agent_run is not None:
             self._resume_create_agent_interrupt(command)
@@ -130,7 +139,7 @@ class RuntimeSessionCommandMixin:
                 request_id=request_id,
                 session_id=self._session_id(),
                 mode=self.mode,
-                payload={"session": session_payload(self.session_record)},
+                payload={"session": self._session_payload()},
             )
         )
 
@@ -154,9 +163,69 @@ class RuntimeSessionCommandMixin:
             return None
         return str(self.session_record.session_id)
 
+    def _session_payload(self) -> dict[str, object]:
+        payload = session_payload(self.session_record)
+        snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+        messages = list(snapshot.get("messages") or []) if isinstance(snapshot, dict) else []
+        linked_agent_session = self._linked_agent_session_payload()
+        if linked_agent_session is not None:
+            messages = _messages_from_agent_session(linked_agent_session)
+            snapshot = {
+                **snapshot,
+                "messages": messages,
+                "agent_session": linked_agent_session,
+            }
+        payload["snapshot"] = snapshot
+        return payload
+
+    def _linked_agent_session_payload(self) -> dict[str, object] | None:
+        if self.session_record is None or self.agent_package_runtime is None:
+            return None
+        package_id = SYSTEM_CHAT_PACKAGE_ID if self.mode == "chat" else None
+        agent_session_id = self.session_record.chat_agent_package_session_id if self.mode == "chat" else None
+        if not package_id or not agent_session_id:
+            return None
+        try:
+            return self.agent_package_runtime.load_session(package_id, agent_session_id)
+        except Exception:
+            return None
+
     def checkpointer_payload(self) -> dict[str, object]:
         return {
             "backend": "system_package",
             "persistent": True,
             "path": None,
         }
+
+
+def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, object]]:
+    turns = record.get("turns")
+    if not isinstance(turns, list):
+        return []
+    messages: list[dict[str, object]] = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        created_at = turn.get("created_at")
+        turn_index = turn.get("index")
+        user_input = str(turn.get("user_input") or "").strip()
+        if user_input:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": user_input,
+                    "turn_index": turn_index,
+                    "created_at": created_at,
+                }
+            )
+        final_answer = str(turn.get("final_answer") or "").strip()
+        if final_answer:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": final_answer,
+                    "turn_index": turn_index,
+                    "created_at": created_at,
+                }
+            )
+    return messages

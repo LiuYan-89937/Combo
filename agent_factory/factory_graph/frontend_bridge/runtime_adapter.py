@@ -9,6 +9,7 @@ from agent_factory.create_agent.runtime import CreateAgentRuntime
 from agent_factory.evolution import AgentEvolutionRuntime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryMode, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_agent_packages import RuntimeAgentPackageCommandMixin
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_resources import RuntimeResourceCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_scheduler import RuntimeSchedulerCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_sessions import RuntimeSessionCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
@@ -28,6 +29,7 @@ from agent_factory.scheduler_system import SchedulerRuntime, scheduler_enabled_f
 class FactoryRuntimeAdapter(
     RuntimeSessionCommandMixin,
     RuntimeAgentPackageCommandMixin,
+    RuntimeResourceCommandMixin,
     RuntimeSchedulerCommandMixin,
 ):
     emit: Emit
@@ -95,11 +97,15 @@ _COMMAND_HANDLERS: dict[str, str] = {
     "set_mode": "set_mode",
     "set_options": "set_options",
     "send_message": "send_message",
+    "workspace_manage": "workspace_manage",
+    "knowledge_manage": "knowledge_manage",
+    "extensions_manage": "extensions_manage",
     "scheduler_manage": "scheduler_manage",
     "list_agent_packages": "list_agent_packages",
     "select_agent_package": "select_agent_package",
     "delete_agent_package": "delete_agent_package",
     "list_agent_package_sessions": "list_agent_package_sessions",
+    "load_agent_package_session": "load_agent_package_session",
     "run_agent_package": "run_agent_package",
     "run_agent_evolution": "run_agent_evolution",
     "resume_interrupt": "resume_interrupt",

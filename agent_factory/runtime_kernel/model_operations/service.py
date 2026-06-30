@@ -209,14 +209,28 @@ class ModelOperationService:
             output_json_schema=schema_payload,
             structured_method=effective_structured_method,
         )
+        input_diagnostics = _structured_input_diagnostics(
+            envelope=envelope,
+            request_messages=request_messages,
+            tool_count=0,
+        )
         trace_span_id = _start_trace_span(
             state=state,
             services=services,
             node_id=node_id,
             operation="structured_json",
-            payload={"schema_name": output_model.__name__, **operation_context},
+            payload={"schema_name": output_model.__name__, **operation_context, "model_input": input_diagnostics},
         )
         for attempt in range(1, attempts + 1):
+            _emit_context_window(
+                state=state,
+                services=services,
+                node_id=node_id,
+                model=model,
+                messages=request_messages,
+                tools=[],
+                source="model_operation.before_structured_call",
+            )
             _emit(
                 emit_event,
                 "model_call_started",
@@ -234,10 +248,30 @@ class ModelOperationService:
                     parsed = result
                 else:
                     parsed = output_model.model_validate(result)
+                usage_metadata = getattr(result, "usage_metadata", None) or {}
+                cache_metrics = _model_cache_metrics_payload(
+                    state=state,
+                    node_id=node_id,
+                    model_metadata=metadata,
+                    usage_metadata=usage_metadata,
+                    input_diagnostics=input_diagnostics,
+                )
                 _emit(
                     emit_event,
                     "model_call_completed",
-                    {"operation": "structured_json", "attempt": attempt},
+                    {
+                        "operation": "structured_json",
+                        "attempt": attempt,
+                        "usage_metadata": usage_metadata,
+                        "model_input": input_diagnostics,
+                    },
+                )
+                _emit(emit_event, "model_cache_metrics", cache_metrics)
+                _emit_provider_usage_context_window(
+                    state=state,
+                    services=services,
+                    node_id=node_id,
+                    response=result,
                 )
                 _finish_trace_span(
                     state=state,
@@ -249,7 +283,9 @@ class ModelOperationService:
                     payload={
                         "attempt": attempt,
                         "schema_name": output_model.__name__,
-                        "model_input": envelope.diagnostics() if envelope is not None else {},
+                        "usage_metadata": usage_metadata,
+                        "model_input": input_diagnostics,
+                        "model_cache": cache_metrics,
                     },
                 )
                 return parsed
@@ -279,6 +315,11 @@ class ModelOperationService:
                             )
                         ),
                     ]
+                    input_diagnostics = _structured_input_diagnostics(
+                        envelope=envelope,
+                        request_messages=request_messages,
+                        tool_count=0,
+                    )
         _finish_trace_span(
             state=state,
             services=services,
@@ -388,6 +429,44 @@ def _finish_trace_span(
         node_id=node_id,
         payload=payload,
     )
+
+
+def _structured_input_diagnostics(
+    *,
+    envelope: Any | None,
+    request_messages: list[Any],
+    tool_count: int,
+) -> dict[str, Any]:
+    if envelope is not None:
+        diagnostics = dict(envelope.diagnostics())
+    else:
+        diagnostics = {
+            "stable_prefix_digest": "",
+            "dynamic_evidence_digest": "",
+            "tool_surface_digest": "",
+            "stable_system_chars": 0,
+            "dynamic_evidence_chars": 0,
+            "history_message_count": _base_message_count(request_messages),
+            "tool_count": tool_count,
+        }
+    diagnostics["request_message_count"] = _base_message_count(request_messages)
+    diagnostics["request_message_chars"] = _request_message_chars(request_messages)
+    return diagnostics
+
+
+def _base_message_count(messages: list[Any]) -> int:
+    return sum(1 for message in messages if isinstance(message, BaseMessage))
+
+
+def _request_message_chars(messages: list[Any]) -> int:
+    return sum(len(_message_content_text(message)) for message in messages)
+
+
+def _message_content_text(message: Any) -> str:
+    content = getattr(message, "content", message)
+    if isinstance(content, str):
+        return content
+    return str(content)
 
 
 def _structured_model(
