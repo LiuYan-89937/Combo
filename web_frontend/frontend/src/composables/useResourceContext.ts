@@ -24,7 +24,8 @@ export function useResourceContext() {
   const label = computed(() => {
     if (!packageId.value) return '闲聊'
     const pkg = packageInfo.value
-    return `子 Agent · ${pkg?.agent_name || pkg?.name || '未命名 Agent'}`
+    const prefix = runtimeStore.currentMode === 'evolve_agent' ? '进化' : '子 Agent'
+    return `${prefix} · ${pkg?.agent_name || pkg?.name || '未命名 Agent'}`
   })
 
   return {

@@ -13,8 +13,7 @@ import { useRuntimeStore } from './runtime'
 import { useSchedulerStore } from './scheduler'
 import { useSessionStore } from './session'
 import { useWorkspaceStore } from './workspace'
-
-const SYSTEM_CHAT_PACKAGE_ID = 'factory_chat'
+import { normalizeResourcePackageId } from '@/utils/resourceScope'
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
@@ -28,6 +27,15 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     sessionStore.setSessions(runtimeStore.sessions as any)
     if (runtimeStore.activeFactorySessionId) {
       sessionStore.setCurrentSession(runtimeStore.activeFactorySessionId)
+    }
+    const sessionPayload = event.payload?.session
+    const evolutionPackageId = sessionPayload && typeof sessionPayload === 'object'
+      ? String(sessionPayload.evolve_agent_package_id || '').trim()
+      : ''
+    if (runtimeStore.currentMode === 'evolve_agent' && evolutionPackageId) {
+      const agentStore = useAgentStore()
+      agentStore.leaveAgentChat()
+      agentStore.selectPackage(evolutionPackageId)
     }
   }
 
@@ -48,6 +56,17 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
       agentStore.selectPackage(runtimeStore.selectedAgentPackage.package_id)
     }
     agentStore.setSessions(runtimeStore.agentSessions as any)
+    if (event.event_type === 'agent_package_sessions_listed') {
+      agentStore.mergeRecentSessions(
+        runtimeStore.agentSessions.map((session: any) => sessionWithPackage(session, event.payload?.package_id)) as any
+      )
+    }
+    if (event.event_type === 'agent_package_session_loaded' && event.payload?.session) {
+      agentStore.mergeRecentSessions([sessionWithPackage(event.payload.session, event.payload.package_id)])
+    }
+    if (event.event_type === 'run_completed' && event.payload?.agent_session) {
+      agentStore.mergeRecentSessions([sessionWithPackage(event.payload.agent_session, event.payload.package_id)])
+    }
     if (event.event_type === 'agent_package_session_loaded' && event.payload?.session?.session_id) {
       agentStore.setActiveAgentSession(event.payload.session.session_id)
     }
@@ -162,8 +181,10 @@ function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
   )
 }
 
-function normalizeResourcePackageId(value: unknown): string | null {
-  const normalized = String(value || '').trim()
-  if (!normalized || normalized === SYSTEM_CHAT_PACKAGE_ID) return null
-  return normalized
+function sessionWithPackage(session: any, packageId: unknown): any {
+  if (!session || typeof session !== 'object') return session
+  return {
+    ...session,
+    package_id: session.package_id || packageId,
+  }
 }

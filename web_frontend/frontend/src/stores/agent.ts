@@ -86,11 +86,17 @@ export interface AgentSessionView {
   updated_at: string
 }
 
+export interface AgentRecentSessionView extends AgentSessionView {
+  package_name?: string | null
+  agent_name?: string | null
+}
+
 export const useAgentStore = defineStore('agent', () => {
   const agentPackages = ref<AgentPackageView[]>([])
   const packageInstances = ref<Record<string, AgentPackageInstanceView>>({})
   const selectedPackageId = ref<string | null>(null)
   const agentSessions = ref<AgentSessionView[]>([])
+  const recentAgentSessions = ref<AgentRecentSessionView[]>([])
   const selectedSessionId = ref<string | null>(null)
   const activeChatPackageId = ref<string | null>(null)
 
@@ -136,6 +142,7 @@ export const useAgentStore = defineStore('agent', () => {
       activeChatPackageId.value = null
       selectedSessionId.value = null
     }
+    filterRecentSessionsByPackages()
   }
 
   function setInstances(instances: AgentPackageInstanceView[]): void {
@@ -165,6 +172,17 @@ export const useAgentStore = defineStore('agent', () => {
 
   function setSessions(sessions: AgentSessionView[]): void {
     agentSessions.value = sessions
+  }
+
+  function setRecentSessions(sessions: AgentRecentSessionView[]): void {
+    recentAgentSessions.value = normalizeRecentSessions(sessions)
+  }
+
+  function mergeRecentSessions(sessions: AgentRecentSessionView[]): void {
+    recentAgentSessions.value = normalizeRecentSessions([
+      ...sessions,
+      ...recentAgentSessions.value,
+    ])
   }
 
   function selectSession(sessionId: string | null): void {
@@ -207,6 +225,28 @@ export const useAgentStore = defineStore('agent', () => {
       activeChatPackageId.value = null
       selectedSessionId.value = null
     }
+    recentAgentSessions.value = recentAgentSessions.value.filter((session) => session.package_id !== packageId)
+  }
+
+  function normalizeRecentSessions(sessions: AgentRecentSessionView[]): AgentRecentSessionView[] {
+    const byKey = new Map<string, AgentRecentSessionView>()
+    sessions
+      .filter((session) => session.package_id && session.session_id)
+      .forEach((session) => {
+        byKey.set(`${session.package_id}:${session.session_id}`, session)
+      })
+    return [...byKey.values()]
+      .sort((left, right) => sessionTime(right).localeCompare(sessionTime(left)))
+      .slice(0, 5)
+  }
+
+  function sessionTime(session: AgentRecentSessionView): string {
+    return session.updated_at || session.created_at || ''
+  }
+
+  function filterRecentSessionsByPackages(): void {
+    const packageIds = new Set(agentPackages.value.map((pkg) => pkg.package_id))
+    recentAgentSessions.value = recentAgentSessions.value.filter((session) => packageIds.has(session.package_id))
   }
 
   return {
@@ -214,6 +254,7 @@ export const useAgentStore = defineStore('agent', () => {
     packageInstances,
     selectedPackageId,
     agentSessions,
+    recentAgentSessions,
     selectedSessionId,
     activeChatPackageId,
     selectedPackage,
@@ -226,6 +267,8 @@ export const useAgentStore = defineStore('agent', () => {
     upsertInstance,
     selectPackage,
     setSessions,
+    setRecentSessions,
+    mergeRecentSessions,
     selectSession,
     enterAgentChat,
     leaveAgentChat,

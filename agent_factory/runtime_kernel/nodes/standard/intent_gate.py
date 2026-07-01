@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from langchain_core.messages import AIMessage, SystemMessage
-from pydantic import BaseModel, ConfigDict, Field
+from langchain_core.messages import SystemMessage
+from pydantic import BaseModel, ConfigDict
 
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.activation import normalize_plan_and_execute_activation
@@ -25,7 +25,7 @@ class CognitiveIntentGateNode:
     node_type = "cognitive"
     supports_interrupt = False
     supports_subgraph_slot = True
-    writable_sections = {"conversation", "context", "execution"}
+    writable_sections = {"context", "execution"}
 
     def execute(
         self,
@@ -56,11 +56,8 @@ class CognitiveIntentGateNode:
         )
         payload = decision.model_dump(mode="json")
         route = "intent.start_workflow" if decision.decision == "start_workflow" else "intent.casual"
-        message = _response_text(decision, activation)
         return {
-            "messages": [AIMessage(content=message)],
             "context": {"model_outputs": {context.node_id: payload}},
-            "conversation": {"assistant_draft": message},
             "execution": {"current_node": context.node_id, "route_decision": route},
         }
 
@@ -95,10 +92,3 @@ def _intent_gate_prompt(activation: dict[str, Any]) -> str:
         "- casual: the user is not starting the main workflow. This includes follow-up requests, workspace/tool actions, status questions, greetings, and cases where more discovery or clarification is needed outside the main workflow.\n"
         "Do not invent missing files, URLs, resources, accounts, or user choices."
     )
-
-
-def _response_text(decision: IntentGateDecision, activation: dict[str, Any]) -> str:
-    message = decision.user_message.strip()
-    if message:
-        return message
-    return ""

@@ -446,7 +446,7 @@ function handleEvolve(pkg: AgentPackageView) {
   agentStore.leaveAgentChat()
   runtimeStore.enterFactoryConversation('evolve_agent', pkg.package_id)
   void enterPackageContext(pkg, 'evolution').then(() => {
-    void router.push({ name: 'Factory' })
+    void router.push({ name: 'Evolution' })
   })
 }
 

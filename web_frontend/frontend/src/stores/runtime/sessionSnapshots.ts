@@ -22,6 +22,9 @@ export function factorySessionSnapshotView(
   const snapshot = session.snapshot || payload?.snapshot || {}
   const restoredMode = (snapshot.mode || session.current_mode || null) as FactoryMode | null
   const scope = conversationScopeForMode(restoredMode, payload || {})
+  const restoredPackageId = restoredMode === 'evolve_agent'
+    ? String(session.evolve_agent_package_id || payload?.package_id || '').trim() || null
+    : null
   const messages = Array.isArray(snapshot.messages)
     ? snapshot.messages
     : Array.isArray(snapshot.transcript)
@@ -42,6 +45,7 @@ export function factorySessionSnapshotView(
       metadata: {
         restored: true,
         mode: restoredMode,
+        package_id: restoredPackageId,
       },
     }
     if (!item.content.trim()) return
@@ -60,6 +64,7 @@ export function factorySessionSnapshotView(
         metadata: {
           restored: true,
           mode: restoredMode,
+          package_id: restoredPackageId,
         },
       })
     }

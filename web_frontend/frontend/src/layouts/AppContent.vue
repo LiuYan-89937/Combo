@@ -32,6 +32,7 @@
     <!-- 全局通知 -->
     <n-notification-provider>
       <AppNotifications />
+      <SchedulerRunNotifier />
     </n-notification-provider>
 
     <!-- 命令面板 -->
@@ -58,6 +59,7 @@ import AppSidebar from '@/components/common/AppSidebar.vue'
 import AppRightSidebar from '@/components/common/AppRightSidebar.vue'
 import AppLoadingBar from '@/components/common/AppLoadingBar.vue'
 import AppNotifications from '@/components/common/AppNotifications.vue'
+import SchedulerRunNotifier from '@/components/scheduler/SchedulerRunNotifier.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
@@ -68,7 +70,13 @@ const route = useRoute()
 const { startSession } = useCommand()
 
 onMounted(() => {
-  const mode = route.name === 'Manufacturing' ? 'create_agent' : route.name === 'Factory' ? 'chat' : null
+  const mode = route.name === 'Manufacturing'
+    ? 'create_agent'
+    : route.name === 'Evolution'
+      ? 'evolve_agent'
+      : route.name === 'Factory'
+        ? 'chat'
+        : null
   startSession(true, mode)
 })
 </script>

@@ -102,12 +102,12 @@
               </div>
             </div>
           </section>
+        </div>
+      </n-tab-pane>
 
-          <section class="status-section">
-            <div class="section-title">计划</div>
-            <n-empty v-if="!runtimeStore.currentPlan" description="暂无计划" size="small" />
-            <PlanPanel v-else compact />
-          </section>
+      <n-tab-pane v-if="runtimeStore.currentPlan" name="plan" tab="计划">
+        <div class="sidebar-content">
+          <PlanPanel compact />
         </div>
       </n-tab-pane>
     </n-tabs>
@@ -136,14 +136,20 @@ const commands = useCommand()
 const resourceContext = useResourceContext()
 const previewLoading = ref(false)
 
-const allowedTabs = new Set(['workspace', 'sessions', 'status'])
+const allowedTabs = new Set(['workspace', 'sessions', 'status', 'plan'])
 const recentTimeline = computed(() => runtimeStore.timeline.slice(-20).reverse())
 const agentContextActive = computed(() => resourceContext.isAgentContext.value)
 const workspacePackageId = computed(() => resourceContext.packageIdForApi.value)
 const workspaceContextLabel = computed(() => resourceContext.label.value)
 const contextWindow = computed(() => runtimeStore.contextWindow)
 const contextWindowPercent = computed(() => ratioToPercent(contextWindow.value?.windowUsageRatio))
-const contextWindowPercentText = computed(() => `${formatPercent(contextWindowPercent.value)}`)
+const contextWindowPercentText = computed(() => (
+  typeof contextWindow.value?.windowUsageRatio === 'number'
+    ? formatPercent(contextWindowPercent.value)
+    : contextWindow.value?.tokenCount !== null && contextWindow.value?.tokenCount !== undefined
+      ? '已记录'
+      : '暂无'
+))
 const contextWindowBarWidth = computed(() => `${contextWindowPercent.value}%`)
 const contextThresholdMarker = computed(() => {
   const windowTokens = contextWindow.value?.contextWindowTokens
@@ -246,11 +252,20 @@ watch(
 watch(
   () => uiStore.activeRightSidebarTab,
   (tab) => {
-    if (!allowedTabs.has(String(tab))) {
+    if (!allowedTabs.has(String(tab)) || (tab === 'plan' && !runtimeStore.currentPlan)) {
       uiStore.setRightSidebarTab('workspace')
     }
   },
   { immediate: true }
+)
+
+watch(
+  () => runtimeStore.currentPlan,
+  (plan) => {
+    if (!plan && uiStore.activeRightSidebarTab === 'plan') {
+      uiStore.setRightSidebarTab('workspace')
+    }
+  }
 )
 </script>
 

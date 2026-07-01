@@ -87,8 +87,10 @@ const runtimeStore = useRuntimeStore()
 const commands = useCommand()
 const searchQuery = ref('')
 
-const activeSessionMode = computed<'chat' | 'create_agent'>(() => {
-  return runtimeStore.currentMode === 'create_agent' ? 'create_agent' : 'chat'
+const activeSessionMode = computed<'chat' | 'create_agent' | 'evolve_agent'>(() => {
+  if (runtimeStore.currentMode === 'create_agent') return 'create_agent'
+  if (runtimeStore.currentMode === 'evolve_agent') return 'evolve_agent'
+  return 'chat'
 })
 
 const filteredSessions = computed(() => {
@@ -118,16 +120,17 @@ function sessionBelongsToActiveMode(session: SessionView): boolean {
   if (session.current_mode === activeSessionMode.value) return true
   if (sessionTurnCount(session) > 0) return true
   if (activeSessionMode.value === 'chat') return Boolean(session.chat_agent_package_session_id)
-  return Boolean(session.create_agent_session_id)
+  if (activeSessionMode.value === 'create_agent') return Boolean(session.create_agent_session_id)
+  return Boolean(session.evolve_agent_package_id)
 }
 
 function sessionTurnCount(session: SessionView): number {
   const modeCounts = session.mode_turn_counts || {}
   const count = modeCounts[activeSessionMode.value]
   if (typeof count === 'number') return count
-  return activeSessionMode.value === 'create_agent'
-    ? session.create_agent_turn_count
-    : session.chat_turn_count
+  if (activeSessionMode.value === 'create_agent') return session.create_agent_turn_count
+  if (activeSessionMode.value === 'evolve_agent') return session.evolve_agent_turn_count || 0
+  return session.chat_turn_count
 }
 
 function sessionTitle(session: SessionView): string {

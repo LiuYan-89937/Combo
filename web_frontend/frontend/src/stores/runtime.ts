@@ -32,7 +32,7 @@ import {
   agentPackageConversationScope,
   agentPackageScopeInfoFromEvent,
   conversationScopeForMode,
-  conversationScopeForRequestEvent,
+  isMoreSpecificConversationScope,
   scopeFromEventPayload,
   scopeFromMessageMetadata,
 } from './runtime/scopes'
@@ -179,7 +179,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
       // 3. Request-scoped 事件过滤
       const isRequestScoped = isRequestScopedEvent(event.event_type)
-      const requestScope = isRequestScoped ? conversationScopeForRequestEvent(event, this.activeRequests) : null
+      const requestScope = isRequestScoped ? this._resolveRequestScopeForEvent(event) : null
       if (requestScope && requestScope !== this.activeConversationScope) {
         this._dispatchEventToConversationScope(requestScope, event)
         return
@@ -225,7 +225,10 @@ export const useRuntimeStore = defineStore('runtime', {
         this.selectedAgentPackage = payload?.package || null
         this.agentSessions = payload?.sessions || this.agentSessions
         if (payload?.purpose === 'evolution' && payload?.package?.package_id) {
-          const scope = conversationScopeForMode('evolve_agent', payload)
+          const scope = conversationScopeForMode('evolve_agent', {
+            ...(payload || {}),
+            session_id: this.activeFactorySessionId,
+          })
           if (scope) {
             this._switchConversationScope(scope)
           }
@@ -358,7 +361,10 @@ export const useRuntimeStore = defineStore('runtime', {
     _handleModeChanged(event: FactoryFrontendEvent) {
       const nextMode = event.mode || event.payload?.mode || null
       this.currentMode = nextMode
-      const nextScope = conversationScopeForMode(nextMode, event.payload || {})
+      const nextScope = conversationScopeForMode(nextMode, {
+        ...(event.payload || {}),
+        session_id: event.session_id || event.payload?.session_id || this.activeFactorySessionId,
+      })
       if (nextScope) {
         this._switchConversationScope(nextScope)
       }
@@ -658,6 +664,11 @@ export const useRuntimeStore = defineStore('runtime', {
       const streamId = event.payload?.stream_id
       const delta = event.payload?.delta
       if (!streamId || delta == null) return
+      const visibleToUser = event.payload?.visible_to_user !== false
+      if (!visibleToUser) {
+        this._discardAssistantMessageStream(streamId, event.timestamp)
+        return
+      }
 
       if (!this.modelStreams[streamId]) {
         this.modelStreams[streamId] = {
@@ -667,10 +678,12 @@ export const useRuntimeStore = defineStore('runtime', {
           content: delta,
           active: true,
           completedAt: null,
-          visibleToUser: event.payload?.visible_to_user !== false,
+          visibleToUser,
         }
       } else {
         this.modelStreams[streamId].requestId = this.modelStreams[streamId].requestId || event.request_id || null
+        this.modelStreams[streamId].nodeId = this.modelStreams[streamId].nodeId || event.node_id || null
+        this.modelStreams[streamId].visibleToUser = visibleToUser
         this.modelStreams[streamId].content += delta
       }
       const stream = this.modelStreams[streamId]
@@ -964,6 +977,20 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    _resolveRequestScopeForEvent(event: FactoryFrontendEvent): string | null {
+      const requestId = event.request_id || null
+      const payloadScope = scopeFromEventPayload(event)
+      if (!requestId) return payloadScope
+      const request = this.activeRequests[requestId]
+      const currentScope = request?.conversationScope || null
+      if (request && isMoreSpecificConversationScope(currentScope, payloadScope)) {
+        this._renameConversationScope(currentScope as string, payloadScope as string)
+        request.conversationScope = payloadScope
+        return payloadScope
+      }
+      return currentScope || payloadScope
+    },
+
     _completeActiveRequest(event: FactoryFrontendEvent, status: RunStatus) {
       this._registerActiveRequest(event, status)
     },
@@ -971,19 +998,17 @@ export const useRuntimeStore = defineStore('runtime', {
     _restoreSessionSnapshot(payload: Record<string, any> | undefined) {
       const snapshot = factorySessionSnapshotView(payload)
       this.currentMode = snapshot.restoredMode
-      if (!snapshot.hasMessages) {
-        if (snapshot.scope) {
-          this._switchConversationScope(snapshot.scope)
-        }
+      if (!snapshot.scope) return
+
+      this._switchConversationScope(snapshot.scope)
+      if (this._hasLiveConversationState()) {
         return
       }
+      if (!snapshot.hasMessages) return
 
       this.transcript = snapshot.transcript
       this.conversationTurns = snapshot.conversationTurns
-      if (snapshot.scope) {
-        this.activeConversationScope = snapshot.scope
-        this._saveActiveConversationScope()
-      }
+      this._saveActiveConversationScope()
     },
 
     _restoreAgentPackageSession(session: any, packageId: string | null = null) {
@@ -1031,7 +1056,10 @@ export const useRuntimeStore = defineStore('runtime', {
 
     enterFactoryConversation(mode: 'chat' | 'create_agent' | 'evolve_agent', packageId: string | null = null) {
       this.currentMode = mode
-      const scope = conversationScopeForMode(mode, { package_id: packageId })
+      const scope = conversationScopeForMode(mode, {
+        package_id: packageId,
+        session_id: this.activeFactorySessionId,
+      })
       if (scope) {
         this._switchConversationScope(scope)
       }
@@ -1280,6 +1308,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _clearSessionScopedState() {
+      this._saveActiveConversationScope()
       this.activeRequestId = null
       this.runStatus = 'idle'
       this.pendingInterrupt = null
@@ -1298,7 +1327,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.workspaceFile = null
       this.extensionTestResult = null
       this.activeConversationScope = null
-      this.conversationScopes = {}
     },
 
     _switchConversationScope(scope: string) {
@@ -1365,11 +1393,27 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    _renameConversationScope(previousScope: string, nextScope: string) {
+      if (!previousScope || !nextScope || previousScope === nextScope) return
+      const saved = this.conversationScopes[previousScope]
+      if (saved && !this.conversationScopes[nextScope]) {
+        this.conversationScopes[nextScope] = saved
+      }
+      delete this.conversationScopes[previousScope]
+      if (this.activeConversationScope === previousScope) {
+        this.activeConversationScope = nextScope
+      }
+      Object.values(this.activeRequests).forEach((request) => {
+        if (request.conversationScope === previousScope) {
+          request.conversationScope = nextScope
+        }
+      })
+    },
+
     _renameActiveConversationScope(nextScope: string) {
       const previousScope = this.activeConversationScope
       if (!previousScope || previousScope === nextScope) return
-      this.activeConversationScope = nextScope
-      delete this.conversationScopes[previousScope]
+      this._renameConversationScope(previousScope, nextScope)
     },
 
     _promoteAgentPackageScopeFromEvent(event: FactoryFrontendEvent) {
@@ -1461,7 +1505,7 @@ export const useRuntimeStore = defineStore('runtime', {
         this.activeRequestId = requestId
         this.runStatus = 'running'
         this.pendingInterrupt = null
-        const conversationScope = scopeFromMessageMetadata(metadata, this.currentMode)
+        const conversationScope = scopeFromMessageMetadata(metadata, this.currentMode, this.activeFactorySessionId)
         this.activeRequests[requestId] = {
           requestId,
           status: 'running',
@@ -1475,44 +1519,6 @@ export const useRuntimeStore = defineStore('runtime', {
           payload: { ...metadata },
         }
       }
-    },
-
-    submitInterruptDecision(requestId: string | null, payload: Record<string, any> = {}) {
-      if (!requestId) return
-      const timestamp = new Date().toISOString()
-      const activeScope = this.activeConversationScope
-      this.pendingInterrupt = null
-      this.runStatus = 'running'
-      this.activeRequestId = requestId
-      this.activeRequests[requestId] = {
-        requestId,
-        status: 'running',
-        mode: (payload.mode as FactoryMode | undefined) || this.currentMode || null,
-        runId: null,
-        conversationScope: activeScope,
-        background: false,
-        source: 'user',
-        startedAt: timestamp,
-        completedAt: null,
-        payload: { ...payload, interrupt_resume: true },
-      }
-      const turn = this._ensureTurnForRequest(requestId, timestamp)
-      turn.status = 'running'
-      turn.startedAt = turn.startedAt || timestamp
-      turn.errorMessage = null
-      turn.metadata = {
-        ...(turn.metadata || {}),
-        interrupt_resume: true,
-        action: payload.action || null,
-      }
-      const approved = payload.approved === true
-      const rejected = payload.approved === false || ['deny', 'revise'].includes(String(payload.action || ''))
-      this.tools
-        .filter((tool) => tool.status === 'approval' && tool.approvalState === 'pending')
-        .forEach((tool) => {
-          tool.approvalState = approved ? 'approved' : rejected ? 'rejected' : tool.approvalState
-          this._upsertTurnTool(tool)
-        })
     },
 
   },

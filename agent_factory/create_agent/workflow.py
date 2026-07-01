@@ -11,6 +11,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from agent_factory.create_agent.models import CreateAgentAction, CreateAgentPublishDecision, PackageValidationReport
+from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
 from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
@@ -260,7 +261,7 @@ class CreateAgentWorkflow:
                 "messages": [SystemMessage(content=ready_error)],
                 "done": False,
             }
-        final_answer = action.message.strip() or "AgentPackage 进化已通过 full_static validation，准备自动发布。"
+        final_answer = _evolution_final_answer(action.message)
         workspace.write_action(CreateAgentAction())
         return {
             "validation": report.to_digest().model_dump(mode="json"),
@@ -398,6 +399,13 @@ def _resume_text(value: Any) -> str:
                 return item.strip()
         return str(value)
     return str(value or "").strip()
+
+
+def _evolution_final_answer(message: str) -> str:
+    text = str(message or "").strip()
+    if text and not looks_like_internal_observation_text(text):
+        return text
+    return "AgentPackage 进化已通过 full_static validation，变更已完成并自动发布。"
 
 
 def _publish_decision_from_resume(value: Any) -> str:

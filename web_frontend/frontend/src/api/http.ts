@@ -16,6 +16,10 @@ interface CommandResponse {
   command: FactoryFrontendCommand
 }
 
+interface RecentAgentSessionsResponse {
+  sessions: any[]
+}
+
 export interface BlobResponse {
   blob: Blob
   filename: string | null
@@ -36,6 +40,8 @@ export const agentPackagesApi = {
       body: JSON.stringify({ package_id: packageId, purpose }),
     }),
   instances: () => requestEvent('/api/agent-packages/instances'),
+  recentSessions: (limit = 5) =>
+    requestJson<RecentAgentSessionsResponse>(withQuery('/api/agent-packages/recent-sessions', { limit })),
   initialize: (packageId: string) =>
     requestEvent(`/api/agent-packages/${encodeURIComponent(packageId)}/initialize`, { method: 'POST' }),
   shutdown: (packageId: string) =>

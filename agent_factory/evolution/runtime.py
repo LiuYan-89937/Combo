@@ -19,6 +19,7 @@ from agent_factory.create_agent.runtime import (
     _json_safe,
     _tool_trace_records,
 )
+from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
 from agent_factory.create_agent.tooling import CreateAgentToolEnvironmentBuilder
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workflow import CreateAgentWorkflow
@@ -379,12 +380,13 @@ class AgentEvolutionRuntime:
             if not final_state.get("done"):
                 raise RuntimeError("agent evolution workflow stopped before completion")
             changed_files = _changed_files(context.before_fingerprint, package_fingerprint(package_path))
+            final_answer = _safe_evolution_summary(str(final_state.get("final_answer") or ""))
             report_path = _write_evolution_publish_report(
                 package_path=package_path,
                 package_id=package_id,
                 trace_id=context.trace_id,
                 user_input=context.user_input,
-                summary=str(final_state.get("final_answer") or ""),
+                summary=final_answer,
                 changed_files=changed_files,
                 validation=final_state.get("validation") if isinstance(final_state.get("validation"), dict) else {},
             )
@@ -412,7 +414,7 @@ class AgentEvolutionRuntime:
                 },
             )
             normalizer.emit_final_message_if_needed(
-                str(final_state.get("final_answer") or "AgentPackage 进化已完成并自动发布。"),
+                final_answer,
                 node_id="agent_evolution",
                 reason="run_completed",
             )
@@ -572,6 +574,13 @@ def _write_evolution_publish_report(
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report_path
+
+
+def _safe_evolution_summary(value: str) -> str:
+    text = str(value or "").strip()
+    if text and not looks_like_internal_observation_text(text):
+        return text
+    return "AgentPackage 进化已完成并自动发布。"
 
 
 def _safe_id(value: str, *, label: str) -> str:

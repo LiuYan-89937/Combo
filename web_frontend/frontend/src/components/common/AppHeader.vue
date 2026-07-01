@@ -69,7 +69,8 @@ const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 
 const currentRouteName = computed(() => {
-  const isConversationRoute = route.name === 'Factory' || route.name === 'Manufacturing'
+  const isConversationRoute = route.name === 'Factory' || route.name === 'Manufacturing' || route.name === 'Evolution'
+  if (route.name === 'Evolution') return 'Agent 进化'
   if (isConversationRoute && runtimeStore.currentMode === 'evolve_agent') return 'Agent 进化'
   if (isConversationRoute && runtimeStore.currentMode === 'create_agent') return 'Agent 制造'
   if (isConversationRoute && runtimeStore.currentMode === 'agent_package') return '子 Agent 对话'

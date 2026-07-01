@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.create_agent.models import CreateAgentAction
+from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
@@ -91,6 +92,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     )
     if action.action == "ask_user" and not action.message.strip():
         raise ValueError("message is required when action is ask_user")
+    if action.action == "finalize" and looks_like_internal_observation_text(action.message):
+        raise ValueError("finalize message must be a concise user-facing summary, not raw tool/probe JSON")
     workspace.write_action(action)
     return tool_envelope({
         "action": action.action,
@@ -115,6 +118,8 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
         message = str(arguments.get("message") or "").strip()
         if action == "ask_user" and not message:
             raise ValueError("message is required when action is ask_user")
+        if action == "finalize" and looks_like_internal_observation_text(message):
+            raise ValueError("finalize message must be a concise user-facing summary, not raw tool/probe JSON")
         CreateAgentAction.model_validate(
             {
                 "action": action,

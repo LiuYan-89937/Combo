@@ -6,8 +6,9 @@ import json
 from typing import Any, Callable
 import uuid
 
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage
 
+from agent_factory.create_agent.output_safety import looks_like_internal_observation_payload
 from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendEvent,
     FactoryFrontendEventType,
@@ -15,12 +16,18 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     event,
 )
 from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_blocks
+from agent_factory.runtime_render.schema import default_node_visible_to_user
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
 RUNTIME_TOOL_EXECUTION_NODES = {FACTORY_TOOLS_NODE, "tool_exec"}
 INTERNAL_MODEL_MESSAGE_NODES = {"intent_gate"}
-NODE_EVENT_TYPES: set[str] = {"model_cache_metrics"}
+NODE_EVENT_TYPES: set[str] = {
+    "model_cache_metrics",
+    "model_call_started",
+    "model_stream_delta",
+    "model_message_completed",
+}
 TOOL_EVENT_INLINE_JSON_LIMIT = 6000
 TOOL_EVENT_PREVIEW_CHARS = 1200
 TOOL_OBSERVATION_TEXT_KEYS = frozenset(
@@ -59,8 +66,6 @@ class ModelStreamState:
     span_id: str
     parent_span_id: str | None
     content: str = ""
-    raw_content: str = ""
-    input_mode: str = "unknown"
     completed: bool = False
 
 
@@ -87,6 +92,7 @@ class RuntimeEventNormalizer:
     last_plan_fingerprint: str | None = None
     default_payload: dict[str, Any] = field(default_factory=dict)
     visible_model_message_emitted: bool = False
+    runtime_pattern_id: str | None = None
 
     def runtime_event(
         self,
@@ -230,7 +236,6 @@ class RuntimeEventNormalizer:
 
     def emit_stream_item(self, stream_mode: str, chunk: Any, *, updates_payload_key: str) -> bool:
         if stream_mode == "messages":
-            self.emit_message_chunk(chunk)
             return True
         if stream_mode == "debug":
             self.emit_debug_event(json_safe(chunk))
@@ -375,15 +380,20 @@ class RuntimeEventNormalizer:
         if event_type not in NODE_EVENT_TYPES:
             return
         event_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        node_id = _optional_str(payload.get("node_id"))
+        frontend_payload = {key: value for key, value in json_safe(event_payload).items() if key != "event_type"}
+        if event_type in {"model_call_started", "model_stream_delta", "model_message_completed"}:
+            frontend_payload.setdefault("visible_to_user", self._node_visible_to_user(node_id))
+            self._record_model_stream_event(event_type, node_id=node_id, payload=frontend_payload)
         self.runtime_event(
             event_type,  # type: ignore[arg-type]
-            node_id=_optional_str(payload.get("node_id")),
+            node_id=node_id,
             stage_id=self.current_stage_id,
             span_id=uuid.uuid4().hex,
             parent_span_id=self._stage_span_or_run(self.current_stage_id),
             severity="error" if event_type.endswith("failed") else None,
             message=_optional_str(payload.get("message")),
-            payload={key: value for key, value in json_safe(event_payload).items() if key != "event_type"},
+            payload=frontend_payload,
         )
 
     def _emit_runtime_render_event(self, payload: Any) -> None:
@@ -404,10 +414,16 @@ class RuntimeEventNormalizer:
         if event_type in {"node_completed", "node_failed"}:
             self.started_nodes.add(node_id)
             self.completed_nodes.add(node_id)
+        source_graph_id = _optional_str(payload.get("graph_id"))
+        if source_graph_id:
+            self.runtime_pattern_id = source_graph_id
         source_protocol_version = _optional_str(payload.get("protocol_version"))
         render_payload = dict(payload.get("payload") or {})
         if "visible_to_user" in render_payload:
-            self.node_visibility[node_id] = bool(render_payload.get("visible_to_user"))
+            visible_to_user = bool(render_payload.get("visible_to_user"))
+            self.node_visibility[node_id] = visible_to_user
+            if not visible_to_user:
+                self._discard_model_stream_for_node(node_id, reason="node_hidden")
         if source_protocol_version:
             render_payload["source_protocol_version"] = source_protocol_version
         self.runtime_event(
@@ -476,39 +492,6 @@ class RuntimeEventNormalizer:
                 parent_span_id=self._stage_span_or_run(self.current_stage_id),
                 payload=item_payload,
             )
-
-    def emit_message_chunk(self, chunk: Any) -> None:
-        try:
-            message_chunk, metadata = chunk
-        except Exception:
-            return
-        if "nostream" in set(metadata.get("tags", [])):
-            return
-        node_id = str(metadata.get("langgraph_node") or "")
-        if node_id in RUNTIME_TOOL_EXECUTION_NODES:
-            return
-        if _is_tool_message_like(message_chunk):
-            return
-        incoming = _content_to_text(getattr(message_chunk, "content", ""))
-        if not incoming:
-            return
-        stream = self._model_stream(node_id or "model")
-        public_delta = _apply_model_stream_content(stream, incoming)
-        if not public_delta:
-            return
-        self.runtime_event(
-            "model_stream_delta",
-            node_id=node_id,
-            stage_id=self.current_stage_id,
-            span_id=stream.span_id,
-            parent_span_id=stream.parent_span_id,
-            payload={
-                "stream_id": stream.stream_id,
-                "delta": public_delta,
-                "content_mode": "delta",
-                "visible_to_user": self._node_visible_to_user(node_id),
-            },
-        )
 
     def emit_model_activity_from_patch(self, node_id: str, stage_id: str | None, patch: dict[str, Any]) -> None:
         for item in patch.get("model_activity", []) or []:
@@ -645,34 +628,32 @@ class RuntimeEventNormalizer:
         )
 
     def _complete_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
-        stream = self.model_streams.get(node_id)
-        if stream is None:
-            return
-        self._complete_model_stream(stream, reason=reason)
+        for stream in list(self.model_streams.values()):
+            if stream.node_id == node_id:
+                self._complete_model_stream(stream, reason=reason)
 
     def _discard_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
-        stream = self.model_streams.get(node_id)
-        if stream is None or stream.completed:
-            return
-        stream.completed = True
-        stream.content = ""
-        stream.raw_content = ""
-        self.runtime_event(
-            "model_message_completed",
-            node_id=stream.node_id,
-            stage_id=self.current_stage_id,
-            span_id=stream.span_id,
-            parent_span_id=stream.parent_span_id,
-            payload={
-                "stream_id": stream.stream_id,
-                "content": "",
-                "content_mode": "discard",
-                "completion_reason": reason,
-                "completion_inferred": True,
-                "discard": True,
-                "visible_to_user": False,
-            },
-        )
+        for stream in list(self.model_streams.values()):
+            if stream.node_id != node_id or stream.completed:
+                continue
+            stream.completed = True
+            stream.content = ""
+            self.runtime_event(
+                "model_message_completed",
+                node_id=stream.node_id,
+                stage_id=self.current_stage_id,
+                span_id=stream.span_id,
+                parent_span_id=stream.parent_span_id,
+                payload={
+                    "stream_id": stream.stream_id,
+                    "content": "",
+                    "content_mode": "discard",
+                    "completion_reason": reason,
+                    "completion_inferred": True,
+                    "discard": True,
+                    "visible_to_user": False,
+                },
+            )
 
     def _complete_model_stream(self, stream: ModelStreamState, *, reason: str) -> None:
         if stream.completed:
@@ -702,13 +683,39 @@ class RuntimeEventNormalizer:
             return True
         if node_id in INTERNAL_MODEL_MESSAGE_NODES:
             return False
-        return self.node_visibility.get(node_id, True)
+        if node_id in self.node_visibility:
+            return self.node_visibility[node_id]
+        if self.runtime_pattern_id:
+            return default_node_visible_to_user(pattern_id=self.runtime_pattern_id, node_id=node_id)
+        return True
 
     def _has_visible_model_stream_content(self) -> bool:
         return any(
             (stream.content or "").strip() and self._node_visible_to_user(stream.node_id)
             for stream in self.model_streams.values()
         )
+
+    def _record_model_stream_event(self, event_type: str, *, node_id: str | None, payload: dict[str, Any]) -> None:
+        stream_id = str(payload.get("stream_id") or "").strip()
+        if not stream_id:
+            return
+        stream = self.model_streams.get(stream_id)
+        if stream is None:
+            stream = ModelStreamState(
+                stream_id=stream_id,
+                node_id=node_id or "model",
+                span_id=uuid.uuid4().hex,
+                parent_span_id=self._node_span(node_id or "model", self.current_stage_id),
+            )
+            self.model_streams[stream_id] = stream
+        if event_type == "model_stream_delta":
+            stream.content += str(payload.get("delta") or "")
+            return
+        if event_type == "model_message_completed":
+            content = payload.get("content")
+            if isinstance(content, str):
+                stream.content = content
+            stream.completed = True
 
     def _normalize_approval_request(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):
@@ -812,26 +819,6 @@ class RuntimeEventNormalizer:
         if not stage_id:
             return self.run_span_id
         return self.stage_spans.get(stage_id) or self._ensure_stage_started(stage_id)
-
-    def _model_stream(self, node_id: str) -> ModelStreamState:
-        if node_id not in self.model_streams or self.model_streams[node_id].completed:
-            node_span = self._node_span(node_id, self.current_stage_id)
-            stream = ModelStreamState(
-                stream_id=uuid.uuid4().hex,
-                node_id=node_id,
-                span_id=uuid.uuid4().hex,
-                parent_span_id=node_span,
-            )
-            self.model_streams[node_id] = stream
-            self.runtime_event(
-                "model_call_started",
-                node_id=node_id,
-                stage_id=self.current_stage_id,
-                span_id=stream.span_id,
-                parent_span_id=node_span,
-                payload={"stream_id": stream.stream_id},
-            )
-        return self.model_streams[node_id]
 
     def _emit_tool_observations(self, node_id: str, stage_id: str | None, parent_span_id: str, patch: dict[str, Any]) -> None:
         for message in patch.get("messages", []) or []:
@@ -1203,19 +1190,6 @@ def _patch_ai_message_requests_tool(patch: dict[str, Any]) -> bool:
     return False
 
 
-def _is_tool_message_like(value: Any) -> bool:
-    if isinstance(value, ToolMessage):
-        return True
-    class_name = value.__class__.__name__
-    if class_name in {"ToolMessage", "ToolMessageChunk"}:
-        return True
-    if isinstance(value, dict):
-        return value.get("type") in {"ToolMessage", "ToolMessageChunk", "tool"} or value.get("role") == "tool"
-    message_type = getattr(value, "type", None)
-    role = getattr(value, "role", None)
-    return message_type in {"tool", "ToolMessage", "ToolMessageChunk"} or role == "tool"
-
-
 def _looks_like_tool_observation_text(text: str) -> bool:
     normalized = str(text or "").strip()
     if not normalized:
@@ -1230,7 +1204,7 @@ def _looks_like_tool_observation_text(text: str) -> bool:
 
 
 def _looks_like_tool_observation_payload(payload: dict[str, Any]) -> bool:
-    if payload.get("type") == "tool_observation":
+    if looks_like_internal_observation_payload(payload):
         return True
     keys = {str(key) for key in payload.keys()}
     if {"tool_id", "tool_call_id"}.issubset(keys):
@@ -1238,7 +1212,6 @@ def _looks_like_tool_observation_payload(payload: dict[str, Any]) -> bool:
     if "output_ref" in keys or "output_summary" in keys:
         return True
     return len(keys & TOOL_OBSERVATION_TEXT_KEYS) >= 3 and ("status" in keys or "content" in keys or "output" in keys)
-
 
 def _looks_like_keyed_tool_observation_text(text: str) -> bool:
     keys: set[str] = set()
@@ -1278,66 +1251,6 @@ def _preview_text(value: str, limit: int) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[:limit]
-
-
-def _apply_model_stream_content(stream: ModelStreamState, incoming: str) -> str:
-    incoming_public = strip_internal_snapshot_blocks(incoming)
-    if stream.content and incoming_public:
-        if incoming_public == stream.content:
-            stream.input_mode = "snapshot"
-            stream.raw_content = incoming
-            return ""
-        if incoming_public.startswith(stream.content):
-            stream.input_mode = "snapshot"
-            stream.raw_content = incoming
-            public_delta = incoming_public[len(stream.content) :]
-            stream.content = incoming_public
-            return public_delta
-
-    raw_delta = _raw_delta_for_stream(stream, incoming)
-    if not raw_delta:
-        return ""
-    stream.raw_content += raw_delta
-    public_content = strip_internal_snapshot_blocks(stream.raw_content)
-    public_delta = _public_delta_for_stream(stream.content, public_content)
-    stream.content = public_content
-    return public_delta
-
-
-def _raw_delta_for_stream(stream: ModelStreamState, content: str) -> str:
-    if not content:
-        return ""
-    previous = stream.raw_content
-    if not previous:
-        return content
-
-    snapshot_delta = _delta_from_snapshot(previous, content)
-    if snapshot_delta is not None:
-        stream.input_mode = "snapshot"
-        return snapshot_delta
-
-    stream.input_mode = "delta"
-    return content
-
-
-def _delta_from_snapshot(previous: str, content: str) -> str | None:
-    if content == previous:
-        return ""
-    if content.startswith(previous):
-        return content[len(previous) :]
-    return None
-
-
-def _public_delta_for_stream(previous: str, current: str) -> str:
-    if not current:
-        return ""
-    if not previous:
-        return current
-    if current == previous:
-        return ""
-    if current.startswith(previous):
-        return current[len(previous) :]
-    return ""
 
 
 def _optional_str(value: Any) -> str | None:

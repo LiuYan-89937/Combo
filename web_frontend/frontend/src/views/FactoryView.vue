@@ -1,24 +1,16 @@
 <template>
   <div class="factory-view">
     <div class="chat-container">
-      <!-- 计划面板 -->
-      <div v-if="runtimeStore.currentPlan" class="plan-section">
-        <n-collapse arrow-placement="right" :default-expanded-names="[]">
-          <n-collapse-item name="runtime-plan">
-            <template #header>
-              <div class="plan-summary">
-                <span class="plan-summary-label">计划</span>
-                <span class="plan-summary-goal">{{ runtimeStore.currentPlan.goal }}</span>
-                <n-tag size="small" :bordered="false" :type="planStatusType">
-                  {{ runtimeStore.currentPlan.status }}
-                </n-tag>
-              </div>
-            </template>
-            <div class="plan-section-body">
-              <PlanPanel compact />
-            </div>
-          </n-collapse-item>
-        </n-collapse>
+      <div v-if="isEvolutionRoute" class="evolution-target-bar">
+        <span class="evolution-target-label">进化对象</span>
+        <n-select
+          class="evolution-target-select"
+          :value="selectedEvolutionPackageId"
+          :options="evolutionPackageOptions"
+          placeholder="选择要进化的 Agent 包"
+          filterable
+          @update:value="handleEvolutionPackageSelect"
+        />
       </div>
 
       <!-- 消息列表 -->
@@ -27,7 +19,7 @@
           <div class="messages-list">
             <n-empty
               v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
-              description="开始对话"
+              :description="emptyDescription"
               style="margin-top: 60px"
             >
               <template #icon>
@@ -37,7 +29,7 @@
               </template>
               <template #extra>
                 <n-text depth="3">
-                  在下方输入框输入消息开始对话
+                  {{ emptyHint }}
                 </n-text>
               </template>
             </n-empty>
@@ -63,11 +55,6 @@
               thinking
             />
 
-            <SchedulerRunNoticeStrip
-              :notices="visibleSchedulerNotices"
-              @open="openSchedulerNotice"
-            />
-
             <div
               v-if="toolActivityHint"
               class="tool-activity-inline"
@@ -91,7 +78,7 @@
         <MessageInput
           ref="inputRef"
           :placeholder="inputPlaceholder"
-          :disabled="runtimeStore.isInputLocked"
+          :disabled="inputDisabled"
           :is-running="runtimeStore.hasActiveRun"
           :attachments-enabled="!isAgentChatActive"
           @send="handleSend"
@@ -104,32 +91,34 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { NScrollbar, NEmpty, NIcon, NText, NCollapse, NCollapseItem, NTag } from 'naive-ui'
+import { useRoute } from 'vue-router'
+import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
 import { ChatbubbleEllipses } from '@vicons/ionicons5'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
+import { useUiStore } from '@/stores/ui'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
-import PlanPanel from '@/components/plan/PlanPanel.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import SchedulerRunNoticeStrip from '@/components/scheduler/SchedulerRunNoticeStrip.vue'
-import type { FactoryMode, SchedulerRunNoticeView, ToolActivity, TranscriptItem } from '@/types/protocol'
+import type { FactoryMode, ToolActivity, TranscriptItem } from '@/types/protocol'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
+const uiStore = useUiStore()
+const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const route = useRoute()
-const router = useRouter()
 const scrollbarRef = ref()
 const inputRef = ref()
 
 const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
 const isManufacturingRoute = computed(() => route.name === 'Manufacturing')
+const isEvolutionRoute = computed(() => route.name === 'Evolution')
 const currentFactoryMessageMode = computed<FactoryMode>(() => {
   if (isManufacturingRoute.value) return 'create_agent'
-  if (runtimeStore.currentMode === 'evolve_agent') return 'evolve_agent'
+  if (isEvolutionRoute.value) return 'evolve_agent'
   return 'chat'
 })
 const activeChatPackageTitle = computed(() => {
@@ -142,17 +131,38 @@ const inputPlaceholder = computed(() => (
     : currentFactoryMessageMode.value === 'create_agent'
       ? '描述要制造的 Agent...'
       : currentFactoryMessageMode.value === 'evolve_agent'
-        ? '描述这次要进化的方向...'
+        ? selectedEvolutionPackageId.value
+          ? `描述对 ${selectedEvolutionPackageTitle.value} 的进化方向...`
+          : '先选择要进化的 Agent 包'
     : '输入消息...'
 ))
-const planStatusType = computed(() => {
-  const status = runtimeStore.currentPlan?.status || ''
-  if (status.includes('completed')) return 'success'
-  if (status.includes('failed')) return 'error'
-  if (status.includes('active') || status.includes('running')) return 'info'
-  return 'default'
+const selectedEvolutionPackageId = computed(() => (
+  isEvolutionRoute.value ? agentStore.selectedPackageId : null
+))
+const selectedEvolutionPackageTitle = computed(() => {
+  const pkg = agentStore.selectedPackage
+  return pkg?.agent_name || pkg?.name || '当前 Agent'
 })
-
+const evolutionPackageOptions = computed(() => agentStore.agentPackages.map((pkg) => ({
+  label: pkg.agent_name || pkg.name || pkg.package_id,
+  value: pkg.package_id,
+})))
+const inputDisabled = computed(() => (
+  runtimeStore.isInputLocked || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
+))
+const emptyDescription = computed(() => {
+  if (isEvolutionRoute.value) return selectedEvolutionPackageId.value ? '开始进化对话' : '选择进化对象'
+  if (isManufacturingRoute.value) return '开始制造对话'
+  return '开始对话'
+})
+const emptyHint = computed(() => {
+  if (isEvolutionRoute.value) {
+    return selectedEvolutionPackageId.value
+      ? '在下方描述这次要进化的方向'
+      : '先从上方选择一个已发布 Agent 包'
+  }
+  return '在下方输入框输入消息开始对话'
+})
 const activeStreams = computed(() => {
   return Object.values(runtimeStore.modelStreams).filter(
     (stream) => stream.visibleToUser && stream.active
@@ -206,7 +216,6 @@ const toolActivityHint = computed(() => {
     ? `${runningToolActivities.value.length} 个工具调用中`
     : '工具调用中'
 })
-const visibleSchedulerNotices = computed(() => runtimeStore.schedulerRunNotices)
 
 function isMessageStreaming(streamId?: string): boolean {
   if (!streamId) return false
@@ -224,6 +233,16 @@ function isKnowledgeRetrievalTool(tool: ToolActivity): boolean {
   return !action || ['search', 'open', 'read', 'list_documents', 'describe_source', 'list_sources'].includes(action)
 }
 
+function handleEvolutionPackageSelect(packageId: string | null) {
+  if (!packageId) return
+  agentStore.leaveAgentChat()
+  agentStore.selectPackage(packageId)
+  runtimeStore.enterFactoryConversation('evolve_agent', packageId)
+  workspaceStore.setScope('package')
+  uiStore.openRightSidebar('workspace')
+  void commands.selectAgentPackage(packageId, 'evolution')
+}
+
 function handleSend(message: string, attachments: any[]) {
   const packageId = agentStore.activeChatPackageId
   if (packageId) {
@@ -236,11 +255,33 @@ function handleSend(message: string, attachments: any[]) {
     })
   } else {
     const mode = currentFactoryMessageMode.value
+    if (mode === 'evolve_agent' && !runtimeStore.isAwaitingUserInputInterrupt) {
+      const evolutionPackageId = selectedEvolutionPackageId.value
+      if (!evolutionPackageId) {
+        uiStore.addNotification({
+          type: 'warning',
+          title: '请选择进化对象',
+          message: '进化前需要先选择一个已发布 Agent 包。',
+          duration: 3000,
+        })
+        return
+      }
+      const command = commands.runAgentEvolution(evolutionPackageId, message)
+      runtimeStore.addUserMessage(message, command.request_id, {
+        mode,
+        package_id: evolutionPackageId,
+      })
+      nextTick(() => {
+        scrollToBottom()
+      })
+      return
+    }
     const command = runtimeStore.isAwaitingUserInputInterrupt
       ? commands.answerInterrupt(message)
       : commands.sendMessage(message, mode, attachments.length > 0 ? attachments : undefined)
     runtimeStore.addUserMessage(message, command.request_id, {
       mode,
+      package_id: mode === 'evolve_agent' ? selectedEvolutionPackageId.value : undefined,
       interrupt_resume: runtimeStore.isAwaitingUserInputInterrupt,
     })
   }
@@ -253,31 +294,6 @@ function handleSend(message: string, attachments: any[]) {
 
 function handleCancel() {
   commands.cancelRequest('user_cancelled')
-}
-
-function openSchedulerNotice(notice: SchedulerRunNoticeView) {
-  runtimeStore.markSchedulerNoticeRead(notice.id)
-  if (notice.targetScope === 'agent_package' && notice.packageId) {
-    agentStore.enterAgentChat(notice.packageId, notice.sessionId)
-    void router.push({ name: 'Factory' })
-    void commands.selectAgentPackage(notice.packageId).then(() => {
-      if (notice.sessionId && notice.packageId) {
-        void commands.loadAgentPackageSession(notice.packageId, notice.sessionId)
-      }
-    })
-    return
-  }
-  if (notice.factorySessionId) {
-    agentStore.leaveAgentChat()
-    runtimeStore.enterFactoryConversation('chat')
-    void router.push({ name: 'Factory' })
-    commands.switchSession(notice.factorySessionId, 'chat')
-    return
-  }
-  void router.push({ name: 'Scheduler' })
-  if (notice.jobId) {
-    void commands.listSchedulerRuns(notice.jobId)
-  }
 }
 
 function scrollToBottom() {
@@ -297,15 +313,6 @@ watch(
 // 监听流式输出，自动滚动
 watch(
   () => [activeStreams.value.map((s) => s.content).join(''), toolActivityHint.value, thinkingMessages.value.length].join(''),
-  () => {
-    nextTick(() => {
-      scrollToBottom()
-    })
-  }
-)
-
-watch(
-  () => runtimeStore.schedulerRunNotices.length,
   () => {
     nextTick(() => {
       scrollToBottom()
@@ -339,8 +346,20 @@ function applyRouteMode() {
     }
     return
   }
+  if (isEvolutionRoute.value) {
+    agentStore.leaveAgentChat()
+    const shouldSwitchSession = runtimeStore.currentMode !== 'evolve_agent'
+    runtimeStore.enterFactoryConversation('evolve_agent', agentStore.selectedPackageId)
+    if (runtimeStore.activeFactorySessionId && shouldSwitchSession) {
+      commands.startSession(true, 'evolve_agent')
+    }
+    if (agentStore.agentPackages.length === 0) {
+      commands.listAgentPackages()
+    }
+    return
+  }
   if (isAgentChatActive.value) return
-  if (route.name === 'Factory' && runtimeStore.currentMode !== 'chat' && runtimeStore.currentMode !== 'evolve_agent') {
+  if (route.name === 'Factory' && runtimeStore.currentMode !== 'chat') {
     const shouldSwitchSession = runtimeStore.currentMode !== 'chat'
     runtimeStore.enterFactoryConversation('chat')
     if (runtimeStore.activeFactorySessionId && shouldSwitchSession) {
@@ -369,48 +388,28 @@ function applyRouteMode() {
   width: 100%;
 }
 
-.plan-section {
-  margin-bottom: 10px;
+.evolution-target-bar {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--n-border-color);
   border-radius: 6px;
   background: var(--n-color);
 }
 
-.plan-section :deep(.n-collapse-item__header) {
-  padding: 8px 12px;
-}
-
-.plan-section :deep(.n-collapse-item__content-inner) {
-  padding: 0 12px 12px;
-}
-
-.plan-summary {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.plan-summary-label {
+.evolution-target-label {
   flex-shrink: 0;
-  color: var(--n-text-color-2);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.plan-summary-goal {
-  min-width: 0;
-  color: var(--n-text-color-1);
   font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  color: var(--n-text-color-2);
 }
 
-.plan-section-body {
-  max-height: 220px;
-  overflow-y: auto;
+.evolution-target-select {
+  min-width: 0;
+  flex: 1;
 }
 
 .messages-section {

@@ -7,7 +7,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
-export type RightSidebarTab = 'workspace' | 'status' | 'sessions'
+export type RightSidebarTab = 'workspace' | 'status' | 'sessions' | 'plan'
 
 export const useUiStore = defineStore('ui', () => {
   // ========== 主题 ==========
@@ -33,6 +33,8 @@ export const useUiStore = defineStore('ui', () => {
     title: string
     message?: string
     duration?: number
+    actionLabel?: string
+    onAction?: () => void
   }
 
   const notifications = ref<Notification[]>([])

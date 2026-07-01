@@ -5,30 +5,50 @@
 </template>
 
 <script setup lang="ts">
-import { watch } from 'vue'
-import { useNotification } from 'naive-ui'
+import { h, watch } from 'vue'
+import { NButton, useNotification } from 'naive-ui'
 import { useUiStore } from '@/stores/ui'
 
 const notification = useNotification()
 const uiStore = useUiStore()
+const displayedNotificationIds = new Set<string>()
 
 // 监听通知变化
 watch(
-  () => uiStore.notifications,
+  () => uiStore.notifications.map((item) => item.id).join('|'),
   (notifications) => {
-    // 显示最新的通知
-    if (notifications.length > 0) {
-      const latest = notifications[notifications.length - 1]
-      notification[latest.type]({
-        title: latest.title,
-        content: latest.message,
-        duration: latest.duration || 5000,
+    if (!notifications) return
+    uiStore.notifications.forEach((item) => {
+      if (displayedNotificationIds.has(item.id)) return
+      displayedNotificationIds.add(item.id)
+      let closeNotification: (() => void) | null = null
+      const handleAction = () => {
+        item.onAction?.()
+        uiStore.removeNotification(item.id)
+        closeNotification?.()
+      }
+      const notificationRef = notification[item.type]({
+        title: item.title,
+        content: item.message,
+        duration: item.duration ?? 5000,
+        action: item.onAction
+          ? () => h(
+              NButton,
+              {
+                text: true,
+                size: 'small',
+                onClick: handleAction,
+              },
+              { default: () => item.actionLabel || '查看' }
+            )
+          : undefined,
         onClose: () => {
-          uiStore.removeNotification(latest.id)
+          uiStore.removeNotification(item.id)
         },
       })
-    }
+      closeNotification = notificationRef.destroy
+    })
   },
-  { deep: true }
+  { immediate: true }
 )
 </script>

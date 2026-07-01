@@ -16,11 +16,12 @@ import { applyRuntimeEvent } from '@/composables/useEventStream'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import type { FactoryFrontendCommand, FactoryMode } from '@/types/protocol'
-import type { AgentPackageView } from '@/stores/agent'
+import { useAgentStore, type AgentPackageView } from '@/stores/agent'
 
 export function useCommand() {
   const uiStore = useUiStore()
   const runtimeStore = useRuntimeStore()
+  const agentStore = useAgentStore()
 
   function reportError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
@@ -121,6 +122,17 @@ export function useCommand() {
     return applyEventRequest(agentPackagesApi.instances())
   }
 
+  const listRecentAgentSessions = async (limit = 5) => {
+    try {
+      const response = await agentPackagesApi.recentSessions(limit)
+      agentStore.setRecentSessions(response.sessions)
+      return response.sessions
+    } catch (error) {
+      reportError(error)
+      return []
+    }
+  }
+
   const initializeAgentPackage = (packageId: string) => {
     return applyEventRequest(agentPackagesApi.initialize(packageId))
   }
@@ -145,10 +157,15 @@ export function useCommand() {
     return command
   }
 
+  const runAgentEvolution = (packageId: string, message: string) => {
+    const command = commands.runAgentEvolutionCommand(packageId, message)
+    sendRuntimeCommand(command)
+    return command
+  }
+
   // ========== Interrupt Commands ==========
   function sendInterruptDecision(payload: commands.ResumeInterruptOptions) {
     const command = commands.resumeInterruptCommand(withPendingInterruptContext(payload))
-    runtimeStore.submitInterruptDecision(command.request_id, command.payload)
     sendRuntimeCommand(command)
     return command
   }
@@ -352,11 +369,13 @@ export function useCommand() {
     exportAgentPackage,
     listAgentPackageSessions,
     listAgentPackageInstances,
+    listRecentAgentSessions,
     initializeAgentPackage,
     shutdownAgentPackageInstance,
     loadAgentPackageSession,
     runAgentPackage,
     sendAgentPackageMessage,
+    runAgentEvolution,
 
     // Interrupt
     approveToolCall,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
@@ -92,9 +93,19 @@ class ModelOperationService:
             operation="tool_bound_chat",
             payload={"model_role": self.model_role, **envelope.diagnostics()},
         )
-        _emit(emit_event, "model_call_started", {"operation": "tool_bound_chat", "model_role": self.model_role})
+        stream_id = uuid4().hex
+        _emit(
+            emit_event,
+            "model_call_started",
+            {"operation": "tool_bound_chat", "model_role": self.model_role, "stream_id": stream_id},
+        )
         try:
-            response = _bind_tools(model, tool_list).invoke(envelope.messages)
+            response = _invoke_tool_bound_chat(
+                model=_bind_tools(model, tool_list),
+                messages=envelope.messages,
+                emit_event=emit_event,
+                stream_id=stream_id,
+            )
         except Exception as exc:
             _emit(emit_event, "model_call_failed", {"operation": "tool_bound_chat", "error": str(exc)})
             _finish_trace_span(
@@ -348,6 +359,72 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
         return
     emit_event({"event_type": event_type, **payload})
+
+
+def _invoke_tool_bound_chat(
+    *,
+    model: Any,
+    messages: list[Any],
+    emit_event,
+    stream_id: str,
+) -> Any:
+    stream = getattr(model, "stream", None)
+    if not callable(stream):
+        response = model.invoke(messages)
+        _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
+        return response
+    chunks: list[Any] = []
+    try:
+        for chunk in stream(messages):
+            chunks.append(chunk)
+            delta = strip_internal_snapshot_blocks(_content_to_text(getattr(chunk, "content", chunk)))
+            if delta:
+                _emit(
+                    emit_event,
+                    "model_stream_delta",
+                    {
+                        "stream_id": stream_id,
+                        "delta": delta,
+                        "content_mode": "delta",
+                    },
+                )
+    except (AttributeError, NotImplementedError):
+        if chunks:
+            raise
+        response = model.invoke(messages)
+        _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
+        return response
+    if not chunks:
+        response = model.invoke(messages)
+        _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
+        return response
+    response = _merge_stream_chunks(chunks)
+    _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
+    return response
+
+
+def _merge_stream_chunks(chunks: list[Any]) -> Any:
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        try:
+            merged = merged + chunk
+        except TypeError:
+            merged = chunk
+    return merged
+
+
+def _emit_model_message_completed(emit_event, *, stream_id: str, response: Any) -> None:
+    content = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
+    _emit(
+        emit_event,
+        "model_message_completed",
+        {
+            "stream_id": stream_id,
+            "content": content,
+            "content_mode": "snapshot",
+            "completion_reason": "model_completed",
+        },
+    )
 
 
 def _model_cache_metrics_payload(

@@ -50,10 +50,13 @@ class FactorySessionRecord(BaseModel):
     current_mode: FactorySessionMode | None = None
     chat_agent_package_session_id: str | None = None
     create_agent_session_id: str | None = None
+    evolve_agent_package_id: str | None = None
     chat_turn_count: int = 0
     create_agent_turn_count: int = 0
+    evolve_agent_turn_count: int = 0
     chat_turns: list[FactorySessionTurn] = Field(default_factory=list)
     create_agent_turns: list[FactorySessionTurn] = Field(default_factory=list)
+    evolve_agent_turns: list[FactorySessionTurn] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -148,6 +151,13 @@ class FactorySessionManager:
         self.save(record)
         return record
 
+    def set_evolution_package(self, session_id: str, package_id: str) -> FactorySessionRecord:
+        record = self.load(session_id)
+        record.current_mode = "evolve_agent"
+        record.evolve_agent_package_id = package_id.strip() or None
+        self.save(record)
+        return record
+
     def remember_first_user_input(self, session_id: str, value: str) -> FactorySessionRecord:
         record = self.load(session_id)
         if not record.first_user_input:
@@ -176,8 +186,10 @@ class FactorySessionManager:
             record.display_title = _display_title(record.first_user_input)
         if mode == "chat":
             record.chat_turn_count = _human_message_count(messages)
-        else:
+        elif mode == "create_agent":
             record.create_agent_turn_count = _human_message_count(messages)
+        elif mode == "evolve_agent":
+            record.evolve_agent_turn_count = _human_message_count(messages)
         self.save(record)
         return record
 
@@ -349,7 +361,12 @@ def _record_matches_mode(record: FactorySessionRecord, mode: FactorySessionMode)
             or bool(record.create_agent_turns)
             or bool(record.create_agent_session_id)
         )
-    return record.current_mode == mode
+    return (
+        record.current_mode == mode
+        or record.evolve_agent_turn_count > 0
+        or bool(record.evolve_agent_turns)
+        or bool(record.evolve_agent_package_id)
+    )
 
 
 def _turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> list[FactorySessionTurn]:
@@ -357,6 +374,8 @@ def _turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> l
         return record.chat_turns
     if mode == "create_agent":
         return record.create_agent_turns
+    if mode == "evolve_agent":
+        return record.evolve_agent_turns
     raise ValueError(f"{mode} mode does not have Factory session turns")
 
 
@@ -366,6 +385,9 @@ def _set_turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode, 
         return
     if mode == "create_agent":
         record.create_agent_turns = turns
+        return
+    if mode == "evolve_agent":
+        record.evolve_agent_turns = turns
         return
     raise ValueError(f"{mode} mode does not have Factory session turns")
 
@@ -385,6 +407,8 @@ def _sync_turn_count(record: FactorySessionRecord, mode: FactorySessionMode) -> 
         record.chat_turn_count = len(record.chat_turns)
     elif mode == "create_agent":
         record.create_agent_turn_count = len(record.create_agent_turns)
+    elif mode == "evolve_agent":
+        record.evolve_agent_turn_count = len(record.evolve_agent_turns)
 
 
 def _safe_turn_index(value: Any, *, fallback: int) -> int:
