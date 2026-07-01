@@ -18,9 +18,7 @@ export function contextWindowView(event: FactoryFrontendEvent): ContextWindowVie
   return {
     tokenCount: optionalNumber(payload.token_count),
     contextWindowTokens: optionalNumber(payload.context_window_tokens),
-    windowUsageRatio: optionalNumber(payload.window_usage_ratio),
     compressionThresholdTokens: optionalNumber(payload.compression_threshold_tokens),
-    compressionUsageRatio: optionalNumber(payload.compression_usage_ratio),
     tokenCountMethod: optionalString(payload.token_count_method),
     source: optionalString(payload.source),
     modelRole: optionalString(payload.model_role),

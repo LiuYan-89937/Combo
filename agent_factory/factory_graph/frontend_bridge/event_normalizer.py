@@ -16,7 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     event,
 )
 from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_blocks
-from agent_factory.runtime_render.schema import default_node_visible_to_user
+from agent_factory.runtime_render.schema import default_model_message_visible_to_user, default_node_visible_to_user
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
@@ -383,7 +383,7 @@ class RuntimeEventNormalizer:
         node_id = _optional_str(payload.get("node_id"))
         frontend_payload = {key: value for key, value in json_safe(event_payload).items() if key != "event_type"}
         if event_type in {"model_call_started", "model_stream_delta", "model_message_completed"}:
-            frontend_payload.setdefault("visible_to_user", self._node_visible_to_user(node_id))
+            frontend_payload.setdefault("visible_to_user", self._model_message_visible_to_user(node_id))
             self._record_model_stream_event(event_type, node_id=node_id, payload=frontend_payload)
         self.runtime_event(
             event_type,  # type: ignore[arg-type]
@@ -422,7 +422,7 @@ class RuntimeEventNormalizer:
         if "visible_to_user" in render_payload:
             visible_to_user = bool(render_payload.get("visible_to_user"))
             self.node_visibility[node_id] = visible_to_user
-            if not visible_to_user:
+            if not visible_to_user and not self._model_message_visible_to_user(node_id):
                 self._discard_model_stream_for_node(node_id, reason="node_hidden")
         if source_protocol_version:
             render_payload["source_protocol_version"] = source_protocol_version
@@ -623,7 +623,7 @@ class RuntimeEventNormalizer:
                 "content_mode": "snapshot",
                 "completion_reason": reason,
                 "completion_inferred": True,
-                "visible_to_user": self._node_visible_to_user(node_id),
+                "visible_to_user": self._model_message_visible_to_user(node_id),
             },
         )
 
@@ -674,7 +674,7 @@ class RuntimeEventNormalizer:
                 "content_mode": "snapshot",
                 "completion_reason": reason,
                 "completion_inferred": True,
-                "visible_to_user": self._node_visible_to_user(stream.node_id),
+                "visible_to_user": self._model_message_visible_to_user(stream.node_id),
             },
         )
 
@@ -689,9 +689,18 @@ class RuntimeEventNormalizer:
             return default_node_visible_to_user(pattern_id=self.runtime_pattern_id, node_id=node_id)
         return True
 
+    def _model_message_visible_to_user(self, node_id: str | None) -> bool:
+        if not node_id:
+            return True
+        if node_id in INTERNAL_MODEL_MESSAGE_NODES or node_id in RUNTIME_TOOL_EXECUTION_NODES:
+            return False
+        if self.runtime_pattern_id:
+            return default_model_message_visible_to_user(pattern_id=self.runtime_pattern_id, node_id=node_id)
+        return True
+
     def _has_visible_model_stream_content(self) -> bool:
         return any(
-            (stream.content or "").strip() and self._node_visible_to_user(stream.node_id)
+            (stream.content or "").strip() and self._model_message_visible_to_user(stream.node_id)
             for stream in self.model_streams.values()
         )
 

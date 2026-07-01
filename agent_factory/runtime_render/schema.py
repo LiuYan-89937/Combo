@@ -14,6 +14,11 @@ RuntimeRenderProducer = Literal["factory", "agent"]
 RuntimeRenderSeverity = Literal["info", "warning", "error"]
 
 
+PLAN_AND_EXECUTE_MODEL_MESSAGE_NODES = frozenset({"casual_react", "executor", "final_answer"})
+PLAN_AND_EXECUTE_FLOW_NODES = PLAN_AND_EXECUTE_MODEL_MESSAGE_NODES | frozenset({"tool_exec"})
+MODEL_MESSAGE_INTERNAL_NODES = frozenset({"factory_tools", "ingress", "intent_gate", "tool_exec", "commit", "finalize"})
+
+
 class NodeRenderSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -103,5 +108,15 @@ def default_node_render_spec(
 
 def default_node_visible_to_user(*, pattern_id: str, node_id: str) -> bool:
     if pattern_id == "plan_and_execute":
-        return node_id not in {"ingress", "intent_gate", "planner", "executor", "commit", "finalize"}
+        return node_id in PLAN_AND_EXECUTE_FLOW_NODES
+    if node_id in {"ingress", "commit", "finalize"}:
+        return False
+    return True
+
+
+def default_model_message_visible_to_user(*, pattern_id: str, node_id: str) -> bool:
+    if pattern_id == "plan_and_execute":
+        return node_id in PLAN_AND_EXECUTE_MODEL_MESSAGE_NODES
+    if node_id in MODEL_MESSAGE_INTERNAL_NODES:
+        return False
     return True

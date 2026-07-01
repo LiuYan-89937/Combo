@@ -327,9 +327,7 @@ export interface RuntimeActivityView {
 export interface ContextWindowView {
   tokenCount: number | null
   contextWindowTokens: number | null
-  windowUsageRatio: number | null
   compressionThresholdTokens: number | null
-  compressionUsageRatio: number | null
   tokenCountMethod: string | null
   source: string | null
   modelRole: string | null

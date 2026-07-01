@@ -4,6 +4,7 @@ from agent_factory.runtime_render.schema import (
     RenderManifestValidationError,
     NodeRenderSpec,
     RuntimeRenderEvent,
+    default_model_message_visible_to_user,
     default_node_render_spec,
     validate_render_manifest,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "RenderManifest",
     "RenderManifestValidationError",
     "RuntimeRenderEvent",
+    "default_model_message_visible_to_user",
     "default_node_render_spec",
     "validate_render_manifest",
 ]

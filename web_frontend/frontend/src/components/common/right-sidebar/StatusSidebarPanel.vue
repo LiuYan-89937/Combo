@@ -5,25 +5,23 @@
       <div v-if="contextWindow" class="context-meter">
         <div class="context-meter-row">
           <span class="context-meter-label">窗口用量</span>
-          <span class="context-meter-value">{{ contextWindowPercentText }}</span>
+          <span class="context-meter-value">{{ contextWindowUsageText }}</span>
         </div>
-        <div class="context-meter-track" aria-hidden="true">
-          <div class="context-meter-fill" :style="{ width: contextWindowBarWidth }"></div>
+        <div class="context-meter-track" :class="{ unknown: contextWindowPercent === null }" aria-hidden="true">
+          <div
+            v-if="contextWindowPercent !== null"
+            class="context-meter-fill"
+            :style="{ width: contextWindowFillWidth }"
+          ></div>
           <div
             v-if="contextThresholdMarker"
             class="context-meter-marker"
             :style="{ left: contextThresholdMarker }"
           ></div>
         </div>
-        <div class="context-meter-meta">
-          {{ formatTokenCount(contextWindow.tokenCount) }} / {{ formatTokenCount(contextWindow.contextWindowTokens) }} tokens
-        </div>
-        <div class="context-meter-meta muted">
-          压缩阈值 {{ formatTokenCount(contextWindow.compressionThresholdTokens) }}
-          <span v-if="contextWindow.tokenCountMethod"> · {{ contextTokenMethodText }}</span>
-        </div>
-        <div class="context-meter-status">
-          {{ contextStatusText }}
+        <div class="context-meter-detail">
+          <span>{{ contextWindowPercentText }}</span>
+          <span>{{ contextWindowThresholdText }}</span>
         </div>
       </div>
       <n-empty v-else description="暂无上下文用量" size="small" />
@@ -74,55 +72,38 @@
 import { computed } from 'vue'
 import { NEmpty, NTag } from 'naive-ui'
 import { useRuntimeStore } from '@/stores/runtime'
+import {
+  contextWindowPercentLabel,
+  contextWindowThresholdPercent,
+  contextWindowThresholdLabel,
+  contextWindowUsageLabel,
+  contextWindowUsagePercent,
+} from '@/utils/contextWindowMeter'
 
 const runtimeStore = useRuntimeStore()
 
 const recentTimeline = computed(() => runtimeStore.timeline.slice(-20).reverse())
 const contextWindow = computed(() => runtimeStore.contextWindow)
-const contextWindowPercent = computed(() => ratioToPercent(contextWindow.value?.windowUsageRatio))
-const contextWindowPercentText = computed(() => (
-  typeof contextWindow.value?.windowUsageRatio === 'number'
-    ? formatPercent(contextWindowPercent.value)
-    : contextWindow.value?.tokenCount !== null && contextWindow.value?.tokenCount !== undefined
-      ? '已记录'
-      : '暂无'
+const contextWindowPercent = computed(() => (
+  contextWindow.value ? contextWindowUsagePercent(contextWindow.value) : null
 ))
-const contextWindowBarWidth = computed(() => `${contextWindowPercent.value}%`)
+const contextWindowFillWidth = computed(() => (
+  contextWindowPercent.value === null ? '0%' : `${contextWindowPercent.value}%`
+))
+const contextWindowUsageText = computed(() => (
+  contextWindow.value ? contextWindowUsageLabel(contextWindow.value) : '- / -'
+))
+const contextWindowPercentText = computed(() => (
+  contextWindow.value ? contextWindowPercentLabel(contextWindow.value) : '用量未知'
+))
+const contextWindowThresholdText = computed(() => (
+  contextWindow.value ? contextWindowThresholdLabel(contextWindow.value) : '压缩阈值 -'
+))
 const contextThresholdMarker = computed(() => {
-  const windowTokens = contextWindow.value?.contextWindowTokens
-  const thresholdTokens = contextWindow.value?.compressionThresholdTokens
-  if (!windowTokens || !thresholdTokens) return ''
-  return `${Math.min(100, Math.max(0, (thresholdTokens / windowTokens) * 100))}%`
+  if (!contextWindow.value) return ''
+  const percent = contextWindowThresholdPercent(contextWindow.value)
+  return percent === null ? '' : `${percent}%`
 })
-const contextStatusText = computed(() => {
-  const activity = runtimeStore.contextActivity
-  if (!activity?.eventType) return '等待上下文事件'
-  const labels: Record<string, string> = {
-    context_prepare_started: '正在准备上下文',
-    context_prepare_completed: '上下文已准备',
-    context_prepare_failed: '上下文准备失败',
-    context_compression_started: '正在压缩上下文',
-    context_compression_completed: '上下文已压缩',
-    context_compression_failed: '上下文压缩失败',
-    context_compression_skipped: '未触发上下文压缩',
-    context_window_updated: '上下文窗口已更新',
-    context_retrieval_completed: '上下文检索已完成',
-    context_assembly_completed: '上下文组装已完成',
-    context_injection_completed: '上下文注入已完成',
-  }
-  return labels[activity.eventType] || activity.eventType
-})
-const contextTokenMethodText = computed(() => {
-  const method = contextWindow.value?.tokenCountMethod
-  const labels: Record<string, string> = {
-    provider_usage: '模型返回用量',
-    previous_provider_usage: '上次模型用量',
-    local_counter: '本地计数',
-    unavailable: '无法计数',
-  }
-  return method ? labels[method] || method : ''
-})
-
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp)
   return date.toLocaleTimeString('zh-CN', {
@@ -144,21 +125,6 @@ function toolStatusType(status: string): 'default' | 'success' | 'warning' | 'er
   return types[status] || 'default'
 }
 
-function ratioToPercent(ratio: number | null | undefined): number {
-  if (typeof ratio !== 'number' || !Number.isFinite(ratio)) return 0
-  return Math.min(100, Math.max(0, ratio * 100))
-}
-
-function formatPercent(value: number): string {
-  if (value >= 10) return `${value.toFixed(1)}%`
-  if (value > 0) return `${value.toFixed(2)}%`
-  return '0%'
-}
-
-function formatTokenCount(value: number | null | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
-  return new Intl.NumberFormat('zh-CN').format(Math.round(value))
-}
 </script>
 
 <style scoped>
@@ -189,7 +155,7 @@ function formatTokenCount(value: number | null | undefined): string {
 .context-meter {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .context-meter-row {
@@ -205,41 +171,57 @@ function formatTokenCount(value: number | null | undefined): string {
 }
 
 .context-meter-value {
-  color: var(--n-text-color-1);
+  flex-shrink: 0;
+  color: #111111;
+  font-size: 13px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .context-meter-track {
   position: relative;
-  height: 8px;
+  width: 100%;
+  height: 6px;
   overflow: hidden;
-  border: 1px solid var(--n-border-color);
   border-radius: 999px;
-  background: var(--n-color-embedded);
+  background: #e7e7e7;
+  box-shadow: inset 0 0 0 1px #d7d7d7;
+}
+
+.context-meter-track.unknown {
+  background: repeating-linear-gradient(
+    90deg,
+    #eeeeee 0,
+    #eeeeee 6px,
+    #d8d8d8 6px,
+    #d8d8d8 8px
+  );
 }
 
 .context-meter-fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--n-text-color-1);
+  background: #111111;
   transition: width 0.2s ease;
 }
 
 .context-meter-marker {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 1px;
-  background: var(--n-text-color-3);
+  top: -5px;
+  bottom: -5px;
+  width: 2px;
+  border-radius: 999px;
+  background: #777777;
+  opacity: 0.85;
 }
 
-.context-meter-meta,
-.context-meter-status {
-  font-size: 12px;
-  color: var(--n-text-color-2);
-}
-
-.context-meter-meta.muted {
+.context-meter-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 16px;
   color: var(--n-text-color-3);
 }
 
