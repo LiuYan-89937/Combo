@@ -15,6 +15,8 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter import FactoryR
 ALWAYS_LONG_RUNNING_COMMANDS = {
     "send_message",
     "resume_interrupt",
+    "initialize_agent_package",
+    "send_agent_package_message",
     "run_agent_package",
     "run_agent_evolution",
 }
@@ -24,13 +26,6 @@ LONG_RUNNING_ACTIONS = {
     "extensions_manage": {"test_mcp"},
     "scheduler_manage": {"run_now"},
 }
-
-CONCURRENT_READ_COMMANDS = {
-    "list_agent_packages",
-    "list_agent_package_sessions",
-    "load_agent_package_session",
-}
-
 
 def main() -> None:
     writer = _JsonLineWriter()
@@ -67,8 +62,7 @@ class _CommandDispatcher:
         self.adapter = adapter
         self.writer = writer
         self._lock = threading.Lock()
-        self._active_thread: threading.Thread | None = None
-        self._active_request_id: str | None = None
+        self._background_threads: dict[str, threading.Thread] = {}
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
         if self.writer.closed:
@@ -80,50 +74,25 @@ class _CommandDispatcher:
             self.adapter.handle(command)
             return True
         if _is_long_running_command(command):
-            return self._start_long_running(command)
-        if self._has_active_request():
-            if _is_concurrent_read_command(command):
-                self.adapter.handle(command)
-                return True
-            self.writer.write(
-                event(
-                    "error",
-                    request_id=command.request_id,
-                    message="runtime is busy; cancel the active request before sending another command",
-                    payload={"active_request_id": self._active_request_id},
-                )
-            )
-            return True
+            return self._start_background(command)
         self.adapter.handle(command)
         return True
 
     def join(self) -> None:
-        thread = self._active_thread
-        if thread is not None:
+        for thread in list(self._background_threads.values()):
             thread.join(timeout=0.2)
 
-    def _start_long_running(self, command: FactoryFrontendCommand) -> bool:
-        if self.writer.closed:
-            return False
+    def _start_background(self, command: FactoryFrontendCommand) -> bool:
+        request_id = command.request_id or f"{command.type}-{id(command)}"
         with self._lock:
-            if self._active_thread is not None and self._active_thread.is_alive():
-                self.writer.write(
-                    event(
-                        "error",
-                        request_id=command.request_id,
-                        message="runtime is already handling a request",
-                        payload={"active_request_id": self._active_request_id},
-                    )
-                )
-                return True
-            self._active_request_id = command.request_id
-            self._active_thread = threading.Thread(
+            thread = threading.Thread(
                 target=self._run_command,
                 args=(command,),
-                name=f"factory-frontend-command-{command.request_id or command.type}",
+                name=f"factory-background-command-{request_id}",
                 daemon=True,
             )
-            self._active_thread.start()
+            self._background_threads[request_id] = thread
+            thread.start()
         return True
 
     def _run_command(self, command: FactoryFrontendCommand) -> None:
@@ -131,13 +100,7 @@ class _CommandDispatcher:
             self.adapter.handle(command)
         finally:
             with self._lock:
-                if self._active_request_id == command.request_id:
-                    self._active_request_id = None
-                self._active_thread = None
-
-    def _has_active_request(self) -> bool:
-        with self._lock:
-            return self._active_thread is not None and self._active_thread.is_alive()
+                self._background_threads.pop(command.request_id or f"{command.type}-{id(command)}", None)
 
 
 def _is_long_running_command(command: FactoryFrontendCommand) -> bool:
@@ -148,15 +111,6 @@ def _is_long_running_command(command: FactoryFrontendCommand) -> bool:
         return False
     action = str(command.payload.get("action") or "").strip()
     return action in long_running_actions
-
-
-def _is_concurrent_read_command(command: FactoryFrontendCommand) -> bool:
-    if command.type in CONCURRENT_READ_COMMANDS:
-        return True
-    if command.type == "workspace_manage":
-        action = str(command.payload.get("action") or "").strip()
-        return action in {"roots", "list", "read"}
-    return False
 
 
 class _JsonLineWriter:

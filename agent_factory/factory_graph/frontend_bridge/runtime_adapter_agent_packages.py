@@ -122,6 +122,32 @@ class RuntimeAgentPackageCommandMixin:
             )
         )
 
+    def initialize_agent_package(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        if not package_id:
+            self._emit_error(command, "initialize_agent_package requires package_id")
+            return
+        self.agent_package_runtime.initialize_package(package_id, request_id=command.request_id)
+
+    def shutdown_agent_package_instance(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        if not package_id:
+            self._emit_error(command, "shutdown_agent_package_instance requires package_id")
+            return
+        self.agent_package_runtime.shutdown_package_instance(package_id, request_id=command.request_id)
+
+    def list_agent_package_instances(self, command: FactoryFrontendCommand) -> None:
+        statuses = self.agent_package_runtime.list_instance_statuses()
+        self.emit(
+            event(
+                "agent_package_instances_listed",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="agent_package",
+                payload={"instances": statuses},
+            )
+        )
+
     def list_agent_package_sessions(self, command: FactoryFrontendCommand) -> None:
         package_id = str(command.payload.get("package_id") or "").strip()
         if not package_id:
@@ -159,17 +185,23 @@ class RuntimeAgentPackageCommandMixin:
         )
 
     def run_agent_package(self, command: FactoryFrontendCommand) -> None:
+        self._send_agent_package_message(command, require_ready=False)
+
+    def send_agent_package_message(self, command: FactoryFrontendCommand) -> None:
+        self._send_agent_package_message(command, require_ready=True)
+
+    def _send_agent_package_message(self, command: FactoryFrontendCommand, *, require_ready: bool) -> None:
         package_id = str(command.payload.get("package_id") or "").strip()
         message = str(command.payload.get("message") or command.message or "").strip()
         session_id = str(command.payload.get("session_id") or "").strip() or None
         if not package_id:
-            self._emit_error(command, "run_agent_package requires package_id")
+            self._emit_error(command, f"{command.type} requires package_id")
             return
         if not message:
-            self._emit_error(command, "run_agent_package requires message")
+            self._emit_error(command, f"{command.type} requires message")
             return
         if self.pending_agent_package_run is not None:
-            self._emit_error(command, "cannot run an agent package while an interrupt is pending")
+            self._emit_error(command, "cannot send an agent package message while an interrupt is pending")
             return
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
@@ -184,6 +216,7 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 session_id=session_id,
                 request_id=command.request_id,
+                require_ready=require_ready,
             )
             self._consume_agent_package_stream(package_id=package_id, run=run, normalizer=normalizer)
         except AttachmentImportError as exc:
@@ -253,8 +286,10 @@ class RuntimeAgentPackageCommandMixin:
                 self.pending_evolution_run = PendingEvolutionRun(
                     package_id=package_id,
                     session_id=session_id,
+                    request_id=item.request_id,
                     trace_id=run.trace_id,
                     interrupt_id=_interrupt_id_from_event(item),
+                    interrupt_event_id=item.event_id,
                 )
                 self.emit(_frontend_scoped_agent_event(item, mode="evolve_agent", session_id=session_id))
                 terminal_event = item
@@ -295,6 +330,7 @@ class RuntimeAgentPackageCommandMixin:
         if pending is None:
             self._emit_error(command, "no pending create-agent interrupt to resume")
             return
+        resume_text = _resume_payload_text(command.payload)
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=command.request_id,
@@ -304,6 +340,13 @@ class RuntimeAgentPackageCommandMixin:
             producer_type="factory_runtime",
         )
         try:
+            if resume_text:
+                self.session_record = self.session_manager.start_turn(
+                    self.session_record.session_id,
+                    "create_agent",
+                    request_id=command.request_id,
+                    user_input=resume_text,
+                )
             run = self.create_agent_runtime.resume_stream(
                 session_id=pending.session_id,
                 resume_payload=command.payload,
@@ -312,6 +355,7 @@ class RuntimeAgentPackageCommandMixin:
             self._consume_create_agent_stream(run=run)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
+            self._finish_host_create_agent_turn(request_id=command.request_id, final_answer=None, status="failed")
 
     def _resume_evolution_interrupt(self, command: FactoryFrontendCommand) -> None:
         pending = self.pending_evolution_run
@@ -372,22 +416,35 @@ class RuntimeAgentPackageCommandMixin:
         normalizer: RuntimeEventNormalizer,
         frontend_mode: FactoryMode | None = None,
         frontend_session_id: str | None = None,
+        sync_system_chat_session: bool = True,
     ) -> RuntimeStreamConsumeResult:
+        normalizer.default_payload = {**normalizer.default_payload, "package_id": package_id}
         final_state = None
         terminal_event: FactoryFrontendEvent | None = None
+        final_answer: str | None = None
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode == "frontend_event":
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+                if item.event_type == "model_message_completed":
+                    content = _visible_model_message_content(item)
+                    if content:
+                        final_answer = content
                 agent_session_id = item.session_id
                 if agent_session_id:
                     run.session["session_id"] = agent_session_id
-                    if frontend_mode == "chat":
+                    if frontend_mode == "chat" and sync_system_chat_session:
                         self._remember_system_chat_agent_session_id(agent_session_id)
-                if item.event_type == "run_completed" and frontend_mode == "chat":
+                if item.event_type == "run_completed" and frontend_mode == "chat" and sync_system_chat_session:
                     self._sync_system_chat_session_summary(item)
                 if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
+                    if frontend_mode == "chat" and sync_system_chat_session:
+                        self._finish_system_chat_turn(
+                            request_id=item.request_id,
+                            final_answer=final_answer,
+                            status="interrupted",
+                        )
                     session_id = str(agent_session_id or (run.session or {}).get("session_id") or "")
                     if not session_id:
                         raise RuntimeError("agent package interrupt missing session_id")
@@ -396,9 +453,28 @@ class RuntimeAgentPackageCommandMixin:
                         session_id=session_id,
                         normalizer=normalizer,
                         interrupt_id=_interrupt_id_from_event(item),
+                        interrupt_event_id=item.event_id,
                     )
-                self.emit(_frontend_scoped_agent_event(item, mode=frontend_mode, session_id=frontend_session_id))
+                self.emit(
+                    _frontend_scoped_agent_event(
+                        item,
+                        mode=frontend_mode,
+                        session_id=frontend_session_id,
+                        package_id=package_id,
+                    )
+                )
                 if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES or item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                    if (
+                        item.event_type in RUN_TERMINAL_EVENT_TYPES
+                        and item.event_type != "run_completed"
+                        and frontend_mode == "chat"
+                        and sync_system_chat_session
+                    ):
+                        self._finish_system_chat_turn(
+                            request_id=item.request_id,
+                            final_answer=final_answer,
+                            status=runtime_stream_status(item),
+                        )
                     terminal_event = item
                 continue
             if stream_mode == "stderr":
@@ -419,7 +495,10 @@ class RuntimeAgentPackageCommandMixin:
                     normalizer=normalizer,
                     interrupt_id=_interrupt_id_from_payload(interrupt_payload),
                 )
-                normalizer.emit_interrupt(json_safe(interrupt_payload))
+                payload = json_safe(interrupt_payload)
+                if isinstance(payload, dict):
+                    payload = {**payload, "package_id": package_id}
+                normalizer.emit_interrupt(payload)
                 return RuntimeStreamConsumeResult(status="interrupted")
             if stream_mode == "runtime_final":
                 final_state = chunk
@@ -464,7 +543,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=agent_session_id,
                 request_id=command.request_id,
             )
-            self._commit_system_chat_request(redacted_message)
+            self._commit_system_chat_request(redacted_message, request_id=command.request_id)
             self._consume_agent_package_stream(
                 package_id=SYSTEM_CHAT_PACKAGE_ID,
                 run=run,
@@ -474,8 +553,10 @@ class RuntimeAgentPackageCommandMixin:
             )
         except AttachmentImportError as exc:
             _emit_attachment_import_failed(normalizer, exc)
+            self._finish_system_chat_turn(request_id=command.request_id, final_answer=None, status="failed")
         except Exception as exc:
             normalizer.emit_run_failed(exc)
+            self._finish_system_chat_turn(request_id=command.request_id, final_answer=None, status="failed")
 
     def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
         redacted_message = redact_attachment_markers(message)
@@ -494,12 +575,18 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=agent_session_id,
                 request_id=command.request_id,
             )
-            self._commit_host_create_agent_request(redacted_message, session_id=agent_session_id)
+            self._commit_host_create_agent_request(
+                redacted_message,
+                session_id=agent_session_id,
+                request_id=command.request_id,
+            )
             self._consume_create_agent_stream(run=run)
         except AttachmentImportError as exc:
             _emit_attachment_import_failed(normalizer, exc)
+            self._finish_host_create_agent_turn(request_id=command.request_id, final_answer=None, status="failed")
         except Exception as exc:
             normalizer.emit_run_failed(exc)
+            self._finish_host_create_agent_turn(request_id=command.request_id, final_answer=None, status="failed")
 
     def _sync_system_chat_session_summary(self, item: FactoryFrontendEvent) -> None:
         if self.session_record is None:
@@ -516,13 +603,44 @@ class RuntimeAgentPackageCommandMixin:
                 )
             except (TypeError, ValueError):
                 pass
+            turns = agent_session.get("turns")
+            if isinstance(turns, list):
+                self.session_record = self.session_manager.replace_turns_from_agent_session(
+                    self.session_record.session_id,
+                    "chat",
+                    [turn for turn in turns if isinstance(turn, dict)],
+                )
+                return
         self.session_manager.save(self.session_record)
 
     def _planned_system_chat_agent_session_id(self) -> str | None:
         return self.session_record.chat_agent_package_session_id if self.session_record is not None else None
 
-    def _commit_system_chat_request(self, first_user_input: str) -> None:
+    def _commit_system_chat_request(self, first_user_input: str, *, request_id: str | None = None) -> None:
         self._remember_factory_first_user_input(first_user_input)
+        self.session_record = self.session_manager.start_turn(
+            self.session_record.session_id,
+            "chat",
+            request_id=request_id,
+            user_input=first_user_input,
+        )
+
+    def _finish_system_chat_turn(
+        self,
+        *,
+        request_id: str | None,
+        final_answer: str | None,
+        status: str,
+    ) -> None:
+        if self.session_record is None:
+            return
+        self.session_record = self.session_manager.finish_turn(
+            self.session_record.session_id,
+            "chat",
+            request_id=request_id,
+            final_answer=final_answer,
+            status=status,
+        )
 
     def _remember_system_chat_agent_session_id(self, session_id: str) -> None:
         if self.session_record is None:
@@ -536,12 +654,23 @@ class RuntimeAgentPackageCommandMixin:
             return self.session_record.create_agent_session_id
         return uuid4().hex
 
-    def _commit_host_create_agent_request(self, first_user_input: str, *, session_id: str) -> None:
+    def _commit_host_create_agent_request(
+        self,
+        first_user_input: str,
+        *,
+        session_id: str,
+        request_id: str | None = None,
+    ) -> None:
         self._remember_factory_first_user_input(first_user_input)
         if self.session_record.create_agent_session_id != session_id:
             self.session_record.create_agent_session_id = session_id
-        self.session_record.create_agent_turn_count += 1
         self.session_manager.save(self.session_record)
+        self.session_record = self.session_manager.start_turn(
+            self.session_record.session_id,
+            "create_agent",
+            request_id=request_id,
+            user_input=first_user_input,
+        )
 
     def _remember_factory_first_user_input(self, first_user_input: str) -> None:
         if self.session_record is None:
@@ -553,23 +682,60 @@ class RuntimeAgentPackageCommandMixin:
 
     def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
         terminal_event: FactoryFrontendEvent | None = None
+        final_answer: str | None = None
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode != "frontend_event":
                 raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            if item.event_type == "model_message_completed":
+                content = _visible_model_message_content(item)
+                if content:
+                    final_answer = content
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
-                self.pending_create_agent_run = PendingCreateAgentRun(session_id=run.session_id)
+                self._finish_host_create_agent_turn(
+                    request_id=item.request_id,
+                    final_answer=final_answer,
+                    status="interrupted",
+                )
+                self.pending_create_agent_run = PendingCreateAgentRun(
+                    session_id=run.session_id,
+                    request_id=item.request_id,
+                    interrupt_id=_interrupt_id_from_event(item),
+                    interrupt_event_id=item.event_id,
+                )
                 self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
                 terminal_event = item
                 continue
             self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
             if item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                self._finish_host_create_agent_turn(
+                    request_id=item.request_id,
+                    final_answer=final_answer,
+                    status=runtime_stream_status(item),
+                )
                 terminal_event = item
         if terminal_event is not None:
             return RuntimeStreamConsumeResult(status=runtime_stream_status(terminal_event), terminal_event=terminal_event)
         raise RuntimeError("create-agent runtime stream ended without a terminal event")
+
+    def _finish_host_create_agent_turn(
+        self,
+        *,
+        request_id: str | None,
+        final_answer: str | None,
+        status: str,
+    ) -> None:
+        if self.session_record is None:
+            return
+        self.session_record = self.session_manager.finish_turn(
+            self.session_record.session_id,
+            "create_agent",
+            request_id=request_id,
+            final_answer=final_answer,
+            status=status,
+        )
 
 
 def _frontend_scoped_agent_event(
@@ -577,13 +743,38 @@ def _frontend_scoped_agent_event(
     *,
     mode: FactoryMode | None,
     session_id: str | None,
+    package_id: str | None = None,
 ) -> FactoryFrontendEvent:
     updates: dict[str, Any] = {}
     if mode is not None:
         updates["mode"] = mode
     if session_id is not None:
         updates["session_id"] = session_id
+    if package_id is not None:
+        updates["payload"] = {
+            **(item.payload if isinstance(item.payload, dict) else {}),
+            "package_id": package_id,
+        }
     return item.model_copy(update=updates) if updates else item
+
+
+def _visible_model_message_content(item: FactoryFrontendEvent) -> str | None:
+    if not isinstance(item.payload, dict):
+        return None
+    if item.payload.get("visible_to_user") is False:
+        return None
+    content = str(item.payload.get("content") or "").strip()
+    return content or None
+
+
+def _resume_payload_text(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return str(payload or "").strip()
+    for key in ("input_text", "answer", "message", "revision_guidance"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _emit_attachment_import_failed(normalizer: RuntimeEventNormalizer, exc: AttachmentImportError) -> None:

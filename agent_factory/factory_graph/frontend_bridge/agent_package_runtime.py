@@ -11,8 +11,10 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from typing import Any, Iterator
 from uuid import uuid4
+import zipfile
 
 from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
@@ -32,7 +34,7 @@ from agent_factory.runtime_attachments import (
     import_marked_attachments,
     safe_attachment_scope_id,
 )
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     AgentRuntimeLaunchError,
     DockerAgentRuntimeLauncher,
@@ -94,6 +96,7 @@ class AgentPackageRuntimeManager:
         self.request_policy = RuntimeRequestPolicy.from_env()
         self._containers: dict[str, AgentRuntimeContainerHandle] = {}
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
+        self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
         self._emit = emit
 
@@ -111,6 +114,167 @@ class AgentPackageRuntimeManager:
             packages.append(self._package_summary(manifest_path))
         return sorted(packages, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
 
+    def list_instance_statuses(self) -> list[dict[str, Any]]:
+        package_ids = {item.get("package_id") for item in self.list_packages()}
+        package_ids.update(self._containers)
+        package_ids.update(self._system_handles)
+        return [
+            self.package_instance_status(str(package_id))
+            for package_id in sorted(item for item in package_ids if item)
+        ]
+
+    def package_instance_status(self, package_id: str) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        backend = "host" if _is_host_system_package(package) else "container"
+        handle = self._system_handles.get(package_id) if backend == "host" else self._containers.get(package_id)
+        running = bool(handle is not None and getattr(handle, "is_running", False))
+        active_request_count = int(getattr(handle, "active_request_count", 0)) if handle is not None else 0
+        active_command_types = set(getattr(handle, "active_command_types", ())) if handle is not None else set()
+        base = {
+            "package_id": package_id,
+            "agent_id": package.assembly_spec.agent.id,
+            "agent_name": package.assembly_spec.agent.name,
+            "backend": backend,
+            "status": "ready" if running else "stopped",
+            "ready": running,
+            "active_request_count": active_request_count,
+            "runtime_root": str(_host_runtime_root(package_id)),
+            "idle_timeout_seconds": self.idle_timeout_seconds,
+        }
+        if running and "initialize_runtime" in active_command_types:
+            base.update({"status": "initializing", "ready": False})
+        override = self._instance_status_overrides.get(package_id)
+        if override:
+            base.update(override)
+            if not running and base.get("status") != "failed":
+                base.update({"status": "stopped", "ready": False})
+        return base
+
+    def initialize_package(
+        self,
+        package_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        initializing_status = self._instance_status_payload(
+            package_id=package_id,
+            package=package,
+            status="initializing",
+            ready=False,
+        )
+        self._instance_status_overrides[package_id] = initializing_status
+        if self._emit is not None:
+            self._emit(
+                event(
+                    "agent_package_instance_updated",
+                    request_id=None,
+                    mode="agent_package",
+                    graph_id="agent_package_runtime",
+                    producer_type="factory_runtime",
+                    payload=initializing_status,
+                )
+            )
+        command = {
+            "type": "initialize_runtime",
+            "request_id": request_id or uuid4().hex,
+            "payload": {},
+        }
+        latest_status: dict[str, Any] | None = None
+        try:
+            for stream_mode, chunk in self._runtime_events(package_id, package=package, command=command):
+                if stream_mode != "frontend_event":
+                    continue
+                item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+                if item.event_type == "agent_package_instance_updated":
+                    latest_status = dict(item.payload or {})
+                    self._instance_status_overrides[package_id] = latest_status
+                elif item.event_type == "run_failed":
+                    latest_status = self._instance_status_payload(
+                        package_id=package_id,
+                        package=package,
+                        status="failed",
+                        ready=False,
+                        error=str(item.message or item.payload.get("message") or "initialize failed"),
+                    )
+                    self._instance_status_overrides[package_id] = latest_status
+                    if self._emit is not None:
+                        self._emit(
+                            event(
+                                "agent_package_instance_updated",
+                                request_id=request_id,
+                                mode="agent_package",
+                                graph_id="agent_package_runtime",
+                                producer_type="factory_runtime",
+                                severity="error",
+                                payload=latest_status,
+                            )
+                        )
+                if self._emit is not None:
+                    self._emit(item)
+        except Exception as exc:
+            latest_status = self._instance_status_payload(
+                package_id=package_id,
+                package=package,
+                status="failed",
+                ready=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            self._instance_status_overrides[package_id] = latest_status
+            if self._emit is not None:
+                self._emit(
+                    event(
+                        "agent_package_instance_updated",
+                        request_id=request_id,
+                        mode="agent_package",
+                        graph_id="agent_package_runtime",
+                        producer_type="factory_runtime",
+                        severity="error",
+                        payload=latest_status,
+                    )
+                )
+            raise
+        return latest_status or self.package_instance_status(package_id)
+
+    def shutdown_package_instance(
+        self,
+        package_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._close_container(package_id)
+        self._close_system(package_id)
+        status = self.package_instance_status(package_id)
+        status = {**status, "status": "stopped", "ready": False}
+        self._instance_status_overrides.pop(package_id, None)
+        if self._emit is not None:
+            self._emit(
+                event(
+                    "agent_package_instance_updated",
+                    request_id=request_id,
+                    mode="agent_package",
+                    graph_id="agent_package_runtime",
+                    producer_type="factory_runtime",
+                    payload=status,
+                )
+            )
+        return status
+
+    def scheduler_events(
+        self,
+        package_id: str,
+        *,
+        payload: dict[str, Any],
+        request_id: str | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        command = {
+            "type": "scheduler_manage",
+            "request_id": request_id or uuid4().hex,
+            "payload": dict(payload),
+        }
+        yield from self._runtime_events(package_id, package=package, command=command)
+
     def package_summary(self, package_id: str) -> dict[str, Any]:
         return self._package_summary(self._manifest_path(package_id))
 
@@ -121,6 +285,23 @@ class AgentPackageRuntimeManager:
             raise FileNotFoundError(f"agent package not found: {package_id}")
         shutil.rmtree(target)
         return {"package_id": package_id, "deleted": True}
+
+    def export_package_archive(self, package_id: str) -> Path:
+        target = self._package_dir(package_id, include_system_packages=False)
+        manifest_path = target / "agent_package.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"agent package not found: {package_id}")
+        archive_stem = _safe_archive_stem(package_id)
+        with tempfile.NamedTemporaryFile(prefix=f"{archive_stem}-", suffix=".zip", delete=False) as handle:
+            archive_path = Path(handle.name)
+        root_name = target.name
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(item for item in target.rglob("*") if item.is_file()):
+                if path.is_symlink():
+                    continue
+                relative_path = Path(root_name) / path.relative_to(target)
+                archive.write(path, relative_path.as_posix())
+        return archive_path
 
     def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
         package = self.loader.load_path(self._manifest_path(package_id))
@@ -197,9 +378,7 @@ class AgentPackageRuntimeManager:
     def extension_config_summary(self, package_id: str) -> dict[str, Any]:
         package = self.loader.load_path(self._manifest_path(package_id))
         extension_root = _extension_root_for_package(package_id, package)
-        if not _is_system_package(package):
-            _seed_package_extensions(package=package, extension_root=extension_root)
-        bundle = _load_extension_bundle(extension_root)
+        bundle = _load_extension_bundle(extension_root, package=package)
         return {
             "package_id": package_id,
             "mcp_servers": [_public_mcp_server(server.model_dump(mode="json")) for server in bundle.mcp_servers.servers],
@@ -214,12 +393,10 @@ class AgentPackageRuntimeManager:
     def extensions_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         package = self.loader.load_path(self._manifest_path(package_id))
         extension_root = _extension_root_for_package(package_id, package)
-        if not _is_system_package(package):
-            _seed_package_extensions(package=package, extension_root=extension_root)
         if action == "list":
             return self.extension_config_summary(package_id)
         if action == "upsert_mcp":
-            server = _mcp_server_from_payload(payload.get("server") if isinstance(payload.get("server"), dict) else payload)
+            server = _mcp_server_for_upsert(extension_root, payload, package=package)
             _save_mcp_server(extension_root, server)
             self._close_container(package_id)
             self._close_system(package_id)
@@ -237,10 +414,14 @@ class AgentPackageRuntimeManager:
             self._close_system(package_id)
             return {"updated": "mcp", "removed": removed, **self.extension_config_summary(package_id)}
         if action == "test_mcp":
-            server = _mcp_server_for_test(extension_root, payload)
+            server = _mcp_server_for_test(extension_root, payload, package=package)
             return {"test": _test_mcp_server(server), **self.extension_config_summary(package_id)}
         if action == "upsert_skill":
-            skill = _skill_from_payload(payload.get("skill") if isinstance(payload.get("skill"), dict) else payload)
+            skill_payload = payload.get("skill") if isinstance(payload.get("skill"), dict) else payload
+            skill = _skill_from_payload(skill_payload, extension_root=extension_root)
+            replace_skill_id = str(payload.get("replace_skill_id") or skill_payload.get("replace_skill_id") or "").strip()
+            if replace_skill_id and replace_skill_id != skill.skill_id:
+                _remove_enabled_skill(extension_root, skill_id=replace_skill_id)
             _save_enabled_skill(extension_root, skill)
             self._close_container(package_id)
             self._close_system(package_id)
@@ -324,11 +505,21 @@ class AgentPackageRuntimeManager:
             completed = runtime.run_job(job.job_id)
             return {"job": completed.model_dump(mode="json"), "sources": [item.model_dump(mode="json") for item in runtime.list_sources()]}
         if action == "remove_source":
-            return {"removed": runtime.remove_source(str(payload.get("source_id") or ""))}
+            source_id = str(payload.get("source_id") or "")
+            return {
+                "source_id": source_id,
+                "removed": runtime.remove_source(source_id),
+                "sources": [item.model_dump(mode="json") for item in runtime.list_sources()],
+            }
         if action == "reindex":
-            job = runtime.reindex_source(str(payload.get("source_id") or ""))
+            source_id = str(payload.get("source_id") or "")
+            job = runtime.reindex_source(source_id)
             completed = runtime.run_job(job.job_id)
-            return {"job": completed.model_dump(mode="json")}
+            return {
+                "source_id": source_id,
+                "job": completed.model_dump(mode="json"),
+                "sources": [item.model_dump(mode="json") for item in runtime.list_sources()],
+            }
         raise ValueError(f"unsupported knowledge action: {action}")
 
     def ensure_session(
@@ -361,8 +552,11 @@ class AgentPackageRuntimeManager:
         session_id: str | None = None,
         request_id: str | None = None,
         user_config: dict[str, Any] | None = None,
+        require_ready: bool = False,
     ) -> AgentPackageStreamRun:
         package = self.loader.load_path(self._manifest_path(package_id))
+        if require_ready and not self._has_ready_runtime(package_id, package):
+            raise RuntimeError(f"agent package instance is not ready: {package_id}")
         resolved_request_id = request_id or uuid4().hex
         attachment_result = self._prepare_runtime_attachments(
             package_id=package_id,
@@ -456,6 +650,7 @@ class AgentPackageRuntimeManager:
             report = _read_json_object(manifest_path.parent / "package_report.json")
             sessions = self._list_sessions_for_loaded_package(package)
             sandbox = _sandbox_summary(package.sandbox_contract)
+            detail = _package_detail_summary(self, package_id=package_id, package=package)
             return {
                 "package_id": package_id,
                 "package_path": str(manifest_path.parent),
@@ -470,6 +665,7 @@ class AgentPackageRuntimeManager:
                 "session_count": len(sessions),
                 "sandbox": sandbox,
                 "extensions": _extensions_summary(package_id, package=package),
+                **detail,
             }
         except Exception as exc:
             return {
@@ -481,6 +677,10 @@ class AgentPackageRuntimeManager:
                 "error": f"{type(exc).__name__}: {exc}",
                 "sandbox": {"status": "unknown"},
                 "extensions": _extensions_summary(package_id),
+                "tools": [],
+                "mcp_servers": [],
+                "skills": [],
+                "knowledge_sources": [],
             }
 
     def _session_manager_for_package(self, package_id: str, package: LoadedAgentPackage) -> AgentSessionManager:
@@ -559,7 +759,7 @@ class AgentPackageRuntimeManager:
                 )
             yield "frontend_event", run_failed_event(request_id, failure_payload)
             return
-        yield from handle.send(command)
+        yield from _scoped_runtime_events(handle.send(command), package_id=package_id)
 
     def _container_events(
         self,
@@ -620,10 +820,46 @@ class AgentPackageRuntimeManager:
             )
             return
         try:
-            yield from handle.send(command)
+            yield from _scoped_runtime_events(handle.send(command), package_id=package_id)
         except Exception:
             self._close_container(package_id)
             raise
+
+    def _runtime_events(
+        self,
+        package_id: str,
+        *,
+        package: LoadedAgentPackage,
+        command: dict[str, Any],
+    ) -> Iterator[tuple[str, Any]]:
+        if _is_host_system_package(package):
+            yield from self._system_events(package_id, package=package, command=command)
+            return
+        yield from self._container_events(package_id, package=package, command=command)
+
+    def _instance_status_payload(
+        self,
+        *,
+        package_id: str,
+        package: LoadedAgentPackage,
+        status: str,
+        ready: bool,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        backend = "host" if _is_host_system_package(package) else "container"
+        payload: dict[str, Any] = {
+            "package_id": package_id,
+            "agent_id": package.assembly_spec.agent.id,
+            "agent_name": package.assembly_spec.agent.name,
+            "backend": backend,
+            "status": status,
+            "ready": ready,
+            "runtime_root": str(_host_runtime_root(package_id)),
+            "idle_timeout_seconds": self.idle_timeout_seconds,
+        }
+        if error:
+            payload["error"] = error
+        return payload
 
     def _container(self, package_id: str, package: LoadedAgentPackage) -> "AgentRuntimeContainerHandle":
         existing = self._containers.get(package_id)
@@ -642,10 +878,9 @@ class AgentPackageRuntimeManager:
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
-        _seed_package_extensions(package=package, extension_root=extension_root)
         fingerprint = _package_fingerprint(package)
         mcp_gateway = self._mcp_gateways.ensure_gateway(
-            AgentInstanceExtensionConfigLoader(extension_root).load().mcp_servers
+            _load_extension_bundle(extension_root, package=package).mcp_servers
         )
         plan = self.launcher.prepare(
             package=package,
@@ -664,6 +899,7 @@ class AgentPackageRuntimeManager:
             emit=self._emit,
         )
         handle.startup_payload = {
+            "package_id": package_id,
             "status": "running",
             "pid": handle.process.pid,
             "image": plan.image,
@@ -736,13 +972,20 @@ class AgentPackageRuntimeManager:
             return False
         return not existing.is_idle(self.idle_timeout_seconds)
 
+    def _has_ready_runtime(self, package_id: str, package: LoadedAgentPackage) -> bool:
+        if _is_host_system_package(package):
+            return self._has_reusable_system_handle(package_id, package)
+        return self._has_reusable_container(package_id, package)
+
     def _close_container(self, package_id: str) -> None:
         handle = self._containers.pop(package_id, None)
+        self._instance_status_overrides.pop(package_id, None)
         if handle is not None:
             handle.close()
 
     def _close_system(self, package_id: str) -> None:
         handle = self._system_handles.pop(package_id, None)
+        self._instance_status_overrides.pop(package_id, None)
         if handle is not None:
             handle.close()
 
@@ -763,6 +1006,7 @@ class AgentPackageRuntimeManager:
     def _workspace_roots(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Path]:
         runtime_root = _host_runtime_root(package_id)
         return {
+            "package": package.package_root,
             "runtime": runtime_root,
             "workdir": runtime_root / "workdir",
             "artifacts": runtime_root / "artifacts",
@@ -779,6 +1023,7 @@ class AgentPackageRuntimeManager:
 
 def _workspace_scope_label(scope: str) -> str:
     labels = {
+        "package": "Package",
         "runtime": "Runtime",
         "workdir": "Workdir",
         "artifacts": "Artifacts",
@@ -871,6 +1116,26 @@ def _root_relative_path(root_path: Path, path: Path, *, field_path: str) -> Path
     return target
 
 
+def _scoped_runtime_events(
+    events: Iterator[tuple[str, Any]],
+    *,
+    package_id: str,
+) -> Iterator[tuple[str, Any]]:
+    for stream_mode, chunk in events:
+        if stream_mode == "frontend_event":
+            yield stream_mode, _scoped_runtime_event(chunk, package_id=package_id)
+            continue
+        yield stream_mode, chunk
+
+
+def _scoped_runtime_event(chunk: Any, *, package_id: str) -> FactoryFrontendEvent:
+    item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+    payload = item.payload if isinstance(item.payload, dict) else None
+    if payload is None:
+        return item
+    return item.model_copy(update={"payload": {**payload, "package_id": package_id}})
+
+
 def _default_package_root() -> Path:
     return project_root() / DEFAULT_AGENT_PACKAGE_ROOT
 
@@ -893,15 +1158,19 @@ def _safe_child(root: Path, child_name: str, *, label: str) -> Path:
     return target
 
 
+def _safe_archive_stem(value: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-")
+    return stem or "agent-package"
+
+
 def _package_fingerprint(package: LoadedAgentPackage) -> str:
     digest = hashlib.sha256()
     digest.update(str(package.package_root.resolve()).encode("utf-8"))
     _hash_tree(digest, package.package_root)
-    extension_root = _extension_root_for_package(package.package_root.name, package)
-    _hash_tree(digest, extension_root)
-    builtin_extension_root = default_builtin_agent_extension_root()
-    if builtin_extension_root.resolve() != extension_root.resolve():
-        _hash_tree(digest, builtin_extension_root)
+    if _is_system_package(package):
+        extension_root = _extension_root_for_package(package.package_root.name, package)
+        if extension_root.resolve() != package.package_root.resolve():
+            _hash_tree(digest, extension_root)
     if _is_host_system_package(package):
         digest.update(b"host-system-package")
     else:
@@ -968,63 +1237,99 @@ def _sandbox_summary(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _package_detail_summary(
+    manager: AgentPackageRuntimeManager,
+    *,
+    package_id: str,
+    package: LoadedAgentPackage,
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "tools": [_public_package_tool(spec) for spec in package.assembly_spec.tools],
+        "mcp_servers": [],
+        "skills": [],
+        "knowledge_sources": [],
+    }
+    detail.update(_package_extension_detail(package_id=package_id, package=package))
+    detail.update(_package_knowledge_detail(manager, package_id=package_id))
+    return detail
+
+
+def _package_extension_detail(*, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
+    extension_root = _extension_root_for_package(package_id, package)
+    try:
+        bundle = _load_extension_bundle(extension_root, package=package)
+        return {
+            "mcp_servers": [
+                _public_mcp_server(server.model_dump(mode="json"))
+                for server in bundle.mcp_servers.servers
+            ],
+            "skills": [
+                _public_skill(skill.model_dump(mode="json"))
+                for skill in bundle.enabled_skills.skills
+            ],
+        }
+    except Exception as exc:
+        return {
+            "mcp_servers": [],
+            "skills": [],
+            "extensions_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _package_knowledge_detail(manager: AgentPackageRuntimeManager, *, package_id: str) -> dict[str, Any]:
+    try:
+        runtime = manager.knowledge_runtime_for_package(package_id)
+        sources = runtime.list_sources()
+        document_counts = {
+            source.source_id: len(runtime.list_documents(source.source_id))
+            for source in sources
+        }
+        return {
+            "knowledge_sources": [
+                _public_knowledge_source(
+                    source.model_dump(mode="json"),
+                    document_count=document_counts.get(source.source_id),
+                )
+                for source in sources
+            ],
+        }
+    except Exception as exc:
+        return {
+            "knowledge_sources": [],
+            "knowledge_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _public_package_tool(spec: Any) -> dict[str, Any]:
+    return {
+        "kind": "package_tool",
+        "id": str(getattr(spec, "id", "") or ""),
+        "name": _humanize_identifier(str(getattr(spec, "id", "") or "")) or "Package Tool",
+        "description": str(getattr(spec, "description", "") or ""),
+        "risk_level": str(getattr(spec, "risk_level", "") or "low"),
+        "concurrent": bool(getattr(spec, "concurrent", True)),
+    }
+
+
+def _public_knowledge_source(source: dict[str, Any], *, document_count: int | None = None) -> dict[str, Any]:
+    metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    return {
+        "source_id": source.get("source_id"),
+        "name": str(source.get("display_name") or source.get("name") or source.get("source_id") or "知识源"),
+        "kind": source.get("source_type"),
+        "status": source.get("status"),
+        "mode": source.get("mount_mode"),
+        "uri": source.get("original_uri") or source.get("uri"),
+        "updated_at": source.get("updated_at"),
+        "document_count": document_count if document_count is not None else metadata.get("document_count"),
+        "sample_titles": metadata.get("sample_titles") if isinstance(metadata.get("sample_titles"), list) else [],
+    }
+
+
 def _extension_root_for_package(package_id: str, package: LoadedAgentPackage) -> Path:
     if _is_system_package(package):
         return package.package_root.parent / "extensions"
     return _host_runtime_root(package_id) / "extensions"
-
-
-def _seed_package_extensions(*, package: LoadedAgentPackage, extension_root: Path) -> None:
-    extension_root.mkdir(parents=True, exist_ok=True)
-    _seed_extension_directory(
-        source_root=default_builtin_agent_extension_root(),
-        extension_root=extension_root,
-        override_existing=False,
-    )
-    _seed_extension_directory(
-        source_root=package.package_root / "extensions",
-        extension_root=extension_root,
-        override_existing=True,
-    )
-
-
-def _seed_extension_directory(
-    *,
-    source_root: Path,
-    extension_root: Path,
-    override_existing: bool,
-) -> None:
-    if not source_root.is_dir():
-        return
-    if source_root.resolve() == extension_root.resolve():
-        return
-    _merge_extension_config(
-        source_path=source_root / "mcp_servers.json",
-        target_path=extension_root / "mcp_servers.json",
-        list_key="servers",
-        id_key="server_id",
-        default_version="mcp_servers.v0",
-        override_existing=override_existing,
-    )
-    _merge_extension_config(
-        source_path=source_root / "enabled_skills.json",
-        target_path=extension_root / "enabled_skills.json",
-        list_key="skills",
-        id_key="skill_id",
-        default_version="enabled_skills.v0",
-        override_existing=override_existing,
-    )
-    source_skills = source_root / "skills"
-    if source_skills.is_dir():
-        target_skills = extension_root / "skills"
-        target_skills.mkdir(parents=True, exist_ok=True)
-        for source_skill in sorted(item for item in source_skills.iterdir() if item.is_dir()):
-            target_skill = target_skills / source_skill.name
-            if target_skill.exists() and not override_existing:
-                continue
-            if target_skill.exists():
-                shutil.rmtree(target_skill)
-            shutil.copytree(source_skill, target_skill)
 
 
 def _merge_extension_config(
@@ -1100,11 +1405,25 @@ def _extensions_summary(package_id: str, *, package: LoadedAgentPackage | None =
     }
 
 
-def _load_extension_bundle(extension_root: Path) -> Any:
+def _load_extension_bundle(extension_root: Path, *, package: LoadedAgentPackage | None = None) -> Any:
     return AgentInstanceExtensionConfigLoader(
         extension_root,
-        inherited_extension_roots=[default_builtin_agent_extension_root()],
+        inherited_extension_roots=_extension_inherited_roots(extension_root, package=package),
     ).load()
+
+
+def _extension_inherited_roots(extension_root: Path, *, package: LoadedAgentPackage | None) -> list[Path]:
+    if package is None:
+        return []
+    roots: list[Path] = []
+    if _is_system_package(package):
+        builtin_root = default_builtin_agent_extension_root()
+        if builtin_root.resolve() != extension_root.resolve():
+            roots.append(builtin_root)
+    package_extension_root = package.package_root / "extensions"
+    if package_extension_root.resolve() != extension_root.resolve():
+        roots.append(package_extension_root)
+    return roots
 
 
 def _load_local_mcp_config(extension_root: Path) -> MCPServersConfig:
@@ -1188,47 +1507,98 @@ def _remove_enabled_skill(extension_root: Path, *, skill_id: str) -> bool:
     return removed
 
 
-def _mcp_server_for_test(extension_root: Path, payload: dict[str, Any]) -> MCPServerConfig:
+def _mcp_server_for_upsert(
+    extension_root: Path,
+    payload: dict[str, Any],
+    *,
+    package: LoadedAgentPackage | None = None,
+) -> MCPServerConfig:
     server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else payload
     server_id = str(server_payload.get("server_id") or "").strip()
-    if server_id:
-        bundle = _load_extension_bundle(extension_root)
+    existing = _find_mcp_server(extension_root, server_id, package=package) if server_id else None
+    return _mcp_server_from_payload(server_payload, existing=existing)
+
+
+def _find_mcp_server(
+    extension_root: Path,
+    server_id: str,
+    *,
+    package: LoadedAgentPackage | None = None,
+) -> MCPServerConfig | None:
+    if not server_id:
+        return None
+    try:
+        bundle = _load_extension_bundle(extension_root, package=package)
+    except Exception:
+        bundle = None
+    if bundle is not None:
         for server in bundle.mcp_servers.servers:
             if server.server_id == server_id:
                 return server
+    try:
+        for server in _load_local_mcp_config(extension_root).servers:
+            if server.server_id == server_id:
+                return server
+    except Exception:
+        return None
+    return None
+
+
+def _mcp_server_for_test(
+    extension_root: Path,
+    payload: dict[str, Any],
+    *,
+    package: LoadedAgentPackage | None = None,
+) -> MCPServerConfig:
+    server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else payload
+    server_id = str(server_payload.get("server_id") or "").strip()
+    if server_id:
+        bundle = _load_extension_bundle(extension_root, package=package)
+        for server in bundle.mcp_servers.servers:
+            if server.server_id == server_id:
+                existing = server
+                return _mcp_server_from_payload(server_payload, existing=existing)
     return _mcp_server_from_payload(server_payload)
 
 
-def _mcp_server_from_payload(payload: dict[str, Any]) -> MCPServerConfig:
+def _mcp_server_from_payload(payload: dict[str, Any], *, existing: MCPServerConfig | None = None) -> MCPServerConfig:
     raw = dict(payload or {})
-    display_name = str(raw.get("display_name") or raw.get("name") or "").strip()
-    source = dict(raw.get("source") or {})
+    existing_source = dict(existing.source) if existing is not None else {}
+    source = {**existing_source, **dict(raw.get("source") or {})}
+    display_name = str(raw.get("display_name") or raw.get("name") or source.get("name") or "").strip()
     if display_name:
-        source.setdefault("name", display_name)
-    command = str(raw.get("command") or "").strip()
-    cwd = str(raw.get("cwd") or "").strip() or None
+        source["name"] = display_name
+    description = str(raw.get("description") or raw.get("summary") or source.get("description") or "").strip()
+    if description:
+        source["description"] = description
+    command = str(raw.get("command") if "command" in raw else existing.command if existing is not None else "").strip()
+    args = _parse_args(raw["args"]) if "args" in raw else list(existing.args) if existing is not None else []
+    cwd_value = raw.get("cwd") if "cwd" in raw else existing.cwd if existing is not None else None
+    cwd = str(cwd_value or "").strip() or None
+    env = _parse_env(raw["env"]) if "env" in raw else dict(existing.env) if existing is not None else {}
+    enabled = raw.get("enabled") if "enabled" in raw else existing.enabled if existing is not None else True
     server_id = _config_identifier(
         str(raw.get("server_id") or ""),
         fallback=display_name or str(source.get("package") or "") or command or "mcp_server",
     )
     return MCPServerConfig(
         server_id=server_id,
-        transport=str(raw.get("transport") or "stdio").strip(),
+        transport=str(raw.get("transport") or (existing.transport if existing is not None else "stdio")).strip(),
         command=command or None,
-        args=_parse_args(raw.get("args")),
+        args=args,
         cwd=cwd,
-        env=_parse_env(raw.get("env")),
+        env=env,
         source=source,
-        enabled=raw.get("enabled", True) is not False,
-        required=bool(raw.get("required")),
-        tool_id_prefix=_optional_identifier(raw.get("tool_id_prefix")),
-        risk_level_default=str(raw.get("risk_level_default") or "medium"),  # type: ignore[arg-type]
-        concurrent_default=bool(raw.get("concurrent_default", False)),
-        timeout_seconds=float(raw.get("timeout_seconds") or 30.0),
+        enabled=enabled is not False,
+        required=bool(raw.get("required") if "required" in raw else existing.required if existing is not None else False),
+        tool_id_prefix=_optional_identifier(raw.get("tool_id_prefix") if "tool_id_prefix" in raw else existing.tool_id_prefix if existing is not None else None),
+        risk_level_default=str(raw.get("risk_level_default") or (existing.risk_level_default if existing is not None else "medium")),  # type: ignore[arg-type]
+        concurrent_default=bool(raw.get("concurrent_default") if "concurrent_default" in raw else existing.concurrent_default if existing is not None else False),
+        timeout_seconds=float(raw.get("timeout_seconds") or (existing.timeout_seconds if existing is not None else 30.0)),
     )
 
 
-def _skill_from_payload(payload: dict[str, Any]) -> EnabledSkillConfig:
+def _skill_from_payload(payload: dict[str, Any], *, extension_root: Path | None = None) -> EnabledSkillConfig:
     raw = dict(payload or {})
     path = str(raw.get("path") or "").strip()
     if not path:
@@ -1236,7 +1606,8 @@ def _skill_from_payload(payload: dict[str, Any]) -> EnabledSkillConfig:
     source = str(raw.get("source") or "local").strip() or "local"
     skill_id = str(raw.get("skill_id") or "").strip()
     if not skill_id:
-        skill_id = _skill_id_from_path(path, fallback=str(raw.get("display_name") or raw.get("name") or "skill"))
+        skill = parse_skill_directory(_skill_path_for_validation(path, extension_root))
+        skill_id = skill.name
     return EnabledSkillConfig(
         skill_id=skill_id,
         enabled=raw.get("enabled", True) is not False,
@@ -1246,11 +1617,11 @@ def _skill_from_payload(payload: dict[str, Any]) -> EnabledSkillConfig:
     )
 
 
-def _skill_id_from_path(path: str, *, fallback: str) -> str:
-    try:
-        return parse_skill_directory(path).name
-    except Exception:
-        return _config_identifier("", fallback=Path(path).expanduser().name or fallback)
+def _skill_path_for_validation(path: str, extension_root: Path | None) -> str:
+    skill_path = Path(path).expanduser()
+    if not skill_path.is_absolute() and extension_root is not None:
+        skill_path = extension_root / skill_path
+    return str(skill_path)
 
 
 def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
@@ -1332,8 +1703,12 @@ def _public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
     source = dict(payload.get("source") or {})
     enabled = payload.get("enabled", True) is not False
     env = payload.get("env") if isinstance(payload.get("env"), dict) else {}
+    name = str(source.get("package") or source.get("name") or _humanize_identifier(server_id) or "MCP server")
+    description = str(source.get("description") or source.get("summary") or "").strip()
     safe_payload = {
         "server_id": server_id,
+        "display_name": name,
+        "description": description,
         "transport": payload.get("transport"),
         "command": payload.get("command"),
         "args": list(payload.get("args") or []),
@@ -1348,12 +1723,12 @@ def _public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         "kind": "mcp",
-        "name": str(source.get("package") or source.get("name") or _humanize_identifier(server_id) or "MCP server"),
+        "name": name,
         "scope": str(source.get("type") or "local"),
         "status": "enabled" if enabled else "disabled",
         "enabled": enabled,
         "transport": payload.get("transport"),
-        "summary": _mcp_server_summary(payload),
+        "summary": description or _mcp_server_summary(payload),
         "payload": safe_payload,
     }
 
@@ -1361,19 +1736,25 @@ def _public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
 def _public_skill(payload: dict[str, Any]) -> dict[str, Any]:
     skill_id = str(payload.get("skill_id") or "").strip()
     enabled = payload.get("enabled", True) is not False
+    metadata = _skill_metadata_for_public_view(payload)
+    name = metadata.get("name") or skill_id
+    description = str(metadata.get("description") or "").strip()
     return {
         "kind": "skill",
-        "name": _humanize_identifier(skill_id) or "Skill",
+        "name": _humanize_identifier(str(name)) or "Skill",
         "scope": str(payload.get("source") or "local"),
         "status": "enabled" if enabled else "disabled",
         "enabled": enabled,
-        "summary": _skill_summary(payload),
+        "summary": description or _skill_summary(payload),
         "payload": {
             "skill_id": skill_id,
+            "description": description,
             "enabled": enabled,
             "source": payload.get("source"),
             "path": payload.get("path"),
             "required": bool(payload.get("required")),
+            "resource_count": metadata.get("resource_count"),
+            "script_count": metadata.get("script_count"),
         },
     }
 
@@ -1396,6 +1777,22 @@ def _skill_summary(payload: dict[str, Any]) -> str:
     if path:
         return f"{source} skill at {path}"
     return f"{source} skill"
+
+
+def _skill_metadata_for_public_view(payload: dict[str, Any]) -> dict[str, Any]:
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        return {}
+    try:
+        skill = parse_skill_directory(path)
+    except Exception:
+        return {}
+    return {
+        "name": skill.metadata.name,
+        "description": skill.metadata.description,
+        "resource_count": len(skill.resources),
+        "script_count": len(skill.scripts),
+    }
 
 
 def _runtime_contract_path(runtime_root: Path, configured: str) -> Path:

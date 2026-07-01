@@ -6,8 +6,57 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
+export interface AgentPackageToolView {
+  kind?: string
+  id?: string
+  name: string
+  description?: string
+  risk_level?: string
+  concurrent?: boolean
+}
+
+export interface AgentPackageExtensionView {
+  kind?: 'mcp' | 'skill' | string
+  name: string
+  scope?: string
+  status?: string
+  enabled?: boolean
+  summary?: string
+  transport?: string | null
+  payload?: Record<string, any>
+}
+
+export interface AgentPackageKnowledgeSourceView {
+  source_id?: string
+  name: string
+  kind?: string | null
+  status?: string | null
+  mode?: string | null
+  uri?: string | null
+  updated_at?: string | null
+  document_count?: number | null
+  sample_titles?: string[]
+}
+
+export interface AgentPackageInstanceView {
+  package_id: string
+  agent_id?: string | null
+  agent_name?: string | null
+  backend?: string | null
+  status: string
+  ready: boolean
+  active_request_count?: number
+  runtime_root?: string | null
+  idle_timeout_seconds?: number | null
+  error?: string | null
+}
+
 export interface AgentPackageView {
   package_id: string
+  package_path?: string
+  manifest_path?: string
+  factory_run_id?: string | null
+  agent_id?: string | null
   agent_name: string | null
   name: string | null
   agent_description: string | null
@@ -16,6 +65,15 @@ export interface AgentPackageView {
   session_count: number | null
   created_at: string | null
   updated_at: string | null
+  sandbox?: Record<string, any>
+  extensions?: Record<string, any>
+  tools?: AgentPackageToolView[]
+  mcp_servers?: AgentPackageExtensionView[]
+  skills?: AgentPackageExtensionView[]
+  knowledge_sources?: AgentPackageKnowledgeSourceView[]
+  extensions_error?: string | null
+  knowledge_error?: string | null
+  error?: string | null
 }
 
 export interface AgentSessionView {
@@ -30,6 +88,7 @@ export interface AgentSessionView {
 
 export const useAgentStore = defineStore('agent', () => {
   const agentPackages = ref<AgentPackageView[]>([])
+  const packageInstances = ref<Record<string, AgentPackageInstanceView>>({})
   const selectedPackageId = ref<string | null>(null)
   const agentSessions = ref<AgentSessionView[]>([])
   const selectedSessionId = ref<string | null>(null)
@@ -50,8 +109,49 @@ export const useAgentStore = defineStore('agent', () => {
     return agentPackages.value.find((pkg) => pkg.package_id === activeChatPackageId.value) || null
   })
 
+  const selectedPackageInstance = computed(() => {
+    if (!selectedPackageId.value) return null
+    return packageInstances.value[selectedPackageId.value] || null
+  })
+
+  function packageInstance(packageId: string | null | undefined): AgentPackageInstanceView | null {
+    if (!packageId) return null
+    return packageInstances.value[packageId] || null
+  }
+
   function setPackages(packages: AgentPackageView[]): void {
     agentPackages.value = packages
+    if (
+      selectedPackageId.value &&
+      !agentPackages.value.some((pkg) => pkg.package_id === selectedPackageId.value)
+    ) {
+      selectedPackageId.value = null
+      selectedSessionId.value = null
+      agentSessions.value = []
+    }
+    if (
+      activeChatPackageId.value &&
+      !agentPackages.value.some((pkg) => pkg.package_id === activeChatPackageId.value)
+    ) {
+      activeChatPackageId.value = null
+      selectedSessionId.value = null
+    }
+  }
+
+  function setInstances(instances: AgentPackageInstanceView[]): void {
+    packageInstances.value = Object.fromEntries(
+      instances
+        .filter((item) => item.package_id)
+        .map((item) => [item.package_id, item])
+    )
+  }
+
+  function upsertInstance(instance: AgentPackageInstanceView): void {
+    if (!instance.package_id) return
+    packageInstances.value = {
+      ...packageInstances.value,
+      [instance.package_id]: instance,
+    }
   }
 
   function selectPackage(packageId: string): void {
@@ -111,6 +211,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   return {
     agentPackages,
+    packageInstances,
     selectedPackageId,
     agentSessions,
     selectedSessionId,
@@ -118,7 +219,11 @@ export const useAgentStore = defineStore('agent', () => {
     selectedPackage,
     selectedSession,
     activeChatPackage,
+    selectedPackageInstance,
+    packageInstance,
     setPackages,
+    setInstances,
+    upsertInstance,
     selectPackage,
     setSessions,
     selectSession,

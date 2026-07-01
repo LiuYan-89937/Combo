@@ -148,7 +148,11 @@ class ToolsContractBuilder:
             runtime_resources.update(package_result.runtime_resources)
             diagnostics.extend(_provider_diagnostics(package_result.diagnostics))
         if config.instance_extensions_enabled:
-            manager = AgentInstanceExtensionManager(extension_root=instance_extension_root)
+            manager = AgentInstanceExtensionManager(
+                extension_root=instance_extension_root,
+                inherit_builtin_extensions=_inherits_builtin_agent_extensions(context.package),
+                inherited_extension_roots=_package_extension_roots(context),
+            )
             extension_result, extension_report = manager.discover(context=provider_context)
             specs.extend(extension_result.tool_specs)
             system_tool_ids.update(extension_result.system_tool_ids)
@@ -637,6 +641,15 @@ def _tool_output_root(*, context: RuntimeBuildContext, instance_extension_root: 
     if instance_extension_root.name == "extensions":
         return instance_extension_root.parent / "tool_outputs"
     return instance_extension_root / "tool_outputs"
+
+
+def _inherits_builtin_agent_extensions(package: Any) -> bool:
+    runtime = getattr(getattr(package, "manifest", None), "runtime", {}) or {}
+    return bool(runtime.get("system_package")) if isinstance(runtime, dict) else False
+
+
+def _package_extension_roots(context: RuntimeBuildContext) -> list[Path]:
+    return [context.package_root / "extensions"]
 
 
 def _resolved_memory_config(config: Any, context: RuntimeBuildContext) -> Any:

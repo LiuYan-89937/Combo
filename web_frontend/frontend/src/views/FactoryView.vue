@@ -21,22 +21,6 @@
         </n-collapse>
       </div>
 
-      <div class="chat-target-bar" :class="{ 'agent-target': isAgentChatActive }">
-        <div class="target-copy">
-          <span class="target-kind">{{ isAgentChatActive ? '子 Agent' : '闲聊' }}</span>
-          <span class="target-title">{{ chatTargetTitle }}</span>
-          <span v-if="chatTargetMeta" class="target-meta">{{ chatTargetMeta }}</span>
-        </div>
-        <n-button
-          v-if="isAgentChatActive"
-          size="small"
-          :disabled="runtimeStore.hasActiveRun"
-          @click="leaveAgentChat"
-        >
-          返回闲聊
-        </n-button>
-      </div>
-
       <!-- 消息列表 -->
       <div class="messages-section">
         <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
@@ -70,6 +54,18 @@
               :key="message.id"
               :message="message"
               streaming
+            />
+
+            <MessageItem
+              v-for="message in thinkingMessages"
+              :key="message.id"
+              :message="message"
+              thinking
+            />
+
+            <SchedulerRunNoticeStrip
+              :notices="visibleSchedulerNotices"
+              @open="openSchedulerNotice"
             />
 
             <div
@@ -108,7 +104,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
-import { NScrollbar, NEmpty, NIcon, NText, NButton, NCollapse, NCollapseItem, NTag } from 'naive-ui'
+import { useRoute, useRouter } from 'vue-router'
+import { NScrollbar, NEmpty, NIcon, NText, NCollapse, NCollapseItem, NTag } from 'naive-ui'
 import { ChatbubbleEllipses } from '@vicons/ionicons5'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
@@ -117,30 +114,35 @@ import PlanPanel from '@/components/plan/PlanPanel.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import type { ToolActivity, TranscriptItem } from '@/types/protocol'
+import SchedulerRunNoticeStrip from '@/components/scheduler/SchedulerRunNoticeStrip.vue'
+import type { FactoryMode, SchedulerRunNoticeView, ToolActivity, TranscriptItem } from '@/types/protocol'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const commands = useCommand()
+const route = useRoute()
+const router = useRouter()
 const scrollbarRef = ref()
 const inputRef = ref()
 
 const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
+const isManufacturingRoute = computed(() => route.name === 'Manufacturing')
+const currentFactoryMessageMode = computed<FactoryMode>(() => {
+  if (isManufacturingRoute.value) return 'create_agent'
+  if (runtimeStore.currentMode === 'evolve_agent') return 'evolve_agent'
+  return 'chat'
+})
 const activeChatPackageTitle = computed(() => {
   const pkg = agentStore.activeChatPackage
   return pkg?.agent_name || pkg?.name || '未命名 Agent'
 })
-const chatTargetTitle = computed(() => (
-  isAgentChatActive.value ? activeChatPackageTitle.value : '闲聊'
-))
-const chatTargetMeta = computed(() => {
-  if (!isAgentChatActive.value) return '主会话'
-  const session = agentStore.selectedSession
-  return session?.display_title || session?.first_user_input || '新子会话'
-})
 const inputPlaceholder = computed(() => (
   isAgentChatActive.value
     ? `向 ${activeChatPackageTitle.value} 发送消息...`
+    : currentFactoryMessageMode.value === 'create_agent'
+      ? '描述要制造的 Agent...'
+      : currentFactoryMessageMode.value === 'evolve_agent'
+        ? '描述这次要进化的方向...'
     : '输入消息...'
 ))
 const planStatusType = computed(() => {
@@ -164,6 +166,7 @@ const transcriptStreamIds = computed(() => {
 const untrackedActiveStreamMessages = computed<TranscriptItem[]>(() => {
   return activeStreams.value
     .filter((stream) => !transcriptStreamIds.value.has(stream.streamId))
+    .filter((stream) => stream.content.trim().length > 0)
     .map((stream) => ({
       id: stream.streamId,
       role: 'assistant',
@@ -171,6 +174,25 @@ const untrackedActiveStreamMessages = computed<TranscriptItem[]>(() => {
       timestamp: new Date().toISOString(),
       streamId: stream.streamId,
     }))
+})
+const thinkingMessages = computed<TranscriptItem[]>(() => {
+  if (!runtimeStore.hasActiveRun || runtimeStore.isAwaitingUserInputInterrupt) return []
+  const activeTurn = runtimeStore.activeTurn
+  if (!activeTurn?.userMessage) return []
+  if (activeTurn.assistantMessages.some((message) => message.content.trim().length > 0)) return []
+  if (activeStreams.value.some((stream) => stream.content.trim().length > 0)) return []
+  return [
+    {
+      id: `thinking-${activeTurn.id}`,
+      role: 'assistant',
+      content: '',
+      timestamp: activeTurn.startedAt || new Date().toISOString(),
+      metadata: {
+        thinking: true,
+        request_id: activeTurn.requestId,
+      },
+    },
+  ]
 })
 const hasApprovalRequests = computed(() => runtimeStore.currentApprovalRequests.length > 0)
 const runningToolActivities = computed(() => {
@@ -184,6 +206,7 @@ const toolActivityHint = computed(() => {
     ? `${runningToolActivities.value.length} 个工具调用中`
     : '工具调用中'
 })
+const visibleSchedulerNotices = computed(() => runtimeStore.schedulerRunNotices)
 
 function isMessageStreaming(streamId?: string): boolean {
   if (!streamId) return false
@@ -205,15 +228,21 @@ function handleSend(message: string, attachments: any[]) {
   const packageId = agentStore.activeChatPackageId
   if (packageId) {
     const agentSessionId = agentStore.selectedSessionId || undefined
-    const command = commands.runAgentPackage(packageId, message, agentSessionId)
+    const command = commands.sendAgentPackageMessage(packageId, message, agentSessionId)
     runtimeStore.addUserMessage(message, command.request_id, {
       mode: 'agent_package',
       package_id: packageId,
       agent_session_id: agentSessionId || null,
     })
   } else {
-    const command = commands.sendMessage(message, 'chat', attachments.length > 0 ? attachments : undefined)
-    runtimeStore.addUserMessage(message, command.request_id, { mode: 'chat' })
+    const mode = currentFactoryMessageMode.value
+    const command = runtimeStore.isAwaitingUserInputInterrupt
+      ? commands.answerInterrupt(message)
+      : commands.sendMessage(message, mode, attachments.length > 0 ? attachments : undefined)
+    runtimeStore.addUserMessage(message, command.request_id, {
+      mode,
+      interrupt_resume: runtimeStore.isAwaitingUserInputInterrupt,
+    })
   }
 
   // 滚动到底部
@@ -226,15 +255,29 @@ function handleCancel() {
   commands.cancelRequest('user_cancelled')
 }
 
-function leaveAgentChat() {
-  if (runtimeStore.hasActiveRun) return
-  agentStore.leaveAgentChat()
-  if (runtimeStore.currentMode !== 'chat') {
-    commands.setMode('chat')
+function openSchedulerNotice(notice: SchedulerRunNoticeView) {
+  runtimeStore.markSchedulerNoticeRead(notice.id)
+  if (notice.targetScope === 'agent_package' && notice.packageId) {
+    agentStore.enterAgentChat(notice.packageId, notice.sessionId)
+    void router.push({ name: 'Factory' })
+    void commands.selectAgentPackage(notice.packageId).then(() => {
+      if (notice.sessionId && notice.packageId) {
+        void commands.loadAgentPackageSession(notice.packageId, notice.sessionId)
+      }
+    })
+    return
   }
-  nextTick(() => {
-    inputRef.value?.focus()
-  })
+  if (notice.factorySessionId) {
+    agentStore.leaveAgentChat()
+    runtimeStore.enterFactoryConversation('chat')
+    void router.push({ name: 'Factory' })
+    commands.switchSession(notice.factorySessionId, 'chat')
+    return
+  }
+  void router.push({ name: 'Scheduler' })
+  if (notice.jobId) {
+    void commands.listSchedulerRuns(notice.jobId)
+  }
 }
 
 function scrollToBottom() {
@@ -253,7 +296,16 @@ watch(
 
 // 监听流式输出，自动滚动
 watch(
-  () => [activeStreams.value.map((s) => s.content).join(''), toolActivityHint.value].join(''),
+  () => [activeStreams.value.map((s) => s.content).join(''), toolActivityHint.value, thinkingMessages.value.length].join(''),
+  () => {
+    nextTick(() => {
+      scrollToBottom()
+    })
+  }
+)
+
+watch(
+  () => runtimeStore.schedulerRunNotices.length,
   () => {
     nextTick(() => {
       scrollToBottom()
@@ -262,16 +314,40 @@ watch(
 )
 
 onMounted(() => {
-  // 设置模式为 chat
-  if (!isAgentChatActive.value && runtimeStore.currentMode !== 'chat') {
-    commands.setMode('chat')
-  }
+  applyRouteMode()
 
   // 聚焦输入框
   nextTick(() => {
     inputRef.value?.focus()
   })
 })
+
+watch(
+  () => route.name,
+  () => {
+    applyRouteMode()
+  }
+)
+
+function applyRouteMode() {
+  if (isManufacturingRoute.value) {
+    agentStore.leaveAgentChat()
+    const shouldSwitchSession = runtimeStore.currentMode !== 'create_agent'
+    runtimeStore.enterFactoryConversation('create_agent')
+    if (runtimeStore.activeFactorySessionId && shouldSwitchSession) {
+      commands.startSession(true, 'create_agent')
+    }
+    return
+  }
+  if (isAgentChatActive.value) return
+  if (route.name === 'Factory' && runtimeStore.currentMode !== 'chat' && runtimeStore.currentMode !== 'evolve_agent') {
+    const shouldSwitchSession = runtimeStore.currentMode !== 'chat'
+    runtimeStore.enterFactoryConversation('chat')
+    if (runtimeStore.activeFactorySessionId && shouldSwitchSession) {
+      commands.startSession(true, 'chat')
+    }
+  }
+}
 </script>
 
 <style scoped>
@@ -335,65 +411,6 @@ onMounted(() => {
 .plan-section-body {
   max-height: 220px;
   overflow-y: auto;
-}
-
-.chat-target-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  border: 1px solid var(--n-border-color);
-  border-radius: 6px;
-  background: var(--n-color);
-}
-
-.chat-target-bar.agent-target {
-  border-color: var(--n-text-color-1);
-}
-
-.target-copy {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.target-kind {
-  flex-shrink: 0;
-  padding: 2px 7px;
-  border: 1px solid var(--n-border-color);
-  border-radius: 999px;
-  color: var(--n-text-color-2);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.agent-target .target-kind {
-  border-color: var(--n-text-color-1);
-  background: var(--n-text-color-1);
-  color: var(--n-color);
-}
-
-.target-title {
-  min-width: 0;
-  color: var(--n-text-color-1);
-  font-size: 14px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.target-meta {
-  min-width: 0;
-  color: var(--n-text-color-3);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .messages-section {

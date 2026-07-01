@@ -109,8 +109,9 @@ class SchedulerRuntime:
             scheduled_at=scheduled_at,
             trigger_reason=trigger_reason,
         )
+        scheduler_request_id = f"scheduler-{run.run_id}"
         self.store.create_run(run)
-        self.emit("scheduler_run_scheduled", job=job, run=run)
+        self.emit("scheduler_run_scheduled", job=job, run=run, payload={"request_id": scheduler_request_id})
         lease = self.store.acquire_lease(
             job_id=job.job_id,
             run_id=run.run_id,
@@ -133,13 +134,20 @@ class SchedulerRuntime:
                 error_summary="another run is already active",
             )
             report_path = self.report_writer.write(report)
-            self.emit("scheduler_run_skipped", job=job, run=skipped, report=report, report_path=report_path)
+            self.emit(
+                "scheduler_run_skipped",
+                job=job,
+                run=skipped,
+                report=report,
+                report_path=report_path,
+                payload={"request_id": scheduler_request_id},
+            )
             return report
         if lease is None:
             raise RuntimeError(f"scheduler job is already leased: {job.job_id}")
         running = run.model_copy(update={"status": "running", "started_at": utc_now().isoformat()})
         self.store.update_run(running)
-        self.emit("scheduler_run_started", job=job, run=running)
+        self.emit("scheduler_run_started", job=job, run=running, payload={"request_id": scheduler_request_id})
         try:
             report = self.executor.execute(job=job, run=running)
             report_path = self.report_writer.write(report)
@@ -160,6 +168,7 @@ class SchedulerRuntime:
                 run=completed,
                 report=report,
                 report_path=report_path,
+                payload={"request_id": scheduler_request_id},
             )
             if status == "failed":
                 self._auto_pause_after_failures(job=job, run=completed, report=report, report_path=report_path)
@@ -205,7 +214,7 @@ class SchedulerRuntime:
             duration_ms=duration_ms,
             error_summary=report.error_summary if report else run.error_summary if run else None,
             report_path=report_path,
-            payload=payload or {},
+            payload=_scheduler_event_payload(payload=payload, report=report),
         )
         self.event_sink(payload)
 
@@ -214,14 +223,14 @@ class SchedulerRuntime:
         if not str(payload.get("task_content") or "").strip():
             payload["task_content"] = _derived_task_content(payload)
         job_payload = {
-            "owner_type": self.owner_type,
-            "owner_id": self.owner_id,
             "timezone": self.config.timezone,
             "concurrency_policy": self.config.default_concurrency_policy,
             "timeout_seconds": self.config.default_timeout_seconds,
             "failure_policy": self.config.default_failure_policy.model_dump(mode="json"),
             "unattended_policy": self.config.unattended_policy,
             **payload,
+            "owner_type": self.owner_type,
+            "owner_id": self.owner_id,
         }
         return SchedulerJob.model_validate(job_payload)
 
@@ -338,3 +347,37 @@ def _derived_task_content(payload: dict[str, Any]) -> str:
     if target_type == "script_run":
         return str(payload.get("job_id") or "执行脚本定时任务")
     return str(payload.get("job_id") or "scheduler job")
+
+
+def _scheduler_event_payload(
+    *,
+    payload: dict[str, Any] | None,
+    report: SchedulerExecutionReport | None,
+) -> dict[str, Any]:
+    result = dict(payload or {})
+    if report is None:
+        return result
+    evidence = report.evidence if isinstance(report.evidence, dict) else {}
+    execution = evidence.get("execution") if isinstance(evidence.get("execution"), dict) else {}
+    if execution:
+        result["execution"] = {
+            key: value
+            for key, value in execution.items()
+            if key
+            in {
+                "request_id",
+                "target_scope",
+                "package_id",
+                "package_name",
+                "agent_session",
+                "conversation",
+                "message",
+                "error",
+                "error_summary",
+                "output_summary",
+                "stdout_preview",
+                "stderr_preview",
+                "exit_code",
+            }
+        }
+    return result

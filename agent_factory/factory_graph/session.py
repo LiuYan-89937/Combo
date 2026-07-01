@@ -8,7 +8,7 @@ from pathlib import Path
 import uuid
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.paths import resolve_project_path
 from agent_factory.runtime_kernel.persistence import (
@@ -26,6 +26,19 @@ DEFAULT_SESSION_ROOT = ".agentfactory/sessions"
 DEFAULT_CHECKPOINT_PATH = ".agentfactory/checkpoints/factory.sqlite"
 DEFAULT_CHECKPOINTER_BACKEND: FactoryCheckpointerBackend = "sqlite"
 
+
+class FactorySessionTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    created_at: str
+    updated_at: str
+    request_id: str | None = None
+    user_input: str | None = None
+    final_answer: str | None = None
+    status: str | None = None
+
+
 class FactorySessionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -39,6 +52,8 @@ class FactorySessionRecord(BaseModel):
     create_agent_session_id: str | None = None
     chat_turn_count: int = 0
     create_agent_turn_count: int = 0
+    chat_turns: list[FactorySessionTurn] = Field(default_factory=list)
+    create_agent_turns: list[FactorySessionTurn] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -86,12 +101,13 @@ class FactorySessionManager:
     def from_env(cls) -> "FactorySessionManager":
         return cls(FactorySessionConfig.from_env())
 
-    def create(self) -> FactorySessionRecord:
+    def create(self, *, mode: FactorySessionMode | None = None) -> FactorySessionRecord:
         now = _now()
         record = FactorySessionRecord(
             session_id=uuid.uuid4().hex,
             created_at=now,
             updated_at=now,
+            current_mode=mode,
         )
         self.save(record)
         return record
@@ -109,8 +125,10 @@ class FactorySessionManager:
             encoding="utf-8",
         )
 
-    def latest(self) -> FactorySessionRecord | None:
+    def latest(self, *, mode: FactorySessionMode | None = None) -> FactorySessionRecord | None:
         records = self.list_sessions()
+        if mode is not None:
+            records = [record for record in records if _record_matches_mode(record, mode)]
         if not records:
             return None
         return records[0]
@@ -160,6 +178,97 @@ class FactorySessionManager:
             record.chat_turn_count = _human_message_count(messages)
         else:
             record.create_agent_turn_count = _human_message_count(messages)
+        self.save(record)
+        return record
+
+    def start_turn(
+        self,
+        session_id: str,
+        mode: FactorySessionMode,
+        *,
+        request_id: str | None,
+        user_input: str,
+    ) -> FactorySessionRecord:
+        record = self.load(session_id)
+        _remember_record_title(record, user_input)
+        record.current_mode = mode
+        turns = _turns_for_mode(record, mode)
+        turn = _find_turn(turns, request_id=request_id)
+        now = _now()
+        if turn is None:
+            turns.append(
+                FactorySessionTurn(
+                    index=len(turns) + 1,
+                    created_at=now,
+                    updated_at=now,
+                    request_id=(request_id or "").strip() or None,
+                    user_input=user_input.strip() or None,
+                    status="running",
+                )
+            )
+        else:
+            if not turn.user_input:
+                turn.user_input = user_input.strip() or None
+            turn.status = turn.status or "running"
+            turn.updated_at = now
+        _sync_turn_count(record, mode)
+        self.save(record)
+        return record
+
+    def finish_turn(
+        self,
+        session_id: str,
+        mode: FactorySessionMode,
+        *,
+        request_id: str | None,
+        final_answer: str | None,
+        status: str,
+    ) -> FactorySessionRecord:
+        record = self.load(session_id)
+        turns = _turns_for_mode(record, mode)
+        turn = _find_turn(turns, request_id=request_id)
+        if turn is None and turns:
+            turn = turns[-1]
+        if turn is not None:
+            turn.final_answer = (final_answer or "").strip() or None
+            turn.status = status.strip() or None
+            turn.updated_at = _now()
+        _sync_turn_count(record, mode)
+        self.save(record)
+        return record
+
+    def replace_turns_from_agent_session(
+        self,
+        session_id: str,
+        mode: FactorySessionMode,
+        agent_turns: list[dict[str, Any]],
+    ) -> FactorySessionRecord:
+        record = self.load(session_id)
+        turns: list[FactorySessionTurn] = []
+        for index, raw_turn in enumerate(agent_turns, start=1):
+            if not isinstance(raw_turn, dict):
+                continue
+            user_input = str(raw_turn.get("user_input") or "").strip() or None
+            final_answer = str(raw_turn.get("final_answer") or "").strip() or None
+            if not user_input and not final_answer:
+                continue
+            created_at = str(raw_turn.get("created_at") or _now())
+            turns.append(
+                FactorySessionTurn(
+                    index=_safe_turn_index(raw_turn.get("index"), fallback=index),
+                    created_at=created_at,
+                    updated_at=created_at,
+                    user_input=user_input,
+                    final_answer=final_answer,
+                    status=str(raw_turn.get("status") or "").strip() or None,
+                )
+            )
+        _set_turns_for_mode(record, mode, turns)
+        first_input = _first_turn_input(turns)
+        if first_input:
+            _remember_record_title(record, first_input)
+        record.current_mode = mode
+        _sync_turn_count(record, mode)
         self.save(record)
         return record
 
@@ -223,3 +332,78 @@ def _display_title(value: str | None, *, limit: int = 42) -> str | None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _record_matches_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> bool:
+    if mode == "chat":
+        return (
+            record.current_mode == mode
+            or record.chat_turn_count > 0
+            or bool(record.chat_turns)
+            or bool(record.chat_agent_package_session_id)
+        )
+    if mode == "create_agent":
+        return (
+            record.current_mode == mode
+            or record.create_agent_turn_count > 0
+            or bool(record.create_agent_turns)
+            or bool(record.create_agent_session_id)
+        )
+    return record.current_mode == mode
+
+
+def _turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> list[FactorySessionTurn]:
+    if mode == "chat":
+        return record.chat_turns
+    if mode == "create_agent":
+        return record.create_agent_turns
+    raise ValueError(f"{mode} mode does not have Factory session turns")
+
+
+def _set_turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode, turns: list[FactorySessionTurn]) -> None:
+    if mode == "chat":
+        record.chat_turns = turns
+        return
+    if mode == "create_agent":
+        record.create_agent_turns = turns
+        return
+    raise ValueError(f"{mode} mode does not have Factory session turns")
+
+
+def _find_turn(turns: list[FactorySessionTurn], *, request_id: str | None) -> FactorySessionTurn | None:
+    needle = (request_id or "").strip()
+    if not needle:
+        return None
+    for turn in reversed(turns):
+        if turn.request_id == needle:
+            return turn
+    return None
+
+
+def _sync_turn_count(record: FactorySessionRecord, mode: FactorySessionMode) -> None:
+    if mode == "chat":
+        record.chat_turn_count = len(record.chat_turns)
+    elif mode == "create_agent":
+        record.create_agent_turn_count = len(record.create_agent_turns)
+
+
+def _safe_turn_index(value: Any, *, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _remember_record_title(record: FactorySessionRecord, user_input: str | None) -> None:
+    if not record.first_user_input:
+        record.first_user_input = (user_input or "").strip() or None
+    if not record.display_title:
+        record.display_title = _display_title(record.first_user_input)
+
+
+def _first_turn_input(turns: list[FactorySessionTurn]) -> str | None:
+    for turn in turns:
+        value = (turn.user_input or "").strip()
+        if value:
+            return value
+    return None

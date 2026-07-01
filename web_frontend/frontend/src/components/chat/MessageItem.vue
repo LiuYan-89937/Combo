@@ -16,7 +16,18 @@
 
       <div class="message-body">
         <div
-          v-if="message.role === 'assistant'"
+          v-if="thinking"
+          class="thinking-content"
+          role="status"
+          aria-live="polite"
+          aria-label="Assistant 正在思考"
+        >
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+        </div>
+        <div
+          v-else-if="message.role === 'assistant'"
           class="markdown-content"
           v-html="renderedContent"
         ></div>
@@ -24,7 +35,7 @@
           {{ message.content }}
         </div>
 
-        <div v-if="streaming" class="streaming-indicator">
+        <div v-if="streaming && !thinking" class="streaming-indicator">
           <n-spin :size="14" />
         </div>
       </div>
@@ -43,9 +54,11 @@ const props = withDefaults(
   defineProps<{
     message: TranscriptItem
     streaming?: boolean
+    thinking?: boolean
   }>(),
   {
     streaming: false,
+    thinking: false,
   }
 )
 
@@ -160,6 +173,49 @@ function formatTime(timestamp: string): string {
   display: inline-flex;
   margin-left: 8px;
   vertical-align: middle;
+}
+
+.thinking-content {
+  width: fit-content;
+  min-width: 54px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 12px;
+  border: 1px solid #111111;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #111111;
+  animation: thinking-pulse 1.05s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@keyframes thinking-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.32;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
 }
 </style>
 

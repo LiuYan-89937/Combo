@@ -25,8 +25,45 @@
         </div>
       </n-tab-pane>
 
+      <n-tab-pane name="sessions" tab="会话">
+        <AgentSessionPanel
+          v-if="agentContextActive && workspacePackageId"
+          :package-id="workspacePackageId"
+        />
+        <SessionSidebar v-else title="主会话" />
+      </n-tab-pane>
+
       <n-tab-pane name="status" tab="状态">
         <div class="sidebar-content">
+          <section class="status-section">
+            <div class="section-title">上下文</div>
+            <div v-if="contextWindow" class="context-meter">
+              <div class="context-meter-row">
+                <span class="context-meter-label">窗口用量</span>
+                <span class="context-meter-value">{{ contextWindowPercentText }}</span>
+              </div>
+              <div class="context-meter-track" aria-hidden="true">
+                <div class="context-meter-fill" :style="{ width: contextWindowBarWidth }"></div>
+                <div
+                  v-if="contextThresholdMarker"
+                  class="context-meter-marker"
+                  :style="{ left: contextThresholdMarker }"
+                ></div>
+              </div>
+              <div class="context-meter-meta">
+                {{ formatTokenCount(contextWindow.tokenCount) }} / {{ formatTokenCount(contextWindow.contextWindowTokens) }} tokens
+              </div>
+              <div class="context-meter-meta muted">
+                压缩阈值 {{ formatTokenCount(contextWindow.compressionThresholdTokens) }}
+                <span v-if="contextWindow.tokenCountMethod"> · {{ contextTokenMethodText }}</span>
+              </div>
+              <div class="context-meter-status">
+                {{ contextStatusText }}
+              </div>
+            </div>
+            <n-empty v-else description="暂无上下文用量" size="small" />
+          </section>
+
           <section class="status-section">
             <div class="section-title">活动</div>
             <n-empty v-if="runtimeStore.timeline.length === 0" description="暂无活动" size="small" />
@@ -73,26 +110,16 @@
           </section>
         </div>
       </n-tab-pane>
-
-      <n-tab-pane name="sessions" tab="会话">
-        <AgentSessionPanel
-          v-if="agentContextActive && workspacePackageId"
-          :package-id="workspacePackageId"
-        />
-        <SessionSidebar v-else title="主会话" />
-      </n-tab-pane>
     </n-tabs>
   </aside>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { NTabs, NTabPane, NEmpty, NTag, NSpin, NText } from 'naive-ui'
+import { NEmpty, NSpin, NTabPane, NTabs, NTag, NText } from 'naive-ui'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
 import PlanPanel from '@/components/plan/PlanPanel.vue'
 import WorkspaceExplorer from '@/components/workspace/WorkspaceExplorer.vue'
@@ -100,33 +127,57 @@ import FilePreview from '@/components/workspace/FilePreview.vue'
 import SessionSidebar from '@/components/chat/SessionSidebar.vue'
 import AgentSessionPanel from '@/components/agent/AgentSessionPanel.vue'
 import type { WorkspaceEntry } from '@/types/protocol'
+import { useResourceContext } from '@/composables/useResourceContext'
 
-const route = useRoute()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
 const workspaceStore = useWorkspaceStore()
-const agentStore = useAgentStore()
 const commands = useCommand()
+const resourceContext = useResourceContext()
 const previewLoading = ref(false)
 
-const recentTimeline = computed(() => {
-  return runtimeStore.timeline.slice(-20).reverse()
+const allowedTabs = new Set(['workspace', 'sessions', 'status'])
+const recentTimeline = computed(() => runtimeStore.timeline.slice(-20).reverse())
+const agentContextActive = computed(() => resourceContext.isAgentContext.value)
+const workspacePackageId = computed(() => resourceContext.packageIdForApi.value)
+const workspaceContextLabel = computed(() => resourceContext.label.value)
+const contextWindow = computed(() => runtimeStore.contextWindow)
+const contextWindowPercent = computed(() => ratioToPercent(contextWindow.value?.windowUsageRatio))
+const contextWindowPercentText = computed(() => `${formatPercent(contextWindowPercent.value)}`)
+const contextWindowBarWidth = computed(() => `${contextWindowPercent.value}%`)
+const contextThresholdMarker = computed(() => {
+  const windowTokens = contextWindow.value?.contextWindowTokens
+  const thresholdTokens = contextWindow.value?.compressionThresholdTokens
+  if (!windowTokens || !thresholdTokens) return ''
+  return `${Math.min(100, Math.max(0, (thresholdTokens / windowTokens) * 100))}%`
 })
-const contextPackageId = computed(() => {
-  if (agentStore.activeChatPackageId) return agentStore.activeChatPackageId
-  if (route.path === '/agents' && agentStore.selectedPackageId) return agentStore.selectedPackageId
-  return null
+const contextStatusText = computed(() => {
+  const activity = runtimeStore.contextActivity
+  if (!activity?.eventType) return '等待上下文事件'
+  const labels: Record<string, string> = {
+    context_prepare_started: '正在准备上下文',
+    context_prepare_completed: '上下文已准备',
+    context_prepare_failed: '上下文准备失败',
+    context_compression_started: '正在压缩上下文',
+    context_compression_completed: '上下文已压缩',
+    context_compression_failed: '上下文压缩失败',
+    context_compression_skipped: '未触发上下文压缩',
+    context_window_updated: '上下文窗口已更新',
+    context_retrieval_completed: '上下文检索已完成',
+    context_assembly_completed: '上下文组装已完成',
+    context_injection_completed: '上下文注入已完成',
+  }
+  return labels[activity.eventType] || activity.eventType
 })
-const contextPackage = computed(() => {
-  if (!contextPackageId.value) return null
-  return agentStore.agentPackages.find((pkg) => pkg.package_id === contextPackageId.value) || null
-})
-const agentContextActive = computed(() => Boolean(contextPackageId.value))
-const workspacePackageId = computed(() => contextPackageId.value || undefined)
-const workspaceContextLabel = computed(() => {
-  if (!contextPackageId.value) return '闲聊'
-  const pkg = contextPackage.value
-  return `子 Agent · ${pkg?.agent_name || pkg?.name || '未命名 Agent'}`
+const contextTokenMethodText = computed(() => {
+  const method = contextWindow.value?.tokenCountMethod
+  const labels: Record<string, string> = {
+    provider_usage: '模型返回用量',
+    previous_provider_usage: '上次模型用量',
+    local_counter: '本地计数',
+    unavailable: '无法计数',
+  }
+  return method ? labels[method] || method : ''
 })
 
 function handleWorkspaceFileSelect(entry: WorkspaceEntry) {
@@ -140,20 +191,6 @@ function closeWorkspacePreview() {
   previewLoading.value = false
   runtimeStore.workspaceFile = null
 }
-
-watch(
-  () => runtimeStore.workspaceFile,
-  (file) => {
-    if (file) previewLoading.value = false
-  }
-)
-
-watch(
-  () => workspacePackageId.value,
-  () => {
-    closeWorkspacePreview()
-  }
-)
 
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp)
@@ -175,6 +212,46 @@ function toolStatusType(status: string): 'default' | 'success' | 'warning' | 'er
   }
   return types[status] || 'default'
 }
+
+function ratioToPercent(ratio: number | null | undefined): number {
+  if (typeof ratio !== 'number' || !Number.isFinite(ratio)) return 0
+  return Math.min(100, Math.max(0, ratio * 100))
+}
+
+function formatPercent(value: number): string {
+  if (value >= 10) return `${value.toFixed(1)}%`
+  if (value > 0) return `${value.toFixed(2)}%`
+  return '0%'
+}
+
+function formatTokenCount(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return new Intl.NumberFormat('zh-CN').format(Math.round(value))
+}
+
+watch(
+  () => runtimeStore.workspaceFile,
+  (file) => {
+    if (file) previewLoading.value = false
+  }
+)
+
+watch(
+  () => workspacePackageId.value,
+  () => {
+    closeWorkspacePreview()
+  }
+)
+
+watch(
+  () => uiStore.activeRightSidebarTab,
+  (tab) => {
+    if (!allowedTabs.has(String(tab))) {
+      uiStore.setRightSidebarTab('workspace')
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
@@ -257,6 +334,63 @@ function toolStatusType(status: string): 'default' | 'success' | 'warning' | 'er
   font-size: 13px;
   font-weight: 600;
   color: var(--n-text-color-1);
+}
+
+.context-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.context-meter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.context-meter-label {
+  color: var(--n-text-color-2);
+}
+
+.context-meter-value {
+  color: var(--n-text-color-1);
+  font-weight: 600;
+}
+
+.context-meter-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--n-border-color);
+  border-radius: 999px;
+  background: var(--n-color-embedded);
+}
+
+.context-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--n-text-color-1);
+  transition: width 0.2s ease;
+}
+
+.context-meter-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--n-text-color-3);
+}
+
+.context-meter-meta,
+.context-meter-status {
+  font-size: 12px;
+  color: var(--n-text-color-2);
+}
+
+.context-meter-meta.muted {
+  color: var(--n-text-color-3);
 }
 
 .timeline-list,

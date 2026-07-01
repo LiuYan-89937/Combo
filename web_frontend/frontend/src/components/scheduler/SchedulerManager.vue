@@ -1,7 +1,10 @@
 <template>
   <div class="scheduler-manager">
     <div class="manager-header">
-      <n-text strong>定时任务</n-text>
+      <div class="manager-title">
+        <n-text strong>定时任务</n-text>
+        <n-text depth="3" class="context-label">{{ schedulerContextLabel }}</n-text>
+      </div>
       <n-button type="primary" @click="showCreateModal = true">
         <template #icon>
           <n-icon><Add /></n-icon>
@@ -44,7 +47,7 @@
 
           <div v-if="job.targetType" class="job-target">
             <n-icon size="16"><LocateOutline /></n-icon>
-            <n-text depth="2" style="font-size: 13px">{{ job.targetType }}</n-text>
+            <n-text depth="2" style="font-size: 13px">{{ job.targetLabel || job.targetType }}</n-text>
           </div>
 
           <div class="job-actions">
@@ -55,7 +58,7 @@
               运行历史
             </n-button>
             <n-dropdown
-              :options="getJobActions(job)"
+              :options="getJobActions()"
               @select="(key) => handleAction(key, job)"
             >
               <n-button size="small" quaternary circle>
@@ -87,41 +90,49 @@
     <SchedulerHistoryDrawer
       v-model:show="showHistoryDrawer"
       :job-id="selectedJobId"
+      :package-id="resourceContext.packageId.value"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { NText, NButton, NIcon, NScrollbar, NCard, NTag, NSpace, NSwitch, NDivider, NDropdown, NEmpty } from 'naive-ui'
+import { computed, ref, onMounted, watch } from 'vue'
+import { NText, NButton, NIcon, NScrollbar, NCard, NTag, NSpace, NSwitch, NDivider, NDropdown, NEmpty, useDialog } from 'naive-ui'
 import { Add, Time, LocateOutline, EllipsisHorizontal } from '@vicons/ionicons5'
 import { useSchedulerStore } from '@/stores/scheduler'
 import { useCommand } from '@/composables/useCommand'
+import { useResourceContext } from '@/composables/useResourceContext'
 import SchedulerJobFormModal from './SchedulerJobFormModal.vue'
 import SchedulerHistoryDrawer from './SchedulerHistoryDrawer.vue'
 import type { SchedulerJobView } from '@/types/protocol'
 
 const schedulerStore = useSchedulerStore()
 const commands = useCommand()
+const dialog = useDialog()
+const resourceContext = useResourceContext()
 const showCreateModal = ref(false)
 const showHistoryDrawer = ref(false)
 const selectedJobId = ref<string | null>(null)
+
+const schedulerContextLabel = computed(() => {
+  return `当前上下文：${resourceContext.label.value}`
+})
 
 function handleToggleEnabled(job: SchedulerJobView, enabled: boolean) {
   const jobId = job.payload?.job_id
   if (!jobId) return
 
   if (enabled) {
-    commands.resumeJob(jobId)
+    commands.resumeJob(jobId, resourceContext.packageIdForApi.value)
   } else {
-    commands.pauseJob(jobId)
+    commands.pauseJob(jobId, resourceContext.packageIdForApi.value)
   }
 }
 
 function handleRunNow(job: SchedulerJobView) {
   const jobId = job.payload?.job_id
   if (jobId) {
-    commands.runJobNow(jobId)
+    commands.runJobNow(jobId, resourceContext.packageIdForApi.value)
   }
 }
 
@@ -131,7 +142,7 @@ function handleViewHistory(job: SchedulerJobView) {
 }
 
 function handleCreate(jobData: any) {
-  commands.createSchedulerJob(jobData)
+  commands.createSchedulerJob(jobData, resourceContext.packageIdForApi.value)
   showCreateModal.value = false
 }
 
@@ -141,15 +152,22 @@ function handleAction(key: string, job: SchedulerJobView) {
 
   switch (key) {
     case 'delete':
-      // TODO: 确认后删除
-      commands.deleteJob(jobId)
+      dialog.warning({
+        title: '删除定时任务',
+        content: `确定删除「${job.title}」吗？删除后不会再触发。`,
+        positiveText: '删除',
+        negativeText: '取消',
+        positiveButtonProps: { type: 'error' },
+        onPositiveClick: () => {
+          commands.deleteJob(jobId, resourceContext.packageIdForApi.value)
+        },
+      })
       break
   }
 }
 
-function getJobActions(job: SchedulerJobView) {
+function getJobActions() {
   return [
-    { label: '编辑', key: 'edit' },
     { label: '删除', key: 'delete' },
   ]
 }
@@ -164,8 +182,25 @@ function getStatusType(status: string): 'default' | 'success' | 'warning' | 'err
 }
 
 onMounted(() => {
-  commands.refreshScheduler()
+  commands.listAgentPackages()
+  refreshCurrentScheduler()
 })
+
+watch(
+  () => resourceContext.packageId.value,
+  () => {
+    refreshCurrentScheduler()
+  }
+)
+
+function refreshCurrentScheduler() {
+  const packageId = resourceContext.packageIdForApi.value
+  schedulerStore.reset()
+  selectedJobId.value = null
+  showHistoryDrawer.value = false
+  commands.refreshSchedulerOptions(packageId)
+  commands.refreshScheduler(packageId)
+}
 </script>
 
 <style scoped>
@@ -181,6 +216,16 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 20px;
+}
+
+.manager-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.context-label {
+  font-size: 12px;
 }
 
 .job-list {

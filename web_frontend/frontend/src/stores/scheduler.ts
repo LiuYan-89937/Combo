@@ -5,12 +5,13 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { SchedulerJobView } from '@/types/protocol'
+import type { SchedulerJobView, SchedulerToolOptionView } from '@/types/protocol'
 
 export const useSchedulerStore = defineStore('scheduler', () => {
   const jobs = ref<SchedulerJobView[]>([])
   const selectedJobId = ref<string | null>(null)
   const runs = ref<any[]>([])
+  const toolOptions = ref<SchedulerToolOptionView[]>([])
 
   function setJobs(newJobs: SchedulerJobView[]): void {
     jobs.value = newJobs
@@ -25,41 +26,26 @@ export const useSchedulerStore = defineStore('scheduler', () => {
     runs.value = newRuns
   }
 
-  function addJob(job: SchedulerJobView): void {
-    const existingIndex = jobs.value.findIndex((j) => j.payload?.job_id === job.payload?.job_id)
-    if (existingIndex !== -1) {
-      jobs.value[existingIndex] = job
-    } else {
-      jobs.value.unshift(job)
-    }
+  function setToolOptions(newToolOptions: SchedulerToolOptionView[]): void {
+    toolOptions.value = newToolOptions
   }
 
-  function removeJob(jobId: string): void {
-    const index = jobs.value.findIndex((j) => j.payload?.job_id === jobId)
-    if (index !== -1) {
-      jobs.value.splice(index, 1)
-    }
-    if (selectedJobId.value === jobId) {
-      selectedJobId.value = null
-    }
-  }
-
-  function updateJob(jobId: string, updates: Partial<SchedulerJobView>): void {
-    const index = jobs.value.findIndex((j) => j.payload?.job_id === jobId)
-    if (index !== -1) {
-      jobs.value[index] = { ...jobs.value[index], ...updates }
-    }
+  function reset(): void {
+    jobs.value = []
+    selectedJobId.value = null
+    runs.value = []
+    toolOptions.value = []
   }
 
   return {
     jobs,
     selectedJobId,
     runs,
+    toolOptions,
     setJobs,
     selectJob,
     setRuns,
-    addJob,
-    removeJob,
-    updateJob,
+    setToolOptions,
+    reset,
   }
 })

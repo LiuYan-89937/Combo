@@ -61,23 +61,35 @@ import { NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Menu, Search, Settings, Bug, Moon, Sunny } from '@vicons/ionicons5'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useAgentStore } from '@/stores/agent'
 
 const route = useRoute()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
+const agentStore = useAgentStore()
 
 const currentRouteName = computed(() => {
+  const isConversationRoute = route.name === 'Factory' || route.name === 'Manufacturing'
+  if (isConversationRoute && runtimeStore.currentMode === 'evolve_agent') return 'Agent 进化'
+  if (isConversationRoute && runtimeStore.currentMode === 'create_agent') return 'Agent 制造'
+  if (isConversationRoute && runtimeStore.currentMode === 'agent_package') return '子 Agent 对话'
   return route.meta.title || route.name || '未知页面'
 })
 
 const modeLabel = computed(() => {
   const mode = runtimeStore.currentMode
   if (!mode) return ''
+  if (mode === 'evolve_agent' && agentStore.selectedPackage) {
+    return agentStore.selectedPackage.agent_name || agentStore.selectedPackage.name || '未命名 Agent'
+  }
+  if (mode === 'agent_package' && agentStore.activeChatPackage) {
+    return agentStore.activeChatPackage.agent_name || agentStore.activeChatPackage.name || '未命名 Agent'
+  }
   const labels = {
-    chat: '对话模式',
-    create_agent: '创建 Agent',
-    evolve_agent: '进化 Agent',
-    agent_package: 'Agent 运行',
+    chat: '闲聊',
+    create_agent: '制造对话',
+    evolve_agent: '进化对话',
+    agent_package: '运行对话',
   }
   return labels[mode as keyof typeof labels] || mode
 })

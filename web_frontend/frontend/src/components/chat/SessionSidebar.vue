@@ -32,11 +32,11 @@
         >
           <div class="session-item">
             <div class="session-title">
-              {{ session.display_title || session.first_user_input || '新会话' }}
+              {{ sessionTitle(session) }}
             </div>
             <div class="session-meta">
-              <n-tag v-if="session.current_mode" size="tiny" :type="modeTagType(session.current_mode)">
-                {{ modeLabel(session.current_mode) }}
+              <n-tag size="tiny" :type="modeTagType(activeSessionMode)">
+                {{ modeLabel(activeSessionMode) }}
               </n-tag>
               <n-text depth="3" style="font-size: 11px">
                 {{ formatTime(session.updated_at) }}
@@ -47,7 +47,7 @@
                 <n-icon size="12">
                   <ChatbubbleEllipses />
                 </n-icon>
-                {{ session.chat_turn_count }} 轮
+                {{ sessionTurnCount(session) }} 轮
               </n-text>
             </div>
           </div>
@@ -70,7 +70,6 @@ import { NButton, NIcon, NText, NInput, NScrollbar, NList, NListItem, NTag, NEmp
 import { Add, ChatbubbleEllipses, Search } from '@vicons/ionicons5'
 import { useSessionStore } from '@/stores/session'
 import { useRuntimeStore } from '@/stores/runtime'
-import { useUiStore } from '@/stores/ui'
 import { useCommand } from '@/composables/useCommand'
 import type { SessionView } from '@/stores/session'
 
@@ -85,45 +84,55 @@ withDefaults(
 
 const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
-const uiStore = useUiStore()
 const commands = useCommand()
 const searchQuery = ref('')
 
-const filteredSessions = computed(() => {
-  if (!searchQuery.value) return sessionStore.sessions
+const activeSessionMode = computed<'chat' | 'create_agent'>(() => {
+  return runtimeStore.currentMode === 'create_agent' ? 'create_agent' : 'chat'
+})
 
+const filteredSessions = computed(() => {
   const query = searchQuery.value.toLowerCase()
-  return sessionStore.sessions.filter(
-    (s) =>
-      s.display_title?.toLowerCase().includes(query) ||
-      s.first_user_input?.toLowerCase().includes(query)
-  )
+  return sessionStore.sessions.filter((session) => {
+    if (!sessionBelongsToActiveMode(session)) return false
+    if (!query) return true
+    return (
+      sessionTitle(session).toLowerCase().includes(query) ||
+      Boolean(session.first_user_input?.toLowerCase().includes(query))
+    )
+  })
 })
 
 function handleNewSession() {
-  if (runtimeStore.hasActiveRun) {
-    uiStore.addNotification({
-      type: 'warning',
-      title: '当前会话正在运行',
-      message: '等当前回复结束后再新建会话。',
-      duration: 3000,
-    })
-    return
-  }
-  commands.newSession()
+  commands.newSession(activeSessionMode.value)
 }
 
 function handleSelectSession(session: SessionView) {
-  if (runtimeStore.hasActiveRun) {
-    uiStore.addNotification({
-      type: 'warning',
-      title: '当前会话正在运行',
-      message: '等当前回复结束后再切换会话。',
-      duration: 3000,
-    })
-    return
+  commands.switchSession(session.session_id, activeSessionMode.value)
+}
+
+function sessionBelongsToActiveMode(session: SessionView): boolean {
+  if (session.session_id === sessionStore.currentSessionId && runtimeStore.currentMode === activeSessionMode.value) {
+    return true
   }
-  commands.switchSession(session.session_id)
+  if (session.current_mode === activeSessionMode.value) return true
+  if (sessionTurnCount(session) > 0) return true
+  if (activeSessionMode.value === 'chat') return Boolean(session.chat_agent_package_session_id)
+  return Boolean(session.create_agent_session_id)
+}
+
+function sessionTurnCount(session: SessionView): number {
+  const modeCounts = session.mode_turn_counts || {}
+  const count = modeCounts[activeSessionMode.value]
+  if (typeof count === 'number') return count
+  return activeSessionMode.value === 'create_agent'
+    ? session.create_agent_turn_count
+    : session.chat_turn_count
+}
+
+function sessionTitle(session: SessionView): string {
+  const modeTitle = session.mode_titles?.[activeSessionMode.value]
+  return modeTitle || session.display_title || session.first_user_input || '新会话'
 }
 
 function modeLabel(mode: string): string {

@@ -23,10 +23,16 @@ import {
   ExtensionPuzzle,
 } from '@vicons/ionicons5'
 import { useUiStore } from '@/stores/ui'
+import { useAgentStore } from '@/stores/agent'
+import { useRuntimeStore } from '@/stores/runtime'
+import { useCommand } from '@/composables/useCommand'
 
 const router = useRouter()
 const route = useRoute()
 const uiStore = useUiStore()
+const agentStore = useAgentStore()
+const runtimeStore = useRuntimeStore()
+const commands = useCommand()
 
 const activeKey = computed(() => route.path)
 
@@ -84,6 +90,15 @@ function renderIcon(icon: any) {
 
 function handleMenuSelect(key: string) {
   if (key.startsWith('/')) {
+    if (key === '/factory') {
+      agentStore.leaveAgentChat()
+      runtimeStore.enterFactoryConversation('chat')
+      commands.startSession(true, 'chat')
+    } else if (key === '/manufacturing') {
+      agentStore.leaveAgentChat()
+      runtimeStore.enterFactoryConversation('create_agent')
+      commands.startSession(true, 'create_agent')
+    }
     router.push(key)
   }
 }

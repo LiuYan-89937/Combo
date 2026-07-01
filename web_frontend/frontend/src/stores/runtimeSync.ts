@@ -14,6 +14,8 @@ import { useSchedulerStore } from './scheduler'
 import { useSessionStore } from './session'
 import { useWorkspaceStore } from './workspace'
 
+const SYSTEM_CHAT_PACKAGE_ID = 'factory_chat'
+
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
 
@@ -39,6 +41,9 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   ) {
     const agentStore = useAgentStore()
     agentStore.setPackages(runtimeStore.agentPackages as any)
+    if (event.event_type === 'agent_package_deleted' && event.payload?.package_id) {
+      agentStore.removePackage(String(event.payload.package_id))
+    }
     if (runtimeStore.selectedAgentPackage?.package_id) {
       agentStore.selectPackage(runtimeStore.selectedAgentPackage.package_id)
     }
@@ -51,7 +56,20 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     }
   }
 
-  if (event.event_type.startsWith('workspace_')) {
+  if (
+    event.event_type === 'agent_package_instance_updated' ||
+    event.event_type === 'agent_package_instances_listed'
+  ) {
+    const agentStore = useAgentStore()
+    if (event.event_type === 'agent_package_instances_listed' && Array.isArray(event.payload?.instances)) {
+      agentStore.setInstances(event.payload.instances as any)
+    }
+    if (event.event_type === 'agent_package_instance_updated' && event.payload?.package_id) {
+      agentStore.upsertInstance(event.payload as any)
+    }
+  }
+
+  if (event.event_type.startsWith('workspace_') && resourceEventMatchesCurrentContext(event)) {
     const workspaceStore = useWorkspaceStore()
     if (event.event_type === 'workspace_roots_listed') {
       workspaceStore.setRoots(runtimeStore.workspaceRoots)
@@ -62,17 +80,42 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     }
   }
 
-  if (event.event_type.startsWith('knowledge_')) {
+  if (event.event_type.startsWith('knowledge_') && resourceEventMatchesCurrentContext(event)) {
     const knowledgeStore = useKnowledgeStore()
-    knowledgeStore.setSources(runtimeStore.knowledgeSources)
-    knowledgeStore.setDocuments(runtimeStore.knowledgeDocuments)
-    knowledgeStore.setSearchResults(runtimeStore.knowledgeResults)
-    knowledgeStore.setCurrentDocument(runtimeStore.knowledgeDocument)
+    if (
+      event.event_type === 'knowledge_sources_listed' ||
+      event.event_type === 'knowledge_source_registered' ||
+      event.event_type === 'knowledge_source_removed' ||
+      event.event_type === 'knowledge_source_reindex_requested' ||
+      event.event_type === 'knowledge_source_ready'
+    ) {
+      knowledgeStore.setSources(runtimeStore.knowledgeSources)
+    }
+    if (event.event_type === 'knowledge_documents_listed') {
+      knowledgeStore.setDocuments(runtimeStore.knowledgeDocuments)
+    }
+    if (event.event_type === 'knowledge_search_completed') {
+      knowledgeStore.setSearchResults(runtimeStore.knowledgeResults)
+    }
+    if (event.event_type === 'knowledge_document_read') {
+      knowledgeStore.setCurrentDocument(runtimeStore.knowledgeDocument)
+    }
   }
 
-  if (event.event_type.startsWith('scheduler_')) {
+  if (event.event_type.startsWith('scheduler_') && resourceEventMatchesCurrentContext(event)) {
     const schedulerStore = useSchedulerStore()
-    schedulerStore.setJobs(runtimeStore.schedulerJobs)
+    if (
+      event.event_type === 'scheduler_jobs_listed' ||
+      event.event_type === 'scheduler_job_created' ||
+      event.event_type === 'scheduler_job_updated' ||
+      event.event_type === 'scheduler_job_deleted' ||
+      event.event_type === 'scheduler_job_described'
+    ) {
+      schedulerStore.setJobs(runtimeStore.schedulerJobs)
+    }
+    if (event.event_type === 'scheduler_options_listed') {
+      schedulerStore.setToolOptions(runtimeStore.schedulerToolOptions)
+    }
     const runs = event.payload?.payload?.runs || event.payload?.runs
     if (Array.isArray(runs)) {
       schedulerStore.setRuns(runs)
@@ -84,8 +127,43 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     event.event_type === 'extension_config_updated' ||
     event.event_type === 'extension_config_tested'
   ) {
+    if (!resourceEventMatchesCurrentContext(event)) return
     const extensionStore = useExtensionStore()
     extensionStore.setItems(runtimeStore.extensionItems)
     extensionStore.setTestResult(runtimeStore.extensionTestResult)
   }
+}
+
+function resourceEventMatchesCurrentContext(event: FactoryFrontendEvent): boolean {
+  return resourceEventPackageId(event) === currentResourcePackageId()
+}
+
+function currentResourcePackageId(): string | null {
+  const runtimeStore = useRuntimeStore()
+  const agentStore = useAgentStore()
+  if (agentStore.activeChatPackageId) {
+    return normalizeResourcePackageId(agentStore.activeChatPackageId)
+  }
+  if (runtimeStore.currentMode === 'evolve_agent' && agentStore.selectedPackageId) {
+    return normalizeResourcePackageId(agentStore.selectedPackageId)
+  }
+  return null
+}
+
+function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
+  const payload = event.payload || {}
+  const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
+  const execution = nested.execution && typeof nested.execution === 'object' ? nested.execution : {}
+  return normalizeResourcePackageId(
+    payload.package_id ||
+      nested.package_id ||
+      execution.package_id ||
+      null
+  )
+}
+
+function normalizeResourcePackageId(value: unknown): string | null {
+  const normalized = String(value || '').trim()
+  if (!normalized || normalized === SYSTEM_CHAT_PACKAGE_ID) return null
+  return normalized
 }

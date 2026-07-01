@@ -85,6 +85,8 @@ class RuntimeEventNormalizer:
     pending_tool_call_ids_by_name: dict[str, list[str]] = field(default_factory=dict)
     proposed_tool_call_ids: set[str] = field(default_factory=set)
     last_plan_fingerprint: str | None = None
+    default_payload: dict[str, Any] = field(default_factory=dict)
+    visible_model_message_emitted: bool = False
 
     def runtime_event(
         self,
@@ -104,6 +106,9 @@ class RuntimeEventNormalizer:
         payload: dict[str, Any] | None = None,
     ) -> FactoryFrontendEvent:
         self.sequence += 1
+        event_payload = {**self.default_payload, **(payload or {})}
+        if _is_visible_model_message_event(event_type, event_payload):
+            self.visible_model_message_emitted = True
         item = event(
             event_type,
             request_id=self.request_id,
@@ -124,7 +129,7 @@ class RuntimeEventNormalizer:
             timestamp=datetime.now(UTC).isoformat(),
             severity=severity,
             message=message,
-            payload=payload,
+            payload=event_payload,
         )
         self.emit(item)
         return item
@@ -163,7 +168,10 @@ class RuntimeEventNormalizer:
         self._emit_tool_proposals(node_id, stage_id, node_span_id, patch)
         self._emit_tool_observations(node_id, stage_id, node_span_id, patch)
         if _patch_has_ai_message(patch) and node_id != FACTORY_TOOLS_NODE:
-            self._complete_model_stream_for_node(node_id or "model", reason="node_completed")
+            if _patch_ai_message_requests_tool(patch):
+                self._discard_model_stream_for_node(node_id or "model", reason="tool_call_requested")
+            else:
+                self._complete_model_stream_for_node(node_id or "model", reason="node_completed")
 
     def emit_debug_event(self, chunk: Any) -> None:
         if not isinstance(chunk, dict):
@@ -301,6 +309,7 @@ class RuntimeEventNormalizer:
             "scheduler_job_deleted",
             "scheduler_job_auto_paused",
             "scheduler_jobs_listed",
+            "scheduler_options_listed",
             "scheduler_job_described",
             "scheduler_runs_listed",
             "scheduler_run_scheduled",
@@ -484,13 +493,7 @@ class RuntimeEventNormalizer:
         if not incoming:
             return
         stream = self._model_stream(node_id or "model")
-        raw_delta = _delta_for_stream(stream, incoming)
-        if not raw_delta:
-            return
-        stream.raw_content += raw_delta
-        public_content = strip_internal_snapshot_blocks(stream.raw_content)
-        public_delta = _public_delta_for_stream(stream.content, public_content)
-        stream.content = public_content
+        public_delta = _apply_model_stream_content(stream, incoming)
         if not public_delta:
             return
         self.runtime_event(
@@ -620,6 +623,8 @@ class RuntimeEventNormalizer:
             return
         if _looks_like_tool_observation_text(text):
             return
+        if self.visible_model_message_emitted:
+            return
         if self._has_visible_model_stream_content():
             return
         stream_id = uuid.uuid4().hex
@@ -644,6 +649,30 @@ class RuntimeEventNormalizer:
         if stream is None:
             return
         self._complete_model_stream(stream, reason=reason)
+
+    def _discard_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
+        stream = self.model_streams.get(node_id)
+        if stream is None or stream.completed:
+            return
+        stream.completed = True
+        stream.content = ""
+        stream.raw_content = ""
+        self.runtime_event(
+            "model_message_completed",
+            node_id=stream.node_id,
+            stage_id=self.current_stage_id,
+            span_id=stream.span_id,
+            parent_span_id=stream.parent_span_id,
+            payload={
+                "stream_id": stream.stream_id,
+                "content": "",
+                "content_mode": "discard",
+                "completion_reason": reason,
+                "completion_inferred": True,
+                "discard": True,
+                "visible_to_user": False,
+            },
+        )
 
     def _complete_model_stream(self, stream: ModelStreamState, *, reason: str) -> None:
         if stream.completed:
@@ -1162,6 +1191,18 @@ def _patch_has_ai_message(patch: dict[str, Any]) -> bool:
     return False
 
 
+def _patch_ai_message_requests_tool(patch: dict[str, Any]) -> bool:
+    for message in patch.get("messages", []) or []:
+        if not isinstance(message, dict) or message.get("type") != "AIMessage":
+            continue
+        if message.get("tool_calls"):
+            return True
+        additional_kwargs = message.get("additional_kwargs")
+        if isinstance(additional_kwargs, dict) and additional_kwargs.get("tool_calls"):
+            return True
+    return False
+
+
 def _is_tool_message_like(value: Any) -> bool:
     if isinstance(value, ToolMessage):
         return True
@@ -1239,7 +1280,31 @@ def _preview_text(value: str, limit: int) -> str:
     return normalized[:limit]
 
 
-def _delta_for_stream(stream: ModelStreamState, content: str) -> str:
+def _apply_model_stream_content(stream: ModelStreamState, incoming: str) -> str:
+    incoming_public = strip_internal_snapshot_blocks(incoming)
+    if stream.content and incoming_public:
+        if incoming_public == stream.content:
+            stream.input_mode = "snapshot"
+            stream.raw_content = incoming
+            return ""
+        if incoming_public.startswith(stream.content):
+            stream.input_mode = "snapshot"
+            stream.raw_content = incoming
+            public_delta = incoming_public[len(stream.content) :]
+            stream.content = incoming_public
+            return public_delta
+
+    raw_delta = _raw_delta_for_stream(stream, incoming)
+    if not raw_delta:
+        return ""
+    stream.raw_content += raw_delta
+    public_content = strip_internal_snapshot_blocks(stream.raw_content)
+    public_delta = _public_delta_for_stream(stream.content, public_content)
+    stream.content = public_content
+    return public_delta
+
+
+def _raw_delta_for_stream(stream: ModelStreamState, content: str) -> str:
     if not content:
         return ""
     previous = stream.raw_content
@@ -1289,6 +1354,20 @@ def _is_tool_approval_resume_payload(payload: dict[str, Any]) -> bool:
         if isinstance(value, dict) and ("approved" in value or "action" in value):
             return True
     return False
+
+
+def _is_visible_model_message_event(event_type: str, payload: dict[str, Any]) -> bool:
+    if event_type == "model_stream_delta":
+        content = payload.get("delta")
+    elif event_type == "model_message_completed":
+        if payload.get("discard") is True:
+            return False
+        content = payload.get("content")
+    else:
+        return False
+    if payload.get("visible_to_user") is False:
+        return False
+    return bool(str(content or "").strip())
 
 
 def json_safe(value: Any) -> Any:

@@ -1,25 +1,44 @@
 <template>
   <div class="knowledge-manager">
     <div class="manager-header">
-      <n-text strong>知识源</n-text>
-      <n-button type="primary" @click="showCreateModal = true">
-        <template #icon>
-          <n-icon><Add /></n-icon>
-        </template>
-        添加知识源
-      </n-button>
+      <div class="manager-title">
+        <n-text strong>知识源</n-text>
+        <n-text depth="3" class="context-label">当前上下文：{{ resourceContext.label.value }}</n-text>
+      </div>
+      <n-space>
+        <n-button
+          v-if="selectedCount > 0"
+          :loading="busyAction === 'delete'"
+          @click="confirmDeleteSources(selectedSources)"
+        >
+          删除已选 {{ selectedCount }}
+        </n-button>
+        <n-button type="primary" @click="showCreateModal = true">
+          <template #icon>
+            <n-icon><Add /></n-icon>
+          </template>
+          添加知识源
+        </n-button>
+      </n-space>
     </div>
 
     <n-scrollbar class="source-list">
       <div class="source-grid">
         <n-card
           v-for="source in knowledgeStore.sources"
-          :key="source.name"
+          :key="sourceKey(source)"
           hoverable
           class="source-card"
           @click="handleSelectSource(source)"
         >
           <div class="source-header">
+            <n-checkbox
+              v-if="sourceIdOf(source)"
+              class="source-select"
+              :checked="selectedSourceIds.has(sourceIdOf(source)!)"
+              @click.stop
+              @update:checked="(checked) => setSourceSelected(sourceIdOf(source)!, checked)"
+            />
             <n-icon size="32" :color="getSourceColor(source)">
               <component :is="getSourceIcon(source)" />
             </n-icon>
@@ -45,7 +64,11 @@
           </div>
 
           <div class="source-actions">
-            <n-button size="small" @click.stop="handleReindex(source)">
+            <n-button
+              size="small"
+              :loading="busyAction === 'reindex' && busySourceId === sourceIdOf(source)"
+              @click.stop="handleReindex(source)"
+            >
               重新索引
             </n-button>
             <n-dropdown
@@ -76,21 +99,85 @@
       v-model:show="showCreateModal"
       @submit="handleCreate"
     />
+
+    <n-drawer v-model:show="documentsDrawerOpen" :width="520" placement="right">
+      <n-drawer-content title="知识源文档" closable>
+        <div class="documents-panel">
+          <div class="documents-title">{{ documentsTitle }}</div>
+          <n-empty
+            v-if="knowledgeStore.documents.length === 0"
+            description="没有可查看的文档"
+            size="small"
+          />
+          <n-list v-else>
+            <n-list-item
+              v-for="document in knowledgeStore.documents"
+              :key="document.documentId || document.payload?.document_id || document.title"
+            >
+              <div class="document-item">
+                <div class="document-title">
+                  {{ document.title || document.name || '文档' }}
+                </div>
+                <div class="document-meta">
+                  {{ document.documentType || document.kind || 'document' }}
+                </div>
+                <div v-if="document.uri" class="document-uri">
+                  {{ document.uri }}
+                </div>
+              </div>
+            </n-list-item>
+          </n-list>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { NText, NButton, NIcon, NScrollbar, NCard, NTag, NDivider, NDropdown, NEmpty } from 'naive-ui'
+import { computed, ref, onMounted, watch } from 'vue'
+import {
+  NButton,
+  NCard,
+  NCheckbox,
+  NDivider,
+  NDrawer,
+  NDrawerContent,
+  NDropdown,
+  NEmpty,
+  NIcon,
+  NList,
+  NListItem,
+  NScrollbar,
+  NSpace,
+  NTag,
+  NText,
+  useDialog,
+} from 'naive-ui'
 import { Add, Document, Settings, EllipsisHorizontal, FolderOutline, Globe, DocumentText } from '@vicons/ionicons5'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import { useCommand } from '@/composables/useCommand'
+import { useResourceContext } from '@/composables/useResourceContext'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
 import type { KnowledgeSourceView } from '@/types/protocol'
 
 const knowledgeStore = useKnowledgeStore()
 const commands = useCommand()
+const dialog = useDialog()
+const resourceContext = useResourceContext()
 const showCreateModal = ref(false)
+const documentsDrawerOpen = ref(false)
+const documentsTitle = ref('')
+const selectedSourceIds = ref<Set<string>>(new Set())
+const busyAction = ref<'delete' | 'reindex' | null>(null)
+const busySourceId = ref<string | null>(null)
+
+const selectedSources = computed(() => {
+  return knowledgeStore.sources.filter((source) => {
+    const sourceId = sourceIdOf(source)
+    return Boolean(sourceId && selectedSourceIds.value.has(sourceId))
+  })
+})
+const selectedCount = computed(() => selectedSources.value.length)
 
 function handleSelectSource(source: KnowledgeSourceView) {
   const sourceId = source.payload?.source_id
@@ -99,20 +186,34 @@ function handleSelectSource(source: KnowledgeSourceView) {
   }
 }
 
-function handleReindex(source: KnowledgeSourceView) {
-  // TODO: 重新索引
+async function handleReindex(source: KnowledgeSourceView) {
+  const sourceId = sourceIdOf(source)
+  if (!sourceId || busyAction.value) return
+  busyAction.value = 'reindex'
+  busySourceId.value = sourceId
+  try {
+    const event = await commands.reindexKnowledgeSource(sourceId, resourceContext.packageIdForApi.value)
+    if (event) {
+      commands.refreshKnowledge(resourceContext.packageIdForApi.value)
+    }
+  } finally {
+    busyAction.value = null
+    busySourceId.value = null
+  }
 }
 
 function handleCreate(sourceData: any) {
-  commands.addKnowledgeSource(sourceData)
+  void commands.addKnowledgeSource(sourceData, resourceContext.packageIdForApi.value)
   showCreateModal.value = false
 }
 
 function handleAction(key: string, source: KnowledgeSourceView) {
-  const sourceId = source.payload?.source_id
   switch (key) {
+    case 'documents':
+      void openDocuments(source)
+      break
     case 'remove':
-      // TODO: 确认后删除
+      confirmDeleteSources([source])
       break
   }
 }
@@ -122,6 +223,70 @@ function getSourceActions(source: KnowledgeSourceView) {
     { label: '查看文档', key: 'documents' },
     { label: '删除', key: 'remove' },
   ]
+}
+
+async function openDocuments(source: KnowledgeSourceView) {
+  const sourceId = sourceIdOf(source)
+  if (!sourceId) return
+  knowledgeStore.selectSource(sourceId)
+  documentsTitle.value = source.name
+  documentsDrawerOpen.value = true
+  await commands.listKnowledgeDocuments(sourceId, resourceContext.packageIdForApi.value)
+}
+
+function setSourceSelected(sourceId: string, checked: boolean) {
+  const next = new Set(selectedSourceIds.value)
+  if (checked) {
+    next.add(sourceId)
+  } else {
+    next.delete(sourceId)
+  }
+  selectedSourceIds.value = next
+}
+
+function confirmDeleteSources(sources: KnowledgeSourceView[]) {
+  const targets = sources.filter((source) => sourceIdOf(source))
+  if (targets.length === 0 || busyAction.value) return
+  const names = targets.map((source) => source.name).join('、')
+  dialog.warning({
+    title: targets.length > 1 ? '确认批量删除知识源' : '确认删除知识源',
+    content: `将删除 ${names}，相关文档和索引会一并移除。这个操作不可撤销。`,
+    positiveText: targets.length > 1 ? `删除 ${targets.length} 个` : '删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void deleteSources(targets)
+    },
+  })
+}
+
+async function deleteSources(sources: KnowledgeSourceView[]) {
+  busyAction.value = 'delete'
+  let deleted = 0
+  try {
+    for (const source of sources) {
+      const sourceId = sourceIdOf(source)
+      if (!sourceId) continue
+      const event = await commands.removeKnowledgeSource(sourceId, resourceContext.packageIdForApi.value)
+      if (event) {
+        deleted += 1
+        setSourceSelected(sourceId, false)
+      }
+    }
+    if (deleted > 0) {
+      commands.refreshKnowledge(resourceContext.packageIdForApi.value)
+    }
+  } finally {
+    busyAction.value = null
+  }
+}
+
+function sourceIdOf(source: KnowledgeSourceView): string | null {
+  const sourceId = source.payload?.source_id
+  return sourceId ? String(sourceId) : null
+}
+
+function sourceKey(source: KnowledgeSourceView): string {
+  return sourceIdOf(source) || source.name
 }
 
 function getSourceIcon(source: KnowledgeSourceView) {
@@ -146,9 +311,26 @@ function getStatusType(status: string): 'default' | 'success' | 'warning' | 'err
   return types[status] || 'default'
 }
 
+watch(
+  () => resourceContext.packageId.value,
+  () => {
+    resetCurrentKnowledgeView()
+    void commands.refreshKnowledge(resourceContext.packageIdForApi.value)
+  }
+)
+
 onMounted(() => {
-  commands.refreshKnowledge()
+  commands.listAgentPackages()
+  resetCurrentKnowledgeView()
+  void commands.refreshKnowledge(resourceContext.packageIdForApi.value)
 })
+
+function resetCurrentKnowledgeView() {
+  selectedSourceIds.value = new Set()
+  documentsDrawerOpen.value = false
+  documentsTitle.value = ''
+  knowledgeStore.reset()
+}
 </script>
 
 <style scoped>
@@ -163,7 +345,18 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 20px;
+}
+
+.manager-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.context-label {
+  font-size: 12px;
 }
 
 .source-list {
@@ -192,6 +385,10 @@ onMounted(() => {
   align-items: center;
 }
 
+.source-select {
+  flex-shrink: 0;
+}
+
 .source-info {
   flex: 1;
   display: flex;
@@ -217,5 +414,36 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+}
+
+.documents-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.documents-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.document-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.document-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.document-meta,
+.document-uri {
+  font-size: 12px;
+  color: var(--n-text-color-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

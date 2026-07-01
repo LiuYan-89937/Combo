@@ -33,10 +33,12 @@ class AgentInstanceExtensionManager:
         mcp_gateway_url: str | None = None,
         inherit_builtin_extensions: bool = True,
         builtin_extension_root: str | Path | None = None,
+        inherited_extension_roots: list[str | Path] | tuple[str | Path, ...] | None = None,
     ) -> None:
         inherited_roots: list[str | Path] = []
         if inherit_builtin_extensions:
             inherited_roots.append(builtin_extension_root or default_builtin_agent_extension_root())
+        inherited_roots.extend(inherited_extension_roots or [])
         self.loader = AgentInstanceExtensionConfigLoader(
             extension_root,
             inherited_extension_roots=inherited_roots,

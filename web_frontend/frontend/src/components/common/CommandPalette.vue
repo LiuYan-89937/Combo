@@ -23,6 +23,7 @@ import { ref, computed } from 'vue'
 import { NModal, NInput, NList, NListItem, NThing } from 'naive-ui'
 import { useRouter } from 'vue-router'
 import { useCommand } from '@/composables/useCommand'
+import { useRuntimeStore } from '@/stores/runtime'
 
 const props = defineProps<{
   show: boolean
@@ -34,6 +35,7 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const commands = useCommand()
+const runtimeStore = useRuntimeStore()
 const searchQuery = ref('')
 
 const show = computed({
@@ -45,7 +47,7 @@ const allCommands = [
   { key: 'goto-factory', title: '打开闲聊', description: '进入闲聊页面', action: () => router.push('/factory') },
   { key: 'goto-manufacturing', title: '打开 Agent 制造', description: '创建新的 Agent', action: () => router.push('/manufacturing') },
   { key: 'goto-agents', title: '打开已发布 Agent', description: '查看和运行已发布的 Agent', action: () => router.push('/agents') },
-  { key: 'new-session', title: '新建会话', description: '创建新的工厂会话', action: () => commands.newSession() },
+  { key: 'new-session', title: '新建会话', description: '创建新的工厂会话', action: () => commands.newSession(runtimeStore.currentMode) },
   { key: 'cancel', title: '取消运行', description: '取消当前正在运行的请求', action: () => commands.cancelRequest() },
 ]
 

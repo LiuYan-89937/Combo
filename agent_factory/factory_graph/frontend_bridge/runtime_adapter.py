@@ -22,7 +22,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
 from agent_factory.factory_graph.session import FactorySessionManager
 from agent_factory.memory_system.factory import shutdown_factory_memory_worker
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
-from agent_factory.scheduler_system import SchedulerRuntime, scheduler_enabled_from_env
+from agent_factory.scheduler_system import SchedulerRuntime
 
 
 @dataclass(slots=True)
@@ -60,8 +60,6 @@ class FactoryRuntimeAdapter(
         if self.evolution_runtime is None:
             self.evolution_runtime = AgentEvolutionRuntime()
         self.agent_package_runtime.set_emit(self.emit)
-        if scheduler_enabled_from_env():
-            self._start_factory_scheduler()
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
         try:
@@ -104,8 +102,12 @@ _COMMAND_HANDLERS: dict[str, str] = {
     "list_agent_packages": "list_agent_packages",
     "select_agent_package": "select_agent_package",
     "delete_agent_package": "delete_agent_package",
+    "initialize_agent_package": "initialize_agent_package",
+    "shutdown_agent_package_instance": "shutdown_agent_package_instance",
+    "list_agent_package_instances": "list_agent_package_instances",
     "list_agent_package_sessions": "list_agent_package_sessions",
     "load_agent_package_session": "load_agent_package_session",
+    "send_agent_package_message": "send_agent_package_message",
     "run_agent_package": "run_agent_package",
     "run_agent_evolution": "run_agent_evolution",
     "resume_interrupt": "resume_interrupt",

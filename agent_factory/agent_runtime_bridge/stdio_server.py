@@ -22,6 +22,7 @@ from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig
 from agent_factory.runtime_kernel.session import AgentSessionConfig
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.scheduler_system.management import manage_scheduler_runtime
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
@@ -71,6 +72,42 @@ class BridgeRuntimeState:
         if command_type == "shutdown":
             self.shutdown()
             return 0
+        if command_type == "initialize_runtime":
+            if not self._ensure_sandbox_initialized(normalizer):
+                return 1
+            try:
+                runtime = self._ensure_compiled(normalizer)
+                normalizer.runtime_event(
+                    "agent_package_instance_updated",
+                    payload=_instance_status_payload(runtime=runtime, status="ready"),
+                )
+                return 0
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "agent_package_instance_updated",
+                    severity="error",
+                    payload={
+                        "status": "failed",
+                        "ready": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                return 1
+        if command_type == "scheduler_manage":
+            if not self._ensure_sandbox_initialized(normalizer):
+                return 1
+            try:
+                runtime = self._ensure_compiled(normalizer)
+                _manage_scheduler(normalizer=normalizer, payload=payload, runtime=runtime)
+                return 0
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "error",
+                    severity="error",
+                    message=f"{type(exc).__name__}: {exc}",
+                    payload={"message": str(exc), "error_type": type(exc).__name__},
+                )
+                return 1
         normalizer.emit_run_started({"command": command_type, "attachment_count": _attachment_count(payload)})
         if command_type == "list_sessions":
             return _list_sessions(normalizer, self._load_package())
@@ -242,7 +279,7 @@ def _configure_scheduler_runtime(*, package: LoadedAgentPackage, compiled: Any, 
     if scheduler_runtime is None:
         return
     tool_registry = getattr(compiled.compiled_app.services, "tool_registry", None)
-    scheduler_runtime.event_sink = _scheduler_event_sink
+    scheduler_runtime.event_sink = _scheduler_event_sink_for_package(package)
     scheduler_runtime.executor = SchedulerExecutor(
         graph_runner=_scheduled_graph_runner(package=package, compiled=compiled, facade=facade),
         tool_runner=runtime_tool_runner(tool_registry) if tool_registry is not None else None,
@@ -270,7 +307,7 @@ def _apply_scheduler_seeds(*, package: LoadedAgentPackage, compiled: Any) -> Non
 
 
 def _emit_worker_lifecycle_failure(*, package: LoadedAgentPackage, lifecycle_event: WorkerLifecycleEvent) -> None:
-    _scheduler_event_sink(
+    _emit_scheduler_event(
         SchedulerEventPayload(
             event_type="scheduler_run_failed",
             owner_type="agent",
@@ -280,7 +317,8 @@ def _emit_worker_lifecycle_failure(*, package: LoadedAgentPackage, lifecycle_eve
                 f"background worker {lifecycle_event.action} failed: "
                 f"{lifecycle_event.worker_id}: {lifecycle_event.message}"
             ),
-        )
+        ),
+        package=package,
     )
 
 
@@ -367,7 +405,14 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
     return run
 
 
-def _scheduler_event_sink(payload: SchedulerEventPayload) -> None:
+def _scheduler_event_sink_for_package(package: LoadedAgentPackage):
+    def emit(payload: SchedulerEventPayload) -> None:
+        _emit_scheduler_event(payload, package=package)
+
+    return emit
+
+
+def _emit_scheduler_event(payload: SchedulerEventPayload, *, package: LoadedAgentPackage) -> None:
     normalizer = RuntimeEventNormalizer(
         emit=_write_event,
         request_id=None,
@@ -376,7 +421,11 @@ def _scheduler_event_sink(payload: SchedulerEventPayload) -> None:
         graph_id="agent_package_scheduler",
         producer_type="agent_runtime",
     )
-    normalizer.emit_custom_event({"type": "scheduler_event", "payload": payload.model_dump(mode="json")})
+    value = payload.model_dump(mode="json")
+    value["package_id"] = package.package_root.name
+    value["package_name"] = package.assembly_spec.agent.name
+    value["agent_id"] = package.assembly_spec.agent.id
+    normalizer.emit_custom_event({"type": "scheduler_event", "payload": value})
 
 
 def _knowledge_event_sink(payload: dict[str, Any]) -> None:
@@ -389,6 +438,45 @@ def _knowledge_event_sink(payload: dict[str, Any]) -> None:
         producer_type="agent_runtime",
     )
     normalizer.emit_custom_event({"type": "knowledge_event", "payload": _normalized_knowledge_payload(payload)})
+
+
+def _instance_status_payload(*, runtime: CompiledRuntime, status: str) -> dict[str, Any]:
+    return {
+        "package_id": runtime.package.package_root.name,
+        "agent_id": runtime.package.assembly_spec.agent.id,
+        "agent_name": runtime.package.assembly_spec.agent.name,
+        "backend": "container",
+        "status": status,
+        "ready": status == "ready",
+    }
+
+
+def _manage_scheduler(
+    *,
+    normalizer: RuntimeEventNormalizer,
+    payload: dict[str, Any],
+    runtime: CompiledRuntime,
+) -> None:
+    scheduler_runtime = getattr(runtime.compiled.compiled_app.services, "scheduler_runtime", None)
+    if scheduler_runtime is None:
+        raise RuntimeError("scheduler runtime is not enabled for this package")
+    tool_registry = getattr(runtime.compiled.compiled_app.services, "tool_registry", None)
+    manage_scheduler_runtime(
+        runtime=scheduler_runtime,
+        payload=payload,
+        tool_registry=tool_registry,
+        emit=lambda scheduler_payload: normalizer.emit_custom_event(
+            {"type": "scheduler_event", "payload": _scheduler_event_payload(scheduler_payload, runtime.package)}
+        ),
+    )
+
+
+def _scheduler_event_payload(payload: SchedulerEventPayload, package: LoadedAgentPackage) -> dict[str, Any]:
+    value = payload.model_dump(mode="json")
+    value["package_id"] = package.package_root.name
+    value["package_name"] = package.assembly_spec.agent.name
+    value["agent_id"] = package.assembly_spec.agent.id
+    return value
 
 
 def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], runtime: CompiledRuntime) -> int:

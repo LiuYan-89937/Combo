@@ -1,0 +1,121 @@
+<template>
+  <n-modal v-model:show="show" preset="card" :title="modalTitle" style="width: 560px">
+    <n-form ref="formRef" :model="formData" :rules="rules">
+      <n-form-item label="Skill 路径" path="path">
+        <n-input v-model:value="formData.path" placeholder="/path/to/skill-directory" />
+      </n-form-item>
+
+      <n-form-item label="来源">
+        <n-select v-model:value="formData.source" :options="sourceOptions" />
+      </n-form-item>
+
+      <n-form-item label="启用">
+        <n-switch v-model:value="formData.enabled" />
+      </n-form-item>
+    </n-form>
+
+    <template #footer>
+      <n-space justify="end">
+        <n-button @click="show = false">取消</n-button>
+        <n-button type="primary" @click="handleSubmit">{{ submitText }}</n-button>
+      </n-space>
+    </template>
+  </n-modal>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import { NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSwitch } from 'naive-ui'
+import type { FormInst, FormRules } from 'naive-ui'
+import type { SkillConfig } from '@/api/commands'
+import type { ExtensionItemView } from '@/types/protocol'
+
+const props = defineProps<{
+  show: boolean
+  item?: ExtensionItemView | null
+}>()
+
+const emit = defineEmits<{
+  'update:show': [value: boolean]
+  submit: [data: SkillConfig]
+}>()
+
+interface SkillFormData {
+  path: string
+  source: string
+  enabled: boolean
+  required: boolean
+}
+
+const show = computed({
+  get: () => props.show,
+  set: (value) => emit('update:show', value),
+})
+
+const formRef = ref<FormInst | null>(null)
+const formData = ref<SkillFormData>(emptyForm())
+const modalTitle = computed(() => (props.item ? '编辑 Skill' : '添加 Skill'))
+const submitText = computed(() => (props.item ? '保存' : '添加'))
+
+const sourceOptions = computed(() => {
+  const options = [{ label: '本地', value: 'local' }]
+  if (formData.value.source && formData.value.source !== 'local') {
+    options.push({ label: formData.value.source, value: formData.value.source })
+  }
+  return options
+})
+
+const rules: FormRules = {
+  path: [{ required: true, message: '请输入 Skill 路径', trigger: 'blur' }],
+}
+
+function emptyForm(): SkillFormData {
+  return {
+    path: '',
+    source: 'local',
+    enabled: true,
+    required: false,
+  }
+}
+
+function loadForm(item: ExtensionItemView | null | undefined): void {
+  if (!item) {
+    formData.value = emptyForm()
+    return
+  }
+  const payload = item.payload || {}
+  formData.value = {
+    path: String(payload.path || ''),
+    source: String(payload.source || 'local'),
+    enabled: item.enabled !== false,
+    required: Boolean(payload.required),
+  }
+}
+
+watch(
+  () => props.show,
+  (visible) => {
+    if (visible) loadForm(props.item)
+  }
+)
+
+watch(
+  () => props.item,
+  (item) => {
+    if (props.show) loadForm(item)
+  }
+)
+
+function handleSubmit(): void {
+  formRef.value?.validate((errors) => {
+    if (errors) return
+    emit('submit', {
+      path: formData.value.path.trim(),
+      source: formData.value.source,
+      enabled: formData.value.enabled,
+      required: formData.value.required,
+      replace_skill_id: props.item?.payload?.skill_id,
+    })
+  })
+}
+</script>

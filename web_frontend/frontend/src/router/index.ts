@@ -19,7 +19,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/manufacturing',
     name: 'Manufacturing',
-    component: () => import('@/views/ManufacturingView.vue'),
+    component: () => import('@/views/FactoryView.vue'),
     meta: { title: 'Agent 制造' },
   },
   {

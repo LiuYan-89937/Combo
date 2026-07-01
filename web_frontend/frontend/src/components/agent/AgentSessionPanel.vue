@@ -118,30 +118,20 @@ function refreshSessions() {
   commands.listAgentPackageSessions(props.packageId)
 }
 
-function enterSession(sessionId: string | null) {
-  if (runtimeStore.hasActiveRun) {
-    uiStore.addNotification({
-      type: 'warning',
-      title: '当前会话正在运行',
-      message: '等当前回复结束后再切换子 Agent 会话。',
-      duration: 3000,
-    })
-    return false
-  }
+function enterSession(sessionId: string | null): void {
   agentStore.enterAgentChat(props.packageId, sessionId)
   workspaceStore.setScope('workdir')
   uiStore.openRightSidebar('workspace')
   void router.push({ name: 'Factory' })
-  return true
 }
 
 function enterNewSession() {
-  if (!enterSession(null)) return
+  enterSession(null)
   runtimeStore.showEmptyAgentPackageSession(props.packageId)
 }
 
 function enterExistingSession(sessionId: string) {
-  if (!enterSession(sessionId)) return
+  enterSession(sessionId)
   commands.loadAgentPackageSession(props.packageId, sessionId)
 }
 

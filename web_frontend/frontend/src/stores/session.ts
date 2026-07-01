@@ -11,8 +11,12 @@ export interface SessionView {
   display_title: string | null
   first_user_input: string | null
   current_mode: string | null
+  chat_agent_package_session_id?: string | null
+  create_agent_session_id?: string | null
   chat_turn_count: number
   create_agent_turn_count: number
+  mode_titles?: Record<string, string | null>
+  mode_turn_counts?: Record<string, number>
   created_at: string
   updated_at: string
 }

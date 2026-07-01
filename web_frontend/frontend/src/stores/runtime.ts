@@ -7,62 +7,63 @@
 import { defineStore } from 'pinia'
 import type {
   FactoryFrontendEvent,
+  FactoryMode,
   RuntimeViewState,
+  ConversationScopeState,
   ModelStream,
   ToolActivity,
   TranscriptItem,
   ConversationTurn,
-  KnowledgeSourceView,
-  KnowledgeDocumentView,
-  KnowledgeSearchResultView,
-  SchedulerJobView,
-  WorkspaceEntry,
-  WorkspaceFileView,
-  WorkspaceRootView,
-  ExtensionItemView,
+  RunStatus,
 } from '@/types/protocol'
+import {
+  buildConversationScopeState,
+  normalizeConversationScopeState,
+} from './runtime/conversationState'
+import {
+  interruptMessage,
+  interruptType,
+  isBackgroundEvent,
+  isRequestScopedEvent,
+  isSchedulerRequest,
+  isUserInputInterrupt,
+} from './runtime/eventUtils'
+import {
+  agentPackageConversationScope,
+  agentPackageScopeInfoFromEvent,
+  conversationScopeForMode,
+  conversationScopeForRequestEvent,
+  scopeFromEventPayload,
+  scopeFromMessageMetadata,
+} from './runtime/scopes'
+import {
+  agentPackageSessionSnapshotView,
+  factorySessionSnapshotView,
+} from './runtime/sessionSnapshots'
+import { toolPayloadArguments, toolPayloadValue } from './runtime/toolPayload'
+import {
+  contextWindowView,
+  extensionItemView,
+  knowledgeDocumentView,
+  knowledgeSearchResultView,
+  knowledgeSourceView,
+  schedulerJobView,
+  schedulerRunNoticeView,
+  schedulerToolOptionView,
+  workspaceEntryView,
+  workspaceFileView,
+  workspaceRootView,
+} from './runtime/viewMappers'
 
 // 事件去重集合
 const processedEventIds = new Set<string>()
-
-function toolPayloadMessage(payload: Record<string, any> | undefined): Record<string, any> {
-  const message = payload?.message
-  return message && typeof message === 'object' ? message : {}
-}
-
-function toolPayloadContent(payload: Record<string, any> | undefined): Record<string, any> {
-  const message = toolPayloadMessage(payload)
-  const content = message.content
-  if (typeof content !== 'string' || content.trim() === '') return {}
-  try {
-    const parsed = JSON.parse(content)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-function toolPayloadValue(payload: Record<string, any> | undefined, keys: string[]): any {
-  const message = toolPayloadMessage(payload)
-  const content = toolPayloadContent(payload)
-  for (const key of keys) {
-    if (payload?.[key] != null && payload[key] !== '') return payload[key]
-    if (message?.[key] != null && message[key] !== '') return message[key]
-    if (content?.[key] != null && content[key] !== '') return content[key]
-  }
-  return null
-}
-
-function toolPayloadArguments(payload: Record<string, any> | undefined): Record<string, any> {
-  const value = toolPayloadValue(payload, ['arguments', 'args'])
-  return value && typeof value === 'object' ? value : {}
-}
 
 export const useRuntimeStore = defineStore('runtime', {
   state: (): RuntimeViewState => ({
     protocolVersion: 'factory_frontend.v1',
     connectionStatus: 'disconnected',
     activeRequestId: null,
+    activeRequests: {},
     runStatus: 'idle',
     pendingInterrupt: null,
     currentMode: null,
@@ -74,11 +75,14 @@ export const useRuntimeStore = defineStore('runtime', {
     modelStreams: {},
     tools: [],
     currentPlan: null,
+    activeConversationScope: null,
+    conversationScopes: {},
     transcript: [],
     conversationTurns: [],
     timeline: [],
     debugEvents: [],
     contextActivity: { status: 'idle' },
+    contextWindow: null,
     memoryActivity: { status: 'idle' },
     knowledgeActivity: [],
     schedulerActivity: [],
@@ -90,6 +94,8 @@ export const useRuntimeStore = defineStore('runtime', {
     knowledgeResults: [],
     knowledgeDocument: null,
     schedulerJobs: [],
+    schedulerToolOptions: [],
+    schedulerRunNotices: [],
     extensionItems: [],
     extensionTestResult: null,
     sessions: [],
@@ -99,9 +105,14 @@ export const useRuntimeStore = defineStore('runtime', {
   }),
 
   getters: {
-    // 输入是否应该被锁定
+    // 输入只因需要专门 UI 处理的中断锁定；运行中不再作为跨会话输入锁。
     isInputLocked: (state): boolean => {
-      return state.runStatus === 'running' || state.runStatus === 'interrupted'
+      return state.runStatus === 'interrupted' && !isUserInputInterrupt(state.pendingInterrupt)
+    },
+
+    // 制造 Agent 的业务中断需要用户继续输入，而不是审批按钮。
+    isAwaitingUserInputInterrupt: (state): boolean => {
+      return state.runStatus === 'interrupted' && isUserInputInterrupt(state.pendingInterrupt)
     },
 
     // 当前是否有活跃的运行
@@ -167,43 +178,17 @@ export const useRuntimeStore = defineStore('runtime', {
       }
 
       // 3. Request-scoped 事件过滤
-      const isRequestScoped = this._isRequestScopedEvent(event.event_type)
-      const isMismatchedActiveRequest =
-        isRequestScoped &&
-        this.activeRequestId !== null &&
-        event.request_id !== null &&
-        event.request_id !== this.activeRequestId
-      if (isMismatchedActiveRequest) {
-        // 不匹配的 request-scoped 事件只进入 debug/timeline，不更新主状态
-        this._recordDebugEvent(event)
-        this._recordTimelineEvent(event)
+      const isRequestScoped = isRequestScopedEvent(event.event_type)
+      const requestScope = isRequestScoped ? conversationScopeForRequestEvent(event, this.activeRequests) : null
+      if (requestScope && requestScope !== this.activeConversationScope) {
+        this._dispatchEventToConversationScope(requestScope, event)
         return
       }
-
       // 4. 路由到具体处理器
       this._dispatchEvent(event)
 
       // 5. 记录到 timeline
       this._recordTimelineEvent(event)
-    },
-
-    /**
-     * 判断是否为 request-scoped 事件
-     */
-    _isRequestScopedEvent(eventType: string): boolean {
-      if (eventType === 'run_started') return false
-      const requestScopedPrefixes = [
-        'run_',
-        'node_',
-        'stage_',
-        'model_',
-        'tool_',
-        'plan_',
-        'context_',
-        'runtime_paused',
-        'runtime_resumed',
-      ]
-      return requestScopedPrefixes.some((prefix) => eventType.startsWith(prefix))
     },
 
     /**
@@ -218,24 +203,33 @@ export const useRuntimeStore = defineStore('runtime', {
       } else if (type === 'session_started') {
         this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
         this.currentMode = event.mode || null
+        this._upsertFactorySession(payload?.session)
         this._clearSessionScopedState()
         this._restoreSessionSnapshot(payload)
       } else if (type === 'session_switched') {
         this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
+        this._upsertFactorySession(payload?.session)
         this._clearSessionScopedState()
         this._restoreSessionSnapshot(payload)
       } else if (type === 'sessions_listed') {
         this.sessions = payload?.sessions || []
       } else if (type === 'mode_changed') {
-        this.currentMode = event.mode || null
+        this._handleModeChanged(event)
       }
 
       // Agent packages
       else if (type === 'agent_packages_listed') {
         this.agentPackages = payload?.packages || []
       } else if (type === 'agent_package_selected') {
+        this.currentMode = event.mode || this.currentMode
         this.selectedAgentPackage = payload?.package || null
         this.agentSessions = payload?.sessions || this.agentSessions
+        if (payload?.purpose === 'evolution' && payload?.package?.package_id) {
+          const scope = conversationScopeForMode('evolve_agent', payload)
+          if (scope) {
+            this._switchConversationScope(scope)
+          }
+        }
       } else if (type === 'agent_package_deleted') {
         const deletedPackageId = payload?.package_id
         this.agentPackages = payload?.packages || this.agentPackages.filter((pkg) => pkg.package_id !== deletedPackageId)
@@ -260,6 +254,8 @@ export const useRuntimeStore = defineStore('runtime', {
       } else if (type === 'runtime_resumed') {
         this.runStatus = 'running'
         this.pendingInterrupt = null
+      } else if (type === 'interrupt_requested') {
+        this._handleInterruptRequested(event)
       }
 
       // Stage lifecycle
@@ -359,7 +355,21 @@ export const useRuntimeStore = defineStore('runtime', {
     /**
      * Run lifecycle handlers
      */
+    _handleModeChanged(event: FactoryFrontendEvent) {
+      const nextMode = event.mode || event.payload?.mode || null
+      this.currentMode = nextMode
+      const nextScope = conversationScopeForMode(nextMode, event.payload || {})
+      if (nextScope) {
+        this._switchConversationScope(nextScope)
+      }
+    },
+
     _handleRunStarted(event: FactoryFrontendEvent) {
+      if (isSchedulerRequest(event.request_id)) {
+        this._registerActiveRequest(event, 'running')
+        return
+      }
+      this._registerActiveRequest(event, 'running')
       // 清空当前 run 的临时状态
       this.activeRequestId = event.request_id || null
       this.currentRunId = event.run_id || null
@@ -382,24 +392,46 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleRunCompleted(event: FactoryFrontendEvent) {
+      if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
+        this._completeActiveRequest(event, 'completed')
+        return
+      }
+      this._completeActiveRequest(event, 'completed')
       this.runStatus = 'completed'
-      const requestId = this.activeRequestId || event.request_id || null
+      const requestId = event.request_id || this.activeRequestId || null
       const turn = this._ensureTurnForRequest(requestId, event.timestamp)
       turn.status = 'completed'
       turn.completedAt = event.timestamp
-      this.activeRequestId = null
+      if (!this.activeRequestId || this.activeRequestId === requestId) {
+        this.activeRequestId = null
+      }
       this.pendingInterrupt = null
 
       // 同步 agent session
       if (event.payload?.agent_session?.session_id) {
         this.activeAgentSessionId = event.payload.agent_session.session_id
         this._upsertAgentSession(event.payload.agent_session)
+        if (event.mode === 'agent_package' && event.payload?.package_id) {
+          const nextScope = agentPackageConversationScope(
+            String(event.payload.package_id),
+            String(event.payload.agent_session.session_id),
+          )
+          this._renameActiveConversationScope(nextScope)
+          if (event.request_id && this.activeRequests[event.request_id]) {
+            this.activeRequests[event.request_id].conversationScope = nextScope
+          }
+        }
       }
     },
 
     _handleRunFailed(event: FactoryFrontendEvent) {
+      if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
+        this._completeActiveRequest(event, 'failed')
+        return
+      }
+      this._completeActiveRequest(event, 'failed')
       this.runStatus = 'failed'
-      const requestId = this.activeRequestId || event.request_id || null
+      const requestId = event.request_id || this.activeRequestId || null
       this.pendingInterrupt = null
 
       // 展示错误
@@ -426,7 +458,45 @@ export const useRuntimeStore = defineStore('runtime', {
       turn.status = 'failed'
       turn.completedAt = event.timestamp
       turn.errorMessage = errorMsg
-      this.activeRequestId = null
+      if (!this.activeRequestId || this.activeRequestId === requestId) {
+        this.activeRequestId = null
+      }
+    },
+
+    _handleInterruptRequested(event: FactoryFrontendEvent) {
+      if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
+        this._completeActiveRequest(event, 'interrupted')
+        return
+      }
+      this._completeActiveRequest(event, 'interrupted')
+      this.runStatus = 'interrupted'
+      this.pendingInterrupt = event
+      this._promoteAgentPackageScopeFromEvent(event)
+      const requestId = event.request_id || this.activeRequestId || null
+      const turn = this._ensureTurnForRequest(requestId, event.timestamp)
+      turn.status = 'interrupted'
+      turn.completedAt = event.timestamp
+      const message = interruptMessage(event)
+      if (message) {
+        const item: TranscriptItem = {
+          id: event.event_id,
+          role: 'assistant',
+          content: message,
+          timestamp: event.timestamp,
+          metadata: {
+            interrupt: true,
+            interrupt_type: interruptType(event),
+            mode: event.mode || null,
+          },
+        }
+        this.transcript.push(item)
+        turn.assistantMessages.push(item)
+      }
+      if (isUserInputInterrupt(event)) {
+        if (!this.activeRequestId || this.activeRequestId === requestId) {
+          this.activeRequestId = null
+        }
+      }
     },
 
     /**
@@ -549,6 +619,7 @@ export const useRuntimeStore = defineStore('runtime', {
      * Plan handler
      */
     _handlePlanUpdated(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       const payload = event.payload
       if (!payload || payload.version !== 'plan_state.v0') return
 
@@ -567,11 +638,13 @@ export const useRuntimeStore = defineStore('runtime', {
      * Model stream handlers
      */
     _handleModelCallStarted(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       const streamId = event.payload?.stream_id
       if (!streamId) return
 
       this.modelStreams[streamId] = {
         streamId,
+        requestId: event.request_id || null,
         nodeId: event.node_id || null,
         content: '',
         active: true,
@@ -581,6 +654,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleModelStreamDelta(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       const streamId = event.payload?.stream_id
       const delta = event.payload?.delta
       if (!streamId || delta == null) return
@@ -588,6 +662,7 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!this.modelStreams[streamId]) {
         this.modelStreams[streamId] = {
           streamId,
+          requestId: event.request_id || null,
           nodeId: event.node_id || null,
           content: delta,
           active: true,
@@ -595,23 +670,30 @@ export const useRuntimeStore = defineStore('runtime', {
           visibleToUser: event.payload?.visible_to_user !== false,
         }
       } else {
+        this.modelStreams[streamId].requestId = this.modelStreams[streamId].requestId || event.request_id || null
         this.modelStreams[streamId].content += delta
       }
       const stream = this.modelStreams[streamId]
       if (stream.visibleToUser && stream.content) {
-        this._upsertAssistantMessageFromStream(streamId, event.timestamp)
+        this._upsertAssistantMessageFromStream(streamId, event.timestamp, event.request_id || stream.requestId || null)
       }
     },
 
     _handleModelMessageCompleted(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       const streamId = event.payload?.stream_id
       const content = event.payload?.content
       if (!streamId) return
+      if (event.payload?.discard || event.payload?.visible_to_user === false) {
+        this._discardAssistantMessageStream(streamId, event.timestamp)
+        return
+      }
 
       if (!this.modelStreams[streamId]) {
         // 没有 delta 时，直接用 snapshot 创建
         this.modelStreams[streamId] = {
           streamId,
+          requestId: event.request_id || null,
           nodeId: event.node_id || null,
           content: content || '',
           active: false,
@@ -619,6 +701,7 @@ export const useRuntimeStore = defineStore('runtime', {
           visibleToUser: event.payload?.visible_to_user !== false,
         }
       } else {
+        this.modelStreams[streamId].requestId = this.modelStreams[streamId].requestId || event.request_id || null
         // 有 delta 时，用 snapshot 补齐（或覆盖）
         if (content && content.length > this.modelStreams[streamId].content.length) {
           this.modelStreams[streamId].content = content
@@ -630,7 +713,7 @@ export const useRuntimeStore = defineStore('runtime', {
       // 添加到 transcript
       const stream = this.modelStreams[streamId]
       if (stream.visibleToUser && stream.content) {
-        this._upsertAssistantMessageFromStream(streamId, event.timestamp)
+        this._upsertAssistantMessageFromStream(streamId, event.timestamp, event.request_id || stream.requestId || null)
       }
     },
 
@@ -638,12 +721,15 @@ export const useRuntimeStore = defineStore('runtime', {
      * Tool handlers
      */
     _handleToolCallProposed(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       this._upsertToolActivityFromEvent(event, 'proposed')
     },
 
     _handleToolApprovalRequested(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       this.runStatus = 'interrupted'
       this.pendingInterrupt = event
+      this._promoteAgentPackageScopeFromEvent(event)
 
       // 更新工具状态为 approval
       const requests = event.payload?.requests || []
@@ -661,8 +747,13 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleToolApprovalResolved(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       const approved = event.payload?.approved
       const toolCallId = event.payload?.tool_call_id
+      this.pendingInterrupt = null
+      if (this.runStatus === 'interrupted') {
+        this.runStatus = 'running'
+      }
 
       if (toolCallId) {
         const tool = this.tools.find((t) => t.toolCallId === toolCallId)
@@ -670,22 +761,33 @@ export const useRuntimeStore = defineStore('runtime', {
           tool.approvalState = approved ? 'approved' : 'rejected'
           this._upsertTurnTool(tool)
         }
+      } else {
+        this.tools
+          .filter((tool) => tool.status === 'approval' && tool.approvalState === 'pending')
+          .forEach((tool) => {
+            tool.approvalState = approved ? 'approved' : 'rejected'
+            this._upsertTurnTool(tool)
+          })
       }
     },
 
     _handleToolCallStarted(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       this._upsertToolActivityFromEvent(event, 'started')
     },
 
     _handleToolCallCompleted(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       this._upsertToolActivityFromEvent(event, 'completed')
     },
 
     _handleToolCallFailed(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       this._upsertToolActivityFromEvent(event, 'failed')
     },
 
     _handleToolObservation(event: FactoryFrontendEvent) {
+      if (isBackgroundEvent(event, this.activeRequestId)) return
       this._upsertToolActivityFromEvent(event, 'observed')
     },
 
@@ -694,15 +796,20 @@ export const useRuntimeStore = defineStore('runtime', {
      */
     _handleContextEvent(event: FactoryFrontendEvent) {
       const type = event.event_type
-      if (type.includes('compression_started')) {
+      if (type === 'context_prepare_started' || type.includes('compression_started')) {
         this.contextActivity.status = 'running'
-      } else if (type.includes('completed')) {
+      } else if (type.includes('completed') || type === 'context_window_updated') {
         this.contextActivity.status = 'completed'
       } else if (type.includes('failed')) {
         this.contextActivity.status = 'failed'
+      } else if (type.includes('skipped')) {
+        this.contextActivity.status = 'skipped'
       }
       this.contextActivity.eventType = type
       this.contextActivity.payload = event.payload
+      if (type === 'context_window_updated') {
+        this.contextWindow = contextWindowView(event)
+      }
     },
 
     _handleMemoryEvent(event: FactoryFrontendEvent) {
@@ -734,12 +841,12 @@ export const useRuntimeStore = defineStore('runtime', {
       if (event.event_type === 'knowledge_documents_listed') {
         const documents = event.payload?.documents || []
         this.knowledgeDocuments = Array.isArray(documents)
-          ? documents.map((document: any): KnowledgeDocumentView => this._knowledgeDocumentView(document))
+          ? documents.map(knowledgeDocumentView)
           : []
       } else if (event.event_type === 'knowledge_search_completed') {
         const results = event.payload?.results || []
         this.knowledgeResults = Array.isArray(results)
-          ? results.map((result: any): KnowledgeSearchResultView => this._knowledgeSearchResultView(result))
+          ? results.map(knowledgeSearchResultView)
           : []
       } else if (event.event_type === 'knowledge_document_read') {
         this.knowledgeDocument = event.payload || null
@@ -750,36 +857,16 @@ export const useRuntimeStore = defineStore('runtime', {
       if (event.event_type === 'workspace_roots_listed') {
         const roots = event.payload?.roots || []
         this.workspaceRoots = Array.isArray(roots)
-          ? roots.map((root: any): WorkspaceRootView => ({
-              scope: root.scope,
-              name: String(root.name || root.scope || 'Workspace'),
-              exists: root.exists !== false,
-            }))
+          ? roots.map(workspaceRootView)
           : []
       } else if (event.event_type === 'workspace_entries_listed') {
         const entries = event.payload?.entries || []
         this.workspaceEntries = Array.isArray(entries)
-          ? entries.map((entry: any): WorkspaceEntry => ({
-              name: String(entry.name || entry.path || '文件'),
-              scope: entry.scope,
-              path: String(entry.path || ''),
-              kind: entry.kind === 'directory' ? 'directory' : 'file',
-              sizeBytes: entry.size_bytes ?? entry.sizeBytes ?? null,
-              updatedAt: entry.updated_at || entry.updatedAt || null,
-            }))
+          ? entries.map(workspaceEntryView)
           : []
       } else if (event.event_type === 'workspace_file_read') {
         const payload = event.payload || {}
-        this.workspaceFile = {
-          name: String(payload.name || payload.path || '文件'),
-          scope: payload.scope,
-          path: String(payload.path || ''),
-          kind: payload.kind === 'binary' ? 'binary' : 'text',
-          sizeBytes: Number(payload.size_bytes || payload.sizeBytes || 0),
-          content: String(payload.content || ''),
-          truncated: Boolean(payload.truncated),
-          payload,
-        } satisfies WorkspaceFileView
+        this.workspaceFile = workspaceFileView(payload)
       }
     },
 
@@ -787,8 +874,8 @@ export const useRuntimeStore = defineStore('runtime', {
       const mcpServers = Array.isArray(event.payload?.mcp_servers) ? event.payload?.mcp_servers : []
       const skills = Array.isArray(event.payload?.skills) ? event.payload?.skills : []
       this.extensionItems = [
-        ...mcpServers.map((item: any): ExtensionItemView => this._extensionItemView(item, 'mcp')),
-        ...skills.map((item: any): ExtensionItemView => this._extensionItemView(item, 'skill')),
+        ...mcpServers.map((item: any) => extensionItemView(item, 'mcp')),
+        ...skills.map((item: any) => extensionItemView(item, 'skill')),
       ]
       if (event.event_type === 'extension_config_tested') {
         this.extensionTestResult = event.payload?.test || event.payload || null
@@ -809,12 +896,18 @@ export const useRuntimeStore = defineStore('runtime', {
         payload: event.payload || {},
       })
       this._updateSchedulerJobs(event)
+      this._updateSchedulerOptions(event)
+      this._updateSchedulerRunNotices(event)
     },
 
     /**
      * Error handler
      */
     _handleError(event: FactoryFrontendEvent) {
+      if (isSchedulerRequest(event.request_id)) {
+        this._completeActiveRequest(event, 'failed')
+        return
+      }
       // 如果 error 的 request_id 命中 active request，视为 failed
       if (event.request_id === this.activeRequestId) {
         this._handleRunFailed(event)
@@ -846,144 +939,86 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    /**
-     * 辅助方法
-     */
+    _registerActiveRequest(event: FactoryFrontendEvent, status: RunStatus) {
+      const requestId = event.request_id
+      if (!requestId) return
+      const existing = this.activeRequests[requestId]
+      const conversationScope =
+        existing?.conversationScope ||
+        scopeFromEventPayload(event) ||
+        this.activeConversationScope
+      this.activeRequests[requestId] = {
+        requestId,
+        status,
+        mode: event.mode || existing?.mode || null,
+        runId: event.run_id || event.payload?.run_id || existing?.runId || null,
+        conversationScope,
+        background: isSchedulerRequest(requestId),
+        source: isSchedulerRequest(requestId) ? 'scheduler' : 'user',
+        startedAt: existing?.startedAt || event.timestamp,
+        completedAt: status === 'running' ? existing?.completedAt || null : event.timestamp,
+        payload: {
+          ...(existing?.payload || {}),
+          ...(event.payload || {}),
+        },
+      }
+    },
+
+    _completeActiveRequest(event: FactoryFrontendEvent, status: RunStatus) {
+      this._registerActiveRequest(event, status)
+    },
+
     _restoreSessionSnapshot(payload: Record<string, any> | undefined) {
-      const session = payload?.session || payload || {}
-      const snapshot = session.snapshot || payload?.snapshot || {}
-      const messages = Array.isArray(snapshot.messages)
-        ? snapshot.messages
-        : Array.isArray(snapshot.transcript)
-          ? snapshot.transcript
-          : []
-      if (messages.length === 0) return
-
-      const transcript: TranscriptItem[] = []
-      const turnsByIndex = new Map<string, ConversationTurn>()
-
-      messages.forEach((message: any, index: number) => {
-        const role = message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user'
-        const turnKey = String(message.turn_index ?? Math.floor(index / 2) + 1)
-        const restoredMode = snapshot.mode || session.current_mode || null
-        const item: TranscriptItem = {
-          id: `restored-${turnKey}-${role}-${index}`,
-          role,
-          content: String(message.content || ''),
-          timestamp: String(message.created_at || message.timestamp || session.updated_at || new Date().toISOString()),
-          metadata: {
-            restored: true,
-            mode: restoredMode,
-          },
+      const snapshot = factorySessionSnapshotView(payload)
+      this.currentMode = snapshot.restoredMode
+      if (!snapshot.hasMessages) {
+        if (snapshot.scope) {
+          this._switchConversationScope(snapshot.scope)
         }
-        if (!item.content.trim()) return
-        transcript.push(item)
-        if (!turnsByIndex.has(turnKey)) {
-          turnsByIndex.set(turnKey, {
-            id: `restored-turn-${turnKey}`,
-            requestId: null,
-            status: 'completed',
-            userMessage: null,
-            assistantMessages: [],
-            tools: [],
-            startedAt: item.timestamp,
-            completedAt: item.timestamp,
-            errorMessage: null,
-            metadata: {
-              restored: true,
-              mode: restoredMode,
-            },
-          })
-        }
-        const turn = turnsByIndex.get(turnKey)!
-        if (role === 'user' && !turn.userMessage) {
-          turn.userMessage = item
-        } else if (role === 'assistant') {
-          turn.assistantMessages.push(item)
-        }
-        turn.completedAt = item.timestamp
-      })
+        return
+      }
 
-      this.transcript = transcript
-      this.conversationTurns = Array.from(turnsByIndex.values())
+      this.transcript = snapshot.transcript
+      this.conversationTurns = snapshot.conversationTurns
+      if (snapshot.scope) {
+        this.activeConversationScope = snapshot.scope
+        this._saveActiveConversationScope()
+      }
     },
 
     _restoreAgentPackageSession(session: any, packageId: string | null = null) {
       if (!session?.session_id) return
+      const snapshot = agentPackageSessionSnapshotView(session, packageId)
       this.activeAgentSessionId = String(session.session_id)
       this.currentMode = 'agent_package'
+      this._switchConversationScope(agentPackageConversationScope(snapshot.sessionPackageId, session.session_id))
+      this._upsertAgentSession(session)
+      if (this._hasLiveConversationState()) {
+        return
+      }
       this.currentPlan = null
+      this.contextActivity = { status: 'idle' }
+      this.contextWindow = null
       this.modelStreams = {}
       this.tools = []
       this.pendingInterrupt = null
-      this._upsertAgentSession(session)
 
-      const transcript: TranscriptItem[] = []
-      const turns: ConversationTurn[] = []
-      const sessionPackageId = packageId || session.package_id || null
-      const rawTurns = Array.isArray(session.turns) ? session.turns : []
-
-      rawTurns.forEach((turn: any, index: number) => {
-        const turnIndex = String(turn?.index ?? index + 1)
-        const timestamp = String(turn?.created_at || session.updated_at || new Date().toISOString())
-        const metadata = {
-          restored: true,
-          mode: 'agent_package',
-          package_id: sessionPackageId,
-          agent_session_id: session.session_id,
-        }
-        const conversationTurn: ConversationTurn = {
-          id: `agent-restored-turn-${session.session_id}-${turnIndex}`,
-          requestId: null,
-          status: 'completed',
-          userMessage: null,
-          assistantMessages: [],
-          tools: [],
-          startedAt: timestamp,
-          completedAt: timestamp,
-          errorMessage: null,
-          metadata,
-        }
-
-        const userInput = String(turn?.user_input || '').trim()
-        if (userInput) {
-          const item: TranscriptItem = {
-            id: `agent-restored-${session.session_id}-${turnIndex}-user`,
-            role: 'user',
-            content: userInput,
-            timestamp,
-            metadata,
-          }
-          transcript.push(item)
-          conversationTurn.userMessage = item
-        }
-
-        const finalAnswer = String(turn?.final_answer || '').trim()
-        if (finalAnswer) {
-          const item: TranscriptItem = {
-            id: `agent-restored-${session.session_id}-${turnIndex}-assistant`,
-            role: 'assistant',
-            content: finalAnswer,
-            timestamp,
-            metadata,
-          }
-          transcript.push(item)
-          conversationTurn.assistantMessages.push(item)
-        }
-
-        if (conversationTurn.userMessage || conversationTurn.assistantMessages.length > 0) {
-          turns.push(conversationTurn)
-        }
-      })
-
-      this.transcript = transcript
-      this.conversationTurns = turns
+      this.transcript = snapshot.transcript
+      this.conversationTurns = snapshot.conversationTurns
+      this._saveActiveConversationScope()
     },
 
     showEmptyAgentPackageSession(_packageId: string | null = null) {
+      this._switchConversationScope(agentPackageConversationScope(_packageId, null))
+      if (this._hasLiveConversationState()) {
+        this.currentMode = 'agent_package'
+        return
+      }
       this.activeAgentSessionId = null
       this.currentMode = 'agent_package'
       this.currentPlan = null
+      this.contextActivity = { status: 'idle' }
+      this.contextWindow = null
       this.modelStreams = {}
       this.tools = []
       this.pendingInterrupt = null
@@ -992,6 +1027,14 @@ export const useRuntimeStore = defineStore('runtime', {
       this.timeline = []
       this.workspaceFile = null
       this.workspaceEntries = []
+    },
+
+    enterFactoryConversation(mode: 'chat' | 'create_agent' | 'evolve_agent', packageId: string | null = null) {
+      this.currentMode = mode
+      const scope = conversationScopeForMode(mode, { package_id: packageId })
+      if (scope) {
+        this._switchConversationScope(scope)
+      }
     },
 
     _ensureTurnForRequest(requestId: string | null, timestamp?: string): ConversationTurn {
@@ -1016,7 +1059,7 @@ export const useRuntimeStore = defineStore('runtime', {
       return turn
     },
 
-    _upsertAssistantMessageFromStream(streamId: string, timestamp: string) {
+    _upsertAssistantMessageFromStream(streamId: string, timestamp: string, requestId: string | null = null) {
       const stream = this.modelStreams[streamId]
       if (!stream || !stream.content.trim()) return
       const existingIdx = this.transcript.findIndex((t) => t.streamId === streamId)
@@ -1035,7 +1078,7 @@ export const useRuntimeStore = defineStore('runtime', {
         }
         this.transcript.push(item)
       }
-      const turn = this._ensureTurnForRequest(this.activeRequestId, timestamp)
+      const turn = this._ensureTurnForRequest(requestId || stream.requestId || this.activeRequestId, timestamp)
       const existingMessage = turn.assistantMessages.find((message) => message.streamId === streamId)
       if (existingMessage) {
         existingMessage.content = item.content
@@ -1043,6 +1086,30 @@ export const useRuntimeStore = defineStore('runtime', {
       } else {
         turn.assistantMessages.push(item)
       }
+    },
+
+    _discardAssistantMessageStream(streamId: string, timestamp: string) {
+      const stream = this.modelStreams[streamId]
+      if (stream) {
+        stream.content = ''
+        stream.active = false
+        stream.completedAt = timestamp
+        stream.visibleToUser = false
+      } else {
+        this.modelStreams[streamId] = {
+          streamId,
+          requestId: null,
+          nodeId: null,
+          content: '',
+          active: false,
+          completedAt: timestamp,
+          visibleToUser: false,
+        }
+      }
+      this.transcript = this.transcript.filter((message) => message.streamId !== streamId)
+      this.conversationTurns.forEach((turn) => {
+        turn.assistantMessages = turn.assistantMessages.filter((message) => message.streamId !== streamId)
+      })
     },
 
     _upsertToolActivityFromEvent(
@@ -1060,6 +1127,7 @@ export const useRuntimeStore = defineStore('runtime', {
       const existing = existingIndex >= 0 ? this.tools[existingIndex] : null
       const activity: ToolActivity = {
         activityKey: existing?.activityKey || activityKey,
+        requestId: event.request_id || existing?.requestId || null,
         eventType: event.event_type,
         timestamp: event.timestamp,
         createdAt: existing?.createdAt || event.timestamp,
@@ -1088,7 +1156,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _upsertTurnTool(tool: ToolActivity) {
-      const turn = this._ensureTurnForRequest(this.activeRequestId, tool.timestamp)
+      const turn = this._ensureTurnForRequest(tool.requestId || this.activeRequestId, tool.timestamp)
       const index = turn.tools.findIndex((item) => item.activityKey === tool.activityKey)
       if (index >= 0) {
         turn.tools[index] = { ...tool }
@@ -1098,59 +1166,29 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _updateKnowledgeSources(event: FactoryFrontendEvent) {
-      if (event.event_type === 'knowledge_sources_listed' && Array.isArray(event.payload?.sources)) {
-        this.knowledgeSources = event.payload.sources.map((source: any): KnowledgeSourceView => (
-          this._knowledgeSourceView(source, event.timestamp)
-        ))
+      if (Array.isArray(event.payload?.sources)) {
+        this.knowledgeSources = event.payload.sources.map((source: any) => knowledgeSourceView(source, event.timestamp))
         return
       }
-      if (event.event_type === 'knowledge_source_registered' && Array.isArray(event.payload?.sources)) {
-        this.knowledgeSources = event.payload.sources.map((source: any): KnowledgeSourceView => (
-          this._knowledgeSourceView(source, event.timestamp)
-        ))
+      if (event.event_type === 'knowledge_source_removed') {
+        const sourceId = event.payload?.source_id
+        if (sourceId) {
+          this.knowledgeSources = this.knowledgeSources.filter((source) => source.payload?.source_id !== sourceId)
+          this.knowledgeDocuments = this.knowledgeDocuments.filter((document) => document.payload?.source_id !== sourceId)
+          this.knowledgeResults = this.knowledgeResults.filter((result) => result.payload?.source_id !== sourceId)
+        }
         return
       }
       const source = event.payload?.source || event.payload?.preview || null
       const sourceId = event.payload?.source_id || source?.source_id
       if (!sourceId && !source?.display_name) return
-      const item = this._knowledgeSourceView(source || event.payload, event.timestamp)
+      const item = knowledgeSourceView(source || event.payload, event.timestamp)
       const key = String(sourceId || item.name)
       const index = this.knowledgeSources.findIndex((value) => String(value.payload?.source_id || value.name) === key)
       if (index >= 0) {
         this.knowledgeSources[index] = item
       } else {
         this.knowledgeSources.unshift(item)
-      }
-    },
-
-    _knowledgeSourceView(source: any, timestamp: string): KnowledgeSourceView {
-      const name = String(source?.display_name || source?.name || '知识源')
-      return {
-        name,
-        status: String(source?.status || '更新中'),
-        mode: source?.mount_mode || source?.mode || null,
-        documentCount: source?.document_count ?? source?.estimated_documents ?? source?.counts?.documents_loaded ?? null,
-        updatedAt: source?.updated_at || timestamp,
-        payload: source || {},
-      }
-    },
-
-    _knowledgeDocumentView(document: any): KnowledgeDocumentView {
-      return {
-        title: String(document.title || document.uri || '文档'),
-        sourceName: document.source_name || null,
-        documentType: document.document_type || null,
-        uri: document.uri || null,
-        payload: document || {},
-      }
-    },
-
-    _knowledgeSearchResultView(result: any): KnowledgeSearchResultView {
-      return {
-        title: String(result.title || '搜索结果'),
-        content: String(result.content || ''),
-        score: typeof result.score === 'number' ? result.score : null,
-        payload: result || {},
       }
     },
 
@@ -1162,17 +1200,62 @@ export const useRuntimeStore = defineStore('runtime', {
       }
       const jobs = event.payload?.payload?.jobs || event.payload?.jobs
       if (Array.isArray(jobs)) {
-        this.schedulerJobs = jobs.map((job: any): SchedulerJobView => this._schedulerJobView(job))
+        this.schedulerJobs = jobs.map(schedulerJobView)
         return
       }
       const job = event.payload?.payload?.job || event.payload?.job
       if (!job) return
-      const view = this._schedulerJobView(job)
+      const view = schedulerJobView(job)
       const index = this.schedulerJobs.findIndex((item) => item.payload?.job_id === job.job_id)
       if (index >= 0) {
         this.schedulerJobs[index] = view
       } else {
         this.schedulerJobs.unshift(view)
+      }
+    },
+
+    _updateSchedulerOptions(event: FactoryFrontendEvent) {
+      if (event.event_type !== 'scheduler_options_listed') return
+      const tools = event.payload?.payload?.tools || event.payload?.tools || []
+      this.schedulerToolOptions = Array.isArray(tools)
+        ? tools
+            .map(schedulerToolOptionView)
+            .filter((tool): tool is NonNullable<ReturnType<typeof schedulerToolOptionView>> => tool !== null)
+        : []
+    },
+
+    _updateSchedulerRunNotices(event: FactoryFrontendEvent) {
+      if (![
+        'scheduler_run_scheduled',
+        'scheduler_run_started',
+        'scheduler_run_completed',
+        'scheduler_run_failed',
+        'scheduler_run_skipped',
+        'scheduler_run_cancelled',
+      ].includes(event.event_type)) {
+        return
+      }
+      const notice = schedulerRunNoticeView(event)
+      if (!notice) return
+      const index = this.schedulerRunNotices.findIndex((item) => item.id === notice.id)
+      if (index >= 0) {
+        this.schedulerRunNotices[index] = {
+          ...this.schedulerRunNotices[index],
+          ...notice,
+          unread: notice.status === 'running' ? this.schedulerRunNotices[index].unread : true,
+        }
+      } else {
+        this.schedulerRunNotices.unshift(notice)
+      }
+      if (this.schedulerRunNotices.length > 30) {
+        this.schedulerRunNotices = this.schedulerRunNotices.slice(0, 30)
+      }
+    },
+
+    markSchedulerNoticeRead(noticeId: string) {
+      const notice = this.schedulerRunNotices.find((item) => item.id === noticeId)
+      if (notice) {
+        notice.unread = false
       }
     },
 
@@ -1186,26 +1269,13 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _schedulerJobView(job: any): SchedulerJobView {
-      return {
-        title: String(job.task_content || job.title || '定时任务'),
-        schedule: String(job.schedule_expr || '未设置'),
-        enabled: job.enabled !== false,
-        status: job.enabled === false ? '已暂停' : '已启用',
-        targetType: job.target?.target_type || null,
-        payload: job || {},
-      }
-    },
-
-    _extensionItemView(item: any, fallbackKind: 'mcp' | 'skill'): ExtensionItemView {
-      const kind = item.kind === 'skill' ? 'skill' : item.kind === 'mcp' ? 'mcp' : fallbackKind
-      return {
-        name: String(item.name || (kind === 'mcp' ? 'MCP' : 'Skill')),
-        kind,
-        scope: String(item.scope || 'local'),
-        status: String(item.status || (item.enabled === false ? 'disabled' : 'enabled')),
-        enabled: item.enabled !== false,
-        payload: item.payload || item || {},
+    _upsertFactorySession(session: any) {
+      if (!session?.session_id) return
+      const index = this.sessions.findIndex((item) => item.session_id === session.session_id)
+      if (index >= 0) {
+        this.sessions[index] = { ...this.sessions[index], ...session }
+      } else {
+        this.sessions.unshift(session)
       }
     },
 
@@ -1219,12 +1289,124 @@ export const useRuntimeStore = defineStore('runtime', {
       this.modelStreams = {}
       this.tools = []
       this.currentPlan = null
+      this.contextActivity = { status: 'idle' }
+      this.contextWindow = null
       this.transcript = []
       this.conversationTurns = []
       this.timeline = []
       this.workspaceEntries = []
       this.workspaceFile = null
       this.extensionTestResult = null
+      this.activeConversationScope = null
+      this.conversationScopes = {}
+    },
+
+    _switchConversationScope(scope: string) {
+      if (!scope || this.activeConversationScope === scope) return
+      this._saveActiveConversationScope()
+      this.activeConversationScope = scope
+      const saved = this.conversationScopes[scope]
+      if (saved) {
+        this._restoreConversationScope(saved)
+      } else {
+        this._clearConversationViewState()
+      }
+    },
+
+    _saveActiveConversationScope() {
+      const scope = this.activeConversationScope
+      if (!scope) return
+      this.conversationScopes[scope] = buildConversationScopeState(this)
+    },
+
+    _restoreConversationScope(saved: ConversationScopeState) {
+      const restored = normalizeConversationScopeState(saved)
+      this.activeRequestId = restored.activeRequestId ?? null
+      this.runStatus = restored.runStatus ?? 'idle'
+      this.pendingInterrupt = restored.pendingInterrupt ?? null
+      this.currentRunId = restored.currentRunId ?? null
+      this.nodes = restored.nodes || {}
+      this.stages = restored.stages || {}
+      this.transcript = restored.transcript
+      this.conversationTurns = restored.conversationTurns
+      this.timeline = restored.timeline
+      this.tools = restored.tools
+      this.currentPlan = restored.currentPlan
+      this.contextActivity = restored.contextActivity
+      this.contextWindow = restored.contextWindow
+      this.modelStreams = restored.modelStreams
+      this.activeAgentSessionId = restored.activeAgentSessionId
+    },
+
+    _dispatchEventToConversationScope(scope: string, event: FactoryFrontendEvent) {
+      const previousScope = this.activeConversationScope
+      if (previousScope) {
+        this._saveActiveConversationScope()
+      }
+      this.activeConversationScope = scope
+      const saved = this.conversationScopes[scope]
+      if (saved) {
+        this._restoreConversationScope(saved)
+      } else {
+        this._clearConversationViewState()
+      }
+      this._dispatchEvent(event)
+      this._recordTimelineEvent(event)
+      this._saveActiveConversationScope()
+      if (previousScope) {
+        this.activeConversationScope = previousScope
+        const previousSaved = this.conversationScopes[previousScope]
+        if (previousSaved) {
+          this._restoreConversationScope(previousSaved)
+        }
+      } else {
+        this.activeConversationScope = null
+        this._clearConversationViewState()
+      }
+    },
+
+    _renameActiveConversationScope(nextScope: string) {
+      const previousScope = this.activeConversationScope
+      if (!previousScope || previousScope === nextScope) return
+      this.activeConversationScope = nextScope
+      delete this.conversationScopes[previousScope]
+    },
+
+    _promoteAgentPackageScopeFromEvent(event: FactoryFrontendEvent) {
+      const scopeInfo = agentPackageScopeInfoFromEvent(event)
+      if (!scopeInfo) return
+      this.activeAgentSessionId = scopeInfo.sessionId
+      this._renameActiveConversationScope(scopeInfo.scope)
+      if (event.request_id && this.activeRequests[event.request_id]) {
+        this.activeRequests[event.request_id].conversationScope = scopeInfo.scope
+      }
+    },
+
+    _hasLiveConversationState(): boolean {
+      return Boolean(
+        this.pendingInterrupt ||
+        this.activeRequestId ||
+        this.runStatus === 'running' ||
+        this.runStatus === 'interrupted',
+      )
+    },
+
+    _clearConversationViewState() {
+      this.activeRequestId = null
+      this.runStatus = 'idle'
+      this.pendingInterrupt = null
+      this.currentRunId = null
+      this.nodes = {}
+      this.stages = {}
+      this.modelStreams = {}
+      this.tools = []
+      this.currentPlan = null
+      this.contextActivity = { status: 'idle' }
+      this.contextWindow = null
+      this.transcript = []
+      this.conversationTurns = []
+      this.timeline = []
+      this.activeAgentSessionId = null
     },
 
     _recordDebugEvent(event: FactoryFrontendEvent) {
@@ -1275,6 +1457,63 @@ export const useRuntimeStore = defineStore('runtime', {
         ...turn.metadata,
         ...metadata,
       }
+      if (requestId) {
+        this.activeRequestId = requestId
+        this.runStatus = 'running'
+        this.pendingInterrupt = null
+        const conversationScope = scopeFromMessageMetadata(metadata, this.currentMode)
+        this.activeRequests[requestId] = {
+          requestId,
+          status: 'running',
+          mode: (metadata.mode as FactoryMode | undefined) || this.currentMode || null,
+          runId: null,
+          conversationScope,
+          background: false,
+          source: 'user',
+          startedAt: timestamp,
+          completedAt: null,
+          payload: { ...metadata },
+        }
+      }
     },
+
+    submitInterruptDecision(requestId: string | null, payload: Record<string, any> = {}) {
+      if (!requestId) return
+      const timestamp = new Date().toISOString()
+      const activeScope = this.activeConversationScope
+      this.pendingInterrupt = null
+      this.runStatus = 'running'
+      this.activeRequestId = requestId
+      this.activeRequests[requestId] = {
+        requestId,
+        status: 'running',
+        mode: (payload.mode as FactoryMode | undefined) || this.currentMode || null,
+        runId: null,
+        conversationScope: activeScope,
+        background: false,
+        source: 'user',
+        startedAt: timestamp,
+        completedAt: null,
+        payload: { ...payload, interrupt_resume: true },
+      }
+      const turn = this._ensureTurnForRequest(requestId, timestamp)
+      turn.status = 'running'
+      turn.startedAt = turn.startedAt || timestamp
+      turn.errorMessage = null
+      turn.metadata = {
+        ...(turn.metadata || {}),
+        interrupt_resume: true,
+        action: payload.action || null,
+      }
+      const approved = payload.approved === true
+      const rejected = payload.approved === false || ['deny', 'revise'].includes(String(payload.action || ''))
+      this.tools
+        .filter((tool) => tool.status === 'approval' && tool.approvalState === 'pending')
+        .forEach((tool) => {
+          tool.approvalState = approved ? 'approved' : rejected ? 'rejected' : tool.approvalState
+          this._upsertTurnTool(tool)
+        })
+    },
+
   },
 })

@@ -4,7 +4,7 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import type {
   KnowledgeSourceView,
   KnowledgeDocumentView,
@@ -17,15 +17,23 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
   const documents = ref<KnowledgeDocumentView[]>([])
   const searchResults = ref<KnowledgeSearchResultView[]>([])
   const currentDocument = ref<any | null>(null)
-  const searchQuery = ref('')
-
-  const selectedSource = computed(() => {
-    if (!selectedSourceId.value) return null
-    return sources.value.find((s) => s.payload?.source_id === selectedSourceId.value) || null
-  })
 
   function setSources(newSources: KnowledgeSourceView[]): void {
+    let nextSelectedSourceId = selectedSourceId.value
+    let nextDocuments = documents.value
+    let nextCurrentDocument = currentDocument.value
+    if (
+      nextSelectedSourceId &&
+      !newSources.some((source) => source.payload?.source_id === nextSelectedSourceId)
+    ) {
+      nextSelectedSourceId = null
+      nextDocuments = []
+      nextCurrentDocument = null
+    }
     sources.value = newSources
+    selectedSourceId.value = nextSelectedSourceId
+    documents.value = nextDocuments
+    currentDocument.value = nextCurrentDocument
   }
 
   function selectSource(sourceId: string | null): void {
@@ -46,29 +54,12 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     currentDocument.value = doc
   }
 
-  function setSearchQuery(query: string): void {
-    searchQuery.value = query
-  }
-
-  function addSource(source: KnowledgeSourceView): void {
-    const existingIndex = sources.value.findIndex(
-      (s) => s.payload?.source_id === source.payload?.source_id
-    )
-    if (existingIndex !== -1) {
-      sources.value[existingIndex] = source
-    } else {
-      sources.value.unshift(source)
-    }
-  }
-
-  function removeSource(sourceId: string): void {
-    const index = sources.value.findIndex((s) => s.payload?.source_id === sourceId)
-    if (index !== -1) {
-      sources.value.splice(index, 1)
-    }
-    if (selectedSourceId.value === sourceId) {
-      selectedSourceId.value = null
-    }
+  function reset(): void {
+    sources.value = []
+    selectedSourceId.value = null
+    documents.value = []
+    searchResults.value = []
+    currentDocument.value = null
   }
 
   return {
@@ -77,15 +68,11 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     documents,
     searchResults,
     currentDocument,
-    searchQuery,
-    selectedSource,
     setSources,
     selectSource,
     setDocuments,
     setSearchResults,
     setCurrentDocument,
-    setSearchQuery,
-    addSource,
-    removeSource,
+    reset,
   }
 })

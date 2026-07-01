@@ -50,6 +50,7 @@ class SystemPackageRuntimeHandle:
         self._closing = False
         self._condition = threading.Condition()
         self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
+        self._request_commands: dict[str, str] = {}
         self._request_done: dict[str, bool] = {}
         self._request_errors: dict[str, BaseException] = {}
         self.last_used = time.monotonic()
@@ -66,6 +67,20 @@ class SystemPackageRuntimeHandle:
     def set_emit(self, emit: Emit | None) -> None:
         self._emit = emit
 
+    @property
+    def is_running(self) -> bool:
+        return not self._closing
+
+    @property
+    def active_request_count(self) -> int:
+        with self._condition:
+            return len(self._request_events)
+
+    @property
+    def active_command_types(self) -> tuple[str, ...]:
+        with self._condition:
+            return tuple(self._request_commands.values())
+
     def is_idle(self, timeout_seconds: int) -> bool:
         return timeout_seconds > 0 and (time.monotonic() - self.last_used) > timeout_seconds
 
@@ -75,9 +90,10 @@ class SystemPackageRuntimeHandle:
         request_id = str(command.get("request_id") or uuid4().hex)
         command["request_id"] = request_id
         with self._condition:
-            if self._request_events:
-                raise RuntimeError(f"system package runtime for {self.package_id} is already handling a request")
+            if request_id in self._request_events:
+                raise RuntimeError(f"system package runtime request is already active: {request_id}")
             self._request_events[request_id] = deque()
+            self._request_commands[request_id] = str(command.get("type") or "")
             self._request_done[request_id] = False
 
         def collect(item: FactoryFrontendEvent) -> None:
@@ -151,6 +167,7 @@ class SystemPackageRuntimeHandle:
             worker.join(timeout=0.1)
             with self._condition:
                 self._request_events.pop(request_id, None)
+                self._request_commands.pop(request_id, None)
                 self._request_done.pop(request_id, None)
                 self._request_errors.pop(request_id, None)
             self.last_used = time.monotonic()

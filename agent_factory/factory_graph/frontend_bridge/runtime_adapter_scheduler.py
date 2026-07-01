@@ -3,8 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import bounded_int
+from agent_factory.factory_graph.frontend_bridge.protocol import (
+    FactoryFrontendCommand,
+    FactoryFrontendEvent,
+    event,
+)
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     SYSTEM_CHAT_PACKAGE_ID,
 )
@@ -26,108 +29,30 @@ from agent_factory.tooling import get_factory_tools
 
 class RuntimeSchedulerCommandMixin:
     def scheduler_manage(self, command: FactoryFrontendCommand) -> None:
-        runtime = self.scheduler_runtime
-        if runtime is None:
-            self._emit_error(command, "scheduler runtime is not enabled")
-            return
-        action = str(command.payload.get("action") or "list").strip()
-        job_id = str(command.payload.get("job_id") or "").strip()
-        limit = bounded_int(command.payload.get("limit"), default=20, minimum=1, maximum=200)
-        if action == "list":
-            jobs = runtime.list_jobs()
-            self._emit_scheduler_event(
-                SchedulerEventPayload(
-                    event_type="scheduler_jobs_listed",
-                    owner_type=runtime.owner_type,
-                    owner_id=runtime.owner_id,
-                    status="listed",
-                    payload={"jobs": [job.model_dump(mode="json") for job in jobs], "count": len(jobs)},
-                ),
+        package_id = str(command.payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
+        try:
+            for stream_mode, chunk in self.agent_package_runtime.scheduler_events(
+                package_id,
+                payload=command.payload,
                 request_id=command.request_id,
-            )
-            return
-        if action == "create":
-            job_payload = command.payload.get("job") if isinstance(command.payload.get("job"), dict) else command.payload
-            job = runtime.create_job(dict(job_payload))
-            self._emit_scheduler_job_snapshot("scheduler_job_created", job, status="created", request_id=command.request_id)
-            return
-        if action == "update":
-            job_payload = command.payload.get("job") if isinstance(command.payload.get("job"), dict) else command.payload
-            job = runtime.upsert_job(dict(job_payload))
-            self._emit_scheduler_job_snapshot("scheduler_job_updated", job, status="updated", request_id=command.request_id)
-            return
-        if action == "describe":
-            if not job_id:
-                self._emit_error(command, "scheduler describe requires job_id")
-                return
-            description = runtime.describe_job(job_id)
-            job_payload = description.get("job") if isinstance(description.get("job"), dict) else {}
-            target_payload = job_payload.get("target", {}) if isinstance(job_payload, dict) else {}
-            self._emit_scheduler_event(
-                SchedulerEventPayload(
-                    event_type="scheduler_job_described",
-                    job_id=job_id,
-                    owner_type=runtime.owner_type,
-                    owner_id=runtime.owner_id,
-                    target_type=target_payload.get("target_type") if isinstance(target_payload, dict) else None,
-                    status="described",
-                    payload=description,
-                ),
-                request_id=command.request_id,
-            )
-            return
-        if action == "runs":
-            runs = runtime.store.list_runs(job_id=job_id or None, limit=limit)
-            self._emit_scheduler_event(
-                SchedulerEventPayload(
-                    event_type="scheduler_runs_listed",
-                    job_id=job_id or None,
-                    owner_type=runtime.owner_type,
-                    owner_id=runtime.owner_id,
-                    status="listed",
-                    payload={"runs": [run.model_dump(mode="json") for run in runs], "count": len(runs), "limit": limit},
-                ),
-                request_id=command.request_id,
-            )
-            return
-        if action == "pause":
-            if not job_id:
-                self._emit_error(command, "scheduler pause requires job_id")
-                return
-            job = runtime.set_job_enabled(job_id, False)
-            self._emit_scheduler_job_snapshot("scheduler_job_updated", job, status="paused", request_id=command.request_id)
-            return
-        if action == "resume":
-            if not job_id:
-                self._emit_error(command, "scheduler resume requires job_id")
-                return
-            job = runtime.set_job_enabled(job_id, True)
-            self._emit_scheduler_job_snapshot("scheduler_job_updated", job, status="enabled", request_id=command.request_id)
-            return
-        if action == "delete":
-            if not job_id:
-                self._emit_error(command, "scheduler delete requires job_id")
-                return
-            deleted = runtime.delete_job(job_id)
-            self._emit_scheduler_event(
-                SchedulerEventPayload(
-                    event_type="scheduler_job_deleted",
-                    job_id=job_id,
-                    owner_type=runtime.owner_type,
-                    owner_id=runtime.owner_id,
-                    status="deleted" if deleted else "missing",
-                    payload={"deleted": deleted},
-                ),
-                request_id=command.request_id,
-            )
-            return
-        if action == "run_now":
-            if not job_id:
-                self._emit_error(command, "scheduler run_now requires job_id")
-                return
-            runtime.run_now(job_id)
-            return
-        self._emit_error(command, f"unsupported scheduler action: {action}")
+            ):
+                if stream_mode == "frontend_event":
+                    item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+                    self.emit(item)
+                elif stream_mode == "stderr":
+                    self.emit(
+                        event(
+                            "debug_patch",
+                            request_id=command.request_id,
+                            session_id=self._session_id(),
+                            mode=self.mode,
+                            graph_id="scheduler_manage",
+                            producer_type="factory_runtime",
+                            payload={"scheduler_stderr": chunk, "package_id": package_id},
+                        )
+                    )
+        except Exception as exc:
+            self._emit_error(command, f"{type(exc).__name__}: {exc}")
 
     def _emit_scheduler_job_snapshot(
         self,
@@ -211,21 +136,23 @@ class RuntimeSchedulerCommandMixin:
     def _scheduler_graph_runner(self, job: Any, _run: Any) -> dict[str, Any]:
         payload = dict(job.target.payload)
         message = str(payload.get("message") or "").strip()
-        mode = str(payload.get("mode") or "chat")
-        if mode not in {"chat", "create_agent"}:
-            return {"status": "failed", "error": f"unsupported factory scheduler graph mode: {mode}"}
-        self._ensure_session(FactoryFrontendCommand(type="start_session"))
-        if mode == "create_agent":
-            return self._run_scheduled_create_agent(message)
+        request_id = f"scheduler-{_run.run_id}"
+        target_scope = str(payload.get("target_scope") or "").strip() or "chat"
+        if target_scope == "agent_package":
+            return self._run_scheduled_agent_package(job=job, run=_run, message=message, request_id=request_id)
+        if target_scope != "chat":
+            return {"status": "failed", "error": f"unsupported scheduler graph target_scope: {target_scope}"}
         package_id = SYSTEM_CHAT_PACKAGE_ID
         redacted_message = redact_attachment_markers(message)
-        agent_session_id = self._planned_system_chat_agent_session_id()
+        thread_policy = str(payload.get("thread_policy") or "new_thread_per_run")
+        agent_session_id = str(payload.get("fixed_thread_id") or "").strip() if thread_policy == "fixed_thread" else None
+        factory_session = self.session_manager.create(mode="chat")
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
-            request_id=None,
-            session_id=self._session_id(),
+            request_id=request_id,
+            session_id=factory_session.session_id,
             mode="chat",
-            graph_id=f"factory_{mode}_package_scheduler",
+            graph_id="scheduled_factory_chat",
             producer_type="factory_runtime",
         )
         try:
@@ -233,15 +160,21 @@ class RuntimeSchedulerCommandMixin:
                 package_id,
                 user_input=message,
                 session_id=agent_session_id,
-                request_id=None,
+                request_id=request_id,
             )
-            self._commit_system_chat_request(redacted_message)
             consume_result = self._consume_agent_package_stream(
                 package_id=package_id,
                 run=run,
                 normalizer=normalizer,
-                frontend_mode=mode,  # type: ignore[arg-type]
-                frontend_session_id=self._session_id(),
+                frontend_mode="chat",
+                frontend_session_id=factory_session.session_id,
+                sync_system_chat_session=False,
+            )
+            self._sync_scheduled_chat_session(
+                factory_session_id=factory_session.session_id,
+                request_id=request_id,
+                user_input=redacted_message,
+                agent_session=run.session if isinstance(run.session, dict) else {},
             )
         except AttachmentImportError as exc:
             payload = attachment_import_error_payload(exc)
@@ -259,28 +192,64 @@ class RuntimeSchedulerCommandMixin:
         if consume_result.status == "failed":
             return _scheduled_failure_result(consume_result, fallback="factory scheduled chat run failed")
         if consume_result.status == "interrupted":
-            return {"status": "interrupted", "output_summary": f"factory scheduled {mode} run requested user input"}
-        return {"status": "completed", "output_summary": f"factory scheduled {mode} run completed"}
+            return {
+                "status": "interrupted",
+                "request_id": request_id,
+                "target_scope": "chat",
+                "package_id": package_id,
+                "agent_session": run.session,
+                "conversation": {"mode": "chat", "session_id": factory_session.session_id},
+                "output_summary": "factory scheduled chat run requested user input",
+            }
+        return {
+            "status": "completed",
+            "request_id": request_id,
+            "target_scope": "chat",
+            "package_id": package_id,
+            "agent_session": run.session,
+            "conversation": {"mode": "chat", "session_id": factory_session.session_id},
+            "output_summary": "factory scheduled chat run completed",
+        }
 
-    def _run_scheduled_create_agent(self, message: str) -> dict[str, Any]:
-        redacted_message = redact_attachment_markers(message)
-        agent_session_id = self._planned_host_create_agent_session_id()
+    def _run_scheduled_agent_package(self, *, job: Any, run: Any, message: str, request_id: str) -> dict[str, Any]:
+        payload = dict(job.target.payload)
+        package_id = str(payload.get("package_id") or "").strip()
+        if not package_id:
+            return {"status": "failed", "error": "scheduled agent package run requires package_id"}
+        thread_policy = str(payload.get("thread_policy") or "new_thread_per_run")
+        session_id = (
+            str(payload.get("fixed_thread_id") or payload.get("session_id") or "").strip()
+            if thread_policy == "fixed_thread"
+            else ""
+        ) or None
+        package_name = package_id
+        try:
+            summary = self.agent_package_runtime.package_summary(package_id)
+            package_name = str(summary.get("agent_name") or summary.get("name") or package_id)
+        except Exception:
+            pass
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
-            request_id=None,
-            session_id=self._session_id(),
-            mode="create_agent",
-            graph_id="create_agent_react_scheduler",
+            request_id=request_id,
+            session_id=None,
+            mode="agent_package",
+            graph_id=f"scheduled_agent_package:{package_id}",
             producer_type="factory_runtime",
         )
         try:
-            run = self.create_agent_runtime.stream(
+            package_run = self.agent_package_runtime.stream(
+                package_id,
                 user_input=message,
-                session_id=agent_session_id,
-                request_id=None,
+                session_id=session_id,
+                request_id=request_id,
             )
-            self._commit_host_create_agent_request(redacted_message, session_id=agent_session_id)
-            consume_result = self._consume_create_agent_stream(run=run)
+            consume_result = self._consume_agent_package_stream(
+                package_id=package_id,
+                run=package_run,
+                normalizer=normalizer,
+                frontend_mode="agent_package",
+                frontend_session_id=None,
+            )
         except AttachmentImportError as exc:
             payload = attachment_import_error_payload(exc)
             normalizer.runtime_event(
@@ -290,15 +259,59 @@ class RuntimeSchedulerCommandMixin:
                 message=payload["message"],
                 payload=payload,
             )
-            return {"status": "failed", "error": payload["message"], "payload": payload}
+            return {
+                "status": "failed",
+                "request_id": request_id,
+                "target_scope": "agent_package",
+                "package_id": package_id,
+                "package_name": package_name,
+                "error": payload["message"],
+                "payload": payload,
+            }
         except Exception as exc:
             normalizer.emit_run_failed(exc)
-            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+            return {
+                "status": "failed",
+                "request_id": request_id,
+                "target_scope": "agent_package",
+                "package_id": package_id,
+                "package_name": package_name,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
         if consume_result.status == "failed":
-            return _scheduled_failure_result(consume_result, fallback="factory scheduled create-agent run failed")
-        if consume_result.status == "interrupted" or self.pending_create_agent_run is not None:
-            return {"status": "interrupted", "output_summary": "scheduled create-agent run requested user input"}
-        return {"status": "completed", "output_summary": "factory scheduled create_agent run completed"}
+            result = _scheduled_failure_result(consume_result, fallback="scheduled agent package run failed")
+            return {
+                **result,
+                "request_id": request_id,
+                "target_scope": "agent_package",
+                "package_id": package_id,
+                "package_name": package_name,
+                "agent_session": package_run.session,
+            }
+        if consume_result.status == "interrupted":
+            return {
+                "status": "interrupted",
+                "request_id": request_id,
+                "target_scope": "agent_package",
+                "package_id": package_id,
+                "package_name": package_name,
+                "agent_session": package_run.session,
+                "output_summary": "scheduled agent package run requested user input",
+            }
+        return {
+            "status": "completed",
+            "request_id": request_id,
+            "target_scope": "agent_package",
+            "package_id": package_id,
+            "package_name": package_name,
+            "agent_session": package_run.session,
+            "conversation": {
+                "mode": "agent_package",
+                "package_id": package_id,
+                "session_id": package_run.session.get("session_id") if isinstance(package_run.session, dict) else None,
+            },
+            "output_summary": "scheduled agent package run completed",
+        }
 
     def _factory_tools(self, tool_ids: list[str] | set[str] | tuple[str, ...] | None = None) -> list[Any]:
         return get_factory_tools(
@@ -310,6 +323,29 @@ class RuntimeSchedulerCommandMixin:
         if self.scheduler_runtime is None:
             return {}
         return {"scheduler_runtime": self.scheduler_runtime}
+
+    def _sync_scheduled_chat_session(
+        self,
+        *,
+        factory_session_id: str,
+        request_id: str,
+        user_input: str,
+        agent_session: dict[str, Any],
+    ) -> None:
+        agent_session_id = str(agent_session.get("session_id") or "").strip()
+        record = self.session_manager.remember_first_user_input(factory_session_id, user_input)
+        if agent_session_id:
+            record.chat_agent_package_session_id = agent_session_id
+            self.session_manager.save(record)
+        turns = agent_session.get("turns")
+        if isinstance(turns, list):
+            self.session_manager.replace_turns_from_agent_session(
+                factory_session_id,
+                "chat",
+                [turn for turn in turns if isinstance(turn, dict)],
+            )
+            return
+        self.session_manager.start_turn(factory_session_id, "chat", request_id=request_id, user_input=user_input)
 
 
 def _scheduled_failure_result(result: Any, *, fallback: str) -> dict[str, Any]:
@@ -323,3 +359,15 @@ def _scheduled_failure_result(result: Any, *, fallback: str) -> dict[str, Any]:
         or fallback
     )
     return {"status": "failed", "error": message, "payload": payload}
+
+
+def _normalized_scheduler_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload)
+    target = result.get("target")
+    if not isinstance(target, dict):
+        raise ValueError("scheduler job requires target")
+    normalized_target = dict(target)
+    target_payload = normalized_target.get("payload")
+    normalized_target["payload"] = dict(target_payload) if isinstance(target_payload, dict) else {}
+    result["target"] = normalized_target
+    return result

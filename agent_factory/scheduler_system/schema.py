@@ -53,6 +53,11 @@ class SchedulerTarget(BaseModel):
             message = str(self.payload.get("message") or "").strip()
             if not message:
                 raise ValueError("graph_run target payload requires message")
+            target_scope = str(self.payload.get("target_scope") or "chat").strip()
+            if target_scope not in {"chat", "agent_package"}:
+                raise ValueError("graph_run target payload has invalid target_scope")
+            if target_scope == "agent_package" and not str(self.payload.get("package_id") or "").strip():
+                raise ValueError("graph_run target payload agent_package requires package_id")
             thread_policy = str(self.payload.get("thread_policy") or "new_thread_per_run")
             if thread_policy not in {"new_thread_per_run", "fixed_thread", "inherit_agent_default"}:
                 raise ValueError("graph_run target payload has invalid thread_policy")

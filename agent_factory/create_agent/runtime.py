@@ -49,6 +49,14 @@ class CreateAgentRuntime:
         self.model = model
         self._active_graph_by_session: dict[str, str] = {}
 
+    def load_session_snapshot(self, session_id: str) -> dict[str, Any]:
+        manufacture = self._checkpoint_snapshot(session_id=session_id, graph_kind="manufacture")
+        assist = self._checkpoint_snapshot(session_id=session_id, graph_kind="assist")
+        snapshot = manufacture or assist
+        if snapshot is None:
+            return {"session_id": session_id, "turn_count": 0, "turns": []}
+        return snapshot
+
     def stream(
         self,
         *,
@@ -98,6 +106,43 @@ class CreateAgentRuntime:
                 },
             ),
         )
+
+    def _checkpoint_snapshot(self, *, session_id: str, graph_kind: str) -> dict[str, Any] | None:
+        values = self._checkpoint_values(thread_id=f"{session_id}:{graph_kind}")
+        if not values:
+            return None
+        user_input = _checkpoint_user_input(values)
+        final_answer = str(values.get("final_answer") or "").strip() or None
+        if not user_input and not final_answer:
+            return None
+        turn = {
+            "index": 1,
+            "created_at": datetime.now(UTC).isoformat(),
+            "user_input": user_input,
+            "final_answer": final_answer,
+            "status": "completed" if values.get("done") else "running",
+        }
+        return {
+            "session_id": session_id,
+            "graph_kind": graph_kind,
+            "workspace_path": str(CreateAgentWorkspace.for_session(session_id).root),
+            "turn_count": 1,
+            "turns": [turn],
+        }
+
+    def _checkpoint_values(self, *, thread_id: str) -> dict[str, Any]:
+        get_tuple = getattr(self.checkpointer, "get_tuple", None)
+        if not callable(get_tuple):
+            return {}
+        try:
+            checkpoint_tuple = get_tuple({"configurable": {"thread_id": thread_id}})
+        except Exception:
+            return {}
+        checkpoint = getattr(checkpoint_tuple, "checkpoint", None) if checkpoint_tuple is not None else None
+        if not isinstance(checkpoint, dict):
+            return {}
+        values = checkpoint.get("channel_values") or checkpoint.get("values") or {}
+        return dict(values) if isinstance(values, dict) else {}
 
     def resume_stream(
         self,
@@ -407,6 +452,22 @@ def _manufacture_resume_update(*, workspace: CreateAgentWorkspace, resume_payloa
             ),
         },
     }
+
+
+def _checkpoint_user_input(values: dict[str, Any]) -> str | None:
+    request = str(values.get("request") or "").strip()
+    if request:
+        return request
+    messages = values.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if message.__class__.__name__ != "HumanMessage":
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return None
 
 
 def _is_publish_confirmation_resume(payload: dict[str, Any]) -> bool:

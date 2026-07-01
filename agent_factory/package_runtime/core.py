@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
+import threading
 from typing import Any, Callable
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
@@ -19,6 +20,7 @@ from agent_factory.runtime_protocol.completion import runtime_completed, runtime
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
 from agent_factory.scheduler_system.events import SchedulerEventPayload
+from agent_factory.scheduler_system.management import manage_scheduler_runtime
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.memory_system import default_agent_memory_config
@@ -66,6 +68,7 @@ class PackageRuntimeCore:
         self.emit_background = emit_background
         self.compiled_runtime: CompiledPackageRuntime | None = None
         self.background_workers = RuntimeBackgroundWorkerManager()
+        self._compile_lock = threading.Lock()
 
     def handle(self, command: dict[str, Any], *, emit: Emit) -> int:
         command_type = str(command.get("type") or "")
@@ -82,6 +85,34 @@ class PackageRuntimeCore:
         if command_type == "shutdown":
             self.shutdown()
             return 0
+        if command_type == "initialize_runtime":
+            try:
+                runtime = self.ensure_compiled(normalizer)
+                normalizer.runtime_event(
+                    "agent_package_instance_updated",
+                    payload=self._instance_status_payload(runtime=runtime, status="ready"),
+                )
+                return 0
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "agent_package_instance_updated",
+                    severity="error",
+                    payload=self._instance_status_payload(status="failed", error=f"{type(exc).__name__}: {exc}"),
+                )
+                return 1
+        if command_type == "scheduler_manage":
+            try:
+                runtime = self.ensure_compiled(normalizer)
+                self._manage_scheduler(normalizer=normalizer, payload=payload, runtime=runtime)
+                return 0
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "error",
+                    severity="error",
+                    message=f"{type(exc).__name__}: {exc}",
+                    payload={"message": str(exc), "error_type": type(exc).__name__},
+                )
+                return 1
         normalizer.emit_run_started({"command": command_type, "attachment_count": _attachment_count(payload)})
         try:
             if command_type == "list_sessions":
@@ -99,62 +130,112 @@ class PackageRuntimeCore:
     def ensure_compiled(self, normalizer: RuntimeEventNormalizer) -> CompiledPackageRuntime:
         if self.compiled_runtime is not None:
             return self.compiled_runtime
-        normalizer.runtime_event(
-            "node_started",
-            node_id="package_compile",
-            node_label="Package Compile",
-            node_kind="system",
-            payload={"manifest": str(self.package.manifest_path)},
-        )
-        runtime_root = _runtime_workspace_root(
-            runtime_root=self.runtime_root,
-            package_root=self.package.package_root,
-        )
-        facade = RuntimeKernelFacade(
-            checkpointer_config=LangGraphCheckpointerConfig(
-                backend="sqlite",
-                path=runtime_root / "checkpoints" / "agent.sqlite",
-            ),
-            memory_system_config=_runtime_memory_config(runtime_root),
-            session_config=AgentSessionConfig(root=runtime_root / "sessions"),
-        )
-        runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
-            self.package,
-            base_services=facade.instance.services,
-            runtime_root=self.runtime_root,
-        )
-        compiled = AgentAssemblyCompiler(facade=facade).compile(
-            self.package.assembly_spec,
-            runtime_build=runtime_build,
-        )
-        self.compiled_runtime = CompiledPackageRuntime(
-            package=self.package,
-            compiled=compiled,
-            facade=facade,
-        )
-        self._configure_scheduler_runtime(runtime=self.compiled_runtime)
-        self._configure_knowledge_runtime(runtime=self.compiled_runtime)
-        self._apply_scheduler_seeds(runtime=self.compiled_runtime)
-        self.background_workers.add_many(runtime_build.background_workers)
-        for lifecycle_event in self.background_workers.start_all():
-            if lifecycle_event.status == "failed":
-                self._emit_worker_lifecycle_failure(lifecycle_event)
-        normalizer.runtime_event(
-            "node_completed",
-            node_id="package_compile",
-            node_label="Package Compile",
-            node_kind="system",
-            payload={
-                "agent_id": self.package.assembly_spec.agent.id,
-                "package_id": self.package.package_root.name,
-            },
-        )
-        return self.compiled_runtime
+        with self._compile_lock:
+            if self.compiled_runtime is not None:
+                return self.compiled_runtime
+            normalizer.runtime_event(
+                "node_started",
+                node_id="package_compile",
+                node_label="Package Compile",
+                node_kind="system",
+                payload={"manifest": str(self.package.manifest_path)},
+            )
+            runtime_root = _runtime_workspace_root(
+                runtime_root=self.runtime_root,
+                package_root=self.package.package_root,
+            )
+            facade = RuntimeKernelFacade(
+                checkpointer_config=LangGraphCheckpointerConfig(
+                    backend="sqlite",
+                    path=runtime_root / "checkpoints" / "agent.sqlite",
+                ),
+                memory_system_config=_runtime_memory_config(runtime_root),
+                session_config=AgentSessionConfig(root=runtime_root / "sessions"),
+            )
+            runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+                self.package,
+                base_services=facade.instance.services,
+                runtime_root=self.runtime_root,
+            )
+            compiled = AgentAssemblyCompiler(facade=facade).compile(
+                self.package.assembly_spec,
+                runtime_build=runtime_build,
+            )
+            self.compiled_runtime = CompiledPackageRuntime(
+                package=self.package,
+                compiled=compiled,
+                facade=facade,
+            )
+            self._configure_scheduler_runtime(runtime=self.compiled_runtime)
+            self._configure_knowledge_runtime(runtime=self.compiled_runtime)
+            self._apply_scheduler_seeds(runtime=self.compiled_runtime)
+            self.background_workers.add_many(runtime_build.background_workers)
+            for lifecycle_event in self.background_workers.start_all():
+                if lifecycle_event.status == "failed":
+                    self._emit_worker_lifecycle_failure(lifecycle_event)
+            normalizer.runtime_event(
+                "node_completed",
+                node_id="package_compile",
+                node_label="Package Compile",
+                node_kind="system",
+                payload={
+                    "agent_id": self.package.assembly_spec.agent.id,
+                    "package_id": self.package.package_root.name,
+                },
+            )
+            return self.compiled_runtime
 
     def shutdown(self) -> None:
         for lifecycle_event in self.background_workers.shutdown_all():
             if lifecycle_event.status == "failed":
                 self._emit_worker_lifecycle_failure(lifecycle_event)
+
+    def _instance_status_payload(
+        self,
+        *,
+        runtime: CompiledPackageRuntime | None = None,
+        status: str,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        package = runtime.package if runtime is not None else self.package
+        payload: dict[str, Any] = {
+            "package_id": package.package_root.name,
+            "agent_id": package.assembly_spec.agent.id,
+            "agent_name": package.assembly_spec.agent.name,
+            "backend": self.producer_type,
+            "status": status,
+            "ready": status == "ready",
+        }
+        if error:
+            payload["error"] = error
+        return payload
+
+    def _manage_scheduler(
+        self,
+        *,
+        normalizer: RuntimeEventNormalizer,
+        payload: dict[str, Any],
+        runtime: CompiledPackageRuntime,
+    ) -> None:
+        scheduler_runtime = getattr(runtime.compiled.compiled_app.services, "scheduler_runtime", None)
+        if scheduler_runtime is None:
+            raise RuntimeError("scheduler runtime is not enabled for this package")
+        tool_registry = getattr(runtime.compiled.compiled_app.services, "tool_registry", None)
+        manage_scheduler_runtime(
+            runtime=scheduler_runtime,
+            payload=payload,
+            tool_registry=tool_registry,
+            emit=lambda scheduler_payload: normalizer.emit_custom_event(
+                {"type": "scheduler_event", "payload": self._scheduler_event_payload(scheduler_payload)}
+            ),
+        )
+
+    def _scheduler_event_payload(self, payload: SchedulerEventPayload) -> dict[str, Any]:
+        value = payload.model_dump(mode="json")
+        value["package_id"] = self.package.package_root.name
+        value["package_name"] = self.package.assembly_spec.agent.name
+        value["agent_id"] = self.package.assembly_spec.agent.id
+        return value
 
     def _run_message(self, normalizer: RuntimeEventNormalizer, payload: dict[str, Any]) -> int:
         message = str(payload.get("message") or "").strip()
@@ -439,7 +520,7 @@ class PackageRuntimeCore:
             graph_id=f"{self.graph_id}.scheduler",
             producer_type=self.producer_type,
         )
-        normalizer.emit_custom_event({"type": "scheduler_event", "payload": payload.model_dump(mode="json")})
+        normalizer.emit_custom_event({"type": "scheduler_event", "payload": self._scheduler_event_payload(payload)})
 
     def _knowledge_event_sink(self, payload: dict[str, Any]) -> None:
         normalizer = RuntimeEventNormalizer(

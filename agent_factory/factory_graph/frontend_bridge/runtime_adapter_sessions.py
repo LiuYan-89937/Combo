@@ -10,20 +10,27 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
 )
 
 MESSAGE_MODES = {"chat", "create_agent", "evolve_agent"}
+SESSION_MODES = {"chat", "create_agent", "evolve_agent"}
 
 
 class RuntimeSessionCommandMixin:
     def start_session(self, command: FactoryFrontendCommand) -> None:
+        requested_mode = _session_mode(command.mode)
         if command.session_id:
             self.session_record = self.session_manager.load(command.session_id)
+            self.mode = requested_mode or self.session_record.current_mode
+            if requested_mode is not None and requested_mode != self.session_record.current_mode:
+                self.session_record = self.session_manager.set_mode(self.session_record.session_id, requested_mode)
             session_event_type = "session_switched"
         elif command.resume_latest:
-            self.session_record = self.session_manager.latest() or self.session_manager.create()
-            session_event_type = "session_switched" if self.session_record else "session_started"
+            existing = self.session_manager.latest(mode=requested_mode) if requested_mode is not None else self.session_manager.latest()
+            self.session_record = existing or self.session_manager.create(mode=requested_mode)
+            self.mode = requested_mode or self.session_record.current_mode
+            session_event_type = "session_switched" if existing else "session_started"
         else:
-            self.session_record = self.session_manager.create()
+            self.session_record = self.session_manager.create(mode=requested_mode)
+            self.mode = requested_mode
             session_event_type = "session_started"
-        self.mode = self.session_record.current_mode
         self._emit_session_event(command.request_id, session_event_type=session_event_type)
 
     def list_sessions(self, command: FactoryFrontendCommand) -> None:
@@ -41,15 +48,18 @@ class RuntimeSessionCommandMixin:
         if not command.session_id:
             self._emit_error(command, "switch_session requires session_id")
             return
+        requested_mode = _session_mode(command.mode)
         self.session_record = self.session_manager.load(command.session_id)
-        self.mode = self.session_record.current_mode
+        self.mode = requested_mode or self.session_record.current_mode
+        if requested_mode is not None and requested_mode != self.session_record.current_mode:
+            self.session_record = self.session_manager.set_mode(self.session_record.session_id, requested_mode)
         self.pending_agent_package_run = None
         self.pending_evolution_run = None
         self._emit_session_event(command.request_id, session_event_type="session_switched")
 
     def new_session(self, command: FactoryFrontendCommand) -> None:
-        self.session_record = self.session_manager.create()
-        self.mode = None
+        self.mode = _session_mode(command.mode)
+        self.session_record = self.session_manager.create(mode=self.mode)
         self.pending_agent_package_run = None
         self.pending_evolution_run = None
         self._emit_session_event(command.request_id, session_event_type="session_started")
@@ -121,11 +131,18 @@ class RuntimeSessionCommandMixin:
         )
 
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
-        if self.pending_create_agent_run is not None:
+        target = _interrupt_resume_target(command.payload)
+        if self.pending_create_agent_run is not None and _pending_create_agent_matches(self.pending_create_agent_run, target):
             self._resume_create_agent_interrupt(command)
             return
-        if self.pending_evolution_run is not None:
+        if self.pending_evolution_run is not None and _pending_evolution_matches(self.pending_evolution_run, target):
             self._resume_evolution_interrupt(command)
+            return
+        if self.pending_agent_package_run is not None and _pending_agent_package_matches(self.pending_agent_package_run, target):
+            self._resume_agent_package_interrupt(command)
+            return
+        if target.explicit:
+            self._emit_error(command, "no matching pending interrupt to resume")
             return
         if self.pending_agent_package_run is None:
             self._emit_error(command, "no pending interrupt to resume")
@@ -164,12 +181,13 @@ class RuntimeSessionCommandMixin:
         return str(self.session_record.session_id)
 
     def _session_payload(self) -> dict[str, object]:
-        payload = session_payload(self.session_record)
+        payload = session_payload(self.session_record, snapshot_mode=self.mode)
         snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
         messages = list(snapshot.get("messages") or []) if isinstance(snapshot, dict) else []
         linked_agent_session = self._linked_agent_session_payload()
-        if linked_agent_session is not None:
+        if not messages and linked_agent_session is not None:
             messages = _messages_from_agent_session(linked_agent_session)
+            self._sync_factory_turns_from_linked_session(linked_agent_session)
             snapshot = {
                 **snapshot,
                 "messages": messages,
@@ -179,16 +197,39 @@ class RuntimeSessionCommandMixin:
         return payload
 
     def _linked_agent_session_payload(self) -> dict[str, object] | None:
-        if self.session_record is None or self.agent_package_runtime is None:
+        if self.session_record is None:
             return None
-        package_id = SYSTEM_CHAT_PACKAGE_ID if self.mode == "chat" else None
-        agent_session_id = self.session_record.chat_agent_package_session_id if self.mode == "chat" else None
-        if not package_id or not agent_session_id:
+        if self.mode == "chat":
+            if self.agent_package_runtime is None or not self.session_record.chat_agent_package_session_id:
+                return None
+            try:
+                return self.agent_package_runtime.load_session(
+                    SYSTEM_CHAT_PACKAGE_ID,
+                    self.session_record.chat_agent_package_session_id,
+                )
+            except Exception:
+                return None
+        if self.mode != "create_agent" or self.create_agent_runtime is None or not self.session_record.create_agent_session_id:
             return None
         try:
-            return self.agent_package_runtime.load_session(package_id, agent_session_id)
+            return self.create_agent_runtime.load_session_snapshot(self.session_record.create_agent_session_id)
         except Exception:
             return None
+
+    def _sync_factory_turns_from_linked_session(self, linked_agent_session: dict[str, object]) -> None:
+        if self.session_record is None or self.mode not in {"chat", "create_agent"}:
+            return
+        turns = linked_agent_session.get("turns")
+        if not isinstance(turns, list):
+            return
+        try:
+            self.session_record = self.session_manager.replace_turns_from_agent_session(
+                self.session_record.session_id,
+                self.mode,
+                [turn for turn in turns if isinstance(turn, dict)],
+            )
+        except Exception:
+            return
 
     def checkpointer_payload(self) -> dict[str, object]:
         return {
@@ -229,3 +270,101 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
                 }
             )
     return messages
+
+
+class _InterruptResumeTarget:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.mode = _normalized_optional(payload.get("mode") or payload.get("original_mode"))
+        self.package_id = _normalized_optional(payload.get("package_id"))
+        self.session_id = _normalized_optional(
+            payload.get("agent_session_id") or payload.get("session_id") or payload.get("original_session_id")
+        )
+        self.request_id = _normalized_optional(
+            payload.get("pending_request_id") or payload.get("original_request_id")
+        )
+        self.interrupt_id = _normalized_optional(payload.get("interrupt_id"))
+        self.interrupt_event_id = _normalized_optional(payload.get("interrupt_event_id"))
+
+    @property
+    def explicit(self) -> bool:
+        return any([
+            self.mode,
+            self.package_id,
+            self.session_id,
+            self.request_id,
+            self.interrupt_id,
+            self.interrupt_event_id,
+        ])
+
+
+def _interrupt_resume_target(payload: object) -> _InterruptResumeTarget:
+    return _InterruptResumeTarget(payload if isinstance(payload, dict) else {})
+
+
+def _pending_create_agent_matches(pending: object, target: _InterruptResumeTarget) -> bool:
+    if target.mode and target.mode != "create_agent":
+        return False
+    return _pending_common_matches(
+        session_id=getattr(pending, "session_id", None),
+        request_id=getattr(pending, "request_id", None),
+        interrupt_id=getattr(pending, "interrupt_id", None),
+        interrupt_event_id=getattr(pending, "interrupt_event_id", None),
+        target=target,
+    )
+
+
+def _pending_evolution_matches(pending: object, target: _InterruptResumeTarget) -> bool:
+    if target.mode and target.mode != "evolve_agent":
+        return False
+    if target.package_id and target.package_id != _normalized_optional(getattr(pending, "package_id", None)):
+        return False
+    return _pending_common_matches(
+        session_id=getattr(pending, "session_id", None),
+        request_id=getattr(pending, "request_id", None),
+        interrupt_id=getattr(pending, "interrupt_id", None),
+        interrupt_event_id=getattr(pending, "interrupt_event_id", None),
+        target=target,
+    )
+
+
+def _pending_agent_package_matches(pending: object, target: _InterruptResumeTarget) -> bool:
+    if target.mode and target.mode not in {"agent_package", "chat"}:
+        return False
+    if target.package_id and target.package_id != _normalized_optional(getattr(pending, "package_id", None)):
+        return False
+    normalizer = getattr(pending, "normalizer", None)
+    return _pending_common_matches(
+        session_id=getattr(pending, "session_id", None),
+        request_id=getattr(normalizer, "request_id", None),
+        interrupt_id=getattr(pending, "interrupt_id", None),
+        interrupt_event_id=getattr(pending, "interrupt_event_id", None),
+        target=target,
+    )
+
+
+def _pending_common_matches(
+    *,
+    session_id: object,
+    request_id: object,
+    interrupt_id: object,
+    interrupt_event_id: object,
+    target: _InterruptResumeTarget,
+) -> bool:
+    if target.interrupt_event_id:
+        return target.interrupt_event_id == _normalized_optional(interrupt_event_id)
+    if target.session_id and target.session_id != _normalized_optional(session_id):
+        return False
+    if target.request_id and target.request_id != _normalized_optional(request_id):
+        return False
+    if target.interrupt_id and target.interrupt_id != _normalized_optional(interrupt_id):
+        return False
+    return True
+
+
+def _normalized_optional(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _session_mode(mode: str | None) -> str | None:
+    return mode if mode in SESSION_MODES else None

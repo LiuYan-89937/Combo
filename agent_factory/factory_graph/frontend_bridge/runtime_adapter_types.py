@@ -23,16 +23,22 @@ class PendingAgentPackageRun:
     session_id: str
     normalizer: RuntimeEventNormalizer
     interrupt_id: str | None = None
+    interrupt_event_id: str | None = None
 
 
 @dataclass(slots=True)
 class PendingCreateAgentRun:
     session_id: str
+    request_id: str | None = None
+    interrupt_id: str | None = None
+    interrupt_event_id: str | None = None
 
 
 @dataclass(slots=True)
 class PendingEvolutionRun:
     package_id: str
     session_id: str
+    request_id: str | None = None
     trace_id: str | None = None
     interrupt_id: str | None = None
+    interrupt_event_id: str | None = None

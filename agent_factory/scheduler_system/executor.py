@@ -216,6 +216,12 @@ def _execution_summary(*, output: dict[str, Any], exception: Exception | None) -
         }
     return {
         "status": _summary(output.get("status"), limit=80) or "completed",
+        "request_id": _summary(output.get("request_id"), limit=120),
+        "target_scope": _summary(output.get("target_scope"), limit=80),
+        "package_id": _summary(output.get("package_id"), limit=160),
+        "package_name": _summary(output.get("package_name"), limit=200),
+        "agent_session": output.get("agent_session") if isinstance(output.get("agent_session"), dict) else None,
+        "conversation": output.get("conversation") if isinstance(output.get("conversation"), dict) else None,
         "message": _summary(output.get("message"), limit=500),
         "error": _summary(_result_value(output, "error"), limit=500),
         "error_summary": _summary(_result_value(output, "error_summary"), limit=500),

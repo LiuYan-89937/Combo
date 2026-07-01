@@ -29,20 +29,20 @@ export function createCommand(
 
 // ============= Session Commands =============
 
-export function startSessionCommand(resumeLatest = false): FactoryFrontendCommand {
-  return createCommand('start_session', { resume_latest: resumeLatest })
+export function startSessionCommand(resumeLatest = false, mode?: FactoryMode | null): FactoryFrontendCommand {
+  return createCommand('start_session', { resume_latest: resumeLatest, mode })
 }
 
 export function listSessionsCommand(): FactoryFrontendCommand {
   return createCommand('list_sessions')
 }
 
-export function switchSessionCommand(sessionId: string): FactoryFrontendCommand {
-  return createCommand('switch_session', { session_id: sessionId })
+export function switchSessionCommand(sessionId: string, mode?: FactoryMode | null): FactoryFrontendCommand {
+  return createCommand('switch_session', { session_id: sessionId, mode })
 }
 
-export function newSessionCommand(): FactoryFrontendCommand {
-  return createCommand('new_session')
+export function newSessionCommand(mode?: FactoryMode | null): FactoryFrontendCommand {
+  return createCommand('new_session', { mode })
 }
 
 export function setModeCommand(mode: FactoryMode): FactoryFrontendCommand {
@@ -112,6 +112,22 @@ export function runAgentPackageCommand(
   })
 }
 
+export function sendAgentPackageMessageCommand(
+  packageId: string,
+  message: string,
+  sessionId?: string
+): FactoryFrontendCommand {
+  const requestId = generateRequestId()
+  return createCommand('send_agent_package_message', {
+    request_id: requestId,
+    payload: {
+      package_id: packageId,
+      message,
+      session_id: sessionId,
+    },
+  })
+}
+
 export function runAgentEvolutionCommand(packageId: string, message: string): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_evolution', {
@@ -124,10 +140,14 @@ export function runAgentEvolutionCommand(packageId: string, message: string): Fa
 // ============= Interrupt Commands =============
 
 export interface ResumeInterruptOptions {
-  action: 'approve' | 'deny' | 'trust_tool' | 'revise'
-  approved: boolean
+  action: 'approve' | 'deny' | 'trust_tool' | 'revise' | 'answer'
+  approved?: boolean
   trust_scope?: 'tool' | 'tool_group'
   revision_guidance?: string
+  input_text?: string
+  answer?: string
+  message?: string
+  [key: string]: any
 }
 
 export function resumeInterruptCommand(options: ResumeInterruptOptions): FactoryFrontendCommand {
@@ -146,7 +166,7 @@ export function cancelRuntimeRequestCommand(reason = 'user_cancelled'): FactoryF
 
 // ============= Workspace Commands =============
 
-export type WorkspaceScope = 'runtime' | 'workdir' | 'artifacts' | 'extensions'
+export type WorkspaceScope = 'package' | 'runtime' | 'workdir' | 'artifacts' | 'extensions'
 
 export function workspaceRootsCommand(packageId?: string): FactoryFrontendCommand {
   return createCommand('workspace_manage', {
@@ -282,17 +302,27 @@ export function listExtensionsCommand(packageId?: string): FactoryFrontendComman
 export interface McpServerConfig {
   server_id?: string
   display_name: string
+  description?: string
   transport: 'stdio'
   command: string
   args: string
   cwd: string
-  env: string
+  env?: string | Record<string, string>
   timeout_seconds: number
   enabled: boolean
   source?: {
     type: 'local'
     name: string
+    description?: string
   }
+}
+
+export interface SkillConfig {
+  path: string
+  source: 'local' | string
+  enabled: boolean
+  required?: boolean
+  replace_skill_id?: string
 }
 
 export function upsertMcpCommand(server: McpServerConfig, packageId?: string): FactoryFrontendCommand {
@@ -348,22 +378,81 @@ export function removeMcpCommand(serverId: string, packageId?: string): FactoryF
   })
 }
 
+export function upsertSkillCommand(skill: SkillConfig, packageId?: string): FactoryFrontendCommand {
+  return createCommand('extensions_manage', {
+    payload: {
+      action: 'upsert_skill',
+      skill,
+      ...(skill.replace_skill_id ? { replace_skill_id: skill.replace_skill_id } : {}),
+      ...(packageId ? { package_id: packageId } : {}),
+    },
+  })
+}
+
+export function setSkillEnabledCommand(
+  skillId: string,
+  enabled: boolean,
+  packageId?: string
+): FactoryFrontendCommand {
+  return createCommand('extensions_manage', {
+    payload: {
+      action: 'set_skill_enabled',
+      skill_id: skillId,
+      enabled,
+      ...(packageId ? { package_id: packageId } : {}),
+    },
+  })
+}
+
+export function removeSkillCommand(skillId: string, packageId?: string): FactoryFrontendCommand {
+  return createCommand('extensions_manage', {
+    payload: {
+      action: 'remove_skill',
+      skill_id: skillId,
+      ...(packageId ? { package_id: packageId } : {}),
+    },
+  })
+}
+
 // ============= Scheduler Commands =============
 
 export type ScheduleType = 'cron' | 'interval' | 'date'
+export type SchedulerTargetType = 'graph_run' | 'script_run' | 'tool_call'
+export type SchedulerThreadPolicy = 'new_thread_per_run' | 'fixed_thread'
 
 export interface SchedulerJobInput {
   task_content: string
   schedule_type: ScheduleType
   schedule_expr: string
-  target: {
-    target_type: 'graph_run'
-    payload: {
-      message: string
-      mode: FactoryMode
-      thread_policy: 'new_thread_per_run' | 'resume_thread'
-    }
-  }
+  enabled?: boolean
+  target:
+    | {
+        target_type: 'graph_run'
+        payload: {
+          message: string
+          thread_policy: SchedulerThreadPolicy
+          fixed_thread_id?: string
+        }
+      }
+    | {
+        target_type: 'script_run'
+        payload: {
+          command: string
+        }
+      }
+    | {
+        target_type: 'tool_call'
+        payload: {
+          tool_id: string
+          arguments?: Record<string, any>
+        }
+      }
+}
+
+export function listSchedulerOptionsCommand(): FactoryFrontendCommand {
+  return createCommand('scheduler_manage', {
+    payload: { action: 'options' },
+  })
 }
 
 export function listSchedulerJobsCommand(): FactoryFrontendCommand {

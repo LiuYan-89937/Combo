@@ -50,6 +50,7 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useCommand } from '@/composables/useCommand'
 import AppHeader from '@/components/common/AppHeader.vue'
@@ -63,11 +64,12 @@ import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
 
 const uiStore = useUiStore()
+const route = useRoute()
 const { startSession } = useCommand()
 
 onMounted(() => {
-  // 启动会话
-  startSession(true)
+  const mode = route.name === 'Manufacturing' ? 'create_agent' : route.name === 'Factory' ? 'chat' : null
+  startSession(true, mode)
 })
 </script>
 

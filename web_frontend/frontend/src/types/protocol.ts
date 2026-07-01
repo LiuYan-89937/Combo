@@ -11,7 +11,7 @@ export type RunStatus = 'idle' | 'running' | 'interrupted' | 'completed' | 'fail
 
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped'
 
-export type WorkspaceScope = 'runtime' | 'workdir' | 'artifacts' | 'extensions'
+export type WorkspaceScope = 'package' | 'runtime' | 'workdir' | 'artifacts' | 'extensions'
 
 // ========== 命令类型 ==========
 
@@ -76,15 +76,47 @@ export interface ConversationTurn {
   metadata?: Record<string, any>
 }
 
+export interface ConversationScopeState {
+  transcript: TranscriptItem[]
+  conversationTurns: ConversationTurn[]
+  timeline: TimelineItem[]
+  tools: ToolActivity[]
+  currentPlan: RuntimePlanView | null
+  contextActivity: RuntimeActivityView
+  contextWindow: ContextWindowView | null
+  modelStreams: Record<string, ModelStream>
+  activeAgentSessionId: string | null
+  activeRequestId?: string | null
+  runStatus?: RunStatus
+  pendingInterrupt?: FactoryFrontendEvent | null
+  currentRunId?: string | null
+  nodes?: Record<string, NodeViewState>
+  stages?: Record<string, StageStatus>
+}
+
 // ========== 模型流 ==========
 
 export interface ModelStream {
   streamId: string
+  requestId?: string | null
   nodeId: string | null
   content: string
   active: boolean
   completedAt: string | null
   visibleToUser: boolean
+}
+
+export interface ActiveRequestView {
+  requestId: string
+  status: RunStatus
+  mode: FactoryMode | null
+  runId: string | null
+  conversationScope?: string | null
+  background: boolean
+  source: 'user' | 'scheduler'
+  startedAt: string
+  completedAt: string | null
+  payload: Record<string, any>
 }
 
 // ========== 节点和阶段 ==========
@@ -117,6 +149,7 @@ export interface StageStatus {
 
 export interface ToolActivity {
   activityKey: string
+  requestId?: string | null
   eventType: string
   timestamp: string
   createdAt: string
@@ -233,6 +266,35 @@ export interface SchedulerJobView {
   enabled: boolean
   schedule: string
   targetType: string | null
+  targetLabel?: string
+  payload: Record<string, any>
+}
+
+export interface SchedulerToolOptionView {
+  id: string
+  name: string
+  description?: string
+  riskLevel?: string
+  inputSchema?: Record<string, any>
+}
+
+export interface SchedulerRunNoticeView {
+  id: string
+  jobId: string | null
+  runId: string | null
+  requestId: string | null
+  status: string
+  title: string
+  summary: string
+  targetType: string | null
+  targetScope: string | null
+  packageId: string | null
+  packageName: string | null
+  sessionId: string | null
+  factorySessionId: string | null
+  reportPath: string | null
+  timestamp: string
+  unread: boolean
   payload: Record<string, any>
 }
 
@@ -253,10 +315,25 @@ export interface RuntimeActivityView {
   payload?: Record<string, any>
 }
 
+export interface ContextWindowView {
+  tokenCount: number | null
+  contextWindowTokens: number | null
+  windowUsageRatio: number | null
+  compressionThresholdTokens: number | null
+  compressionUsageRatio: number | null
+  tokenCountMethod: string | null
+  source: string | null
+  modelRole: string | null
+  nodeId: string | null
+  updatedAt: string
+  payload: Record<string, any>
+}
+
 export interface RuntimeViewState {
   protocolVersion: string
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting'
   activeRequestId: string | null
+  activeRequests: Record<string, ActiveRequestView>
   runStatus: RunStatus
   pendingInterrupt: FactoryFrontendEvent | null
   currentMode: FactoryMode | null
@@ -268,11 +345,14 @@ export interface RuntimeViewState {
   modelStreams: Record<string, ModelStream>
   tools: ToolActivity[]
   currentPlan: RuntimePlanView | null
+  activeConversationScope: string | null
+  conversationScopes: Record<string, ConversationScopeState>
   transcript: TranscriptItem[]
   conversationTurns: ConversationTurn[]
   timeline: TimelineItem[]
   debugEvents: FactoryFrontendEvent[]
   contextActivity: RuntimeActivityView
+  contextWindow: ContextWindowView | null
   memoryActivity: RuntimeActivityView
   knowledgeActivity: Record<string, any>[]
   schedulerActivity: Record<string, any>[]
@@ -284,6 +364,8 @@ export interface RuntimeViewState {
   knowledgeResults: KnowledgeSearchResultView[]
   knowledgeDocument: Record<string, any> | null
   schedulerJobs: SchedulerJobView[]
+  schedulerToolOptions: SchedulerToolOptionView[]
+  schedulerRunNotices: SchedulerRunNoticeView[]
   extensionItems: ExtensionItemView[]
   extensionTestResult: Record<string, any> | null
   sessions: any[]

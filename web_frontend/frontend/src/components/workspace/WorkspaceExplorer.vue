@@ -115,6 +115,7 @@ const runtimeStore = useRuntimeStore()
 const commands = useCommand()
 
 const scopeOptions = [
+  { label: 'package', value: 'package' },
   { label: 'workdir', value: 'workdir' },
   { label: 'runtime', value: 'runtime' },
   { label: 'artifacts', value: 'artifacts' },

@@ -45,6 +45,7 @@ class AgentRuntimeContainerHandle:
         self._emit = emit
         self._condition = threading.Condition()
         self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
+        self._request_commands: dict[str, str] = {}
         self._reader_error: BaseException | None = None
         self._stdout_closed = False
         self._closing = False
@@ -73,6 +74,16 @@ class AgentRuntimeContainerHandle:
     def is_running(self) -> bool:
         return self.process.poll() is None
 
+    @property
+    def active_request_count(self) -> int:
+        with self._condition:
+            return len(self._request_events)
+
+    @property
+    def active_command_types(self) -> tuple[str, ...]:
+        with self._condition:
+            return tuple(self._request_commands.values())
+
     def is_idle(self, timeout_seconds: int) -> bool:
         return timeout_seconds > 0 and (time.monotonic() - self.last_used) > timeout_seconds
 
@@ -87,6 +98,7 @@ class AgentRuntimeContainerHandle:
             if request_id in self._request_events:
                 raise RuntimeError(f"agent runtime request is already active: {request_id}")
             self._request_events[request_id] = deque()
+            self._request_commands[request_id] = str(command.get("type") or "")
         self.process.stdin.write(json.dumps(command, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
         self.last_used = time.monotonic()
@@ -125,6 +137,7 @@ class AgentRuntimeContainerHandle:
         finally:
             with self._condition:
                 self._request_events.pop(request_id, None)
+                self._request_commands.pop(request_id, None)
             self.last_used = time.monotonic()
             self._schedule_idle_shutdown()
 
