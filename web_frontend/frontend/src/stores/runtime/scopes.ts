@@ -1,4 +1,4 @@
-import type { ActiveRequestView, FactoryFrontendEvent, FactoryMode } from '@/types/protocol'
+import type { FactoryFrontendEvent, FactoryMode } from '@/types/protocol'
 
 export interface AgentPackageScopeInfo {
   packageId: string
@@ -29,17 +29,6 @@ export function conversationScopeForMode(
     return `factory:evolve_agent:${packageId || 'unselected'}:${factorySessionIdFromPayload(payload) || 'new'}`
   }
   return null
-}
-
-export function conversationScopeForRequestEvent(
-  event: FactoryFrontendEvent,
-  activeRequests: Record<string, ActiveRequestView>,
-): string | null {
-  const requestId = event.request_id || null
-  if (requestId && activeRequests[requestId]?.conversationScope) {
-    return activeRequests[requestId].conversationScope || null
-  }
-  return scopeFromEventPayload(event)
 }
 
 export function isMoreSpecificConversationScope(

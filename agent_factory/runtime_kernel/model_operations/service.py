@@ -662,6 +662,7 @@ def _emit_context_window(
             token_count=result.token_count,
             token_count_method=result.method,
             compression_threshold_tokens=threshold,
+            context_window_tokens=_context_window_tokens(services),
             error=result.error,
             model_role=result.model_role or _model_role(services),
             source=source,
@@ -691,6 +692,7 @@ def _emit_provider_usage_context_window(
             token_count=token_count,
             token_count_method="provider_usage",
             compression_threshold_tokens=_compression_threshold(services=services, node_id=node_id),
+            context_window_tokens=_context_window_tokens(services),
             model_role=_model_role(services),
             source="model_operation.provider_usage",
         ),
@@ -705,6 +707,18 @@ def _compression_threshold(*, services: Any, node_id: str) -> int | None:
         return int(runtime.policy_for_node(node_id).compression.trigger_token_threshold)
     except Exception:
         return None
+
+
+def _context_window_tokens(services: Any | None) -> int | None:
+    resources = getattr(services, "runtime_resources", None)
+    if not isinstance(resources, dict):
+        return None
+    value = resources.get("context_window_tokens")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _model_role(services: Any) -> str:

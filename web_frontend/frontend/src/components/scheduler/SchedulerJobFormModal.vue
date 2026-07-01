@@ -78,7 +78,7 @@ import {
 } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
 import { useSchedulerStore } from '@/stores/scheduler'
-import type { SchedulerJobInput } from '@/api/commands'
+import type { SchedulerJobInput } from '@/api/resourceTypes'
 
 type TargetKind = 'graph_run' | 'script_run' | 'tool_call'
 

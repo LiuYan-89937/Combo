@@ -27,7 +27,7 @@
 import { computed, ref, watch } from 'vue'
 import { NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSwitch } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
-import type { SkillConfig } from '@/api/commands'
+import type { SkillConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
 
 const props = defineProps<{

@@ -99,6 +99,8 @@ class AgentPackageRuntimeManager:
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
         self._emit = emit
+        self._context_window_tokens: int | None = None
+        self._env_overrides: dict[str, str] = {}
 
     def set_emit(self, emit: Emit | None) -> None:
         self._emit = emit
@@ -106,6 +108,19 @@ class AgentPackageRuntimeManager:
             handle.set_emit(emit)
         for handle in self._system_handles.values():
             handle.set_emit(emit)
+
+    def set_context_window_tokens(self, value: int | None) -> None:
+        self._context_window_tokens = value if isinstance(value, int) and value > 0 else None
+        resources = self._runtime_resource_overrides()
+        for handle in self._system_handles.values():
+            handle.set_runtime_resources_override(resources)
+
+    def set_env_overrides(self, overrides: dict[str, str] | None) -> None:
+        next_overrides = dict(overrides or {})
+        if next_overrides == self._env_overrides:
+            return
+        self._env_overrides = next_overrides
+        self.close_all()
 
     def list_packages(self) -> list[dict[str, Any]]:
         self.package_root.mkdir(parents=True, exist_ok=True)
@@ -889,6 +904,7 @@ class AgentPackageRuntimeManager:
             workdir_root=workdir_root,
             extension_root=extension_root,
             mcp_gateway_url=mcp_gateway.docker_url if mcp_gateway is not None else None,
+            env_overrides=self._runtime_env_overrides(),
         )
         handle = AgentRuntimeContainerHandle(
             package_id=package_id,
@@ -944,6 +960,7 @@ class AgentPackageRuntimeManager:
             producer_type="factory_runtime" if _is_system_package(package) else "agent_runtime_host",
             emit=self._emit,
         )
+        handle.set_runtime_resources_override(self._runtime_resource_overrides())
         handle.startup_payload = {
             "status": "running",
             "backend": "host",
@@ -955,6 +972,17 @@ class AgentPackageRuntimeManager:
         }
         self._system_handles[package_id] = handle
         return handle
+
+    def _runtime_env_overrides(self) -> dict[str, str]:
+        result = dict(self._env_overrides)
+        if self._context_window_tokens is not None:
+            result["AGENTFACTORY_CONTEXT_WINDOW_TOKENS"] = str(self._context_window_tokens)
+        return result
+
+    def _runtime_resource_overrides(self) -> dict[str, Any]:
+        if self._context_window_tokens is None:
+            return {}
+        return {"context_window_tokens": self._context_window_tokens}
 
     def _has_reusable_container(self, package_id: str, package: LoadedAgentPackage) -> bool:
         existing = self._containers.get(package_id)

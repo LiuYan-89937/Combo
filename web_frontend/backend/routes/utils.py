@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
+from web_frontend.backend.runtime_bridge import RuntimeBridge
+
+
+async def resource_command(
+    runtime_bridge: RuntimeBridge,
+    command_type: str,
+    payload: dict[str, Any],
+    event_types: set[str],
+    *,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    return await send_and_wait(
+        runtime_bridge,
+        command_type,
+        payload,
+        event_types,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+async def send_and_wait(
+    runtime_bridge: RuntimeBridge,
+    command_type: str,
+    payload: dict[str, Any],
+    event_types: set[str],
+    *,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    command = FactoryFrontendCommand(type=command_type, request_id=request_id(), payload=payload)
+    return await runtime_bridge.send_and_wait(command, event_types=event_types, timeout_seconds=timeout_seconds)
+
+
+def request_id() -> str:
+    return f"http-{uuid.uuid4().hex}"
+
+
+def optional_package(package_id: str | None) -> dict[str, str]:
+    return {"package_id": package_id} if package_id else {}

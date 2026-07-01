@@ -35,9 +35,6 @@
       <SchedulerRunNotifier />
     </n-notification-provider>
 
-    <!-- 命令面板 -->
-    <CommandPalette v-model:show="uiStore.commandPaletteOpen" />
-
     <!-- 设置抽屉 -->
     <SettingsDrawer v-model:show="uiStore.settingsDrawerOpen" />
 
@@ -60,7 +57,6 @@ import AppRightSidebar from '@/components/common/AppRightSidebar.vue'
 import AppLoadingBar from '@/components/common/AppLoadingBar.vue'
 import AppNotifications from '@/components/common/AppNotifications.vue'
 import SchedulerRunNotifier from '@/components/scheduler/SchedulerRunNotifier.vue'
-import CommandPalette from '@/components/common/CommandPalette.vue'
 import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import EventStreamManager from '@/components/common/EventStreamManager.vue'

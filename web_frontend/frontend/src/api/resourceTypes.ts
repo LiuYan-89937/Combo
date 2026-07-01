@@ -1,0 +1,68 @@
+export type WorkspaceScope = 'package' | 'runtime' | 'workdir' | 'artifacts' | 'extensions'
+
+export interface KnowledgeSourceInput {
+  kind: 'folder' | 'file' | 'url' | 'note'
+  display_name: string
+  uri: string
+  content?: string
+  mount_mode: 'index_only' | 'rag'
+}
+
+export interface McpServerConfig {
+  server_id?: string
+  display_name: string
+  description?: string
+  transport: 'stdio'
+  command: string
+  args: string
+  cwd: string
+  env?: string | Record<string, string>
+  timeout_seconds: number
+  enabled: boolean
+  source?: {
+    type: 'local'
+    name: string
+    description?: string
+  }
+}
+
+export interface SkillConfig {
+  path: string
+  source: 'local' | string
+  enabled: boolean
+  required?: boolean
+  replace_skill_id?: string
+}
+
+export type ScheduleType = 'cron' | 'interval' | 'date'
+export type SchedulerTargetType = 'graph_run' | 'script_run' | 'tool_call'
+export type SchedulerThreadPolicy = 'new_thread_per_run' | 'fixed_thread'
+
+export interface SchedulerJobInput {
+  task_content: string
+  schedule_type: ScheduleType
+  schedule_expr: string
+  enabled?: boolean
+  target:
+    | {
+        target_type: 'graph_run'
+        payload: {
+          message: string
+          thread_policy: SchedulerThreadPolicy
+          fixed_thread_id?: string
+        }
+      }
+    | {
+        target_type: 'script_run'
+        payload: {
+          command: string
+        }
+      }
+    | {
+        target_type: 'tool_call'
+        payload: {
+          tool_id: string
+          arguments?: Record<string, any>
+        }
+      }
+}

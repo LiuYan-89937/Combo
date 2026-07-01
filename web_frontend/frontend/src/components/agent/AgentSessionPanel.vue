@@ -2,14 +2,14 @@
   <div class="agent-session-panel">
     <div class="panel-header">
       <div class="header-title">
-        <n-text strong>子 Agent 会话</n-text>
+        <n-text strong>{{ t('agentSessions.title') }}</n-text>
         <n-text depth="3" class="package-name">
           {{ packageTitle }}
         </n-text>
       </div>
       <div class="header-actions">
         <n-button size="small" type="primary" @click="enterNewSession">
-          新对话
+          {{ t('agentSessions.newChat') }}
         </n-button>
         <n-button size="small" @click="refreshSessions">
           <template #icon>
@@ -22,7 +22,7 @@
     <div class="panel-search">
       <n-input
         v-model:value="searchQuery"
-        placeholder="搜索子 Agent 会话..."
+        :placeholder="t('agentSessions.searchPlaceholder')"
         clearable
       >
         <template #prefix>
@@ -41,11 +41,11 @@
         >
           <div class="session-item">
             <div class="session-title">
-              {{ session.display_title || session.first_user_input || '新会话' }}
+              {{ session.display_title || session.first_user_input || t('sessions.newSession') }}
             </div>
             <div class="session-meta">
               <n-tag size="tiny" type="success">
-                子 Agent
+                {{ t('agentSessions.tag') }}
               </n-tag>
               <n-text depth="3" class="meta-text">
                 {{ formatTime(session.updated_at) }}
@@ -56,7 +56,7 @@
                 <n-icon size="12">
                   <ChatbubbleEllipses />
                 </n-icon>
-                {{ session.turn_count }} 轮
+                {{ t('sessions.turns', { count: session.turn_count }) }}
               </n-text>
             </div>
           </div>
@@ -65,7 +65,7 @@
 
       <n-empty
         v-if="filteredSessions.length === 0"
-        description="没有子 Agent 会话"
+        :description="t('agentSessions.empty')"
         size="small"
         style="margin-top: 40px"
       />
@@ -78,6 +78,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText } from 'naive-ui'
 import { ChatbubbleEllipses, Refresh, Search } from '@vicons/ionicons5'
+import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
@@ -94,6 +95,7 @@ const uiStore = useUiStore()
 const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const router = useRouter()
+const { locale, t } = useI18n()
 const searchQuery = ref('')
 
 const currentPackage = computed(() => {
@@ -102,7 +104,7 @@ const currentPackage = computed(() => {
 
 const packageTitle = computed(() => {
   const pkg = currentPackage.value
-  return pkg?.agent_name || pkg?.name || '未命名 Agent'
+  return pkg?.agent_name || pkg?.name || t('common.unnamedAgent')
 })
 
 const filteredSessions = computed(() => {
@@ -142,14 +144,14 @@ function formatTime(timestamp: string): string {
 
   if (diff < 3600000) {
     const minutes = Math.floor(diff / 60000)
-    return `${minutes}分钟前`
+    return new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' }).format(-minutes, 'minute')
   }
 
   if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    return date.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
   }
 
-  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+  return date.toLocaleDateString(locale.value, { month: '2-digit', day: '2-digit' })
 }
 
 onMounted(() => {

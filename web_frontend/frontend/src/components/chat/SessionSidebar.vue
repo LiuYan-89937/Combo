@@ -1,19 +1,19 @@
 <template>
   <div class="session-panel">
     <div class="sidebar-header">
-      <n-text strong>{{ title }}</n-text>
+      <n-text strong>{{ panelTitle }}</n-text>
       <n-button size="small" @click="handleNewSession">
         <template #icon>
           <n-icon><Add /></n-icon>
         </template>
-        新建
+        {{ t('sessions.new') }}
       </n-button>
     </div>
 
     <div class="sidebar-search">
       <n-input
         v-model:value="searchQuery"
-        placeholder="搜索会话..."
+        :placeholder="t('common.searchSessions')"
         clearable
       >
         <template #prefix>
@@ -47,7 +47,7 @@
                 <n-icon size="12">
                   <ChatbubbleEllipses />
                 </n-icon>
-                {{ sessionTurnCount(session) }} 轮
+                {{ t('sessions.turns', { count: sessionTurnCount(session) }) }}
               </n-text>
             </div>
           </div>
@@ -56,7 +56,7 @@
 
       <n-empty
         v-if="filteredSessions.length === 0"
-        description="没有会话"
+        :description="t('sessions.empty')"
         size="small"
         style="margin-top: 40px"
       />
@@ -65,27 +65,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { NButton, NIcon, NText, NInput, NScrollbar, NList, NListItem, NTag, NEmpty } from 'naive-ui'
 import { Add, ChatbubbleEllipses, Search } from '@vicons/ionicons5'
+import { useI18n } from '@/composables/useI18n'
 import { useSessionStore } from '@/stores/session'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useCommand } from '@/composables/useCommand'
 import type { SessionView } from '@/stores/session'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     title?: string
   }>(),
   {
-    title: '主会话',
+    title: '',
   }
 )
 
 const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
 const commands = useCommand()
+const { locale, t } = useI18n()
 const searchQuery = ref('')
+
+const panelTitle = computed(() => props.title || t('sessions.main'))
 
 const activeSessionMode = computed<'chat' | 'create_agent' | 'evolve_agent'>(() => {
   if (runtimeStore.currentMode === 'create_agent') return 'create_agent'
@@ -135,15 +139,15 @@ function sessionTurnCount(session: SessionView): number {
 
 function sessionTitle(session: SessionView): string {
   const modeTitle = session.mode_titles?.[activeSessionMode.value]
-  return modeTitle || session.display_title || session.first_user_input || '新会话'
+  return modeTitle || session.display_title || session.first_user_input || t('sessions.newSession')
 }
 
 function modeLabel(mode: string): string {
   const labels: Record<string, string> = {
-    chat: '对话',
-    create_agent: '创建',
-    evolve_agent: '进化',
-    agent_package: 'Agent',
+    chat: t('sessions.modeChat'),
+    create_agent: t('sessions.modeCreate'),
+    evolve_agent: t('sessions.modeEvolve'),
+    agent_package: t('sessions.modeAgent'),
   }
   return labels[mode] || mode
 }
@@ -165,14 +169,14 @@ function formatTime(timestamp: string): string {
 
   if (diff < 3600000) {
     const minutes = Math.floor(diff / 60000)
-    return `${minutes}分钟前`
+    return new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' }).format(-minutes, 'minute')
   }
 
   if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    return date.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
   }
 
-  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+  return date.toLocaleDateString(locale.value, { month: '2-digit', day: '2-digit' })
 }
 
 onMounted(() => {

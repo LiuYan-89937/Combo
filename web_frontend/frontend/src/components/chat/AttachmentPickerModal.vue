@@ -1,8 +1,8 @@
 <template>
-  <n-modal v-model:show="show" preset="card" title="添加附件" style="width: 600px">
+  <n-modal v-model:show="show" preset="card" :title="t('attachments.title')" style="width: 600px">
     <n-tabs type="line" animated>
       <!-- 本地文件 -->
-      <n-tab-pane name="file" tab="本地文件">
+      <n-tab-pane name="file" :tab="t('attachments.localFile')">
         <div class="tab-content">
           <n-upload
             :custom-request="handleFileUpload"
@@ -14,9 +14,9 @@
                 <n-icon size="48" :depth="3">
                   <CloudUploadOutline />
                 </n-icon>
-                <n-text>点击或拖拽文件到此处上传</n-text>
+                <n-text>{{ t('attachments.uploadMain') }}</n-text>
                 <n-text depth="3" style="font-size: 12px">
-                  支持任意文件类型，最大 10MB
+                  {{ t('attachments.uploadHint') }}
                 </n-text>
               </div>
             </n-upload-dragger>
@@ -25,15 +25,15 @@
       </n-tab-pane>
 
       <!-- 工作区文件 -->
-      <n-tab-pane name="workspace" tab="工作区文件">
+      <n-tab-pane name="workspace" :tab="t('attachments.workspaceFile')">
         <div class="tab-content">
           <n-input
             v-model:value="workspaceSearch"
-            placeholder="搜索工作区文件..."
+            :placeholder="t('attachments.workspaceSearchPlaceholder')"
             clearable
           />
           <div class="file-list">
-            <n-empty v-if="workspaceFiles.length === 0" description="暂无文件" size="small" />
+            <n-empty v-if="workspaceFiles.length === 0" :description="t('attachments.noFiles')" size="small" />
             <div
               v-for="file in filteredWorkspaceFiles"
               :key="file.path"
@@ -48,39 +48,39 @@
       </n-tab-pane>
 
       <!-- URL -->
-      <n-tab-pane name="url" tab="URL 链接">
+      <n-tab-pane name="url" :tab="t('attachments.url')">
         <div class="tab-content">
           <n-form>
-            <n-form-item label="URL 地址">
+            <n-form-item :label="t('attachments.urlAddress')">
               <n-input v-model:value="urlInput" placeholder="https://example.com/doc.pdf" />
             </n-form-item>
-            <n-form-item label="显示名称">
-              <n-input v-model:value="urlName" placeholder="文档名称（可选）" />
+            <n-form-item :label="t('attachments.displayName')">
+              <n-input v-model:value="urlName" :placeholder="t('attachments.urlNamePlaceholder')" />
             </n-form-item>
             <n-button type="primary" @click="handleAddUrl" :disabled="!isValidUrl">
-              添加
+              {{ t('common.add') }}
             </n-button>
           </n-form>
         </div>
       </n-tab-pane>
 
       <!-- 文本片段 -->
-      <n-tab-pane name="text" tab="文本片段">
+      <n-tab-pane name="text" :tab="t('attachments.text')">
         <div class="tab-content">
           <n-form>
-            <n-form-item label="文本内容">
+            <n-form-item :label="t('attachments.textContent')">
               <n-input
                 v-model:value="textContent"
                 type="textarea"
                 :rows="6"
-                placeholder="粘贴或输入文本内容..."
+                :placeholder="t('attachments.textPlaceholder')"
               />
             </n-form-item>
-            <n-form-item label="名称">
-              <n-input v-model:value="textName" placeholder="文本片段名称" />
+            <n-form-item :label="t('attachments.displayName')">
+              <n-input v-model:value="textName" :placeholder="t('attachments.textName')" />
             </n-form-item>
             <n-button type="primary" @click="handleAddText" :disabled="!textContent.trim()">
-              添加
+              {{ t('common.add') }}
             </n-button>
           </n-form>
         </div>
@@ -94,6 +94,7 @@ import { ref, computed } from 'vue'
 import { NModal, NTabs, NTabPane, NUpload, NUploadDragger, NIcon, NText, NInput, NForm, NFormItem, NButton, NEmpty } from 'naive-ui'
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import { CloudUploadOutline, Document } from '@vicons/ionicons5'
+import { useI18n } from '@/composables/useI18n'
 
 const props = defineProps<{
   show: boolean
@@ -108,6 +109,8 @@ const show = computed({
   get: () => props.show,
   set: (value) => emit('update:show', value),
 })
+
+const { t } = useI18n()
 
 // 工作区文件
 const workspaceSearch = ref('')
@@ -179,7 +182,7 @@ function handleAddText() {
 
   emit('attach', {
     kind: 'text',
-    name: textName.value || '文本片段',
+    name: textName.value || t('attachments.defaultTextName'),
     content: textContent.value,
   })
 

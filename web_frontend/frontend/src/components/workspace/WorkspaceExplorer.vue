@@ -163,9 +163,6 @@ function handleAction(key: string, entry: WorkspaceEntry) {
         emit('selectFile', entry)
       }
       break
-    case 'download':
-      // TODO: 下载文件
-      break
   }
 }
 
@@ -173,7 +170,6 @@ function getEntryActions(entry: WorkspaceEntry) {
   if (entry.kind === 'file') {
     return [
       { label: '打开', key: 'open' },
-      { label: '下载', key: 'download' },
     ]
   }
   return []

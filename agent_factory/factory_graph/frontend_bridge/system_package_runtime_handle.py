@@ -67,6 +67,9 @@ class SystemPackageRuntimeHandle:
     def set_emit(self, emit: Emit | None) -> None:
         self._emit = emit
 
+    def set_runtime_resources_override(self, resources: dict[str, Any]) -> None:
+        self.core.set_runtime_resources_override(resources)
+
     @property
     def is_running(self) -> bool:
         return not self._closing

@@ -52,6 +52,15 @@ export interface FactoryFrontendEvent {
   payload: Record<string, any>
 }
 
+export interface RuntimeOptionsView {
+  show_state?: boolean
+  show_messages?: boolean
+  context_window_tokens: number | null
+  context_window_tokens_source: 'env' | 'web' | 'unset' | string
+  env_override_keys?: string[]
+  env_override_count?: number
+}
+
 // ========== 对话相关 ==========
 
 export interface TranscriptItem {
@@ -332,6 +341,7 @@ export interface ContextWindowView {
 export interface RuntimeViewState {
   protocolVersion: string
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting'
+  runtimeOptions: RuntimeOptionsView
   activeRequestId: string | null
   activeRequests: Record<string, ActiveRequestView>
   runStatus: RunStatus

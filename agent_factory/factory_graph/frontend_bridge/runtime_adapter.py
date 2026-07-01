@@ -48,9 +48,12 @@ class FactoryRuntimeAdapter(
     evolution_package_id: str | None = None
     scheduler_runtime: SchedulerRuntime | None = None
     background_workers: RuntimeBackgroundWorkerManager | None = None
+    env_override_baseline: dict[str, str | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         load_agentfactory_dotenv()
+        if self.options.context_window_tokens is None and self.options.context_window_tokens_source == "unset":
+            self.options = FactoryBridgeOptions.from_env()
         if self.session_manager is None:
             self.session_manager = FactorySessionManager.from_env()
         if self.agent_package_runtime is None:
@@ -60,6 +63,7 @@ class FactoryRuntimeAdapter(
         if self.evolution_runtime is None:
             self.evolution_runtime = AgentEvolutionRuntime()
         self.agent_package_runtime.set_emit(self.emit)
+        self._apply_runtime_options()
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
         try:

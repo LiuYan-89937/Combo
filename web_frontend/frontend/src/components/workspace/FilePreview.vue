@@ -69,7 +69,6 @@ function formatFileSize(bytes: number): string {
 }
 
 function handleDownload() {
-  // TODO: 实现下载
   const blob = new Blob([props.file.content], { type: 'text/plain' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

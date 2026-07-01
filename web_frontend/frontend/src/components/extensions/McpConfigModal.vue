@@ -57,7 +57,7 @@
 import { ref, computed, watch } from 'vue'
 import { NModal, NForm, NFormItem, NInput, NInputNumber, NSpace, NButton, NSwitch } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
-import type { McpServerConfig } from '@/api/commands'
+import type { McpServerConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
 
 const props = defineProps<{

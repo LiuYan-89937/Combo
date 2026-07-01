@@ -98,6 +98,7 @@ class DockerAgentRuntimeLauncher:
         workdir_root: Path,
         extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
+        env_overrides: dict[str, str] | None = None,
     ) -> DockerAgentRuntimePlan:
         docker = self._docker_executable()
         sandbox = dict(package.sandbox_contract or {})
@@ -117,7 +118,7 @@ class DockerAgentRuntimeLauncher:
         input_files_root = workdir_root / ATTACHMENT_INPUT_DIR
         input_files_root.mkdir(parents=True, exist_ok=True)
         service_env = self._service_environment(sandbox)
-        env = {**self._environment(sandbox), **service_env}
+        env = {**self._environment(sandbox), **service_env, **(env_overrides or {})}
         if mcp_gateway_url:
             env["AGENTFACTORY_MCP_GATEWAY_URL"] = mcp_gateway_url
         command = [
@@ -181,6 +182,7 @@ class DockerAgentRuntimeLauncher:
         workdir_root: Path,
         extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
+        env_overrides: dict[str, str] | None = None,
     ) -> list[str]:
         return self.prepare(
             package=package,
@@ -189,6 +191,7 @@ class DockerAgentRuntimeLauncher:
             workdir_root=workdir_root,
             extension_root=extension_root,
             mcp_gateway_url=mcp_gateway_url,
+            env_overrides=env_overrides,
         ).command
 
     def _docker_executable(self) -> str:

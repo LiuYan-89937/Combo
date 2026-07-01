@@ -10,16 +10,26 @@ import type {
   FactoryMode,
   RuntimeViewState,
   ConversationScopeState,
-  ModelStream,
-  ToolActivity,
-  TranscriptItem,
   ConversationTurn,
+  ModelStream,
+  TranscriptItem,
   RunStatus,
 } from '@/types/protocol'
 import {
   buildConversationScopeState,
   normalizeConversationScopeState,
 } from './runtime/conversationState'
+import {
+  ensureConversationTurn,
+} from './runtime/conversationMutations'
+import {
+  applyContextActivityEvent,
+  applyKnowledgeActivityEvent,
+  applyMemoryActivityEvent,
+  applySchedulerActivityEvent,
+  recordDebugEvent,
+  recordTimelineEvent,
+} from './runtime/activityMutations'
 import {
   interruptMessage,
   interruptType,
@@ -28,6 +38,20 @@ import {
   isSchedulerRequest,
   isUserInputInterrupt,
 } from './runtime/eventUtils'
+import {
+  applyNodeCompleted,
+  applyNodeFailed,
+  applyNodeProgress,
+  applyNodeStarted,
+  applyStageCompleted,
+  applyStageFailed,
+  applyStageStarted,
+} from './runtime/graphMutations'
+import {
+  applyModelCallStarted,
+  applyModelMessageCompleted,
+  applyModelStreamDelta,
+} from './runtime/modelMutations'
 import {
   agentPackageConversationScope,
   agentPackageScopeInfoFromEvent,
@@ -40,20 +64,16 @@ import {
   agentPackageSessionSnapshotView,
   factorySessionSnapshotView,
 } from './runtime/sessionSnapshots'
-import { toolPayloadArguments, toolPayloadValue } from './runtime/toolPayload'
 import {
-  contextWindowView,
-  extensionItemView,
-  knowledgeDocumentView,
-  knowledgeSearchResultView,
-  knowledgeSourceView,
-  schedulerJobView,
-  schedulerRunNoticeView,
-  schedulerToolOptionView,
-  workspaceEntryView,
-  workspaceFileView,
-  workspaceRootView,
-} from './runtime/viewMappers'
+  applyExtensionsEvent,
+  applyWorkspaceEvent,
+  markSchedulerRunNoticeRead,
+} from './runtime/resourceMutations'
+import {
+  applyToolApprovalRequested,
+  applyToolApprovalResolved,
+  applyToolLifecycleEvent,
+} from './runtime/toolMutations'
 
 // 事件去重集合
 const processedEventIds = new Set<string>()
@@ -62,6 +82,12 @@ export const useRuntimeStore = defineStore('runtime', {
   state: (): RuntimeViewState => ({
     protocolVersion: 'factory_frontend.v1',
     connectionStatus: 'disconnected',
+    runtimeOptions: {
+      context_window_tokens: null,
+      context_window_tokens_source: 'unset',
+      env_override_keys: [],
+      env_override_count: 0,
+    },
     activeRequestId: null,
     activeRequests: {},
     runStatus: 'idle',
@@ -199,7 +225,10 @@ export const useRuntimeStore = defineStore('runtime', {
 
       // Runtime lifecycle
       if (type === 'runtime_ready') {
+        this._handleRuntimeOptionsChanged(event)
         console.info('Runtime ready')
+      } else if (type === 'runtime_options_changed') {
+        this._handleRuntimeOptionsChanged(event)
       } else if (type === 'session_started') {
         this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
         this.currentMode = event.mode || null
@@ -370,6 +399,21 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    _handleRuntimeOptionsChanged(event: FactoryFrontendEvent) {
+      const options = event.payload?.options
+      if (!options || typeof options !== 'object') return
+      this.runtimeOptions = {
+        ...this.runtimeOptions,
+        ...options,
+        context_window_tokens: optionalPositiveInteger(options.context_window_tokens),
+        context_window_tokens_source: String(options.context_window_tokens_source || 'unset'),
+        env_override_keys: Array.isArray(options.env_override_keys)
+          ? options.env_override_keys.map(String)
+          : [],
+        env_override_count: optionalPositiveInteger(options.env_override_count) || 0,
+      }
+    },
+
     _handleRunStarted(event: FactoryFrontendEvent) {
       if (isSchedulerRequest(event.request_id)) {
         this._registerActiveRequest(event, 'running')
@@ -386,7 +430,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.modelStreams = {}
       this.tools = []
       this.currentPlan = null
-      const turn = this._ensureTurnForRequest(event.request_id || null, event.timestamp)
+      const turn = ensureConversationTurn(this, event.request_id || null, event.timestamp)
       turn.status = 'running'
       turn.startedAt = event.timestamp
       turn.errorMessage = null
@@ -405,7 +449,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this._completeActiveRequest(event, 'completed')
       this.runStatus = 'completed'
       const requestId = event.request_id || this.activeRequestId || null
-      const turn = this._ensureTurnForRequest(requestId, event.timestamp)
+      const turn = ensureConversationTurn(this, requestId, event.timestamp)
       turn.status = 'completed'
       turn.completedAt = event.timestamp
       if (!this.activeRequestId || this.activeRequestId === requestId) {
@@ -460,7 +504,7 @@ export const useRuntimeStore = defineStore('runtime', {
         },
       }
       this.transcript.push(errorItem)
-      const turn = this._ensureTurnForRequest(requestId, event.timestamp)
+      const turn = ensureConversationTurn(this, requestId, event.timestamp)
       turn.status = 'failed'
       turn.completedAt = event.timestamp
       turn.errorMessage = errorMsg
@@ -479,7 +523,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.pendingInterrupt = event
       this._promoteAgentPackageScopeFromEvent(event)
       const requestId = event.request_id || this.activeRequestId || null
-      const turn = this._ensureTurnForRequest(requestId, event.timestamp)
+      const turn = ensureConversationTurn(this, requestId, event.timestamp)
       turn.status = 'interrupted'
       turn.completedAt = event.timestamp
       const message = interruptMessage(event)
@@ -509,116 +553,34 @@ export const useRuntimeStore = defineStore('runtime', {
      * Stage handlers
      */
     _handleStageStarted(event: FactoryFrontendEvent) {
-      const stageId = event.stage_id
-      if (!stageId) return
-
-      this.stages[stageId] = {
-        stageId,
-        status: 'running',
-        nodeId: event.node_id || null,
-        startedAt: event.timestamp,
-        completedAt: null,
-        failedAt: null,
-        lastEventType: event.event_type,
-        lastMessage: event.message || null,
-      }
+      applyStageStarted(this, event)
     },
 
     _handleStageCompleted(event: FactoryFrontendEvent) {
-      const stageId = event.stage_id
-      if (!stageId || !this.stages[stageId]) return
-
-      this.stages[stageId].status = 'completed'
-      this.stages[stageId].completedAt = event.timestamp
-      this.stages[stageId].lastEventType = event.event_type
-      this.stages[stageId].lastMessage = event.message || null
+      applyStageCompleted(this, event)
     },
 
     _handleStageFailed(event: FactoryFrontendEvent) {
-      const stageId = event.stage_id
-      if (!stageId || !this.stages[stageId]) return
-
-      this.stages[stageId].status = 'failed'
-      this.stages[stageId].failedAt = event.timestamp
-      this.stages[stageId].lastEventType = event.event_type
-      this.stages[stageId].lastMessage = event.message || null
+      applyStageFailed(this, event)
     },
 
     /**
      * Node handlers
      */
     _handleNodeStarted(event: FactoryFrontendEvent) {
-      const nodeId = event.node_id
-      if (!nodeId) return
-
-      this.nodes[nodeId] = {
-        nodeId,
-        stageId: event.stage_id || null,
-        status: 'running',
-        label: event.node_label || null,
-        kind: event.node_kind || null,
-        startedAt: event.timestamp,
-        completedAt: null,
-        failedAt: null,
-        message: event.message || null,
-        payload: event.payload || {},
-      }
+      applyNodeStarted(this, event)
     },
 
     _handleNodeProgress(event: FactoryFrontendEvent) {
-      const nodeId = event.node_id
-      if (!nodeId) return
-
-      if (!this.nodes[nodeId]) {
-        this.nodes[nodeId] = {
-          nodeId,
-          stageId: event.stage_id || null,
-          status: 'running',
-          label: event.node_label || null,
-          kind: event.node_kind || null,
-          startedAt: event.timestamp,
-          completedAt: null,
-          failedAt: null,
-          message: event.message || null,
-          payload: event.payload || {},
-        }
-      } else {
-        this.nodes[nodeId].message = event.message || null
-        this.nodes[nodeId].payload = { ...this.nodes[nodeId].payload, ...event.payload }
-      }
+      applyNodeProgress(this, event)
     },
 
     _handleNodeCompleted(event: FactoryFrontendEvent) {
-      const nodeId = event.node_id
-      if (!nodeId || !this.nodes[nodeId]) return
-
-      this.nodes[nodeId].status = 'completed'
-      this.nodes[nodeId].completedAt = event.timestamp
-      this.nodes[nodeId].message = event.message || null
+      applyNodeCompleted(this, event)
     },
 
     _handleNodeFailed(event: FactoryFrontendEvent) {
-      const nodeId = event.node_id
-      if (!nodeId) return
-
-      if (!this.nodes[nodeId]) {
-        this.nodes[nodeId] = {
-          nodeId,
-          stageId: event.stage_id || null,
-          status: 'failed',
-          label: event.node_label || null,
-          kind: event.node_kind || null,
-          startedAt: event.timestamp,
-          completedAt: null,
-          failedAt: event.timestamp,
-          message: event.message || null,
-          payload: event.payload || {},
-        }
-      } else {
-        this.nodes[nodeId].status = 'failed'
-        this.nodes[nodeId].failedAt = event.timestamp
-        this.nodes[nodeId].message = event.message || null
-      }
+      applyNodeFailed(this, event)
     },
 
     /**
@@ -644,273 +606,75 @@ export const useRuntimeStore = defineStore('runtime', {
      * Model stream handlers
      */
     _handleModelCallStarted(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      const streamId = event.payload?.stream_id
-      if (!streamId) return
-
-      this.modelStreams[streamId] = {
-        streamId,
-        requestId: event.request_id || null,
-        nodeId: event.node_id || null,
-        content: '',
-        active: true,
-        completedAt: null,
-        visibleToUser: event.payload?.visible_to_user !== false,
-      }
+      applyModelCallStarted(this, event)
     },
 
     _handleModelStreamDelta(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      const streamId = event.payload?.stream_id
-      const delta = event.payload?.delta
-      if (!streamId || delta == null) return
-      const visibleToUser = event.payload?.visible_to_user !== false
-      if (!visibleToUser) {
-        this._discardAssistantMessageStream(streamId, event.timestamp)
-        return
-      }
-
-      if (!this.modelStreams[streamId]) {
-        this.modelStreams[streamId] = {
-          streamId,
-          requestId: event.request_id || null,
-          nodeId: event.node_id || null,
-          content: delta,
-          active: true,
-          completedAt: null,
-          visibleToUser,
-        }
-      } else {
-        this.modelStreams[streamId].requestId = this.modelStreams[streamId].requestId || event.request_id || null
-        this.modelStreams[streamId].nodeId = this.modelStreams[streamId].nodeId || event.node_id || null
-        this.modelStreams[streamId].visibleToUser = visibleToUser
-        this.modelStreams[streamId].content += delta
-      }
-      const stream = this.modelStreams[streamId]
-      if (stream.visibleToUser && stream.content) {
-        this._upsertAssistantMessageFromStream(streamId, event.timestamp, event.request_id || stream.requestId || null)
-      }
+      applyModelStreamDelta(this, event)
     },
 
     _handleModelMessageCompleted(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      const streamId = event.payload?.stream_id
-      const content = event.payload?.content
-      if (!streamId) return
-      if (event.payload?.discard || event.payload?.visible_to_user === false) {
-        this._discardAssistantMessageStream(streamId, event.timestamp)
-        return
-      }
-
-      if (!this.modelStreams[streamId]) {
-        // 没有 delta 时，直接用 snapshot 创建
-        this.modelStreams[streamId] = {
-          streamId,
-          requestId: event.request_id || null,
-          nodeId: event.node_id || null,
-          content: content || '',
-          active: false,
-          completedAt: event.timestamp,
-          visibleToUser: event.payload?.visible_to_user !== false,
-        }
-      } else {
-        this.modelStreams[streamId].requestId = this.modelStreams[streamId].requestId || event.request_id || null
-        // 有 delta 时，用 snapshot 补齐（或覆盖）
-        if (content && content.length > this.modelStreams[streamId].content.length) {
-          this.modelStreams[streamId].content = content
-        }
-        this.modelStreams[streamId].active = false
-        this.modelStreams[streamId].completedAt = event.timestamp
-      }
-
-      // 添加到 transcript
-      const stream = this.modelStreams[streamId]
-      if (stream.visibleToUser && stream.content) {
-        this._upsertAssistantMessageFromStream(streamId, event.timestamp, event.request_id || stream.requestId || null)
-      }
+      applyModelMessageCompleted(this, event)
     },
 
     /**
      * Tool handlers
      */
     _handleToolCallProposed(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      this._upsertToolActivityFromEvent(event, 'proposed')
+      applyToolLifecycleEvent(this, event, 'proposed')
     },
 
     _handleToolApprovalRequested(event: FactoryFrontendEvent) {
       if (isBackgroundEvent(event, this.activeRequestId)) return
-      this.runStatus = 'interrupted'
-      this.pendingInterrupt = event
+      applyToolApprovalRequested(this, event)
       this._promoteAgentPackageScopeFromEvent(event)
-
-      // 更新工具状态为 approval
-      const requests = event.payload?.requests || []
-      requests.forEach((req: any) => {
-        const approvalEvent = {
-          ...event,
-          payload: { ...(event.payload || {}), ...req },
-        } satisfies FactoryFrontendEvent
-        const activity = this._upsertToolActivityFromEvent(approvalEvent, 'approval')
-        if (activity) {
-          activity.approvalState = 'pending'
-          this._upsertTurnTool(activity)
-        }
-      })
     },
 
     _handleToolApprovalResolved(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      const approved = event.payload?.approved
-      const toolCallId = event.payload?.tool_call_id
-      this.pendingInterrupt = null
-      if (this.runStatus === 'interrupted') {
-        this.runStatus = 'running'
-      }
-
-      if (toolCallId) {
-        const tool = this.tools.find((t) => t.toolCallId === toolCallId)
-        if (tool) {
-          tool.approvalState = approved ? 'approved' : 'rejected'
-          this._upsertTurnTool(tool)
-        }
-      } else {
-        this.tools
-          .filter((tool) => tool.status === 'approval' && tool.approvalState === 'pending')
-          .forEach((tool) => {
-            tool.approvalState = approved ? 'approved' : 'rejected'
-            this._upsertTurnTool(tool)
-          })
-      }
+      applyToolApprovalResolved(this, event)
     },
 
     _handleToolCallStarted(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      this._upsertToolActivityFromEvent(event, 'started')
+      applyToolLifecycleEvent(this, event, 'started')
     },
 
     _handleToolCallCompleted(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      this._upsertToolActivityFromEvent(event, 'completed')
+      applyToolLifecycleEvent(this, event, 'completed')
     },
 
     _handleToolCallFailed(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      this._upsertToolActivityFromEvent(event, 'failed')
+      applyToolLifecycleEvent(this, event, 'failed')
     },
 
     _handleToolObservation(event: FactoryFrontendEvent) {
-      if (isBackgroundEvent(event, this.activeRequestId)) return
-      this._upsertToolActivityFromEvent(event, 'observed')
+      applyToolLifecycleEvent(this, event, 'observed')
     },
 
     /**
      * Context/Memory/Knowledge/Scheduler handlers
      */
     _handleContextEvent(event: FactoryFrontendEvent) {
-      const type = event.event_type
-      if (type === 'context_prepare_started' || type.includes('compression_started')) {
-        this.contextActivity.status = 'running'
-      } else if (type.includes('completed') || type === 'context_window_updated') {
-        this.contextActivity.status = 'completed'
-      } else if (type.includes('failed')) {
-        this.contextActivity.status = 'failed'
-      } else if (type.includes('skipped')) {
-        this.contextActivity.status = 'skipped'
-      }
-      this.contextActivity.eventType = type
-      this.contextActivity.payload = event.payload
-      if (type === 'context_window_updated') {
-        this.contextWindow = contextWindowView(event)
-      }
+      applyContextActivityEvent(this, event)
     },
 
     _handleMemoryEvent(event: FactoryFrontendEvent) {
-      const type = event.event_type
-      if (type.includes('queued') && !type.includes('failed')) {
-        this.memoryActivity.status = 'writing'
-      } else if (type.includes('completed')) {
-        this.memoryActivity.status = 'completed'
-      } else if (type.includes('failed')) {
-        this.memoryActivity.status = 'failed'
-      }
-      this.memoryActivity.eventType = type
-      this.memoryActivity.payload = event.payload
+      applyMemoryActivityEvent(this, event)
     },
 
     _handleKnowledgeEvent(event: FactoryFrontendEvent) {
-      this.knowledgeActivity.push({
-        eventType: event.event_type,
-        timestamp: event.timestamp,
-        sourceId: event.payload?.source_id || null,
-        jobId: event.payload?.job_id || null,
-        mode: event.payload?.mode || null,
-        phase: event.payload?.phase || null,
-        status: event.payload?.status || null,
-        reportPath: event.payload?.report_path || null,
-        payload: event.payload || {},
-      })
-      this._updateKnowledgeSources(event)
-      if (event.event_type === 'knowledge_documents_listed') {
-        const documents = event.payload?.documents || []
-        this.knowledgeDocuments = Array.isArray(documents)
-          ? documents.map(knowledgeDocumentView)
-          : []
-      } else if (event.event_type === 'knowledge_search_completed') {
-        const results = event.payload?.results || []
-        this.knowledgeResults = Array.isArray(results)
-          ? results.map(knowledgeSearchResultView)
-          : []
-      } else if (event.event_type === 'knowledge_document_read') {
-        this.knowledgeDocument = event.payload || null
-      }
+      applyKnowledgeActivityEvent(this, event)
     },
 
     _handleWorkspaceEvent(event: FactoryFrontendEvent) {
-      if (event.event_type === 'workspace_roots_listed') {
-        const roots = event.payload?.roots || []
-        this.workspaceRoots = Array.isArray(roots)
-          ? roots.map(workspaceRootView)
-          : []
-      } else if (event.event_type === 'workspace_entries_listed') {
-        const entries = event.payload?.entries || []
-        this.workspaceEntries = Array.isArray(entries)
-          ? entries.map(workspaceEntryView)
-          : []
-      } else if (event.event_type === 'workspace_file_read') {
-        const payload = event.payload || {}
-        this.workspaceFile = workspaceFileView(payload)
-      }
+      applyWorkspaceEvent(this, event)
     },
 
     _handleExtensionsEvent(event: FactoryFrontendEvent) {
-      const mcpServers = Array.isArray(event.payload?.mcp_servers) ? event.payload?.mcp_servers : []
-      const skills = Array.isArray(event.payload?.skills) ? event.payload?.skills : []
-      this.extensionItems = [
-        ...mcpServers.map((item: any) => extensionItemView(item, 'mcp')),
-        ...skills.map((item: any) => extensionItemView(item, 'skill')),
-      ]
-      if (event.event_type === 'extension_config_tested') {
-        this.extensionTestResult = event.payload?.test || event.payload || null
-      } else if (event.event_type === 'extension_config_updated') {
-        this.extensionTestResult = null
-      }
+      applyExtensionsEvent(this, event)
     },
 
     _handleSchedulerEvent(event: FactoryFrontendEvent) {
-      this.schedulerActivity.push({
-        eventType: event.event_type,
-        timestamp: event.timestamp,
-        jobId: event.payload?.job_id || null,
-        runId: event.payload?.run_id || null,
-        targetType: event.payload?.target_type || null,
-        status: event.payload?.status || null,
-        reportPath: event.payload?.report_path || null,
-        payload: event.payload || {},
-      })
-      this._updateSchedulerJobs(event)
-      this._updateSchedulerOptions(event)
-      this._updateSchedulerRunNotices(event)
+      applySchedulerActivityEvent(this, event)
     },
 
     /**
@@ -1065,226 +829,8 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _ensureTurnForRequest(requestId: string | null, timestamp?: string): ConversationTurn {
-      const existing = requestId
-        ? this.conversationTurns.find((turn) => turn.requestId === requestId)
-        : null
-      if (existing) return existing
-      const fallback = !requestId ? this.conversationTurns[this.conversationTurns.length - 1] : null
-      if (fallback && fallback.status === 'running') return fallback
-      const turn: ConversationTurn = {
-        id: requestId || `turn-${Date.now()}`,
-        requestId,
-        status: this.runStatus,
-        userMessage: null,
-        assistantMessages: [],
-        tools: [],
-        startedAt: timestamp || new Date().toISOString(),
-        completedAt: null,
-        errorMessage: null,
-      }
-      this.conversationTurns.push(turn)
-      return turn
-    },
-
-    _upsertAssistantMessageFromStream(streamId: string, timestamp: string, requestId: string | null = null) {
-      const stream = this.modelStreams[streamId]
-      if (!stream || !stream.content.trim()) return
-      const existingIdx = this.transcript.findIndex((t) => t.streamId === streamId)
-      let item: TranscriptItem
-      if (existingIdx >= 0) {
-        item = this.transcript[existingIdx]
-        item.content = stream.content
-        item.timestamp = timestamp
-      } else {
-        item = {
-          id: streamId,
-          role: 'assistant',
-          content: stream.content,
-          timestamp,
-          streamId,
-        }
-        this.transcript.push(item)
-      }
-      const turn = this._ensureTurnForRequest(requestId || stream.requestId || this.activeRequestId, timestamp)
-      const existingMessage = turn.assistantMessages.find((message) => message.streamId === streamId)
-      if (existingMessage) {
-        existingMessage.content = item.content
-        existingMessage.timestamp = item.timestamp
-      } else {
-        turn.assistantMessages.push(item)
-      }
-    },
-
-    _discardAssistantMessageStream(streamId: string, timestamp: string) {
-      const stream = this.modelStreams[streamId]
-      if (stream) {
-        stream.content = ''
-        stream.active = false
-        stream.completedAt = timestamp
-        stream.visibleToUser = false
-      } else {
-        this.modelStreams[streamId] = {
-          streamId,
-          requestId: null,
-          nodeId: null,
-          content: '',
-          active: false,
-          completedAt: timestamp,
-          visibleToUser: false,
-        }
-      }
-      this.transcript = this.transcript.filter((message) => message.streamId !== streamId)
-      this.conversationTurns.forEach((turn) => {
-        turn.assistantMessages = turn.assistantMessages.filter((message) => message.streamId !== streamId)
-      })
-    },
-
-    _upsertToolActivityFromEvent(
-      event: FactoryFrontendEvent,
-      status: ToolActivity['status'],
-    ): ToolActivity | null {
-      const payload = event.payload || {}
-      const toolCallId = toolPayloadValue(payload, ['tool_call_id', 'toolCallId'])
-      const toolName = toolPayloadValue(payload, ['tool_name', 'tool_id', 'name'])
-      const activityKey = String(toolCallId || event.span_id || event.event_id)
-      const existingIndex = this.tools.findIndex((item) => (
-        item.activityKey === activityKey ||
-        Boolean(toolCallId && item.toolCallId === String(toolCallId))
-      ))
-      const existing = existingIndex >= 0 ? this.tools[existingIndex] : null
-      const activity: ToolActivity = {
-        activityKey: existing?.activityKey || activityKey,
-        requestId: event.request_id || existing?.requestId || null,
-        eventType: event.event_type,
-        timestamp: event.timestamp,
-        createdAt: existing?.createdAt || event.timestamp,
-        stageId: event.stage_id || existing?.stageId || null,
-        nodeId: event.node_id || existing?.nodeId || null,
-        toolCallId: toolCallId ? String(toolCallId) : existing?.toolCallId || null,
-        toolName: toolName ? String(toolName) : existing?.toolName || '工具调用',
-        status,
-        approvalState: existing?.approvalState || null,
-        payload: {
-          ...(existing?.payload || {}),
-          ...payload,
-          arguments: {
-            ...toolPayloadArguments(existing?.payload || {}),
-            ...toolPayloadArguments(payload),
-          },
-        },
-      }
-      if (existingIndex >= 0) {
-        this.tools[existingIndex] = activity
-      } else {
-        this.tools.push(activity)
-      }
-      this._upsertTurnTool(activity)
-      return activity
-    },
-
-    _upsertTurnTool(tool: ToolActivity) {
-      const turn = this._ensureTurnForRequest(tool.requestId || this.activeRequestId, tool.timestamp)
-      const index = turn.tools.findIndex((item) => item.activityKey === tool.activityKey)
-      if (index >= 0) {
-        turn.tools[index] = { ...tool }
-      } else {
-        turn.tools.push({ ...tool })
-      }
-    },
-
-    _updateKnowledgeSources(event: FactoryFrontendEvent) {
-      if (Array.isArray(event.payload?.sources)) {
-        this.knowledgeSources = event.payload.sources.map((source: any) => knowledgeSourceView(source, event.timestamp))
-        return
-      }
-      if (event.event_type === 'knowledge_source_removed') {
-        const sourceId = event.payload?.source_id
-        if (sourceId) {
-          this.knowledgeSources = this.knowledgeSources.filter((source) => source.payload?.source_id !== sourceId)
-          this.knowledgeDocuments = this.knowledgeDocuments.filter((document) => document.payload?.source_id !== sourceId)
-          this.knowledgeResults = this.knowledgeResults.filter((result) => result.payload?.source_id !== sourceId)
-        }
-        return
-      }
-      const source = event.payload?.source || event.payload?.preview || null
-      const sourceId = event.payload?.source_id || source?.source_id
-      if (!sourceId && !source?.display_name) return
-      const item = knowledgeSourceView(source || event.payload, event.timestamp)
-      const key = String(sourceId || item.name)
-      const index = this.knowledgeSources.findIndex((value) => String(value.payload?.source_id || value.name) === key)
-      if (index >= 0) {
-        this.knowledgeSources[index] = item
-      } else {
-        this.knowledgeSources.unshift(item)
-      }
-    },
-
-    _updateSchedulerJobs(event: FactoryFrontendEvent) {
-      if (event.event_type === 'scheduler_job_deleted') {
-        const jobId = event.payload?.job_id
-        this.schedulerJobs = this.schedulerJobs.filter((item) => item.payload?.job_id !== jobId)
-        return
-      }
-      const jobs = event.payload?.payload?.jobs || event.payload?.jobs
-      if (Array.isArray(jobs)) {
-        this.schedulerJobs = jobs.map(schedulerJobView)
-        return
-      }
-      const job = event.payload?.payload?.job || event.payload?.job
-      if (!job) return
-      const view = schedulerJobView(job)
-      const index = this.schedulerJobs.findIndex((item) => item.payload?.job_id === job.job_id)
-      if (index >= 0) {
-        this.schedulerJobs[index] = view
-      } else {
-        this.schedulerJobs.unshift(view)
-      }
-    },
-
-    _updateSchedulerOptions(event: FactoryFrontendEvent) {
-      if (event.event_type !== 'scheduler_options_listed') return
-      const tools = event.payload?.payload?.tools || event.payload?.tools || []
-      this.schedulerToolOptions = Array.isArray(tools)
-        ? tools
-            .map(schedulerToolOptionView)
-            .filter((tool): tool is NonNullable<ReturnType<typeof schedulerToolOptionView>> => tool !== null)
-        : []
-    },
-
-    _updateSchedulerRunNotices(event: FactoryFrontendEvent) {
-      if (![
-        'scheduler_run_scheduled',
-        'scheduler_run_started',
-        'scheduler_run_completed',
-        'scheduler_run_failed',
-        'scheduler_run_skipped',
-        'scheduler_run_cancelled',
-      ].includes(event.event_type)) {
-        return
-      }
-      const notice = schedulerRunNoticeView(event)
-      if (!notice) return
-      const index = this.schedulerRunNotices.findIndex((item) => item.id === notice.id)
-      if (index >= 0) {
-        this.schedulerRunNotices[index] = {
-          ...this.schedulerRunNotices[index],
-          ...notice,
-          unread: notice.status === 'running' ? this.schedulerRunNotices[index].unread : true,
-        }
-      } else {
-        this.schedulerRunNotices.unshift(notice)
-      }
-      if (this.schedulerRunNotices.length > 30) {
-        this.schedulerRunNotices = this.schedulerRunNotices.slice(0, 30)
-      }
-    },
-
     markSchedulerNoticeRead(noticeId: string) {
-      const notice = this.schedulerRunNotices.find((item) => item.id === noticeId)
-      if (notice) {
-        notice.unread = false
-      }
+      markSchedulerRunNoticeRead(this, noticeId)
     },
 
     _upsertAgentSession(session: any) {
@@ -1454,31 +1000,11 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _recordDebugEvent(event: FactoryFrontendEvent) {
-      this.debugEvents.push(event)
-      // 保留最近 100 条
-      if (this.debugEvents.length > 100) {
-        this.debugEvents.shift()
-      }
+      recordDebugEvent(this, event)
     },
 
     _recordTimelineEvent(event: FactoryFrontendEvent) {
-      this.timeline.push({
-        id: event.event_id,
-        eventType: event.event_type,
-        timestamp: event.timestamp,
-        spanId: event.span_id || null,
-        parentSpanId: event.parent_span_id || null,
-        stageId: event.stage_id || null,
-        nodeId: event.node_id || null,
-        nodeLabel: event.node_label || null,
-        message: event.message || null,
-        severity: event.severity || null,
-        payload: event.payload || {},
-      })
-      // 保留最近 200 条
-      if (this.timeline.length > 200) {
-        this.timeline.shift()
-      }
+      recordTimelineEvent(this, event)
     },
 
     /**
@@ -1494,7 +1020,7 @@ export const useRuntimeStore = defineStore('runtime', {
         metadata,
       }
       this.transcript.push(item)
-      const turn = this._ensureTurnForRequest(requestId, timestamp)
+      const turn = ensureConversationTurn(this, requestId, timestamp)
       turn.userMessage = item
       turn.status = 'running'
       turn.metadata = {
@@ -1523,3 +1049,16 @@ export const useRuntimeStore = defineStore('runtime', {
 
   },
 })
+
+function optionalPositiveInteger(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value)
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.trunc(parsed)
+    }
+  }
+  return null
+}

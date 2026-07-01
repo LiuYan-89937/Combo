@@ -4,15 +4,36 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import {
+  detectBrowserLocale,
+  normalizeLocale,
+  type Locale,
+} from '@/i18n'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
 export type RightSidebarTab = 'workspace' | 'status' | 'sessions' | 'plan'
+
+const STORAGE_KEYS = {
+  locale: 'fast-agent-factory.locale',
+} as const
+
+function readStoredLocale(): Locale {
+  if (typeof window === 'undefined') return 'zh-CN'
+  const stored = window.localStorage.getItem(STORAGE_KEYS.locale)
+  return stored ? normalizeLocale(stored) : detectBrowserLocale()
+}
+
+function writeStorage(key: string, value: string): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(key, value)
+}
 
 export const useUiStore = defineStore('ui', () => {
   // ========== 主题 ==========
   const themeMode = ref<ThemeMode>('light')
   const isDarkMode = ref(false)
+  const locale = ref<Locale>(readStoredLocale())
 
   // ========== 布局 ==========
   const leftSidebarCollapsed = ref(false)
@@ -22,7 +43,6 @@ export const useUiStore = defineStore('ui', () => {
   const activeRightSidebarTab = ref<RightSidebarTab>('workspace')
 
   // ========== 弹窗/抽屉 ==========
-  const commandPaletteOpen = ref(false)
   const settingsDrawerOpen = ref(false)
   const debugDrawerOpen = ref(false)
 
@@ -111,8 +131,9 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
-  function toggleCommandPalette(): void {
-    commandPaletteOpen.value = !commandPaletteOpen.value
+  function setLocale(nextLocale: Locale): void {
+    locale.value = nextLocale
+    writeStorage(STORAGE_KEYS.locale, nextLocale)
   }
 
   function toggleSettingsDrawer(): void {
@@ -125,26 +146,25 @@ export const useUiStore = defineStore('ui', () => {
 
   // 初始化主题监听
   if (typeof window !== 'undefined') {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    isDarkMode.value = mediaQuery.matches
-
-    mediaQuery.addEventListener('change', (e) => {
-      if (themeMode.value === 'auto') {
-        isDarkMode.value = e.matches
-      }
-    })
+    watch(
+      locale,
+      (value) => {
+        document.documentElement.lang = value
+      },
+      { immediate: true }
+    )
   }
 
   return {
     // State
     themeMode,
     isDarkMode,
+    locale,
     leftSidebarCollapsed,
     rightSidebarCollapsed,
     leftSidebarWidth,
     rightSidebarWidth,
     activeRightSidebarTab,
-    commandPaletteOpen,
     settingsDrawerOpen,
     debugDrawerOpen,
     notifications,
@@ -160,7 +180,7 @@ export const useUiStore = defineStore('ui', () => {
     openRightSidebar,
     setRightSidebarTab,
     setThemeMode,
-    toggleCommandPalette,
+    setLocale,
     toggleSettingsDrawer,
     toggleDebugDrawer,
     addNotification,

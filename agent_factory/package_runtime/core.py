@@ -60,15 +60,22 @@ class PackageRuntimeCore:
         emit_background: Emit | None = None,
         graph_id: str = "agent_package_runtime",
         producer_type: str = "agent_runtime",
+        runtime_resources_override: dict[str, Any] | None = None,
     ) -> None:
         self.package = package
         self.runtime_root = Path(runtime_root).expanduser().resolve() if runtime_root is not None else None
         self.graph_id = graph_id
         self.producer_type = producer_type
         self.emit_background = emit_background
+        self.runtime_resources_override = dict(runtime_resources_override or {})
         self.compiled_runtime: CompiledPackageRuntime | None = None
         self.background_workers = RuntimeBackgroundWorkerManager()
         self._compile_lock = threading.Lock()
+
+    def set_runtime_resources_override(self, resources: dict[str, Any]) -> None:
+        self.runtime_resources_override = dict(resources)
+        if self.compiled_runtime is not None:
+            self.compiled_runtime.compiled.compiled_app.services.runtime_resources.update(self.runtime_resources_override)
 
     def handle(self, command: dict[str, Any], *, emit: Emit) -> int:
         command_type = str(command.get("type") or "")
@@ -157,6 +164,7 @@ class PackageRuntimeCore:
                 base_services=facade.instance.services,
                 runtime_root=self.runtime_root,
             )
+            runtime_build.services.runtime_resources.update(self.runtime_resources_override)
             compiled = AgentAssemblyCompiler(facade=facade).compile(
                 self.package.assembly_spec,
                 runtime_build=runtime_build,

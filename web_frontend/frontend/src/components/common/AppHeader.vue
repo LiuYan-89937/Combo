@@ -6,7 +6,7 @@
           <Menu />
         </n-icon>
       </n-button>
-      <h1 class="app-title">FastAgentFactory</h1>
+      <h1 class="app-title">{{ t('app.name') }}</h1>
       <n-tag :type="connectionStatusType" size="small" round>
         {{ connectionStatusText }}
       </n-tag>
@@ -26,30 +26,18 @@
         {{ runStatusText }}
       </n-tag>
 
-      <n-button text @click="uiStore.toggleCommandPalette" title="命令面板 (Cmd+K)">
-        <n-icon size="20">
-          <Search />
-        </n-icon>
-      </n-button>
-
-      <n-button text @click="uiStore.toggleDebugDrawer" title="调试面板">
+      <n-button text @click="uiStore.toggleDebugDrawer" :title="t('header.debugPanel')">
         <n-icon size="20">
           <Bug />
         </n-icon>
       </n-button>
 
-      <n-button text @click="uiStore.toggleSettingsDrawer" title="设置">
+      <n-button text @click="uiStore.toggleSettingsDrawer" :title="t('header.settings')">
         <n-icon size="20">
           <Settings />
         </n-icon>
       </n-button>
 
-      <n-button text @click="toggleTheme" title="切换主题">
-        <n-icon size="20">
-          <Moon v-if="uiStore.actualTheme === 'light'" />
-          <Sunny v-else />
-        </n-icon>
-      </n-button>
     </div>
   </header>
 </template>
@@ -58,39 +46,42 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
-import { Menu, Search, Settings, Bug, Moon, Sunny } from '@vicons/ionicons5'
+import { Menu, Settings, Bug } from '@vicons/ionicons5'
+import { routeTitleKey } from '@/i18n'
+import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 
 const route = useRoute()
+const { t } = useI18n()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 
 const currentRouteName = computed(() => {
   const isConversationRoute = route.name === 'Factory' || route.name === 'Manufacturing' || route.name === 'Evolution'
-  if (route.name === 'Evolution') return 'Agent 进化'
-  if (isConversationRoute && runtimeStore.currentMode === 'evolve_agent') return 'Agent 进化'
-  if (isConversationRoute && runtimeStore.currentMode === 'create_agent') return 'Agent 制造'
-  if (isConversationRoute && runtimeStore.currentMode === 'agent_package') return '子 Agent 对话'
-  return route.meta.title || route.name || '未知页面'
+  if (route.name === 'Evolution') return t('route.evolution')
+  if (isConversationRoute && runtimeStore.currentMode === 'evolve_agent') return t('route.evolution')
+  if (isConversationRoute && runtimeStore.currentMode === 'create_agent') return t('route.manufacturing')
+  if (isConversationRoute && runtimeStore.currentMode === 'agent_package') return t('mode.agentPackageRoute')
+  return t(routeTitleKey(route.name))
 })
 
 const modeLabel = computed(() => {
   const mode = runtimeStore.currentMode
   if (!mode) return ''
   if (mode === 'evolve_agent' && agentStore.selectedPackage) {
-    return agentStore.selectedPackage.agent_name || agentStore.selectedPackage.name || '未命名 Agent'
+    return agentStore.selectedPackage.agent_name || agentStore.selectedPackage.name || t('common.unnamedAgent')
   }
   if (mode === 'agent_package' && agentStore.activeChatPackage) {
-    return agentStore.activeChatPackage.agent_name || agentStore.activeChatPackage.name || '未命名 Agent'
+    return agentStore.activeChatPackage.agent_name || agentStore.activeChatPackage.name || t('common.unnamedAgent')
   }
   const labels = {
-    chat: '闲聊',
-    create_agent: '制造对话',
-    evolve_agent: '进化对话',
-    agent_package: '运行对话',
+    chat: t('mode.chat'),
+    create_agent: t('mode.createAgent'),
+    evolve_agent: t('mode.evolveAgent'),
+    agent_package: t('mode.agentPackage'),
   }
   return labels[mode as keyof typeof labels] || mode
 })
@@ -98,10 +89,10 @@ const modeLabel = computed(() => {
 const connectionStatusText = computed(() => {
   const status = runtimeStore.connectionStatus
   const labels = {
-    disconnected: '未连接',
-    connecting: '连接中',
-    connected: '已连接',
-    error: '连接错误',
+    disconnected: t('connection.disconnected'),
+    connecting: t('connection.connecting'),
+    connected: t('connection.connected'),
+    error: t('connection.error'),
   }
   return labels[status]
 })
@@ -120,11 +111,11 @@ const connectionStatusType = computed(() => {
 const runStatusText = computed(() => {
   const status = runtimeStore.runStatus
   const labels = {
-    idle: '空闲',
-    running: '运行中',
-    interrupted: '已暂停',
-    completed: '已完成',
-    failed: '失败',
+    idle: t('run.idle'),
+    running: t('run.running'),
+    interrupted: t('run.interrupted'),
+    completed: t('run.completed'),
+    failed: t('run.failed'),
   }
   return labels[status]
 })
@@ -140,17 +131,6 @@ const runStatusType = computed(() => {
   }
   return types[status] as any
 })
-
-function toggleTheme() {
-  const current = uiStore.themeMode
-  if (current === 'auto') {
-    uiStore.setThemeMode('dark')
-  } else if (current === 'dark') {
-    uiStore.setThemeMode('light')
-  } else {
-    uiStore.setThemeMode('auto')
-  }
-}
 </script>
 
 <style scoped>

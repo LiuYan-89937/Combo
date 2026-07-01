@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import os
+import re
 
+from agent_factory.context_system.token_counter import context_window_tokens_from_env
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
+    CONTEXT_WINDOW_TOKENS_ENV,
     FactoryBridgeOptions,
     SYSTEM_CHAT_PACKAGE_ID,
 )
+from agent_factory.models.chat_model import reset_chat_models
+from agent_factory.models.embedding_model import reset_embedding_model
+
+
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 MESSAGE_MODES = {"chat", "create_agent", "evolve_agent"}
 SESSION_MODES = {"chat", "create_agent", "evolve_agent"}
@@ -71,17 +80,40 @@ class RuntimeSessionCommandMixin:
         self._apply_mode(command, command.mode)
 
     def set_options(self, command: FactoryFrontendCommand) -> None:
+        context_window_tokens = self.options.context_window_tokens
+        context_window_tokens_source = self.options.context_window_tokens_source
+        env_overrides = dict(self.options.env_overrides)
+        env_overrides_changed = False
+        if "env_overrides" in command.options:
+            env_overrides = _parse_env_overrides(command.options.get("env_overrides"))
+            env_overrides_changed = True
+        if "context_window_tokens" in command.options:
+            context_window_tokens = _parse_context_window_tokens(command.options.get("context_window_tokens"))
+            context_window_tokens_source = "web" if context_window_tokens is not None else "unset"
+        elif env_overrides_changed and CONTEXT_WINDOW_TOKENS_ENV in env_overrides:
+            context_window_tokens = _parse_context_window_tokens(env_overrides.get(CONTEXT_WINDOW_TOKENS_ENV))
+            context_window_tokens_source = "web_env" if context_window_tokens is not None else "unset"
+        elif env_overrides_changed and context_window_tokens_source == "web_env":
+            context_window_tokens = None
+            context_window_tokens_source = "unset"
+        if context_window_tokens is None and context_window_tokens_source == "unset":
+            context_window_tokens = context_window_tokens_from_env()
+            context_window_tokens_source = "env" if context_window_tokens is not None else "unset"
         self.options = FactoryBridgeOptions(
             show_state=bool(command.options.get("show_state", self.options.show_state)),
             show_messages=bool(command.options.get("show_messages", self.options.show_messages)),
+            context_window_tokens=context_window_tokens,
+            context_window_tokens_source=context_window_tokens_source,
+            env_overrides=env_overrides,
         )
+        self._apply_runtime_options()
         self.emit(
             event(
                 "runtime_options_changed",
                 request_id=command.request_id,
                 session_id=self._session_id(),
                 mode=self.mode,
-                payload={"options": asdict(self.options)},
+                payload={"options": self._options_payload()},
             )
         )
 
@@ -247,6 +279,46 @@ class RuntimeSessionCommandMixin:
             "path": None,
         }
 
+    def _options_payload(self) -> dict[str, object]:
+        payload = asdict(self.options)
+        payload.pop("env_overrides", None)
+        env_keys = sorted(self.options.env_overrides)
+        payload["env_override_keys"] = env_keys
+        payload["env_override_count"] = len(env_keys)
+        return payload
+
+    def _apply_runtime_options(self) -> None:
+        self._apply_env_overrides(self.options.effective_env_overrides())
+        if self.agent_package_runtime is not None:
+            self.agent_package_runtime.set_context_window_tokens(self.options.context_window_tokens)
+            self.agent_package_runtime.set_env_overrides(self.options.env_overrides)
+
+    def _apply_env_overrides(self, env_overrides: dict[str, str]) -> None:
+        changed = False
+        previous_keys = set(self.env_override_baseline)
+        next_keys = set(env_overrides)
+
+        for key in previous_keys - next_keys:
+            previous = self.env_override_baseline.pop(key)
+            if previous is None:
+                if key in os.environ:
+                    os.environ.pop(key, None)
+                    changed = True
+            elif os.environ.get(key) != previous:
+                os.environ[key] = previous
+                changed = True
+
+        for key, value in env_overrides.items():
+            if key not in self.env_override_baseline:
+                self.env_override_baseline[key] = os.environ.get(key)
+            if os.environ.get(key) != value:
+                os.environ[key] = value
+                changed = True
+
+        if changed:
+            reset_chat_models()
+            reset_embedding_model()
+
 
 def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, object]]:
     turns = record.get("turns")
@@ -279,6 +351,48 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
                 }
             )
     return messages
+
+
+def _parse_context_window_tokens(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _parse_env_overrides(value: object) -> dict[str, str]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return {
+            _normalize_env_key(key): str(item)
+            for key, item in value.items()
+            if _normalize_env_key(key)
+        }
+    if isinstance(value, str):
+        result: dict[str, str] = {}
+        for raw_line in value.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, raw_value = line.split("=", 1)
+            normalized = _normalize_env_key(key)
+            if normalized:
+                result[normalized] = raw_value.strip()
+        return result
+    return {}
+
+
+def _normalize_env_key(value: object) -> str:
+    key = str(value or "").strip()
+    return key if _ENV_KEY_RE.fullmatch(key) else ""
 
 
 class _InterruptResumeTarget:
