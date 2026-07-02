@@ -46,25 +46,52 @@ export function applyToolApprovalRequested(state: ToolMutationState, event: Fact
 export function applyToolApprovalResolved(state: ToolMutationState, event: FactoryFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   const approved = event.payload?.approved
-  const toolCallId = event.payload?.tool_call_id
+  const toolCallIds = approvalToolCallIds(event.payload)
   state.pendingInterrupt = null
   if (state.runStatus === 'interrupted') {
     state.runStatus = 'running'
   }
 
-  if (toolCallId) {
-    const tool = state.tools.find((item) => item.toolCallId === toolCallId)
-    if (tool) {
-      tool.approvalState = approved ? 'approved' : 'rejected'
-      upsertTurnTool(state, tool)
+  if (toolCallIds.length > 0) {
+    const matched = state.tools.filter((item) => item.toolCallId && toolCallIds.includes(item.toolCallId))
+    if (matched.length > 0) {
+      matched.forEach((tool) => resolveApprovalTool(tool, event, Boolean(approved)))
+      matched.forEach((tool) => upsertTurnTool(state, tool))
+      return
     }
+  }
+
+  const pendingTools = state.tools.filter((tool) => tool.status === 'approval' && tool.approvalState === 'pending')
+  if (pendingTools.length > 0) {
+    pendingTools.forEach((tool) => resolveApprovalTool(tool, event, Boolean(approved)))
+    pendingTools.forEach((tool) => upsertTurnTool(state, tool))
     return
   }
 
   state.tools
-    .filter((tool) => tool.status === 'approval' && tool.approvalState === 'pending')
+    .filter((tool) => tool.status === 'approval')
     .forEach((tool) => {
-      tool.approvalState = approved ? 'approved' : 'rejected'
+      resolveApprovalTool(tool, event, Boolean(approved))
       upsertTurnTool(state, tool)
     })
+}
+
+function resolveApprovalTool(tool: ToolActivity, event: FactoryFrontendEvent, approved: boolean) {
+  tool.approvalState = approved ? 'approved' : 'rejected'
+  tool.eventType = event.event_type
+  tool.timestamp = event.timestamp
+  tool.payload = {
+    ...(tool.payload || {}),
+    approval: event.payload || {},
+  }
+}
+
+function approvalToolCallIds(payload: Record<string, any> | undefined): string[] {
+  const values = [
+    payload?.tool_call_id,
+    payload?.toolCallId,
+    ...(Array.isArray(payload?.tool_call_ids) ? payload.tool_call_ids : []),
+    ...(Array.isArray(payload?.toolCallIds) ? payload.toolCallIds : []),
+  ]
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)))
 }

@@ -13,7 +13,7 @@ import {
 } from '@/i18n'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
-export type RightSidebarTab = 'workspace' | 'status' | 'sessions' | 'plan'
+export type RightSidebarTab = 'workspace' | 'status' | 'sessions'
 
 export const RIGHT_SIDEBAR_WIDTH = {
   default: 320,

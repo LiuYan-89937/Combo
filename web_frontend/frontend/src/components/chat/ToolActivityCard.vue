@@ -1,10 +1,10 @@
 <template>
-  <div class="tool-card" :class="[`status-${tool.status}`]">
+  <div class="tool-card" :class="[`status-${displayStatus}`]">
     <div class="tool-summary-row">
       <div class="tool-status-icon" :class="{ spinning: isRunning }" aria-hidden="true">
-        <n-icon v-if="tool.status === 'completed'"><CheckmarkCircleOutline /></n-icon>
-        <n-icon v-else-if="tool.status === 'failed'"><CloseCircleOutline /></n-icon>
-        <n-icon v-else-if="tool.status === 'approval'"><AlertCircleOutline /></n-icon>
+        <n-icon v-if="['approved', 'completed', 'observed'].includes(displayStatus)"><CheckmarkCircleOutline /></n-icon>
+        <n-icon v-else-if="['failed', 'rejected'].includes(displayStatus)"><CloseCircleOutline /></n-icon>
+        <n-icon v-else-if="displayStatus === 'approval'"><AlertCircleOutline /></n-icon>
       </div>
       <div class="tool-main">
         <div class="tool-title-line">
@@ -48,6 +48,7 @@ import {
 } from '@vicons/ionicons5'
 import type { ToolActivity } from '@/types/protocol'
 import { useI18n } from '@/composables/useI18n'
+import { toolActivityDisplayStatus } from '@/utils/toolActivityState'
 
 const props = defineProps<{
   tool: ToolActivity
@@ -58,29 +59,31 @@ const expanded = ref(false)
 const DETAIL_MAX_CHARS = 1600
 
 const displayName = computed(() => friendlyToolName(props.tool.toolName))
+const displayStatus = computed(() => toolActivityDisplayStatus(props.tool))
 const isRunning = computed(() => ['proposed', 'started'].includes(props.tool.status))
 const statusText = computed(() => {
-  const approvalState = props.tool.approvalState
-  if (props.tool.status === 'approval') return t('tool.status.waitingApproval')
-  if (approvalState === 'approved') return t('tool.status.approved')
-  if (approvalState === 'rejected' || approvalState === 'denied') return t('tool.status.rejected')
   return {
+    approved: t('tool.status.approved'),
+    rejected: t('tool.status.rejected'),
+    approval: t('tool.status.waitingApproval'),
     proposed: t('tool.status.proposed'),
     started: t('tool.status.started'),
     completed: t('tool.status.completed'),
     failed: t('tool.status.failed'),
     observed: t('tool.status.observed'),
-  }[props.tool.status] || props.tool.status
+  }[displayStatus.value] || displayStatus.value
 })
 const statusTagType = computed<'default' | 'success' | 'warning' | 'error' | 'info'>(() => {
-  if (props.tool.status === 'completed' || props.tool.status === 'observed') return 'success'
-  if (props.tool.status === 'failed') return 'error'
-  if (props.tool.status === 'approval') return 'warning'
+  if (displayStatus.value === 'approved' || displayStatus.value === 'completed' || displayStatus.value === 'observed') return 'success'
+  if (displayStatus.value === 'failed' || displayStatus.value === 'rejected') return 'error'
+  if (displayStatus.value === 'approval') return 'warning'
   return 'info'
 })
 const subtitle = computed(() => {
+  if (displayStatus.value === 'approval') return t('tool.subtitle.approval')
+  if (displayStatus.value === 'approved') return t('tool.subtitle.approved')
+  if (displayStatus.value === 'rejected') return t('tool.subtitle.rejected')
   if (isKnowledgeTool.value) return knowledgeSubtitle.value
-  if (props.tool.status === 'approval') return t('tool.subtitle.approval')
   if (props.tool.status === 'started') return t('tool.subtitle.started')
   if (props.tool.status === 'completed' || props.tool.status === 'observed') return resultHeadline.value || t('tool.subtitle.completed')
   if (props.tool.status === 'failed') return errorHeadline.value || t('tool.subtitle.failed')

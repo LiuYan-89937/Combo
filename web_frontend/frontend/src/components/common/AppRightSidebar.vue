@@ -34,12 +34,6 @@
       <n-tab-pane name="status" :tab="t('right.status')">
         <StatusSidebarPanel />
       </n-tab-pane>
-
-      <n-tab-pane v-if="runtimeStore.currentPlan" name="plan" :tab="t('right.plan')">
-        <div class="sidebar-content">
-          <PlanPanel compact />
-        </div>
-      </n-tab-pane>
     </n-tabs>
   </aside>
 </template>
@@ -49,9 +43,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NIcon, NTabPane, NTabs } from 'naive-ui'
 import { ChevronForward } from '@vicons/ionicons5'
 import { useI18n } from '@/composables/useI18n'
-import { useRuntimeStore } from '@/stores/runtime'
 import { RIGHT_SIDEBAR_WIDTH, useUiStore } from '@/stores/ui'
-import PlanPanel from '@/components/plan/PlanPanel.vue'
 import SessionsSidebarPanel from './right-sidebar/SessionsSidebarPanel.vue'
 import StatusSidebarPanel from './right-sidebar/StatusSidebarPanel.vue'
 import WorkspaceSidebarPanel from './right-sidebar/WorkspaceSidebarPanel.vue'
@@ -59,9 +51,8 @@ import WorkspaceSidebarPanel from './right-sidebar/WorkspaceSidebarPanel.vue'
 const MAIN_CONTENT_MIN_WIDTH = 520
 
 const uiStore = useUiStore()
-const runtimeStore = useRuntimeStore()
 const { t } = useI18n()
-const allowedTabs = new Set(['workspace', 'sessions', 'status', 'plan'])
+const allowedTabs = new Set(['workspace', 'sessions', 'status'])
 const isResizing = ref(false)
 const viewportWidth = ref(RIGHT_SIDEBAR_WIDTH.max + MAIN_CONTENT_MIN_WIDTH)
 let resizeStartX = 0
@@ -76,20 +67,11 @@ const displayedRightSidebarWidth = computed(() => {
 watch(
   () => uiStore.activeRightSidebarTab,
   (tab) => {
-    if (!allowedTabs.has(String(tab)) || (tab === 'plan' && !runtimeStore.currentPlan)) {
+    if (!allowedTabs.has(String(tab))) {
       uiStore.setRightSidebarTab('workspace')
     }
   },
   { immediate: true }
-)
-
-watch(
-  () => runtimeStore.currentPlan,
-  (plan) => {
-    if (!plan && uiStore.activeRightSidebarTab === 'plan') {
-      uiStore.setRightSidebarTab('workspace')
-    }
-  }
 )
 
 onMounted(() => {
@@ -214,9 +196,4 @@ function availableRightSidebarWidth(): number {
   min-height: 0;
 }
 
-.sidebar-content {
-  padding: 16px;
-  overflow-y: auto;
-  height: 100%;
-}
 </style>

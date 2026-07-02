@@ -27,26 +27,9 @@
       <n-empty v-else :description="t('status.noContext')" size="small" />
     </section>
 
-    <section class="status-section">
-      <div class="section-title">{{ t('status.activity') }}</div>
-      <n-empty v-if="runtimeStore.timeline.length === 0" :description="t('status.noActivity')" size="small" />
-      <div v-else class="timeline-list">
-        <div
-          v-for="item in recentTimeline"
-          :key="item.id"
-          class="timeline-item"
-        >
-          <div class="timeline-time">
-            {{ formatTime(item.timestamp) }}
-          </div>
-          <div class="timeline-content">
-            <strong>{{ item.nodeLabel || item.eventType }}</strong>
-            <div v-if="item.message" class="timeline-message">
-              {{ item.message }}
-            </div>
-          </div>
-        </div>
-      </div>
+    <section v-if="runtimeStore.currentPlan" class="status-section">
+      <div class="section-title">{{ t('right.plan') }}</div>
+      <PlanPanel compact />
     </section>
 
     <section class="status-section">
@@ -58,8 +41,8 @@
           :key="tool.activityKey"
           class="tool-item"
         >
-          <n-tag :type="toolStatusType(tool.status)" size="small">
-            {{ toolStatusLabel(tool.status) }}
+          <n-tag :type="toolStatusType(tool)" size="small">
+            {{ toolStatusLabel(tool) }}
           </n-tag>
           <span class="tool-name">{{ tool.toolName }}</span>
         </div>
@@ -73,6 +56,9 @@ import { computed } from 'vue'
 import { NEmpty, NTag } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
+import PlanPanel from '@/components/plan/PlanPanel.vue'
+import type { ToolActivity } from '@/types/protocol'
+import { toolActivityDisplayStatus, type ToolActivityDisplayStatus } from '@/utils/toolActivityState'
 import {
   contextWindowPercentLabel,
   contextWindowThresholdPercent,
@@ -82,9 +68,8 @@ import {
 } from '@/utils/contextWindowMeter'
 
 const runtimeStore = useRuntimeStore()
-const { locale, t } = useI18n()
+const { t } = useI18n()
 
-const recentTimeline = computed(() => runtimeStore.timeline.slice(-20).reverse())
 const contextWindow = computed(() => runtimeStore.contextWindow)
 const contextWindowPercent = computed(() => (
   contextWindow.value ? contextWindowUsagePercent(contextWindow.value) : null
@@ -111,17 +96,12 @@ const contextThresholdMarker = computed(() => {
   const percent = contextWindowThresholdPercent(contextWindow.value)
   return percent === null ? '' : `${percent}%`
 })
-function formatTime(timestamp: string): string {
-  const date = new Date(timestamp)
-  return date.toLocaleTimeString(locale.value, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
-}
 
-function toolStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
+function toolStatusLabel(tool: ToolActivity): string {
+  const status = toolActivityDisplayStatus(tool)
+  const labels: Record<ToolActivityDisplayStatus, string> = {
+    approved: t('tool.status.approved'),
+    rejected: t('tool.status.rejected'),
     proposed: t('tool.status.proposed'),
     approval: t('tool.status.waitingApproval'),
     started: t('tool.status.started'),
@@ -129,11 +109,14 @@ function toolStatusLabel(status: string): string {
     failed: t('tool.status.failed'),
     observed: t('tool.status.observed'),
   }
-  return labels[status] || status || t('common.unknown')
+  return labels[status] || t('common.unknown')
 }
 
-function toolStatusType(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {
-  const types: Record<string, any> = {
+function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' | 'error' | 'info' {
+  const status = toolActivityDisplayStatus(tool)
+  const types: Record<ToolActivityDisplayStatus, 'default' | 'success' | 'warning' | 'error' | 'info'> = {
+    approved: 'success',
+    rejected: 'error',
     proposed: 'default',
     approval: 'warning',
     started: 'info',
@@ -244,36 +227,10 @@ function toolStatusType(status: string): 'default' | 'success' | 'warning' | 'er
   color: var(--n-text-color-3);
 }
 
-.timeline-list,
 .tools-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.timeline-item {
-  display: flex;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--n-border-color);
-}
-
-.timeline-time {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--n-text-color-3);
-  width: 80px;
-}
-
-.timeline-content {
-  flex: 1;
-  font-size: 14px;
-}
-
-.timeline-message {
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--n-text-color-2);
 }
 
 .tool-item {

@@ -2,6 +2,7 @@ import { computed } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import type { ToolActivity, TranscriptItem } from '@/types/protocol'
+import { isToolActivityActive, isToolActivityPendingApproval } from '@/utils/toolActivityState'
 
 export function useFactoryMessageProjection() {
   const runtimeStore = useRuntimeStore()
@@ -53,7 +54,7 @@ export function useFactoryMessageProjection() {
   })
   const toolActivityHint = computed(() => {
     if (!runtimeStore.hasActiveRun || runningToolActivities.value.length === 0) return ''
-    if (runningToolActivities.value.some((tool) => tool.status === 'approval')) return t('factory.waitToolApproval')
+    if (runningToolActivities.value.some((tool) => isToolActivityPendingApproval(tool))) return t('factory.waitToolApproval')
     if (runningToolActivities.value.some((tool) => isKnowledgeRetrievalTool(tool))) return t('factory.knowledgeRetrieving')
     return runningToolActivities.value.length > 1
       ? t('factory.toolsRunning', { count: runningToolActivities.value.length })
@@ -84,7 +85,7 @@ export function useFactoryMessageProjection() {
 }
 
 function isToolActivityRunning(tool: ToolActivity): boolean {
-  return tool.status === 'proposed' || tool.status === 'approval' || tool.status === 'started'
+  return isToolActivityActive(tool)
 }
 
 function isKnowledgeRetrievalTool(tool: ToolActivity): boolean {
