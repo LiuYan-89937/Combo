@@ -370,6 +370,7 @@ defineExpose({
 
 .send-button,
 .cancel-button {
+  border-radius: var(--app-radius-md);
   transition: transform var(--app-transition-fast);
 }
 

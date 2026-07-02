@@ -462,6 +462,72 @@ html {
   margin-top: var(--app-space-sm);
 }
 
+/* 全局 Naive UI 组件圆角统一 */
+.n-button {
+  border-radius: var(--app-radius-md) !important;
+}
+
+.n-input,
+.n-input-number,
+.n-input__input-el,
+.n-input__textarea-el {
+  border-radius: var(--app-radius-md) !important;
+}
+
+.n-select,
+.n-base-selection,
+.n-base-select-menu,
+.n-select-menu {
+  border-radius: var(--app-radius-md) !important;
+}
+
+.n-dropdown,
+.n-dropdown-menu {
+  border-radius: var(--app-radius-md) !important;
+}
+
+.n-popover,
+.n-modal,
+.n-card {
+  border-radius: var(--app-radius-lg) !important;
+}
+
+.n-tag {
+  border-radius: var(--app-radius-sm) !important;
+}
+
+.n-switch {
+  border-radius: var(--app-radius-pill) !important;
+}
+
+.n-checkbox,
+.n-radio {
+  border-radius: var(--app-radius-sm) !important;
+}
+
+.n-radio-button {
+  border-radius: var(--app-radius-md) !important;
+}
+
+.n-menu-item,
+.n-menu-item-content {
+  border-radius: var(--app-radius-md) !important;
+}
+
+.n-drawer,
+.n-drawer-content {
+  border-radius: var(--app-radius-lg) !important;
+}
+
+.n-badge {
+  border-radius: var(--app-radius-pill) !important;
+}
+
+.n-tooltip {
+  border-radius: var(--app-radius-sm) !important;
+}
+
+/* Naive UI 按钮颜色覆盖 */
 .n-button {
   color: var(--n-text-color);
   background-color: var(--n-color);

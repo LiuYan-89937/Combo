@@ -184,7 +184,7 @@ watchEffect(() => {
   align-items: center;
   justify-content: space-between;
   padding: 0 var(--app-space-lg);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--app-glass-background);
   border-bottom: 1px solid var(--app-divider);
   gap: var(--app-space-lg);
   backdrop-filter: saturate(180%) blur(20px);

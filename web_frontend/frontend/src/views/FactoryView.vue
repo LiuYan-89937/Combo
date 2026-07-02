@@ -256,7 +256,7 @@ watch(() => route.name, applyRouteMode)
 }
 
 .messages-list {
-  padding: var(--app-space-lg) 0 var(--app-space-xxl);
+  padding: var(--app-space-lg) var(--app-space-lg) var(--app-space-xxl);
 }
 
 .chat-empty {

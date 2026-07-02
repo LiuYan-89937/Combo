@@ -1,108 +1,57 @@
 # FastAgentFactory
 
-FastAgentFactory 是一个 Web-first 的 AgentPackage 工厂。它把自然语言需求制造成可编译、可验证、可发布、可运行的 AgentPackage，并让工厂自身、聊天模式和生产出的子 Agent 尽量共享同一套 RuntimeKernel、工具、上下文、记忆、定时任务和事件流规范。
+FastAgentFactory 是一个 Web 端的 Agent 工厂。你可以用它闲聊、制造新的 Agent、运行已发布 Agent、进化 Agent，并在网页里管理模型池、知识库、定时任务、MCP、Skill 和工作区文件。
 
-项目当前关注三件事：
+项目现在以 Web 前端为主入口，不再推荐通过旧 CLI 交互启动。
 
-- 生产 AgentPackage：用户在 `/create-agent` 描述需求，制造链路用 ReAct 模式读写包文件、调用 validator、probe package tool、确认后发布。
-- 运行 AgentPackage：已发布包由 RuntimeKernel 编译和执行，默认通过 Docker sandbox 隔离运行。
-- 统一前端事件：Web 前端通过 HTTP 命令与 SSE 事件消费标准 runtime events；后续其他入口可以复用同一协议。
+## 能做什么
 
-## 当前形态
-
-```text
-Vue Web Frontend
-  -> FastAPI HTTP / SSE runtime service
-  -> Factory runtime adapter
-  -> /chat SystemPackage runtime
-  -> /create-agent ReAct manufacturing runtime
-  -> /run-agent-package published AgentPackage runtime
-```
-
-核心运行链路：
-
-```text
-AgentPackage
-  -> RuntimeContracts
-  -> RuntimeBuildPlanner
-  -> AgentAssemblyCompiler
-  -> RuntimeKernel
-  -> LangGraph pattern
-  -> model / tools / memory / knowledge / scheduler / trace
-  -> runtime events
-  -> frontend render
-```
-
-## 目录结构
-
-```text
-agent_factory/
-  create_agent/              create-agent ReAct 制造链路
-  runtime_kernel/            RuntimeKernel、节点、pattern、状态、model operation
-  runtime_contracts/         AgentPackage contract schema 与 build planner
-  package_runtime/           宿主侧运行已发布 AgentPackage
-  agent_runtime_bridge/      Docker 子进程内 JSONL runtime bridge
-  factory_graph/             frontend event normalizer、session adapter、Web runtime adapter
-  tooling/                   ToolSpec、ToolExecutionGateway、内置工具、skill、MCP provider
-  context_system/            上下文检索、压缩、turn evidence
-  memory_system/             跨会话 memory store 与后台写入
-  knowledge_system/          知识源发现、索引与检索
-  scheduler_system/          定时任务事实源与 APScheduler runtime
-  trace_system/              JSONL trace fact store
-
-SystemPackage/
-  factory_chat/              工厂 chat 模式本身也是一个 AgentPackage
-  extensions/                系统级 MCP / skill 配置
-
-docker/
-  agent-runtime/             子 Agent runtime 镜像
-
-web_frontend/
-  backend/                   FastAPI Web runtime service
-  frontend/                  Vue Web 前端
-
-docs/
-  basic_capability_construction.md
-  runtime_render_pipeline.md
-```
-
-`.agentfactory/` 和 `.agent_runtime/` 是本地运行产物目录，不进入 Git。
+- 闲聊：使用系统内置 `factory_chat` 包进行日常对话、工具调用、附件解析和图片生成。
+- 制造 Agent：在「Agent 制造」里用自然语言描述需求，系统会生成可运行的 AgentPackage。
+- 运行 Agent：在「已发布 Agent」里初始化、运行、进入子 Agent 会话。
+- 进化 Agent：选择一个已发布 Agent 包，进入独立的进化对话。
+- 模型池：为子 Agent 维护可选模型，包括主对话模型和辅助图片生成模型。
+- 知识库：上传文档或文件夹，配置 RAG 分块和检索后供 Agent 使用。
+- 定时任务：给当前闲聊或当前子 Agent 添加自然语言任务，支持 cron、启用、停用和运行记录。
+- 附件：支持文件、文本片段、URL、工作区文件、拖拽上传和图片粘贴。
+- 工作区：在网页右侧查看运行状态、工作区文件、会话信息和输出产物。
 
 ## 环境要求
 
 - Python 3.11+
-- Node.js 与 npm
+- Node.js
+- npm
 - uv
 - Docker Desktop 或可用 Docker daemon
-- OpenAI-compatible Chat Completions 服务
-- 可选：OpenAI-compatible embedding 服务，用于跨会话记忆语义检索
+- 一个兼容 OpenAI Chat Completions 的文本模型服务
+- 一个 embedding 模型服务，用于知识库、RAG 和记忆检索
 
 ## 安装
 
-从仓库根目录安装 Python 依赖：
+在仓库根目录执行：
 
 ```bash
 uv sync
 ```
 
-安装 Web 前端依赖：
+安装前端依赖：
 
 ```bash
 cd web_frontend/frontend
 npm install
 ```
 
-创建本地配置：
+复制配置文件：
 
 ```bash
 cp .env.example .env
 ```
 
-`.env` 不进入 Git。模型、数据库、MCP、Docker 等本地配置都放在 `.env` 或 `.agentfactory/` 运行目录内。
+`.env` 是本地私有配置，不要提交。
 
 ## 基础配置
 
-基础配置只保留用户需要直接理解和选择的模型项。任务模型、压缩模型可以和主模型不是同一家供应商；任务模型 provider/base URL/API key 留空时继承主模型，压缩模型留空时按任务模型、主模型顺序继承。
+用户通常只需要填写这些模型项：
 
 ```bash
 AGENTFACTORY_MODEL_PROVIDER=openai_compatible_chat
@@ -127,7 +76,6 @@ AGENTFACTORY_EMBEDDING_MODEL=
 AGENTFACTORY_EMBEDDING_DIMS=
 
 AGENTFACTORY_MAIN_MODEL_MULTIMODAL=false
-
 AGENTFACTORY_MODEL_REASONING=
 AGENTFACTORY_MODEL_REASONING_EFFORT=
 
@@ -138,467 +86,191 @@ AGENTFACTORY_MODEL_MAX_OUTPUT_TOKENS=8192
 AGENTFACTORY_MODEL_MAX_INPUT_TOKENS=1000000
 ```
 
-### 模型协议与 Provider 适配
+说明：
 
-后端模型层使用统一的 Factory Model Protocol：runtime 只识别规范化后的 message、tool、structured output、reasoning、multimodal 和 usage 语义；具体厂商字段由 provider adapter 映射。当前已经接入的是 OpenAI Chat Completions 兼容链路，后续原生 OpenAI Responses、多模态内容直传和网页端思考流会继续落在同一层。
+- 主模型用于闲聊、制造和进化的主要对话。
+- 任务模型可以和主模型不是同一家供应商。
+- 压缩模型用于上下文压缩。
+- embedding 模型是必填项，用于知识库、RAG、记忆和语义检索。
+- 如果任务模型留空，会继承主模型。
+- 如果压缩模型留空，会优先继承任务模型，其次继承主模型。
+- 思考模式只应该在对应 provider/model 支持时开启。
 
-Provider 通过 `AGENTFACTORY_MODEL_PROVIDER` 配置；任务模型和压缩模型可分别通过 `AGENTFACTORY_TASK_MODEL_PROVIDER`、`AGENTFACTORY_COMPRESSION_MODEL_PROVIDER` 单独覆盖。
-
-| Provider | 配置值 | 入口格式 | 文本 | 工具调用 | 结构化输出 | 思考模式 | 原生图片/语音输入 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Chat | `openai_chat` | OpenAI Chat Completions | 支持 | 支持 | `json_schema` / `json_mode` / `function_calling` | 当前 Chat adapter 不启用 | 取决于模型 |
-| 通用 OpenAI 兼容 | `openai_compatible_chat` | OpenAI-compatible Chat Completions | 支持 | 支持 | `json_mode` / `function_calling` | 不默认启用 | 取决于厂商与模型 |
-| DeepSeek | `deepseek` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `thinking` / `reasoning_content` | 当前不声明原生直传 |
-| 千问 / 百炼 | `qwen` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_schema` / `json_mode` / `function_calling` | `enable_thinking` / `thinking_budget` | 取决于 Qwen-VL / Omni 等模型 |
-| 智谱 / Z.ai GLM | `zhipu` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `thinking` / `reasoning_effort` / `reasoning_content` | 取决于模型 |
-| Kimi / Moonshot | `kimi` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_schema` / `json_mode` / `function_calling` | `thinking` / `reasoning_content` | 图片取决于模型 |
-| MiniMax | `minimax` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `thinking.adaptive` / `reasoning_split` | 图片取决于模型 |
-| 小米 MiMo | `mimo` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `reasoning_content` 兼容链路 | 取决于模型 |
-| 腾讯混元 | `hunyuan` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | 当前不声明 | 图片取决于模型 |
-
-思考模式配置：
-
-```bash
-AGENTFACTORY_MODEL_REASONING=enabled
-AGENTFACTORY_MODEL_REASONING_EFFORT=high
-```
-
-打开思考模式时需要选择具备思考能力的 provider，例如 `deepseek`、`qwen`、`zhipu`、`kimi`、`minimax` 或 `mimo`；通用 provider 不会隐式猜测厂商能力。
-
-结构化输出配置：
-
-```bash
-AGENTFACTORY_MODEL_STRUCTURED_OUTPUT_METHOD=json_mode
-AGENTFACTORY_TASK_MODEL_STRUCTURED_OUTPUT_METHOD=
-AGENTFACTORY_COMPRESSION_MODEL_STRUCTURED_OUTPUT_METHOD=
-```
-
-如果配置的结构化输出模式不在当前 provider 能力清单内，runtime 会直接报错，而不是静默降级。
-
-Web 后端提供只读能力清单接口：`GET /api/model-pool/providers`。
-
-### 子 Agent 模型池
-
-`.env` 只配置工厂自身使用的闲聊、制造、进化、压缩和 embedding 模型。已发布子 Agent 不再继承工厂主模型；它们通过本地模型池选择运行模型。
-
-模型池保存在本地 SQLite，默认路径为 `.agentfactory/model_pool/factory.sqlite`。网页端「模型池」页面可以新增凭证和模型配置；API key 只写入本地数据库，接口响应只返回掩码和指纹。高级路径覆盖：
-
-```bash
-AGENTFACTORY_MODEL_POOL_STORE_PATH=.agentfactory/model_pool/factory.sqlite
-```
-
-制造 Agent 时会先分析任务所需能力，再调用 `model_pool_select` 从已启用模型配置中选择模型。生成的 AgentPackage 只在 `contracts/model.json` 写入 `model_contract.v1` 的 `profile_id` 绑定、选择来源、选择理由和能力需求，不写 `base_url`、`api_key` 或其他凭证。
-
-`contracts/model.json` 也统一声明辅助模型工具：
-
-```json
-{
-  "type": "model",
-  "version": "model_contract.v1",
-  "config": {
-    "bindings": {
-      "main": { "profile_id": "deepseek-v4-pro" }
-    },
-    "tool_bindings": {
-      "image_generate": {
-        "capability": "image_output",
-        "profile_id": "qwen-image",
-        "selection_source": "auto"
-      }
-    }
-  }
-}
-```
-
-辅助模型工具是系统内置工具，由 runtime 从 `model.json` 动态编译，不写入包内 `tools/` 目录。`react_agent` 会把它们作为系统工具暴露给主 ReAct loop；`plan_and_execute` 会把它们暴露给 executor，planner 仍只负责计划。
-
-子 Agent 容器初始化时会把模型池数据库以只读方式挂载进容器，运行时按 `profile_id` 解析实际模型配置。模型池没有匹配项时，制造流程应要求用户先配置模型池，而不是静默回退到工厂模型。
-
-工具审批、运行目录、定时任务、MCP/SkillHUB、附件限制和子 Agent 容器超时都是高级选项。默认值已经内置，只有需要覆盖时才写入 `.env`。
-
-完整基础配置以 [.env.example](.env.example) 为准。
+完整配置以 [.env.example](.env.example) 为准。
 
 ## 启动
+
+一键启动前后端：
 
 ```bash
 ./web_frontend/start.sh
 ```
 
-也可以分开启动：
+启动后访问：
+
+- 前端：http://localhost:3000
+- 后端：http://localhost:8000
+- 后端健康检查：http://localhost:8000/health
+
+只启动后端：
 
 ```bash
 ./web_frontend/start_backend.sh
+```
+
+只启动前端：
+
+```bash
 cd web_frontend/frontend
 npm run dev
 ```
 
-Web 后端在进程内持有 factory runtime service，不再通过旧 JSONL stdio bridge 启动主交互链路。
+`start.sh` 会自动同步 Python 依赖、前端依赖，并检查子 Agent Docker runtime 镜像。
 
-## create-agent 制造链路
+## 推荐使用流程
 
-`/create-agent` 是宿主侧 ReAct 制造链路，不再使用独立 workflow 代替模型决策。系统负责安全边界、空包 scaffold、工具执行、validator、publish gate；模型负责理解需求、选择能力、编辑文件、显式切换 focus、显式调用 validation 和 publish。
+1. 启动 Web 页面。
+2. 在 `.env` 配好闲聊、制造、进化、压缩和 embedding 模型。
+3. 打开「模型池」，添加可供子 Agent 使用的模型。
+4. 在「闲聊」里测试主模型、附件、工具调用和图片生成。
+5. 在「Agent 制造」里描述想要的 Agent。
+6. 发布后进入「已发布 Agent」，先初始化实例，再进入子 Agent 对话。
+7. 如果需要优化已发布 Agent，进入「Agent 进化」并选择目标包。
+8. 在对应对话上下文里管理知识库、定时任务和工作区。
 
-当前制造流程：
+## 支持的文本模型 Provider
 
-```text
-用户需求
-  -> create-agent workspace
-  -> 代码生成空 AgentPackage
-  -> LLM 读取当前包文件和少量 capability example
-  -> LLM 通过 create_agent_authoring 写稳定包面，必要时用通用文件工具写非结构化内容
-  -> LLM 显式调用 create_agent_validate
-  -> 如有 package tool，LLM 调用 create_agent_probe_tool 做真实工具 probe
-  -> LLM 修复并再次 validate
-  -> LLM 切换到 validation_publish
-  -> full_static validation passed
-  -> create_agent_control(action=finalize)
-  -> 用户发布确认
-  -> create_agent_publish
-```
+文本模型统一走 OpenAI Chat Completions 兼容格式。具体模型名由你在 `.env` 或模型池里填写。
 
-制造原则：
+| Provider | 配置值 | 工具调用 | 结构化输出 | 思考模式 | 图片输入 | 音频输入 |
+| --- | --- | --- | --- | --- | --- | --- |
+| OpenAI Chat Completions | `openai_chat` | 支持 | `json_schema` / `json_mode` / `function_calling` | 当前不启用 | 取决于模型 | 不声明 |
+| 通用 OpenAI 兼容服务 | `openai_compatible_chat` | 支持 | `json_mode` / `function_calling` | 不默认启用 | 取决于服务 | 取决于服务 |
+| DeepSeek | `deepseek` | 取决于模型 | `json_mode` / `function_calling` | 支持 `reasoning_content` | 不声明 | 不声明 |
+| 千问 / 百炼 / DashScope | `qwen` | 取决于模型 | `json_schema` / `json_mode` / `function_calling` | 支持 thinking 参数 | 取决于模型 | 取决于模型 |
+| 智谱 / Z.ai GLM | `zhipu` | 取决于模型 | `json_mode` / `function_calling` | 支持 reasoning 参数 | 取决于模型 | 取决于模型 |
+| Kimi / Moonshot | `kimi` | 取决于模型 | `json_schema` / `json_mode` / `function_calling` | 支持 reasoning 内容 | 取决于模型 | 不声明 |
+| MiniMax | `minimax` | 取决于模型 | `json_mode` / `function_calling` | 支持 adaptive thinking | 取决于模型 | 不声明 |
+| 小米 MiMo | `mimo` | 取决于模型 | `json_mode` / `function_calling` | 支持 reasoning 内容 | 取决于模型 | 取决于模型 |
+| 腾讯混元 | `hunyuan` | 取决于模型 | `json_mode` / `function_calling` | 当前不声明 | 取决于模型 | 不声明 |
 
-- 空 AgentPackage 是基础结构来源，模型不逐文件审计 scaffold。
-- validator 是 evidence provider，不自动推进或回退 focus。
-- 文件写入只受通用安全边界限制，不按阶段锁死 owned files。
-- schema 是 repair 工具，不是正常生产路径的阅读材料。
-- package tool 必须能被加载、真实 probe，并留下 observation。
-- MCP candidate 由 `create_agent_authoring(action="materialize_mcp_inheritance")` 按 `tool_access.allowed_tool_ids` 轻量继承；validate/probe/publish 不修改继承文件。
-- 发布前必须有最新 `full_static` validation passed，且包 fingerprint 未变化。
+能力说明：
 
-制造工作区位于：
+- “取决于模型”表示 adapter 支持该 provider 的协议，但最终能力由你填写的模型决定。
+- 开启思考模式前，先确认对应模型确实支持 reasoning/thinking。
+- DeepSeek 思考模式下，工具调用轮次需要按厂商规则保留 reasoning 内容。
+- 多模态图片输入只在主模型被配置为多模态且模型支持时启用。
 
-```text
-.agentfactory/create_agent_workspaces/<session_id>/
-```
+## 支持的图片生成 Provider
 
-制造 trace 位于工作区内：
+图片生成模型通过模型池配置，并以系统内置工具暴露给主模型调用。
 
-```text
-.factory/manufacturing_trace.json
-```
+| Provider | 配置值 | 适用模型 | 文生图 | 图生图 | 图片编辑 | 多图参考 | 批量生成 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenAI Images | `openai_image` | 如 `gpt-image-2` | 支持 | 支持 | 支持 | 支持 | 支持 |
+| 千问 / 万相 | `qwen` | 如 Wanx 系列 | 支持 | 支持 | 支持 | 支持 | 支持 |
+| 豆包 Seedream / 火山方舟 | `volcengine_seedream` | Seedream 系列 | 支持 | 支持 | 支持 | 支持 | 支持 |
 
-## AgentPackage
+千问万相也支持这些别名：
 
-AgentPackage 是可发布运行单元。基础形状由 `package_scaffold` 生成，运行时由 `AgentPackageLoader + RuntimeBuildPlanner + AgentAssemblyCompiler` 装配。
+- `wanx`
+- `dashscope_wanx`
+- `aliyun_wanx`
 
-典型结构：
+图片生成结果会保存为运行产物，前端可以在对话和工作区里查看。
 
-```text
-agent_package.json
-assembly_spec.json
-render_manifest.json
-resources.json
-sandbox_contract.json
-contracts/
-  artifact.json
-  context.json
-  dependencies.json
-  knowledge.json
-  memory.json
-  model.json
-  node_provider.json
-  render.json
-  resources.json
-  sandbox.json
-  scheduler.json
-  session.json
-  state.json
-  tools.json
-  trace.json
-prompts/
-tools/
-policies/
-strategies/
-formatters/
-extensions/
-```
+## 模型池怎么用
 
-`agent_package.json` 只做索引。运行能力来自 `contracts/*.json`，业务装配来自 `assembly_spec.json`，对话体验来自 prompt binding 和 model operation binding。
+`.env` 只负责工厂自身的主模型、任务模型、压缩模型和 embedding 模型。已发布子 Agent 使用模型池。
 
-正式发布目录：
+模型池默认保存在：
 
 ```text
-.agentfactory/published_agent_packages/
+.agentfactory/model_pool/factory.sqlite
 ```
 
-临时或开发包目录：
+在网页「模型池」里可以：
 
-```text
-.agentfactory/packages/
-```
+- 添加供应商凭证。
+- 添加文本模型。
+- 添加图片生成模型。
+- 标注模型能力，例如工具调用、思考模式、图片输入、图片输出。
+- 为子 Agent 的主模型或辅助模型工具提供候选模型。
 
-## RuntimeKernel 输入规范
+Agent 制造时会根据任务需求选择模型，并把选择结果写入 AgentPackage 的 `contracts/model.json`。包里只保存 `profile_id`、能力需求和选择理由，不保存 API key。
 
-RuntimeKernel 的模型请求由统一 builder 组装：
+## 附件与知识库
 
-```text
-stable system prompt
-  + full conversation history
-  + dynamic turn evidence
-  + native tool surface
-```
+对话附件支持：
 
-稳定前缀和动态尾部分离，以提高 provider prompt cache 命中率。运行时会记录：
+- 本地文件上传
+- 图片直接粘贴
+- 文本片段
+- URL
+- 工作区文件
 
-```text
-model_cache_metrics
-stable_prefix_digest
-dynamic_evidence_digest
-tool_surface_digest
-input_tokens
-cached_input_tokens
-hit_ratio
-```
+附件会被解析成文本或多模态输入，再发送给模型。图片附件在多模态模型可用时可以作为图片输入；否则仍可经过文档解析/OCR 链路提取文本。
 
-动态 evidence 只作为本轮内部上下文，不应该被直接展示给用户。
-
-## 工具系统
-
-统一工具链路：
-
-```text
-ToolProvider
-  -> ToolSpec
-  -> ToolRegistry
-  -> ToolCompiler
-  -> ToolExecutionGateway
-  -> LangGraph ToolNode
-  -> ToolObservation
-```
-
-工具入口统一返回 envelope：
-
-```json
-{
-  "output": {},
-  "evidence": {},
-  "summary": ""
-}
-```
-
-- `output` 只表达业务结果，并由 `ToolSpec.output_schema` 校验。
-- `evidence` 记录风险、审批、fingerprint、focus、changed files 等运行证据。
-- `summary` 用于面向模型和前端的短摘要。
-
-内置工具包括 filesystem、process、scheduler、knowledge、resource_set、tool_output、network、skill 和 MCP provider 编译出的工具。中高风险工具可触发审批。
-
-工具审批由 ToolGateway 的统一策略控制。`.env` 是全局默认；AgentPackage 只有在 `contracts/tools.json` 的 `config.approval_policy` 显式写出字段时才覆盖：
-
-```json
-{
-  "mode": "custom",
-  "low": "ask_on_risk",
-  "medium": "allow",
-  "high": "ask"
-}
-```
-
-`standard` 等价于低风险 `ask_on_risk`、中风险 `ask_unless_allowed`、高风险 `ask`。
-包内不写 `approval_policy` 时继承 `.env`；只写单个风险级时只覆盖该风险级。
-
-策略值：
-
-```text
-allow                不审批，除非风险 evaluator 明确 deny
-ask                  总是审批
-ask_on_risk          evaluator 要求 ask/uncertain 时审批
-ask_unless_allowed   evaluator 明确 allow 时不审批，否则审批
-deny                 直接拒绝
-```
-
-本地调试时如果希望所有非 deny 工具都不弹审批：
-
-```bash
-AGENTFACTORY_TOOL_APPROVAL_MODE=allow_all
-```
-
-## Skill 与 MCP
-
-Skill 是制造期和运行期的协议知识来源，按 describe / read_resource 递进披露。create-agent skill 只应该提供：
-
-- guidance：什么时候需要该能力、应该改哪些文件。
-- examples：从空包增加能力的完整增量例子。
-- repair：validator issue 后的修复提示。
-
-MCP 通过统一 provider 暴露成 ToolSpec。宿主机 MCP 可以通过 MCP gateway 提供给 Docker 子 Agent，子 Agent 镜像不需要重复安装 Node 依赖。
-
-项目内置的工厂扩展位于 `SystemPackage/extensions/`，本机运行覆盖层位于 `.agentfactory/factory/extensions/`。create-agent 制造期会先加载内置层，再加载本机覆盖层；同一个 MCP `server_id` 在本机覆盖层中可替换内置配置。
-
-内置联网研究能力使用 BigOpenLLMSearch：
-
-- GitHub：`https://github.com/LiuYan-89937/WebSearchApi`
-- MCP 启动入口：`npx -y bigopen-llm-search`
-- 工具前缀：`bigopen_*`
-- 默认搜索后端：`SEARXNG_AUTO_START=true` + `DEFAULT_SEARCH_ENGINE=searxng`
-
-## 上下文、记忆、知识
-
-ContextSystem 负责模型调用前的 turn evidence 和会话压缩，不再把工具表、最近消息等动态内容塞进稳定 system prompt。
-
-MemorySystem 负责跨会话记忆：
-
-```text
-conversation
-  -> background memory write
-  -> store namespace
-  -> optional semantic index
-  -> retrieval evidence
-```
-
-KnowledgeSystem 负责知识源发现、索引和检索。知识目录在子 Agent 中映射到：
-
-```text
-/runtime/knowledge
-```
+知识库支持上传文件和文件夹，并可配置 RAG 分块参数。RAG 主要面向文本文档，不把图片本身直接作为向量内容。
 
 ## 定时任务
 
-SchedulerSystem 使用 SQLite 作为事实源，APScheduler 负责触发，任务执行复用 RuntimeKernel 或 ToolExecutionGateway。
+定时任务按当前上下文分区：
 
-支持任务类型：
+- 在闲聊里创建的是闲聊任务。
+- 在某个子 Agent 会话里创建的是该子 Agent 的任务。
 
-```text
-graph_run
-script_run
-tool_call
-```
+任务内容是自然语言任务，也可以让 Agent 通过工具调用创建。任务支持 cron、启用、停用和运行记录。任务完成后会推送通知，点击后回到对应会话查看结果。
 
-支持触发类型：
+## 子 Agent 实例
 
-```text
-cron
-interval
-date
-```
+已发布 Agent 包需要先初始化实例，再进入对话。初始化会准备容器、依赖和运行环境。初始化完成后，子 Agent 可以在后台保持存续，切换到其他会话不会要求当前 Agent 立即停止。
 
-子 Agent 可以通过运行期工具创建自己的定时任务。需要用户审批的工具在 unattended scheduler policy 下不会静默执行。
+## 本地数据目录
 
-## Docker 子 Agent runtime
-
-构建 runtime 镜像：
-
-```bash
-docker build -t agentfactory-runtime-python:3.12 -f docker/agent-runtime/Dockerfile .
-```
-
-可指定基础镜像和 Debian 镜像源：
-
-```bash
-docker build -t agentfactory-runtime-python:3.12 \
-  --build-arg PYTHON_BASE_IMAGE=python:3.12-slim \
-  --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian \
-  --build-arg DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security \
-  -f docker/agent-runtime/Dockerfile .
-```
-
-容器挂载约定：
-
-```text
-/package                  read-only   AgentPackage
-/resources/resources.json read-only   package resources
-/artifacts                read-write  artifact output
-/workdir                  read-write  temporary workdir
-/runtime                  read-write  session/checkpoint/memory/extensions/knowledge/trace
-/runtime/extensions       read-write  runtime extensions
-/runtime/knowledge        read-write  knowledge root
-/volumes/*                optional sandbox contract volumes
-```
-
-Docker preflight 会检查 Docker CLI、daemon、runtime image、mount、volume、network 和 sandbox contract。
-
-## 事件流与前端
-
-Web、chat、create-agent、子 Agent runtime 都通过统一 runtime events 交互。前端只做事件投影和渲染，不直接理解后端内部状态文件。
-
-常见事件包括：
-
-```text
-run_started
-node_started
-model_call_started
-model_stream_delta
-model_message_completed
-tool_call_started
-tool_call_completed
-tool_call_failed
-tool_approval_requested
-interrupt_requested
-run_completed
-run_failed
-model_cache_metrics
-```
-
-协议目录在：
-
-```text
-agent_factory/factory_graph/frontend_bridge/protocol_catalog.json
-```
-
-Web 前端实现规范见：
-
-```text
-docs/web_frontend_event_protocol.md
-```
-
-## Trace
-
-TraceSystem 使用 JSONL fact store。运行期 trace 一般位于：
-
-```text
-/runtime/trace/runs/<trace_id>/
-  manifest.json
-  trace.jsonl
-  refs.jsonl
-```
-
-create-agent 制造 trace 位于制造工作区的 `.factory/manufacturing_trace.json`。Trace 是事实源；Web 时间线和状态面板是对 runtime events 的实时投影。
-
-## 本地运行产物
+这些目录是本地运行数据，不应该提交：
 
 ```text
 .agentfactory/
-  sessions/
-  checkpoints/
-  memory/
-  scheduler/
-  packages/
-  published_agent_packages/
-  agent_runtime/
-  factory/
+.agent_runtime/
 ```
 
-这些目录不进入 Git。清理历史运行数据时注意保留：
+常见内容：
 
-- `.agentfactory/factory/mcp_servers/`：宿主机 MCP 安装位置。
-- `.agentfactory/published_agent_packages/`：正式发布包。
+- 会话记录
+- checkpoint
+- trace
+- 工作区文件
+- 知识库索引
+- 定时任务数据库
+- 模型池 SQLite
+- 子 Agent runtime 产物
 
-## 开发检查
-
-本项目不要求自行运行特化业务样例。常规改动优先做语法和静态检查。
-
-Python：
+## 常用命令
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/fastagentfactory_pycache .venv/bin/python -m compileall -q agent_factory
+# 同步 Python 依赖
+uv sync
+
+# 一键启动 Web
+./web_frontend/start.sh
+
+# 只启动后端
+./web_frontend/start_backend.sh
+
+# 前端开发
+cd web_frontend/frontend
+npm run dev
+
+# 前端类型检查
+cd web_frontend/frontend
+npm run type-check
 ```
 
-TypeScript：
+## 注意事项
 
-```bash
-cd web_frontend/frontend && npm run type-check
-```
-
-Git diff：
-
-```bash
-git diff --check
-```
-
-运行真实链路、调用外部模型、调用 MCP、执行 Docker agent，应该在明确需要时手动进行。
-
-## 参考文档
-
-- [docs/basic_capability_construction.md](docs/basic_capability_construction.md)：基础能力、Contract、Builder 与 RuntimeKernel 接入规范。
-- [docs/runtime_render_pipeline.md](docs/runtime_render_pipeline.md)：runtime events 与前端渲染链路。
-- [docs/web_frontend_event_protocol.md](docs/web_frontend_event_protocol.md)：Web 前端消费 `FactoryFrontendEvent` 的协议与 reducer 规范。
+- 不要提交 `.env`、API key、模型池数据库或运行产物。
+- 不要在包配置里写 API key；子 Agent 应通过模型池的 `profile_id` 解析模型。
+- 子 Agent 的知识库、定时任务、工作区和会话都按当前 Agent 分区。
+- 如果切换模型后行为异常，先确认模型池里的 provider、base URL、模型名和能力标注是否一致。
+- 如果 Docker 初始化失败，先确认 Docker daemon 正常运行。

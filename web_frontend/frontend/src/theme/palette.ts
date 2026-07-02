@@ -72,139 +72,139 @@ export interface AppPalette {
 }
 
 export const lightPalette: AppPalette = {
-  // 基础背景（苹果官网的纯净白）
+  // 基础背景（纯净白）
   surface: '#ffffff',
   surfaceElevated: '#ffffff',
-  surfaceMuted: '#f5f5f7',
-  surfacePressed: '#e8e8ed',
-  surfaceActiveHover: '#d2d2d7',
-  surfaceHover: '#fbfbfd',
+  surfaceMuted: '#fafafa',
+  surfacePressed: '#f5f5f5',
+  surfaceActiveHover: '#e5e5e5',
+  surfaceHover: '#fafafa',
 
-  // 玻璃效果（液态玻璃感）
+  // 玻璃效果
   glassBackground: 'rgba(255, 255, 255, 0.72)',
   glassBackgroundLight: 'rgba(255, 255, 255, 0.88)',
   glassBorder: 'rgba(0, 0, 0, 0.04)',
   glassBorderLight: 'rgba(0, 0, 0, 0.06)',
 
-  // 边框和分隔（极淡，几乎透明）
+  // 边框和分隔（极淡）
   border: 'rgba(0, 0, 0, 0.06)',
   borderHover: 'rgba(0, 0, 0, 0.12)',
-  borderFocus: '#0071e3',
+  borderFocus: 'rgba(0, 0, 0, 0.8)',
   divider: 'rgba(0, 0, 0, 0.04)',
 
-  // 文本（苹果的深灰，不是纯黑）
-  text: '#1d1d1f',
+  // 文本（黑白灰）
+  text: '#171717',
   textStrong: '#000000',
-  textSecondary: '#6e6e73',
-  textMuted: '#86868b',
-  textPlaceholder: '#c7c7cc',
-  textDisabled: '#d2d2d7',
+  textSecondary: '#737373',
+  textMuted: '#a3a3a3',
+  textPlaceholder: '#d4d4d4',
+  textDisabled: '#e5e5e5',
   textInverse: '#ffffff',
 
-  // 主色（苹果蓝）
-  primary: '#0071e3',
-  primaryHover: '#0077ed',
-  primaryPressed: '#006edb',
-  primarySuppl: '#147ce5',
+  // 主色（纯黑）
+  primary: '#000000',
+  primaryHover: '#262626',
+  primaryPressed: '#000000',
+  primarySuppl: '#404040',
 
-  // 语义色（清爽克制）
-  success: '#30d158',
-  successHover: '#32d65a',
-  successPressed: '#2dca53',
+  // 语义色（黑白为主）
+  success: '#000000',
+  successHover: '#262626',
+  successPressed: '#000000',
 
-  info: '#0071e3',
-  infoHover: '#0077ed',
-  infoPressed: '#006edb',
+  info: '#000000',
+  infoHover: '#262626',
+  infoPressed: '#000000',
 
-  warning: '#ff9f0a',
-  warningHover: '#ffa61a',
-  warningPressed: '#ff9500',
+  warning: '#737373',
+  warningHover: '#525252',
+  warningPressed: '#404040',
 
-  error: '#ff3b30',
-  errorHover: '#ff4d42',
-  errorPressed: '#ff2d20',
+  error: '#000000',
+  errorHover: '#262626',
+  errorPressed: '#000000',
 
   // 特殊用途
-  focusShadow: 'rgba(0, 113, 227, 0.25)',
+  focusShadow: 'rgba(0, 0, 0, 0.1)',
   transparent: 'transparent',
   overlay: 'rgba(0, 0, 0, 0.3)',
 
-  // 阴影（苹果风格 - 极柔和多层）
+  // 阴影（柔和）
   shadowSm: '0 2px 8px rgba(0, 0, 0, 0.04)',
   shadowMd: '0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04)',
   shadowLg: '0 8px 24px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06)',
 
   // 代码/终端
-  codeBackground: '#f5f5f7',
-  codeBorder: '#d2d2d7',
+  codeBackground: '#fafafa',
+  codeBorder: 'rgba(0, 0, 0, 0.06)',
 }
 
 export const darkPalette: AppPalette = {
-  // 基础背景（苹果暗色的深蓝黑）
+  // 基础背景（纯黑）
   surface: '#000000',
-  surfaceElevated: '#1c1c1e',
-  surfaceMuted: '#2c2c2e',
-  surfacePressed: '#3a3a3c',
-  surfaceActiveHover: '#48484a',
-  surfaceHover: '#1c1c1e',
+  surfaceElevated: '#0a0a0a',
+  surfaceMuted: '#171717',
+  surfacePressed: '#262626',
+  surfaceActiveHover: '#404040',
+  surfaceHover: '#0a0a0a',
 
-  // 玻璃效果（暗色下更透明，对比更强）
-  glassBackground: 'rgba(28, 28, 30, 0.78)',
-  glassBackgroundLight: 'rgba(44, 44, 46, 0.88)',
+  // 玻璃效果
+  glassBackground: 'rgba(10, 10, 10, 0.78)',
+  glassBackgroundLight: 'rgba(23, 23, 23, 0.88)',
   glassBorder: 'rgba(255, 255, 255, 0.1)',
   glassBorderLight: 'rgba(255, 255, 255, 0.15)',
 
   // 边框和分隔
-  border: '#38383a',
-  borderHover: '#6e6e73',
-  borderFocus: '#0a84ff',
-  divider: '#38383a',
+  border: 'rgba(255, 255, 255, 0.08)',
+  borderHover: 'rgba(255, 255, 255, 0.15)',
+  borderFocus: 'rgba(255, 255, 255, 0.8)',
+  divider: 'rgba(255, 255, 255, 0.06)',
 
-  // 文本
-  text: '#f5f5f7',
+  // 文本（黑白灰）
+  text: '#fafafa',
   textStrong: '#ffffff',
-  textSecondary: '#98989d',
-  textMuted: '#6e6e73',
-  textPlaceholder: '#48484a',
-  textDisabled: '#3a3a3c',
+  textSecondary: '#a3a3a3',
+  textMuted: '#737373',
+  textPlaceholder: '#525252',
+  textDisabled: '#404040',
   textInverse: '#000000',
 
-  // 主色（苹果暗色蓝）
-  primary: '#0a84ff',
-  primaryHover: '#409cff',
-  primaryPressed: '#0077ed',
-  primarySuppl: '#409cff',
+  // 主色（纯白）
+  primary: '#ffffff',
+  primaryHover: '#fafafa',
+  primaryPressed: '#e5e5e5',
+  primarySuppl: '#d4d4d4',
 
-  // 语义色（暗色优化）
-  success: '#30d158',
-  successHover: '#32d65a',
-  successPressed: '#2dca53',
+  // 语义色（黑白为主）
+  success: '#ffffff',
+  successHover: '#fafafa',
+  successPressed: '#e5e5e5',
 
-  info: '#0a84ff',
-  infoHover: '#409cff',
-  infoPressed: '#0077ed',
+  info: '#ffffff',
+  infoHover: '#fafafa',
+  infoPressed: '#e5e5e5',
 
-  warning: '#ff9f0a',
-  warningHover: '#ffa61a',
-  warningPressed: '#ff9500',
+  warning: '#a3a3a3',
+  warningHover: '#d4d4d4',
+  warningPressed: '#737373',
 
-  error: '#ff453a',
-  errorHover: '#ff6961',
-  errorPressed: '#ff3b30',
+  error: '#ffffff',
+  errorHover: '#fafafa',
+  errorPressed: '#e5e5e5',
 
   // 特殊用途
-  focusShadow: 'rgba(10, 132, 255, 0.3)',
+  focusShadow: 'rgba(255, 255, 255, 0.2)',
   transparent: 'transparent',
   overlay: 'rgba(0, 0, 0, 0.6)',
 
   // 阴影（暗色下更深）
-  shadowSm: '0 1px 3px rgba(0, 0, 0, 0.6), 0 1px 2px rgba(0, 0, 0, 0.4)',
-  shadowMd: '0 4px 12px rgba(0, 0, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.5)',
-  shadowLg: '0 12px 32px rgba(0, 0, 0, 0.8), 0 4px 8px rgba(0, 0, 0, 0.6)',
+  shadowSm: '0 2px 8px rgba(0, 0, 0, 0.6)',
+  shadowMd: '0 4px 16px rgba(0, 0, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.5)',
+  shadowLg: '0 8px 24px rgba(0, 0, 0, 0.8), 0 4px 8px rgba(0, 0, 0, 0.6)',
 
   // 代码/终端
-  codeBackground: '#1c1c1e',
-  codeBorder: '#38383a',
+  codeBackground: '#0a0a0a',
+  codeBorder: 'rgba(255, 255, 255, 0.08)',
 }
 
 /**
