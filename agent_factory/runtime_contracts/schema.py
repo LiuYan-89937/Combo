@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from agent_factory.context_system import ContextContractConfig
 from agent_factory.knowledge_system import KnowledgeContractConfig
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
-from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBinding
+from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBinding, ModelToolBinding
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
@@ -270,6 +270,7 @@ class ModelContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bindings: dict[ModelBindingRole, ModelProfileBinding] = Field(default_factory=dict)
+    tool_bindings: dict[str, ModelToolBinding] = Field(default_factory=dict)
 
     @field_validator("bindings")
     @classmethod
@@ -278,6 +279,20 @@ class ModelContractConfig(BaseModel):
         value: dict[ModelBindingRole, ModelProfileBinding],
     ) -> dict[ModelBindingRole, ModelProfileBinding]:
         return dict(value)
+
+    @field_validator("tool_bindings")
+    @classmethod
+    def _tool_binding_ids_are_tool_ids(
+        cls,
+        value: dict[str, ModelToolBinding],
+    ) -> dict[str, ModelToolBinding]:
+        result: dict[str, ModelToolBinding] = {}
+        for tool_id, binding in value.items():
+            clean_id = str(tool_id or "").strip()
+            if not clean_id or not clean_id.replace("_", "").isalnum() or clean_id[0].isdigit() or clean_id.lower() != clean_id:
+                raise ValueError("model tool binding ids must be lowercase snake_case")
+            result[clean_id] = binding
+        return result
 
 
 class ModelContract(BaseModel):

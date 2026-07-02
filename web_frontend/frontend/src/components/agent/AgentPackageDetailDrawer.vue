@@ -66,6 +66,30 @@
 
         <section class="detail-section">
           <div class="section-header">
+            <div class="section-label">{{ t('agentDetail.modelTools') }}</div>
+            <n-tag size="small" :bordered="false">{{ modelToolBindings.length }}</n-tag>
+          </div>
+          <n-empty v-if="modelToolBindings.length === 0" :description="t('agentDetail.noModelTools')" size="small" />
+          <div v-else class="detail-list">
+            <div v-for="binding in modelToolBindings" :key="binding.tool_id" class="detail-list-item">
+              <div class="item-main">
+                <div class="item-title">{{ binding.tool_id }} · {{ binding.profile_id }}</div>
+                <div v-if="binding.description || binding.reason" class="item-description">
+                  {{ binding.description || binding.reason }}
+                </div>
+                <div class="item-meta">
+                  {{ binding.capability || t('common.unknown') }} · {{ binding.selection_source || t('common.auto') }}
+                </div>
+              </div>
+              <n-tag size="small" :bordered="false">
+                {{ agentPackage.model_contract?.version || t('common.unknown') }}
+              </n-tag>
+            </div>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-header">
             <div class="section-label">{{ t('agentDetail.packageTools') }}</div>
             <n-tag size="small" :bordered="false">{{ packageTools.length }}</n-tag>
           </div>
@@ -255,6 +279,10 @@ const knowledgeSources = computed<AgentPackageKnowledgeSourceView[]>(() => props
 const modelBindings = computed(() => {
   const bindings = props.agentPackage?.model_contract?.bindings || {}
   return Object.entries(bindings).map(([role, binding]) => ({ role, ...binding }))
+})
+const modelToolBindings = computed(() => {
+  const bindings = props.agentPackage?.model_contract?.tool_bindings || {}
+  return Object.entries(bindings).map(([tool_id, binding]) => ({ tool_id, ...binding }))
 })
 
 function packageStatusLabel(status: string | null | undefined): string {

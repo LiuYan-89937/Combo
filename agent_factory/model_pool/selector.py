@@ -10,6 +10,7 @@ from agent_factory.model_pool.schema import (
     ModelSelectionRequirement,
     ModelSelectionRequest,
     ModelSelectionResult,
+    ModelToolSelectionRecommendation,
 )
 from agent_factory.model_pool.store import ModelPoolStore
 
@@ -31,6 +32,7 @@ class ModelPoolSelector:
         profiles = self.store.list_profiles()
         enabled_profiles = [profile for profile in profiles if profile.enabled]
         recommendations: list[ModelSelectionRecommendation] = []
+        tool_recommendations: list[ModelToolSelectionRecommendation] = []
         unmatched: list[dict[str, Any]] = []
         for requirement in request.requirements:
             candidates = self._rank_candidates(requirement, enabled_profiles)
@@ -58,9 +60,39 @@ class ModelPoolSelector:
                     warnings=selected.warnings,
                 )
             )
+        for requirement in request.tool_requirements:
+            model_requirement = requirement.as_model_requirement()
+            candidates = self._rank_candidates(model_requirement, enabled_profiles)
+            if not candidates:
+                unmatched.append(
+                    {
+                        "tool_id": requirement.tool_id,
+                        "capability": requirement.capability,
+                        "purpose": requirement.purpose,
+                        "required_capabilities": _requirement_payload(model_requirement),
+                        "reason": "No enabled model profile matches the required auxiliary model tool capability.",
+                    }
+                )
+                continue
+            selected = candidates[0]
+            tool_recommendations.append(
+                ModelToolSelectionRecommendation(
+                    tool_id=requirement.tool_id,
+                    capability=requirement.capability,
+                    profile_id=selected.profile.profile_id,
+                    display_name=selected.profile.display_name,
+                    provider=selected.profile.provider,
+                    model_name=selected.profile.model_name,
+                    score=round(selected.score, 6),
+                    reason=selected.reason,
+                    required_capabilities=_requirement_payload(model_requirement),
+                    warnings=selected.warnings,
+                )
+            )
         return ModelSelectionResult(
             status="blocked" if unmatched else "completed",
             recommendations=recommendations,
+            tool_recommendations=tool_recommendations,
             unmatched=unmatched,
             profile_count=len(profiles),
             enabled_profile_count=len(enabled_profiles),

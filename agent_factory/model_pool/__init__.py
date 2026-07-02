@@ -19,6 +19,9 @@ from agent_factory.model_pool.schema import (
     ModelSelectionRequest,
     ModelSelectionRequirement,
     ModelSelectionResult,
+    ModelToolBinding,
+    ModelToolSelectionRecommendation,
+    ModelToolSelectionRequirement,
 )
 from agent_factory.model_pool.selector import ModelPoolSelector
 from agent_factory.model_pool.store import ModelPoolStore
@@ -38,6 +41,9 @@ __all__ = [
     "ModelSelectionRequest",
     "ModelSelectionRequirement",
     "ModelSelectionResult",
+    "ModelToolBinding",
+    "ModelToolSelectionRecommendation",
+    "ModelToolSelectionRequirement",
     "ResolvedChatModelProfile",
     "default_model_pool_store_path",
     "resolve_chat_model_profile",

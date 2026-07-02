@@ -35,6 +35,10 @@ def analyze_create_agent_task(*, user_input: str, model: Any | None = None) -> C
                     "Also infer model_requirements for the produced AgentPackage. Include at least a main chat model "
                     "requirement, and add task/compression requirements only when the produced agent needs "
                     "a distinct role. Requirements describe capabilities, not provider names or secrets. "
+                    "When the produced agent needs image or audio capabilities that can be served by auxiliary models, "
+                    "infer model_tool_requirements with stable snake_case tool ids such as image_understand, "
+                    "image_generate, audio_transcribe, or audio_generate. These auxiliary models are exposed as "
+                    "system tools to the runtime executor, not as native main-model capabilities. "
                     "Do not write concrete plan steps; this is only manufacturing task analysis."
                 )
             ),

@@ -60,6 +60,15 @@ export interface AgentPackageModelContractView {
     required_capabilities?: Record<string, any>
     overrides?: Record<string, any>
   }>
+  tool_bindings?: Record<string, {
+    profile_id: string
+    capability?: string
+    selection_source?: string
+    reason?: string
+    description?: string
+    required_capabilities?: Record<string, any>
+    overrides?: Record<string, any>
+  }>
 }
 
 export interface AgentPackageView {

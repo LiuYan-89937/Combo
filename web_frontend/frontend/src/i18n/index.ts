@@ -283,6 +283,8 @@ const zhCN = {
   'modelPool.notesPlaceholder': '可选：适用场景、限制或计费说明',
   'agentDetail.models': '模型绑定',
   'agentDetail.noModels': '未配置模型绑定',
+  'agentDetail.modelTools': '辅助模型工具',
+  'agentDetail.noModelTools': '未配置辅助模型工具',
 
   'scheduler.createTitle': '创建定时任务',
   'scheduler.title': '定时任务',
@@ -799,6 +801,8 @@ const enUS: Record<MessageKey, string> = {
   'modelPool.notesPlaceholder': 'Optional: use cases, limits, or pricing notes',
   'agentDetail.models': 'Model bindings',
   'agentDetail.noModels': 'No model bindings configured',
+  'agentDetail.modelTools': 'Auxiliary model tools',
+  'agentDetail.noModelTools': 'No auxiliary model tools configured',
 
   'scheduler.createTitle': 'Create scheduled task',
   'scheduler.title': 'Scheduled tasks',

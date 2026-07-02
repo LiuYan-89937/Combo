@@ -162,6 +162,52 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     },
                     "additionalProperties": False,
                 },
+                "tool_bindings": {
+                    "type": "object",
+                    "description": "Auxiliary model tools keyed by the system tool id exposed to the main model or executor.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "profile_id": {"type": "string"},
+                            "capability": {
+                                "type": "string",
+                                "enum": ["image_input", "image_output", "audio_input", "audio_output"],
+                            },
+                            "selection_source": {"type": "string", "enum": ["auto", "manual"]},
+                            "reason": {"type": "string"},
+                            "required_capabilities": {"type": "object", "additionalProperties": True},
+                            "description": {"type": "string"},
+                            "overrides": {
+                                "type": "object",
+                                "properties": {
+                                    "temperature": {"type": "number", "minimum": 0},
+                                    "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+                                    "max_output_tokens": {"type": "integer", "minimum": 1},
+                                    "max_input_tokens": {"type": "integer", "minimum": 1},
+                                    "multimodal": {"type": "boolean"},
+                                    "structured_output_method": {
+                                        "type": "string",
+                                        "enum": ["function_calling", "json_mode", "json_schema"],
+                                    },
+                                    "reasoning": {
+                                        "type": "object",
+                                        "properties": {
+                                            "enabled": {"type": "boolean"},
+                                            "effort": {"type": "string"},
+                                            "summary": {"type": "string"},
+                                            "budget_tokens": {"type": "integer", "minimum": 1},
+                                            "send_history": {"type": "boolean"},
+                                        },
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "additionalProperties": False,
+                            },
+                        },
+                        "required": ["profile_id", "capability"],
+                        "additionalProperties": False,
+                    },
+                },
             },
             "required": ["action"],
             "allOf": [
@@ -500,12 +546,18 @@ def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str
 
 def _configure_model_bindings(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
     bindings = _required_dict(arguments, "bindings")
+    tool_bindings = arguments.get("tool_bindings")
+    if tool_bindings is not None and not isinstance(tool_bindings, dict):
+        raise ValueError("tool_bindings must be an object")
     contract = ModelContract.model_validate(
         {
             "type": "model",
             "version": "model_contract.v1",
             "enabled": True,
-            "config": {"bindings": bindings},
+            "config": {
+                "bindings": bindings,
+                "tool_bindings": tool_bindings or {},
+            },
         }
     )
     payload = contract.model_dump(mode="json")

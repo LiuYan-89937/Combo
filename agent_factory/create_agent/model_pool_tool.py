@@ -15,8 +15,9 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
         id=CREATE_AGENT_MODEL_POOL_TOOL_ID,
         description=(
             "Select runnable model profiles from the local model pool for the AgentPackage being manufactured. "
-            "Use this after task analysis and before writing contracts/model.json. The tool returns profile ids only; "
-            "never write provider credentials into the package."
+            "Use this after task analysis and before writing contracts/model.json. Pass requirements for main/task/"
+            "compression models and tool_requirements for auxiliary image/audio model tools. The tool returns "
+            "profile ids only; never write provider credentials into the package."
         ),
         entrypoint="agent_factory.create_agent.model_pool_tool:run",
         input_schema={
@@ -55,9 +56,31 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                         "required": ["role"],
                         "additionalProperties": False,
                     },
-                }
+                },
+                "tool_requirements": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool_id": {"type": "string"},
+                            "capability": {
+                                "type": "string",
+                                "enum": ["image_input", "image_output", "audio_input", "audio_output"],
+                            },
+                            "purpose": {"type": "string"},
+                            "min_context_window_tokens": {"type": "integer", "minimum": 1},
+                            "excluded_profile_ids": {"type": "array", "items": {"type": "string"}},
+                            "optimize_for": {
+                                "type": "string",
+                                "enum": ["balanced", "quality", "cost", "latency", "context"],
+                            },
+                            "max_candidates": {"type": "integer", "minimum": 1, "maximum": 20},
+                        },
+                        "required": ["tool_id", "capability"],
+                        "additionalProperties": False,
+                    },
+                },
             },
-            "required": ["requirements"],
             "additionalProperties": False,
         },
         output_schema={
@@ -65,11 +88,12 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
             "properties": {
                 "status": {"type": "string", "enum": ["completed", "blocked"]},
                 "recommendations": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                "tool_recommendations": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
                 "unmatched": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
                 "profile_count": {"type": "integer"},
                 "enabled_profile_count": {"type": "integer"},
             },
-            "required": ["status", "recommendations", "unmatched", "profile_count", "enabled_profile_count"],
+            "required": ["status", "recommendations", "tool_recommendations", "unmatched", "profile_count", "enabled_profile_count"],
             "additionalProperties": False,
         },
         risk_level="low",

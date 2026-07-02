@@ -14,10 +14,12 @@ from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutp
 ModelPoolProfileKind = Literal["chat"]
 ModelBindingRole = Literal["main", "task", "compression"]
 ModelPoolModality = Literal["text", "image", "audio"]
+ModelToolCapability = Literal["image_input", "image_output", "audio_input", "audio_output"]
 ModelSelectionSource = Literal["auto", "manual"]
 ModelSelectionOptimizeFor = Literal["balanced", "quality", "cost", "latency", "context"]
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
+_TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def utc_now_text() -> str:
@@ -237,12 +239,6 @@ class ModelSelectionRequirement(BaseModel):
         return self.model_copy(update={"kind": "chat"})
 
 
-class ModelSelectionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    requirements: list[ModelSelectionRequirement] = Field(default_factory=list)
-
-
 class ModelSelectionRecommendation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -258,14 +254,97 @@ class ModelSelectionRecommendation(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ModelToolSelectionRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    capability: ModelToolCapability
+    purpose: str = ""
+    min_context_window_tokens: int | None = Field(default=None, ge=1)
+    excluded_profile_ids: list[str] = Field(default_factory=list)
+    optimize_for: ModelSelectionOptimizeFor = "balanced"
+    max_candidates: int = Field(default=5, ge=1, le=20)
+
+    @field_validator("tool_id")
+    @classmethod
+    def _tool_id(cls, value: str) -> str:
+        tool_id = str(value or "").strip()
+        if not _TOOL_ID_RE.fullmatch(tool_id):
+            raise ValueError("tool_id must be snake_case")
+        return tool_id
+
+    @field_validator("excluded_profile_ids")
+    @classmethod
+    def _stable_profile_ids(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            text = str(item or "").strip().lower()
+            if text and text not in seen:
+                result.append(text)
+                seen.add(text)
+        return result
+
+    def as_model_requirement(self) -> ModelSelectionRequirement:
+        inputs, outputs = modality_requirement_for_tool_capability(self.capability)
+        return ModelSelectionRequirement(
+            role="task",
+            purpose=self.purpose,
+            input_modalities=inputs,
+            output_modalities=outputs,
+            min_context_window_tokens=self.min_context_window_tokens,
+            excluded_profile_ids=self.excluded_profile_ids,
+            optimize_for=self.optimize_for,
+            max_candidates=self.max_candidates,
+        )
+
+
+class ModelToolSelectionRecommendation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    capability: ModelToolCapability
+    profile_id: str
+    display_name: str
+    provider: str
+    model_name: str
+    score: float
+    selection_source: ModelSelectionSource = "auto"
+    reason: str = ""
+    required_capabilities: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ModelSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requirements: list[ModelSelectionRequirement] = Field(default_factory=list)
+    tool_requirements: list[ModelToolSelectionRequirement] = Field(default_factory=list)
+
+
 class ModelSelectionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["completed", "blocked"] = "completed"
     recommendations: list[ModelSelectionRecommendation] = Field(default_factory=list)
+    tool_recommendations: list[ModelToolSelectionRecommendation] = Field(default_factory=list)
     unmatched: list[dict[str, Any]] = Field(default_factory=list)
     profile_count: int = 0
     enabled_profile_count: int = 0
+
+
+def modality_requirement_for_tool_capability(
+    capability: ModelToolCapability,
+) -> tuple[list[ModelPoolModality], list[ModelPoolModality]]:
+    if capability == "image_input":
+        return ["image"], ["text"]
+    if capability == "image_output":
+        return ["text"], ["image"]
+    if capability == "audio_input":
+        return ["audio"], ["text"]
+    if capability == "audio_output":
+        return ["text"], ["audio"]
+    raise ValueError(f"unsupported model tool capability: {capability}")
 
 
 def validate_pool_id(value: str, *, field_name: str) -> str:
@@ -340,3 +419,25 @@ class ModelProfileBinding(BaseModel):
     @classmethod
     def _profile_id(cls, value: str) -> str:
         return validate_pool_id(value, field_name="profile_id")
+
+
+class ModelToolBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str
+    capability: ModelToolCapability
+    selection_source: ModelSelectionSource = "auto"
+    reason: str = ""
+    required_capabilities: dict[str, Any] = Field(default_factory=dict)
+    overrides: ModelBindingRuntimeOverrides = Field(default_factory=ModelBindingRuntimeOverrides)
+    description: str = ""
+
+    @field_validator("profile_id")
+    @classmethod
+    def _profile_id(cls, value: str) -> str:
+        return validate_pool_id(value, field_name="profile_id")
+
+    @field_validator("description")
+    @classmethod
+    def _description(cls, value: str) -> str:
+        return str(value or "").strip()

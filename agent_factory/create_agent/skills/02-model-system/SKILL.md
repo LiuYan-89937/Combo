@@ -32,8 +32,8 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 ## Manufacturing Protocol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read `.factory/task_analysis.json` and identify model requirements before writing `contracts/model.json`.
-3. Call `model_pool_select` with the model requirements. If the result is blocked, ask the user to configure a matching model pool profile; do not silently fall back to the factory model.
-4. Write model bindings only through `create_agent_authoring(action="configure_model_bindings", bindings=...)`.
+3. Call `model_pool_select` with the model requirements and any auxiliary `tool_requirements`. If the result is blocked, ask the user to configure matching model pool profiles; do not silently fall back to the factory model.
+4. Write model bindings and auxiliary model tool bindings only through `create_agent_authoring(action="configure_model_bindings", bindings=..., tool_bindings=...)`.
 5. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 6. If the requested capability does not affect dependencies or sandbox, leave those files as-is and move to the next useful focus yourself.
 7. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
@@ -42,6 +42,8 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 ## Capability Write Guidance
 - `contracts/model.json` uses `model_contract.v1`. New user AgentPackages must bind models from the local model pool.
 - Store only `profile_id`, `selection_source`, `reason`, `required_capabilities`, and safe per-package overrides in `contracts/model.json`.
+- Put auxiliary model tools in `config.tool_bindings` in the same `contracts/model.json`. They are system model tools exposed by runtime, not package tool source files.
+- For `plan_and_execute`, auxiliary model tools are available to the executor through system tool exposure; the planner should not call business or model tools directly.
 - Do not write provider `base_url`, `api_key`, account ids, or credentials into the AgentPackage.
 - Leave dependency/sandbox contracts as-is when the request does not require changes.
 - Do not invent provider credentials, account ids, API keys, endpoints, or local paths.

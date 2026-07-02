@@ -734,7 +734,7 @@ class AgentPackageRuntimeManager:
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "error": f"{type(exc).__name__}: {exc}",
                 "sandbox": {"status": "unknown"},
-                "model_contract": {"version": "", "bindings": {}},
+                "model_contract": {"version": "", "bindings": {}, "tool_bindings": {}},
                 "extensions": _extensions_summary(package_id),
                 "tools": [],
                 "mcp_servers": [],
@@ -1339,9 +1339,10 @@ def _sandbox_summary(contract: dict[str, Any]) -> dict[str, Any]:
 def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
     contract = package.contracts.get("model") if isinstance(package.contracts, dict) else None
     if not isinstance(contract, dict):
-        return {"version": "", "bindings": {}}
+        return {"version": "", "bindings": {}, "tool_bindings": {}}
     config = contract.get("config") if isinstance(contract.get("config"), dict) else {}
     bindings = config.get("bindings") if isinstance(config.get("bindings"), dict) else {}
+    tool_bindings = config.get("tool_bindings") if isinstance(config.get("tool_bindings"), dict) else {}
     public_bindings: dict[str, dict[str, Any]] = {}
     for role, binding in bindings.items():
         if not isinstance(binding, dict):
@@ -1353,9 +1354,23 @@ def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
             "required_capabilities": binding.get("required_capabilities") if isinstance(binding.get("required_capabilities"), dict) else {},
             "overrides": binding.get("overrides") if isinstance(binding.get("overrides"), dict) else {},
         }
+    public_tool_bindings: dict[str, dict[str, Any]] = {}
+    for tool_id, binding in tool_bindings.items():
+        if not isinstance(binding, dict):
+            continue
+        public_tool_bindings[str(tool_id)] = {
+            "profile_id": str(binding.get("profile_id") or ""),
+            "capability": str(binding.get("capability") or ""),
+            "selection_source": str(binding.get("selection_source") or ""),
+            "reason": str(binding.get("reason") or ""),
+            "description": str(binding.get("description") or ""),
+            "required_capabilities": binding.get("required_capabilities") if isinstance(binding.get("required_capabilities"), dict) else {},
+            "overrides": binding.get("overrides") if isinstance(binding.get("overrides"), dict) else {},
+        }
     return {
         "version": str(contract.get("version") or ""),
         "bindings": public_bindings,
+        "tool_bindings": public_tool_bindings,
     }
 
 

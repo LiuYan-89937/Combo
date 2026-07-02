@@ -52,6 +52,7 @@ from agent_factory.runtime_kernel.persistence import (
 )
 from agent_factory.runtime_kernel.types import ToolExecutionResult
 from agent_factory.tooling.approval_policy import resolve_tool_approval_policy
+from agent_factory.tooling.builtins.model_tools import MODEL_TOOL_RUNTIME_RESOURCE, get_model_tool_specs
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
@@ -173,6 +174,11 @@ class ToolsContractBuilder:
             tool_output_spec = get_tool_output_tool_specs()[0]
             specs.append(tool_output_spec)
             system_tool_ids.add(tool_output_spec.id)
+        model_tool_runtime = tool_runtime_resources.get(MODEL_TOOL_RUNTIME_RESOURCE)
+        if isinstance(model_tool_runtime, dict) and model_tool_runtime:
+            model_tool_specs = get_model_tool_specs(model_tool_runtime)
+            specs.extend(model_tool_specs)
+            system_tool_ids.update(spec.id for spec in model_tool_specs)
         registry = ToolRegistry(specs)
         compiler = ToolCompiler(
             package_root=context.package_root,
@@ -418,6 +424,19 @@ class ModelContractBuilder:
             role: (resolved.model, resolved.settings)
             for role, resolved in resolved_profiles.items()
         }
+        model_tool_runtime = {}
+        for tool_id, binding in contract.config.tool_bindings.items():
+            resolved = resolve_chat_model_profile(binding, role=f"tool:{tool_id}")
+            model_tool_runtime[tool_id] = {
+                "tool_id": tool_id,
+                "capability": binding.capability,
+                "description": binding.description,
+                "profile_id": resolved.profile_id,
+                "provider": resolved.settings.provider,
+                "model_name": resolved.settings.model or "",
+                "model": resolved.model,
+                "settings": resolved.settings,
+            }
         return RuntimeContribution(
             services={
                 "model_service": LangChainModelServiceAdapter(
@@ -430,6 +449,11 @@ class ModelContractBuilder:
                     models_by_role=models_by_role,
                 ),
             },
+            tool_runtime_resources=(
+                {MODEL_TOOL_RUNTIME_RESOURCE: model_tool_runtime}
+                if model_tool_runtime
+                else {}
+            ),
             diagnostics=[
                 RuntimeDiagnostic(
                     where="model.runtime",
@@ -439,6 +463,10 @@ class ModelContractBuilder:
                         "profile_ids_by_role": {
                             role: resolved.profile_id
                             for role, resolved in resolved_profiles.items()
+                        },
+                        "model_tool_profile_ids": {
+                            tool_id: item["profile_id"]
+                            for tool_id, item in model_tool_runtime.items()
                         },
                     },
                 )

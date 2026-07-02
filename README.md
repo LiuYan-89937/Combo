@@ -189,6 +189,29 @@ AGENTFACTORY_MODEL_POOL_STORE_PATH=.agentfactory/model_pool/factory.sqlite
 
 制造 Agent 时会先分析任务所需能力，再调用 `model_pool_select` 从已启用模型配置中选择模型。生成的 AgentPackage 只在 `contracts/model.json` 写入 `model_contract.v1` 的 `profile_id` 绑定、选择来源、选择理由和能力需求，不写 `base_url`、`api_key` 或其他凭证。
 
+`contracts/model.json` 也统一声明辅助模型工具：
+
+```json
+{
+  "type": "model",
+  "version": "model_contract.v1",
+  "config": {
+    "bindings": {
+      "main": { "profile_id": "deepseek-v4-pro" }
+    },
+    "tool_bindings": {
+      "image_generate": {
+        "capability": "image_output",
+        "profile_id": "qwen-image",
+        "selection_source": "auto"
+      }
+    }
+  }
+}
+```
+
+辅助模型工具是系统内置工具，由 runtime 从 `model.json` 动态编译，不写入包内 `tools/` 目录。`react_agent` 会把它们作为系统工具暴露给主 ReAct loop；`plan_and_execute` 会把它们暴露给 executor，planner 仍只负责计划。
+
 子 Agent 容器初始化时会把模型池数据库以只读方式挂载进容器，运行时按 `profile_id` 解析实际模型配置。模型池没有匹配项时，制造流程应要求用户先配置模型池，而不是静默回退到工厂模型。
 
 工具审批、运行目录、定时任务、MCP/SkillHUB、附件限制和子 Agent 容器超时都是高级选项。默认值已经内置，只有需要覆盖时才写入 `.env`。

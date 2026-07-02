@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from agent_factory.model_pool.schema import ModelSelectionRequirement
+from agent_factory.model_pool.schema import ModelSelectionRequirement, ModelToolSelectionRequirement
 
 
 SYSTEM_STATE_FILE = ".factory/system_state.json"
@@ -68,6 +68,7 @@ class CreateAgentTaskAnalysis(BaseModel):
     requires_dynamic_plan: bool = False
     selected_pattern_id: Literal["react_agent", "plan_and_execute"]
     model_requirements: list[ModelSelectionRequirement] = Field(default_factory=list)
+    model_tool_requirements: list[ModelToolSelectionRequirement] = Field(default_factory=list)
     reasoning: str = ""
     selection_reason: str = ""
     manufacturing_notes: list[str] = Field(default_factory=list)
