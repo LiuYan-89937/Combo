@@ -258,7 +258,7 @@ input_schema 校验
 - LLM 只负责语义风险判断。
 - LLM 风险判断统一使用小任务模型，也就是 `.env` 中的 `AGENTFACTORY_TASK_MODEL`。
 - LLM 不能覆盖 hard deny。
-- Gateway 是唯一裁决入口，CLI/WebUI 只负责展示 `ask` 类型审批。
+- Gateway 是唯一裁决入口，WebUI 只负责展示 `ask` 类型审批。
 
 ### 2.4 当前代码入口
 
@@ -551,7 +551,7 @@ Factory 与生产出来的 Agent 使用同构 session 语义：
 session_id -> thread_id -> LangGraph checkpoint
 ```
 
-CLI/WebUI 只暴露 `session_id`，不要求用户理解 `thread_id`。
+WebUI 只暴露 `session_id`，不要求用户理解 `thread_id`。
 
 会话内记忆不负责上下文清洗、压缩、摘要注入、token budget 裁剪或 prompt 组装。这些后续归入上下文系统工程。
 
@@ -912,7 +912,7 @@ knowledge_source_reindex_requested
 
 事件 payload 只携带 source/job/mode/status/progress/count/report/error 等摘要，不携带文档全文。
 
-CLI 对应显示：
+Web 对应显示：
 
 - Knowledge 活动时间线。
 - preview / completed / failed / removed transcript 归档项。
@@ -1013,7 +1013,7 @@ unattended_policy = deny_if_approval_required
 failure_policy = pause after 3 consecutive failures
 ```
 
-任务创建/变更本身需要经过工具审批或 CLI 显式命令。任务被批准后，定时执行仍然通过 `ToolExecutionGateway` 做参数、资源、风险和输出校验，但跳过人工审批 interrupt，避免无人值守任务卡住对话。
+任务创建/变更本身需要经过工具审批或 Web 管理入口。任务被批准后，定时执行仍然通过 `ToolExecutionGateway` 做参数、资源、风险和输出校验，但跳过人工审批 interrupt，避免无人值守任务卡住对话。
 
 失败治理是 Job 契约的一部分。默认 `failure_policy.enabled=true`，同一任务连续失败达到 `max_consecutive_failures` 后自动将 job 置为 disabled，并发出 `scheduler_job_auto_paused` 事件。成功执行会自然打断连续失败计数。
 
@@ -1026,9 +1026,9 @@ Factory 与生成 Agent 共用 schema、store、worker、executor、tool 和事�
 | Factory | `.agentfactory/scheduler/factory.sqlite` | `("scheduler", "factory", <project_id>)` |
 | 生成 Agent | `/runtime/scheduler/scheduler.sqlite` | `("scheduler", "agent", <agent_id>)` |
 
-Factory chat/free/create-agent 模式可以通过同一个内置 `scheduler` 工具管理任务，也可以通过 CLI 硬管理入口 `/scheduler ...` 管理任务。生成 Agent 在 RuntimeContract 编译时得到 `services.scheduler_runtime`、后台 worker，并通过内置 `scheduler` 工具管理自己的任务。
+Factory chat/free/create-agent 模式可以通过同一个内置 `scheduler` 工具管理任务，也可以通过 Web 管理入口管理任务。生成 Agent 在 RuntimeContract 编译时得到 `services.scheduler_runtime`、后台 worker，并通过内置 `scheduler` 工具管理自己的任务。
 
-Factory CLI 硬管理入口：
+Factory Web 管理入口需要覆盖：
 
 ```text
 /scheduler list
@@ -1064,13 +1064,13 @@ scheduler_feedback_completed
 scheduler_feedback_failed
 ```
 
-CLI/WebUI 只消费事件摘要，例如 `job_id / run_id / target_type / status / duration_ms / error_summary / report_path`。完整 stdout、stderr、证据和错误细节写入 scheduler execution report。
+WebUI 只消费事件摘要，例如 `job_id / run_id / target_type / status / duration_ms / error_summary / report_path`。完整 stdout、stderr、证据和错误细节写入 scheduler execution report。
 
 ---
 
 ## 6. Trace 系统
 
-Trace 系统需要作为独立运行基础设施处理，不能附属于记忆、工具、CLI 或 render wrapper。
+Trace 系统需要作为独立运行基础设施处理，不能附属于记忆、工具、Web UI 或 render wrapper。
 
 完整工程方案见：
 
@@ -1096,7 +1096,7 @@ Exporter         = 可选 OpenTelemetry / Langfuse / Phoenix 等外部观测平�
 | `agent_factory/factory_graph/frontend_bridge/event_normalizer.py` | 会把 LangGraph stream 归一成前端事件。 |
 | `agent_factory/runtime_render/` | 已有 render wrapper 相关节点生命周期事件。 |
 | `docs/runtime_render_pipeline.md` | 描述了 Factory 与生成 Agent 共用渲染管线。 |
-| `cli/src/state/runtimeStore.ts` | CLI 已按事件订阅渲染运行状态、工具状态、记忆提示。 |
+| `web_frontend/frontend/src/stores/runtime.ts` | Web 前端已按事件订阅渲染运行状态、工具状态、记忆提示。 |
 | `agent_factory/runtime_kernel/state/schema.py` | RuntimeState 中已有 observability 相关状态。 |
 
 这些能力目前分为两层：实时渲染仍走 runtime events；全链路追踪事实进入独立 `agent_factory/trace_system/` 的 JSONL Trace Fact Store。旧前端 trace 快照已废弃。
@@ -1132,7 +1132,7 @@ agent_factory/trace_system/
 - Trace 可以记录摘要、计数、错误、耗时、引用，不默认记录完整敏感内容。
 - 工具大输出、artifact、知识块、checkpoint、scheduler report 都只记录引用。
 - 后台任务必须能关联到触发它的 `run_id / session_id / thread_id / job_id`。
-- CLI/WebUI 实时状态继续消费 runtime events；详情视图消费 trace projection，不解析 LangGraph 原始 patch。
+- WebUI 实时状态继续消费 runtime events；详情视图消费 trace projection，不解析 LangGraph 原始 patch。
 - 返厂 repair 读取 trace/report，而不是从 UI 文案反推失败原因。
 
 ---
@@ -1189,7 +1189,7 @@ AgentPackage
 - 跨会话记忆、知识检索、资源、工具元信息、定时任务状态都作为上下文源进入 assembler。
 - 上下文系统负责排序、裁剪、去重、同步压缩和注入位置，不负责跨会话记忆写入。
 - Factory 与生成 Agent 使用同一套上下文源分类和预算思想，但数据隔离。
-- CLI/WebUI 只消费 `context_*` 标准事件展示压缩、检索、组装、注入状态，不从 debug patch 猜上下文状态。
+- WebUI 只消费 `context_*` 标准事件展示压缩、检索、组装、注入状态，不从 debug patch 猜上下文状态。
 
 ---
 
@@ -1260,10 +1260,10 @@ agent_package/
   -> 围绕 SessionMemoryRead / SessionMemoryWrite / CrossSessionMemoryRead / CrossSessionMemoryWrite 清理实现
 
 知识系统
-  -> 继续完善知识管理 CLI 确认卡、更多解析器和后续知识库 UI
+  -> 继续完善知识管理 Web 确认卡、更多解析器和知识库 UI
 
 定时任务系统
-  -> 继续完善报表查询、错过执行策略和 CLI 操作体验
+  -> 继续完善报表查询、错过执行策略和 Web 操作体验
 
 Trace 系统
   -> 按 JSONL fact store、reference-first、diagnostic layer 和 optional exporter 落地

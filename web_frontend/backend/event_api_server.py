@@ -1,7 +1,7 @@
 """
-FastAPI Event/API Server - FastAgentFactory Web Frontend Bridge.
+FastAPI Event/API Server - FastAgentFactory Web Runtime Service.
 
-The module only assembles the app. Runtime process management and route groups
+The module only assembles the app. Runtime lifecycle management and route groups
 live in dedicated modules so frontend-facing concerns do not share one file.
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 load_agentfactory_dotenv()
 
-app = FastAPI(title="FastAgentFactory Web Bridge")
+app = FastAPI(title="FastAgentFactory Web Runtime Service")
 runtime_bridge = RuntimeBridge()
 
 app.add_middleware(

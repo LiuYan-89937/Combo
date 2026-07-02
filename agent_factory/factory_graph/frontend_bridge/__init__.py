@@ -1,2 +1,1 @@
-"""Frontend bridge for the TypeScript CLI."""
-
+"""Frontend event protocol and runtime adapters for the Web application."""

@@ -1,5 +1,0 @@
-packages:
-  - cli
-verifyDepsBeforeRun: false
-confirmModulesPurge: false
-

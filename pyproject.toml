@@ -1,7 +1,7 @@
 [project]
 name = "fast-agent-factory"
 version = "0.1.0"
-description = "CLI-first Agent factory framework with reproducible runtime and lifecycle controls."
+description = "Web-first Agent factory framework with reproducible runtime and lifecycle controls."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

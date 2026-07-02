@@ -1,7 +1,0 @@
-{
-  "private": true,
-  "scripts": {
-    "factory": "pnpm --dir cli factory"
-  }
-}
-

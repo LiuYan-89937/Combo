@@ -34,7 +34,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo ""
-echo "Starting backend Event/API bridge on port 8000..."
+echo "Starting backend web runtime service on port 8000..."
 "${PYTHON_BIN}" web_frontend/backend/event_api_server.py &
 BACKEND_PID=$!
 
@@ -44,7 +44,7 @@ if ! web_wait_for_backend "${BACKEND_PID}" 45 1; then
     exit 1
 fi
 
-echo "Backend ready: http://localhost:8000"
+echo "Backend runtime service ready: http://localhost:8000"
 echo ""
 echo "Starting frontend development server on port 3000..."
 echo ""

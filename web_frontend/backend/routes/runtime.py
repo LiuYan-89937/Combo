@@ -21,8 +21,7 @@ def create_runtime_router(runtime_bridge: RuntimeBridge, logger: logging.Logger)
     async def health_check():
         return {
             "status": "ok",
-            "runtime_bridge_active": runtime_bridge.process is not None
-            and runtime_bridge.process.poll() is None,
+            "runtime_service_active": runtime_bridge.active,
         }
 
     @router.get("/events")

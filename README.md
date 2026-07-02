@@ -1,18 +1,18 @@
 # FastAgentFactory
 
-FastAgentFactory 是一个 CLI-first 的 AgentPackage 工厂。它把自然语言需求制造成可编译、可验证、可发布、可运行的 AgentPackage，并让工厂自身、聊天模式和生产出的子 Agent 尽量共享同一套 RuntimeKernel、工具、上下文、记忆、定时任务和事件流规范。
+FastAgentFactory 是一个 Web-first 的 AgentPackage 工厂。它把自然语言需求制造成可编译、可验证、可发布、可运行的 AgentPackage，并让工厂自身、聊天模式和生产出的子 Agent 尽量共享同一套 RuntimeKernel、工具、上下文、记忆、定时任务和事件流规范。
 
 项目当前关注三件事：
 
 - 生产 AgentPackage：用户在 `/create-agent` 描述需求，制造链路用 ReAct 模式读写包文件、调用 validator、probe package tool、确认后发布。
 - 运行 AgentPackage：已发布包由 RuntimeKernel 编译和执行，默认通过 Docker sandbox 隔离运行。
-- 统一前端事件：CLI 只消费标准 runtime events；后续网页端、移动端可以复用同一协议。
+- 统一前端事件：Web 前端通过 HTTP 命令与 SSE 事件消费标准 runtime events；后续其他入口可以复用同一协议。
 
 ## 当前形态
 
 ```text
-TypeScript CLI
-  -> Python JSONL bridge
+Vue Web Frontend
+  -> FastAPI HTTP / SSE runtime service
   -> Factory runtime adapter
   -> /chat SystemPackage runtime
   -> /create-agent ReAct manufacturing runtime
@@ -42,7 +42,7 @@ agent_factory/
   runtime_contracts/         AgentPackage contract schema 与 build planner
   package_runtime/           宿主侧运行已发布 AgentPackage
   agent_runtime_bridge/      Docker 子进程内 JSONL runtime bridge
-  factory_graph/             CLI bridge、frontend event normalizer、session adapter
+  factory_graph/             frontend event normalizer、session adapter、Web runtime adapter
   tooling/                   ToolSpec、ToolExecutionGateway、内置工具、skill、MCP provider
   context_system/            上下文检索、压缩、turn evidence
   memory_system/             跨会话 memory store 与后台写入
@@ -54,11 +54,12 @@ SystemPackage/
   factory_chat/              工厂 chat 模式本身也是一个 AgentPackage
   extensions/                系统级 MCP / skill 配置
 
-cli/
-  src/                       Ink CLI、事件投影、命令、interrupt 渲染
-
 docker/
   agent-runtime/             子 Agent runtime 镜像
+
+web_frontend/
+  backend/                   FastAPI Web runtime service
+  frontend/                  Vue Web 前端
 
 docs/
   basic_capability_construction.md
@@ -70,7 +71,7 @@ docs/
 ## 环境要求
 
 - Python 3.11+
-- Node.js 与 pnpm
+- Node.js 与 npm
 - uv
 - Docker Desktop 或可用 Docker daemon
 - OpenAI-compatible Chat Completions 服务
@@ -84,10 +85,11 @@ docs/
 uv sync
 ```
 
-安装 CLI 依赖：
+安装 Web 前端依赖：
 
 ```bash
-pnpm --dir cli install
+cd web_frontend/frontend
+npm install
 ```
 
 创建本地配置：
@@ -155,44 +157,18 @@ AGENTFACTORY_SCHEDULER_STORE_PATH=.agentfactory/scheduler/factory.sqlite
 ## 启动
 
 ```bash
-pnpm factory
+./web_frontend/start.sh
 ```
 
-等价于：
+也可以分开启动：
 
 ```bash
-pnpm --dir cli factory
+./web_frontend/start_backend.sh
+cd web_frontend/frontend
+npm run dev
 ```
 
-CLI 会自动启动 Python bridge：
-
-```bash
-python -m agent_factory.factory_graph.frontend_bridge.stdio_server
-```
-
-正常使用时不需要手动运行 bridge。
-
-## CLI 命令
-
-```text
-/chat                         进入 SystemPackage 聊天模式
-/create-agent                 进入 Agent 制造模式
-/run-agent-package            扫描正式产物目录并进入已发布 Agent
-/agent-sessions               选择当前 AgentPackage 的会话
-/scheduler <action>           管理定时任务与执行记录
-/session                      显示当前会话
-/sessions                     打开历史会话选择器
-/new-session                  创建新会话
-/resume <session_id>          按完整 id 切换会话
-/tools                        显示工厂基础工具
-/state on|off                 切换最终 state 展示
-/messages on|off              切换最终 messages 展示
-/tool-grep <query|off>        过滤工具执行与 observation 展示
-/cancel                       取消当前正在运行的请求
-/exit                         退出当前模式
-/quit                         退出 CLI
-/help                         显示命令帮助
-```
+Web 后端在进程内持有 factory runtime service，不再通过旧 JSONL stdio bridge 启动主交互链路。
 
 ## create-agent 制造链路
 
@@ -469,7 +445,7 @@ Docker preflight 会检查 Docker CLI、daemon、runtime image、mount、volume�
 
 ## 事件流与前端
 
-CLI、chat、create-agent、子 Agent runtime 都通过统一 runtime events 交互。前端只做事件投影和渲染，不直接理解后端内部状态文件。
+Web、chat、create-agent、子 Agent runtime 都通过统一 runtime events 交互。前端只做事件投影和渲染，不直接理解后端内部状态文件。
 
 常见事件包括：
 
@@ -512,7 +488,7 @@ TraceSystem 使用 JSONL fact store。运行期 trace 一般位于：
   refs.jsonl
 ```
 
-create-agent 制造 trace 位于制造工作区的 `.factory/manufacturing_trace.json`。Trace 是事实源；CLI timeline 是对 runtime events 的实时投影。
+create-agent 制造 trace 位于制造工作区的 `.factory/manufacturing_trace.json`。Trace 是事实源；Web 时间线和状态面板是对 runtime events 的实时投影。
 
 ## 本地运行产物
 
@@ -546,7 +522,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/fastagentfactory_pycache .venv/bin/python -m co
 TypeScript：
 
 ```bash
-pnpm --dir cli typecheck
+cd web_frontend/frontend && npm run type-check
 ```
 
 Git diff：
