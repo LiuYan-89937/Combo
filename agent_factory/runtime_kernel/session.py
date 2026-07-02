@@ -4,9 +4,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from agent_factory.runtime_attachments import normalized_runtime_attachments
 
 
 class AgentSessionTurn(BaseModel):
@@ -15,6 +18,7 @@ class AgentSessionTurn(BaseModel):
     index: int
     created_at: str
     user_input: str | None = None
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     reasoning_content: str | None = None
     final_answer: str | None = None
     status: str | None = None
@@ -96,6 +100,7 @@ class AgentSessionManager:
         final_answer: str | None = None,
         status: str | None = None,
         trace_ref: dict[str, str] | None = None,
+        attachments: Any = None,
     ) -> AgentSessionRecord:
         record = self.load(session_id)
         if not record.first_user_input:
@@ -111,6 +116,7 @@ class AgentSessionManager:
                 index=record.turn_count,
                 created_at=_now(),
                 user_input=turn_input,
+                attachments=normalized_runtime_attachments(attachments),
                 reasoning_content=(reasoning_content or "").strip() or None,
                 final_answer=(final_answer or "").strip() or None,
                 status=(status or "").strip() or None,

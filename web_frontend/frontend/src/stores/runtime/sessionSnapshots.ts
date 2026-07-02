@@ -42,6 +42,7 @@ export function factorySessionSnapshotView(
       role,
       content: String(message.content || ''),
       timestamp: String(message.created_at || message.timestamp || session.updated_at || new Date().toISOString()),
+      attachments: role === 'user' ? transcriptAttachmentViews(message.attachments) : [],
       reasoning: restoredReasoningView(message),
       metadata: {
         restored: true,
@@ -125,6 +126,7 @@ export function agentPackageSessionSnapshotView(
         role: 'user',
         content: userInput,
         timestamp,
+        attachments: transcriptAttachmentViews(turn?.attachments),
         metadata,
       }
       transcript.push(item)
@@ -165,4 +167,20 @@ function restoredReasoningView(value: any) {
     active: false,
     completedAt: value?.updated_at || value?.created_at || value?.timestamp || null,
   }
+}
+
+function transcriptAttachmentViews(value: any): TranscriptItem['attachments'] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => {
+      const kind: 'file' | 'text' | 'url' = item.kind === 'url' ? 'url' : item.kind === 'text' ? 'text' : 'file'
+      return {
+        kind,
+        name: String(item.name || item.display_name || item.attachment_id || '').trim(),
+        source_kind: item.source_kind ? String(item.source_kind) : undefined,
+        mime_type: item.mime_type ? String(item.mime_type) : undefined,
+      }
+    })
+    .filter((item) => item.name.length > 0)
 }

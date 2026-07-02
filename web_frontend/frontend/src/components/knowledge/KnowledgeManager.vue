@@ -253,27 +253,27 @@ function sourceStatusLabel(status: string): string {
 
 .source-card {
   cursor: pointer;
-  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base), border-color var(--app-transition-base);
+  transition: transform var(--app-transition-spring), box-shadow var(--app-transition-base);
   border-radius: var(--app-radius-lg);
-  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: app-fade-in-up 0.5s var(--app-transition-spring) both;
+  will-change: transform;
 }
 
-.source-card:nth-child(1) { animation-delay: 0.02s; }
-.source-card:nth-child(2) { animation-delay: 0.06s; }
-.source-card:nth-child(3) { animation-delay: 0.10s; }
-.source-card:nth-child(4) { animation-delay: 0.14s; }
-.source-card:nth-child(5) { animation-delay: 0.18s; }
-.source-card:nth-child(n+6) { animation-delay: 0.22s; }
+.source-card:nth-child(1) { animation-delay: 0.08s; }
+.source-card:nth-child(2) { animation-delay: 0.16s; }
+.source-card:nth-child(3) { animation-delay: 0.24s; }
+.source-card:nth-child(4) { animation-delay: 0.32s; }
+.source-card:nth-child(5) { animation-delay: 0.40s; }
+.source-card:nth-child(n+6) { animation-delay: 0.48s; }
 
 .source-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--app-shadow-md);
-  border-color: var(--app-border-hover);
+  transform: translateY(-4px);
+  box-shadow: var(--app-shadow-lg);
 }
 
 .source-card:active {
-  transform: translateY(-1px);
-  transition-duration: 0.08s;
+  transform: translateY(-2px) scale(0.98);
+  transition-duration: 0.12s;
 }
 
 .source-header {

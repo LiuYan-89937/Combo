@@ -191,7 +191,7 @@ watch(
   min-width: 0;
   height: 52px;
   padding: 7px 9px;
-  border-radius: 6px;
+  border-radius: var(--app-radius-md);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -202,7 +202,7 @@ watch(
 .recent-agent-toggle {
   width: 32px;
   min-width: 32px;
-  border-radius: 6px;
+  border-radius: var(--app-radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -239,7 +239,7 @@ watch(
 .recent-agent-item {
   width: 100%;
   min-height: 58px;
-  border-radius: 6px;
+  border-radius: var(--app-radius-md);
   padding: 7px 9px;
   display: grid;
   grid-template-rows: auto auto auto;

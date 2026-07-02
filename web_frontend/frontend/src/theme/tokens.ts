@@ -13,7 +13,7 @@ export interface DesignTokens {
   spaceXl: string
   spaceXxl: string
 
-  // 圆角
+  // 圆角（液态玻璃感 - 更柔和）
   radiusSm: string
   radiusMd: string
   radiusLg: string
@@ -33,10 +33,23 @@ export interface DesignTokens {
   leadingNormal: string
   leadingRelaxed: string
 
-  // 过渡
+  // 过渡（更流畅的曲线）
   transitionFast: string
   transitionBase: string
   transitionSlow: string
+  transitionSpring: string
+  transitionFluid: string
+
+  // 阴影系统（多层软阴影）
+  shadowSm: string
+  shadowMd: string
+  shadowLg: string
+  shadowGlass: string
+
+  // 玻璃效果
+  glassBlur: string
+  glassBlurLight: string
+  glassBorder: string
 
   // 层级
   zBase: string
@@ -54,20 +67,20 @@ export interface DesignTokens {
 }
 
 export const designTokens: DesignTokens = {
-  // 间距（8px 基础网格）
-  spaceXxs: '2px',
-  spaceXs: '4px',
-  spaceSm: '8px',
-  spaceMd: '12px',
-  spaceLg: '16px',
-  spaceXl: '24px',
-  spaceXxl: '32px',
+  // 间距（苹果风格 - 更大的呼吸感）
+  spaceXxs: '4px',
+  spaceXs: '8px',
+  spaceSm: '12px',
+  spaceMd: '16px',
+  spaceLg: '24px',
+  spaceXl: '32px',
+  spaceXxl: '48px',
 
-  // 圆角
-  radiusSm: '4px',
-  radiusMd: '6px',
-  radiusLg: '8px',
-  radiusXl: '12px',
+  // 圆角（苹果风格 - 更大更柔和）
+  radiusSm: '10px',
+  radiusMd: '14px',
+  radiusLg: '24px',
+  radiusXl: '32px',
   radiusPill: '999px',
 
   // 字号
@@ -83,10 +96,23 @@ export const designTokens: DesignTokens = {
   leadingNormal: '1.5',
   leadingRelaxed: '1.65',
 
-  // 过渡
-  transitionFast: '0.12s ease',
-  transitionBase: '0.2s ease',
-  transitionSlow: '0.3s ease',
+  // 过渡（更流畅的曲线 + 弹性）
+  transitionFast: '0.18s cubic-bezier(0.34, 1.3, 0.64, 1)',
+  transitionBase: '0.35s cubic-bezier(0.34, 1.56, 0.64, 1)',
+  transitionSlow: '0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+  transitionSpring: '0.5s cubic-bezier(0.34, 1.8, 0.64, 1)',
+  transitionFluid: '0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+
+  // 多层软阴影系统（苹果风格 - 极柔和）
+  shadowSm: '0 2px 8px rgba(0, 0, 0, 0.04)',
+  shadowMd: '0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04)',
+  shadowLg: '0 8px 24px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06)',
+  shadowGlass: '0 12px 48px rgba(0, 0, 0, 0.15), 0 8px 16px rgba(0, 0, 0, 0.08)',
+
+  // 玻璃效果
+  glassBlur: 'blur(20px) saturate(180%)',
+  glassBlurLight: 'blur(12px) saturate(160%)',
+  glassBorder: '1px solid rgba(255, 255, 255, 0.18)',
 
   // 层级
   zBase: '1',

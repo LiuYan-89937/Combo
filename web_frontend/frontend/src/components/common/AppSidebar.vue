@@ -36,8 +36,8 @@ const { activeKey, handleMenuSelect, menuOptions } = useSidebarNavigation()
 <style scoped>
 .app-sidebar {
   height: 100%;
-  background-color: var(--app-surface);
-  border-right: 1px solid var(--app-border);
+  background: var(--app-surface);
+  border-right: 1px solid var(--app-divider);
   transition: width var(--app-transition-slow);
   display: flex;
   flex-direction: column;
@@ -72,8 +72,8 @@ const { activeKey, handleMenuSelect, menuOptions } = useSidebarNavigation()
 
 .app-sidebar :deep(.n-menu-item-content) {
   color: var(--app-text);
-  border-radius: 6px;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  border-radius: var(--app-radius-md);
+  transition: background-color var(--app-transition-base), color var(--app-transition-base), transform var(--app-transition-fast);
 }
 
 .app-sidebar :deep(.n-menu-item-content .n-menu-item-content__icon),

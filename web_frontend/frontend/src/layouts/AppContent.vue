@@ -172,13 +172,13 @@ onMounted(() => {
 .sidebar-restore.left {
   left: 0;
   border-left: 0;
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 var(--app-radius-md) var(--app-radius-md) 0;
 }
 
 .sidebar-restore.right {
   right: 0;
   border-right: 0;
-  border-radius: 8px 0 0 8px;
+  border-radius: var(--app-radius-md) 0 0 var(--app-radius-md);
 }
 
 .sidebar-restore:hover {

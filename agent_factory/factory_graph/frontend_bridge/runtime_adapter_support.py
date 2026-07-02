@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_factory.runtime_attachments import transcript_attachment_views
+
 
 def session_payload(record: Any | None, *, snapshot_mode: str | None = None) -> dict[str, Any]:
     if record is None:
@@ -39,10 +41,12 @@ def _messages_from_turns(value: Any) -> list[dict[str, Any]]:
         if not isinstance(turn, dict):
             continue
         if str(turn.get("user_input") or "").strip():
+            attachments = transcript_attachment_views(turn.get("attachments"))
             messages.append(
                 {
                     "role": "user",
                     "content": str(turn["user_input"]),
+                    **({"attachments": attachments} if attachments else {}),
                     "turn_index": turn.get("index"),
                     "created_at": turn.get("created_at"),
                 }
@@ -71,10 +75,12 @@ def _messages_from_session_turns(value: Any) -> list[dict[str, Any]]:
         turn_index = turn.get("index") or index
         user_input = str(turn.get("user_input") or "").strip()
         if user_input:
+            attachments = transcript_attachment_views(turn.get("attachments"))
             messages.append(
                 {
                     "role": "user",
                     "content": user_input,
+                    **({"attachments": attachments} if attachments else {}),
                     "turn_index": turn_index,
                     "created_at": turn.get("created_at"),
                 }

@@ -29,6 +29,7 @@ from agent_factory.paths import project_root
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
     import_runtime_attachments,
+    normalized_runtime_attachments,
     time_named_attachment_scope,
 )
 
@@ -128,6 +129,7 @@ class CreateAgentRuntime:
             "index": 1,
             "created_at": datetime.now(UTC).isoformat(),
             "user_input": user_input,
+            "attachments": normalized_runtime_attachments(values.get("runtime_attachments")),
             "final_answer": final_answer,
             "status": "completed" if values.get("done") else "running",
         }

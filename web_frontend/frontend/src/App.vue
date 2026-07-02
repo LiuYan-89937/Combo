@@ -200,8 +200,17 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   color: var(--app-text);
-  background-color: var(--app-surface);
-  transition: background-color 0.24s ease, color 0.24s ease;
+  background: var(--app-surface);
+  transition: background 0.3s var(--app-transition-fluid), color 0.3s var(--app-transition-fluid);
+}
+
+/* 背景微渐变增加呼吸感 */
+:root[data-theme='light'] body {
+  background: linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 100%);
+}
+
+:root[data-theme='dark'] body {
+  background: linear-gradient(180deg, #000000 0%, #1c1c1e 100%);
 }
 
 code {
@@ -220,15 +229,21 @@ code {
 
 ::-webkit-scrollbar-thumb {
   background: var(--app-border);
-  border-radius: 5px;
+  border-radius: var(--app-radius-pill);
   border: 2px solid transparent;
   background-clip: padding-box;
+  transition: background var(--app-transition-base);
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--app-border-hover);
   background-clip: padding-box;
   border: 2px solid transparent;
+}
+
+/* 平滑滚动 */
+html {
+  scroll-behavior: smooth;
 }
 
 ::-webkit-scrollbar-corner {
@@ -239,7 +254,7 @@ code {
 :focus-visible {
   outline: 2px solid var(--app-primary);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--app-radius-sm);
 }
 
 /* 输入框、按钮已有 Naive 样式，避免额外描边 */
@@ -257,9 +272,28 @@ code {
 
 .app-elevated {
   background: var(--app-surface-elevated);
-  border: 1px solid var(--app-border);
+  border: none;
   border-radius: var(--app-radius-lg);
-  box-shadow: var(--app-shadow-sm);
+  box-shadow: var(--app-shadow-md);
+}
+
+/* 液态玻璃卡片（无边框，纯阴影）*/
+.app-glass-card {
+  background: var(--app-glass-background);
+  backdrop-filter: var(--app-glass-blur);
+  -webkit-backdrop-filter: var(--app-glass-blur);
+  border: none;
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-md);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 不支持 backdrop-filter 时的降级 */
+@supports not (backdrop-filter: blur(1px)) {
+  .app-glass-card {
+    background: var(--app-surface-elevated);
+  }
 }
 
 /* 骨架条基础动画 */
@@ -284,11 +318,11 @@ code {
 @keyframes app-fade-in-up {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(12px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -300,7 +334,7 @@ code {
 @keyframes app-pop-in {
   0% {
     opacity: 0;
-    transform: scale(0.94);
+    transform: scale(0.92);
   }
   60% {
     opacity: 1;
@@ -317,20 +351,59 @@ code {
   50% { opacity: 0.55; }
 }
 
+/* 液态玻璃感：边框高光扫过 */
+@keyframes glass-border-sweep {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* 流动渐变（streaming 状态） */
+@keyframes glass-gradient-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* streaming 光标呼吸 */
+@keyframes streaming-caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* 运行状态光晕 */
+@keyframes run-status-halo {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--app-success);
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
 .app-fade-in-up {
-  animation: app-fade-in-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: app-fade-in-up 0.4s var(--app-transition-spring) both;
 }
 
 .app-fade-in {
-  animation: app-fade-in 0.24s ease both;
+  animation: app-fade-in 0.3s var(--app-transition-fluid) both;
 }
 
 .app-pop-in {
-  animation: app-pop-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: app-pop-in 0.35s var(--app-transition-spring) both;
 }
 
 .app-pulse-soft {
-  animation: app-pulse-soft 1.6s ease-in-out infinite;
+  animation: app-pulse-soft 2s ease-in-out infinite;
 }
 
 /* 尊重用户的减少动画偏好 */
@@ -343,6 +416,20 @@ code {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* 按钮按压反馈 */
+.n-button:active {
+  transform: scale(0.96);
+  transition-duration: 0.1s;
+}
+
+/* 输入框 focus glow */
+.n-input:focus-within,
+.n-input-number:focus-within,
+.n-select:focus-within,
+.n-base-selection:focus-within {
+  box-shadow: 0 0 0 3px var(--app-focus-shadow) !important;
 }
 
 /* 全局 n-empty 增强 */

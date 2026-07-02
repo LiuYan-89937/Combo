@@ -319,7 +319,7 @@ watch(
   color: var(--app-text);
   font-size: 13px;
   user-select: none;
-  border-radius: 4px;
+  border-radius: var(--app-radius-sm);
   transition: background-color 0.12s ease;
 }
 

@@ -302,7 +302,7 @@ pre {
   margin: 0;
   padding: 10px 12px;
   overflow: auto;
-  border-radius: 6px;
+  border-radius: var(--app-radius-md);
   background: var(--app-code-background);
   border: 1px solid var(--app-code-border);
   color: var(--app-text);

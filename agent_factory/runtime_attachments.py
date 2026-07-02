@@ -625,47 +625,30 @@ def has_attachment_payload(attachments: Any) -> bool:
     return isinstance(attachments, list) and any(isinstance(item, dict) for item in attachments)
 
 
-def format_attachments_for_session_input(user_input: str | None, attachments: Any) -> str | None:
-    text = str(user_input or "").strip()
-    attachment_lines = _attachment_session_lines(attachments)
-    if not attachment_lines:
-        return text or None
-    lines: list[str] = []
-    if text:
-        lines.append(text)
-    lines.append("[runtime attachments]")
-    lines.extend(attachment_lines)
-    return "\n".join(lines).strip() or None
-
-
-def _attachment_session_lines(attachments: Any) -> list[str]:
+def normalized_runtime_attachments(attachments: Any) -> list[dict[str, Any]]:
     if not isinstance(attachments, list):
         return []
-    lines: list[str] = []
-    for item in attachments:
-        if not isinstance(item, dict):
+    return [dict(item) for item in attachments if isinstance(item, dict)]
+
+
+def transcript_attachment_views(attachments: Any) -> list[dict[str, Any]]:
+    views: list[dict[str, Any]] = []
+    for item in normalized_runtime_attachments(attachments):
+        name = _attachment_display_name(item)
+        if not name:
             continue
-        attachment_id = str(item.get("attachment_id") or "").strip()
-        path = str(item.get("path") or item.get("runtime_path") or "").strip()
-        display_name = str(item.get("display_name") or "").strip()
-        if not attachment_id or not path:
-            continue
-        parts = [
-            f"name={display_name or attachment_id}",
-            f"path={path}",
-            f"id={attachment_id}",
-        ]
-        mime_type = str(item.get("mime_type") or "").strip()
-        if mime_type:
-            parts.append(f"mime={mime_type}")
-        size_bytes = item.get("size_bytes")
-        if isinstance(size_bytes, int):
-            parts.append(f"size_bytes={size_bytes}")
-        digest = str(item.get("sha256") or "").strip()
-        if digest:
-            parts.append(f"sha256={digest}")
-        lines.append("- " + "; ".join(parts))
-    return lines
+        source_kind = str(item.get("source_kind") or "").strip()
+        raw_kind = str(item.get("kind") or "").strip()
+        mime_type = _attachment_mime_type(item)
+        views.append(
+            {
+                "kind": _attachment_view_kind(source_kind, raw_kind),
+                "name": name,
+                **({"source_kind": source_kind} if source_kind else {}),
+                **({"mime_type": mime_type} if mime_type else {}),
+            }
+        )
+    return views
 
 
 def _attachment_mime_type(item: dict[str, Any]) -> str:
@@ -680,6 +663,28 @@ def _attachment_mime_type(item: dict[str, Any]) -> str:
         if guessed:
             return guessed
     return ""
+
+
+def _attachment_display_name(item: dict[str, Any]) -> str:
+    for key in ("display_name", "name"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    for key in ("path", "runtime_path"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return PurePosixPath(value).name or Path(value).name
+    return str(item.get("attachment_id") or "").strip()
+
+
+def _attachment_view_kind(source_kind: str, raw_kind: str = "") -> str:
+    if raw_kind in {"file", "text", "url"}:
+        return raw_kind
+    if source_kind == "url":
+        return "url"
+    if source_kind == "inline_text":
+        return "text"
+    return "file"
 
 
 def _is_image_mime_type(mime_type: str) -> bool:

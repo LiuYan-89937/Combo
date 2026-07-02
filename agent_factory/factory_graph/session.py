@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.paths import resolve_project_path
+from agent_factory.runtime_attachments import normalized_runtime_attachments
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
@@ -35,6 +36,7 @@ class FactorySessionTurn(BaseModel):
     updated_at: str
     request_id: str | None = None
     user_input: str | None = None
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     reasoning_content: str | None = None
     final_answer: str | None = None
     status: str | None = None
@@ -201,6 +203,7 @@ class FactorySessionManager:
         *,
         request_id: str | None,
         user_input: str,
+        attachments: Any = None,
     ) -> FactorySessionRecord:
         record = self.load(session_id)
         _remember_record_title(record, user_input)
@@ -216,12 +219,15 @@ class FactorySessionManager:
                     updated_at=now,
                     request_id=(request_id or "").strip() or None,
                     user_input=user_input.strip() or None,
+                    attachments=normalized_runtime_attachments(attachments),
                     status="running",
                 )
             )
         else:
             if not turn.user_input:
                 turn.user_input = user_input.strip() or None
+            if not turn.attachments:
+                turn.attachments = normalized_runtime_attachments(attachments)
             turn.status = turn.status or "running"
             turn.updated_at = now
         _sync_turn_count(record, mode)
@@ -264,6 +270,7 @@ class FactorySessionManager:
             if not isinstance(raw_turn, dict):
                 continue
             user_input = str(raw_turn.get("user_input") or "").strip() or None
+            attachments = normalized_runtime_attachments(raw_turn.get("attachments"))
             reasoning_content = str(raw_turn.get("reasoning_content") or "").strip() or None
             final_answer = str(raw_turn.get("final_answer") or "").strip() or None
             if not user_input and not final_answer:
@@ -275,6 +282,7 @@ class FactorySessionManager:
                     created_at=created_at,
                     updated_at=created_at,
                     user_input=user_input,
+                    attachments=attachments,
                     reasoning_content=reasoning_content,
                     final_answer=final_answer,
                     status=str(raw_turn.get("status") or "").strip() or None,

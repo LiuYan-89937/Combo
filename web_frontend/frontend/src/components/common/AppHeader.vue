@@ -184,10 +184,21 @@ watchEffect(() => {
   align-items: center;
   justify-content: space-between;
   padding: 0 var(--app-space-lg);
-  background-color: var(--app-surface);
-  border-bottom: 1px solid var(--app-border);
+  background: rgba(255, 255, 255, 0.8);
+  border-bottom: 1px solid var(--app-divider);
   gap: var(--app-space-lg);
-  backdrop-filter: saturate(1.8) blur(8px);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  position: relative;
+  z-index: var(--app-z-sticky);
+  transition: background var(--app-transition-base);
+}
+
+/* 不支持 backdrop-filter 时降级 */
+@supports not (backdrop-filter: blur(1px)) {
+  .app-header {
+    background: var(--app-surface);
+  }
 }
 
 .header-left,

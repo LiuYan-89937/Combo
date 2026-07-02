@@ -198,15 +198,27 @@ function formatTime(timestamp: string): string {
 .message-item {
   display: flex;
   gap: var(--app-space-md);
-  padding: var(--app-space-lg) var(--app-space-sm);
+  padding: var(--app-space-lg) var(--app-space-md);
   border-radius: var(--app-radius-lg);
-  transition: background-color var(--app-transition-base);
-  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: background-color var(--app-transition-base), transform var(--app-transition-spring), box-shadow var(--app-transition-base);
+  animation: app-fade-in-up 0.55s var(--app-transition-spring) both;
+}
+
+.message-item.role-assistant {
+  background: var(--app-surface-elevated);
+  border: none;
+  box-shadow: var(--app-shadow-sm);
 }
 
 .message-item.streaming {
-  background-color: var(--app-surface-muted);
   position: relative;
+  animation: app-fade-in-up 0.55s var(--app-transition-spring) both,
+             message-pulse 3s ease-in-out infinite;
+}
+
+@keyframes message-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.005); }
 }
 
 .message-item.streaming::before {
@@ -215,10 +227,18 @@ function formatTime(timestamp: string): string {
   left: 0;
   top: 12px;
   bottom: 12px;
-  width: 2px;
-  background: var(--app-text);
+  width: 4px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--app-primary) 20%,
+    var(--app-primary) 80%,
+    transparent
+  );
+  background-size: 100% 200%;
   border-radius: var(--app-radius-pill);
-  animation: app-pulse-soft 1.6s ease-in-out infinite;
+  animation: glass-gradient-flow 2.5s ease-in-out infinite;
+  box-shadow: 0 0 12px var(--app-primary);
 }
 
 .message-item.role-user {
@@ -227,10 +247,16 @@ function formatTime(timestamp: string): string {
 
 .message-item:hover {
   background-color: var(--app-surface-hover);
+  transform: translateX(2px);
+}
+
+.message-item.role-assistant:hover {
+  box-shadow: var(--app-shadow-md);
+  transform: translateX(4px) translateY(-1px);
 }
 
 .message-item + .message-item {
-  margin-top: var(--app-space-xs);
+  margin-top: var(--app-space-md);
 }
 
 .message-avatar {
@@ -309,18 +335,18 @@ function formatTime(timestamp: string): string {
 
 .streaming-caret {
   display: inline-block;
-  width: 8px;
-  height: 16px;
-  margin-left: 3px;
+  width: 2px;
+  height: 18px;
+  margin-left: 4px;
   vertical-align: text-bottom;
   background: var(--app-text);
   border-radius: 1px;
-  animation: streaming-caret-blink 1s steps(2, start) infinite;
+  animation: streaming-caret-blink 1.2s ease-in-out infinite;
 }
 
 @keyframes streaming-caret-blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .thinking-content {
@@ -563,8 +589,32 @@ function formatTime(timestamp: string): string {
 }
 
 .markdown-content img {
-  max-width: 100%;
+  max-width: min(600px, 100%);
+  max-height: 400px;
   height: auto;
-  border-radius: var(--app-radius-md);
+  width: auto;
+  border-radius: var(--app-radius-lg);
+  border: 1px solid var(--app-border);
+  box-shadow: var(--app-shadow-sm);
+  cursor: pointer;
+  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base);
+  animation: image-blur-in 0.6s var(--app-transition-fluid) both;
+  object-fit: contain;
+}
+
+.markdown-content img:hover {
+  transform: scale(1.02);
+  box-shadow: var(--app-shadow-md);
+}
+
+@keyframes image-blur-in {
+  from {
+    opacity: 0;
+    filter: blur(10px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
 }
 </style>

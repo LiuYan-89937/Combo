@@ -1,6 +1,6 @@
 <template>
-  <n-drawer v-model:show="show" :width="drawerWidth" placement="right">
-    <n-drawer-content :title="t('settings.title')" closable>
+  <n-drawer v-model:show="show" :width="drawerWidth" placement="right" class="glass-drawer">
+    <n-drawer-content :title="t('settings.title')" closable class="glass-drawer-content">
       <div class="settings-body">
         <!-- 分组：外观与语言 -->
         <section class="settings-group">
@@ -338,6 +338,19 @@ const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => 
   }
   .group-header {
     padding: var(--app-space-sm) var(--app-space-md);
+  }
+}
+
+/* ========== 液态玻璃抽屉 ========== */
+:deep(.glass-drawer .n-drawer-body-content-wrapper) {
+  background: var(--app-glass-background);
+  backdrop-filter: var(--app-glass-blur);
+  -webkit-backdrop-filter: var(--app-glass-blur);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  :deep(.glass-drawer .n-drawer-body-content-wrapper) {
+    background: var(--app-surface-elevated);
   }
 }
 </style>

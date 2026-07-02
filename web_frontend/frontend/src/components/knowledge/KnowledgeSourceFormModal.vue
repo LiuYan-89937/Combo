@@ -378,7 +378,7 @@ function isValidUrl(value: string): boolean {
   width: 100%;
   min-height: 150px;
   border: 1px dashed var(--app-border-hover);
-  border-radius: 8px;
+  border-radius: var(--app-radius-md);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -420,7 +420,7 @@ function isValidUrl(value: string): boolean {
 .rag-options {
   padding: 12px;
   border: 1px solid var(--app-border);
-  border-radius: 8px;
+  border-radius: var(--app-radius-md);
   margin-bottom: 12px;
   background: var(--app-surface-muted);
 }

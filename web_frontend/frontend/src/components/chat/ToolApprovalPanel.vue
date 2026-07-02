@@ -287,7 +287,7 @@ function handleRevise() {
   overflow: auto;
   max-height: 180px;
   border: 1px solid var(--app-code-border);
-  border-radius: 6px;
+  border-radius: var(--app-radius-md);
   background: var(--app-code-background);
   color: var(--app-text);
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;

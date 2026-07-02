@@ -28,6 +28,7 @@ from agent_factory.runtime_attachments import (
     attachment_import_error_payload,
     has_attachment_payload,
     redact_attachment_markers,
+    transcript_attachment_views,
 )
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 
@@ -251,7 +252,12 @@ class RuntimeAgentPackageCommandMixin:
             producer_type="factory_runtime",
         )
         try:
-            self._commit_evolution_request(redacted_message, package_id=package_id, request_id=command.request_id)
+            self._commit_evolution_request(
+                redacted_message,
+                package_id=package_id,
+                request_id=command.request_id,
+                attachments=transcript_attachment_views(command.payload.get("attachments")),
+            )
             run = self.evolution_runtime.stream(
                 package_id=package_id,
                 user_input=message,
@@ -590,7 +596,11 @@ class RuntimeAgentPackageCommandMixin:
                 user_config=_runtime_user_config(command),
                 attachments=command.payload.get("attachments"),
             )
-            self._commit_system_chat_request(redacted_message, request_id=command.request_id)
+            self._commit_system_chat_request(
+                redacted_message,
+                request_id=command.request_id,
+                attachments=transcript_attachment_views(command.payload.get("attachments")),
+            )
             self._consume_agent_package_stream(
                 package_id=SYSTEM_CHAT_PACKAGE_ID,
                 run=run,
@@ -628,6 +638,7 @@ class RuntimeAgentPackageCommandMixin:
                 redacted_message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
+                attachments=transcript_attachment_views(command.payload.get("attachments")),
             )
             self._consume_create_agent_stream(run=run)
         except AttachmentImportError as exc:
@@ -665,13 +676,20 @@ class RuntimeAgentPackageCommandMixin:
     def _planned_system_chat_agent_session_id(self) -> str | None:
         return self.session_record.chat_agent_package_session_id if self.session_record is not None else None
 
-    def _commit_system_chat_request(self, first_user_input: str, *, request_id: str | None = None) -> None:
+    def _commit_system_chat_request(
+        self,
+        first_user_input: str,
+        *,
+        request_id: str | None = None,
+        attachments: Any = None,
+    ) -> None:
         self._remember_factory_first_user_input(first_user_input)
         self.session_record = self.session_manager.start_turn(
             self.session_record.session_id,
             "chat",
             request_id=request_id,
             user_input=first_user_input,
+            attachments=attachments,
         )
 
     def _finish_system_chat_turn(
@@ -711,6 +729,7 @@ class RuntimeAgentPackageCommandMixin:
         *,
         session_id: str,
         request_id: str | None = None,
+        attachments: Any = None,
     ) -> None:
         self._remember_factory_first_user_input(first_user_input)
         if self.session_record.create_agent_session_id != session_id:
@@ -721,6 +740,7 @@ class RuntimeAgentPackageCommandMixin:
             "create_agent",
             request_id=request_id,
             user_input=first_user_input,
+            attachments=attachments,
         )
 
     def _remember_factory_first_user_input(self, first_user_input: str) -> None:
@@ -737,6 +757,7 @@ class RuntimeAgentPackageCommandMixin:
         *,
         package_id: str,
         request_id: str | None = None,
+        attachments: Any = None,
     ) -> None:
         self._remember_factory_first_user_input(first_user_input)
         self.evolution_package_id = package_id
@@ -749,6 +770,7 @@ class RuntimeAgentPackageCommandMixin:
             "evolve_agent",
             request_id=request_id,
             user_input=first_user_input,
+            attachments=attachments,
         )
 
     def _finish_evolution_turn(

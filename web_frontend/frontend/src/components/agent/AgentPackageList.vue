@@ -458,28 +458,29 @@ onMounted(() => {
 
 .package-card {
   cursor: pointer;
-  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base), border-color var(--app-transition-base);
+  transition: transform var(--app-transition-spring), box-shadow var(--app-transition-base);
   border-radius: var(--app-radius-lg);
-  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: app-fade-in-up 0.5s var(--app-transition-spring) both;
+  position: relative;
+  will-change: transform;
 }
 
-.package-card:nth-child(1) { animation-delay: 0.02s; }
-.package-card:nth-child(2) { animation-delay: 0.06s; }
-.package-card:nth-child(3) { animation-delay: 0.10s; }
-.package-card:nth-child(4) { animation-delay: 0.14s; }
-.package-card:nth-child(5) { animation-delay: 0.18s; }
-.package-card:nth-child(6) { animation-delay: 0.22s; }
-.package-card:nth-child(n+7) { animation-delay: 0.26s; }
+.package-card:nth-child(1) { animation-delay: 0.08s; }
+.package-card:nth-child(2) { animation-delay: 0.16s; }
+.package-card:nth-child(3) { animation-delay: 0.24s; }
+.package-card:nth-child(4) { animation-delay: 0.32s; }
+.package-card:nth-child(5) { animation-delay: 0.40s; }
+.package-card:nth-child(6) { animation-delay: 0.48s; }
+.package-card:nth-child(n+7) { animation-delay: 0.56s; }
 
 .package-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--app-shadow-md);
-  border-color: var(--app-border-hover);
+  transform: translateY(-4px);
+  box-shadow: var(--app-shadow-lg);
 }
 
 .package-card:active {
-  transform: translateY(-1px);
-  transition-duration: 0.08s;
+  transform: translateY(-2px) scale(0.98);
+  transition-duration: 0.12s;
 }
 
 .package-header {

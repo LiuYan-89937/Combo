@@ -7,7 +7,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     SYSTEM_CHAT_PACKAGE_ID,
 )
-from agent_factory.runtime_attachments import has_attachment_payload
+from agent_factory.runtime_attachments import has_attachment_payload, transcript_attachment_views
 
 
 MESSAGE_MODES = {"chat", "create_agent", "evolve_agent"}
@@ -249,10 +249,12 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
         turn_index = turn.get("index")
         user_input = str(turn.get("user_input") or "").strip()
         if user_input:
+            attachments = transcript_attachment_views(turn.get("attachments"))
             messages.append(
                 {
                     "role": "user",
                     "content": user_input,
+                    **({"attachments": attachments} if attachments else {}),
                     "turn_index": turn_index,
                     "created_at": created_at,
                 }

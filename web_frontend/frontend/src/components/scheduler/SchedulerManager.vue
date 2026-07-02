@@ -289,22 +289,22 @@ function refreshCurrentScheduler() {
 }
 
 .job-card {
-  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base), border-color var(--app-transition-base);
+  transition: transform var(--app-transition-spring), box-shadow var(--app-transition-base);
   border-radius: var(--app-radius-lg);
-  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: app-fade-in-up 0.5s var(--app-transition-spring) both;
+  will-change: transform;
 }
 
-.job-card:nth-child(1) { animation-delay: 0.02s; }
-.job-card:nth-child(2) { animation-delay: 0.06s; }
-.job-card:nth-child(3) { animation-delay: 0.10s; }
-.job-card:nth-child(4) { animation-delay: 0.14s; }
-.job-card:nth-child(5) { animation-delay: 0.18s; }
-.job-card:nth-child(n+6) { animation-delay: 0.22s; }
+.job-card:nth-child(1) { animation-delay: 0.08s; }
+.job-card:nth-child(2) { animation-delay: 0.16s; }
+.job-card:nth-child(3) { animation-delay: 0.24s; }
+.job-card:nth-child(4) { animation-delay: 0.32s; }
+.job-card:nth-child(5) { animation-delay: 0.40s; }
+.job-card:nth-child(n+6) { animation-delay: 0.48s; }
 
 .job-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--app-shadow-md);
-  border-color: var(--app-border-hover);
+  transform: translateY(-4px);
+  box-shadow: var(--app-shadow-lg);
 }
 
 .job-header {

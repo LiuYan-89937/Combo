@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.runtime_attachments import format_attachments_for_session_input
+from agent_factory.runtime_attachments import normalized_runtime_attachments
 from agent_factory.trace_system import runtime_trace_ref
 
 
@@ -51,15 +51,16 @@ def session_user_input_from_state(
     state: Any,
     *,
     fallback_user_input: str | None = None,
-    fallback_attachments: Any = None,
 ) -> str | None:
+    value = _current_user_input_from_state(state) or fallback_user_input
+    return str(value or "").strip() or None
+
+
+def session_attachments_from_state(state: Any, *, fallback_attachments: Any = None) -> list[dict[str, Any]]:
     attachments = _runtime_attachments_from_state(state)
     if attachments is None:
         attachments = fallback_attachments
-    return format_attachments_for_session_input(
-        _current_user_input_from_state(state) or fallback_user_input,
-        attachments,
-    )
+    return normalized_runtime_attachments(attachments)
 
 
 def _current_user_input_from_state(state: Any) -> str | None:
@@ -78,4 +79,4 @@ def _runtime_attachments_from_state(state: Any) -> list[dict[str, Any]] | None:
     attachments = user_config.get("attachments")
     if not isinstance(attachments, list):
         return None
-    return [dict(item) for item in attachments if isinstance(item, dict)]
+    return normalized_runtime_attachments(attachments)
