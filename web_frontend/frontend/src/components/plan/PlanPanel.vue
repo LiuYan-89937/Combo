@@ -65,60 +65,75 @@ function stepIcon(status: PlanStepStatus) {
 
 <style scoped>
 .plan-panel {
-  padding: 16px;
-  background: var(--n-color-embedded);
-  border-radius: 8px;
+  padding: var(--app-space-lg);
+  background: var(--app-surface-muted);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
 }
 
 .plan-panel.compact {
-  padding: 12px;
+  padding: var(--app-space-md);
 }
 
 .plan-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-md);
 }
 
 .plan-steps {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--app-space-sm);
 }
 
 .plan-step {
-  padding: 12px;
-  background: var(--n-color);
-  border-radius: 6px;
-  border-left: 3px solid var(--n-border-color);
+  padding: var(--app-space-md);
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  border-left: 3px solid var(--app-border);
+  transition: border-color var(--app-transition-fast);
+  animation: app-fade-in-up 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .plan-step.status-in_progress {
-  border-left-color: var(--n-info-color);
+  border-left-color: var(--app-info);
 }
 
 .plan-step.status-completed {
-  border-left-color: var(--n-success-color);
-  opacity: 0.7;
+  border-left-color: var(--app-success);
+  opacity: 0.72;
 }
 
 .plan-step.status-failed {
-  border-left-color: var(--n-error-color);
+  border-left-color: var(--app-error);
 }
 
 .step-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--app-space-sm);
   font-weight: 600;
+  color: var(--app-text);
+}
+
+.step-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .step-objective,
 .step-result {
-  margin-top: 6px;
-  font-size: 13px;
-  color: var(--n-text-color-2);
+  margin-top: var(--app-space-xs);
+  font-size: var(--app-font-md);
+  color: var(--app-text-secondary);
+  line-height: var(--app-leading-normal);
 }
 
 .step-result {

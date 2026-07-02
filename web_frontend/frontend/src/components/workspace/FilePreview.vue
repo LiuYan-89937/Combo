@@ -185,16 +185,17 @@ function handleClose() {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 
 .preview-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--n-border-color);
+  gap: var(--app-space-md);
+  padding: var(--app-space-md) var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
+  background: var(--app-surface-muted);
 }
 
 .file-info {
@@ -213,7 +214,7 @@ function handleClose() {
   min-height: 0;
   overflow: auto;
   padding: 16px;
-  color: #111111;
+  color: var(--app-text);
 }
 
 .preview-pdf {
@@ -222,7 +223,7 @@ function handleClose() {
 
 .text-preview pre {
   margin: 0;
-  color: #111111;
+  color: var(--app-text);
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
   font-size: 13px;
   line-height: 1.6;
@@ -247,7 +248,7 @@ function handleClose() {
   width: 100%;
   height: 100%;
   border: 0;
-  background: #ffffff;
+  background: var(--app-surface);
 }
 
 .binary-preview {

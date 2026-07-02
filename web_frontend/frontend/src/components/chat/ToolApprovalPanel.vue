@@ -197,11 +197,26 @@ function handleRevise() {
 
 <style scoped>
 .tool-approval-panel {
-  padding: 14px 16px;
-  border: 1px solid #111111;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #111111;
+  padding: var(--app-space-lg);
+  border: 1px solid var(--app-text);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow-md);
+  animation: app-fade-in-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  position: relative;
+}
+
+.tool-approval-panel::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: var(--app-radius-lg) 0 0 var(--app-radius-lg);
+  background: var(--app-warning);
+  animation: app-pulse-soft 1.6s ease-in-out infinite;
 }
 
 .approval-header {
@@ -228,7 +243,7 @@ function handleRevise() {
 
 .approval-item {
   padding-top: 12px;
-  border-top: 1px solid #e5e5e5;
+  border-top: 1px solid var(--app-divider);
 }
 
 .tool-line {
@@ -240,7 +255,7 @@ function handleRevise() {
 
 .tool-summary {
   margin: 8px 0 0;
-  color: #333333;
+  color: var(--app-text-secondary);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -255,9 +270,9 @@ function handleRevise() {
 .risk-reason {
   max-width: 100%;
   padding: 2px 8px;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--app-border);
   border-radius: 999px;
-  color: #333333;
+  color: var(--app-text-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -268,13 +283,13 @@ function handleRevise() {
 
 .arguments-block {
   margin: 0;
-  padding: 10px;
+  padding: 10px 12px;
   overflow: auto;
   max-height: 180px;
-  border: 1px solid #e5e5e5;
-  border-radius: 4px;
-  background: #fafafa;
-  color: #111111;
+  border: 1px solid var(--app-code-border);
+  border-radius: 6px;
+  background: var(--app-code-background);
+  color: var(--app-text);
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
   font-size: 12px;
   line-height: 1.5;

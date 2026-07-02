@@ -1,8 +1,30 @@
 <template>
   <header class="app-header">
     <div class="header-left">
-      <h1 class="app-title">{{ t('app.name') }}</h1>
-      <n-tag :type="connectionStatusType" size="small" round>
+      <div class="brand">
+        <img
+          :src="appIcon"
+          class="brand-logo"
+          alt="FastAgentFactory"
+          width="32"
+          height="32"
+          decoding="async"
+        />
+        <h1 class="app-title">{{ t('app.name') }}</h1>
+      </div>
+      <n-tag
+        :type="connectionStatusType"
+        size="small"
+        round
+        class="connection-tag"
+        :class="{
+          'is-connected': runtimeStore.connectionStatus === 'connected',
+          'is-connecting': runtimeStore.connectionStatus === 'connecting',
+        }"
+      >
+        <template #icon>
+          <span class="connection-dot" aria-hidden="true"></span>
+        </template>
         {{ connectionStatusText }}
       </n-tag>
     </div>
@@ -17,17 +39,36 @@
     </div>
 
     <div class="header-right">
-      <n-tag v-if="runtimeStore.runStatus !== 'idle'" :type="runStatusType" size="small" round>
+      <n-tag
+        v-if="runtimeStore.runStatus !== 'idle'"
+        :type="runStatusType"
+        size="small"
+        round
+        class="run-status-tag"
+        :class="{ 'is-running': runtimeStore.runStatus === 'running' }"
+      >
         {{ runStatusText }}
       </n-tag>
 
-      <n-button text @click="uiStore.toggleDebugDrawer" :title="t('header.debugPanel')">
+      <n-button
+        text
+        class="header-icon-btn"
+        :title="t('header.debugPanel')"
+        :aria-label="t('header.debugPanel')"
+        @click="uiStore.toggleDebugDrawer"
+      >
         <n-icon size="20">
           <Bug />
         </n-icon>
       </n-button>
 
-      <n-button text @click="uiStore.toggleSettingsDrawer" :title="t('header.settings')">
+      <n-button
+        text
+        class="header-icon-btn"
+        :title="t('header.settings')"
+        :aria-label="t('header.settings')"
+        @click="uiStore.toggleSettingsDrawer"
+      >
         <n-icon size="20">
           <Settings />
         </n-icon>
@@ -42,6 +83,7 @@ import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Bug, Settings } from '@vicons/ionicons5'
+import appIcon from '@/assets/fast-agent-factory-icon.png'
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
@@ -136,22 +178,28 @@ watchEffect(() => {
 
 <style scoped>
 .app-header {
-  height: 56px;
+  height: var(--app-header-height);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  background-color: var(--n-color);
-  border-bottom: 1px solid var(--n-border-color);
-  gap: 16px;
+  padding: 0 var(--app-space-lg);
+  background-color: var(--app-surface);
+  border-bottom: 1px solid var(--app-border);
+  gap: var(--app-space-lg);
+  backdrop-filter: saturate(1.8) blur(8px);
 }
 
 .header-left,
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--app-space-md);
   min-width: 0;
+}
+
+.header-right {
+  gap: var(--app-space-sm);
 }
 
 .header-center {
@@ -161,10 +209,115 @@ watchEffect(() => {
   min-width: 0;
 }
 
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+  min-width: 0;
+  user-select: none;
+}
+
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  object-fit: contain;
+  transition: transform var(--app-transition-base), filter var(--app-transition-base);
+}
+
+.brand-logo:hover {
+  transform: scale(1.05) rotate(-2deg);
+}
+
+/* 图标是黑色形状 + 透明背景。
+ * 浅色模式：原样显示。
+ * 暗色模式：invert 把黑色形状反转成白色，透明部分保持透明。
+ */
+:root[data-theme='dark'] .brand-logo {
+  filter: invert(1);
+}
+
 .app-title {
-  font-size: 18px;
+  font-size: var(--app-font-xl);
   font-weight: 600;
   margin: 0;
   white-space: nowrap;
+  letter-spacing: -0.01em;
+  color: var(--app-text-strong);
+}
+
+.connection-tag {
+  transition: background-color var(--app-transition-base), border-color var(--app-transition-base);
+}
+
+.connection-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+}
+
+.connection-tag.is-connecting .connection-dot {
+  animation: app-pulse-soft 1.2s ease-in-out infinite;
+}
+
+.connection-tag.is-connected .connection-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 24%, transparent);
+}
+
+.run-status-tag.is-running {
+  position: relative;
+}
+
+.run-status-tag.is-running::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1px solid currentColor;
+  opacity: 0.4;
+  animation: run-status-halo 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes run-status-halo {
+  0%, 100% { transform: scale(1); opacity: 0.4; }
+  50% { transform: scale(1.08); opacity: 0; }
+}
+
+.header-icon-btn {
+  transition: transform var(--app-transition-fast), background-color var(--app-transition-fast);
+  border-radius: var(--app-radius-md);
+  padding: 6px;
+}
+
+.header-icon-btn:hover {
+  background: var(--app-surface-muted);
+}
+
+.header-icon-btn:active {
+  transform: scale(0.92);
+}
+
+/* 中等屏隐藏 breadcrumb 只保留 tag */
+@media (max-width: 768px) {
+  .header-center {
+    display: none;
+  }
+  .app-title {
+    font-size: var(--app-font-lg);
+  }
+  .brand-logo {
+    width: 24px;
+    height: 24px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-title {
+    display: none;
+  }
 }
 </style>

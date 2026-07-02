@@ -128,8 +128,8 @@ function availableRightSidebarWidth(): number {
 <style scoped>
 .right-sidebar {
   height: 100%;
-  background-color: var(--n-color);
-  border-left: 1px solid var(--n-border-color);
+  background-color: var(--app-surface);
+  border-left: 1px solid var(--app-border);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -160,24 +160,25 @@ function availableRightSidebarWidth(): number {
 
 .right-sidebar-resizer:hover::after,
 .right-sidebar.resizing .right-sidebar-resizer::after {
-  background: #111111;
+  background: var(--app-text);
 }
 
 .right-sidebar-toolbar {
-  height: 40px;
+  height: var(--app-toolbar-height);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 0 10px 0 14px;
-  border-bottom: 1px solid var(--n-border-color);
+  gap: var(--app-space-sm);
+  padding: 0 var(--app-space-sm) 0 var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
 }
 
 .right-sidebar-title {
-  color: #111111;
+  color: var(--app-text);
   font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .right-tabs {
@@ -187,13 +188,17 @@ function availableRightSidebarWidth(): number {
 }
 
 .right-sidebar :deep(.n-tabs-nav) {
-  padding: 0 12px;
+  padding: 0 var(--app-space-md);
 }
 
 .right-sidebar :deep(.n-tabs-pane-wrapper),
 .right-sidebar :deep(.n-tab-pane) {
   height: 100%;
   min-height: 0;
+}
+
+.right-sidebar :deep(.n-tabs-tab) {
+  transition: color var(--app-transition-fast);
 }
 
 </style>

@@ -41,13 +41,13 @@
           <n-divider style="margin: 12px 0" />
 
           <div class="job-schedule">
-            <n-icon size="16"><Time /></n-icon>
-            <n-text depth="2" style="font-size: 13px">{{ job.schedule || t('common.unset') }}</n-text>
+            <n-icon size="14" class="job-row-icon"><Time /></n-icon>
+            <span class="job-row-text job-row-text--mono">{{ job.schedule || t('common.unset') }}</span>
           </div>
 
           <div v-if="job.targetType" class="job-target">
-            <n-icon size="16"><LocateOutline /></n-icon>
-            <n-text depth="2" style="font-size: 13px">{{ schedulerTargetLabel(job) }}</n-text>
+            <n-icon size="14" class="job-row-icon"><LocateOutline /></n-icon>
+            <span class="job-row-text">{{ schedulerTargetLabel(job) }}</span>
           </div>
 
           <div class="job-actions">
@@ -72,10 +72,15 @@
       <n-empty
         v-if="schedulerStore.jobs.length === 0"
         :description="t('scheduler.empty')"
-        style="margin-top: 60px"
+        class="manager-empty"
       >
+        <template #icon>
+          <n-icon size="56" class="manager-empty-icon">
+            <Time />
+          </n-icon>
+        </template>
         <template #extra>
-          <n-button @click="showCreateModal = true">{{ t('scheduler.createFirst') }}</n-button>
+          <n-button type="primary" @click="showCreateModal = true">{{ t('scheduler.createFirst') }}</n-button>
         </template>
       </n-empty>
     </n-scrollbar>
@@ -244,70 +249,139 @@ function refreshCurrentScheduler() {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px;
+  padding: var(--app-space-xl);
+  max-width: var(--app-content-max-width);
+  width: 100%;
+  margin: 0 auto;
 }
 
 .manager-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  gap: var(--app-space-md);
+  margin-bottom: var(--app-space-xl);
+  flex-wrap: wrap;
 }
 
 .manager-title {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--app-space-xs);
+  min-width: 0;
 }
 
 .context-label {
-  font-size: 12px;
+  font-size: var(--app-font-sm);
 }
 
 .job-list {
   flex: 1;
   min-height: 0;
+  margin: 0 calc(var(--app-space-xs) * -1);
+  padding: 0 var(--app-space-xs) var(--app-space-lg);
 }
 
 .job-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
+  gap: var(--app-space-lg);
 }
 
 .job-card {
-  transition: transform 0.2s;
+  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base), border-color var(--app-transition-base);
+  border-radius: var(--app-radius-lg);
+  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
+
+.job-card:nth-child(1) { animation-delay: 0.02s; }
+.job-card:nth-child(2) { animation-delay: 0.06s; }
+.job-card:nth-child(3) { animation-delay: 0.10s; }
+.job-card:nth-child(4) { animation-delay: 0.14s; }
+.job-card:nth-child(5) { animation-delay: 0.18s; }
+.job-card:nth-child(n+6) { animation-delay: 0.22s; }
 
 .job-card:hover {
   transform: translateY(-2px);
+  box-shadow: var(--app-shadow-md);
+  border-color: var(--app-border-hover);
 }
 
 .job-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--app-space-md);
 }
 
 .job-info {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--app-space-sm);
+  min-width: 0;
 }
 
 .job-schedule,
 .job-target {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 8px 0;
+  gap: var(--app-space-sm);
+  margin: var(--app-space-sm) 0;
+  min-width: 0;
+}
+
+.job-row-icon {
+  flex-shrink: 0;
+  color: var(--app-text-muted);
+}
+
+.job-row-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--app-font-sm);
+  color: var(--app-text-secondary);
+  line-height: 1.4;
+}
+
+.job-row-text--mono {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
+  font-size: var(--app-font-xs);
+  color: var(--app-text);
+  background: var(--app-surface-muted);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  padding: 2px 6px;
 }
 
 .job-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+  flex-wrap: wrap;
+}
+
+.manager-empty {
+  margin-top: 12vh;
+  animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.manager-empty-icon {
+  display: block;
+  color: var(--app-text-muted);
+  opacity: 0.55;
+  line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .scheduler-manager {
+    padding: var(--app-space-md);
+  }
+  .job-grid {
+    grid-template-columns: 1fr;
+    gap: var(--app-space-md);
+  }
 }
 </style>

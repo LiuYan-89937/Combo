@@ -56,9 +56,11 @@
           </div>
         </div>
 
-        <div v-if="streaming && !thinking" class="streaming-indicator">
-          <n-spin :size="14" />
-        </div>
+        <span
+          v-if="streaming && !thinking"
+          class="streaming-caret"
+          aria-hidden="true"
+        ></span>
       </div>
     </div>
   </div>
@@ -67,7 +69,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { CSSProperties } from 'vue'
-import { NAvatar, NIcon, NText, NSpin } from 'naive-ui'
+import { NAvatar, NIcon, NText } from 'naive-ui'
 import { Document, Link, Text } from '@vicons/ionicons5'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdown } from '@/composables/useMarkdown'
@@ -97,14 +99,14 @@ const roleLabel = computed(() => {
 const avatarStyle = computed<CSSProperties>(() => {
   if (props.message.role === 'assistant') {
     return {
-      background: '#ffffff',
-      color: '#111111',
-      border: '1px solid #111111',
+      background: 'var(--app-surface)',
+      color: 'var(--app-text)',
+      border: '1px solid var(--app-text)',
     }
   }
   return {
-    background: '#111111',
-    color: '#ffffff',
+    background: 'var(--app-text)',
+    color: 'var(--app-text-inverse)',
   }
 })
 
@@ -164,21 +166,46 @@ function formatTime(timestamp: string): string {
 <style scoped>
 .message-item {
   display: flex;
-  gap: 12px;
-  padding: 16px;
-  transition: background-color 0.2s;
+  gap: var(--app-space-md);
+  padding: var(--app-space-lg) var(--app-space-sm);
+  border-radius: var(--app-radius-lg);
+  transition: background-color var(--app-transition-base);
+  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .message-item.streaming {
-  background-color: var(--n-color-embedded);
+  background-color: var(--app-surface-muted);
+  position: relative;
+}
+
+.message-item.streaming::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: var(--app-text);
+  border-radius: var(--app-radius-pill);
+  animation: app-pulse-soft 1.6s ease-in-out infinite;
+}
+
+.message-item.role-user {
+  background-color: transparent;
 }
 
 .message-item:hover {
-  background-color: var(--n-color-hover);
+  background-color: var(--app-surface-hover);
+}
+
+.message-item + .message-item {
+  margin-top: var(--app-space-xs);
 }
 
 .message-avatar {
   flex-shrink: 0;
+  padding-top: 2px;
+  animation: app-pop-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .message-content {
@@ -188,13 +215,16 @@ function formatTime(timestamp: string): string {
 
 .message-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-sm);
 }
 
 .message-body {
   position: relative;
+  font-size: var(--app-font-lg);
+  line-height: var(--app-leading-relaxed);
 }
 
 .plain-content {
@@ -205,22 +235,28 @@ function formatTime(timestamp: string): string {
 .message-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
 }
 
 .message-attachment-chip {
   max-width: min(360px, 100%);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border: 1px solid var(--n-border-color);
-  border-radius: 6px;
-  background: var(--n-color);
-  color: var(--n-text-color);
-  font-size: 12px;
-  line-height: 1.2;
+  gap: var(--app-space-xs);
+  padding: 4px var(--app-space-sm);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-pill);
+  background: var(--app-surface-muted);
+  color: var(--app-text);
+  font-size: var(--app-font-sm);
+  line-height: 1.4;
+  transition: border-color var(--app-transition-fast), background-color var(--app-transition-fast);
+}
+
+.message-attachment-chip:hover {
+  border-color: var(--app-border-hover);
+  background: var(--app-surface-pressed);
 }
 
 .message-attachment-icon {
@@ -236,13 +272,24 @@ function formatTime(timestamp: string): string {
 
 .message-attachment-kind {
   flex: 0 0 auto;
-  color: var(--n-text-color-3);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
 }
 
-.streaming-indicator {
-  display: inline-flex;
-  margin-left: 8px;
-  vertical-align: middle;
+.streaming-caret {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: var(--app-text);
+  border-radius: 1px;
+  animation: streaming-caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes streaming-caret-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
 .thinking-content {
@@ -254,16 +301,16 @@ function formatTime(timestamp: string): string {
   justify-content: center;
   gap: 5px;
   padding: 0 12px;
-  border: 1px solid #111111;
-  border-radius: 6px;
-  background: #ffffff;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-surface-muted);
 }
 
 .thinking-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #111111;
+  background: var(--app-text);
   animation: thinking-pulse 1.05s ease-in-out infinite;
 }
 
@@ -293,8 +340,8 @@ function formatTime(timestamp: string): string {
 /* Markdown 样式 */
 .markdown-content {
   max-width: 100%;
-  line-height: 1.65;
-  color: var(--n-text-color);
+  line-height: var(--app-leading-relaxed);
+  color: var(--app-text);
   overflow-wrap: anywhere;
 }
 
@@ -313,45 +360,52 @@ function formatTime(timestamp: string): string {
 .markdown-content h5,
 .markdown-content h6 {
   margin-top: 24px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   font-weight: 600;
-  line-height: 1.25;
+  line-height: var(--app-leading-tight);
+  color: var(--app-text-strong);
+  letter-spacing: -0.01em;
 }
 
 .markdown-content h1 {
-  font-size: 2em;
-  border-bottom: 1px solid var(--n-border-color);
+  font-size: 1.75em;
+  border-bottom: 1px solid var(--app-divider);
   padding-bottom: 0.3em;
 }
 
 .markdown-content h2 {
-  font-size: 1.5em;
-  border-bottom: 1px solid var(--n-border-color);
+  font-size: 1.4em;
+  border-bottom: 1px solid var(--app-divider);
   padding-bottom: 0.3em;
 }
+
+.markdown-content h3 { font-size: 1.2em; }
+.markdown-content h4 { font-size: 1.05em; }
 
 .markdown-content p {
   margin: 0 0 14px;
 }
 
 .markdown-content code {
-  padding: 0.2em 0.4em;
+  padding: 0.15em 0.4em;
   margin: 0;
-  font-size: 85%;
-  background-color: var(--n-color-embedded);
-  border-radius: 6px;
+  font-size: 88%;
+  background-color: var(--app-code-background);
+  border: 1px solid var(--app-code-border);
+  border-radius: var(--app-radius-sm);
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
   word-break: break-word;
 }
 
 .markdown-content pre {
   max-width: 100%;
-  padding: 16px;
+  padding: 14px 16px;
   overflow: auto;
-  font-size: 85%;
-  line-height: 1.45;
-  background-color: var(--n-color-embedded);
-  border-radius: 6px;
+  font-size: 88%;
+  line-height: 1.55;
+  background-color: var(--app-code-background);
+  border: 1px solid var(--app-code-border);
+  border-radius: var(--app-radius-md);
   margin-bottom: 16px;
   white-space: pre;
 }
@@ -366,8 +420,8 @@ function formatTime(timestamp: string): string {
 
 .markdown-content ul,
 .markdown-content ol {
-  padding-left: 2em;
-  margin-bottom: 16px;
+  padding-left: 1.75em;
+  margin-bottom: 14px;
 }
 
 .markdown-content li {
@@ -375,10 +429,12 @@ function formatTime(timestamp: string): string {
 }
 
 .markdown-content blockquote {
-  margin: 0 0 16px 0;
-  padding: 0 1em;
-  color: var(--n-text-color-2);
-  border-left: 0.25em solid var(--n-border-color);
+  margin: 0 0 14px 0;
+  padding: 4px 12px;
+  color: var(--app-text-secondary);
+  border-left: 3px solid var(--app-border-hover);
+  background: var(--app-surface-muted);
+  border-radius: 0 var(--app-radius-md) var(--app-radius-md) 0;
 }
 
 .markdown-content table {
@@ -387,37 +443,42 @@ function formatTime(timestamp: string): string {
   overflow-x: auto;
   border-collapse: collapse;
   width: 100%;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+  border-radius: var(--app-radius-md);
 }
 
 .markdown-content hr {
   margin: 18px 0;
   border: 0;
-  border-top: 1px solid var(--n-border-color);
+  border-top: 1px solid var(--app-divider);
 }
 
 .markdown-content table th,
 .markdown-content table td {
-  padding: 6px 13px;
-  border: 1px solid var(--n-border-color);
+  padding: 8px 13px;
+  border: 1px solid var(--app-border);
 }
 
 .markdown-content table th {
   font-weight: 600;
-  background-color: var(--n-color-embedded);
+  background-color: var(--app-surface-muted);
+  color: var(--app-text-strong);
 }
 
 .markdown-content a {
-  color: var(--n-primary-color);
+  color: var(--app-info);
   text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--app-transition-fast);
 }
 
 .markdown-content a:hover {
-  text-decoration: underline;
+  border-bottom-color: currentColor;
 }
 
 .markdown-content img {
   max-width: 100%;
   height: auto;
+  border-radius: var(--app-radius-md);
 }
 </style>

@@ -68,14 +68,21 @@
       </div>
 
       <div class="right-actions">
-        <n-text v-if="inputText.length > 0" depth="3" style="font-size: 12px">
+        <n-text
+          v-if="inputText.length > 0"
+          depth="3"
+          class="character-count"
+          aria-live="polite"
+        >
           {{ t('attachments.characterCount', { count: inputText.length }) }}
         </n-text>
 
         <n-button
           v-if="!isRunning"
           type="primary"
+          class="send-button"
           :disabled="!canSend"
+          :aria-label="t('common.send')"
           @click="handleSend"
         >
           {{ t('common.send') }}
@@ -87,6 +94,8 @@
         <n-button
           v-else
           type="error"
+          class="cancel-button"
+          :aria-label="t('common.cancel')"
           @click="handleCancel"
         >
           {{ t('common.cancel') }}
@@ -209,26 +218,44 @@ defineExpose({
 .message-input-container {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--app-space-md);
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-xl);
+  background: var(--app-surface);
+  transition: border-color var(--app-transition-base), box-shadow var(--app-transition-base);
+}
+
+.message-input-container:focus-within {
+  border-color: var(--app-border-focus);
+  box-shadow: 0 0 0 3px var(--app-focus-shadow);
 }
 
 .attachments-preview {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--n-color-embedded);
-  border-radius: 6px;
+  gap: var(--app-space-sm);
+  padding: var(--app-space-sm) var(--app-space-md);
+  background: var(--app-surface-muted);
+  border-radius: var(--app-radius-md);
+  animation: app-fade-in 0.2s ease both;
 }
 
 .attachment-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  background: var(--n-color);
-  border-radius: 4px;
-  font-size: 13px;
+  gap: var(--app-space-xs);
+  padding: var(--app-space-xs) var(--app-space-sm);
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  font-size: var(--app-font-md);
+  transition: border-color var(--app-transition-fast), transform var(--app-transition-fast);
+  animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.attachment-item:hover {
+  border-color: var(--app-border-hover);
 }
 
 .attachment-name {
@@ -242,24 +269,57 @@ defineExpose({
   position: relative;
 }
 
+.input-wrapper :deep(.n-input) {
+  --n-border: none !important;
+  --n-border-hover: none !important;
+  --n-border-focus: none !important;
+  --n-box-shadow-focus: none !important;
+  background: transparent;
+}
+
 .input-wrapper :deep(.n-input .n-input__textarea-el) {
-  color: #111111;
+  color: var(--app-text);
+  padding: var(--app-space-xs) 0;
+  font-size: var(--app-font-lg);
+  line-height: var(--app-leading-normal);
 }
 
 .input-wrapper :deep(.n-input .n-input__placeholder) {
-  color: #757575;
+  color: var(--app-text-placeholder);
 }
 
 .input-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--app-space-sm);
 }
 
 .left-actions,
 .right-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--app-space-sm);
+  min-width: 0;
+}
+
+.character-count {
+  font-size: var(--app-font-sm);
+  font-variant-numeric: tabular-nums;
+  animation: app-fade-in 0.16s ease both;
+}
+
+.send-button,
+.cancel-button {
+  transition: transform var(--app-transition-fast);
+}
+
+.send-button:not(:disabled):active,
+.cancel-button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+.cancel-button {
+  animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 </style>

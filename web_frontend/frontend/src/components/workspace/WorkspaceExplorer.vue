@@ -244,8 +244,8 @@ function toggleExpanded(path: string): void {
 }
 
 function entryIconColor(entry: WorkspaceEntry): string {
-  if (entry.kind === 'directory') return '#111111'
-  return '#555555'
+  if (entry.kind === 'directory') return 'var(--app-text)'
+  return 'var(--app-text-muted)'
 }
 
 function formatFileSize(bytes: number): string {
@@ -272,16 +272,17 @@ watch(
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 
 .explorer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--n-border-color);
+  gap: var(--app-space-sm);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border-bottom: 1px solid var(--app-divider);
+  background: var(--app-surface-muted);
 }
 
 .header-title {
@@ -309,20 +310,26 @@ watch(
 }
 
 .tree-row {
-  height: 26px;
+  height: 28px;
   display: flex;
   align-items: center;
   gap: 5px;
   padding-right: 8px;
   cursor: pointer;
-  color: #111111;
+  color: var(--app-text);
   font-size: 13px;
   user-select: none;
+  border-radius: 4px;
+  transition: background-color 0.12s ease;
 }
 
-.tree-row:hover,
+.tree-row:hover {
+  background: var(--app-surface-muted);
+}
+
 .tree-row.selected {
-  background: #eeeeee;
+  background: var(--app-surface-pressed);
+  font-weight: 500;
 }
 
 .twisty,
@@ -339,7 +346,7 @@ watch(
   align-items: center;
   justify-content: center;
   background: transparent;
-  color: #555555;
+  color: var(--app-text-muted);
   cursor: pointer;
 }
 
@@ -365,14 +372,14 @@ watch(
 
 .entry-size {
   flex-shrink: 0;
-  color: #777777;
+  color: var(--app-text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .tree-hint {
   padding: 16px;
-  color: #777777;
+  color: var(--app-text-muted);
   font-size: 13px;
 }
 

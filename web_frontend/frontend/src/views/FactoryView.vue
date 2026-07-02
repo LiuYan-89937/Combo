@@ -20,15 +20,15 @@
             <n-empty
               v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
               :description="emptyDescription"
-              style="margin-top: 60px"
+              class="chat-empty"
             >
               <template #icon>
-                <n-icon size="48">
+                <n-icon size="56" class="chat-empty-icon">
                   <ChatbubbleEllipses />
                 </n-icon>
               </template>
               <template #extra>
-                <n-text depth="3">
+                <n-text depth="3" class="chat-empty-hint">
                   {{ emptyHint }}
                 </n-text>
               </template>
@@ -198,7 +198,7 @@ watch(() => route.name, applyRouteMode)
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 
 .chat-container {
@@ -206,8 +206,8 @@ watch(() => route.name, applyRouteMode)
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 20px;
-  max-width: 1200px;
+  padding: var(--app-space-xl) var(--app-space-xl) var(--app-space-lg);
+  max-width: var(--app-chat-max-width);
   margin: 0 auto;
   width: 100%;
 }
@@ -216,19 +216,19 @@ watch(() => route.name, applyRouteMode)
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--n-border-color);
-  border-radius: 6px;
-  background: var(--n-color);
+  gap: var(--app-space-md);
+  margin-bottom: var(--app-space-md);
+  padding: var(--app-space-md) var(--app-space-lg);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface-muted);
 }
 
 .evolution-target-label {
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--app-font-md);
   font-weight: 600;
-  color: var(--n-text-color-2);
+  color: var(--app-text-secondary);
 }
 
 .evolution-target-select {
@@ -247,14 +247,57 @@ watch(() => route.name, applyRouteMode)
 }
 
 .messages-list {
-  padding: 16px 0;
+  padding: var(--app-space-lg) 0 var(--app-space-xxl);
+}
+
+.chat-empty {
+  margin-top: 15vh;
+  animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.chat-empty-icon {
+  display: block;
+  color: var(--app-text-muted);
+  opacity: 0.6;
+  line-height: 1;
+  animation: app-pulse-soft 2.4s ease-in-out infinite;
+}
+
+.chat-empty-hint {
+  display: block;
+  margin-top: var(--app-space-sm);
+  font-size: var(--app-font-md);
+  text-align: center;
+  line-height: var(--app-leading-relaxed);
+  max-width: 360px;
 }
 
 .approval-section {
-  margin-top: 12px;
+  margin-top: var(--app-space-md);
 }
 
 .input-section {
-  margin-top: 16px;
+  margin-top: var(--app-space-lg);
+  padding-top: var(--app-space-md);
+  border-top: 1px solid var(--app-divider);
+}
+
+/* 窄屏适配 */
+@media (max-width: 768px) {
+  .chat-container {
+    padding: var(--app-space-md);
+  }
+  .evolution-target-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--app-space-sm);
+  }
+}
+
+/* 超宽屏（>1600）保留呼吸感，稍微放宽 */
+@media (min-width: 1600px) {
+  .chat-container {
+    max-width: 1100px;
+  }
 }
 </style>

@@ -131,15 +131,15 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
 
 <style scoped>
 .sidebar-content {
-  padding: 16px;
+  padding: var(--app-space-lg);
   overflow-y: auto;
   height: 100%;
 }
 
 .status-section {
-  padding-bottom: 16px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid var(--n-border-color);
+  padding-bottom: var(--app-space-lg);
+  margin-bottom: var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
 }
 
 .status-section:last-child {
@@ -148,33 +148,35 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
 }
 
 .section-title {
-  margin-bottom: 12px;
-  font-size: 13px;
+  margin-bottom: var(--app-space-md);
+  font-size: var(--app-font-md);
   font-weight: 600;
-  color: var(--n-text-color-1);
+  color: var(--app-text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .context-meter {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--app-space-md);
 }
 
 .context-meter-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  font-size: 13px;
+  gap: var(--app-space-md);
+  font-size: var(--app-font-md);
 }
 
 .context-meter-label {
-  color: var(--n-text-color-2);
+  color: var(--app-text-secondary);
 }
 
 .context-meter-value {
   flex-shrink: 0;
-  color: #111111;
+  color: var(--app-text);
   font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -186,24 +188,24 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e7e7e7;
-  box-shadow: inset 0 0 0 1px #d7d7d7;
+  background: var(--app-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--app-border);
 }
 
 .context-meter-track.unknown {
   background: repeating-linear-gradient(
     90deg,
-    #eeeeee 0,
-    #eeeeee 6px,
-    #d8d8d8 6px,
-    #d8d8d8 8px
+    var(--app-surface-muted) 0,
+    var(--app-surface-muted) 6px,
+    var(--app-border) 6px,
+    var(--app-border) 8px
   );
 }
 
 .context-meter-fill {
   height: 100%;
   border-radius: inherit;
-  background: #111111;
+  background: var(--app-text);
   transition: width 0.2s ease;
 }
 
@@ -213,7 +215,7 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   bottom: -5px;
   width: 2px;
   border-radius: 999px;
-  background: #777777;
+  background: var(--app-text-muted);
   opacity: 0.85;
 }
 
@@ -221,29 +223,42 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
+  gap: var(--app-space-sm);
+  font-size: var(--app-font-xs);
   line-height: 16px;
-  color: var(--n-text-color-3);
+  color: var(--app-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .tools-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--app-space-sm);
 }
 
 .tool-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border-radius: 4px;
-  background-color: var(--n-color-embedded);
+  gap: var(--app-space-sm);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border-radius: var(--app-radius-md);
+  background-color: var(--app-surface-muted);
+  border: 1px solid var(--app-border);
+  transition: border-color var(--app-transition-fast), background-color var(--app-transition-fast);
+}
+
+.tool-item:hover {
+  border-color: var(--app-border-hover);
+  background: var(--app-surface-hover);
 }
 
 .tool-name {
-  font-size: 13px;
-  font-family: monospace;
+  font-size: var(--app-font-md);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 </style>

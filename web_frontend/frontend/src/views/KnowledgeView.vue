@@ -11,6 +11,6 @@ import KnowledgeManager from '@/components/knowledge/KnowledgeManager.vue'
 <style scoped>
 .knowledge-view {
   height: 100%;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 </style>

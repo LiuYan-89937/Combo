@@ -11,6 +11,6 @@ import AgentPackageList from '@/components/agent/AgentPackageList.vue'
 <style scoped>
 .published-view {
   height: 100%;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 </style>

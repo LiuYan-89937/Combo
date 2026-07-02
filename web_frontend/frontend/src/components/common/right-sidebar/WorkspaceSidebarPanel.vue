@@ -93,9 +93,10 @@ watch(
 }
 
 .context-bar {
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--n-border-color);
-  background: var(--n-color);
+  padding: var(--app-space-sm) var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
+  background: var(--app-surface-muted);
+  font-size: var(--app-font-sm);
 }
 
 .workspace-sidebar-explorer {
@@ -108,6 +109,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--app-space-sm);
+  color: var(--app-text-muted);
 }
 </style>

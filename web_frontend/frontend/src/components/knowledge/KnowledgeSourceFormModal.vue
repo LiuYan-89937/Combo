@@ -377,14 +377,20 @@ function isValidUrl(value: string): boolean {
 .upload-zone {
   width: 100%;
   min-height: 150px;
-  border: 1px dashed #8a8a8a;
-  border-radius: 6px;
+  border: 1px dashed var(--app-border-hover);
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background: #fafafa;
+  background: var(--app-surface-muted);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.upload-zone:hover {
+  border-color: var(--app-text);
+  background: var(--app-surface-hover);
 }
 
 .upload-hint {
@@ -405,7 +411,7 @@ function isValidUrl(value: string): boolean {
 
 .selected-file {
   font-size: 12px;
-  color: #333333;
+  color: var(--app-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -413,9 +419,10 @@ function isValidUrl(value: string): boolean {
 
 .rag-options {
   padding: 12px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
   margin-bottom: 12px;
+  background: var(--app-surface-muted);
 }
 
 .chunk-grid {

@@ -11,6 +11,6 @@ import SchedulerManager from '@/components/scheduler/SchedulerManager.vue'
 <style scoped>
 .scheduler-view {
   height: 100%;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 </style>

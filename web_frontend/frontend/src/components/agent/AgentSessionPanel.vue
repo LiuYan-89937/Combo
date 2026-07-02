@@ -172,27 +172,28 @@ watch(
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--n-border-color);
+  gap: var(--app-space-md);
+  padding: var(--app-space-md) var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
 }
 
 .header-title {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--app-space-xxs);
 }
 
 .package-name {
-  font-size: 12px;
+  font-size: var(--app-font-sm);
+  color: var(--app-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -201,13 +202,13 @@ watch(
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--app-space-sm);
   flex-shrink: 0;
 }
 
 .panel-search {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--n-border-color);
+  padding: var(--app-space-md) var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
 }
 
 .session-list {
@@ -215,8 +216,24 @@ watch(
   min-height: 0;
 }
 
+.agent-session-panel :deep(.n-list-item) {
+  transition: background-color var(--app-transition-fast);
+}
+
 .agent-session-panel :deep(.n-list-item.active) {
-  background: var(--n-color-pressed);
+  background: var(--app-surface-pressed);
+  position: relative;
+}
+
+.agent-session-panel :deep(.n-list-item.active)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-text);
 }
 
 .session-item {

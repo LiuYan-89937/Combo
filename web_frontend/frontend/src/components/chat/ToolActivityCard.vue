@@ -13,7 +13,13 @@
         </div>
         <div class="tool-subtitle">{{ subtitle }}</div>
       </div>
-      <n-button quaternary size="tiny" @click="expanded = !expanded">
+      <n-button
+        quaternary
+        size="tiny"
+        class="tool-expand-btn"
+        :aria-expanded="expanded"
+        @click="expanded = !expanded"
+      >
         {{ expanded ? t('tool.collapse') : t('tool.details') }}
       </n-button>
     </div>
@@ -162,11 +168,59 @@ function recordValue(value: unknown): Record<string, unknown> {
 
 <style scoped>
 .tool-card {
-  margin: 4px 16px 8px 64px;
-  padding: 10px 12px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  background: #ffffff;
+  position: relative;
+  margin: var(--app-space-xs) var(--app-space-lg) var(--app-space-sm) 60px;
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface-muted);
+  transition: border-color var(--app-transition-fast), background-color var(--app-transition-fast);
+  animation: app-fade-in-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  overflow: hidden;
+}
+
+.tool-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--app-border);
+  transition: background var(--app-transition-fast);
+}
+
+.tool-card.status-approved::before,
+.tool-card.status-completed::before,
+.tool-card.status-observed::before {
+  background: var(--app-success);
+}
+
+.tool-card.status-failed::before,
+.tool-card.status-rejected::before {
+  background: var(--app-error);
+}
+
+.tool-card.status-approval::before {
+  background: var(--app-warning);
+}
+
+.tool-card.status-proposed::before,
+.tool-card.status-started::before {
+  background: var(--app-info);
+  animation: app-pulse-soft 1.6s ease-in-out infinite;
+}
+
+.tool-card:hover {
+  border-color: var(--app-border-hover);
+  background: var(--app-surface);
+}
+
+@media (max-width: 768px) {
+  .tool-card {
+    margin-left: var(--app-space-sm);
+    margin-right: var(--app-space-sm);
+  }
 }
 
 .tool-summary-row {
@@ -182,12 +236,12 @@ function recordValue(value: unknown): Record<string, unknown> {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #111111;
+  color: var(--app-text);
 }
 
 .tool-status-icon.spinning {
-  border: 1px solid #d0d0d0;
-  border-top-color: #111111;
+  border: 1px solid var(--app-border);
+  border-top-color: var(--app-text);
   border-radius: 50%;
   animation: tool-spin 0.8s linear infinite;
 }
@@ -207,7 +261,7 @@ function recordValue(value: unknown): Record<string, unknown> {
 .tool-title {
   font-size: 13px;
   font-weight: 600;
-  color: #111111;
+  color: var(--app-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -216,49 +270,55 @@ function recordValue(value: unknown): Record<string, unknown> {
 .tool-subtitle {
   margin-top: 3px;
   font-size: 12px;
-  color: #666666;
+  color: var(--app-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .tool-detail {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid #eeeeee;
+  margin-top: var(--app-space-md);
+  padding-top: var(--app-space-md);
+  border-top: 1px solid var(--app-divider);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--app-space-md);
+  animation: app-fade-in 0.24s ease both;
+}
+
+.tool-expand-btn {
+  flex-shrink: 0;
 }
 
 .detail-label {
   margin-bottom: 4px;
   font-size: 12px;
   font-weight: 600;
-  color: #333333;
+  color: var(--app-text-secondary);
 }
 
 pre {
   max-height: 260px;
   margin: 0;
-  padding: 8px;
+  padding: 10px 12px;
   overflow: auto;
-  border-radius: 4px;
-  background: #f6f6f6;
-  color: #111111;
+  border-radius: 6px;
+  background: var(--app-code-background);
+  border: 1px solid var(--app-code-border);
+  color: var(--app-text);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .error-block pre {
-  border: 1px solid #d03050;
+  border: 1px solid var(--app-error);
 }
 
 .detail-meta {
   font-size: 12px;
-  color: #777777;
+  color: var(--app-text-muted);
 }
 
 @keyframes tool-spin {

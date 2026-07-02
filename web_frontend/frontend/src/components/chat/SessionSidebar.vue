@@ -58,7 +58,7 @@
         v-if="filteredSessions.length === 0"
         :description="t('sessions.empty')"
         size="small"
-        style="margin-top: 40px"
+        class="sessions-empty"
       />
     </n-scrollbar>
   </div>
@@ -189,20 +189,20 @@ onMounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--n-color);
+  background: var(--app-surface);
 }
 
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--n-border-color);
+  padding: var(--app-space-md) var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
 }
 
 .sidebar-search {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--n-border-color);
+  padding: var(--app-space-md) var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
 }
 
 .session-list {
@@ -213,36 +213,61 @@ onMounted(() => {
 .session-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--app-space-xs);
+  padding: var(--app-space-xs) 0;
+}
+
+.session-panel :deep(.n-list-item) {
+  transition: background-color var(--app-transition-fast);
+  border-radius: var(--app-radius-md);
+  animation: app-fade-in 0.2s ease both;
 }
 
 .session-panel :deep(.n-list-item.active) {
-  background: var(--n-color-pressed);
+  background: var(--app-surface-pressed);
+  position: relative;
+}
+
+.session-panel :deep(.n-list-item.active)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-text);
 }
 
 .session-title {
-  font-size: 14px;
+  font-size: var(--app-font-lg);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--app-text);
 }
 
 .session-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--app-space-sm);
 }
 
 .session-stats {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--app-space-md);
 }
 
 .session-stats :deep(.n-text) {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--app-space-xs);
+}
+
+.sessions-empty {
+  margin-top: var(--app-space-xxl);
+  animation: app-fade-in 0.24s ease both;
 }
 </style>

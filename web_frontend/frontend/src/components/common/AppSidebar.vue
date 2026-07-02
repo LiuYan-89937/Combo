@@ -36,39 +36,44 @@ const { activeKey, handleMenuSelect, menuOptions } = useSidebarNavigation()
 <style scoped>
 .app-sidebar {
   height: 100%;
-  background-color: var(--n-color);
-  border-right: 1px solid var(--n-border-color);
-  transition: width 0.3s ease;
+  background-color: var(--app-surface);
+  border-right: 1px solid var(--app-border);
+  transition: width var(--app-transition-slow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .sidebar-toolbar {
-  height: 40px;
+  height: var(--app-toolbar-height);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 0 10px 0 14px;
-  border-bottom: 1px solid var(--n-border-color);
+  gap: var(--app-space-sm);
+  padding: 0 var(--app-space-sm) 0 var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
 }
 
 .sidebar-title {
-  color: #111111;
+  color: var(--app-text);
   font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .main-menu {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding: 6px 8px;
 }
 
 .app-sidebar :deep(.n-menu-item-content) {
-  color: #111111;
+  color: var(--app-text);
+  border-radius: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .app-sidebar :deep(.n-menu-item-content .n-menu-item-content__icon),
@@ -77,11 +82,12 @@ const { activeKey, handleMenuSelect, menuOptions } = useSidebarNavigation()
 }
 
 .app-sidebar :deep(.n-menu-item-content:not(.n-menu-item-content--selected):hover) {
-  background-color: #f5f5f5;
+  background-color: var(--app-surface-muted);
 }
 
 .app-sidebar :deep(.n-menu-item-content--selected) {
-  background-color: #eeeeee;
-  color: #000000;
+  background-color: var(--app-surface-pressed);
+  color: var(--app-text-strong);
+  font-weight: 500;
 }
 </style>

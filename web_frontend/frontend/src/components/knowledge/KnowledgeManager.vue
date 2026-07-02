@@ -41,12 +41,14 @@
               @click.stop
               @update:checked="(checked) => setSourceSelected(sourceIdOf(source)!, checked)"
             />
-            <n-icon size="32" :color="getSourceColor(source)">
-              <component :is="getSourceIcon(source)" />
-            </n-icon>
+            <div class="source-avatar" :style="{ color: getSourceColor(source) }">
+              <n-icon size="22">
+                <component :is="getSourceIcon(source)" />
+              </n-icon>
+            </div>
             <div class="source-info">
-              <n-text strong>{{ sourceDisplayName(source) }}</n-text>
-              <n-tag :type="getStatusType(source.status)" size="small">
+              <n-text strong class="source-name">{{ sourceDisplayName(source) }}</n-text>
+              <n-tag :type="getStatusType(source.status)" size="small" class="source-status">
                 {{ sourceStatusLabel(source.status) }}
               </n-tag>
             </div>
@@ -56,12 +58,12 @@
 
           <div class="source-stats">
             <div v-if="source.documentCount != null" class="stat-item">
-              <n-icon size="16"><Document /></n-icon>
-              <span>{{ t('knowledge.documents', { count: source.documentCount }) }}</span>
+              <n-icon size="14" class="stat-icon"><Document /></n-icon>
+              <span class="stat-text">{{ t('knowledge.documents', { count: source.documentCount }) }}</span>
             </div>
             <div v-if="source.mode" class="stat-item">
-              <n-icon size="16"><Settings /></n-icon>
-              <span>{{ source.mode }}</span>
+              <n-icon size="14" class="stat-icon"><Settings /></n-icon>
+              <span class="stat-text">{{ source.mode }}</span>
             </div>
           </div>
 
@@ -88,10 +90,15 @@
       <n-empty
         v-if="knowledgeStore.sources.length === 0"
         :description="t('knowledge.empty')"
-        style="margin-top: 60px"
+        class="manager-empty"
       >
+        <template #icon>
+          <n-icon size="56" class="manager-empty-icon">
+            <Library />
+          </n-icon>
+        </template>
         <template #extra>
-          <n-button @click="showCreateModal = true">{{ t('knowledge.addFirst') }}</n-button>
+          <n-button type="primary" @click="showCreateModal = true">{{ t('knowledge.addFirst') }}</n-button>
         </template>
       </n-empty>
     </n-scrollbar>
@@ -153,7 +160,7 @@ import {
   NTag,
   NText,
 } from 'naive-ui'
-import { Add, Document, Settings, EllipsisHorizontal } from '@vicons/ionicons5'
+import { Add, Document, Library, Settings, EllipsisHorizontal } from '@vicons/ionicons5'
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
 import { useI18n } from '@/composables/useI18n'
@@ -205,50 +212,73 @@ function sourceStatusLabel(status: string): string {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px;
+  padding: var(--app-space-xl);
+  max-width: var(--app-content-max-width);
+  width: 100%;
+  margin: 0 auto;
 }
 
 .manager-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: var(--app-space-md);
+  margin-bottom: var(--app-space-xl);
+  flex-wrap: wrap;
 }
 
 .manager-title {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--app-space-xs);
+  min-width: 0;
 }
 
 .context-label {
-  font-size: 12px;
+  font-size: var(--app-font-sm);
 }
 
 .source-list {
   flex: 1;
   min-height: 0;
+  margin: 0 calc(var(--app-space-xs) * -1);
+  padding: 0 var(--app-space-xs) var(--app-space-lg);
 }
 
 .source-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
+  gap: var(--app-space-lg);
 }
 
 .source-card {
   cursor: pointer;
-  transition: transform 0.2s;
+  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base), border-color var(--app-transition-base);
+  border-radius: var(--app-radius-lg);
+  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
+
+.source-card:nth-child(1) { animation-delay: 0.02s; }
+.source-card:nth-child(2) { animation-delay: 0.06s; }
+.source-card:nth-child(3) { animation-delay: 0.10s; }
+.source-card:nth-child(4) { animation-delay: 0.14s; }
+.source-card:nth-child(5) { animation-delay: 0.18s; }
+.source-card:nth-child(n+6) { animation-delay: 0.22s; }
 
 .source-card:hover {
   transform: translateY(-2px);
+  box-shadow: var(--app-shadow-md);
+  border-color: var(--app-border-hover);
+}
+
+.source-card:active {
+  transform: translateY(-1px);
+  transition-duration: 0.08s;
 }
 
 .source-header {
   display: flex;
-  gap: 12px;
+  gap: var(--app-space-md);
   align-items: center;
 }
 
@@ -256,61 +286,122 @@ function sourceStatusLabel(status: string): string {
   flex-shrink: 0;
 }
 
+.source-avatar {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
 .source-info {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--app-space-xs);
+  min-width: 0;
+}
+
+.source-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--app-leading-tight);
+}
+
+.source-status {
+  align-self: flex-start;
 }
 
 .source-stats {
   display: flex;
-  gap: 16px;
-  margin: 12px 0;
+  gap: var(--app-space-lg);
+  margin: var(--app-space-md) 0;
 }
 
 .stat-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--n-text-color-2);
+  gap: var(--app-space-xs);
+  font-size: var(--app-font-sm);
+  color: var(--app-text-secondary);
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.stat-icon {
+  flex-shrink: 0;
+  color: var(--app-text-muted);
+}
+
+.stat-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+  flex-wrap: wrap;
 }
 
 .documents-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--app-space-md);
 }
 
 .documents-title {
-  font-size: 16px;
+  font-size: var(--app-font-xl);
   font-weight: 600;
 }
 
 .document-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--app-space-xs);
 }
 
 .document-title {
-  font-size: 14px;
+  font-size: var(--app-font-lg);
   font-weight: 500;
 }
 
 .document-meta,
 .document-uri {
-  font-size: 12px;
-  color: var(--n-text-color-3);
+  font-size: var(--app-font-sm);
+  color: var(--app-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.manager-empty {
+  margin-top: 12vh;
+  animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.manager-empty-icon {
+  display: block;
+  color: var(--app-text-muted);
+  opacity: 0.55;
+  line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .knowledge-manager {
+    padding: var(--app-space-md);
+  }
+  .source-grid {
+    grid-template-columns: 1fr;
+    gap: var(--app-space-md);
+  }
 }
 </style>

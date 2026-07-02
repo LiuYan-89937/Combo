@@ -38,8 +38,14 @@
       <n-empty
         v-if="filteredPackages.length === 0"
         :description="t('agents.empty')"
-        style="margin-top: 60px"
-      />
+        class="manager-empty"
+      >
+        <template #icon>
+          <n-icon size="56" class="manager-empty-icon">
+            <Rocket />
+          </n-icon>
+        </template>
+      </n-empty>
 
       <div v-else class="package-grid">
         <n-card
@@ -56,12 +62,18 @@
               @click.stop
               @update:checked="(checked) => setPackageSelected(pkg.package_id, checked)"
             />
-            <n-avatar :size="48" :style="{ background: getPackageColor(pkg) }">
+            <n-avatar
+              :size="44"
+              :style="{ background: getPackageColor(pkg) }"
+              class="package-avatar"
+            >
               {{ getPackageInitial(pkg) }}
             </n-avatar>
             <div class="package-info">
-              <n-text strong>{{ pkg.agent_name || pkg.name || pkg.package_id }}</n-text>
-              <n-text depth="3" style="font-size: 12px">
+              <n-text strong class="package-name">
+                {{ pkg.agent_name || pkg.name || pkg.package_id }}
+              </n-text>
+              <n-text depth="3" class="package-desc">
                 {{ pkg.agent_description || t('common.noDescription') }}
               </n-text>
             </div>
@@ -71,12 +83,12 @@
 
           <div class="package-stats">
             <div class="stat-item">
-              <n-icon size="16"><Build /></n-icon>
-              <span>{{ t('agents.tools', { count: pkg.tool_count || 0 }) }}</span>
+              <n-icon size="14" class="stat-icon"><Build /></n-icon>
+              <span class="stat-text">{{ t('agents.tools', { count: pkg.tool_count || 0 }) }}</span>
             </div>
             <div class="stat-item">
-              <n-icon size="16"><ChatbubbleEllipses /></n-icon>
-              <span>{{ t('agents.sessions', { count: pkg.session_count || 0 }) }}</span>
+              <n-icon size="14" class="stat-icon"><ChatbubbleEllipses /></n-icon>
+              <span class="stat-text">{{ t('agents.sessions', { count: pkg.session_count || 0 }) }}</span>
             </div>
           </div>
 
@@ -165,7 +177,7 @@ import {
   NText,
   useDialog,
 } from 'naive-ui'
-import { Search, Refresh, Build, ChatbubbleEllipses, EllipsisHorizontal } from '@vicons/ionicons5'
+import { Search, Refresh, Build, ChatbubbleEllipses, EllipsisHorizontal, Rocket } from '@vicons/ionicons5'
 import AgentPackageDetailDrawer from './AgentPackageDetailDrawer.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
@@ -417,45 +429,71 @@ onMounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px;
+  padding: var(--app-space-xl);
+  max-width: var(--app-content-max-width);
+  width: 100%;
+  margin: 0 auto;
 }
 
 .list-header {
   display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: var(--app-space-md);
+  margin-bottom: var(--app-space-xl);
+  flex-wrap: wrap;
 }
 
 .list-content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  margin: 0 calc(var(--app-space-xs) * -1);
+  padding: 0 var(--app-space-xs) var(--app-space-lg);
 }
 
 .package-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--app-space-lg);
 }
 
 .package-card {
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base), border-color var(--app-transition-base);
+  border-radius: var(--app-radius-lg);
+  animation: app-fade-in-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
+
+.package-card:nth-child(1) { animation-delay: 0.02s; }
+.package-card:nth-child(2) { animation-delay: 0.06s; }
+.package-card:nth-child(3) { animation-delay: 0.10s; }
+.package-card:nth-child(4) { animation-delay: 0.14s; }
+.package-card:nth-child(5) { animation-delay: 0.18s; }
+.package-card:nth-child(6) { animation-delay: 0.22s; }
+.package-card:nth-child(n+7) { animation-delay: 0.26s; }
 
 .package-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--app-shadow-md);
+  border-color: var(--app-border-hover);
+}
+
+.package-card:active {
+  transform: translateY(-1px);
+  transition-duration: 0.08s;
 }
 
 .package-header {
   display: flex;
-  gap: 12px;
+  gap: var(--app-space-md);
   align-items: flex-start;
 }
 
 .package-select {
-  margin-top: 14px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.package-avatar {
   flex-shrink: 0;
 }
 
@@ -463,36 +501,93 @@ onMounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--app-space-xxs);
   min-width: 0;
+}
+
+.package-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--app-leading-tight);
+  color: var(--app-text-strong);
+}
+
+.package-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--app-font-sm);
+  line-height: 1.4;
+  min-height: calc(1.4em * 2);
 }
 
 .package-stats {
   display: flex;
-  gap: 16px;
-  margin: 12px 0;
+  gap: var(--app-space-lg);
+  margin: var(--app-space-md) 0;
 }
 
 .stat-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--n-text-color-2);
+  gap: var(--app-space-xs);
+  font-size: var(--app-font-sm);
+  color: var(--app-text-secondary);
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.stat-icon {
+  flex-shrink: 0;
+  color: var(--app-text-muted);
+}
+
+.stat-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .package-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+  flex-wrap: wrap;
 }
 
 .package-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--n-border-color);
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+  padding-top: var(--app-space-md);
+  border-top: 1px solid var(--app-divider);
+  flex-wrap: wrap;
+}
+
+.manager-empty {
+  margin-top: 12vh;
+  animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.manager-empty-icon {
+  display: block;
+  color: var(--app-text-muted);
+  opacity: 0.55;
+  line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .agent-package-list {
+    padding: var(--app-space-md);
+  }
+  .package-grid {
+    grid-template-columns: 1fr;
+    gap: var(--app-space-md);
+  }
 }
 </style>

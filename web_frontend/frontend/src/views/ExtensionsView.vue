@@ -96,10 +96,10 @@
           <n-empty
             v-else
             :description="t('extensions.noMcpServers')"
-            style="margin-top: 60px"
+            class="manager-empty"
           >
             <template #extra>
-              <n-button @click="openAddMcp">{{ t('extensions.addFirstServer') }}</n-button>
+              <n-button type="primary" @click="openAddMcp">{{ t('extensions.addFirstServer') }}</n-button>
             </template>
           </n-empty>
         </div>
@@ -157,10 +157,10 @@
           <n-empty
             v-else
             :description="t('extensions.noSkills')"
-            style="margin-top: 60px"
+            class="manager-empty"
           >
             <template #extra>
-              <n-button @click="openAddSkill">{{ t('extensions.addFirstSkill') }}</n-button>
+              <n-button type="primary" @click="openAddSkill">{{ t('extensions.addFirstSkill') }}</n-button>
             </template>
           </n-empty>
         </div>
@@ -238,8 +238,12 @@ const {
 <style scoped>
 .extensions-view {
   height: 100%;
-  padding: 20px;
-  background: var(--n-color);
+  padding: var(--app-space-xl);
+  max-width: var(--app-content-max-width);
+  width: 100%;
+  margin: 0 auto;
+  background: var(--app-surface);
+  overflow-y: auto;
 }
 
 .context-bar {
@@ -247,61 +251,74 @@ const {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: var(--app-space-lg);
+  margin-bottom: var(--app-space-lg);
 }
 
 .context-title {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--app-space-xs);
   min-width: 0;
 }
 
 .context-subtitle {
-  font-size: 12px;
+  font-size: var(--app-font-sm);
 }
 
 .test-result {
-  margin-bottom: 16px;
+  margin-bottom: var(--app-space-lg);
 }
 
 .test-tools {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
+  gap: var(--app-space-xs);
+  margin-top: var(--app-space-md);
 }
 
 .tab-content {
-  padding: 20px 0;
+  padding: var(--app-space-xl) 0;
 }
 
 .content-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: var(--app-space-lg);
+  margin-bottom: var(--app-space-xl);
+  flex-wrap: wrap;
 }
 
 .extension-list {
-  margin-top: 16px;
+  margin-top: var(--app-space-lg);
+  border-radius: var(--app-radius-lg);
 }
 
 .item-description {
-  color: var(--n-text-color-2);
-  font-size: 12px;
-  line-height: 1.45;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
+  line-height: var(--app-leading-normal);
 }
 
 .item-meta {
-  margin-top: 4px;
-  color: var(--n-text-color-3);
-  font-size: 12px;
+  margin-top: var(--app-space-xs);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-sm);
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.manager-empty {
+  margin-top: 10vh;
+  animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (max-width: 640px) {
+  .extensions-view {
+    padding: var(--app-space-md);
+  }
 }
 </style>

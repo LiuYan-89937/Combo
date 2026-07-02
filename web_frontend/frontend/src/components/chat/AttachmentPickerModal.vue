@@ -219,15 +219,17 @@ function handleAddText() {
 .file-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--n-color-embedded);
-  border-radius: 6px;
+  gap: var(--app-space-sm);
+  padding: var(--app-space-sm) var(--app-space-md);
+  background: var(--app-surface-muted);
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-md);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color var(--app-transition-fast), border-color var(--app-transition-fast);
 }
 
 .file-item:hover {
-  background: var(--n-color-hover);
+  background: var(--app-surface-hover);
+  border-color: var(--app-border);
 }
 </style>

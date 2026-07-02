@@ -17,6 +17,7 @@
           class="sidebar-restore left"
           size="small"
           :title="t('layout.expandLeftSidebar')"
+          :aria-label="t('layout.expandLeftSidebar')"
           @click="uiStore.toggleLeftSidebar"
         >
           <template #icon>
@@ -44,6 +45,7 @@
           class="sidebar-restore right"
           size="small"
           :title="t('layout.expandRightSidebar')"
+          :aria-label="t('layout.expandRightSidebar')"
           @click="uiStore.toggleRightSidebar"
         >
           <template #icon>
@@ -112,6 +114,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--app-surface);
+  color: var(--app-text);
 }
 
 .app-container {
@@ -132,43 +136,54 @@ onMounted(() => {
   flex: 1 1 0;
   min-width: 0;
   overflow-y: auto;
+  background: var(--app-surface);
 }
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+  transform: translateY(4px);
 }
 
 .sidebar-restore {
   position: absolute;
   z-index: 8;
-  top: 12px;
-  width: 28px;
-  height: 44px;
-  border: 1px solid #d0d0d0;
-  background: #ffffff;
-  color: #111111;
+  top: 16px;
+  width: 24px;
+  height: 48px;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  color: var(--app-text);
   cursor: pointer;
+  box-shadow: var(--app-shadow-sm);
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  animation: app-fade-in 0.24s ease both;
+}
+
+.sidebar-restore:active {
+  transform: scale(0.95);
 }
 
 .sidebar-restore.left {
   left: 0;
   border-left: 0;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 8px 8px 0;
 }
 
 .sidebar-restore.right {
   right: 0;
   border-right: 0;
-  border-radius: 6px 0 0 6px;
+  border-radius: 8px 0 0 8px;
 }
 
 .sidebar-restore:hover {
-  background: #f3f3f3;
+  background: var(--app-surface-muted);
+  border-color: var(--app-border-hover);
+  box-shadow: var(--app-shadow-md);
 }
 </style>

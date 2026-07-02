@@ -24,12 +24,25 @@ export const RIGHT_SIDEBAR_WIDTH = {
 const STORAGE_KEYS = {
   locale: localeStorageKey,
   rightSidebarWidth: 'fast-agent-factory.rightSidebarWidth',
+  themeMode: 'fast-agent-factory.themeMode',
 } as const
 
 function readStoredLocale(): Locale {
   if (typeof window === 'undefined') return 'zh-CN'
   const stored = window.localStorage.getItem(STORAGE_KEYS.locale)
   return stored ? normalizeLocale(stored) : detectBrowserLocale()
+}
+
+function readStoredThemeMode(): ThemeMode {
+  if (typeof window === 'undefined') return 'light'
+  const stored = window.localStorage.getItem(STORAGE_KEYS.themeMode)
+  if (stored === 'dark' || stored === 'light' || stored === 'auto') return stored
+  return 'light'
+}
+
+function detectSystemDark(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
 function writeStorage(key: string, value: string): void {
@@ -50,8 +63,8 @@ function clampNumber(value: number, min: number, max: number): number {
 
 export const useUiStore = defineStore('ui', () => {
   // ========== 主题 ==========
-  const themeMode = ref<ThemeMode>('light')
-  const isDarkMode = ref(false)
+  const themeMode = ref<ThemeMode>(readStoredThemeMode())
+  const isDarkMode = ref(detectSystemDark())
   const locale = ref<Locale>(readStoredLocale())
 
   // ========== 布局 ==========
@@ -162,8 +175,11 @@ export const useUiStore = defineStore('ui', () => {
 
   function setThemeMode(mode: ThemeMode): void {
     themeMode.value = mode
+    writeStorage(STORAGE_KEYS.themeMode, mode)
     if (mode !== 'auto') {
       isDarkMode.value = mode === 'dark'
+    } else {
+      isDarkMode.value = detectSystemDark()
     }
   }
 
@@ -189,6 +205,21 @@ export const useUiStore = defineStore('ui', () => {
       },
       { immediate: true }
     )
+
+    // 监听系统主题变化，仅在 auto 模式下生效
+    if (window.matchMedia) {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+      const handler = (event: MediaQueryListEvent) => {
+        if (themeMode.value === 'auto') {
+          isDarkMode.value = event.matches
+        }
+      }
+      if (typeof mediaQuery.addEventListener === 'function') {
+        mediaQuery.addEventListener('change', handler)
+      } else if (typeof (mediaQuery as MediaQueryList & { addListener?: (fn: (e: MediaQueryListEvent) => void) => void }).addListener === 'function') {
+        (mediaQuery as MediaQueryList & { addListener: (fn: (e: MediaQueryListEvent) => void) => void }).addListener(handler)
+      }
+    }
   }
 
   return {

@@ -142,9 +142,9 @@ watch(
 <style scoped>
 .recent-agent-section {
   flex-shrink: 0;
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--n-border-color);
-  background: var(--n-color);
+  padding: var(--app-space-md);
+  border-top: 1px solid var(--app-divider);
+  background: var(--app-surface);
 }
 
 .recent-agent-header {
@@ -157,22 +157,34 @@ watch(
 .recent-agent-main,
 .recent-agent-toggle,
 .recent-agent-item {
-  border: 1px solid var(--n-border-color);
-  background: var(--n-color);
-  color: var(--n-text-color-1);
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  color: var(--app-text);
   cursor: pointer;
+  transition: background-color var(--app-transition-fast), border-color var(--app-transition-fast), transform var(--app-transition-fast);
+}
+
+.recent-agent-main:not(:disabled):active,
+.recent-agent-toggle:not(:disabled):active,
+.recent-agent-item:active {
+  transform: scale(0.98);
+}
+
+.recent-agent-item {
+  animation: app-fade-in-up 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .recent-agent-main:disabled,
 .recent-agent-toggle:disabled {
-  color: var(--n-text-color-disabled);
+  color: var(--app-text-disabled);
   cursor: default;
 }
 
 .recent-agent-main:not(:disabled):hover,
 .recent-agent-toggle:not(:disabled):hover,
 .recent-agent-item:hover {
-  background: #f5f5f5;
+  background: var(--app-surface-muted);
+  border-color: var(--app-border-hover);
 }
 
 .recent-agent-main {
@@ -197,9 +209,11 @@ watch(
 }
 
 .recent-agent-kicker {
-  font-size: 11px;
+  font-size: var(--app-font-xs);
   line-height: 1.2;
-  color: var(--n-text-color-3);
+  color: var(--app-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .recent-agent-title {
@@ -234,8 +248,8 @@ watch(
 }
 
 .recent-agent-item.active {
-  background: #eeeeee;
-  border-color: #d0d0d0;
+  background: var(--app-surface-pressed);
+  border-color: var(--app-border-hover);
 }
 
 .recent-agent-item-name,
@@ -253,14 +267,14 @@ watch(
 }
 
 .recent-agent-item-title {
-  font-size: 12px;
-  color: var(--n-text-color-2);
+  font-size: var(--app-font-sm);
+  color: var(--app-text-secondary);
 }
 
 .recent-agent-item-time,
 .recent-agent-empty {
-  font-size: 11px;
-  color: var(--n-text-color-3);
+  font-size: var(--app-font-xs);
+  color: var(--app-text-muted);
 }
 
 .recent-agent-empty {
