@@ -74,9 +74,7 @@ export interface RuntimeOptionsView {
   show_state?: boolean
   show_messages?: boolean
   context_window_tokens: number | null
-  context_window_tokens_source: 'env' | 'web' | 'unset' | string
-  env_override_keys?: string[]
-  env_override_count?: number
+  context_window_tokens_source: 'env' | 'unset' | string
 }
 
 // ========== 对话相关 ==========

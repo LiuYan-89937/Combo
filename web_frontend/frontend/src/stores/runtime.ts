@@ -91,8 +91,6 @@ export const useRuntimeStore = defineStore('runtime', {
     runtimeOptions: {
       context_window_tokens: null,
       context_window_tokens_source: 'unset',
-      env_override_keys: [],
-      env_override_count: 0,
     },
     activeRequestId: null,
     activeRequests: {},
@@ -233,8 +231,6 @@ export const useRuntimeStore = defineStore('runtime', {
       if (type === 'runtime_ready') {
         this._handleRuntimeOptionsChanged(event)
         console.info('Runtime ready')
-      } else if (type === 'runtime_options_changed') {
-        this._handleRuntimeOptionsChanged(event)
       } else if (type === 'session_started') {
         this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
         this.currentMode = event.mode || null
@@ -413,10 +409,6 @@ export const useRuntimeStore = defineStore('runtime', {
         ...options,
         context_window_tokens: optionalPositiveInteger(options.context_window_tokens),
         context_window_tokens_source: String(options.context_window_tokens_source || 'unset'),
-        env_override_keys: Array.isArray(options.env_override_keys)
-          ? options.env_override_keys.map(String)
-          : [],
-        env_override_count: optionalPositiveInteger(options.env_override_count) || 0,
       }
     },
 

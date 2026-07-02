@@ -59,6 +59,11 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
           key: '/extensions',
           icon: renderIcon(ExtensionPuzzle),
         },
+        {
+          label: t('route.modelPool'),
+          key: '/model-pool',
+          icon: renderIcon(ExtensionPuzzle),
+        },
       ],
     },
   ]

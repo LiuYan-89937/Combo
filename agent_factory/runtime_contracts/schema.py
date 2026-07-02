@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from agent_factory.context_system import ContextContractConfig
 from agent_factory.knowledge_system import KnowledgeContractConfig
 from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
+from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBinding
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
@@ -44,6 +45,7 @@ ContractVersion = Literal[
     "sandbox_contract.v0",
     "dependencies_contract.v0",
     "model_contract.v0",
+    "model_contract.v1",
     "knowledge_contract.v0",
     "scheduler_contract.v0",
     "scheduler_seed_contract.v0",
@@ -248,18 +250,41 @@ class KnowledgeContract(BaseModel):
     config: KnowledgeContractConfig = Field(default_factory=KnowledgeContractConfig)
 
 
-class ModelContractConfig(BaseModel):
+class ModelContractV0Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["main", "task"] = "main"
     source: Literal["factory_runtime_env"] = "factory_runtime_env"
 
 
-class ModelContract(BaseModel):
+class ModelContractV0(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["model"] = "model"
     version: Literal["model_contract.v0"] = "model_contract.v0"
+    enabled: bool = True
+    config: ModelContractV0Config = Field(default_factory=ModelContractV0Config)
+
+
+class ModelContractConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bindings: dict[ModelBindingRole, ModelProfileBinding] = Field(default_factory=dict)
+
+    @field_validator("bindings")
+    @classmethod
+    def _bindings_are_not_empty_ids(
+        cls,
+        value: dict[ModelBindingRole, ModelProfileBinding],
+    ) -> dict[ModelBindingRole, ModelProfileBinding]:
+        return dict(value)
+
+
+class ModelContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["model"] = "model"
+    version: Literal["model_contract.v1"] = "model_contract.v1"
     enabled: bool = True
     config: ModelContractConfig = Field(default_factory=ModelContractConfig)
 
@@ -531,6 +556,7 @@ RuntimeContract = (
     | ResourcesContract
     | SandboxRuntimeContract
     | DependenciesContract
+    | ModelContractV0
     | ModelContract
     | SchedulerContract
     | SchedulerSeedContract

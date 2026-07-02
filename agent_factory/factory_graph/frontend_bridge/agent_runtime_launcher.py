@@ -10,6 +10,7 @@ import subprocess
 from typing import Any
 
 from agent_factory.paths import project_root
+from agent_factory.model_pool import MODEL_POOL_STORE_PATH_ENV, ModelPoolStore, resolve_model_pool_store_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 from agent_factory.runtime_contracts import LoadedAgentPackage
 
@@ -25,35 +26,8 @@ RUNTIME_IMAGE_MIRROR_BUILD_COMMAND = (
 )
 IMAGE_INSPECT_COMMAND_LABEL = "docker image inspect"
 
-MODEL_ENV_ALLOWLIST = (
-    "AGENTFACTORY_OPENAI_BASE_URL",
-    "AGENTFACTORY_OPENAI_API_KEY",
-    "AGENTFACTORY_OPENAI_MODEL",
-    "AGENTFACTORY_LLM_PROVIDER",
-    "AGENTFACTORY_LLM_TEMPERATURE",
-    "AGENTFACTORY_LLM_TIMEOUT_SECONDS",
-    "AGENTFACTORY_LLM_THINKING",
-    "AGENTFACTORY_STRUCTURED_OUTPUT_METHOD",
-    "AGENTFACTORY_LLM_STRUCTURED_OUTPUT_METHOD",
-    "AGENTFACTORY_TASK_MODEL",
-    "AGENTFACTORY_TASK_TEMPERATURE",
-    "AGENTFACTORY_TASK_THINKING",
-    "AGENTFACTORY_TASK_STRUCTURED_OUTPUT_METHOD",
-    "AGENTFACTORY_COMPRESSION_MODEL",
-    "AGENTFACTORY_COMPRESSION_API_KEY",
-    "AGENTFACTORY_COMPRESSION_BASE_URL",
-    "AGENTFACTORY_COMPRESSION_TEMPERATURE",
-    "AGENTFACTORY_COMPRESSION_TIMEOUT_SECONDS",
-    "AGENTFACTORY_COMPRESSION_THINKING",
-    "AGENTFACTORY_COMPRESSION_STRUCTURED_OUTPUT_METHOD",
-    "AGENTFACTORY_CONTEXT_WINDOW_TOKENS",
-    "AGENTFACTORY_EMBEDDING_PROVIDER",
-    "AGENTFACTORY_EMBEDDING_MODEL",
-    "AGENTFACTORY_EMBEDDING_API_KEY",
-    "AGENTFACTORY_EMBEDDING_BASE_URL",
-    "AGENTFACTORY_EMBEDDING_DIMS",
-    "AGENTFACTORY_EMBEDDING_TIMEOUT_SECONDS",
-)
+MODEL_ENV_ALLOWLIST: tuple[str, ...] = ()
+CONTAINER_MODEL_POOL_STORE_PATH = "/runtime/model_pool/factory.sqlite"
 
 SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ALLOWED_CONTAINER_ROOTS = (
@@ -99,7 +73,6 @@ class DockerAgentRuntimeLauncher:
         extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
         skillhub_gateway_url: str | None = None,
-        env_overrides: dict[str, str] | None = None,
     ) -> DockerAgentRuntimePlan:
         docker = self._docker_executable()
         sandbox = dict(package.sandbox_contract or {})
@@ -119,7 +92,10 @@ class DockerAgentRuntimeLauncher:
         input_files_root = workdir_root / ATTACHMENT_INPUT_DIR
         input_files_root.mkdir(parents=True, exist_ok=True)
         service_env = self._service_environment(sandbox)
-        env = {**self._environment(sandbox), **service_env, **(env_overrides or {})}
+        model_pool_path = resolve_model_pool_store_path()
+        ModelPoolStore(model_pool_path)
+        env = {**self._environment(sandbox), **service_env}
+        env[MODEL_POOL_STORE_PATH_ENV] = CONTAINER_MODEL_POOL_STORE_PATH
         if mcp_gateway_url:
             env["AGENTFACTORY_MCP_GATEWAY_URL"] = mcp_gateway_url
         if skillhub_gateway_url:
@@ -145,6 +121,8 @@ class DockerAgentRuntimeLauncher:
             f"{runtime_root.resolve()}:/runtime:rw",
             "-v",
             f"{extension_root.resolve()}:/runtime/extensions:rw",
+            "-v",
+            f"{model_pool_path.resolve()}:{CONTAINER_MODEL_POOL_STORE_PATH}:ro",
         ]
         contract_mounts = [*(sandbox.get("mounts") or []), *(sandbox.get("volumes") or [])]
         for mount in contract_mounts:
@@ -160,7 +138,7 @@ class DockerAgentRuntimeLauncher:
             resolved_image=resolved_image,
             network=network,
             extension_root=extension_root,
-            mount_count=6 + 1 + len(contract_mounts),
+            mount_count=6 + 2 + len(contract_mounts),
             service_env=service_env,
             preflight={
                 "status": "ok",
@@ -170,7 +148,7 @@ class DockerAgentRuntimeLauncher:
                 "image_check": IMAGE_INSPECT_COMMAND_LABEL,
                 "network": network,
                 "extension_root": str(extension_root),
-                "mount_count": 6 + 1 + len(contract_mounts),
+                "mount_count": 6 + 2 + len(contract_mounts),
                 "service_env_keys": sorted(service_env),
                 "mcp_gateway_url": mcp_gateway_url,
                 "skillhub_gateway_url": skillhub_gateway_url,
@@ -187,7 +165,6 @@ class DockerAgentRuntimeLauncher:
         extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
         skillhub_gateway_url: str | None = None,
-        env_overrides: dict[str, str] | None = None,
     ) -> list[str]:
         return self.prepare(
             package=package,
@@ -197,7 +174,6 @@ class DockerAgentRuntimeLauncher:
             extension_root=extension_root,
             mcp_gateway_url=mcp_gateway_url,
             skillhub_gateway_url=skillhub_gateway_url,
-            env_overrides=env_overrides,
         ).command
 
     def _docker_executable(self) -> str:

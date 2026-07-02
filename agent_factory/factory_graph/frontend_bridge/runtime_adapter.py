@@ -48,7 +48,6 @@ class FactoryRuntimeAdapter(
     evolution_package_id: str | None = None
     scheduler_runtime: SchedulerRuntime | None = None
     background_workers: RuntimeBackgroundWorkerManager | None = None
-    env_override_baseline: dict[str, str | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         load_agentfactory_dotenv()
@@ -63,7 +62,6 @@ class FactoryRuntimeAdapter(
         if self.evolution_runtime is None:
             self.evolution_runtime = AgentEvolutionRuntime()
         self.agent_package_runtime.set_emit(self.emit)
-        self._apply_runtime_options()
 
     def handle(self, command: FactoryFrontendCommand) -> bool:
         try:
@@ -97,7 +95,6 @@ _COMMAND_HANDLERS: dict[str, str] = {
     "switch_session": "switch_session",
     "new_session": "new_session",
     "set_mode": "set_mode",
-    "set_options": "set_options",
     "send_message": "send_message",
     "workspace_manage": "workspace_manage",
     "knowledge_manage": "knowledge_manage",

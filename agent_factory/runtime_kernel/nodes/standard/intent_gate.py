@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict
 
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.activation import normalize_plan_and_execute_activation
-from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
 
@@ -53,6 +52,7 @@ class CognitiveIntentGateNode:
             operation_metadata={"node_id": context.node_id, "operation": "intent_gate"},
             services=context.services,
             node_id=context.node_id,
+            model_role="task",
         )
         payload = decision.model_dump(mode="json")
         route = "intent.start_workflow" if decision.decision == "start_workflow" else "intent.casual"
@@ -66,9 +66,7 @@ def _model_operation_service(context: NodeExecutionContext):
     service = context.services.model_operation_service
     if service is None:
         raise RuntimeKernelError("cognitive.intent_gate requires model_operation_service")
-    if getattr(service, "model_role", "task") == "task":
-        return service
-    return ModelOperationService(role="task")
+    return service
 
 
 def _activation_config(state: RuntimeState) -> dict[str, Any]:

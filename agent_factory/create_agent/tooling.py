@@ -27,6 +27,10 @@ from agent_factory.create_agent.models import (
     VALIDATION_FILE,
     VALIDATION_STATE_FILE,
 )
+from agent_factory.create_agent.model_pool_tool import (
+    CREATE_AGENT_MODEL_POOL_TOOL_ID,
+    build_model_pool_select_tool_spec,
+)
 from agent_factory.create_agent.publish_tool import (
     CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE,
     CREATE_AGENT_PUBLISH_TOOL_ID,
@@ -212,6 +216,7 @@ class CreateAgentToolEnvironmentBuilder:
             create_agent_tool_ids = [
                 CREATE_AGENT_AUTHORING_TOOL_ID,
                 CREATE_AGENT_CONTROL_TOOL_ID,
+                CREATE_AGENT_MODEL_POOL_TOOL_ID,
                 CREATE_AGENT_PROBE_TOOL_ID,
                 CREATE_AGENT_VALIDATE_TOOL_ID,
                 *([CREATE_AGENT_STAGE_TOOL_ID, CREATE_AGENT_PUBLISH_TOOL_ID] if mode == "manufacture" else []),
@@ -226,6 +231,7 @@ class CreateAgentToolEnvironmentBuilder:
             )
             extra_specs = [
                 build_create_agent_control_tool_spec(),
+                build_model_pool_select_tool_spec(),
                 build_create_agent_authoring_tool_spec(),
                 build_create_agent_probe_tool_spec(),
                 build_create_agent_validate_tool_spec(),

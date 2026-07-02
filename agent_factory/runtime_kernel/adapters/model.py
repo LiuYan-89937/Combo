@@ -10,6 +10,8 @@ from langchain_core.tools import BaseTool
 
 from agent_factory.models import (
     ChatModelSettings,
+    get_compression_model,
+    get_compression_model_settings,
     get_main_model,
     get_main_model_settings,
     get_task_model,
@@ -19,7 +21,7 @@ from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 
 
-ModelRole = Literal["main", "task"]
+ModelRole = Literal["main", "task", "compression"]
 _INTERNAL_SESSION_SNAPSHOT_BLOCK_RE = re.compile(
     r"<session_snapshot\b[^>]*>.*?</session_snapshot>",
     re.IGNORECASE | re.DOTALL,
@@ -79,8 +81,16 @@ class LangChainModelServiceAdapter:
     tools, choose routes, approve actions, or synthesize graph control.
     """
 
-    def __init__(self, *, role: ModelRole = "main") -> None:
+    def __init__(
+        self,
+        *,
+        role: ModelRole = "main",
+        model: Any | None = None,
+        settings: ChatModelSettings | None = None,
+    ) -> None:
         self.model_role = role
+        self._model = model
+        self._settings = settings
 
     def generate(
         self,
@@ -90,7 +100,7 @@ class LangChainModelServiceAdapter:
         messages: list[Any] | None = None,
         tools: list[BaseTool] | None = None,
     ) -> ModelInvocationResult:
-        model, settings = _configured_model_for_role(self.model_role)
+        model, settings = self._resolve_model()
         if model is None:
             raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
         bound_model = _bind_tools(model, tools or [])
@@ -111,12 +121,16 @@ class LangChainModelServiceAdapter:
             final_answer=None if tool_calls else text,
             tool_calls=tool_calls,
             metadata={
-                "model_role": settings.role,
-                "model": settings.model or "",
+                **settings.metadata(),
                 "tool_count": len(tools or []),
                 **envelope.diagnostics(),
             },
         )
+
+    def _resolve_model(self) -> tuple[Any, ChatModelSettings]:
+        if self._model is not None and self._settings is not None:
+            return self._model, self._settings
+        return _configured_model_for_role(self.model_role)
 
 
 def _configured_model_for_role(role: ModelRole) -> tuple[Any, ChatModelSettings]:
@@ -124,6 +138,8 @@ def _configured_model_for_role(role: ModelRole) -> tuple[Any, ChatModelSettings]
         return get_main_model(), get_main_model_settings()
     if role == "task":
         return get_task_model(), get_task_model_settings()
+    if role == "compression":
+        return get_compression_model(), get_compression_model_settings()
     raise ValueError(f"unsupported model role: {role}")
 
 

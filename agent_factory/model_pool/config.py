@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from agent_factory.paths import factory_artifact_path, resolve_project_path
+
+
+MODEL_POOL_STORE_PATH_ENV = "AGENTFACTORY_MODEL_POOL_STORE_PATH"
+
+
+def default_model_pool_store_path() -> Path:
+    return factory_artifact_path("model_pool", "factory.sqlite")
+
+
+def resolve_model_pool_store_path(value: str | Path | None = None) -> Path:
+    configured = value if value is not None else os.getenv(MODEL_POOL_STORE_PATH_ENV)
+    if configured:
+        return resolve_project_path(configured)
+    return default_model_pool_store_path()

@@ -51,6 +51,17 @@ export interface AgentPackageInstanceView {
   error?: string | null
 }
 
+export interface AgentPackageModelContractView {
+  version: string
+  bindings: Record<string, {
+    profile_id: string
+    selection_source?: string
+    reason?: string
+    required_capabilities?: Record<string, any>
+    overrides?: Record<string, any>
+  }>
+}
+
 export interface AgentPackageView {
   package_id: string
   package_path?: string
@@ -66,6 +77,7 @@ export interface AgentPackageView {
   created_at: string | null
   updated_at: string | null
   sandbox?: Record<string, any>
+  model_contract?: AgentPackageModelContractView
   extensions?: Record<string, any>
   tools?: AgentPackageToolView[]
   mcp_servers?: AgentPackageExtensionView[]

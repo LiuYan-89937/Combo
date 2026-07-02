@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import AIMessage
 
+from agent_factory.runtime_kernel.adapters.model import ModelRole
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.planning import (
@@ -39,6 +40,7 @@ class CognitiveAnswerNode:
             emit_event=context.emit_event,
             services=context.services,
             node_id=context.node_id,
+            model_role=_model_role_from_payload(_model_operation_payload(context.bindings), default="main"),
         )
         if result.clarification_question:
             return {
@@ -106,6 +108,13 @@ def _model_operation_payload(bindings: list[dict[str, Any]]) -> dict[str, Any]:
         if binding.get("binding_type") == "model_operation":
             return dict(binding.get("payload") or {})
     return {}
+
+
+def _model_role_from_payload(payload: dict[str, Any], *, default: ModelRole) -> ModelRole:
+    value = str(payload.get("model_role") or default).strip()
+    if value not in {"main", "task", "compression"}:
+        raise RuntimeKernelError(f"unsupported model_operation.model_role: {value}")
+    return cast(ModelRole, value)
 
 
 def _prompt_binding_by_id(context: NodeExecutionContext, prompt_id: str) -> dict[str, Any] | None:

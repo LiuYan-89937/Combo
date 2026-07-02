@@ -30,12 +30,10 @@
     "run_agent_evolution",
     "resume_interrupt",
     "cancel_runtime_request",
-    "set_options",
     "shutdown"
   ],
   "event_types": [
     "runtime_ready",
-    "runtime_options_changed",
     "session_started",
     "session_switched",
     "sessions_listed",

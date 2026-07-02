@@ -6,7 +6,10 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from agent_factory.models import get_main_model, get_task_model
+from agent_factory.models import get_compression_model, get_main_model, get_task_model
+from agent_factory.models.usage import normalize_usage_metadata
+
+MODEL_MAX_INPUT_TOKENS_ENV = "AGENTFACTORY_MODEL_MAX_INPUT_TOKENS"
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +21,7 @@ class TokenCountResult:
 
 
 def context_window_tokens_from_env() -> int | None:
-    value = os.getenv("AGENTFACTORY_CONTEXT_WINDOW_TOKENS")
+    value = os.getenv(MODEL_MAX_INPUT_TOKENS_ENV)
     if not value:
         return None
     try:
@@ -33,13 +36,13 @@ def count_messages_tokens(
     *,
     services: Any | None = None,
     model: Any | None = None,
+    model_role: str | None = None,
     tools: list[Any] | None = None,
 ) -> TokenCountResult:
     selected_model = model
-    model_role: str | None = None
     if selected_model is None:
-        model_role = _model_role_from_services(services)
-        selected_model = _model_for_role(model_role)
+        model_role = model_role or _model_role_from_services(services)
+        selected_model = _model_for_role(model_role, services=services)
     if selected_model is None:
         return TokenCountResult(
             token_count=None,
@@ -78,10 +81,25 @@ def count_messages_tokens(
         return _count_error(exc, model_role=model_role)
 
 
-def count_text_tokens(text: str, *, services: Any | None = None, model: Any | None = None) -> TokenCountResult:
+def count_text_tokens(
+    text: str,
+    *,
+    services: Any | None = None,
+    model: Any | None = None,
+    model_role: str | None = None,
+) -> TokenCountResult:
     if not text:
-        return TokenCountResult(token_count=0, method="model_tokenizer", model_role=_model_role_from_services(services))
-    return count_messages_tokens([HumanMessage(content=text)], services=services, model=model)
+        return TokenCountResult(
+            token_count=0,
+            method="model_tokenizer",
+            model_role=model_role or _model_role_from_services(services),
+        )
+    return count_messages_tokens(
+        [HumanMessage(content=text)],
+        services=services,
+        model=model,
+        model_role=model_role,
+    )
 
 
 def context_window_payload(
@@ -115,43 +133,15 @@ def context_window_payload(
 
 
 def token_count_from_usage_metadata(usage: Any) -> int | None:
-    if not isinstance(usage, dict):
-        return None
-    for key in ("input_tokens", "prompt_tokens"):
-        value = usage.get(key)
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-    return None
+    return normalize_usage_metadata(usage).input_tokens
 
 
 def output_token_count_from_usage_metadata(usage: Any) -> int | None:
-    if not isinstance(usage, dict):
-        return None
-    for key in ("output_tokens", "completion_tokens"):
-        value = usage.get(key)
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-    return None
+    return normalize_usage_metadata(usage).output_tokens
 
 
 def cached_input_token_count_from_usage_metadata(usage: Any) -> int | None:
-    if not isinstance(usage, dict):
-        return None
-    for details_key in ("input_token_details", "prompt_tokens_details"):
-        details = usage.get(details_key)
-        if not isinstance(details, dict):
-            continue
-        for key in ("cache_read", "cached_tokens"):
-            value = details.get(key)
-            if isinstance(value, int):
-                return value
-            if isinstance(value, float):
-                return int(value)
-    return None
+    return normalize_usage_metadata(usage).cache_hit_tokens
 
 
 def _model_role_from_services(services: Any | None) -> str:
@@ -165,9 +155,17 @@ def _model_role_from_services(services: Any | None) -> str:
     return "main"
 
 
-def _model_for_role(role: str | None) -> Any | None:
+def _model_for_role(role: str | None, *, services: Any | None = None) -> Any | None:
+    service = getattr(services, "model_operation_service", None) if services is not None else None
+    resolver = getattr(service, "model_for_role", None)
+    if callable(resolver):
+        model = resolver(role)
+        if model is not None:
+            return model
     if role == "task":
         return get_task_model()
+    if role == "compression":
+        return get_compression_model()
     return get_main_model()
 
 

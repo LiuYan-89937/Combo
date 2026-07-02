@@ -28,12 +28,6 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.setModeCommand(mode))
   }
 
-  const setRuntimeOptions = (options: Record<string, any>) => {
-    const command = commands.setOptionsCommand(options)
-    transport.sendRuntimeCommand(command)
-    return command
-  }
-
   const sendMessage = (message: string, mode?: FactoryMode, attachments?: RuntimeAttachmentInput[]) => {
     const command = commands.sendMessageCommand({ message, mode, attachments })
     transport.sendRuntimeCommand(command)
@@ -97,7 +91,6 @@ export function useRuntimeCommands() {
     switchSession,
     newSession,
     setMode,
-    setRuntimeOptions,
     sendMessage,
     approveToolCall,
     denyToolCall,

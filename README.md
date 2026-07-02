@@ -102,57 +102,98 @@ cp .env.example .env
 
 ## 基础配置
 
-至少需要配置主模型：
+基础配置只保留用户需要直接理解和选择的模型项。任务模型、压缩模型可以和主模型不是同一家供应商；任务模型 provider/base URL/API key 留空时继承主模型，压缩模型留空时按任务模型、主模型顺序继承。
 
 ```bash
-AGENTFACTORY_LLM_PROVIDER=openai_compatible_chat
-AGENTFACTORY_OPENAI_BASE_URL=
-AGENTFACTORY_OPENAI_API_KEY=
-AGENTFACTORY_OPENAI_MODEL=
-```
+AGENTFACTORY_MODEL_PROVIDER=openai_compatible_chat
+AGENTFACTORY_MODEL_BASE_URL=
+AGENTFACTORY_MODEL_API_KEY=
+AGENTFACTORY_MAIN_MODEL=
 
-建议配置小任务模型和压缩模型：
-
-```bash
+AGENTFACTORY_TASK_MODEL_PROVIDER=
+AGENTFACTORY_TASK_MODEL_BASE_URL=
+AGENTFACTORY_TASK_MODEL_API_KEY=
 AGENTFACTORY_TASK_MODEL=
-AGENTFACTORY_COMPRESSION_BASE_URL=
-AGENTFACTORY_COMPRESSION_API_KEY=
+
+AGENTFACTORY_COMPRESSION_MODEL_PROVIDER=
+AGENTFACTORY_COMPRESSION_MODEL_BASE_URL=
+AGENTFACTORY_COMPRESSION_MODEL_API_KEY=
 AGENTFACTORY_COMPRESSION_MODEL=
-AGENTFACTORY_CONTEXT_WINDOW_TOKENS=1000000
-```
 
-工具审批策略可按环境调整：
-
-```bash
-AGENTFACTORY_TOOL_APPROVAL_MODE=standard
-AGENTFACTORY_TOOL_APPROVAL_LOW=
-AGENTFACTORY_TOOL_APPROVAL_MEDIUM=
-AGENTFACTORY_TOOL_APPROVAL_HIGH=
-```
-
-跨会话记忆语义检索需要 embedding：
-
-```bash
-AGENTFACTORY_MEMORY_SEMANTIC_INDEX_ENABLED=true
 AGENTFACTORY_EMBEDDING_PROVIDER=openai_compatible
 AGENTFACTORY_EMBEDDING_BASE_URL=
 AGENTFACTORY_EMBEDDING_API_KEY=
 AGENTFACTORY_EMBEDDING_MODEL=
-AGENTFACTORY_EMBEDDING_DIMS=1536
+AGENTFACTORY_EMBEDDING_DIMS=
+
+AGENTFACTORY_MAIN_MODEL_MULTIMODAL=false
+
+AGENTFACTORY_MODEL_REASONING=
+AGENTFACTORY_MODEL_REASONING_EFFORT=
+
+AGENTFACTORY_MODEL_COMPRESSION_TRIGGER_TOKENS=200000
+AGENTFACTORY_MODEL_TEMPERATURE=0.2
+AGENTFACTORY_MODEL_TIMEOUT_SECONDS=600
+AGENTFACTORY_MODEL_MAX_OUTPUT_TOKENS=8192
+AGENTFACTORY_MODEL_MAX_INPUT_TOKENS=1000000
 ```
 
-常用本地运行目录：
+### 模型协议与 Provider 适配
+
+后端模型层使用统一的 Factory Model Protocol：runtime 只识别规范化后的 message、tool、structured output、reasoning、multimodal 和 usage 语义；具体厂商字段由 provider adapter 映射。当前已经接入的是 OpenAI Chat Completions 兼容链路，后续原生 OpenAI Responses、多模态内容直传和网页端思考流会继续落在同一层。
+
+Provider 通过 `AGENTFACTORY_MODEL_PROVIDER` 配置；任务模型和压缩模型可分别通过 `AGENTFACTORY_TASK_MODEL_PROVIDER`、`AGENTFACTORY_COMPRESSION_MODEL_PROVIDER` 单独覆盖。
+
+| Provider | 配置值 | 入口格式 | 文本 | 工具调用 | 结构化输出 | 思考模式 | 原生图片/语音输入 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenAI Chat | `openai_chat` | OpenAI Chat Completions | 支持 | 支持 | `json_schema` / `json_mode` / `function_calling` | 当前 Chat adapter 不启用 | 取决于模型 |
+| 通用 OpenAI 兼容 | `openai_compatible_chat` | OpenAI-compatible Chat Completions | 支持 | 支持 | `json_mode` / `function_calling` | 不默认启用 | 取决于厂商与模型 |
+| DeepSeek | `deepseek` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `thinking` / `reasoning_content` | 当前不声明原生直传 |
+| 千问 / 百炼 | `qwen` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_schema` / `json_mode` / `function_calling` | `enable_thinking` / `thinking_budget` | 取决于 Qwen-VL / Omni 等模型 |
+| 智谱 / Z.ai GLM | `zhipu` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `thinking` / `reasoning_effort` / `reasoning_content` | 取决于模型 |
+| Kimi / Moonshot | `kimi` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_schema` / `json_mode` / `function_calling` | `thinking` / `reasoning_content` | 图片取决于模型 |
+| MiniMax | `minimax` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `thinking.adaptive` / `reasoning_split` | 图片取决于模型 |
+| 小米 MiMo | `mimo` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | `reasoning_content` 兼容链路 | 取决于模型 |
+| 腾讯混元 | `hunyuan` | OpenAI-compatible Chat Completions | 支持 | 取决于模型 | `json_mode` / `function_calling` | 当前不声明 | 图片取决于模型 |
+
+思考模式配置：
 
 ```bash
-AGENTFACTORY_SESSION_ROOT=.agentfactory/sessions
-AGENTFACTORY_CHECKPOINTER_BACKEND=sqlite
-AGENTFACTORY_CHECKPOINT_PATH=.agentfactory/checkpoints/factory.sqlite
-AGENTFACTORY_MEMORY_STORE_BACKEND=sqlite
-AGENTFACTORY_MEMORY_STORE_PATH=.agentfactory/memory/factory.sqlite
-AGENTFACTORY_SCHEDULER_STORE_PATH=.agentfactory/scheduler/factory.sqlite
+AGENTFACTORY_MODEL_REASONING=enabled
+AGENTFACTORY_MODEL_REASONING_EFFORT=high
 ```
 
-完整配置以 [.env.example](.env.example) 为准。
+打开思考模式时需要选择具备思考能力的 provider，例如 `deepseek`、`qwen`、`zhipu`、`kimi`、`minimax` 或 `mimo`；通用 provider 不会隐式猜测厂商能力。
+
+结构化输出配置：
+
+```bash
+AGENTFACTORY_MODEL_STRUCTURED_OUTPUT_METHOD=json_mode
+AGENTFACTORY_TASK_MODEL_STRUCTURED_OUTPUT_METHOD=
+AGENTFACTORY_COMPRESSION_MODEL_STRUCTURED_OUTPUT_METHOD=
+```
+
+如果配置的结构化输出模式不在当前 provider 能力清单内，runtime 会直接报错，而不是静默降级。
+
+Web 后端提供只读能力清单接口：`GET /api/model-pool/providers`。
+
+### 子 Agent 模型池
+
+`.env` 只配置工厂自身使用的闲聊、制造、进化、压缩和 embedding 模型。已发布子 Agent 不再继承工厂主模型；它们通过本地模型池选择运行模型。
+
+模型池保存在本地 SQLite，默认路径为 `.agentfactory/model_pool/factory.sqlite`。网页端「模型池」页面可以新增凭证和模型配置；API key 只写入本地数据库，接口响应只返回掩码和指纹。高级路径覆盖：
+
+```bash
+AGENTFACTORY_MODEL_POOL_STORE_PATH=.agentfactory/model_pool/factory.sqlite
+```
+
+制造 Agent 时会先分析任务所需能力，再调用 `model_pool_select` 从已启用模型配置中选择模型。生成的 AgentPackage 只在 `contracts/model.json` 写入 `model_contract.v1` 的 `profile_id` 绑定、选择来源、选择理由和能力需求，不写 `base_url`、`api_key` 或其他凭证。
+
+子 Agent 容器初始化时会把模型池数据库以只读方式挂载进容器，运行时按 `profile_id` 解析实际模型配置。模型池没有匹配项时，制造流程应要求用户先配置模型池，而不是静默回退到工厂模型。
+
+工具审批、运行目录、定时任务、MCP/SkillHUB、附件限制和子 Agent 容器超时都是高级选项。默认值已经内置，只有需要覆盖时才写入 `.env`。
+
+完整基础配置以 [.env.example](.env.example) 为准。
 
 ## 启动
 

@@ -122,7 +122,7 @@ class ModelOperationBindingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operation: Literal["chat", "tool_bound_chat", "structured_json"]
-    model_role: Literal["main", "task"] = "main"
+    model_role: Literal["main", "task", "compression"] = "main"
     output_schema: dict[str, Any] = Field(default_factory=dict)
     write_target: ModelOperationWriteTarget
     max_attempts: int = Field(default=5, ge=1)

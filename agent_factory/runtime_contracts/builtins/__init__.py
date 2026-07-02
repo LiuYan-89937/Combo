@@ -7,6 +7,7 @@ from agent_factory.runtime_contracts.builtins.builders import (
     KnowledgeContractBuilder,
     MemoryContractBuilder,
     ModelContractBuilder,
+    ModelContractV0Builder,
     NodeProviderContractBuilder,
     RenderContractBuilder,
     ResourcesContractBuilder,
@@ -44,6 +45,7 @@ from agent_factory.runtime_contracts.schema import (
     KnowledgeContract,
     MemoryContract,
     ModelContract,
+    ModelContractV0,
     NodeProviderContract,
     RenderContract,
     ResourcesContract,
@@ -106,6 +108,12 @@ def default_runtime_contract_registry(
     registry.register(
         contract_type="model",
         version="model_contract.v0",
+        model=ModelContractV0,
+        builder=ModelContractV0Builder(),
+    )
+    registry.register(
+        contract_type="model",
+        version="model_contract.v1",
         model=ModelContract,
         builder=ModelContractBuilder(),
     )

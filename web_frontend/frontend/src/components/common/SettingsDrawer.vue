@@ -45,93 +45,6 @@
           </div>
         </section>
 
-        <!-- 分组：运行时 -->
-        <section class="settings-group">
-          <header class="group-header">
-            <div class="group-icon" aria-hidden="true">
-              <n-icon size="18"><Terminal /></n-icon>
-            </div>
-            <div class="group-title-block">
-              <div class="group-title">{{ t('settings.groupRuntime') }}</div>
-              <div class="group-desc">{{ t('settings.groupRuntimeDesc') }}</div>
-            </div>
-          </header>
-
-          <div class="group-body">
-            <!-- 上下文窗口 -->
-            <div class="field-block">
-              <div class="field-block-head">
-                <label class="field-label">{{ t('settings.contextWindow') }}</label>
-                <n-tag
-                  size="small"
-                  :bordered="false"
-                  :type="contextSourceTagType"
-                  class="field-badge"
-                >
-                  {{ contextWindowSourceText }}
-                </n-tag>
-              </div>
-              <p class="field-hint">{{ t('settings.contextWindowHint') }}</p>
-              <div class="field-current">
-                <span class="field-current-label">{{ t('common.current') }}</span>
-                <span class="field-current-value">{{ contextWindowTokensText }}</span>
-              </div>
-              <n-input-number
-                v-model:value="contextWindowTokensDraft"
-                :min="1"
-                :precision="0"
-                clearable
-                :placeholder="t('settings.contextPlaceholder')"
-                class="field-input"
-              />
-              <div class="field-actions">
-                <n-button size="small" type="primary" @click="saveContextWindowTokens">
-                  {{ t('common.save') }}
-                </n-button>
-                <n-button size="small" @click="resetContextWindowTokens">
-                  {{ t('settings.useEnvDefault') }}
-                </n-button>
-              </div>
-            </div>
-
-            <div class="field-divider" aria-hidden="true"></div>
-
-            <!-- 环境变量覆盖 -->
-            <div class="field-block">
-              <div class="field-block-head">
-                <label class="field-label">{{ t('settings.envOverrides') }}</label>
-                <n-tag
-                  size="small"
-                  :bordered="false"
-                  :type="envOverrideCount > 0 ? 'info' : 'default'"
-                  class="field-badge"
-                >
-                  {{ envOverridesStatusText }}
-                </n-tag>
-              </div>
-              <p class="field-hint">{{ t('settings.envOverridesHint') }}</p>
-              <n-input
-                v-model:value="envOverridesDraft"
-                type="textarea"
-                :rows="6"
-                :placeholder="t('settings.envOverridesPlaceholder')"
-                class="field-input env-textarea"
-              />
-              <p v-if="envOverrideKeysText" class="field-meta">
-                {{ t('settings.envOverridesKeys', { keys: envOverrideKeysText }) }}
-              </p>
-              <div class="field-actions">
-                <n-button size="small" type="primary" @click="saveEnvOverrides">
-                  {{ t('common.save') }}
-                </n-button>
-                <n-button size="small" @click="resetEnvOverrides">
-                  {{ t('settings.resetEnvOverrides') }}
-                </n-button>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <!-- 页脚：关于 -->
         <footer class="settings-footer">
           <div class="footer-title">{{ t('settings.about') }}</div>
@@ -144,22 +57,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import {
-  NButton,
   NDrawer,
   NDrawerContent,
   NIcon,
-  NInput,
-  NInputNumber,
   NRadioButton,
   NRadioGroup,
-  NTag,
 } from 'naive-ui'
-import { ColorPalette, Terminal } from '@vicons/ionicons5'
-import { useCommand } from '@/composables/useCommand'
+import { ColorPalette } from '@vicons/ionicons5'
 import { useI18n } from '@/composables/useI18n'
-import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import type { Locale } from '@/i18n'
 import type { ThemeMode } from '@/stores/ui'
@@ -173,11 +80,7 @@ const emit = defineEmits<{
 }>()
 
 const uiStore = useUiStore()
-const runtimeStore = useRuntimeStore()
-const commands = useCommand()
 const { localeOptions, t } = useI18n()
-const contextWindowTokensDraft = ref<number | null>(null)
-const envOverridesDraft = ref('')
 
 const show = computed({
   get: () => props.show,
@@ -204,72 +107,6 @@ const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => 
   { label: t('settings.themeDark'), value: 'dark' },
   { label: t('settings.themeAuto'), value: 'auto' },
 ])
-
-const contextWindowTokensText = computed(() => {
-  const value = runtimeStore.runtimeOptions.context_window_tokens
-  return typeof value === 'number' ? new Intl.NumberFormat(locale.value).format(value) : t('common.unset')
-})
-
-const contextWindowSourceText = computed(() => {
-  const source = runtimeStore.runtimeOptions.context_window_tokens_source
-  const labels: Record<string, string> = {
-    env: t('settings.sourceEnv'),
-    web: t('settings.sourceWeb'),
-    web_env: t('settings.sourceWebEnv'),
-    unset: t('settings.sourceUnset'),
-  }
-  return labels[source] || source
-})
-
-const contextSourceTagType = computed<'default' | 'success' | 'info' | 'warning'>(() => {
-  const source = runtimeStore.runtimeOptions.context_window_tokens_source
-  if (source === 'web' || source === 'web_env') return 'info'
-  if (source === 'env') return 'success'
-  return 'default'
-})
-
-const envOverrideKeys = computed(() => runtimeStore.runtimeOptions.env_override_keys || [])
-const envOverrideCount = computed(() => runtimeStore.runtimeOptions.env_override_count || envOverrideKeys.value.length)
-
-const envOverridesStatusText = computed(() => {
-  return t('settings.envOverridesActive', { count: envOverrideCount.value })
-})
-
-const envOverrideKeysText = computed(() => envOverrideKeys.value.join(', '))
-
-function saveContextWindowTokens() {
-  commands.setRuntimeOptions({
-    context_window_tokens: contextWindowTokensDraft.value,
-  })
-}
-
-function resetContextWindowTokens() {
-  contextWindowTokensDraft.value = null
-  commands.setRuntimeOptions({
-    context_window_tokens: null,
-  })
-}
-
-function saveEnvOverrides() {
-  commands.setRuntimeOptions({
-    env_overrides: envOverridesDraft.value,
-  })
-}
-
-function resetEnvOverrides() {
-  envOverridesDraft.value = ''
-  commands.setRuntimeOptions({
-    env_overrides: {},
-  })
-}
-
-watch(
-  () => runtimeStore.runtimeOptions.context_window_tokens,
-  (value) => {
-    contextWindowTokensDraft.value = value
-  },
-  { immediate: true }
-)
 </script>
 
 <style scoped>

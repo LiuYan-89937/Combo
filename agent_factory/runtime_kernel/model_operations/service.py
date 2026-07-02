@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -20,12 +21,11 @@ from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
-    cached_input_token_count_from_usage_metadata,
     count_messages_tokens,
     context_window_payload,
-    output_token_count_from_usage_metadata,
     token_count_from_usage_metadata,
 )
+from agent_factory.models.usage import normalize_usage_metadata
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
 
@@ -37,9 +37,18 @@ class ModelOperationService:
     not decide graph routes, plan tools, approve tools, or execute tools.
     """
 
-    def __init__(self, *, role: ModelRole = "main", model: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        role: ModelRole = "main",
+        model: Any | None = None,
+        settings: Any | None = None,
+        models_by_role: Mapping[str, tuple[Any, Any]] | None = None,
+    ) -> None:
         self.model_role = role
         self._model = model
+        self._settings = settings
+        self._models_by_role = dict(models_by_role or {})
 
     def text(
         self,
@@ -48,6 +57,7 @@ class ModelOperationService:
         prompt_binding: dict[str, Any] | None = None,
         messages: list[Any] | None = None,
         emit_event=None,
+        model_role: ModelRole | None = None,
     ) -> ModelInvocationResult:
         return self.tool_bound_chat(
             state=state,
@@ -55,6 +65,7 @@ class ModelOperationService:
             messages=messages,
             tools=[],
             emit_event=emit_event,
+            model_role=model_role,
         )
 
     def tool_bound_chat(
@@ -67,8 +78,10 @@ class ModelOperationService:
         emit_event=None,
         services: Any | None = None,
         node_id: str | None = None,
+        model_role: ModelRole | None = None,
     ) -> ModelInvocationResult:
-        model, metadata = self._resolve_model()
+        model, metadata = self._resolve_model(model_role)
+        effective_model_role = str(metadata.get("model_role") or model_role or self.model_role)
         tool_list = list(tools or [])
         envelope = build_runtime_model_input(
             state=state,
@@ -82,6 +95,7 @@ class ModelOperationService:
             services=services,
             node_id=node_id,
             model=model,
+            model_role=effective_model_role,
             messages=envelope.messages,
             tools=tool_list,
             source="model_operation.before_call",
@@ -91,13 +105,13 @@ class ModelOperationService:
             services=services,
             node_id=node_id,
             operation="tool_bound_chat",
-            payload={"model_role": self.model_role, **envelope.diagnostics()},
+            payload={"model_role": effective_model_role, **envelope.diagnostics()},
         )
         stream_id = uuid4().hex
         _emit(
             emit_event,
             "model_call_started",
-            {"operation": "tool_bound_chat", "model_role": self.model_role, "stream_id": stream_id},
+            {"operation": "tool_bound_chat", "model_role": effective_model_role, "stream_id": stream_id},
         )
         try:
             response = _invoke_tool_bound_chat(
@@ -144,6 +158,7 @@ class ModelOperationService:
             services=services,
             node_id=node_id,
             response=response,
+            model_role=effective_model_role,
         )
         _finish_trace_span(
             state=state,
@@ -188,8 +203,10 @@ class ModelOperationService:
         operation_metadata: dict[str, Any] | None = None,
         services: Any | None = None,
         node_id: str | None = None,
+        model_role: ModelRole | None = None,
     ) -> BaseModel:
-        model, metadata = self._resolve_model()
+        model, metadata = self._resolve_model(model_role)
+        effective_model_role = str(metadata.get("model_role") or model_role or self.model_role)
         envelope = None
         if prebuilt_messages is not None:
             request_messages = list(prebuilt_messages)
@@ -238,6 +255,7 @@ class ModelOperationService:
                 services=services,
                 node_id=node_id,
                 model=model,
+                model_role=effective_model_role,
                 messages=request_messages,
                 tools=[],
                 source="model_operation.before_structured_call",
@@ -283,6 +301,7 @@ class ModelOperationService:
                     services=services,
                     node_id=node_id,
                     response=result,
+                    model_role=effective_model_role,
                 )
                 _finish_trace_span(
                     state=state,
@@ -342,17 +361,37 @@ class ModelOperationService:
         )
         raise RuntimeError(f"structured model operation failed after {attempts} attempts: {last_error}")
 
-    def _resolve_model(self) -> tuple[Any, dict[str, Any]]:
+    def _resolve_model(self, role: ModelRole | None = None) -> tuple[Any, dict[str, Any]]:
+        requested_role = role or self.model_role
+        if self._models_by_role:
+            item = self._models_by_role.get(requested_role)
+            if item is None:
+                raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
+            model, settings = item
+            metadata = settings.metadata() if hasattr(settings, "metadata") else {}
+            return model, {"model_role": requested_role, "model": "injected", **metadata}
         if self._model is not None:
-            return self._model, {"model_role": self.model_role, "model": "injected", "structured_output_method": ""}
-        model, settings = _configured_model_for_role(self.model_role)
+            if role is not None and role != self.model_role:
+                model, settings = _configured_model_for_role(role)
+                if model is None:
+                    raise RuntimeError(f"{role} model is not configured for AgentPackage runtime")
+                return model, {**settings.metadata()}
+            metadata = self._settings.metadata() if hasattr(self._settings, "metadata") else {}
+            return self._model, {"model_role": self.model_role, "model": "injected", **metadata}
+        model, settings = _configured_model_for_role(requested_role)
         if model is None:
-            raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
+            raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
         return model, {
-            "model_role": settings.role,
-            "model": settings.model or "",
-            "structured_output_method": settings.structured_output_method or "",
+            **settings.metadata(),
         }
+
+    def model_for_role(self, role: str | None = None) -> Any | None:
+        requested_role = role if role in {"main", "task", "compression"} else self.model_role
+        try:
+            model, _metadata = self._resolve_model(requested_role)  # type: ignore[arg-type]
+        except RuntimeError:
+            return None
+        return model
 
 
 def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
@@ -435,9 +474,10 @@ def _model_cache_metrics_payload(
     usage_metadata: dict[str, Any],
     input_diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
-    input_tokens = token_count_from_usage_metadata(usage_metadata)
-    output_tokens = output_token_count_from_usage_metadata(usage_metadata)
-    cached_input_tokens = cached_input_token_count_from_usage_metadata(usage_metadata)
+    normalized_usage = normalize_usage_metadata(usage_metadata)
+    input_tokens = normalized_usage.input_tokens
+    output_tokens = normalized_usage.output_tokens
+    cached_input_tokens = normalized_usage.cache_hit_tokens
     hit_ratio = None
     if input_tokens and cached_input_tokens is not None:
         hit_ratio = round(float(cached_input_tokens) / float(input_tokens), 6)
@@ -455,8 +495,11 @@ def _model_cache_metrics_payload(
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cached_input_tokens": cached_input_tokens,
+            "cache_miss_tokens": normalized_usage.cache_miss_tokens,
+            "reasoning_tokens": normalized_usage.reasoning_tokens,
+            "total_tokens": normalized_usage.total_tokens,
             "hit_ratio": hit_ratio,
-            "source": "usage_metadata.input_token_details.cache_read" if cached_input_tokens is not None else None,
+            "source": "normalized_provider_usage" if cached_input_tokens is not None else None,
         },
         "model_input": input_diagnostics,
     }
@@ -574,6 +617,23 @@ def _structured_config_tags(config_tags: list[str] | None) -> list[str]:
 
 def _effective_structured_method(*, requested: str | None, model_metadata: dict[str, Any]) -> str:
     method = str(requested or model_metadata.get("structured_output_method") or "").strip()
+    if not method:
+        method = str(
+            model_metadata.get("default_structured_output_method")
+            or _DEFAULT_STRUCTURED_METHOD
+        ).strip()
+    supported = {
+        str(item)
+        for item in (model_metadata.get("structured_output_methods") or [])
+        if str(item).strip()
+    }
+    if supported and method not in supported:
+        provider = str(model_metadata.get("provider") or "model")
+        supported_text = ", ".join(sorted(supported))
+        raise RuntimeError(
+            f"structured output method {method!r} is not supported by {provider}; "
+            f"supported methods: {supported_text}"
+        )
     return method or _DEFAULT_STRUCTURED_METHOD
 
 
@@ -642,6 +702,7 @@ def _emit_context_window(
     services: Any | None,
     node_id: str | None,
     model: Any,
+    model_role: str,
     messages: list[Any],
     tools: list[BaseTool],
     source: str,
@@ -649,7 +710,7 @@ def _emit_context_window(
     if services is None or node_id is None:
         return
     threshold = _compression_threshold(services=services, node_id=node_id)
-    result = count_messages_tokens(messages, services=services, model=model, tools=tools)
+    result = count_messages_tokens(messages, services=services, model=model, model_role=model_role, tools=tools)
     if result.token_count is None:
         return
     emit_context_event(
@@ -664,7 +725,7 @@ def _emit_context_window(
             compression_threshold_tokens=threshold,
             context_window_tokens=_context_window_tokens(services),
             error=result.error,
-            model_role=result.model_role or _model_role(services),
+            model_role=result.model_role or model_role,
             source=source,
         ),
     )
@@ -676,6 +737,7 @@ def _emit_provider_usage_context_window(
     services: Any | None,
     node_id: str | None,
     response: Any,
+    model_role: str,
 ) -> None:
     if services is None or node_id is None:
         return
@@ -693,7 +755,7 @@ def _emit_provider_usage_context_window(
             token_count_method="provider_usage",
             compression_threshold_tokens=_compression_threshold(services=services, node_id=node_id),
             context_window_tokens=_context_window_tokens(services),
-            model_role=_model_role(services),
+            model_role=model_role,
             source="model_operation.provider_usage",
         ),
     )

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
+from agent_factory.runtime_kernel.adapters.model import ModelRole
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
-from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.tooling.schema_compiler import compile_json_schema
@@ -30,7 +30,8 @@ class CognitiveStructuredNode:
             schema=schema,
             model_name=_model_name(context.node_id),
         )
-        service = _model_operation_service(context, str(binding_payload.get("model_role") or "main"))
+        model_role = _model_role_from_payload(binding_payload, default="main")
+        service = _model_operation_service(context)
         result = service.structured_json(
             output_model=compiled_schema.pydantic_model,
             state=state,
@@ -42,6 +43,7 @@ class CognitiveStructuredNode:
             operation_metadata={"node_id": context.node_id},
             services=context.services,
             node_id=context.node_id,
+            model_role=model_role,
         )
         output = result.model_dump(mode="json")
         compiled_schema.validate(output)
@@ -83,13 +85,18 @@ def _prompt_binding_payload(context: NodeExecutionContext, prompt_id: Any) -> di
     return None
 
 
-def _model_operation_service(context: NodeExecutionContext, model_role: str):
+def _model_operation_service(context: NodeExecutionContext):
     service = context.services.model_operation_service
     if service is None:
         raise RuntimeKernelError("cognitive.structured requires model_operation_service")
-    if getattr(service, "model_role", model_role) == model_role:
-        return service
-    return ModelOperationService(role=model_role)  # type: ignore[arg-type]
+    return service
+
+
+def _model_role_from_payload(payload: dict[str, Any], *, default: ModelRole) -> ModelRole:
+    value = str(payload.get("model_role") or default).strip()
+    if value not in {"main", "task", "compression"}:
+        raise RuntimeKernelError(f"unsupported model_operation.model_role: {value}")
+    return cast(ModelRole, value)
 
 
 def _write_output_patch(

@@ -49,10 +49,6 @@ export function setModeCommand(mode: FactoryMode): FactoryFrontendCommand {
   return createCommand('set_mode', { mode })
 }
 
-export function setOptionsCommand(options: Record<string, any>): FactoryFrontendCommand {
-  return createCommand('set_options', { options })
-}
-
 // ============= Message Commands =============
 
 export interface SendMessageOptions {

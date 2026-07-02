@@ -31,13 +31,19 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 
 ## Manufacturing Protocol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
-2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
-3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
+2. Read `.factory/task_analysis.json` and identify model requirements before writing `contracts/model.json`.
+3. Call `model_pool_select` with the model requirements. If the result is blocked, ask the user to configure a matching model pool profile; do not silently fall back to the factory model.
+4. Write model bindings only through `create_agent_authoring(action="configure_model_bindings", bindings=...)`.
+5. Read the current target package files before editing. Preserve unrelated valid scaffold content.
+6. If the requested capability does not affect dependencies or sandbox, leave those files as-is and move to the next useful focus yourself.
+7. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
+8. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- Leave default model/dependency/sandbox contracts as-is when the request does not require changes.
+- `contracts/model.json` uses `model_contract.v1`. New user AgentPackages must bind models from the local model pool.
+- Store only `profile_id`, `selection_source`, `reason`, `required_capabilities`, and safe per-package overrides in `contracts/model.json`.
+- Do not write provider `base_url`, `api_key`, account ids, or credentials into the AgentPackage.
+- Leave dependency/sandbox contracts as-is when the request does not require changes.
 - Do not invent provider credentials, account ids, API keys, endpoints, or local paths.
 - Declare dependencies and sandbox resources only for capabilities that are actually implemented in package files.
 - Every non-stdlib, non-package-local, non-`agent_factory` Python import used by package tools must be represented in `contracts/dependencies.json` `config.python_requirements`.

@@ -32,6 +32,9 @@ def analyze_create_agent_task(*, user_input: str, model: Any | None = None) -> C
                     "Use the pattern catalog semantics, not business-specific keyword rules. "
                     "Select plan_and_execute when the produced Agent should maintain and revise a dynamic per-run plan "
                     "as part of normal runtime behavior. Select react_agent when a direct answer/tool loop is enough. "
+                    "Also infer model_requirements for the produced AgentPackage. Include at least a main chat model "
+                    "requirement, and add task/compression requirements only when the produced agent needs "
+                    "a distinct role. Requirements describe capabilities, not provider names or secrets. "
                     "Do not write concrete plan steps; this is only manufacturing task analysis."
                 )
             ),

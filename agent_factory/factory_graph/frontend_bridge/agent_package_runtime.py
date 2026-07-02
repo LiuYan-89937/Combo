@@ -123,8 +123,6 @@ class AgentPackageRuntimeManager:
         self._mcp_gateways = HostMCPGatewayManager()
         self._skillhub_gateways = HostSkillHubGatewayManager()
         self._emit = emit
-        self._context_window_tokens: int | None = None
-        self._env_overrides: dict[str, str] = {}
 
     def set_emit(self, emit: Emit | None) -> None:
         self._emit = emit
@@ -132,19 +130,6 @@ class AgentPackageRuntimeManager:
             handle.set_emit(emit)
         for handle in self._system_handles.values():
             handle.set_emit(emit)
-
-    def set_context_window_tokens(self, value: int | None) -> None:
-        self._context_window_tokens = value if isinstance(value, int) and value > 0 else None
-        resources = self._runtime_resource_overrides()
-        for handle in self._system_handles.values():
-            handle.set_runtime_resources_override(resources)
-
-    def set_env_overrides(self, overrides: dict[str, str] | None) -> None:
-        next_overrides = dict(overrides or {})
-        if next_overrides == self._env_overrides:
-            return
-        self._env_overrides = next_overrides
-        self.close_all()
 
     def list_packages(self) -> list[dict[str, Any]]:
         self.package_root.mkdir(parents=True, exist_ok=True)
@@ -736,6 +721,7 @@ class AgentPackageRuntimeManager:
                 "tool_count": len(package.assembly_spec.tools),
                 "session_count": len(sessions),
                 "sandbox": sandbox,
+                "model_contract": _model_contract_summary(package),
                 "extensions": _extensions_summary(package_id, package=package),
                 **detail,
             }
@@ -748,6 +734,7 @@ class AgentPackageRuntimeManager:
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "error": f"{type(exc).__name__}: {exc}",
                 "sandbox": {"status": "unknown"},
+                "model_contract": {"version": "", "bindings": {}},
                 "extensions": _extensions_summary(package_id),
                 "tools": [],
                 "mcp_servers": [],
@@ -964,7 +951,6 @@ class AgentPackageRuntimeManager:
             extension_root=extension_root,
             mcp_gateway_url=mcp_gateway.docker_url if mcp_gateway is not None else None,
             skillhub_gateway_url=skillhub_gateway.docker_url,
-            env_overrides=self._runtime_env_overrides(),
         )
         handle = AgentRuntimeContainerHandle(
             package_id=package_id,
@@ -1020,7 +1006,6 @@ class AgentPackageRuntimeManager:
             producer_type="factory_runtime" if _is_system_package(package) else "agent_runtime_host",
             emit=self._emit,
         )
-        handle.set_runtime_resources_override(self._runtime_resource_overrides())
         handle.startup_payload = {
             "status": "running",
             "backend": "host",
@@ -1032,17 +1017,6 @@ class AgentPackageRuntimeManager:
         }
         self._system_handles[package_id] = handle
         return handle
-
-    def _runtime_env_overrides(self) -> dict[str, str]:
-        result = dict(self._env_overrides)
-        if self._context_window_tokens is not None:
-            result["AGENTFACTORY_CONTEXT_WINDOW_TOKENS"] = str(self._context_window_tokens)
-        return result
-
-    def _runtime_resource_overrides(self) -> dict[str, Any]:
-        if self._context_window_tokens is None:
-            return {}
-        return {"context_window_tokens": self._context_window_tokens}
 
     def _has_reusable_container(self, package_id: str, package: LoadedAgentPackage) -> bool:
         existing = self._containers.get(package_id)
@@ -1359,6 +1333,29 @@ def _sandbox_summary(contract: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "contract_ready" if contract else "missing_contract",
         "backend": backend or "unknown",
+    }
+
+
+def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
+    contract = package.contracts.get("model") if isinstance(package.contracts, dict) else None
+    if not isinstance(contract, dict):
+        return {"version": "", "bindings": {}}
+    config = contract.get("config") if isinstance(contract.get("config"), dict) else {}
+    bindings = config.get("bindings") if isinstance(config.get("bindings"), dict) else {}
+    public_bindings: dict[str, dict[str, Any]] = {}
+    for role, binding in bindings.items():
+        if not isinstance(binding, dict):
+            continue
+        public_bindings[str(role)] = {
+            "profile_id": str(binding.get("profile_id") or ""),
+            "selection_source": str(binding.get("selection_source") or ""),
+            "reason": str(binding.get("reason") or ""),
+            "required_capabilities": binding.get("required_capabilities") if isinstance(binding.get("required_capabilities"), dict) else {},
+            "overrides": binding.get("overrides") if isinstance(binding.get("overrides"), dict) else {},
+        }
+    return {
+        "version": str(contract.get("version") or ""),
+        "bindings": public_bindings,
     }
 
 

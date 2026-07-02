@@ -23,6 +23,7 @@ from agent_factory.runtime_contracts.schema import (
     MemoryContract,
     DependenciesContract,
     ModelContract,
+    ModelContractV0,
     NodeProviderContract,
     RenderContract,
     ResourcesContract,
@@ -35,6 +36,7 @@ from agent_factory.runtime_contracts.schema import (
     TraceContract,
 )
 from agent_factory.artifact_system import ArtifactStore, ReportStore
+from agent_factory.model_pool import resolve_chat_model_profile
 from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
@@ -383,11 +385,11 @@ class KnowledgeContractBuilder:
         )
 
 
-class ModelContractBuilder:
+class ModelContractV0Builder:
     contract_type = "model"
     contract_version = "model_contract.v0"
 
-    def build(self, contract: ModelContract, context: RuntimeBuildContext) -> RuntimeContribution:
+    def build(self, contract: ModelContractV0, context: RuntimeBuildContext) -> RuntimeContribution:
         if contract.config.source != "factory_runtime_env":
             raise ValueError(f"unsupported model contract source: {contract.config.source}")
         return RuntimeContribution(
@@ -395,6 +397,52 @@ class ModelContractBuilder:
                 "model_service": LangChainModelServiceAdapter(role=contract.config.role),
                 "model_operation_service": ModelOperationService(role=contract.config.role),
             }
+        )
+
+
+class ModelContractBuilder:
+    contract_type = "model"
+    contract_version = "model_contract.v1"
+
+    def build(self, contract: ModelContract, context: RuntimeBuildContext) -> RuntimeContribution:
+        del context
+        main_binding = contract.config.bindings.get("main")
+        if main_binding is None:
+            raise ValueError("model_contract.v1 requires config.bindings.main")
+        resolved_profiles = {
+            role: resolve_chat_model_profile(binding, role=role)
+            for role, binding in contract.config.bindings.items()
+        }
+        resolved_main = resolved_profiles["main"]
+        models_by_role = {
+            role: (resolved.model, resolved.settings)
+            for role, resolved in resolved_profiles.items()
+        }
+        return RuntimeContribution(
+            services={
+                "model_service": LangChainModelServiceAdapter(
+                    role="main",
+                    model=resolved_main.model,
+                    settings=resolved_main.settings,
+                ),
+                "model_operation_service": ModelOperationService(
+                    role="main",
+                    models_by_role=models_by_role,
+                ),
+            },
+            diagnostics=[
+                RuntimeDiagnostic(
+                    where="model.runtime",
+                    level="info",
+                    message="model pool bindings resolved",
+                    details={
+                        "profile_ids_by_role": {
+                            role: resolved.profile_id
+                            for role, resolved in resolved_profiles.items()
+                        },
+                    },
+                )
+            ],
         )
 
 

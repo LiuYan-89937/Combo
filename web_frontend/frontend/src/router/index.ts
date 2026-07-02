@@ -52,6 +52,11 @@ const routes: RouteRecordRaw[] = [
     name: 'Extensions',
     component: () => import('@/views/ExtensionsView.vue'),
   },
+  {
+    path: '/model-pool',
+    name: 'ModelPool',
+    component: () => import('@/views/ModelPoolView.vue'),
+  },
 ]
 
 const router = createRouter({

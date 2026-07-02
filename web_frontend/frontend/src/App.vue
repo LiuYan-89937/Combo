@@ -1,5 +1,10 @@
 <template>
-  <n-config-provider :theme="naiveTheme" :theme-overrides="themeOverrides">
+  <n-config-provider
+    :theme="naiveTheme"
+    :theme-overrides="themeOverrides"
+    :locale="naiveLocale"
+    :date-locale="naiveDateLocale"
+  >
     <n-message-provider>
       <n-notification-provider>
         <n-dialog-provider>
@@ -15,7 +20,7 @@
 <script setup lang="ts">
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
-import { darkTheme, type GlobalThemeOverrides } from 'naive-ui'
+import { darkTheme, dateEnUS, dateZhCN, enUS, zhCN, type GlobalThemeOverrides } from 'naive-ui'
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
@@ -24,12 +29,14 @@ import { applyPaletteToRoot } from '@/theme/cssVariables'
 import AppContent from '@/layouts/AppContent.vue'
 
 const route = useRoute()
-const { t } = useI18n()
+const { locale, t } = useI18n()
 const uiStore = useUiStore()
 
 const isDark = computed(() => uiStore.actualTheme === 'dark')
 const palette = computed(() => getPalette(isDark.value))
 const naiveTheme = computed(() => (isDark.value ? darkTheme : null))
+const naiveLocale = computed(() => (locale.value === 'zh-CN' ? zhCN : enUS))
+const naiveDateLocale = computed(() => (locale.value === 'zh-CN' ? dateZhCN : dateEnUS))
 const themeOverrides = computed<GlobalThemeOverrides>(() => createThemeOverrides(palette.value))
 
 // 主题变化时同步注入 CSS 变量到 :root，并给 <html> 打上主题标记

@@ -17,6 +17,7 @@ from agent_factory.runtime_contracts.schema import (
     AgentIdentitySpec,
     AgentPackageManifest,
     DependenciesContract,
+    ModelContract,
     ResourceDescriptor,
     ResourcesContract,
     SchedulerSeedContract,
@@ -34,6 +35,7 @@ DEFAULT_CASUAL_REACT_TOOL_IDS = ("glob", "ls", "read")
 DEFAULT_EXECUTOR_READ_TOOL_IDS = ("glob", "ls", "read")
 DEFAULT_EXECUTOR_FALLBACK_TOOL_IDS = ("bash", "write", "edit")
 CREATE_AGENT_AUTHORING_ACTIONS = {
+    "configure_model_bindings",
     "configure_dependencies",
     "reset_contract",
     "materialize_mcp_inheritance",
@@ -115,6 +117,51 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "initial_state": {"type": "object", "additionalProperties": True},
                 "writable_node_ids": {"type": "array", "items": {"type": "string"}},
                 "contract_key": {"type": "string", "enum": sorted(RESETTABLE_CONTRACT_KEYS)},
+                "bindings": {
+                    "type": "object",
+                    "description": "Model pool profile bindings keyed by runtime role. Only profile ids and selection metadata are allowed.",
+                    "properties": {
+                        role: {
+                            "type": "object",
+                            "properties": {
+                                "profile_id": {"type": "string"},
+                                "selection_source": {"type": "string", "enum": ["auto", "manual"]},
+                                "reason": {"type": "string"},
+                                "required_capabilities": {"type": "object", "additionalProperties": True},
+                                "overrides": {
+                                    "type": "object",
+                                    "properties": {
+                                        "temperature": {"type": "number", "minimum": 0},
+                                        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+                                        "max_output_tokens": {"type": "integer", "minimum": 1},
+                                        "max_input_tokens": {"type": "integer", "minimum": 1},
+                                        "multimodal": {"type": "boolean"},
+                                        "structured_output_method": {
+                                            "type": "string",
+                                            "enum": ["function_calling", "json_mode", "json_schema"],
+                                        },
+                                        "reasoning": {
+                                            "type": "object",
+                                            "properties": {
+                                                "enabled": {"type": "boolean"},
+                                                "effort": {"type": "string"},
+                                                "summary": {"type": "string"},
+                                                "budget_tokens": {"type": "integer", "minimum": 1},
+                                                "send_history": {"type": "boolean"},
+                                            },
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "required": ["profile_id"],
+                            "additionalProperties": False,
+                        }
+                        for role in ["main", "task", "compression"]
+                    },
+                    "additionalProperties": False,
+                },
             },
             "required": ["action"],
             "allOf": [
@@ -175,6 +222,10 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     "then": {"required": ["state_namespace", "state_schema", "initial_state", "writable_node_ids"]},
                 },
                 {"if": {"properties": {"action": {"const": "reset_contract"}}}, "then": {"required": ["contract_key"]}},
+                {
+                    "if": {"properties": {"action": {"const": "configure_model_bindings"}}},
+                    "then": {"required": ["bindings"]},
+                },
             ],
             "additionalProperties": False,
         },
@@ -204,6 +255,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     _assert_evolution_action_allowed(action, resources)
     if action == "set_identity":
         result = _set_identity(workspace, arguments)
+    elif action == "configure_model_bindings":
+        result = _configure_model_bindings(workspace, arguments)
     elif action == "configure_pattern_assembly":
         result = _configure_pattern_assembly(workspace, arguments)
     elif action == "upsert_package_tool":
@@ -442,6 +495,27 @@ def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str
         ["contracts/dependencies.json"],
         "Updated package dependency contract.",
         written={"dependencies": dependencies_payload.get("config", {})},
+    )
+
+
+def _configure_model_bindings(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
+    bindings = _required_dict(arguments, "bindings")
+    contract = ModelContract.model_validate(
+        {
+            "type": "model",
+            "version": "model_contract.v1",
+            "enabled": True,
+            "config": {"bindings": bindings},
+        }
+    )
+    payload = contract.model_dump(mode="json")
+    path = workspace.root / "contracts" / "model.json"
+    _write_json(path, payload)
+    return _result(
+        "configure_model_bindings",
+        ["contracts/model.json"],
+        "Updated model pool profile bindings.",
+        written={"model": payload.get("config", {})},
     )
 
 

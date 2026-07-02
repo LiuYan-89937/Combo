@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -22,13 +23,26 @@ ContextCandidateKind = Literal[
     "trace",
 ]
 ContextEventStatus = Literal["started", "completed", "failed", "skipped"]
+MODEL_COMPRESSION_TRIGGER_TOKENS_ENV = "AGENTFACTORY_MODEL_COMPRESSION_TRIGGER_TOKENS"
+DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD = 200000
+
+
+def _compression_trigger_token_threshold_from_env() -> int:
+    value = os.getenv(MODEL_COMPRESSION_TRIGGER_TOKENS_ENV)
+    if not value:
+        return DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD
+    try:
+        parsed = int(value)
+    except ValueError:
+        return DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD
+    return parsed if parsed >= 1000 else DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD
 
 
 class CompressionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    trigger_token_threshold: int = Field(default=200000, ge=1000)
+    trigger_token_threshold: int = Field(default_factory=_compression_trigger_token_threshold_from_env, ge=1000)
     keep_recent_messages: int = Field(default=12, ge=2, le=128)
 
 
