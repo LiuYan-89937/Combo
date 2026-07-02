@@ -1,32 +1,32 @@
 <template>
   <n-modal v-model:show="show" preset="card" :title="modalTitle" style="width: 600px">
     <n-form ref="formRef" :model="formData" :rules="rules">
-      <n-form-item label="名称" path="display_name">
-        <n-input v-model:value="formData.display_name" placeholder="服务器名称" />
+      <n-form-item :label="t('common.name')" path="display_name">
+        <n-input v-model:value="formData.display_name" :placeholder="t('extensions.serverName')" />
       </n-form-item>
 
-      <n-form-item label="描述">
+      <n-form-item :label="t('common.description')">
         <n-input
           v-model:value="formData.description"
           type="textarea"
           :rows="2"
-          placeholder="这个 MCP 服务器提供的能力"
+          :placeholder="t('extensions.serverDescriptionPlaceholder')"
         />
       </n-form-item>
 
-      <n-form-item label="命令" path="command">
+      <n-form-item :label="t('extensions.command')" path="command">
         <n-input v-model:value="formData.command" placeholder="node" />
       </n-form-item>
 
-      <n-form-item label="参数">
+      <n-form-item :label="t('extensions.arguments')">
         <n-input v-model:value="formData.args" placeholder="server.js" />
       </n-form-item>
 
-      <n-form-item label="工作目录">
+      <n-form-item :label="t('extensions.cwd')">
         <n-input v-model:value="formData.cwd" placeholder="/path/to/server" />
       </n-form-item>
 
-      <n-form-item label="环境变量">
+      <n-form-item :label="t('extensions.env')">
         <n-input
           v-model:value="formData.env"
           type="textarea"
@@ -35,18 +35,18 @@
         />
       </n-form-item>
 
-      <n-form-item label="超时（秒）">
+      <n-form-item :label="t('extensions.timeoutSeconds')">
         <n-input-number v-model:value="formData.timeout_seconds" :min="1" :max="300" />
       </n-form-item>
 
-      <n-form-item label="启用">
+      <n-form-item :label="t('scheduler.enabled')">
         <n-switch v-model:value="formData.enabled" />
       </n-form-item>
     </n-form>
 
     <template #footer>
       <n-space justify="end">
-        <n-button @click="show = false">取消</n-button>
+        <n-button @click="show = false">{{ t('common.cancel') }}</n-button>
         <n-button type="primary" @click="handleSubmit">{{ submitText }}</n-button>
       </n-space>
     </template>
@@ -59,6 +59,7 @@ import { NModal, NForm, NFormItem, NInput, NInputNumber, NSpace, NButton, NSwitc
 import type { FormInst, FormRules } from 'naive-ui'
 import type { McpServerConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
+import { useI18n } from '@/composables/useI18n'
 
 const props = defineProps<{
   show: boolean
@@ -87,14 +88,15 @@ interface McpFormData {
 }
 
 const formRef = ref<FormInst | null>(null)
-const modalTitle = computed(() => (props.item ? '编辑 MCP 服务器' : '添加 MCP 服务器'))
-const submitText = computed(() => (props.item ? '保存' : '添加'))
+const { t } = useI18n()
+const modalTitle = computed(() => (props.item ? t('extensions.mcpEditTitle') : t('extensions.mcpAddTitle')))
+const submitText = computed(() => (props.item ? t('common.save') : t('common.add')))
 const formData = ref<McpFormData>(emptyForm())
 
-const rules: FormRules = {
-  display_name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  command: [{ required: true, message: '请输入启动命令', trigger: 'blur' }],
-}
+const rules = computed<FormRules>(() => ({
+  display_name: [{ required: true, message: t('extensions.validateName'), trigger: 'blur' }],
+  command: [{ required: true, message: t('extensions.validateCommand'), trigger: 'blur' }],
+}))
 
 function emptyForm(): McpFormData {
   return {

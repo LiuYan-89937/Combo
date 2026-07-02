@@ -7,6 +7,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import {
   detectBrowserLocale,
+  localeStorageKey,
   normalizeLocale,
   type Locale,
 } from '@/i18n'
@@ -14,8 +15,15 @@ import {
 export type ThemeMode = 'light' | 'dark' | 'auto'
 export type RightSidebarTab = 'workspace' | 'status' | 'sessions' | 'plan'
 
+export const RIGHT_SIDEBAR_WIDTH = {
+  default: 320,
+  min: 280,
+  max: 760,
+} as const
+
 const STORAGE_KEYS = {
-  locale: 'fast-agent-factory.locale',
+  locale: localeStorageKey,
+  rightSidebarWidth: 'fast-agent-factory.rightSidebarWidth',
 } as const
 
 function readStoredLocale(): Locale {
@@ -29,6 +37,17 @@ function writeStorage(key: string, value: string): void {
   window.localStorage.setItem(key, value)
 }
 
+function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  if (typeof window === 'undefined') return fallback
+  const stored = Number(window.localStorage.getItem(key))
+  if (!Number.isFinite(stored)) return fallback
+  return clampNumber(stored, min, max)
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
 export const useUiStore = defineStore('ui', () => {
   // ========== 主题 ==========
   const themeMode = ref<ThemeMode>('light')
@@ -39,7 +58,14 @@ export const useUiStore = defineStore('ui', () => {
   const leftSidebarCollapsed = ref(false)
   const rightSidebarCollapsed = ref(false)
   const leftSidebarWidth = ref(280)
-  const rightSidebarWidth = ref(320)
+  const rightSidebarWidth = ref(
+    readStoredNumber(
+      STORAGE_KEYS.rightSidebarWidth,
+      RIGHT_SIDEBAR_WIDTH.default,
+      RIGHT_SIDEBAR_WIDTH.min,
+      RIGHT_SIDEBAR_WIDTH.max,
+    )
+  )
   const activeRightSidebarTab = ref<RightSidebarTab>('workspace')
 
   // ========== 弹窗/抽屉 ==========
@@ -124,6 +150,16 @@ export const useUiStore = defineStore('ui', () => {
     activeRightSidebarTab.value = tab
   }
 
+  function setRightSidebarWidth(width: number, maxWidth = RIGHT_SIDEBAR_WIDTH.max): void {
+    const boundedMax = Math.max(
+      RIGHT_SIDEBAR_WIDTH.min,
+      Math.min(maxWidth, RIGHT_SIDEBAR_WIDTH.max),
+    )
+    const nextWidth = Math.round(clampNumber(width, RIGHT_SIDEBAR_WIDTH.min, boundedMax))
+    rightSidebarWidth.value = nextWidth
+    writeStorage(STORAGE_KEYS.rightSidebarWidth, String(nextWidth))
+  }
+
   function setThemeMode(mode: ThemeMode): void {
     themeMode.value = mode
     if (mode !== 'auto') {
@@ -179,6 +215,7 @@ export const useUiStore = defineStore('ui', () => {
     toggleRightSidebar,
     openRightSidebar,
     setRightSidebarTab,
+    setRightSidebarWidth,
     setThemeMode,
     setLocale,
     toggleSettingsDrawer,

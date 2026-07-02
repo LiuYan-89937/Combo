@@ -5,7 +5,8 @@ import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
-import type { FactoryMode } from '@/types/protocol'
+import { useI18n } from '@/composables/useI18n'
+import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
 
 export function useFactoryConversation() {
   const route = useRoute()
@@ -14,6 +15,7 @@ export function useFactoryConversation() {
   const uiStore = useUiStore()
   const workspaceStore = useWorkspaceStore()
   const commands = useCommand()
+  const { t } = useI18n()
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
   const isManufacturingRoute = computed(() => route.name === 'Manufacturing')
@@ -25,14 +27,14 @@ export function useFactoryConversation() {
   })
   const activeChatPackageTitle = computed(() => {
     const pkg = agentStore.activeChatPackage
-    return pkg?.agent_name || pkg?.name || '未命名 Agent'
+    return pkg?.agent_name || pkg?.name || t('common.unnamedAgent')
   })
   const selectedEvolutionPackageId = computed(() => (
     isEvolutionRoute.value ? agentStore.selectedPackageId : null
   ))
   const selectedEvolutionPackageTitle = computed(() => {
     const pkg = agentStore.selectedPackage
-    return pkg?.agent_name || pkg?.name || '当前 Agent'
+    return pkg?.agent_name || pkg?.name || t('common.current')
   })
   const evolutionPackageOptions = computed(() => agentStore.agentPackages.map((pkg) => ({
     label: pkg.agent_name || pkg.name || pkg.package_id,
@@ -40,30 +42,30 @@ export function useFactoryConversation() {
   })))
   const inputPlaceholder = computed(() => (
     isAgentChatActive.value
-      ? `向 ${activeChatPackageTitle.value} 发送消息...`
+      ? t('factory.sendToAgentPlaceholder', { name: activeChatPackageTitle.value })
       : currentFactoryMessageMode.value === 'create_agent'
-        ? '描述要制造的 Agent...'
+        ? t('factory.createAgentPlaceholder')
         : currentFactoryMessageMode.value === 'evolve_agent'
           ? selectedEvolutionPackageId.value
-            ? `描述对 ${selectedEvolutionPackageTitle.value} 的进化方向...`
-            : '先选择要进化的 Agent 包'
-          : '输入消息...'
+            ? t('factory.evolveAgentPlaceholder', { name: selectedEvolutionPackageTitle.value })
+            : t('factory.selectEvolutionFirst')
+          : t('chat.inputPlaceholder')
   ))
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
   ))
   const emptyDescription = computed(() => {
-    if (isEvolutionRoute.value) return selectedEvolutionPackageId.value ? '开始进化对话' : '选择进化对象'
-    if (isManufacturingRoute.value) return '开始制造对话'
-    return '开始对话'
+    if (isEvolutionRoute.value) return selectedEvolutionPackageId.value ? t('factory.emptyEvolutionReady') : t('factory.emptyEvolutionSelect')
+    if (isManufacturingRoute.value) return t('factory.emptyManufacturing')
+    return t('factory.emptyChat')
   })
   const emptyHint = computed(() => {
     if (isEvolutionRoute.value) {
       return selectedEvolutionPackageId.value
-        ? '在下方描述这次要进化的方向'
-        : '先从上方选择一个已发布 Agent 包'
+        ? t('factory.emptyEvolutionHint')
+        : t('factory.emptyEvolutionSelectHint')
     }
-    return '在下方输入框输入消息开始对话'
+    return t('factory.emptyChatHint')
   })
 
   function handleEvolutionPackageSelect(packageId: string | null) {
@@ -76,16 +78,18 @@ export function useFactoryConversation() {
     void commands.selectAgentPackage(packageId, 'evolution')
   }
 
-  function sendMessage(message: string, attachments: any[]): boolean {
+  function sendMessage(message: string, attachments: RuntimeAttachmentInput[]): boolean {
+    const payloadAttachments = attachments.length > 0 ? attachments : undefined
+    const visibleAttachments = attachmentViews(attachments)
     const packageId = agentStore.activeChatPackageId
     if (packageId) {
       const agentSessionId = agentStore.selectedSessionId || undefined
-      const command = commands.sendAgentPackageMessage(packageId, message, agentSessionId)
+      const command = commands.sendAgentPackageMessage(packageId, message, agentSessionId, payloadAttachments)
       runtimeStore.addUserMessage(message, command.request_id, {
         mode: 'agent_package',
         package_id: packageId,
         agent_session_id: agentSessionId || null,
-      })
+      }, visibleAttachments)
       return true
     }
 
@@ -95,28 +99,28 @@ export function useFactoryConversation() {
       if (!evolutionPackageId) {
         uiStore.addNotification({
           type: 'warning',
-          title: '请选择进化对象',
-          message: '进化前需要先选择一个已发布 Agent 包。',
+          title: t('factory.selectEvolutionNotificationTitle'),
+          message: t('factory.selectEvolutionNotificationMessage'),
           duration: 3000,
         })
         return false
       }
-      const command = commands.runAgentEvolution(evolutionPackageId, message)
+      const command = commands.runAgentEvolution(evolutionPackageId, message, payloadAttachments)
       runtimeStore.addUserMessage(message, command.request_id, {
         mode,
         package_id: evolutionPackageId,
-      })
+      }, visibleAttachments)
       return true
     }
 
     const command = runtimeStore.isAwaitingUserInputInterrupt
       ? commands.answerInterrupt(message)
-      : commands.sendMessage(message, mode, attachments.length > 0 ? attachments : undefined)
+      : commands.sendMessage(message, mode, payloadAttachments)
     runtimeStore.addUserMessage(message, command.request_id, {
       mode,
       package_id: mode === 'evolve_agent' ? selectedEvolutionPackageId.value : undefined,
       interrupt_resume: runtimeStore.isAwaitingUserInputInterrupt,
-    })
+    }, runtimeStore.isAwaitingUserInputInterrupt ? [] : visibleAttachments)
     return true
   }
 
@@ -169,4 +173,13 @@ export function useFactoryConversation() {
     handleEvolutionPackageSelect,
     sendMessage,
   }
+}
+
+function attachmentViews(attachments: RuntimeAttachmentInput[]): TranscriptAttachmentView[] {
+  return attachments.map((attachment) => ({
+    kind: attachment.kind,
+    name: attachment.name,
+    source_kind: attachment.source_kind,
+    mime_type: attachment.mime_type,
+  }))
 }

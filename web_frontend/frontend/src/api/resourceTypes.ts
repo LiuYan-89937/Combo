@@ -6,6 +6,25 @@ export interface KnowledgeSourceInput {
   uri: string
   content?: string
   mount_mode: 'index_only' | 'rag'
+  files?: KnowledgeUploadFile[]
+  ingestion_plan?: {
+    planner: 'system_default'
+    default_splitter: 'recursive' | 'markdown' | 'code' | 'json'
+    default_chunk_size: number
+    default_chunk_overlap: number
+    rules: Array<{
+      match: string
+      splitter: 'recursive' | 'markdown' | 'code' | 'json'
+      chunk_size: number
+      chunk_overlap: number
+      reason?: string
+    }>
+  }
+}
+
+export interface KnowledgeUploadFile {
+  file: File
+  relativePath: string
 }
 
 export interface McpServerConfig {

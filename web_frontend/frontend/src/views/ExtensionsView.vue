@@ -2,7 +2,7 @@
   <div class="extensions-view">
     <div class="context-bar">
       <div class="context-title">
-        <n-text strong>扩展管理</n-text>
+        <n-text strong>{{ t('extensions.title') }}</n-text>
         <n-text depth="3" class="context-subtitle">{{ activePackageLabel }}</n-text>
       </div>
       <n-space align="center">
@@ -10,7 +10,7 @@
           <template #icon>
             <n-icon><Refresh /></n-icon>
           </template>
-          刷新
+          {{ t('common.refresh') }}
         </n-button>
       </n-space>
     </div>
@@ -37,15 +37,15 @@
     </n-alert>
 
     <n-tabs type="line" animated>
-      <n-tab-pane name="mcp" tab="MCP 服务器">
+      <n-tab-pane name="mcp" :tab="t('extensions.mcpServers')">
         <div class="tab-content">
           <div class="content-header">
-            <n-text>MCP 服务器配置</n-text>
+            <n-text>{{ t('extensions.mcpConfig') }}</n-text>
             <n-button type="primary" @click="openAddMcp">
               <template #icon>
                 <n-icon><Add /></n-icon>
               </template>
-              添加服务器
+              {{ t('extensions.addServer') }}
             </n-button>
           </div>
 
@@ -56,7 +56,7 @@
                   <n-space align="center">
                     <n-text strong>{{ item.name }}</n-text>
                     <n-tag :type="item.enabled ? 'success' : 'default'" size="small">
-                      {{ item.enabled ? '已启用' : '已禁用' }}
+                      {{ item.enabled ? t('common.enabled') : t('common.disabled') }}
                     </n-tag>
                   </n-space>
                 </template>
@@ -75,7 +75,7 @@
                       :loading="busyKey === `test:${extensionKey(item)}`"
                       @click="handleTestMcp(item)"
                     >
-                      测试连接
+                      {{ t('extensions.testConnection') }}
                     </n-button>
                     <n-switch
                       :value="item.enabled"
@@ -95,25 +95,25 @@
 
           <n-empty
             v-else
-            description="还没有 MCP 服务器"
+            :description="t('extensions.noMcpServers')"
             style="margin-top: 60px"
           >
             <template #extra>
-              <n-button @click="openAddMcp">添加第一个服务器</n-button>
+              <n-button @click="openAddMcp">{{ t('extensions.addFirstServer') }}</n-button>
             </template>
           </n-empty>
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="skills" tab="Skills">
+      <n-tab-pane name="skills" :tab="t('extensions.skillExtensions')">
         <div class="tab-content">
           <div class="content-header">
-            <n-text>Skill 扩展</n-text>
+            <n-text>{{ t('extensions.skillExtensions') }}</n-text>
             <n-button type="primary" @click="openAddSkill">
               <template #icon>
                 <n-icon><Add /></n-icon>
               </template>
-              添加 Skill
+              {{ t('extensions.addSkill') }}
             </n-button>
           </div>
 
@@ -124,7 +124,7 @@
                   <n-space align="center">
                     <n-text strong>{{ item.name }}</n-text>
                     <n-tag :type="item.enabled ? 'success' : 'default'" size="small">
-                      {{ item.enabled ? '已启用' : '已禁用' }}
+                      {{ item.enabled ? t('common.enabled') : t('common.disabled') }}
                     </n-tag>
                   </n-space>
                 </template>
@@ -133,7 +133,7 @@
                     {{ item.payload?.description || item.payload?.summary || item.status }}
                   </div>
                   <div class="item-meta">
-                    {{ item.payload?.path || '未设置路径' }}
+                    {{ item.payload?.path || t('extensions.pathUnset') }}
                   </div>
                 </template>
                 <template #action>
@@ -156,11 +156,11 @@
 
           <n-empty
             v-else
-            description="还没有 Skill 扩展"
+            :description="t('extensions.noSkills')"
             style="margin-top: 60px"
           >
             <template #extra>
-              <n-button @click="openAddSkill">添加第一个 Skill</n-button>
+              <n-button @click="openAddSkill">{{ t('extensions.addFirstSkill') }}</n-button>
             </template>
           </n-empty>
         </div>
@@ -202,6 +202,9 @@ import { Add, EllipsisHorizontal, Refresh } from '@vicons/ionicons5'
 import { useExtensionsManager } from '@/composables/extensions/useExtensionsManager'
 import McpConfigModal from '@/components/extensions/McpConfigModal.vue'
 import SkillConfigModal from '@/components/extensions/SkillConfigModal.vue'
+import { useI18n } from '@/composables/useI18n'
+
+const { t } = useI18n()
 
 const {
   activePackageLabel,

@@ -1,6 +1,6 @@
 <template>
   <div class="view-placeholder">
-    <n-empty description="Agent 制造功能开发中">
+    <n-empty :description="t('manufacturing.developing')">
       <template #icon>
         <n-icon size="80">
           <Build />
@@ -8,7 +8,7 @@
       </template>
       <template #extra>
         <n-text depth="3">
-          此页面正在开发中，敬请期待
+          {{ t('manufacturing.developingHint') }}
         </n-text>
       </template>
     </n-empty>
@@ -18,6 +18,9 @@
 <script setup lang="ts">
 import { NEmpty, NIcon, NText } from 'naive-ui'
 import { Build } from '@vicons/ionicons5'
+import { useI18n } from '@/composables/useI18n'
+
+const { t } = useI18n()
 </script>
 
 <style scoped>

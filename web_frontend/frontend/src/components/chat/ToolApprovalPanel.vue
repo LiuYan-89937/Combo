@@ -5,10 +5,10 @@
         <n-icon size="18">
           <ShieldCheckmark />
         </n-icon>
-        <span>工具调用待确认</span>
+        <span>{{ t('tool.pendingApproval') }}</span>
       </div>
       <n-tag size="small" :bordered="false">
-        {{ requests.length }} 项
+        {{ t('common.itemCount', { count: requests.length }) }}
       </n-tag>
     </div>
 
@@ -40,7 +40,7 @@
         </div>
 
         <n-collapse v-if="hasArguments(request)" class="arguments-collapse" arrow-placement="right">
-          <n-collapse-item title="参数" name="arguments">
+          <n-collapse-item :title="t('tool.arguments')" name="arguments">
             <pre class="arguments-block">{{ formatArguments(request) }}</pre>
           </n-collapse-item>
         </n-collapse>
@@ -52,7 +52,7 @@
         v-model:value="revisionGuidance"
         type="textarea"
         size="small"
-        placeholder="给模型的重写要求"
+        :placeholder="t('tool.revisionPlaceholder')"
         :autosize="{ minRows: 2, maxRows: 4 }"
       />
     </div>
@@ -63,25 +63,25 @@
           <template #icon>
             <n-icon><CloseCircle /></n-icon>
           </template>
-          拒绝
+          {{ t('tool.deny') }}
         </n-button>
         <n-button size="small" :disabled="!revisionGuidance.trim()" @click="handleRevise">
           <template #icon>
             <n-icon><CreateOutline /></n-icon>
           </template>
-          要求重写
+          {{ t('tool.revise') }}
         </n-button>
         <n-button size="small" @click="handleTrust">
           <template #icon>
             <n-icon><Shield /></n-icon>
           </template>
-          信任工具
+          {{ t('tool.trust') }}
         </n-button>
         <n-button size="small" type="primary" @click="handleApprove">
           <template #icon>
             <n-icon><CheckmarkCircle /></n-icon>
           </template>
-          批准
+          {{ t('tool.approve') }}
         </n-button>
       </n-space>
     </div>
@@ -108,12 +108,14 @@ import {
   ShieldCheckmark,
 } from '@vicons/ionicons5'
 import { useCommand } from '@/composables/useCommand'
+import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 
 type ApprovalRequest = Record<string, any>
 
 const runtimeStore = useRuntimeStore()
 const commands = useCommand()
+const { t } = useI18n()
 const revisionGuidance = ref('')
 
 const requests = computed<ApprovalRequest[]>(() => runtimeStore.currentApprovalRequests)
@@ -123,7 +125,7 @@ function requestKey(request: ApprovalRequest, index: number): string {
 }
 
 function toolName(request: ApprovalRequest): string {
-  return String(request.tool_name || request.tool_id || request.name || '工具调用')
+  return String(request.tool_name || request.tool_id || request.name || t('tool.call'))
 }
 
 function toolSummary(request: ApprovalRequest): string {
@@ -137,11 +139,11 @@ function riskLevel(request: ApprovalRequest): string {
 function riskLabel(request: ApprovalRequest): string {
   const level = riskLevel(request)
   const labels: Record<string, string> = {
-    low: '低风险',
-    medium: '中风险',
-    high: '高风险',
-    critical: '高风险',
-    standard: '需确认',
+    low: t('tool.risk.low'),
+    medium: t('tool.risk.medium'),
+    high: t('tool.risk.high'),
+    critical: t('tool.risk.high'),
+    standard: t('tool.risk.standard'),
   }
   return labels[level] || level
 }

@@ -20,7 +20,7 @@
           class="thinking-content"
           role="status"
           aria-live="polite"
-          aria-label="Assistant 正在思考"
+          :aria-label="t('roles.assistantThinking')"
         >
           <span class="thinking-dot"></span>
           <span class="thinking-dot"></span>
@@ -35,6 +35,27 @@
           {{ message.content }}
         </div>
 
+        <div
+          v-if="messageAttachments.length > 0"
+          class="message-attachments"
+          :aria-label="t('attachments.messageAttachments')"
+        >
+          <div
+            v-for="(attachment, index) in messageAttachments"
+            :key="`${attachment.kind}-${attachment.name}-${index}`"
+            class="message-attachment-chip"
+            :title="attachment.name"
+          >
+            <n-icon size="15" class="message-attachment-icon">
+              <Document v-if="attachment.kind === 'file'" />
+              <Link v-else-if="attachment.kind === 'url'" />
+              <Text v-else />
+            </n-icon>
+            <span class="message-attachment-name">{{ attachment.name }}</span>
+            <span class="message-attachment-kind">{{ attachmentKindLabel(attachment) }}</span>
+          </div>
+        </div>
+
         <div v-if="streaming && !thinking" class="streaming-indicator">
           <n-spin :size="14" />
         </div>
@@ -46,9 +67,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { CSSProperties } from 'vue'
-import { NAvatar, NText, NSpin } from 'naive-ui'
+import { NAvatar, NIcon, NText, NSpin } from 'naive-ui'
+import { Document, Link, Text } from '@vicons/ionicons5'
+import { useI18n } from '@/composables/useI18n'
 import { useMarkdown } from '@/composables/useMarkdown'
-import type { TranscriptItem } from '@/types/protocol'
+import type { TranscriptAttachmentView, TranscriptItem } from '@/types/protocol'
 
 const props = withDefaults(
   defineProps<{
@@ -63,11 +86,12 @@ const props = withDefaults(
 )
 
 const { renderMarkdown } = useMarkdown()
+const { locale, t } = useI18n()
 
 const roleLabel = computed(() => {
-  if (props.message.role === 'user') return '你'
-  if (props.message.role === 'system') return '系统'
-  return 'Assistant'
+  if (props.message.role === 'user') return t('roles.user')
+  if (props.message.role === 'system') return t('roles.system')
+  return t('roles.assistant')
 })
 
 const avatarStyle = computed<CSSProperties>(() => {
@@ -91,8 +115,17 @@ const avatarText = computed(() => {
 })
 
 const renderedContent = computed(() => {
-  return renderMarkdown(props.message.content)
+  return renderMarkdown(props.message.content, { streaming: props.streaming })
 })
+
+const messageAttachments = computed(() => props.message.attachments || [])
+
+function attachmentKindLabel(attachment: TranscriptAttachmentView): string {
+  if (attachment.kind === 'url') return t('attachments.url')
+  if (attachment.kind === 'text') return t('attachments.text')
+  if (attachment.source_kind === 'workspace_file') return t('attachments.workspaceFile')
+  return t('attachments.localFile')
+}
 
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp)
@@ -101,25 +134,25 @@ function formatTime(timestamp: string): string {
 
   // 小于 1 分钟
   if (diff < 60000) {
-    return '刚刚'
+    return t('time.justNow')
   }
 
   // 小于 1 小时
   if (diff < 3600000) {
     const minutes = Math.floor(diff / 60000)
-    return `${minutes} 分钟前`
+    return t('time.minutesAgo', { count: minutes })
   }
 
   // 今天
   if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString('zh-CN', {
+    return date.toLocaleTimeString(locale.value, {
       hour: '2-digit',
       minute: '2-digit',
     })
   }
 
   // 更早
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(locale.value, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -167,6 +200,43 @@ function formatTime(timestamp: string): string {
 .plain-content {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.message-attachment-chip {
+  max-width: min(360px, 100%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--n-border-color);
+  border-radius: 6px;
+  background: var(--n-color);
+  color: var(--n-text-color);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.message-attachment-icon {
+  flex: 0 0 auto;
+}
+
+.message-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-kind {
+  flex: 0 0 auto;
+  color: var(--n-text-color-3);
 }
 
 .streaming-indicator {
@@ -222,8 +292,18 @@ function formatTime(timestamp: string): string {
 <style>
 /* Markdown 样式 */
 .markdown-content {
-  line-height: 1.6;
+  max-width: 100%;
+  line-height: 1.65;
   color: var(--n-text-color);
+  overflow-wrap: anywhere;
+}
+
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
 }
 
 .markdown-content h1,
@@ -251,7 +331,7 @@ function formatTime(timestamp: string): string {
 }
 
 .markdown-content p {
-  margin-bottom: 16px;
+  margin: 0 0 14px;
 }
 
 .markdown-content code {
@@ -261,9 +341,11 @@ function formatTime(timestamp: string): string {
   background-color: var(--n-color-embedded);
   border-radius: 6px;
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
+  word-break: break-word;
 }
 
 .markdown-content pre {
+  max-width: 100%;
   padding: 16px;
   overflow: auto;
   font-size: 85%;
@@ -271,12 +353,15 @@ function formatTime(timestamp: string): string {
   background-color: var(--n-color-embedded);
   border-radius: 6px;
   margin-bottom: 16px;
+  white-space: pre;
 }
 
 .markdown-content pre code {
   padding: 0;
   background-color: transparent;
   border: 0;
+  white-space: inherit;
+  word-break: normal;
 }
 
 .markdown-content ul,
@@ -297,9 +382,18 @@ function formatTime(timestamp: string): string {
 }
 
 .markdown-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   width: 100%;
   margin-bottom: 16px;
+}
+
+.markdown-content hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--n-border-color);
 }
 
 .markdown-content table th,

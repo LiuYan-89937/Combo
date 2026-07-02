@@ -1,5 +1,11 @@
 import type { ContextWindowView } from '@/types/protocol'
 
+export interface ContextWindowMeterLabels {
+  unknownUsage: string
+  used: string
+  compressionThreshold: string
+}
+
 export function contextWindowUsagePercent(contextWindow: ContextWindowView): number | null {
   const ratio = contextWindowUsageRatio(contextWindow)
   return ratio === null ? null : ratio * 100
@@ -18,16 +24,16 @@ export function contextWindowUsageLabel(contextWindow: ContextWindowView): strin
   return `${formatCompactTokenCount(contextWindow.tokenCount)} / ${formatCompactTokenCount(contextWindow.contextWindowTokens)}`
 }
 
-export function contextWindowPercentLabel(contextWindow: ContextWindowView): string {
+export function contextWindowPercentLabel(contextWindow: ContextWindowView, labels?: ContextWindowMeterLabels): string {
   const percent = contextWindowUsagePercent(contextWindow)
   if (percent === null) {
-    return '用量未知'
+    return labels?.unknownUsage || 'Usage unknown'
   }
-  return `已用 ${formatPercent(percent)}`
+  return `${labels?.used || 'Used'} ${formatPercent(percent)}`
 }
 
-export function contextWindowThresholdLabel(contextWindow: ContextWindowView): string {
-  return `压缩阈值 ${formatCompactTokenCount(contextWindow.compressionThresholdTokens)}`
+export function contextWindowThresholdLabel(contextWindow: ContextWindowView, labels?: ContextWindowMeterLabels): string {
+  return `${labels?.compressionThreshold || 'Compression threshold'} ${formatCompactTokenCount(contextWindow.compressionThresholdTokens)}`
 }
 
 function contextWindowUsageRatio(contextWindow: ContextWindowView): number | null {

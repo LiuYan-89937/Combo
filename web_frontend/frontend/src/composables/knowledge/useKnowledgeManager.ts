@@ -2,6 +2,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useDialog } from 'naive-ui'
 import { DocumentText, FolderOutline, Globe } from '@vicons/ionicons5'
 import { useCommand } from '@/composables/useCommand'
+import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import type { KnowledgeSourceView } from '@/types/protocol'
@@ -11,6 +12,7 @@ export function useKnowledgeManager() {
   const commands = useCommand()
   const dialog = useDialog()
   const resourceContext = useResourceContext()
+  const { t } = useI18n()
 
   const showCreateModal = ref(false)
   const documentsDrawerOpen = ref(false)
@@ -68,8 +70,8 @@ export function useKnowledgeManager() {
 
   function getSourceActions(_source: KnowledgeSourceView) {
     return [
-      { label: '查看文档', key: 'documents' },
-      { label: '删除', key: 'remove' },
+      { label: t('knowledge.viewDocuments'), key: 'documents' },
+      { label: t('common.delete'), key: 'remove' },
     ]
   }
 
@@ -77,7 +79,7 @@ export function useKnowledgeManager() {
     const sourceId = sourceIdOf(source)
     if (!sourceId) return
     knowledgeStore.selectSource(sourceId)
-    documentsTitle.value = source.name
+    documentsTitle.value = source.name || t('knowledge.sourceFallback')
     documentsDrawerOpen.value = true
     await commands.listKnowledgeDocuments(sourceId, resourceContext.packageIdForApi.value)
   }
@@ -95,12 +97,12 @@ export function useKnowledgeManager() {
   function confirmDeleteSources(sources: KnowledgeSourceView[]) {
     const targets = sources.filter((source) => sourceIdOf(source))
     if (targets.length === 0 || busyAction.value) return
-    const names = targets.map((source) => source.name).join('、')
+    const names = targets.map((source) => source.name || t('knowledge.sourceFallback')).join('、')
     dialog.warning({
-      title: targets.length > 1 ? '确认批量删除知识源' : '确认删除知识源',
-      content: `将删除 ${names}，相关文档和索引会一并移除。这个操作不可撤销。`,
-      positiveText: targets.length > 1 ? `删除 ${targets.length} 个` : '删除',
-      negativeText: '取消',
+      title: targets.length > 1 ? t('knowledge.confirmBulkDeleteTitle') : t('knowledge.confirmDeleteTitle'),
+      content: t('knowledge.confirmDeleteContent', { names }),
+      positiveText: targets.length > 1 ? t('knowledge.confirmBulkPositive', { count: targets.length }) : t('common.delete'),
+      negativeText: t('common.cancel'),
       onPositiveClick: () => {
         void deleteSources(targets)
       },

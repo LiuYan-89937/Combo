@@ -2,14 +2,14 @@
   <div class="scheduler-manager">
     <div class="manager-header">
       <div class="manager-title">
-        <n-text strong>定时任务</n-text>
+        <n-text strong>{{ t('scheduler.title') }}</n-text>
         <n-text depth="3" class="context-label">{{ schedulerContextLabel }}</n-text>
       </div>
       <n-button type="primary" @click="showCreateModal = true">
         <template #icon>
           <n-icon><Add /></n-icon>
         </template>
-        创建任务
+        {{ t('scheduler.createTask') }}
       </n-button>
     </div>
 
@@ -22,13 +22,13 @@
         >
           <div class="job-header">
             <div class="job-info">
-              <n-text strong>{{ job.title }}</n-text>
+              <n-text strong>{{ schedulerJobTitle(job) }}</n-text>
               <n-space align="center" :size="8">
                 <n-tag :type="getStatusType(job.status)" size="small">
-                  {{ job.status }}
+                  {{ schedulerStatusLabel(job.status) }}
                 </n-tag>
                 <n-tag v-if="!job.enabled" type="default" size="small">
-                  已暂停
+                  {{ t('scheduler.paused') }}
                 </n-tag>
               </n-space>
             </div>
@@ -42,20 +42,20 @@
 
           <div class="job-schedule">
             <n-icon size="16"><Time /></n-icon>
-            <n-text depth="2" style="font-size: 13px">{{ job.schedule }}</n-text>
+            <n-text depth="2" style="font-size: 13px">{{ job.schedule || t('common.unset') }}</n-text>
           </div>
 
           <div v-if="job.targetType" class="job-target">
             <n-icon size="16"><LocateOutline /></n-icon>
-            <n-text depth="2" style="font-size: 13px">{{ job.targetLabel || job.targetType }}</n-text>
+            <n-text depth="2" style="font-size: 13px">{{ schedulerTargetLabel(job) }}</n-text>
           </div>
 
           <div class="job-actions">
             <n-button size="small" @click="handleRunNow(job)">
-              立即运行
+              {{ t('scheduler.runNow') }}
             </n-button>
             <n-button size="small" @click="handleViewHistory(job)">
-              运行历史
+              {{ t('scheduler.history') }}
             </n-button>
             <n-dropdown
               :options="getJobActions()"
@@ -71,11 +71,11 @@
 
       <n-empty
         v-if="schedulerStore.jobs.length === 0"
-        description="还没有定时任务"
+        :description="t('scheduler.empty')"
         style="margin-top: 60px"
       >
         <template #extra>
-          <n-button @click="showCreateModal = true">创建第一个任务</n-button>
+          <n-button @click="showCreateModal = true">{{ t('scheduler.createFirst') }}</n-button>
         </template>
       </n-empty>
     </n-scrollbar>
@@ -101,6 +101,7 @@ import { NText, NButton, NIcon, NScrollbar, NCard, NTag, NSpace, NSwitch, NDivid
 import { Add, Time, LocateOutline, EllipsisHorizontal } from '@vicons/ionicons5'
 import { useSchedulerStore } from '@/stores/scheduler'
 import { useCommand } from '@/composables/useCommand'
+import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
 import SchedulerJobFormModal from './SchedulerJobFormModal.vue'
 import SchedulerHistoryDrawer from './SchedulerHistoryDrawer.vue'
@@ -110,12 +111,13 @@ const schedulerStore = useSchedulerStore()
 const commands = useCommand()
 const dialog = useDialog()
 const resourceContext = useResourceContext()
+const { t } = useI18n()
 const showCreateModal = ref(false)
 const showHistoryDrawer = ref(false)
 const selectedJobId = ref<string | null>(null)
 
 const schedulerContextLabel = computed(() => {
-  return `当前上下文：${resourceContext.label.value}`
+  return t('resource.currentContext', { label: resourceContext.label.value })
 })
 
 function handleToggleEnabled(job: SchedulerJobView, enabled: boolean) {
@@ -153,10 +155,10 @@ function handleAction(key: string, job: SchedulerJobView) {
   switch (key) {
     case 'delete':
       dialog.warning({
-        title: '删除定时任务',
-        content: `确定删除「${job.title}」吗？删除后不会再触发。`,
-        positiveText: '删除',
-        negativeText: '取消',
+        title: t('scheduler.deleteTitle'),
+        content: t('scheduler.deleteContent', { name: schedulerJobTitle(job) }),
+        positiveText: t('common.delete'),
+        negativeText: t('common.cancel'),
         positiveButtonProps: { type: 'error' },
         onPositiveClick: () => {
           commands.deleteJob(jobId, resourceContext.packageIdForApi.value)
@@ -168,15 +170,49 @@ function handleAction(key: string, job: SchedulerJobView) {
 
 function getJobActions() {
   return [
-    { label: '删除', key: 'delete' },
+    { label: t('common.delete'), key: 'delete' },
   ]
+}
+
+function schedulerStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    scheduled: t('scheduler.status.scheduled'),
+    running: t('scheduler.status.running'),
+    completed: t('scheduler.status.completed'),
+    failed: t('scheduler.status.failed'),
+    skipped: t('scheduler.status.skipped'),
+    cancelled: t('scheduler.status.cancelled'),
+    enabled: t('scheduler.status.enabled'),
+    paused: t('scheduler.status.paused'),
+  }
+  return labels[status] || status || t('common.unknown')
+}
+
+function schedulerJobTitle(job: SchedulerJobView): string {
+  return job.title || t('scheduler.title')
+}
+
+function schedulerTargetLabel(job: SchedulerJobView): string {
+  const payload = job.payload?.target?.payload || {}
+  if (job.targetType === 'script_run') return t('scheduler.targetScript')
+  if (job.targetType === 'tool_call') {
+    return t('scheduler.targetToolWithName', { name: payload.tool_id || t('scheduler.targetUnselectedTool') })
+  }
+  if (job.targetType === 'graph_run') return t('scheduler.targetGraph')
+  return job.targetLabel || job.targetType || t('scheduler.title')
 }
 
 function getStatusType(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {
   const types: Record<string, any> = {
     ready: 'success',
+    enabled: 'success',
+    scheduled: 'info',
     running: 'info',
+    completed: 'success',
     failed: 'error',
+    paused: 'default',
+    skipped: 'warning',
+    cancelled: 'warning',
   }
   return types[status] || 'default'
 }

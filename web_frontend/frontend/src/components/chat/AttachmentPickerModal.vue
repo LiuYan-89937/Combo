@@ -147,6 +147,7 @@ function handleFileUpload({ file }: UploadCustomRequestOptions) {
       kind: 'file',
       name: file.name,
       content: content.split(',')[1], // Base64
+      encoding: 'base64',
       mime_type: file.type,
     })
     show.value = false
@@ -159,6 +160,7 @@ function handleSelectWorkspaceFile(file: any) {
     kind: 'file',
     name: file.name,
     content: file.path, // 工作区文件路径
+    source_kind: 'workspace_file',
   })
   show.value = false
 }

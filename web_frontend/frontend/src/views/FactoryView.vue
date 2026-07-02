@@ -2,12 +2,12 @@
   <div class="factory-view">
     <div class="chat-container">
       <div v-if="isEvolutionRoute" class="evolution-target-bar">
-        <span class="evolution-target-label">进化对象</span>
+        <span class="evolution-target-label">{{ t('factory.evolutionTarget') }}</span>
         <n-select
           class="evolution-target-select"
           :value="selectedEvolutionPackageId"
           :options="evolutionPackageOptions"
-          placeholder="选择要进化的 Agent 包"
+          :placeholder="t('factory.evolutionTargetPlaceholder')"
           filterable
           @update:value="handleEvolutionPackageSelect"
         />
@@ -34,12 +34,20 @@
               </template>
             </n-empty>
 
-            <MessageItem
+            <template
               v-for="message in runtimeStore.transcript"
               :key="message.id"
-              :message="message"
-              :streaming="isMessageStreaming(message.streamId)"
-            />
+            >
+              <MessageItem
+                :message="message"
+                :streaming="isMessageStreaming(message.streamId)"
+              />
+              <ToolActivityCard
+                v-for="tool in toolsAfterMessage(message)"
+                :key="`${message.id}-${tool.activityKey}`"
+                :tool="tool"
+              />
+            </template>
 
             <MessageItem
               v-for="message in untrackedActiveStreamMessages"
@@ -54,16 +62,6 @@
               :message="message"
               thinking
             />
-
-            <div
-              v-if="toolActivityHint"
-              class="tool-activity-inline"
-              role="status"
-              aria-live="polite"
-            >
-              <span class="tool-activity-spinner" aria-hidden="true"></span>
-              <span>{{ toolActivityHint }}</span>
-            </div>
           </div>
         </n-scrollbar>
       </div>
@@ -80,7 +78,7 @@
           :placeholder="inputPlaceholder"
           :disabled="inputDisabled"
           :is-running="runtimeStore.hasActiveRun"
-          :attachments-enabled="!isAgentChatActive"
+          attachments-enabled
           @send="handleSend"
           @cancel="handleCancel"
         />
@@ -95,19 +93,22 @@ import { useRoute } from 'vue-router'
 import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
 import { ChatbubbleEllipses } from '@vicons/ionicons5'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useI18n } from '@/composables/useI18n'
 import { useFactoryConversation } from '@/composables/factory/useFactoryConversation'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
+import ToolActivityCard from '@/components/chat/ToolActivityCard.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
+import type { RuntimeAttachmentInput, ToolActivity, TranscriptItem } from '@/types/protocol'
 
 const runtimeStore = useRuntimeStore()
 const route = useRoute()
+const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
 
 const {
-  isAgentChatActive,
   isEvolutionRoute,
   selectedEvolutionPackageId,
   evolutionPackageOptions,
@@ -127,11 +128,16 @@ const {
   hasApprovalRequests,
   isMessageStreaming,
   thinkingMessages,
-  toolActivityHint,
   untrackedActiveStreamMessages,
 } = useFactoryMessageProjection()
 
-function handleSend(message: string, attachments: any[]) {
+function toolsAfterMessage(message: TranscriptItem): ToolActivity[] {
+  if (message.role !== 'user') return []
+  const turn = runtimeStore.conversationTurns.find((item) => item.userMessage?.id === message.id)
+  return turn?.tools || []
+}
+
+function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
   if (!sendMessage(message, attachments)) return
   nextTick(() => {
     scrollToBottom()
@@ -149,6 +155,15 @@ function scrollToBottom() {
 // 监听消息变化，自动滚动
 watch(
   () => runtimeStore.transcript.length,
+  () => {
+    nextTick(() => {
+      scrollToBottom()
+    })
+  }
+)
+
+watch(
+  () => runtimeStore.tools.map((tool) => `${tool.activityKey}:${tool.status}:${tool.timestamp}`).join('|'),
   () => {
     nextTick(() => {
       scrollToBottom()
@@ -233,36 +248,6 @@ watch(() => route.name, applyRouteMode)
 
 .messages-list {
   padding: 16px 0;
-}
-
-.tool-activity-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 16px 12px 64px;
-  padding: 8px 10px;
-  border: 1px solid var(--n-border-color);
-  border-radius: 6px;
-  color: var(--n-text-color-2);
-  background: var(--n-color);
-  font-size: 13px;
-  line-height: 1;
-}
-
-.tool-activity-spinner {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  border: 1px solid var(--n-border-color);
-  border-top-color: var(--n-text-color-1);
-  border-radius: 50%;
-  animation: tool-activity-spin 0.8s linear infinite;
-}
-
-@keyframes tool-activity-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .approval-section {

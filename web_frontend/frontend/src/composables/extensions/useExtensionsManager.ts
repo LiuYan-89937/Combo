@@ -1,6 +1,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useDialog } from 'naive-ui'
 import { useCommand } from '@/composables/useCommand'
+import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useExtensionStore } from '@/stores/extension'
 import type { McpServerConfig, SkillConfig } from '@/api/resourceTypes'
@@ -11,6 +12,7 @@ export function useExtensionsManager() {
   const commands = useCommand()
   const dialog = useDialog()
   const resourceContext = useResourceContext()
+  const { t } = useI18n()
 
   const showMcpModal = ref(false)
   const showSkillModal = ref(false)
@@ -19,14 +21,14 @@ export function useExtensionsManager() {
   const busyKey = ref<string | null>(null)
 
   const packageId = computed(() => resourceContext.packageIdForApi.value)
-  const activePackageLabel = computed(() => `当前配置目标：${resourceContext.label.value}`)
+  const activePackageLabel = computed(() => t('resource.currentConfigTarget', { label: resourceContext.label.value }))
   const testResultType = computed(() => (
     extensionStore.testResult?.status === 'ok' ? 'success' : 'error'
   ))
   const testResultTitle = computed(() => (
-    extensionStore.testResult?.status === 'ok' ? '连接可用' : '连接失败'
+    extensionStore.testResult?.status === 'ok' ? t('extensions.connectionOk') : t('extensions.connectionFailed')
   ))
-  const testResultMessage = computed(() => String(extensionStore.testResult?.message || '无测试结果'))
+  const testResultMessage = computed(() => String(extensionStore.testResult?.message || t('extensions.noTestResult')))
   const testTools = computed(() => (
     Array.isArray(extensionStore.testResult?.tools) ? extensionStore.testResult.tools : []
   ))
@@ -133,10 +135,10 @@ export function useExtensionsManager() {
     const serverId = String(item.payload?.server_id || '')
     if (!serverId) return
     dialog.warning({
-      title: '删除 MCP 服务器',
-      content: `将删除 ${item.name || '这个 MCP 服务器'}，运行中的实例会在下次请求前重新加载配置。`,
-      positiveText: '删除',
-      negativeText: '取消',
+      title: t('extensions.deleteMcpTitle'),
+      content: t('extensions.deleteMcpContent', { name: item.name || t('extensions.thisMcpServer') }),
+      positiveText: t('common.delete'),
+      negativeText: t('common.cancel'),
       onPositiveClick: () => {
         void commands.removeMcp(serverId, packageId.value)
       },
@@ -147,10 +149,10 @@ export function useExtensionsManager() {
     const skillId = String(item.payload?.skill_id || '')
     if (!skillId) return
     dialog.warning({
-      title: '删除 Skill',
-      content: `将删除 ${item.name || '这个 Skill'}，运行中的实例会在下次请求前重新加载配置。`,
-      positiveText: '删除',
-      negativeText: '取消',
+      title: t('extensions.deleteSkillTitle'),
+      content: t('extensions.deleteSkillContent', { name: item.name || t('extensions.thisSkill') }),
+      positiveText: t('common.delete'),
+      negativeText: t('common.cancel'),
       onPositiveClick: () => {
         void commands.removeSkill(skillId, packageId.value)
       },
@@ -168,6 +170,24 @@ export function useExtensionsManager() {
     commands.listAgentPackages()
     void refreshCurrentExtensions()
   })
+
+  const mcpActions = computed(() => [
+    { label: t('common.edit'), key: 'edit' },
+    { label: t('common.delete'), key: 'remove' },
+  ])
+
+  const skillActions = computed(() => [
+    { label: t('common.edit'), key: 'edit' },
+    { label: t('common.delete'), key: 'remove' },
+  ])
+
+  function mcpCommandLine(item: ExtensionItemView): string {
+    const command = String(item.payload?.command || '')
+    const args = Array.isArray(item.payload?.args)
+      ? item.payload.args.join(' ')
+      : String(item.payload?.args || '')
+    return [command, args].filter(Boolean).join(' ') || t('extensions.commandUnset')
+  }
 
   return {
     activePackageLabel,
@@ -198,24 +218,6 @@ export function useExtensionsManager() {
   }
 }
 
-const mcpActions = [
-  { label: '编辑', key: 'edit' },
-  { label: '删除', key: 'remove' },
-]
-
-const skillActions = [
-  { label: '编辑', key: 'edit' },
-  { label: '删除', key: 'remove' },
-]
-
 function extensionKey(item: ExtensionItemView): string {
   return String(item.payload?.server_id || item.payload?.skill_id || item.name || item.kind)
-}
-
-function mcpCommandLine(item: ExtensionItemView): string {
-  const command = String(item.payload?.command || '')
-  const args = Array.isArray(item.payload?.args)
-    ? item.payload.args.join(' ')
-    : String(item.payload?.args || '')
-  return [command, args].filter(Boolean).join(' ') || '未设置命令'
 }

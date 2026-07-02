@@ -12,6 +12,7 @@ from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.entrypoints import MCPToolClient
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import MCPToolCatalogClient
+from agent_factory.tooling.skillhub import SKILLHUB_RUNTIME_RESOURCE, build_skillhub_runtime_resource
 from agent_factory.tooling.builtins import (
     get_always_available_system_tool_ids,
     get_builtin_protected_tool_ids,
@@ -90,6 +91,7 @@ def get_factory_tools(
                 "allow_external": False,
             },
             TOOL_OUTPUT_STORE_RESOURCE: ToolOutputStore(factory_artifact_path("tool_outputs")),
+            **_factory_skillhub_resource(factory_extension_root),
             **effective_runtime_resources,
             **base_tool_runtime_resources,
         }
@@ -181,6 +183,11 @@ def _merge_runtime_resources(
             raise ValueError(f"conflicting factory tool runtime resource: {key}")
         merged[key] = value
     return merged
+
+
+def _factory_skillhub_resource(extension_root: Path) -> dict[str, object]:
+    resource = build_skillhub_runtime_resource(extension_root)
+    return {SKILLHUB_RUNTIME_RESOURCE: resource} if resource is not None else {}
 
 
 def _factory_extensions_module():

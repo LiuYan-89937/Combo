@@ -26,6 +26,20 @@ export async function requestEvent(url: string, init: RequestInit = {}): Promise
   return response.event
 }
 
+export async function requestFormEvent(url: string, formData: FormData, init: RequestInit = {}): Promise<FactoryFrontendEvent> {
+  const response = await fetch(url, {
+    ...init,
+    method: init.method || 'POST',
+    body: formData,
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  const data = (await response.json()) as EventResponse
+  return data.event
+}
+
 export async function requestBlob(url: string, init: RequestInit = {}): Promise<BlobResponse> {
   const response = await fetch(url, init)
   if (!response.ok) {

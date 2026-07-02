@@ -1,11 +1,6 @@
 <template>
   <header class="app-header">
     <div class="header-left">
-      <n-button text @click="uiStore.toggleLeftSidebar">
-        <n-icon size="20">
-          <Menu />
-        </n-icon>
-      </n-button>
       <h1 class="app-title">{{ t('app.name') }}</h1>
       <n-tag :type="connectionStatusType" size="small" round>
         {{ connectionStatusText }}
@@ -43,10 +38,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
-import { Menu, Settings, Bug } from '@vicons/ionicons5'
+import { Bug, Settings } from '@vicons/ionicons5'
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
@@ -130,6 +125,12 @@ const runStatusType = computed(() => {
     failed: 'error',
   }
   return types[status] as any
+})
+
+watchEffect(() => {
+  if (typeof document !== 'undefined') {
+    document.title = `${currentRouteName.value} - FastAgentFactory`
+  }
 })
 </script>
 

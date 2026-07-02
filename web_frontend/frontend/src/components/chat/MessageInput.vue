@@ -40,7 +40,7 @@
           <template #icon>
             <n-icon><AttachOutline /></n-icon>
           </template>
-          添加附件
+          {{ t('attachments.add') }}
         </n-button>
 
         <n-button
@@ -52,7 +52,7 @@
           <template #icon>
             <n-icon><CodeSlash /></n-icon>
           </template>
-          文本模式
+          {{ t('attachments.textMode') }}
         </n-button>
 
         <n-popover trigger="hover" placement="top">
@@ -63,13 +63,13 @@
               </template>
             </n-button>
           </template>
-          Markdown 支持：**粗体**、*斜体*、`代码`
+          {{ t('attachments.markdownHint') }}
         </n-popover>
       </div>
 
       <div class="right-actions">
         <n-text v-if="inputText.length > 0" depth="3" style="font-size: 12px">
-          {{ inputText.length }} 字符
+          {{ t('attachments.characterCount', { count: inputText.length }) }}
         </n-text>
 
         <n-button
@@ -78,7 +78,7 @@
           :disabled="!canSend"
           @click="handleSend"
         >
-          发送
+          {{ t('common.send') }}
           <template #icon>
             <n-icon><Send /></n-icon>
           </template>
@@ -89,7 +89,7 @@
           type="error"
           @click="handleCancel"
         >
-          取消
+          {{ t('common.cancel') }}
           <template #icon>
             <n-icon><Stop /></n-icon>
           </template>
@@ -111,13 +111,10 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { NInput, NButton, NIcon, NText, NPopover } from 'naive-ui'
 import { AttachOutline, Document, Link, Text, Close, CodeSlash, Send, Stop } from '@vicons/ionicons5'
 import AttachmentPickerModal from './AttachmentPickerModal.vue'
+import { useI18n } from '@/composables/useI18n'
+import type { RuntimeAttachmentInput } from '@/types/protocol'
 
-interface Attachment {
-  kind: 'file' | 'text' | 'url'
-  name: string
-  content?: string
-  mime_type?: string
-}
+const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
@@ -129,7 +126,7 @@ const props = withDefaults(
     attachmentsEnabled?: boolean
   }>(),
   {
-    placeholder: '输入消息...',
+    placeholder: '',
     disabled: false,
     isRunning: false,
     rows: 3,
@@ -139,14 +136,15 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  send: [message: string, attachments: Attachment[]]
+  send: [message: string, attachments: RuntimeAttachmentInput[]]
   cancel: []
 }>()
 
 const inputRef = ref()
 const inputText = ref('')
-const attachments = ref<Attachment[]>([])
+const attachments = ref<RuntimeAttachmentInput[]>([])
 const showAttachmentPicker = ref(false)
+const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
 
 const canSend = computed(() => {
   const hasText = inputText.value.trim().length > 0
@@ -175,7 +173,7 @@ function handleCancel() {
   emit('cancel')
 }
 
-function handleAttach(attachment: Attachment) {
+function handleAttach(attachment: RuntimeAttachmentInput) {
   if (!props.attachmentsEnabled) return
   attachments.value.push(attachment)
 }

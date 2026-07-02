@@ -2,12 +2,15 @@ import * as commands from '@/api/commands'
 import { agentPackagesApi } from '@/api/agentPackages'
 import { useAgentStore, type AgentPackageView } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
+import { useI18n } from '@/composables/useI18n'
+import type { RuntimeAttachmentInput } from '@/types/protocol'
 import { useCommandTransport } from './transport'
 
 export function useAgentPackageCommands() {
   const agentStore = useAgentStore()
   const uiStore = useUiStore()
   const transport = useCommandTransport()
+  const { t } = useI18n()
 
   const listAgentPackages = () => {
     transport.applyEventRequest(agentPackagesApi.list())
@@ -34,8 +37,8 @@ export function useAgentPackageCommands() {
       URL.revokeObjectURL(url)
       uiStore.addNotification({
         type: 'success',
-        title: '导出完成',
-        message: `${pkg.agent_name || pkg.name || 'Agent 包'} 已开始下载。`,
+        title: t('agents.exportCompleteTitle'),
+        message: t('agents.exportCompleteMessage', { name: pkg.agent_name || pkg.name || t('common.unnamedAgent') }),
         duration: 3000,
       })
       return true
@@ -76,20 +79,30 @@ export function useAgentPackageCommands() {
     return transport.applyEventRequest(agentPackagesApi.session(packageId, sessionId))
   }
 
-  const runAgentPackage = (packageId: string, message: string, sessionId?: string) => {
-    const command = commands.runAgentPackageCommand(packageId, message, sessionId)
+  const runAgentPackage = (
+    packageId: string,
+    message: string,
+    sessionId?: string,
+    attachments?: RuntimeAttachmentInput[],
+  ) => {
+    const command = commands.runAgentPackageCommand(packageId, message, sessionId, attachments)
     transport.sendRuntimeCommand(command)
     return command
   }
 
-  const sendAgentPackageMessage = (packageId: string, message: string, sessionId?: string) => {
-    const command = commands.sendAgentPackageMessageCommand(packageId, message, sessionId)
+  const sendAgentPackageMessage = (
+    packageId: string,
+    message: string,
+    sessionId?: string,
+    attachments?: RuntimeAttachmentInput[],
+  ) => {
+    const command = commands.sendAgentPackageMessageCommand(packageId, message, sessionId, attachments)
     transport.sendRuntimeCommand(command)
     return command
   }
 
-  const runAgentEvolution = (packageId: string, message: string) => {
-    const command = commands.runAgentEvolutionCommand(packageId, message)
+  const runAgentEvolution = (packageId: string, message: string, attachments?: RuntimeAttachmentInput[]) => {
+    const command = commands.runAgentEvolutionCommand(packageId, message, attachments)
     transport.sendRuntimeCommand(command)
     return command
   }

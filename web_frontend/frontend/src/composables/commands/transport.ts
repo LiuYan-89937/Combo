@@ -1,17 +1,19 @@
 import { postCommand } from '@/api/http'
 import { applyRuntimeEvent } from '@/composables/useEventStream'
+import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import type { FactoryFrontendCommand, FactoryFrontendEvent } from '@/types/protocol'
 
 export function useCommandTransport() {
   const uiStore = useUiStore()
+  const { t } = useI18n()
 
   function reportError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
     console.error('Command failed:', error)
     uiStore.addNotification({
       type: 'error',
-      title: '请求失败',
+      title: t('common.error'),
       message,
       duration: 5000,
     })

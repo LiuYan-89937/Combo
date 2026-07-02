@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
+from pathlib import PurePosixPath
+import shutil
 from typing import Any
+from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.paths import factory_artifact_path
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import optional_package, resource_command
 
@@ -27,6 +33,65 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
             runtime_bridge,
             "knowledge_manage",
             {"action": "confirm_source", **payload},
+            {"knowledge_source_registered"},
+            timeout_seconds=120.0,
+        )
+        return {"event": event}
+
+    @router.post("/sources/upload")
+    async def upload_knowledge_source(
+        source: str = Form(...),
+        package_id: str | None = Form(default=None),
+        files: list[UploadFile] = File(...),
+    ):
+        source_payload = _source_payload_from_form(source)
+        resolved_package_id = package_id or str(source_payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
+        display_name = str(source_payload.get("display_name") or "uploaded_source").strip()
+        source_id = _safe_source_id(display_name)
+        upload_root = _knowledge_upload_root(resolved_package_id, source_id)
+        if upload_root.exists():
+            shutil.rmtree(upload_root)
+        upload_root.mkdir(parents=True, exist_ok=True)
+        saved = []
+        for upload in files:
+            relative_path = _safe_upload_relative_path(upload.filename or "uploaded_file")
+            target = upload_root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            size_bytes = 0
+            with target.open("wb") as handle:
+                while chunk := await upload.read(1024 * 1024):
+                    size_bytes += len(chunk)
+                    handle.write(chunk)
+            saved.append({"path": relative_path.as_posix(), "size_bytes": size_bytes, "content_type": upload.content_type})
+        source_payload.pop("kind", None)
+        metadata = dict(source_payload.get("metadata") or {})
+        metadata.update(
+            {
+                "display_name": display_name,
+                "managed_upload": True,
+                "original_uri": f"upload://{source_id}",
+                "upload_file_count": len(saved),
+                "upload_files": saved[:50],
+            }
+        )
+        source_payload.update(
+            {
+                "source_id": source_id,
+                "source_type": "filesystem",
+                "display_name": display_name,
+                "uri": str(upload_root),
+                "original_uri": f"upload://{source_id}",
+                "metadata": metadata,
+            }
+        )
+        event = await resource_command(
+            runtime_bridge,
+            "knowledge_manage",
+            {
+                "action": "confirm_source",
+                "source": source_payload,
+                **optional_package(package_id),
+            },
             {"knowledge_source_registered"},
             timeout_seconds=120.0,
         )
@@ -86,3 +151,53 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return {"event": event}
 
     return router
+
+
+def _source_payload_from_form(value: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="source form field must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="source form field must be a JSON object")
+    return payload
+
+
+def _knowledge_upload_root(package_id: str, source_id: str):
+    return factory_artifact_path(
+        "agent_runtime",
+        package_id,
+        ".agent_runtime",
+        "knowledge",
+        "sources",
+        "uploads",
+        source_id,
+    )
+
+
+def _safe_source_id(display_name: str) -> str:
+    cleaned = "".join(char.lower() if char.isalnum() else "_" for char in display_name).strip("_")
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    if not cleaned or not cleaned[0].isalpha():
+        cleaned = f"source_{cleaned or 'upload'}"
+    return f"{cleaned[:40].rstrip('_')}_{uuid4().hex[:10]}"
+
+
+def _safe_upload_relative_path(filename: str):
+    parts = []
+    for part in str(filename or "uploaded_file").replace("\\", "/").split("/"):
+        safe = _safe_path_part(part)
+        if safe:
+            parts.append(safe)
+    if not parts:
+        parts = ["uploaded_file"]
+    return PurePosixPath(*parts)
+
+
+def _safe_path_part(value: str) -> str:
+    text = str(value or "").strip()
+    if text in {"", ".", ".."}:
+        return ""
+    cleaned = "".join("_" if char in {"/", "\\"} or not char.isprintable() else char for char in text).strip()
+    return cleaned if cleaned not in {"", ".", ".."} else ""

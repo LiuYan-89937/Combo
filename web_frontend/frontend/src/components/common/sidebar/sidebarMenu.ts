@@ -5,7 +5,6 @@ import {
   Build,
   ChatbubbleEllipses,
   ExtensionPuzzle,
-  FolderOpen,
   GitCompare,
   Library,
   Rocket,
@@ -45,11 +44,6 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
       label: t('sidebar.resources'),
       key: 'resources',
       children: [
-        {
-          label: t('route.workspace'),
-          key: '/workspace',
-          icon: renderIcon(FolderOpen),
-        },
         {
           label: t('route.knowledge'),
           key: '/knowledge',

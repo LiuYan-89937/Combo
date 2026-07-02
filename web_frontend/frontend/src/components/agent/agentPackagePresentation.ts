@@ -5,11 +5,13 @@ import type {
   AgentPackageToolView,
   AgentPackageView,
 } from '@/stores/agent'
+import type { I18nKey, Locale } from '@/i18n'
 
 export type NaiveTagType = 'default' | 'success' | 'warning' | 'error' | 'info'
+type Translate = (key: I18nKey, params?: Record<string, string | number>) => string
 
-export function packageDisplayName(pkg: AgentPackageView): string {
-  return pkg.agent_name || pkg.name || '未命名 Agent'
+export function packageDisplayName(pkg: AgentPackageView, t?: Translate): string {
+  return pkg.agent_name || pkg.name || t?.('common.unnamedAgent') || 'Unnamed Agent'
 }
 
 export function isPackageReady(instance: AgentPackageInstanceView | null): boolean {
@@ -20,12 +22,16 @@ export function isInstanceInitializing(instance: AgentPackageInstanceView | null
   return instance?.status === 'initializing'
 }
 
-export function instanceStatusLabel(instance: AgentPackageInstanceView | null): string {
-  if (!instance) return '未初始化'
-  if (instance.error) return '实例异常'
-  if (instance.status === 'initializing') return '初始化中'
-  if (instance.ready) return instance.active_request_count ? `运行中 ${instance.active_request_count}` : '已就绪'
-  return '未初始化'
+export function instanceStatusLabel(instance: AgentPackageInstanceView | null, t: Translate): string {
+  if (!instance) return t('agentDetail.notInitialized')
+  if (instance.error) return t('agentDetail.instanceError')
+  if (instance.status === 'initializing') return t('agentDetail.initializing')
+  if (instance.ready) {
+    return instance.active_request_count
+      ? t('agentDetail.runningCount', { count: instance.active_request_count })
+      : t('agentDetail.ready')
+  }
+  return t('agentDetail.notInitialized')
 }
 
 export function instanceStatusType(instance: AgentPackageInstanceView | null): NaiveTagType {
@@ -56,15 +62,15 @@ export function statusType(status: string): NaiveTagType {
   return types[status] || 'default'
 }
 
-export function formatPackageDate(timestamp: string | null): string {
-  if (!timestamp) return '未知'
+export function formatPackageDate(timestamp: string | null, locale: Locale, t: Translate): string {
+  if (!timestamp) return t('common.unknown')
   const date = new Date(timestamp)
-  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+  return date.toLocaleDateString(locale, { month: '2-digit', day: '2-digit' })
 }
 
-export function formatPackageDateTime(timestamp: string | null): string {
-  if (!timestamp) return '未知'
-  return new Date(timestamp).toLocaleString('zh-CN')
+export function formatPackageDateTime(timestamp: string | null, locale: Locale, t: Translate): string {
+  if (!timestamp) return t('common.unknown')
+  return new Date(timestamp).toLocaleString(locale)
 }
 
 export function extensionKey(item: AgentPackageExtensionView): string {
@@ -72,49 +78,49 @@ export function extensionKey(item: AgentPackageExtensionView): string {
   return String(payloadId || item.name)
 }
 
-export function toolMeta(tool: AgentPackageToolView): string {
-  return tool.concurrent === false ? '串行执行' : '可并发执行'
+export function toolMeta(tool: AgentPackageToolView, t: Translate): string {
+  return tool.concurrent === false ? t('agentDetail.serialTool') : t('agentDetail.concurrentTool')
 }
 
 export function extensionDescription(item: AgentPackageExtensionView): string {
   return String(item.payload?.description || item.summary || '').trim()
 }
 
-export function mcpMeta(server: AgentPackageExtensionView): string {
+export function mcpMeta(server: AgentPackageExtensionView, t: Translate): string {
   const payload = server.payload || {}
   const envCount = Array.isArray(payload.env_keys) ? payload.env_keys.length : 0
   const parts = [
     server.transport || payload.transport,
     server.scope,
-    envCount > 0 ? `环境变量 ${envCount} 项` : null,
-    payload.timeout_seconds ? `${payload.timeout_seconds} 秒超时` : null,
+    envCount > 0 ? t('agentDetail.envCount', { count: envCount }) : null,
+    payload.timeout_seconds ? t('agentDetail.timeoutSeconds', { count: Number(payload.timeout_seconds) }) : null,
   ].filter(Boolean)
-  return parts.join(' · ') || 'MCP 服务器'
+  return parts.join(' · ') || t('agentDetail.mcpServer')
 }
 
-export function skillMeta(skill: AgentPackageExtensionView): string {
+export function skillMeta(skill: AgentPackageExtensionView, t: Translate): string {
   const payload = skill.payload || {}
   const resourceCount = Number(payload.resource_count || 0)
   const scriptCount = Number(payload.script_count || 0)
   const parts = [
     skill.scope,
-    resourceCount > 0 ? `${resourceCount} 个资源` : null,
-    scriptCount > 0 ? `${scriptCount} 个脚本` : null,
+    resourceCount > 0 ? t('agentDetail.resourceCount', { count: resourceCount }) : null,
+    scriptCount > 0 ? t('agentDetail.scriptCount', { count: scriptCount }) : null,
   ].filter(Boolean)
   return parts.join(' · ') || 'Skill'
 }
 
-export function knowledgeMeta(source: AgentPackageKnowledgeSourceView): string {
+export function knowledgeMeta(source: AgentPackageKnowledgeSourceView, locale: Locale, t: Translate): string {
   const parts = [
     source.kind,
     source.mode,
-    source.document_count != null ? `${source.document_count} 文档` : null,
-    source.updated_at ? `更新于 ${formatPackageDateTime(source.updated_at)}` : null,
+    source.document_count != null ? t('knowledge.documents', { count: source.document_count }) : null,
+    source.updated_at ? t('agentDetail.updatedAtPrefix', { time: formatPackageDateTime(source.updated_at, locale, t) }) : null,
   ].filter(Boolean)
-  return parts.join(' · ') || '知识源'
+  return parts.join(' · ') || t('agentDetail.knowledgeSource')
 }
 
-export function knowledgeSamples(source: AgentPackageKnowledgeSourceView): string {
+export function knowledgeSamples(source: AgentPackageKnowledgeSourceView, t: Translate): string {
   const titles = (source.sample_titles || []).filter(Boolean).slice(0, 3)
-  return titles.length > 0 ? `样例：${titles.join('、')}` : ''
+  return titles.length > 0 ? t('agentDetail.samples', { titles: titles.join('、') }) : ''
 }

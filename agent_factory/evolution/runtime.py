@@ -30,7 +30,8 @@ from agent_factory.factory_graph.frontend_bridge.event_normalizer import Runtime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.session import build_factory_checkpointer_handle
-from agent_factory.paths import factory_artifact_path
+from agent_factory.paths import factory_artifact_path, project_root
+from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR, import_runtime_attachments, time_named_attachment_scope
 from agent_factory.runtime_contracts import AgentPackageLoader
 from agent_factory.trace_system.diagnostics import TraceDiagnostics
 from agent_factory.trace_system.projector import TraceProjector
@@ -54,6 +55,7 @@ class _EvolutionRunContext:
     graph_thread_id: str
     backup_path: Path | None
     before_fingerprint: dict[str, str]
+    runtime_attachments: list[dict[str, Any]]
 
 
 class AgentEvolutionRuntime:
@@ -80,6 +82,7 @@ class AgentEvolutionRuntime:
         user_input: str,
         request_id: str | None,
         session_id: str | None,
+        attachments: Any = None,
     ) -> AgentEvolutionStreamRun:
         safe_package_id = _safe_id(package_id, label="package_id")
         trace_id = self.latest_failed_trace_id(safe_package_id)
@@ -93,6 +96,7 @@ class AgentEvolutionRuntime:
                 request_id=request_id or uuid4().hex,
                 session_id=session_id,
                 resume_payload=None,
+                attachments=attachments,
             ),
         )
 
@@ -119,6 +123,7 @@ class AgentEvolutionRuntime:
                 request_id=request_id or uuid4().hex,
                 session_id=session_id,
                 resume_payload=resume_payload or {},
+                attachments=None,
             ),
         )
 
@@ -148,6 +153,7 @@ class AgentEvolutionRuntime:
         request_id: str,
         session_id: str | None,
         resume_payload: dict[str, Any] | None,
+        attachments: Any,
     ) -> Iterator[tuple[str, Any]]:
         pending_events: list[FactoryFrontendEvent] = []
 
@@ -178,6 +184,7 @@ class AgentEvolutionRuntime:
                 graph_thread_id=_thread_id(f"{session_id or 'sessionless'}:{request_id}", package_id),
                 backup_path=None,
                 before_fingerprint={},
+                runtime_attachments=[],
             )
         resolved_thread_id = context.graph_thread_id
         normalizer.emit_run_started({"package_id": package_id, "trace_id": context.trace_id})
@@ -190,6 +197,17 @@ class AgentEvolutionRuntime:
             if resume_payload is None:
                 context.backup_path = _backup_package(package_path, package_id=package_id)
                 context.before_fingerprint = package_fingerprint(package_path)
+                attachment_scope = time_named_attachment_scope()
+                attachment_result = import_runtime_attachments(
+                    context.user_input,
+                    attachments,
+                    storage_root=package_path / ".factory" / ATTACHMENT_INPUT_DIR / attachment_scope,
+                    runtime_path_root=f".factory/{ATTACHMENT_INPUT_DIR}/{attachment_scope}",
+                    base_dir=project_root(),
+                    scope=attachment_scope,
+                )
+                context.user_input = attachment_result.message
+                context.runtime_attachments = attachment_result.attachments
                 self._active_runs[active_run_key] = context
             package = AgentPackageLoader().load_path(package_path / "agent_package.json")
             if context.trace_id:
@@ -324,7 +342,7 @@ class AgentEvolutionRuntime:
                 stream_input: Any = {
                     "request": context.user_input,
                     "workspace_path": str(package_path),
-                    "runtime_attachments": [],
+                    "runtime_attachments": context.runtime_attachments,
                     "graph_kind": "evolution",
                     "evolution_context": {
                         "package_id": package_id,

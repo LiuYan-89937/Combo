@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { watch } from 'vue'
 import { useSchedulerNoticeNavigation } from '@/composables/useSchedulerNoticeNavigation'
+import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import type { SchedulerRunNoticeView } from '@/types/protocol'
@@ -12,6 +13,7 @@ import type { SchedulerRunNoticeView } from '@/types/protocol'
 const runtimeStore = useRuntimeStore()
 const uiStore = useUiStore()
 const { canOpenSchedulerNoticeConversation, openSchedulerNoticeConversation } = useSchedulerNoticeNavigation()
+const { t } = useI18n()
 const notifiedNoticeKeys = new Set(
   runtimeStore.schedulerRunNotices
     .filter(isTerminalNotice)
@@ -32,7 +34,7 @@ watch(
           title: notificationTitle(notice),
           message: notice.summary,
           duration: notificationDuration(notice.status),
-          actionLabel: canOpenSchedulerNoticeConversation(notice) ? '查看会话' : undefined,
+          actionLabel: canOpenSchedulerNoticeConversation(notice) ? t('scheduler.viewConversation') : undefined,
           onAction: canOpenSchedulerNoticeConversation(notice)
             ? () => {
                 openSchedulerNoticeConversation(notice)
@@ -58,17 +60,28 @@ function notificationType(status: string): 'success' | 'warning' | 'error' {
 }
 
 function notificationTitle(notice: SchedulerRunNoticeView): string {
-  return `${notice.title} · ${statusLabel(notice.status)}`
+  return `${noticeTitle(notice)} · ${statusLabel(notice.status)}`
+}
+
+function noticeTitle(notice: SchedulerRunNoticeView): string {
+  if (notice.targetType === 'script_run') return t('scheduler.noticeScript')
+  if (notice.targetType === 'tool_call') return t('scheduler.noticeTool')
+  if (notice.targetScope === 'agent_package' || notice.packageId) {
+    return notice.packageName
+      ? t('scheduler.noticeAgentNamed', { name: notice.packageName })
+      : t('scheduler.noticeAgent')
+  }
+  return t('scheduler.noticeChat')
 }
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    completed: '已完成',
-    failed: '失败',
-    skipped: '跳过',
-    cancelled: '取消',
+    completed: t('scheduler.status.completed'),
+    failed: t('scheduler.status.failed'),
+    skipped: t('scheduler.status.skipped'),
+    cancelled: t('scheduler.status.cancelled'),
   }
-  return labels[status] || '更新'
+  return labels[status] || t('scheduler.status.updated')
 }
 
 function notificationDuration(status: string): number {

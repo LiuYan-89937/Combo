@@ -38,7 +38,7 @@ export function workspaceRootView(root: any): WorkspaceRootView {
 
 export function workspaceEntryView(entry: any): WorkspaceEntry {
   return {
-    name: String(entry.name || entry.path || '文件'),
+    name: String(entry.name || entry.path || 'file'),
     scope: entry.scope,
     path: String(entry.path || ''),
     kind: entry.kind === 'directory' ? 'directory' : 'file',
@@ -49,22 +49,25 @@ export function workspaceEntryView(entry: any): WorkspaceEntry {
 
 export function workspaceFileView(payload: Record<string, any>): WorkspaceFileView {
   return {
-    name: String(payload.name || payload.path || '文件'),
+    name: String(payload.name || payload.path || 'file'),
     scope: payload.scope,
     path: String(payload.path || ''),
     kind: payload.kind === 'binary' ? 'binary' : 'text',
+    mimeType: payload.mime_type || payload.mimeType || null,
+    encoding: String(payload.encoding || (payload.kind === 'binary' ? 'base64' : 'utf-8')),
     sizeBytes: Number(payload.size_bytes || payload.sizeBytes || 0),
     content: String(payload.content || ''),
+    contentBase64: String(payload.content_base64 || payload.contentBase64 || ''),
     truncated: Boolean(payload.truncated),
     payload,
   }
 }
 
 export function knowledgeSourceView(source: any, timestamp: string): KnowledgeSourceView {
-  const name = String(source?.display_name || source?.name || '知识源')
+  const name = String(source?.display_name || source?.name || '')
   return {
     name,
-    status: String(source?.status || '更新中'),
+    status: String(source?.status || 'updating'),
     mode: source?.mount_mode || source?.mode || null,
     documentCount: source?.document_count ?? source?.estimated_documents ?? source?.counts?.documents_loaded ?? null,
     updatedAt: source?.updated_at || timestamp,
@@ -75,7 +78,7 @@ export function knowledgeSourceView(source: any, timestamp: string): KnowledgeSo
 export function knowledgeDocumentView(document: any): KnowledgeDocumentView {
   return {
     documentId: document.document_id || document.documentId || undefined,
-    title: String(document.title || document.uri || '文档'),
+    title: String(document.title || document.uri || ''),
     sourceName: document.source_name || null,
     documentType: document.document_type || null,
     uri: document.uri || null,
@@ -85,7 +88,7 @@ export function knowledgeDocumentView(document: any): KnowledgeDocumentView {
 
 export function knowledgeSearchResultView(result: any): KnowledgeSearchResultView {
   return {
-    title: String(result.title || '搜索结果'),
+    title: String(result.title || ''),
     content: String(result.content || ''),
     score: typeof result.score === 'number' ? result.score : null,
     payload: result || {},
@@ -97,10 +100,10 @@ export function schedulerJobView(job: any): SchedulerJobView {
   const targetPayload = target.payload || {}
   const targetType = target.target_type || null
   return {
-    title: String(job.task_content || job.title || '定时任务'),
-    schedule: String(job.schedule_expr || '未设置'),
+    title: String(job.task_content || job.title || ''),
+    schedule: String(job.schedule_expr || ''),
     enabled: job.enabled !== false,
-    status: job.enabled === false ? '已暂停' : '已启用',
+    status: job.enabled === false ? 'paused' : 'enabled',
     targetType,
     targetLabel: schedulerJobTargetLabel(targetType, targetPayload),
     payload: job || {},
@@ -112,7 +115,7 @@ export function schedulerToolOptionView(tool: any): SchedulerToolOptionView | nu
   if (!id) return null
   return {
     id,
-    name: String(tool.name || tool.id || '工具'),
+    name: String(tool.name || tool.id || ''),
     description: tool.description ? String(tool.description) : undefined,
     riskLevel: tool.risk_level ? String(tool.risk_level) : undefined,
     inputSchema: tool.input_schema && typeof tool.input_schema === 'object' ? tool.input_schema : undefined,
@@ -179,10 +182,8 @@ export function extensionItemView(item: any, fallbackKind: 'mcp' | 'skill'): Ext
 }
 
 function schedulerJobTargetLabel(targetType: string | null, payload: Record<string, any>): string {
-  if (targetType === 'script_run') return '脚本'
-  if (targetType === 'tool_call') return `工具：${payload.tool_id || '未选择'}`
-  if (targetType === 'graph_run') return '自然语言任务'
-  return targetType || '定时任务'
+  if (targetType === 'tool_call') return String(payload.tool_id || '')
+  return targetType || ''
 }
 
 function schedulerNoticeTitle(
@@ -191,22 +192,12 @@ function schedulerNoticeTitle(
   targetType: string | null,
   packageId: string | null,
 ): string {
-  if (targetType === 'script_run') return '脚本定时任务'
-  if (targetType === 'tool_call') return '工具定时任务'
-  if (targetScope === 'agent_package' || packageId) return packageName ? `${packageName} 定时任务` : 'Agent 定时任务'
-  return '闲聊定时任务'
+  if (targetScope === 'agent_package' || packageId) return packageName || 'agent_package'
+  return targetType || 'chat'
 }
 
 function schedulerStatusText(status: string): string {
-  const labels: Record<string, string> = {
-    scheduled: '已调度',
-    running: '运行中',
-    completed: '已完成',
-    failed: '运行失败',
-    skipped: '已跳过',
-    cancelled: '已取消',
-  }
-  return labels[status] || status || '状态更新'
+  return status || 'updated'
 }
 
 function optionalNumber(value: unknown): number | null {

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import mimetypes
+from urllib.parse import quote
 
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
+
+from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import optional_package, resource_command
 
@@ -37,7 +43,7 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     async def workspace_file(
         scope: str = "workdir",
         path: str = "",
-        max_chars: int = Query(default=120000, ge=1000, le=200000),
+        max_chars: int = Query(default=120000, ge=1000, le=1_000_000),
         package_id: str | None = None,
     ):
         event = await resource_command(
@@ -53,5 +59,32 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
             {"workspace_file_read"},
         )
         return {"event": event}
+
+    @router.get("/raw")
+    async def workspace_raw_file(
+        scope: str = "workdir",
+        path: str = "",
+        package_id: str | None = None,
+    ):
+        resolved_package_id = package_id or SYSTEM_CHAT_PACKAGE_ID
+        try:
+            target = AgentPackageRuntimeManager().resolve_workspace_file(
+                resolved_package_id,
+                scope=scope,
+                relative_path=path,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        filename = target.name
+        quoted_filename = quote(filename)
+        return FileResponse(
+            target,
+            media_type=media_type,
+            filename=filename,
+            headers={"Content-Disposition": f"inline; filename*=UTF-8''{quoted_filename}"},
+        )
 
     return router

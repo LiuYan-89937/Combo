@@ -7,6 +7,9 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 
 
+WORKSPACE_FILE_PREVIEW_MAX_CHARS = 1_000_000
+
+
 class RuntimeResourceCommandMixin:
     def workspace_manage(self, command: FactoryFrontendCommand) -> None:
         package_id = _package_id_from_payload(command.payload)
@@ -28,7 +31,12 @@ class RuntimeResourceCommandMixin:
                 package_id,
                 scope=str(command.payload.get("scope") or "workdir"),
                 relative_path=str(command.payload.get("path") or ""),
-                max_chars=bounded_int(command.payload.get("max_chars"), default=20000, minimum=1000, maximum=200000),
+                max_chars=bounded_int(
+                    command.payload.get("max_chars"),
+                    default=20000,
+                    minimum=1000,
+                    maximum=WORKSPACE_FILE_PREVIEW_MAX_CHARS,
+                ),
             )
             self._emit_resource_event(command, "workspace_file_read", result)
             return

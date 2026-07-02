@@ -24,8 +24,8 @@ from agent_factory.factory_graph.session import build_factory_checkpointer_handl
 from agent_factory.paths import project_root
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
-    import_marked_attachments,
-    safe_attachment_scope_id,
+    import_runtime_attachments,
+    time_named_attachment_scope,
 )
 
 
@@ -63,13 +63,15 @@ class CreateAgentRuntime:
         user_input: str,
         session_id: str | None,
         request_id: str | None,
+        attachments: Any = None,
     ) -> CreateAgentStreamRun:
         resolved_session_id = session_id or uuid4().hex
         resolved_request_id = request_id or uuid4().hex
         workspace = CreateAgentWorkspace.for_session(resolved_session_id)
-        attachment_scope = safe_attachment_scope_id(resolved_request_id)
-        attachment_result = import_marked_attachments(
+        attachment_scope = time_named_attachment_scope()
+        attachment_result = import_runtime_attachments(
             user_input,
+            attachments,
             storage_root=workspace.root / ".factory" / ATTACHMENT_INPUT_DIR / attachment_scope,
             runtime_path_root=f".factory/{ATTACHMENT_INPUT_DIR}/{attachment_scope}",
             base_dir=project_root(),

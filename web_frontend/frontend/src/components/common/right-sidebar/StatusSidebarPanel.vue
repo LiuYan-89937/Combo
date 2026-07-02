@@ -1,10 +1,10 @@
 <template>
   <div class="sidebar-content">
     <section class="status-section">
-      <div class="section-title">上下文</div>
+      <div class="section-title">{{ t('status.context') }}</div>
       <div v-if="contextWindow" class="context-meter">
         <div class="context-meter-row">
-          <span class="context-meter-label">窗口用量</span>
+          <span class="context-meter-label">{{ t('status.windowUsage') }}</span>
           <span class="context-meter-value">{{ contextWindowUsageText }}</span>
         </div>
         <div class="context-meter-track" :class="{ unknown: contextWindowPercent === null }" aria-hidden="true">
@@ -24,12 +24,12 @@
           <span>{{ contextWindowThresholdText }}</span>
         </div>
       </div>
-      <n-empty v-else description="暂无上下文用量" size="small" />
+      <n-empty v-else :description="t('status.noContext')" size="small" />
     </section>
 
     <section class="status-section">
-      <div class="section-title">活动</div>
-      <n-empty v-if="runtimeStore.timeline.length === 0" description="暂无活动" size="small" />
+      <div class="section-title">{{ t('status.activity') }}</div>
+      <n-empty v-if="runtimeStore.timeline.length === 0" :description="t('status.noActivity')" size="small" />
       <div v-else class="timeline-list">
         <div
           v-for="item in recentTimeline"
@@ -50,8 +50,8 @@
     </section>
 
     <section class="status-section">
-      <div class="section-title">工具</div>
-      <n-empty v-if="runtimeStore.tools.length === 0" description="暂无工具调用" size="small" />
+      <div class="section-title">{{ t('status.tools') }}</div>
+      <n-empty v-if="runtimeStore.tools.length === 0" :description="t('status.noTools')" size="small" />
       <div v-else class="tools-list">
         <div
           v-for="tool in runtimeStore.tools"
@@ -59,7 +59,7 @@
           class="tool-item"
         >
           <n-tag :type="toolStatusType(tool.status)" size="small">
-            {{ tool.status }}
+            {{ toolStatusLabel(tool.status) }}
           </n-tag>
           <span class="tool-name">{{ tool.toolName }}</span>
         </div>
@@ -71,6 +71,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NEmpty, NTag } from 'naive-ui'
+import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import {
   contextWindowPercentLabel,
@@ -81,6 +82,7 @@ import {
 } from '@/utils/contextWindowMeter'
 
 const runtimeStore = useRuntimeStore()
+const { locale, t } = useI18n()
 
 const recentTimeline = computed(() => runtimeStore.timeline.slice(-20).reverse())
 const contextWindow = computed(() => runtimeStore.contextWindow)
@@ -94,11 +96,16 @@ const contextWindowUsageText = computed(() => (
   contextWindow.value ? contextWindowUsageLabel(contextWindow.value) : '- / -'
 ))
 const contextWindowPercentText = computed(() => (
-  contextWindow.value ? contextWindowPercentLabel(contextWindow.value) : '用量未知'
+  contextWindow.value ? contextWindowPercentLabel(contextWindow.value, contextWindowLabels.value) : t('status.waitContextEvent')
 ))
 const contextWindowThresholdText = computed(() => (
-  contextWindow.value ? contextWindowThresholdLabel(contextWindow.value) : '压缩阈值 -'
+  contextWindow.value ? contextWindowThresholdLabel(contextWindow.value, contextWindowLabels.value) : t('status.compressionThreshold', { tokens: '-' })
 ))
+const contextWindowLabels = computed(() => ({
+  unknownUsage: t('status.waitContextEvent'),
+  used: t('status.recorded'),
+  compressionThreshold: t('status.compressionThreshold', { tokens: '' }).trim(),
+}))
 const contextThresholdMarker = computed(() => {
   if (!contextWindow.value) return ''
   const percent = contextWindowThresholdPercent(contextWindow.value)
@@ -106,11 +113,23 @@ const contextThresholdMarker = computed(() => {
 })
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp)
-  return date.toLocaleTimeString('zh-CN', {
+  return date.toLocaleTimeString(locale.value, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
   })
+}
+
+function toolStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    proposed: t('tool.status.proposed'),
+    approval: t('tool.status.waitingApproval'),
+    started: t('tool.status.started'),
+    completed: t('tool.status.completed'),
+    failed: t('tool.status.failed'),
+    observed: t('tool.status.observed'),
+  }
+  return labels[status] || status || t('common.unknown')
 }
 
 function toolStatusType(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {

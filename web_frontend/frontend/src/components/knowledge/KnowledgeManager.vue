@@ -2,8 +2,10 @@
   <div class="knowledge-manager">
     <div class="manager-header">
       <div class="manager-title">
-        <n-text strong>知识源</n-text>
-        <n-text depth="3" class="context-label">当前上下文：{{ resourceContext.label.value }}</n-text>
+        <n-text strong>{{ t('knowledge.title') }}</n-text>
+        <n-text depth="3" class="context-label">
+          {{ t('resource.currentContext', { label: resourceContext.label.value }) }}
+        </n-text>
       </div>
       <n-space>
         <n-button
@@ -11,13 +13,13 @@
           :loading="busyAction === 'delete'"
           @click="confirmDeleteSources(selectedSources)"
         >
-          删除已选 {{ selectedCount }}
+          {{ t('knowledge.deleteSelected', { count: selectedCount }) }}
         </n-button>
         <n-button type="primary" @click="showCreateModal = true">
           <template #icon>
             <n-icon><Add /></n-icon>
           </template>
-          添加知识源
+          {{ t('knowledge.add') }}
         </n-button>
       </n-space>
     </div>
@@ -43,9 +45,9 @@
               <component :is="getSourceIcon(source)" />
             </n-icon>
             <div class="source-info">
-              <n-text strong>{{ source.name }}</n-text>
+              <n-text strong>{{ sourceDisplayName(source) }}</n-text>
               <n-tag :type="getStatusType(source.status)" size="small">
-                {{ source.status }}
+                {{ sourceStatusLabel(source.status) }}
               </n-tag>
             </div>
           </div>
@@ -55,7 +57,7 @@
           <div class="source-stats">
             <div v-if="source.documentCount != null" class="stat-item">
               <n-icon size="16"><Document /></n-icon>
-              <span>{{ source.documentCount }} 文档</span>
+              <span>{{ t('knowledge.documents', { count: source.documentCount }) }}</span>
             </div>
             <div v-if="source.mode" class="stat-item">
               <n-icon size="16"><Settings /></n-icon>
@@ -69,7 +71,7 @@
               :loading="busyAction === 'reindex' && busySourceId === sourceIdOf(source)"
               @click.stop="handleReindex(source)"
             >
-              重新索引
+              {{ t('knowledge.reindex') }}
             </n-button>
             <n-dropdown
               :options="getSourceActions(source)"
@@ -85,11 +87,11 @@
 
       <n-empty
         v-if="knowledgeStore.sources.length === 0"
-        description="还没有知识源"
+        :description="t('knowledge.empty')"
         style="margin-top: 60px"
       >
         <template #extra>
-          <n-button @click="showCreateModal = true">添加第一个知识源</n-button>
+          <n-button @click="showCreateModal = true">{{ t('knowledge.addFirst') }}</n-button>
         </template>
       </n-empty>
     </n-scrollbar>
@@ -101,12 +103,12 @@
     />
 
     <n-drawer v-model:show="documentsDrawerOpen" :width="520" placement="right">
-      <n-drawer-content title="知识源文档" closable>
+      <n-drawer-content :title="t('knowledge.documentsTitle')" closable>
         <div class="documents-panel">
           <div class="documents-title">{{ documentsTitle }}</div>
           <n-empty
             v-if="knowledgeStore.documents.length === 0"
-            description="没有可查看的文档"
+            :description="t('knowledge.noDocuments')"
             size="small"
           />
           <n-list v-else>
@@ -116,7 +118,7 @@
             >
               <div class="document-item">
                 <div class="document-title">
-                  {{ document.title || document.name || '文档' }}
+                  {{ document.title || document.name || t('knowledge.document') }}
                 </div>
                 <div class="document-meta">
                   {{ document.documentType || document.kind || 'document' }}
@@ -154,6 +156,10 @@ import {
 import { Add, Document, Settings, EllipsisHorizontal } from '@vicons/ionicons5'
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
+import { useI18n } from '@/composables/useI18n'
+import type { KnowledgeSourceView } from '@/types/protocol'
+
+const { t } = useI18n()
 
 const {
   busyAction,
@@ -179,6 +185,19 @@ const {
   sourceIdOf,
   sourceKey,
 } = useKnowledgeManager()
+
+function sourceDisplayName(source: KnowledgeSourceView): string {
+  return source.name || t('knowledge.sourceFallback')
+}
+
+function sourceStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    ready: t('agents.statusReady'),
+    indexing: t('knowledge.updating'),
+    failed: t('run.failed'),
+  }
+  return labels[status] || status || t('common.unknown')
+}
 </script>
 
 <style scoped>

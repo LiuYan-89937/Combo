@@ -36,7 +36,7 @@
       >
         <span class="recent-agent-item-name">{{ agentSessionPackageLabel(session) }}</span>
         <span class="recent-agent-item-title">{{ agentSessionTitle(session) }}</span>
-        <span class="recent-agent-item-time">{{ formatTime(session.updated_at || session.created_at) }}</span>
+        <span class="recent-agent-item-time">{{ formatRecentTime(session.updated_at || session.created_at) }}</span>
       </button>
 
       <div v-if="recentAgentSessions.length === 0" class="recent-agent-empty">
@@ -65,7 +65,7 @@ const agentStore = useAgentStore()
 const runtimeStore = useRuntimeStore()
 const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
-const { t } = useI18n()
+const { locale, t } = useI18n()
 const recentAgentExpanded = ref(false)
 
 const recentAgentSessions = computed(() => agentStore.recentAgentSessions)
@@ -115,6 +115,14 @@ function agentSessionTitle(session: AgentRecentSessionView): string {
 
 function refreshRecentAgentSessions() {
   void commands.listRecentAgentSessions(5)
+}
+
+function formatRecentTime(timestamp: string): string {
+  return formatTime(timestamp, locale.value, {
+    justNow: t('time.justNow'),
+    minutesAgo: (minutes) => t('time.minutesAgo', { count: minutes }),
+    yesterdayAt: (time) => t('time.yesterdayAt', { time }),
+  })
 }
 
 onMounted(() => {

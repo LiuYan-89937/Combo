@@ -2,44 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import html
 import importlib
 import json
 from pathlib import Path
-import re
 from typing import Any
 from urllib.parse import urlparse
 
 from langchain_core.documents import Document
 
+from agent_factory.document_processing import (
+    DOCX_EXTENSIONS,
+    PDF_EXTENSIONS,
+    TEXT_EXTENSIONS,
+    SUPPORTED_FILE_EXTENSIONS,
+    html_to_text,
+    parse_file,
+)
 from agent_factory.knowledge_system.schema import KnowledgeLimits, SourceType
 
 
-TEXT_EXTENSIONS = {
-    ".md",
-    ".markdown",
-    ".txt",
-    ".rst",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".toml",
-    ".csv",
-    ".tsv",
-    ".py",
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".java",
-    ".go",
-    ".rs",
-    ".sql",
-    ".html",
-    ".htm",
-}
-PDF_EXTENSIONS = {".pdf"}
-DOCX_EXTENSIONS = {".docx"}
 IGNORED_DIRS = {
     ".git",
     ".venv",
@@ -140,7 +121,7 @@ def discover_web_snapshot(
         response.raise_for_status()
     except Exception as exc:
         return SourceDiscovery(documents=[], file_type_counts={}, warnings=[f"web fetch failed: {type(exc).__name__}: {exc}"])
-    text = _html_to_text(response.text)
+    text = html_to_text(response.text)
     if len(text) > limits.max_file_bytes:
         text = text[: limits.max_file_bytes]
     title = parsed.netloc + parsed.path
@@ -210,7 +191,7 @@ def load_file(path: Path, *, root: Path, source_type: SourceType, limits: Knowle
     document_type = suffix.removeprefix(".") or "file"
     if not _supported_suffix(suffix):
         return None
-    documents = _load_file_documents(path=path, suffix=suffix)
+    documents = _load_file_documents(path=path, suffix=suffix, root=root)
     content = "\n\n".join(document.page_content for document in documents).strip()
     content = content.strip()
     if not content:
@@ -235,7 +216,7 @@ def load_file(path: Path, *, root: Path, source_type: SourceType, limits: Knowle
 
 
 def _supported_suffix(suffix: str) -> bool:
-    return suffix in TEXT_EXTENSIONS or suffix in PDF_EXTENSIONS or suffix in DOCX_EXTENSIONS
+    return suffix in SUPPORTED_FILE_EXTENSIONS
 
 
 def sha256_text(value: str) -> str:
@@ -250,39 +231,12 @@ def _iter_source_files(root: Path) -> list[Path]:
     )
 
 
-def _load_file_documents(*, path: Path, suffix: str) -> list[Document]:
-    loader = _build_langchain_loader(path=path, suffix=suffix)
-    if loader is not None:
-        try:
-            return loader.load()
-        except (ImportError, ModuleNotFoundError):
-            return _fallback_file_documents(path=path, suffix=suffix)
-    return _fallback_file_documents(path=path, suffix=suffix)
-
-
-def _build_langchain_loader(*, path: Path, suffix: str):
-    try:
-        document_loaders = importlib.import_module("langchain_community.document_loaders")
-    except ModuleNotFoundError:
-        return None
-    if suffix in PDF_EXTENSIONS:
-        return document_loaders.PyPDFLoader(str(path))
-    if suffix in DOCX_EXTENSIONS:
-        return document_loaders.Docx2txtLoader(str(path))
-    if suffix in {".html", ".htm"}:
-        return document_loaders.BSHTMLLoader(str(path), open_encoding="utf-8")
-    if suffix in TEXT_EXTENSIONS:
-        return document_loaders.TextLoader(str(path), encoding="utf-8", autodetect_encoding=True)
-    return None
-
-
-def _fallback_file_documents(*, path: Path, suffix: str) -> list[Document]:
-    if suffix in TEXT_EXTENSIONS:
-        content = _read_text(path)
-        if suffix in {".html", ".htm"}:
-            content = _html_to_text(content)
-        return [Document(page_content=content, metadata={"loader": "internal_text_fallback"})]
-    return []
+def _load_file_documents(*, path: Path, suffix: str, root: Path) -> list[Document]:
+    parsed = parse_file(path, root=root)
+    return [
+        Document(page_content=document.content, metadata=document.metadata)
+        for document in parsed.documents
+    ]
 
 
 def _loader_name(documents: list[Document]) -> str:
@@ -291,24 +245,7 @@ def _loader_name(documents: list[Document]) -> str:
     loaders = [str(document.metadata.get("loader") or "").strip() for document in documents if document.metadata]
     if loaders and loaders[0]:
         return loaders[0]
-    return "langchain_document_loader"
-
-
-def _read_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return path.read_text(encoding="utf-8", errors="ignore")
-
-
-def _html_to_text(value: str) -> str:
-    BeautifulSoup = importlib.import_module("bs4").BeautifulSoup
-    soup = BeautifulSoup(value, "html.parser")
-    for item in soup(["script", "style", "noscript"]):
-        item.decompose()
-    text = soup.get_text("\n")
-    text = html.unescape(text)
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(line.strip() for line in text.splitlines())).strip()
+    return "document_parser"
 
 
 def json_hash(value: dict[str, Any]) -> str:

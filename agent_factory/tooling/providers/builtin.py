@@ -13,6 +13,7 @@ from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
 )
+from agent_factory.tooling.skillhub import SKILLHUB_RUNTIME_RESOURCE, build_skillhub_runtime_resource
 
 
 class BuiltinToolProvider:
@@ -27,13 +28,16 @@ class BuiltinToolProvider:
         if unknown_ids:
             raise ValueError("unknown builtin tool ids: " + ", ".join(unknown_ids))
         specs = get_builtin_tool_specs()
+        runtime_resources = _runtime_resources(context)
+        if SKILLHUB_RUNTIME_RESOURCE not in runtime_resources:
+            specs = [spec for spec in specs if spec.id != "skillhub"]
         if self._tool_ids:
             always_available = get_always_available_system_tool_ids()
             specs = [spec for spec in specs if spec.id in self._tool_ids or spec.id in always_available]
         return ToolProviderResult(
             tool_specs=specs,
             system_tool_ids=[spec.id for spec in specs],
-            runtime_resources=_runtime_resources(context),
+            runtime_resources=runtime_resources,
         )
 
 
@@ -42,7 +46,7 @@ def _runtime_resources(context: ToolProviderContext) -> dict[str, object]:
     root = str(resources.get("builtin_workspace_root") or DEFAULT_BUILTIN_WORKSPACE_ROOT)
     allow_external = bool(resources.get("builtin_allow_external_paths", DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS))
     read_only_paths = _read_only_paths(resources, root=root)
-    return {
+    runtime_resources: dict[str, object] = {
         "filesystem": {
             "root": root,
             "allow_external": allow_external,
@@ -54,6 +58,10 @@ def _runtime_resources(context: ToolProviderContext) -> dict[str, object]:
             "read_only_paths": read_only_paths,
         },
     }
+    skillhub = build_skillhub_runtime_resource(context.extension_root)
+    if skillhub is not None:
+        runtime_resources[SKILLHUB_RUNTIME_RESOURCE] = skillhub
+    return runtime_resources
 
 
 def _read_only_paths(resources: dict[str, object], *, root: str) -> list[str]:

@@ -217,6 +217,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=session_id,
                 request_id=command.request_id,
                 require_ready=require_ready,
+                attachments=command.payload.get("attachments"),
             )
             self._consume_agent_package_stream(package_id=package_id, run=run, normalizer=normalizer)
         except AttachmentImportError as exc:
@@ -254,8 +255,12 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 request_id=command.request_id,
                 session_id=self._session_id(),
+                attachments=command.payload.get("attachments"),
             )
             self._consume_evolution_stream(package_id=package_id, run=run)
+        except AttachmentImportError as exc:
+            _emit_attachment_import_failed(normalizer, exc)
+            self._finish_evolution_turn(request_id=command.request_id, final_answer=None, status="failed")
         except Exception as exc:
             normalizer.emit_run_failed(exc)
             self._finish_evolution_turn(request_id=command.request_id, final_answer=None, status="failed")
@@ -271,7 +276,11 @@ class RuntimeAgentPackageCommandMixin:
                 request_id=command.request_id,
                 session_id=command.session_id,
                 message=message,
-                payload={"package_id": package_id, "message": message},
+                payload={
+                    "package_id": package_id,
+                    "message": message,
+                    **({"attachments": command.payload.get("attachments")} if command.payload.get("attachments") else {}),
+                },
             )
         )
 
@@ -561,6 +570,7 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
+                attachments=command.payload.get("attachments"),
             )
             self._commit_system_chat_request(redacted_message, request_id=command.request_id)
             self._consume_agent_package_stream(
@@ -593,6 +603,7 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
+                attachments=command.payload.get("attachments"),
             )
             self._commit_host_create_agent_request(
                 redacted_message,

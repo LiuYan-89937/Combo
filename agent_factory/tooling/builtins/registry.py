@@ -6,6 +6,7 @@ from agent_factory.tooling.builtins.network.specs import get_network_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.builtins.resource_set.specs import get_resource_set_tool_specs
 from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
+from agent_factory.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.spec import ToolSpec
 
@@ -23,6 +24,7 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "bash_stop",
     "scheduler",
     "knowledge",
+    "skillhub",
     "tool_output",
     "resource_set",
 }
@@ -37,6 +39,7 @@ def get_builtin_tool_specs() -> list[ToolSpec]:
         *get_network_tool_specs(),
         *get_scheduler_tool_specs(),
         *get_knowledge_tool_specs(),
+        *get_skillhub_tool_specs(),
         *get_tool_output_tool_specs(),
         *get_resource_set_tool_specs(),
     ]

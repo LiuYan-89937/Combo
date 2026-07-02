@@ -1,7 +1,7 @@
 import * as commands from '@/api/commands'
 import { withPendingInterruptContext } from '@/composables/commands/interruptContext'
 import { useRuntimeStore } from '@/stores/runtime'
-import type { FactoryMode } from '@/types/protocol'
+import type { FactoryMode, RuntimeAttachmentInput } from '@/types/protocol'
 import { useCommandTransport } from './transport'
 
 export function useRuntimeCommands() {
@@ -34,7 +34,7 @@ export function useRuntimeCommands() {
     return command
   }
 
-  const sendMessage = (message: string, mode?: FactoryMode, attachments?: any[]) => {
+  const sendMessage = (message: string, mode?: FactoryMode, attachments?: RuntimeAttachmentInput[]) => {
     const command = commands.sendMessageCommand({ message, mode, attachments })
     transport.sendRuntimeCommand(command)
     return command

@@ -1,8 +1,8 @@
 <template>
   <n-drawer v-model:show="show" :width="400" placement="right">
-    <n-drawer-content title="运行历史">
+    <n-drawer-content :title="t('scheduler.history')">
       <template #header-extra>
-        <n-button size="small" @click="refreshRuns">刷新</n-button>
+        <n-button size="small" @click="refreshRuns">{{ t('common.refresh') }}</n-button>
       </template>
 
       <n-list bordered>
@@ -10,7 +10,7 @@
           <n-thing>
             <template #header>
               <n-tag :type="getRunStatusType(run.status)" size="small">
-                {{ run.status }}
+                {{ runStatusLabel(run.status) }}
               </n-tag>
             </template>
             <template #description>
@@ -29,7 +29,7 @@
 
       <n-empty
         v-if="runs.length === 0"
-        description="还没有运行记录"
+        :description="t('scheduler.noRuns')"
         size="small"
         style="margin-top: 40px"
       />
@@ -42,6 +42,7 @@ import { computed, watch } from 'vue'
 import { NButton, NDrawer, NDrawerContent, NList, NListItem, NThing, NTag, NText, NEmpty } from 'naive-ui'
 import { useSchedulerStore } from '@/stores/scheduler'
 import { useCommand } from '@/composables/useCommand'
+import { useI18n } from '@/composables/useI18n'
 
 const props = defineProps<{
   show: boolean
@@ -55,6 +56,7 @@ const emit = defineEmits<{
 
 const schedulerStore = useSchedulerStore()
 const commands = useCommand()
+const { locale, t } = useI18n()
 
 const show = computed({
   get: () => props.show,
@@ -89,10 +91,21 @@ function getRunStatusType(status: string): 'default' | 'success' | 'error' | 'in
   return types[status] || 'default'
 }
 
+function runStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    completed: t('scheduler.status.completed'),
+    failed: t('scheduler.status.failed'),
+    running: t('scheduler.status.running'),
+    skipped: t('scheduler.status.skipped'),
+    cancelled: t('scheduler.status.cancelled'),
+  }
+  return labels[status] || status || t('common.unknown')
+}
+
 function formatTime(timestamp: string): string {
-  if (!timestamp) return '未开始'
+  if (!timestamp) return t('time.notStarted')
   const date = new Date(timestamp)
-  return date.toLocaleString('zh-CN')
+  return date.toLocaleString(locale.value)
 }
 </script>
 

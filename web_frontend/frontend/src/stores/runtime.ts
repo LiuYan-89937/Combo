@@ -74,6 +74,12 @@ import {
   applyToolApprovalResolved,
   applyToolLifecycleEvent,
 } from './runtime/toolMutations'
+import {
+  detectBrowserLocale,
+  localeStorageKey,
+  normalizeLocale,
+  translate,
+} from '@/i18n'
 
 // 事件去重集合
 const processedEventIds = new Set<string>()
@@ -691,7 +697,7 @@ export const useRuntimeStore = defineStore('runtime', {
       } else if (event.request_id) {
         const turn = this.conversationTurns.find((item) => item.requestId === event.request_id)
         if (turn) {
-          const errorMessage = event.message || event.payload?.message || '请求失败'
+          const errorMessage = event.message || event.payload?.message || translate(currentLocale(), 'common.requestFailed')
           const errorItem: TranscriptItem = {
             id: event.event_id,
             role: 'system',
@@ -1010,13 +1016,19 @@ export const useRuntimeStore = defineStore('runtime', {
     /**
      * 添加用户消息到 transcript
      */
-    addUserMessage(content: string, requestId: string | null = null, metadata: Record<string, any> = {}) {
+    addUserMessage(
+      content: string,
+      requestId: string | null = null,
+      metadata: Record<string, any> = {},
+      attachments: TranscriptItem['attachments'] = [],
+    ) {
       const timestamp = new Date().toISOString()
       const item: TranscriptItem = {
         id: `user-${Date.now()}`,
         role: 'user',
         content,
         timestamp,
+        attachments,
         metadata,
       }
       this.transcript.push(item)
@@ -1049,6 +1061,12 @@ export const useRuntimeStore = defineStore('runtime', {
 
   },
 })
+
+function currentLocale() {
+  if (typeof window === 'undefined') return detectBrowserLocale()
+  const stored = window.localStorage.getItem(localeStorageKey)
+  return stored ? normalizeLocale(stored) : detectBrowserLocale()
+}
 
 function optionalPositiveInteger(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {

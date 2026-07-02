@@ -133,7 +133,7 @@ export function upsertToolActivityFromEvent(
     stageId: event.stage_id || existing?.stageId || null,
     nodeId: event.node_id || existing?.nodeId || null,
     toolCallId: toolCallId ? String(toolCallId) : existing?.toolCallId || null,
-    toolName: toolName ? String(toolName) : existing?.toolName || '工具调用',
+    toolName: toolName ? String(toolName) : existing?.toolName || 'tool_call',
     status,
     approvalState: existing?.approvalState || null,
     payload: {

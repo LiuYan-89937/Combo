@@ -12,6 +12,18 @@
 
       <!-- 主内容区 -->
       <div class="app-main">
+        <n-button
+          v-if="uiStore.leftSidebarCollapsed"
+          class="sidebar-restore left"
+          size="small"
+          :title="t('layout.expandLeftSidebar')"
+          @click="uiStore.toggleLeftSidebar"
+        >
+          <template #icon>
+            <n-icon><ChevronForward /></n-icon>
+          </template>
+        </n-button>
+
         <!-- 左侧边栏 -->
         <AppSidebar v-if="!uiStore.leftSidebarCollapsed" />
 
@@ -26,6 +38,18 @@
 
         <!-- 右侧边栏 -->
         <AppRightSidebar v-if="!uiStore.rightSidebarCollapsed" />
+
+        <n-button
+          v-if="uiStore.rightSidebarCollapsed"
+          class="sidebar-restore right"
+          size="small"
+          :title="t('layout.expandRightSidebar')"
+          @click="uiStore.toggleRightSidebar"
+        >
+          <template #icon>
+            <n-icon><ChevronBack /></n-icon>
+          </template>
+        </n-button>
       </div>
     </div>
 
@@ -49,8 +73,11 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { NButton, NIcon } from 'naive-ui'
+import { ChevronBack, ChevronForward } from '@vicons/ionicons5'
 import { useUiStore } from '@/stores/ui'
 import { useCommand } from '@/composables/useCommand'
+import { useI18n } from '@/composables/useI18n'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AppSidebar from '@/components/common/AppSidebar.vue'
 import AppRightSidebar from '@/components/common/AppRightSidebar.vue'
@@ -64,6 +91,7 @@ import EventStreamManager from '@/components/common/EventStreamManager.vue'
 const uiStore = useUiStore()
 const route = useRoute()
 const { startSession } = useCommand()
+const { t } = useI18n()
 
 onMounted(() => {
   const mode = route.name === 'Manufacturing'
@@ -97,10 +125,11 @@ onMounted(() => {
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative;
 }
 
 .app-content {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
   overflow-y: auto;
 }
@@ -113,5 +142,33 @@ onMounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.sidebar-restore {
+  position: absolute;
+  z-index: 8;
+  top: 12px;
+  width: 28px;
+  height: 44px;
+  border: 1px solid #d0d0d0;
+  background: #ffffff;
+  color: #111111;
+  cursor: pointer;
+}
+
+.sidebar-restore.left {
+  left: 0;
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+}
+
+.sidebar-restore.right {
+  right: 0;
+  border-right: 0;
+  border-radius: 6px 0 0 6px;
+}
+
+.sidebar-restore:hover {
+  background: #f3f3f3;
 }
 </style>

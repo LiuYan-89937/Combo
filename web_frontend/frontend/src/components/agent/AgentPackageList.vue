@@ -175,7 +175,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import type { AgentPackageView } from '@/stores/agent'
 import {
-  formatPackageDate as formatTime,
+  formatPackageDate,
   instanceStatusLabel as packageInstanceStatusLabel,
   instanceStatusType as packageInstanceStatusType,
   isInstanceInitializing as packageInstanceInitializing,
@@ -193,7 +193,7 @@ const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const router = useRouter()
 const dialog = useDialog()
-const { t } = useI18n()
+const { locale, t } = useI18n()
 
 const searchQuery = ref('')
 const filterStatus = ref<string | null>(null)
@@ -333,7 +333,7 @@ function setPackageSelected(packageId: string, checked: boolean) {
 function confirmDeletePackages(packages: AgentPackageView[]) {
   const targets = packages.filter((pkg) => pkg.package_id)
   if (targets.length === 0 || busyAction.value) return
-  const names = targets.map(packageDisplayName).join('、')
+  const names = targets.map((pkg) => packageDisplayName(pkg, t)).join('、')
   dialog.warning({
     title: targets.length > 1 ? t('agents.confirmBulkDeleteTitle') : t('agents.confirmDeleteTitle'),
     content: t('agents.confirmDeleteContent', { names }),
@@ -396,7 +396,11 @@ function isInstanceBusy(pkg: AgentPackageView): boolean {
 }
 
 function instanceStatusLabel(pkg: AgentPackageView): string {
-  return packageInstanceStatusLabel(packageInstance(pkg))
+  return packageInstanceStatusLabel(packageInstance(pkg), t)
+}
+
+function formatTime(timestamp: string | null): string {
+  return formatPackageDate(timestamp, locale.value, t)
 }
 
 function getInstanceStatusType(pkg: AgentPackageView): 'default' | 'success' | 'warning' | 'error' | 'info' {

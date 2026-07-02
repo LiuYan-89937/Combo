@@ -1,22 +1,22 @@
 <template>
   <n-modal v-model:show="show" preset="card" :title="modalTitle" style="width: 560px">
     <n-form ref="formRef" :model="formData" :rules="rules">
-      <n-form-item label="Skill 路径" path="path">
+      <n-form-item :label="t('extensions.skillPath')" path="path">
         <n-input v-model:value="formData.path" placeholder="/path/to/skill-directory" />
       </n-form-item>
 
-      <n-form-item label="来源">
+      <n-form-item :label="t('extensions.source')">
         <n-select v-model:value="formData.source" :options="sourceOptions" />
       </n-form-item>
 
-      <n-form-item label="启用">
+      <n-form-item :label="t('scheduler.enabled')">
         <n-switch v-model:value="formData.enabled" />
       </n-form-item>
     </n-form>
 
     <template #footer>
       <n-space justify="end">
-        <n-button @click="show = false">取消</n-button>
+        <n-button @click="show = false">{{ t('common.cancel') }}</n-button>
         <n-button type="primary" @click="handleSubmit">{{ submitText }}</n-button>
       </n-space>
     </template>
@@ -29,6 +29,7 @@ import { NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSwitch } f
 import type { FormInst, FormRules } from 'naive-ui'
 import type { SkillConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
+import { useI18n } from '@/composables/useI18n'
 
 const props = defineProps<{
   show: boolean
@@ -54,20 +55,21 @@ const show = computed({
 
 const formRef = ref<FormInst | null>(null)
 const formData = ref<SkillFormData>(emptyForm())
-const modalTitle = computed(() => (props.item ? '编辑 Skill' : '添加 Skill'))
-const submitText = computed(() => (props.item ? '保存' : '添加'))
+const { t } = useI18n()
+const modalTitle = computed(() => (props.item ? t('extensions.skillEditTitle') : t('extensions.skillAddTitle')))
+const submitText = computed(() => (props.item ? t('common.save') : t('common.add')))
 
 const sourceOptions = computed(() => {
-  const options = [{ label: '本地', value: 'local' }]
+  const options = [{ label: t('extensions.local'), value: 'local' }]
   if (formData.value.source && formData.value.source !== 'local') {
     options.push({ label: formData.value.source, value: formData.value.source })
   }
   return options
 })
 
-const rules: FormRules = {
-  path: [{ required: true, message: '请输入 Skill 路径', trigger: 'blur' }],
-}
+const rules = computed<FormRules>(() => ({
+  path: [{ required: true, message: t('extensions.validateSkillPath'), trigger: 'blur' }],
+}))
 
 function emptyForm(): SkillFormData {
   return {

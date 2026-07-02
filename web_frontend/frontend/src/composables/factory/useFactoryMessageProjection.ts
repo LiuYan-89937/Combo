@@ -1,9 +1,11 @@
 import { computed } from 'vue'
+import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import type { ToolActivity, TranscriptItem } from '@/types/protocol'
 
 export function useFactoryMessageProjection() {
   const runtimeStore = useRuntimeStore()
+  const { t } = useI18n()
 
   const activeStreams = computed(() => {
     return Object.values(runtimeStore.modelStreams).filter(
@@ -51,11 +53,11 @@ export function useFactoryMessageProjection() {
   })
   const toolActivityHint = computed(() => {
     if (!runtimeStore.hasActiveRun || runningToolActivities.value.length === 0) return ''
-    if (runningToolActivities.value.some((tool) => tool.status === 'approval')) return '等待工具确认'
-    if (runningToolActivities.value.some((tool) => isKnowledgeRetrievalTool(tool))) return '知识库检索中'
+    if (runningToolActivities.value.some((tool) => tool.status === 'approval')) return t('factory.waitToolApproval')
+    if (runningToolActivities.value.some((tool) => isKnowledgeRetrievalTool(tool))) return t('factory.knowledgeRetrieving')
     return runningToolActivities.value.length > 1
-      ? `${runningToolActivities.value.length} 个工具调用中`
-      : '工具调用中'
+      ? t('factory.toolsRunning', { count: runningToolActivities.value.length })
+      : t('factory.toolRunning')
   })
   const activeStreamContentKey = computed(() => {
     return [

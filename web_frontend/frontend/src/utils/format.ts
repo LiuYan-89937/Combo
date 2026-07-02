@@ -1,43 +1,43 @@
-/**
- * 时间格式化工具
- */
+import type { Locale } from '@/i18n'
 
-export function formatTime(timestamp: string): string {
+interface RelativeTimeLabels {
+  justNow: string
+  minutesAgo: (minutes: number) => string
+  yesterdayAt: (time: string) => string
+}
+
+export function formatTime(timestamp: string, locale: Locale = 'zh-CN', labels?: RelativeTimeLabels): string {
   const date = new Date(timestamp)
   const now = new Date()
   const diff = now.getTime() - date.getTime()
 
-  // 小于 1 分钟
   if (diff < 60000) {
-    return '刚刚'
+    return labels?.justNow || new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(0, 'minute')
   }
 
-  // 小于 1 小时
   if (diff < 3600000) {
     const minutes = Math.floor(diff / 60000)
-    return `${minutes} 分钟前`
+    return labels?.minutesAgo(minutes) || new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(-minutes, 'minute')
   }
 
-  // 今天
   if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString('zh-CN', {
+    return date.toLocaleTimeString(locale, {
       hour: '2-digit',
       minute: '2-digit',
     })
   }
 
-  // 昨天
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
   if (date.toDateString() === yesterday.toDateString()) {
-    return '昨天 ' + date.toLocaleTimeString('zh-CN', {
+    const time = date.toLocaleTimeString(locale, {
       hour: '2-digit',
       minute: '2-digit',
     })
+    return labels?.yesterdayAt(time) || time
   }
 
-  // 更早
-  return date.toLocaleDateString('zh-CN', {
+  return date.toLocaleDateString(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

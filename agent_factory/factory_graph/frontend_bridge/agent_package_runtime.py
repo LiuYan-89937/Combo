@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import base64
 import hashlib
 import json
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -16,6 +18,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 import zipfile
 
+from agent_factory.document_processing import EMAIL_EXTENSIONS, OFFICE_EXTENSIONS, parse_file
 from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
@@ -25,14 +28,15 @@ from agent_factory.runtime_kernel.extensions.loader import (
     default_builtin_agent_extension_root,
 )
 from agent_factory.mcp_gateway import HostMCPGatewayManager
+from agent_factory.skillhub_gateway import HostSkillHubGatewayManager
 from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
     AttachmentImportResult,
-    import_marked_attachments,
-    safe_attachment_scope_id,
+    import_runtime_attachments,
+    time_named_attachment_scope,
 )
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
@@ -55,6 +59,25 @@ from agent_factory.tooling.skills import parse_skill_directory
 DEFAULT_AGENT_PACKAGE_ROOT = ".agentfactory/packages"
 DEFAULT_SYSTEM_PACKAGE_ROOT = "SystemPackage"
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
+WORKSPACE_BINARY_PREVIEW_EXTENSIONS = {
+    ".pdf",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".ico",
+    ".zip",
+    ".gz",
+    ".tar",
+    ".doc",
+    ".docx",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+}
 Emit = Callable[[FactoryFrontendEvent], None]
 
 
@@ -98,6 +121,7 @@ class AgentPackageRuntimeManager:
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
+        self._skillhub_gateways = HostSkillHubGatewayManager()
         self._emit = emit
         self._context_window_tokens: int | None = None
         self._env_overrides: dict[str, str] = {}
@@ -372,23 +396,54 @@ class AgentPackageRuntimeManager:
         byte_limit = max(4096, max_chars * 4)
         with target.open("rb") as handle:
             data = handle.read(byte_limit + 1)
-        is_binary = b"\x00" in data[:4096]
+        mime_type, _ = mimetypes.guess_type(target.name)
+        is_binary = _workspace_file_is_binary(target=target, data=data, mime_type=mime_type)
         content = ""
+        content_base64 = ""
+        preview_mode = "binary"
         truncated = stat.st_size > byte_limit
-        if not is_binary:
+        extracted_text = _workspace_extracted_text_preview(target=target, root=root, max_chars=max_chars)
+        if extracted_text is not None:
+            content, extracted_truncated = extracted_text
+            is_binary = False
+            preview_mode = "extracted_text"
+            truncated = extracted_truncated
+        elif not is_binary:
             text = data.decode("utf-8", errors="replace")
             truncated = truncated or len(text) > max_chars
             content = text[:max_chars]
+            preview_mode = "text"
+        else:
+            preview_bytes = data[:byte_limit]
+            content_base64 = base64.b64encode(preview_bytes).decode("ascii")
         return {
             "package_id": package_id,
             "scope": scope,
             "path": target.relative_to(root).as_posix(),
             "name": target.name,
             "kind": "binary" if is_binary else "text",
+            "mime_type": mime_type or "application/octet-stream",
+            "encoding": "base64" if is_binary else "utf-8",
             "size_bytes": stat.st_size,
             "content": content,
+            "content_base64": content_base64,
+            "preview_mode": preview_mode,
             "truncated": truncated,
         }
+
+    def resolve_workspace_file(
+        self,
+        package_id: str,
+        *,
+        scope: str = "workdir",
+        relative_path: str,
+    ) -> Path:
+        package = self.loader.load_path(self._manifest_path(package_id))
+        root = self._workspace_scope_root(package_id, package, scope)
+        target = _safe_workspace_path(root, relative_path)
+        if not target.is_file():
+            raise FileNotFoundError(f"workspace file not found: {relative_path}")
+        return target
 
     def extension_config_summary(self, package_id: str) -> dict[str, Any]:
         package = self.loader.load_path(self._manifest_path(package_id))
@@ -567,6 +622,7 @@ class AgentPackageRuntimeManager:
         session_id: str | None = None,
         request_id: str | None = None,
         user_config: dict[str, Any] | None = None,
+        attachments: Any = None,
         require_ready: bool = False,
     ) -> AgentPackageStreamRun:
         package = self.loader.load_path(self._manifest_path(package_id))
@@ -577,7 +633,7 @@ class AgentPackageRuntimeManager:
             package_id=package_id,
             package=package,
             user_input=user_input,
-            request_id=resolved_request_id,
+            attachments=attachments,
         )
         command = {
             "type": "run_message",
@@ -608,18 +664,19 @@ class AgentPackageRuntimeManager:
         package_id: str,
         package: LoadedAgentPackage,
         user_input: str,
-        request_id: str,
+        attachments: Any,
     ) -> AttachmentImportResult:
         runtime_root = _host_runtime_root(package_id)
         workdir_root = runtime_root / "workdir"
-        attachment_scope = safe_attachment_scope_id(request_id)
+        attachment_scope = time_named_attachment_scope()
         runtime_path_root = (
             str(workdir_root / ATTACHMENT_INPUT_DIR / attachment_scope)
             if _is_host_system_package(package)
             else f"/workdir/{ATTACHMENT_INPUT_DIR}/{attachment_scope}"
         )
-        return import_marked_attachments(
+        return import_runtime_attachments(
             user_input,
+            attachments,
             storage_root=workdir_root / ATTACHMENT_INPUT_DIR / attachment_scope,
             runtime_path_root=runtime_path_root,
             base_dir=project_root(),
@@ -721,6 +778,7 @@ class AgentPackageRuntimeManager:
         for package_id in list(self._system_handles):
             self._close_system(package_id)
         self._mcp_gateways.close_all()
+        self._skillhub_gateways.close_all()
 
     def cancel_active_requests(self, *, reason: str = "user_cancelled") -> int:
         cancelled = 0
@@ -878,7 +936,7 @@ class AgentPackageRuntimeManager:
 
     def _container(self, package_id: str, package: LoadedAgentPackage) -> "AgentRuntimeContainerHandle":
         existing = self._containers.get(package_id)
-        fingerprint = _package_fingerprint(package)
+        fingerprint = _runtime_fingerprint(package_id, package)
         if (
             existing is not None
             and existing.is_running
@@ -893,10 +951,11 @@ class AgentPackageRuntimeManager:
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
-        fingerprint = _package_fingerprint(package)
+        fingerprint = _runtime_fingerprint(package_id, package)
         mcp_gateway = self._mcp_gateways.ensure_gateway(
             _load_extension_bundle(extension_root, package=package).mcp_servers
         )
+        skillhub_gateway = self._skillhub_gateways.ensure_gateway(extension_root)
         plan = self.launcher.prepare(
             package=package,
             runtime_root=runtime_root,
@@ -904,6 +963,7 @@ class AgentPackageRuntimeManager:
             workdir_root=workdir_root,
             extension_root=extension_root,
             mcp_gateway_url=mcp_gateway.docker_url if mcp_gateway is not None else None,
+            skillhub_gateway_url=skillhub_gateway.docker_url,
             env_overrides=self._runtime_env_overrides(),
         )
         handle = AgentRuntimeContainerHandle(
@@ -929,7 +989,7 @@ class AgentPackageRuntimeManager:
 
     def _system_handle(self, package_id: str, package: LoadedAgentPackage) -> "SystemPackageRuntimeHandle":
         existing = self._system_handles.get(package_id)
-        fingerprint = _package_fingerprint(package)
+        fingerprint = _runtime_fingerprint(package_id, package)
         if (
             existing is not None
             and existing.package_fingerprint == fingerprint
@@ -988,7 +1048,7 @@ class AgentPackageRuntimeManager:
         existing = self._containers.get(package_id)
         if existing is None or not existing.is_running:
             return False
-        if existing.package_fingerprint != _package_fingerprint(package):
+        if existing.package_fingerprint != _runtime_fingerprint(package_id, package):
             return False
         return not existing.is_idle(self.idle_timeout_seconds)
 
@@ -996,7 +1056,7 @@ class AgentPackageRuntimeManager:
         existing = self._system_handles.get(package_id)
         if existing is None:
             return False
-        if existing.package_fingerprint != _package_fingerprint(package):
+        if existing.package_fingerprint != _runtime_fingerprint(package_id, package):
             return False
         return not existing.is_idle(self.idle_timeout_seconds)
 
@@ -1058,6 +1118,33 @@ def _workspace_scope_label(scope: str) -> str:
         "extensions": "Extensions",
     }
     return labels.get(scope, _humanize_identifier(scope))
+
+
+def _workspace_file_is_binary(*, target: Path, data: bytes, mime_type: str | None) -> bool:
+    suffix = target.suffix.lower()
+    if suffix in WORKSPACE_BINARY_PREVIEW_EXTENSIONS:
+        return True
+    if suffix == ".svg":
+        return False
+    normalized_mime = str(mime_type or "").lower()
+    if normalized_mime.startswith("image/"):
+        return True
+    if normalized_mime in {"application/pdf", "application/zip", "application/octet-stream"}:
+        return True
+    return b"\x00" in data[:4096]
+
+
+def _workspace_extracted_text_preview(*, target: Path, root: Path, max_chars: int) -> tuple[str, bool] | None:
+    if target.suffix.lower() not in (OFFICE_EXTENSIONS | EMAIL_EXTENSIONS):
+        return None
+    try:
+        result = parse_file(target, root=root)
+    except Exception:
+        return None
+    content = "\n\n".join(document.content.strip() for document in result.documents if document.content.strip()).strip()
+    if not content:
+        return None
+    return content[:max_chars], len(content) > max_chars
 
 
 def _safe_workspace_path(root: Path, relative_path: str | os.PathLike[str] | None) -> Path:
@@ -1203,6 +1290,16 @@ def _package_fingerprint(package: LoadedAgentPackage) -> str:
         digest.update(b"host-system-package")
     else:
         digest.update(_runtime_image_identity(package).encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _runtime_fingerprint(package_id: str, package: LoadedAgentPackage) -> str:
+    digest = hashlib.sha256()
+    digest.update(_package_fingerprint(package).encode("utf-8"))
+    extension_root = _extension_root_for_package(package_id, package)
+    digest.update(b"runtime-extension-root")
+    digest.update(str(extension_root.resolve()).encode("utf-8"))
+    _hash_tree(digest, extension_root)
     return digest.hexdigest()
 
 
@@ -1874,6 +1971,8 @@ def _normalized_source_payload(payload: dict[str, Any]) -> dict[str, Any]:
     source_id = str(source.get("source_id") or "").strip()
     if source_id:
         result["source_id"] = source_id
+    if source.get("ingestion_plan") is not None:
+        result["ingestion_plan"] = source.get("ingestion_plan")
     return result
 
 

@@ -1,10 +1,10 @@
 <template>
   <n-drawer v-model:show="show" :width="500" placement="right">
-    <n-drawer-content title="调试面板">
+    <n-drawer-content :title="t('debug.title')">
       <n-tabs type="line">
-        <n-tab-pane name="events" tab="事件流">
+        <n-tab-pane name="events" :tab="t('debug.events')">
           <div class="debug-content">
-            <n-text depth="3">最近 {{ runtimeStore.debugEvents.length }} 个事件</n-text>
+            <n-text depth="3">{{ t('debug.recentEvents', { count: runtimeStore.debugEvents.length }) }}</n-text>
             <n-list bordered style="margin-top: 12px">
               <n-list-item v-for="event in recentEvents" :key="event.event_id">
                 <n-thing>
@@ -28,7 +28,7 @@
           </div>
         </n-tab-pane>
 
-        <n-tab-pane name="state" tab="状态">
+        <n-tab-pane name="state" :tab="t('debug.state')">
           <div class="debug-content">
             <n-code
               :code="stateSnapshot"
@@ -45,6 +45,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NDrawer, NDrawerContent, NTabs, NTabPane, NText, NList, NListItem, NThing, NTag, NCode } from 'naive-ui'
+import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 
 const props = defineProps<{
@@ -56,6 +57,7 @@ const emit = defineEmits<{
 }>()
 
 const runtimeStore = useRuntimeStore()
+const { t } = useI18n()
 
 const show = computed({
   get: () => props.show,

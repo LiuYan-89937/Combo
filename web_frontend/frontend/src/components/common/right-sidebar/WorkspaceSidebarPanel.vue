@@ -2,7 +2,7 @@
   <div class="workspace-sidebar-content">
     <div v-if="previewLoading && !runtimeStore.workspaceFile" class="workspace-loading">
       <n-spin size="small" />
-      <n-text depth="3">正在读取文件</n-text>
+      <n-text depth="3">{{ t('workspace.readingFile') }}</n-text>
     </div>
     <FilePreview
       v-else-if="runtimeStore.workspaceFile"
@@ -11,7 +11,7 @@
     />
     <div v-else class="workspace-browser">
       <div class="context-bar">
-        <n-text depth="3">工作区：{{ workspaceContextLabel }}</n-text>
+        <n-text depth="3">{{ t('workspace.context', { label: workspaceContextLabel }) }}</n-text>
       </div>
       <WorkspaceExplorer
         class="workspace-sidebar-explorer"
@@ -33,22 +33,28 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import type { WorkspaceEntry } from '@/types/protocol'
 import FilePreview from '@/components/workspace/FilePreview.vue'
 import WorkspaceExplorer from '@/components/workspace/WorkspaceExplorer.vue'
+import { useI18n } from '@/composables/useI18n'
 
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
 const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const resourceContext = useResourceContext()
+const { t } = useI18n()
 const previewLoading = ref(false)
+const WORKSPACE_PREVIEW_MAX_CHARS = 1_000_000
 
 const workspacePackageId = computed(() => resourceContext.packageIdForApi.value)
 const workspaceContextLabel = computed(() => resourceContext.label.value)
 
-function handleWorkspaceFileSelect(entry: WorkspaceEntry) {
+async function handleWorkspaceFileSelect(entry: WorkspaceEntry) {
   uiStore.setRightSidebarTab('workspace')
   previewLoading.value = true
   runtimeStore.workspaceFile = null
-  commands.readFile(workspaceStore.currentScope, entry.path, workspacePackageId.value)
+  await commands.readFile(workspaceStore.currentScope, entry.path, workspacePackageId.value, WORKSPACE_PREVIEW_MAX_CHARS)
+  if (!runtimeStore.workspaceFile) {
+    previewLoading.value = false
+  }
 }
 
 function closeWorkspacePreview() {

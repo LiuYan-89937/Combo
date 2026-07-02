@@ -3,7 +3,7 @@
  * 提供类型安全的命令发送接口
  */
 
-import type { FactoryFrontendCommand, FactoryMode } from '@/types/protocol'
+import type { FactoryFrontendCommand, FactoryMode, RuntimeAttachmentInput } from '@/types/protocol'
 
 let requestIdCounter = 0
 
@@ -58,12 +58,7 @@ export function setOptionsCommand(options: Record<string, any>): FactoryFrontend
 export interface SendMessageOptions {
   message: string
   mode?: FactoryMode
-  attachments?: Array<{
-    kind: 'file' | 'text' | 'url'
-    name: string
-    content?: string
-    mime_type?: string
-  }>
+  attachments?: RuntimeAttachmentInput[]
 }
 
 export function sendMessageCommand(options: SendMessageOptions): FactoryFrontendCommand {
@@ -81,7 +76,8 @@ export function sendMessageCommand(options: SendMessageOptions): FactoryFrontend
 export function runAgentPackageCommand(
   packageId: string,
   message: string,
-  sessionId?: string
+  sessionId?: string,
+  attachments?: RuntimeAttachmentInput[]
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_package', {
@@ -90,6 +86,7 @@ export function runAgentPackageCommand(
       package_id: packageId,
       message,
       session_id: sessionId,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     },
   })
 }
@@ -97,7 +94,8 @@ export function runAgentPackageCommand(
 export function sendAgentPackageMessageCommand(
   packageId: string,
   message: string,
-  sessionId?: string
+  sessionId?: string,
+  attachments?: RuntimeAttachmentInput[]
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('send_agent_package_message', {
@@ -106,15 +104,23 @@ export function sendAgentPackageMessageCommand(
       package_id: packageId,
       message,
       session_id: sessionId,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     },
   })
 }
 
-export function runAgentEvolutionCommand(packageId: string, message: string): FactoryFrontendCommand {
+export function runAgentEvolutionCommand(
+  packageId: string,
+  message: string,
+  attachments?: RuntimeAttachmentInput[]
+): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_evolution', {
     request_id: requestId,
-    payload: { package_id: packageId },
+    payload: {
+      package_id: packageId,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+    },
     message,
   })
 }

@@ -7,10 +7,12 @@
 <script setup lang="ts">
 import { h, watch } from 'vue'
 import { NButton, useNotification } from 'naive-ui'
+import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 
 const notification = useNotification()
 const uiStore = useUiStore()
+const { t } = useI18n()
 const displayedNotificationIds = new Set<string>()
 
 // 监听通知变化
@@ -39,7 +41,7 @@ watch(
                 size: 'small',
                 onClick: handleAction,
               },
-              { default: () => item.actionLabel || '查看' }
+              { default: () => item.actionLabel || t('common.view') }
             )
           : undefined,
         onClose: () => {

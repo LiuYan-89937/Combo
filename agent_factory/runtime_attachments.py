@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -8,7 +10,8 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 from typing import Any
-from uuid import uuid4
+
+from agent_factory.document_processing import parse_file, parse_url
 
 
 ATTACHMENT_INPUT_DIR = "input_files"
@@ -16,6 +19,8 @@ ATTACHMENT_MARKER = "@"
 ATTACHMENT_MAX_FILES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILES"
 ATTACHMENT_MAX_FILE_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILE_BYTES"
 ATTACHMENT_MAX_TOTAL_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_TOTAL_BYTES"
+ATTACHMENT_MAX_MODEL_CHARS_ENV = "AGENTFACTORY_ATTACHMENT_MAX_MODEL_CHARS"
+DEFAULT_ATTACHMENT_MAX_MODEL_CHARS = 24000
 
 
 class AttachmentImportError(ValueError):
@@ -36,6 +41,7 @@ class AttachmentImportPolicy:
     max_files: int | None = None
     max_file_bytes: int | None = None
     max_total_bytes: int | None = None
+    max_model_chars: int = DEFAULT_ATTACHMENT_MAX_MODEL_CHARS
 
     @classmethod
     def from_env(cls) -> "AttachmentImportPolicy":
@@ -43,6 +49,7 @@ class AttachmentImportPolicy:
             max_files=_optional_positive_int_env(ATTACHMENT_MAX_FILES_ENV),
             max_file_bytes=_optional_positive_int_env(ATTACHMENT_MAX_FILE_BYTES_ENV),
             max_total_bytes=_optional_positive_int_env(ATTACHMENT_MAX_TOTAL_BYTES_ENV),
+            max_model_chars=_optional_positive_int_env(ATTACHMENT_MAX_MODEL_CHARS_ENV) or DEFAULT_ATTACHMENT_MAX_MODEL_CHARS,
         )
 
 
@@ -65,9 +72,15 @@ class RuntimeAttachmentRef:
     scope: str
     access: str
     imported_at: str
+    extracted_text: str | None = None
+    extracted_char_count: int = 0
+    extracted_text_truncated: bool = False
+    parser: str | None = None
+    parse_warnings: tuple[str, ...] = ()
+    source_url: str | None = None
 
     def model_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "attachment_id": self.attachment_id,
             "display_name": self.display_name,
             "source_kind": self.source_kind,
@@ -80,6 +93,17 @@ class RuntimeAttachmentRef:
             "access": self.access,
             "imported_at": self.imported_at,
         }
+        if self.extracted_text:
+            payload["extracted_text"] = self.extracted_text
+            payload["extracted_char_count"] = self.extracted_char_count
+            payload["extracted_text_truncated"] = self.extracted_text_truncated
+        if self.parser:
+            payload["parser"] = self.parser
+        if self.parse_warnings:
+            payload["parse_warnings"] = list(self.parse_warnings)
+        if self.source_url:
+            payload["source_url"] = self.source_url
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +117,15 @@ class _PreparedLocalAttachment:
 class _ImportedLocalAttachment:
     ref: RuntimeAttachmentRef
     target_dir: Path
+
+
+@dataclass(frozen=True, slots=True)
+class _AttachmentText:
+    content: str
+    original_chars: int
+    truncated: bool
+    parser: str | None
+    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +161,7 @@ def import_marked_attachments(
                 storage_root=storage_root,
                 runtime_path_root=runtime_path_root,
                 scope=scope,
+                policy=resolved_policy,
             )
             imported.append(imported_item)
             ref = imported_item.ref
@@ -146,6 +180,89 @@ def import_marked_attachments(
         message=_replace_ranges(message, replacements),
         attachments=[imported_item.ref.model_payload() for imported_item in imported],
     )
+
+
+def import_runtime_attachments(
+    message: str,
+    attachments: Any,
+    *,
+    storage_root: Path,
+    runtime_path_root: str,
+    base_dir: Path | None = None,
+    scope: str = "run",
+    policy: AttachmentImportPolicy | None = None,
+) -> AttachmentImportResult:
+    resolved_policy = policy or AttachmentImportPolicy.from_env()
+    marked = import_marked_attachments(
+        message,
+        storage_root=storage_root,
+        runtime_path_root=runtime_path_root,
+        base_dir=base_dir,
+        scope=scope,
+        policy=resolved_policy,
+    )
+    payload_attachments = import_payload_attachments(
+        attachments,
+        storage_root=storage_root,
+        runtime_path_root=runtime_path_root,
+        base_dir=base_dir,
+        scope=scope,
+        policy=resolved_policy,
+    )
+    return AttachmentImportResult(
+        message=marked.message,
+        attachments=[*marked.attachments, *payload_attachments],
+    )
+
+
+def import_payload_attachments(
+    attachments: Any,
+    *,
+    storage_root: Path,
+    runtime_path_root: str,
+    base_dir: Path | None = None,
+    scope: str = "run",
+    policy: AttachmentImportPolicy | None = None,
+) -> list[dict[str, Any]]:
+    if not isinstance(attachments, list) or not attachments:
+        return []
+    resolved_policy = policy or AttachmentImportPolicy.from_env()
+    items = [dict(item) for item in attachments if isinstance(item, dict)]
+    if resolved_policy.max_files is not None and len(items) > resolved_policy.max_files:
+        raise AttachmentImportError(
+            "attachment count exceeds configured limit: "
+            f"{len(items)} > {resolved_policy.max_files}",
+            code="external_attachment_limit_exceeded",
+        )
+    imported: list[_ImportedLocalAttachment] = []
+    try:
+        for item in items:
+            imported.append(
+                _import_payload_attachment(
+                    item,
+                    storage_root=storage_root,
+                    runtime_path_root=runtime_path_root,
+                    base_dir=base_dir,
+                    scope=scope,
+                    policy=resolved_policy,
+                )
+            )
+        _enforce_import_policy(
+            [
+                _PreparedLocalAttachment(
+                    raw_path=imported_item.ref.display_name,
+                    source=imported_item.target_dir / imported_item.ref.display_name,
+                    size_bytes=imported_item.ref.size_bytes,
+                )
+                for imported_item in imported
+            ],
+            policy=resolved_policy,
+        )
+    except Exception:
+        for imported_item in imported:
+            shutil.rmtree(imported_item.target_dir, ignore_errors=True)
+        raise
+    return [item.ref.model_payload() for item in imported]
 
 
 def parse_attachment_markers(message: str) -> list[AttachmentMarker]:
@@ -180,14 +297,34 @@ def import_local_attachment(
     scope: str = "run",
     policy: AttachmentImportPolicy | None = None,
 ) -> RuntimeAttachmentRef:
+    return _import_local_attachment_item(
+        raw_path,
+        storage_root=storage_root,
+        runtime_path_root=runtime_path_root,
+        base_dir=base_dir,
+        scope=scope,
+        policy=policy or AttachmentImportPolicy.from_env(),
+    ).ref
+
+
+def _import_local_attachment_item(
+    raw_path: str,
+    *,
+    storage_root: Path,
+    runtime_path_root: str,
+    base_dir: Path | None = None,
+    scope: str = "run",
+    policy: AttachmentImportPolicy,
+) -> _ImportedLocalAttachment:
     prepared = _prepare_local_attachment_source(raw_path, base_dir=base_dir)
-    _enforce_import_policy([prepared], policy=policy or AttachmentImportPolicy.from_env())
+    _enforce_import_policy([prepared], policy=policy)
     return _copy_prepared_local_attachment(
         prepared,
         storage_root=storage_root,
         runtime_path_root=runtime_path_root,
         scope=scope,
-    ).ref
+        policy=policy,
+    )
 
 
 def _copy_prepared_local_attachment(
@@ -196,32 +333,31 @@ def _copy_prepared_local_attachment(
     storage_root: Path,
     runtime_path_root: str,
     scope: str,
+    policy: AttachmentImportPolicy,
 ) -> _ImportedLocalAttachment:
-    attachment_id = f"att_{uuid4().hex}"
     safe_name = _safe_filename(prepared.source.name)
-    target_dir = storage_root / attachment_id
-    target_dir.mkdir(parents=True, exist_ok=False)
-    target = target_dir / safe_name
+    storage_root.mkdir(parents=True, exist_ok=True)
+    target = _unique_storage_path(storage_root, safe_name)
     try:
         shutil.copy2(prepared.source, target)
         digest = _file_sha256(target)
         size_bytes = target.stat().st_size
     except Exception as exc:
-        shutil.rmtree(target_dir, ignore_errors=True)
+        shutil.rmtree(storage_root, ignore_errors=True)
         raise AttachmentImportError(
             f"attachment file could not be imported: {prepared.raw_path}: {exc}",
             path=prepared.raw_path,
         ) from exc
     runtime_path = _runtime_attachment_path(
         runtime_path_root=runtime_path_root,
-        attachment_id=attachment_id,
-        filename=safe_name,
+        filename=target.name,
     )
     mime_type, _ = mimetypes.guess_type(safe_name)
+    extracted = _extract_file_text(target, policy=policy)
     return _ImportedLocalAttachment(
         ref=RuntimeAttachmentRef(
-            attachment_id=attachment_id,
-            display_name=safe_name,
+            attachment_id=_attachment_id_for(runtime_path=runtime_path, digest=digest),
+            display_name=target.name,
             source_kind="local_path",
             runtime_path=runtime_path,
             mime_type=mime_type,
@@ -230,8 +366,169 @@ def _copy_prepared_local_attachment(
             scope=scope,
             access="read_only",
             imported_at=datetime.now(UTC).isoformat(),
+            extracted_text=extracted.content,
+            extracted_char_count=extracted.original_chars,
+            extracted_text_truncated=extracted.truncated,
+            parser=extracted.parser,
+            parse_warnings=extracted.warnings,
         ),
-        target_dir=target_dir,
+        target_dir=storage_root,
+    )
+
+
+def _import_payload_attachment(
+    item: dict[str, Any],
+    *,
+    storage_root: Path,
+    runtime_path_root: str,
+    base_dir: Path | None,
+    scope: str,
+    policy: AttachmentImportPolicy,
+) -> _ImportedLocalAttachment:
+    kind = str(item.get("kind") or "").strip().lower()
+    display_name = _safe_filename(str(item.get("name") or item.get("display_name") or kind or "attachment"))
+    mime_type = str(item.get("mime_type") or item.get("mime") or "").strip() or None
+    content = item.get("content")
+    if kind == "text":
+        text = str(content or "")
+        if not text.strip():
+            raise AttachmentImportError("text attachment content cannot be empty", path=display_name)
+        filename = _ensure_suffix(display_name, ".txt")
+        extracted = _bounded_attachment_text(text, parser="inline_text", warnings=(), policy=policy)
+        return _write_runtime_attachment(
+            data=text.encode("utf-8"),
+            display_name=filename,
+            source_kind="inline_text",
+            mime_type=mime_type or "text/plain",
+            storage_root=storage_root,
+            runtime_path_root=runtime_path_root,
+            scope=scope,
+            extracted=extracted,
+        )
+    if kind == "url":
+        url = str(content or item.get("url") or "").strip()
+        parsed = parse_url(url, metadata={"title": display_name})
+        text = "\n\n".join(document.content for document in parsed.documents).strip()
+        extracted = _bounded_attachment_text(
+            text,
+            parser=_first_loader(parsed.documents) or "url",
+            warnings=tuple(parsed.warnings),
+            policy=policy,
+        )
+        filename = _ensure_suffix(display_name or "url", ".txt")
+        return _write_runtime_attachment(
+            data=(text or url).encode("utf-8"),
+            display_name=filename,
+            source_kind="url",
+            mime_type=mime_type or "text/plain",
+            storage_root=storage_root,
+            runtime_path_root=runtime_path_root,
+            scope=scope,
+            extracted=extracted,
+            source_url=url,
+        )
+    if kind == "file":
+        raw = str(content or item.get("path") or "").strip()
+        encoding = str(item.get("encoding") or "").strip().lower()
+        if encoding == "base64" or raw.startswith("data:"):
+            data = _decode_base64_payload(raw)
+            return _write_runtime_attachment(
+                data=data,
+                display_name=display_name,
+                source_kind="uploaded_file",
+                mime_type=mime_type,
+                storage_root=storage_root,
+                runtime_path_root=runtime_path_root,
+                scope=scope,
+                policy=policy,
+            )
+        if raw:
+            candidate = _resolve_source(raw, base_dir=base_dir)
+            if candidate.exists():
+                return _import_local_attachment_item(
+                    raw,
+                    storage_root=storage_root,
+                    runtime_path_root=runtime_path_root,
+                    base_dir=base_dir,
+                    scope=scope,
+                    policy=policy,
+                )
+        if raw:
+            data = _decode_base64_payload(raw)
+            return _write_runtime_attachment(
+                data=data,
+                display_name=display_name,
+                source_kind="uploaded_file",
+                mime_type=mime_type,
+                storage_root=storage_root,
+                runtime_path_root=runtime_path_root,
+                scope=scope,
+                policy=policy,
+            )
+        return _import_local_attachment_item(
+            raw,
+            storage_root=storage_root,
+            runtime_path_root=runtime_path_root,
+            base_dir=base_dir,
+            scope=scope,
+            policy=policy,
+        )
+    raise AttachmentImportError(f"unsupported attachment kind: {kind or 'unknown'}", path=display_name)
+
+
+def _write_runtime_attachment(
+    *,
+    data: bytes,
+    display_name: str,
+    source_kind: str,
+    mime_type: str | None,
+    storage_root: Path,
+    runtime_path_root: str,
+    scope: str,
+    policy: AttachmentImportPolicy | None = None,
+    extracted: _AttachmentText | None = None,
+    source_url: str | None = None,
+) -> _ImportedLocalAttachment:
+    safe_name = _safe_filename(display_name)
+    storage_root.mkdir(parents=True, exist_ok=True)
+    target = _unique_storage_path(storage_root, safe_name)
+    try:
+        target.write_bytes(data)
+        digest = _file_sha256(target)
+        size_bytes = target.stat().st_size
+    except Exception as exc:
+        shutil.rmtree(storage_root, ignore_errors=True)
+        raise AttachmentImportError(
+            f"attachment file could not be imported: {safe_name}: {exc}",
+            path=safe_name,
+        ) from exc
+    resolved_policy = policy or AttachmentImportPolicy.from_env()
+    text = extracted if extracted is not None else _extract_file_text(target, policy=resolved_policy)
+    runtime_path = _runtime_attachment_path(
+        runtime_path_root=runtime_path_root,
+        filename=target.name,
+    )
+    guessed_mime, _ = mimetypes.guess_type(safe_name)
+    return _ImportedLocalAttachment(
+        ref=RuntimeAttachmentRef(
+            attachment_id=_attachment_id_for(runtime_path=runtime_path, digest=digest),
+            display_name=target.name,
+            source_kind=source_kind,
+            runtime_path=runtime_path,
+            mime_type=mime_type or guessed_mime,
+            size_bytes=size_bytes,
+            sha256=digest,
+            scope=scope,
+            access="read_only",
+            imported_at=datetime.now(UTC).isoformat(),
+            extracted_text=text.content,
+            extracted_char_count=text.original_chars,
+            extracted_text_truncated=text.truncated,
+            parser=text.parser,
+            parse_warnings=text.warnings,
+            source_url=source_url,
+        ),
+        target_dir=storage_root,
     )
 
 
@@ -265,6 +562,23 @@ def format_attachments_for_model(attachments: Any) -> str:
         if digest:
             parts.append(f"sha256={digest}")
         lines.append("- " + "; ".join(parts))
+        extracted_text = str(item.get("extracted_text") or "").strip()
+        if extracted_text:
+            char_count = item.get("extracted_char_count")
+            truncated = bool(item.get("extracted_text_truncated"))
+            parser = str(item.get("parser") or "").strip()
+            meta = []
+            if parser:
+                meta.append(f"parser={parser}")
+            if isinstance(char_count, int):
+                meta.append(f"chars={char_count}")
+            if truncated:
+                meta.append("truncated=true")
+            lines.append(f"  extracted_text{(' (' + ', '.join(meta) + ')') if meta else ''}:")
+            lines.extend(f"  {line}" for line in extracted_text.splitlines())
+        warnings = item.get("parse_warnings")
+        if isinstance(warnings, list) and warnings:
+            lines.append("  parse_warnings=" + "; ".join(str(warning) for warning in warnings if str(warning).strip()))
     return "\n".join(lines) if len(lines) > 2 else ""
 
 
@@ -326,11 +640,11 @@ def redact_attachment_markers(message: str) -> str:
     return _replace_ranges(message, replacements)
 
 
-def safe_attachment_scope_id(value: str | None, *, fallback: str = "run") -> str:
-    text = str(value or "").strip()
-    chars = [char if char.isalnum() or char in {"_", ".", "-"} else "_" for char in text]
-    cleaned = "".join(chars).strip("._-")
-    return cleaned or fallback
+def time_named_attachment_scope(now: datetime | None = None) -> str:
+    value = now or datetime.now(UTC)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 def merge_attachments_into_user_config(user_config: Any, attachments: Any) -> dict[str, Any]:
@@ -417,6 +731,71 @@ def _enforce_import_policy(
             )
 
 
+def _extract_file_text(path: Path, *, policy: AttachmentImportPolicy) -> _AttachmentText:
+    parsed = parse_file(path, root=path.parent)
+    content = "\n\n".join(document.content for document in parsed.documents).strip()
+    return _bounded_attachment_text(
+        content,
+        parser=_first_loader(parsed.documents),
+        warnings=tuple(parsed.warnings),
+        policy=policy,
+    )
+
+
+def _bounded_attachment_text(
+    content: str,
+    *,
+    parser: str | None,
+    warnings: tuple[str, ...],
+    policy: AttachmentImportPolicy,
+) -> _AttachmentText:
+    text = str(content or "").strip()
+    original_chars = len(text)
+    limit = policy.max_model_chars
+    if limit > 0 and len(text) > limit:
+        text = text[:limit].rstrip()
+        truncated = True
+    else:
+        truncated = False
+    return _AttachmentText(
+        content=text,
+        original_chars=original_chars,
+        truncated=truncated,
+        parser=parser,
+        warnings=warnings,
+    )
+
+
+def _first_loader(documents: Any) -> str | None:
+    if not isinstance(documents, list):
+        return None
+    for document in documents:
+        metadata = getattr(document, "metadata", None)
+        if not isinstance(metadata, dict) and isinstance(document, dict):
+            metadata = document.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        loader = str(metadata.get("loader") or "").strip()
+        if loader:
+            return loader
+    return None
+
+
+def _decode_base64_payload(value: str) -> bytes:
+    payload = value.split(",", 1)[1] if value.startswith("data:") and "," in value else value
+    try:
+        return base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise AttachmentImportError("file attachment content is not valid base64") from exc
+
+
+def _ensure_suffix(value: str, suffix: str) -> str:
+    name = _safe_filename(value)
+    if Path(name).suffix:
+        return name
+    return f"{name}{suffix}"
+
+
 def _resolve_source(raw_path: str, *, base_dir: Path | None) -> Path:
     candidate = Path(raw_path).expanduser()
     if not candidate.is_absolute():
@@ -448,6 +827,22 @@ def _safe_filename(value: str) -> str:
     return cleaned or "attachment"
 
 
+def _unique_storage_path(storage_root: Path, filename: str) -> Path:
+    safe_name = _safe_filename(filename)
+    candidate = storage_root / safe_name
+    if not candidate.exists():
+        return candidate
+    parsed = Path(safe_name)
+    stem = parsed.stem or parsed.name
+    suffix = parsed.suffix
+    index = 2
+    while True:
+        candidate = storage_root / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
 def _display_name_from_raw_path(value: str) -> str:
     normalized = value.replace("\\", "/").rstrip("/")
     return _safe_filename(normalized.rsplit("/", 1)[-1])
@@ -464,8 +859,13 @@ def _optional_positive_int_env(name: str) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _runtime_attachment_path(*, runtime_path_root: str, attachment_id: str, filename: str) -> str:
-    return str(PurePosixPath(runtime_path_root) / attachment_id / filename)
+def _runtime_attachment_path(*, runtime_path_root: str, filename: str) -> str:
+    return str(PurePosixPath(runtime_path_root) / filename)
+
+
+def _attachment_id_for(*, runtime_path: str, digest: str) -> str:
+    source = runtime_path + "\0" + digest
+    return f"att_{sha256(source.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _file_sha256(path: Path) -> str:

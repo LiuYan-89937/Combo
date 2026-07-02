@@ -13,6 +13,24 @@ export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed' 
 
 export type WorkspaceScope = 'package' | 'runtime' | 'workdir' | 'artifacts' | 'extensions'
 
+export type RuntimeAttachmentKind = 'file' | 'text' | 'url'
+
+export interface RuntimeAttachmentInput {
+  kind: RuntimeAttachmentKind
+  name: string
+  content?: string
+  encoding?: 'base64'
+  source_kind?: string
+  mime_type?: string
+}
+
+export interface TranscriptAttachmentView {
+  kind: RuntimeAttachmentKind
+  name: string
+  source_kind?: string
+  mime_type?: string
+}
+
 // ========== 命令类型 ==========
 
 export interface FactoryFrontendCommand {
@@ -69,6 +87,7 @@ export interface TranscriptItem {
   content: string
   timestamp: string
   streamId?: string
+  attachments?: TranscriptAttachmentView[]
   metadata?: any
 }
 
@@ -230,7 +249,10 @@ export interface WorkspaceFileView {
   scope?: WorkspaceScope
   path?: string
   kind: 'text' | 'binary'
+  mimeType: string | null
+  encoding: 'utf-8' | 'base64' | string
   content: string
+  contentBase64: string
   sizeBytes: number
   truncated: boolean
   payload?: Record<string, any>

@@ -1,32 +1,32 @@
 <template>
   <n-drawer :show="show" :width="460" placement="right" @update:show="emit('update:show', $event)">
-    <n-drawer-content title="Agent 包详情" closable>
+    <n-drawer-content :title="t('agentDetail.title')" closable>
       <div v-if="agentPackage" class="detail-panel">
         <section class="detail-section">
-          <div class="detail-title">{{ packageDisplayName(agentPackage) }}</div>
+          <div class="detail-title">{{ packageDisplayName(agentPackage, t) }}</div>
           <div class="detail-description">
-            {{ agentPackage.agent_description || '无描述' }}
+            {{ agentPackage.agent_description || t('common.noDescription') }}
           </div>
         </section>
 
         <section class="detail-section detail-grid">
           <div class="detail-row">
-            <span>状态</span>
+            <span>{{ t('common.status') }}</span>
             <n-tag size="small" :type="statusType(agentPackage.status || '')">
-              {{ agentPackage.status || '未知' }}
+              {{ packageStatusLabel(agentPackage.status) }}
             </n-tag>
           </div>
           <div class="detail-row">
-            <span>工具</span>
+            <span>{{ t('agentDetail.tools') }}</span>
             <strong>{{ agentPackage.tool_count || 0 }}</strong>
           </div>
           <div class="detail-row">
-            <span>会话</span>
+            <span>{{ t('agentDetail.sessions') }}</span>
             <strong>{{ agentPackage.session_count || 0 }}</strong>
           </div>
           <div class="detail-row">
-            <span>更新时间</span>
-            <strong>{{ formatPackageDateTime(agentPackage.updated_at) }}</strong>
+            <span>{{ t('agentDetail.updatedAt') }}</span>
+            <strong>{{ formatPackageDateTime(agentPackage.updated_at, locale, t) }}</strong>
           </div>
           <div class="detail-row">
             <span>MCP</span>
@@ -37,23 +37,23 @@
             <strong>{{ skills.length }}</strong>
           </div>
           <div class="detail-row">
-            <span>知识源</span>
+            <span>{{ t('agentDetail.knowledgeSources') }}</span>
             <strong>{{ knowledgeSources.length }}</strong>
           </div>
         </section>
 
         <section class="detail-section">
           <div class="section-header">
-            <div class="section-label">包内工具</div>
+            <div class="section-label">{{ t('agentDetail.packageTools') }}</div>
             <n-tag size="small" :bordered="false">{{ packageTools.length }}</n-tag>
           </div>
-          <n-empty v-if="packageTools.length === 0" description="未配置包内工具" size="small" />
+          <n-empty v-if="packageTools.length === 0" :description="t('agentDetail.noPackageTools')" size="small" />
           <div v-else class="detail-list">
             <div v-for="tool in packageTools" :key="tool.id || tool.name" class="detail-list-item">
               <div class="item-main">
                 <div class="item-title">{{ tool.name }}</div>
                 <div v-if="tool.description" class="item-description">{{ tool.description }}</div>
-                <div class="item-meta">{{ toolMeta(tool) }}</div>
+                <div class="item-meta">{{ toolMeta(tool, t) }}</div>
               </div>
               <n-tag size="small" :bordered="false">{{ tool.risk_level || 'low' }}</n-tag>
             </div>
@@ -65,7 +65,7 @@
             <div class="section-label">MCP</div>
             <n-tag size="small" :bordered="false">{{ mcpServers.length }}</n-tag>
           </div>
-          <n-empty v-if="mcpServers.length === 0" description="未配置 MCP" size="small" />
+          <n-empty v-if="mcpServers.length === 0" :description="t('agentDetail.noMcp')" size="small" />
           <div v-else class="detail-list">
             <div v-for="server in mcpServers" :key="extensionKey(server)" class="detail-list-item">
               <div class="item-main">
@@ -73,10 +73,10 @@
                 <div v-if="extensionDescription(server)" class="item-description">
                   {{ extensionDescription(server) }}
                 </div>
-                <div class="item-meta">{{ mcpMeta(server) }}</div>
+                <div class="item-meta">{{ mcpMeta(server, t) }}</div>
               </div>
               <n-tag size="small" :bordered="false" :type="server.enabled === false ? 'default' : 'success'">
-                {{ server.enabled === false ? '停用' : '启用' }}
+                {{ server.enabled === false ? t('agentDetail.disabled') : t('agentDetail.enabled') }}
               </n-tag>
             </div>
           </div>
@@ -87,7 +87,7 @@
             <div class="section-label">Skill</div>
             <n-tag size="small" :bordered="false">{{ skills.length }}</n-tag>
           </div>
-          <n-empty v-if="skills.length === 0" description="未配置 Skill" size="small" />
+          <n-empty v-if="skills.length === 0" :description="t('agentDetail.noSkill')" size="small" />
           <div v-else class="detail-list">
             <div v-for="skill in skills" :key="extensionKey(skill)" class="detail-list-item">
               <div class="item-main">
@@ -95,10 +95,10 @@
                 <div v-if="extensionDescription(skill)" class="item-description">
                   {{ extensionDescription(skill) }}
                 </div>
-                <div class="item-meta">{{ skillMeta(skill) }}</div>
+                <div class="item-meta">{{ skillMeta(skill, t) }}</div>
               </div>
               <n-tag size="small" :bordered="false" :type="skill.enabled === false ? 'default' : 'success'">
-                {{ skill.enabled === false ? '停用' : '启用' }}
+                {{ skill.enabled === false ? t('agentDetail.disabled') : t('agentDetail.enabled') }}
               </n-tag>
             </div>
           </div>
@@ -106,10 +106,10 @@
 
         <section class="detail-section">
           <div class="section-header">
-            <div class="section-label">知识库</div>
+            <div class="section-label">{{ t('agentDetail.knowledgeBase') }}</div>
             <n-tag size="small" :bordered="false">{{ knowledgeSources.length }}</n-tag>
           </div>
-          <n-empty v-if="knowledgeSources.length === 0" description="未配置知识源" size="small" />
+          <n-empty v-if="knowledgeSources.length === 0" :description="t('agentDetail.noKnowledge')" size="small" />
           <div v-else class="detail-list">
             <div
               v-for="source in knowledgeSources"
@@ -119,32 +119,32 @@
               <div class="item-main">
                 <div class="item-title">{{ source.name }}</div>
                 <div class="item-description">
-                  {{ knowledgeMeta(source) }}
+                  {{ knowledgeMeta(source, locale, t) }}
                 </div>
                 <div v-if="source.uri" class="item-uri">{{ source.uri }}</div>
-                <div v-if="knowledgeSamples(source)" class="item-meta">
-                  {{ knowledgeSamples(source) }}
+                <div v-if="knowledgeSamples(source, t)" class="item-meta">
+                  {{ knowledgeSamples(source, t) }}
                 </div>
               </div>
               <n-tag size="small" :bordered="false" :type="source.status === 'ready' ? 'success' : 'default'">
-                {{ source.status || '未知' }}
+                {{ packageStatusLabel(source.status) }}
               </n-tag>
             </div>
           </div>
         </section>
 
         <section v-if="agentPackage.extensions_error || agentPackage.knowledge_error" class="detail-section">
-          <div class="section-label">详情读取提示</div>
+          <div class="section-label">{{ t('agentDetail.readHint') }}</div>
           <div v-if="agentPackage.extensions_error" class="detail-note">
-            MCP / Skill 配置读取失败：{{ agentPackage.extensions_error }}
+            {{ t('agentDetail.extensionsReadFailed', { error: agentPackage.extensions_error }) }}
           </div>
           <div v-if="agentPackage.knowledge_error" class="detail-note">
-            知识库详情读取失败：{{ agentPackage.knowledge_error }}
+            {{ t('agentDetail.knowledgeReadFailed', { error: agentPackage.knowledge_error }) }}
           </div>
         </section>
 
         <section v-if="agentPackage.error" class="detail-section">
-          <div class="section-label">状态说明</div>
+          <div class="section-label">{{ t('agentDetail.statusNote') }}</div>
           <div class="detail-note">
             {{ agentPackage.error }}
           </div>
@@ -156,19 +156,19 @@
             :loading="instanceBusy"
             @click="emit('shutdown', agentPackage)"
           >
-            关闭实例
+            {{ t('agentDetail.shutdown') }}
           </n-button>
           <n-button
             v-else
             :loading="instanceBusy"
             @click="emit('initialize', agentPackage)"
           >
-            初始化实例
+            {{ t('agentDetail.initialize') }}
           </n-button>
-          <n-button type="primary" :disabled="!ready" @click="emit('run', agentPackage)">运行</n-button>
-          <n-button @click="emit('evolve', agentPackage)">进化</n-button>
+          <n-button type="primary" :disabled="!ready" @click="emit('run', agentPackage)">{{ t('agents.run') }}</n-button>
+          <n-button @click="emit('evolve', agentPackage)">{{ t('agents.evolve') }}</n-button>
           <n-button :loading="exportBusy" @click="emit('export', agentPackage)">
-            导出
+            {{ t('common.export') }}
           </n-button>
         </div>
       </div>
@@ -185,6 +185,7 @@ import {
   NEmpty,
   NTag,
 } from 'naive-ui'
+import { useI18n } from '@/composables/useI18n'
 import type {
   AgentPackageExtensionView,
   AgentPackageInstanceView,
@@ -224,10 +225,22 @@ const emit = defineEmits<{
 }>()
 
 const ready = computed(() => isPackageReady(props.instance))
+const { locale, t } = useI18n()
 const packageTools = computed<AgentPackageToolView[]>(() => props.agentPackage?.tools || [])
 const mcpServers = computed<AgentPackageExtensionView[]>(() => props.agentPackage?.mcp_servers || [])
 const skills = computed<AgentPackageExtensionView[]>(() => props.agentPackage?.skills || [])
 const knowledgeSources = computed<AgentPackageKnowledgeSourceView[]>(() => props.agentPackage?.knowledge_sources || [])
+
+function packageStatusLabel(status: string | null | undefined): string {
+  const value = status || ''
+  const labels: Record<string, string> = {
+    ready: t('agents.statusReady'),
+    running: t('agents.statusRunning'),
+    failed: t('run.failed'),
+    initializing: t('agentDetail.initializing'),
+  }
+  return labels[value] || value || t('common.unknown')
+}
 </script>
 
 <style scoped>

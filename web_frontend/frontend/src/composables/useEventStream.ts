@@ -5,6 +5,7 @@
 
 import { ref } from 'vue'
 import { EventStreamClient, type ConnectionStatus } from '@/api/events'
+import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import { syncDomainStoresFromRuntime } from '@/stores/runtimeSync'
 import { useUiStore } from '@/stores/ui'
@@ -23,6 +24,7 @@ export function applyRuntimeEvent(event: FactoryFrontendEvent): void {
 export function useEventStream() {
   const runtimeStore = useRuntimeStore()
   const uiStore = useUiStore()
+  const { t } = useI18n()
 
   function connect() {
     if (client) return
@@ -39,22 +41,22 @@ export function useEventStream() {
         if (newStatus === 'connected') {
           uiStore.addNotification({
             type: 'success',
-            title: '已连接',
-            message: '事件流连接成功',
+            title: t('connection.connected'),
+            message: t('eventStream.connectedMessage'),
             duration: 3000,
           })
         } else if (newStatus === 'error') {
           uiStore.addNotification({
             type: 'error',
-            title: '连接错误',
-            message: '事件流连接失败',
+            title: t('connection.error'),
+            message: t('eventStream.failedMessage'),
             duration: 5000,
           })
         } else if (newStatus === 'reconnecting') {
           uiStore.addNotification({
             type: 'warning',
-            title: '重新连接中',
-            message: '正在恢复事件流...',
+            title: t('connection.reconnecting'),
+            message: t('eventStream.reconnectingMessage'),
             duration: 3000,
           })
         }

@@ -9,8 +9,8 @@ export function useWorkspaceCommands() {
     return transport.applyEventRequest(workspaceApi.entries(scope, path, packageId))
   }
 
-  const readFile = (scope: WorkspaceScope, path: string, packageId?: string) => {
-    return transport.applyEventRequest(workspaceApi.file(scope, path, packageId))
+  const readFile = (scope: WorkspaceScope, path: string, packageId?: string, maxChars?: number) => {
+    return transport.applyEventRequest(workspaceApi.file(scope, path, packageId, maxChars))
   }
 
   return {
