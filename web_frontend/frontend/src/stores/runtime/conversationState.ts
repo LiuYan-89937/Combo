@@ -21,11 +21,11 @@ type ConversationScopeSource = Pick<
 
 export function buildConversationScopeState(source: ConversationScopeSource): ConversationScopeState {
   return {
-    transcript: source.transcript.map((item) => ({ ...item })),
+    transcript: source.transcript.map(cloneTranscriptItem),
     conversationTurns: source.conversationTurns.map((turn) => ({
       ...turn,
-      userMessage: turn.userMessage ? { ...turn.userMessage } : null,
-      assistantMessages: turn.assistantMessages.map((item) => ({ ...item })),
+      userMessage: turn.userMessage ? cloneTranscriptItem(turn.userMessage) : null,
+      assistantMessages: turn.assistantMessages.map(cloneTranscriptItem),
       tools: turn.tools.map((tool) => ({ ...tool, payload: { ...(tool.payload || {}) } })),
       metadata: { ...(turn.metadata || {}) },
     })),
@@ -62,11 +62,11 @@ export function buildConversationScopeState(source: ConversationScopeSource): Co
 
 export function normalizeConversationScopeState(saved: ConversationScopeState): ConversationScopeState {
   return {
-    transcript: saved.transcript.map((item) => ({ ...item })),
+    transcript: saved.transcript.map(cloneTranscriptItem),
     conversationTurns: saved.conversationTurns.map((turn) => ({
       ...turn,
-      userMessage: turn.userMessage ? { ...turn.userMessage } : null,
-      assistantMessages: turn.assistantMessages.map((item) => ({ ...item })),
+      userMessage: turn.userMessage ? cloneTranscriptItem(turn.userMessage) : null,
+      assistantMessages: turn.assistantMessages.map(cloneTranscriptItem),
       tools: turn.tools.map((tool) => ({ ...tool, payload: { ...(tool.payload || {}) } })),
       metadata: { ...(turn.metadata || {}) },
     })),
@@ -82,7 +82,12 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
       ? { ...saved.contextWindow, payload: { ...(saved.contextWindow.payload || {}) } }
       : null,
     modelStreams: Object.fromEntries(
-      Object.entries(saved.modelStreams).map(([key, stream]) => [key, { ...stream }]),
+      Object.entries(saved.modelStreams).map(([key, stream]) => [key, {
+        ...stream,
+        reasoningContent: stream.reasoningContent || '',
+        reasoningActive: Boolean(stream.reasoningActive),
+        reasoningCompletedAt: stream.reasoningCompletedAt || null,
+      }]),
     ),
     activeAgentSessionId: saved.activeAgentSessionId,
     activeRequestId: saved.activeRequestId ?? null,
@@ -97,5 +102,12 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
     stages: Object.fromEntries(
       Object.entries(saved.stages || {}).map(([key, stage]) => [key, { ...stage }]),
     ),
+  }
+}
+
+function cloneTranscriptItem<T extends { reasoning?: any }>(item: T): T {
+  return {
+    ...item,
+    reasoning: item.reasoning ? { ...item.reasoning } : undefined,
   }
 }

@@ -79,6 +79,10 @@
           :disabled="inputDisabled"
           :is-running="runtimeStore.hasActiveRun"
           attachments-enabled
+          model-selector-enabled
+          :model-options="runtimeMainModelOptions"
+          :selected-model-profile-id="selectedMainModelProfileId"
+          @update:selected-model-profile-id="setSelectedMainModelProfileId"
           @send="handleSend"
           @cancel="handleCancel"
         />
@@ -114,6 +118,10 @@ const {
   evolutionPackageOptions,
   inputPlaceholder,
   inputDisabled,
+  loadRuntimeMainModelProfiles,
+  runtimeMainModelOptions,
+  selectedMainModelProfileId,
+  setSelectedMainModelProfileId,
   emptyDescription,
   emptyHint,
   applyRouteMode,
@@ -183,6 +191,7 @@ watch(
 
 onMounted(() => {
   applyRouteMode()
+  void loadRuntimeMainModelProfiles()
 
   // 聚焦输入框
   nextTick(() => {

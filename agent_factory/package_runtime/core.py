@@ -28,10 +28,11 @@ from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.package_runtime.session_turns import (
     resume_user_input,
     session_final_answer,
+    session_reasoning_content,
     session_trace_ref,
     session_user_input_from_state,
 )
-from agent_factory.runtime_attachments import merge_attachments_into_user_config
+from agent_factory.runtime_attachments import has_attachment_payload, merge_attachments_into_user_config
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
@@ -247,7 +248,7 @@ class PackageRuntimeCore:
 
     def _run_message(self, normalizer: RuntimeEventNormalizer, payload: dict[str, Any]) -> int:
         message = str(payload.get("message") or "").strip()
-        if not message:
+        if not message and not has_attachment_payload(payload.get("attachments")):
             normalizer.emit_run_failed(ValueError("run_message requires payload.message"))
             return 1
         runtime = self.ensure_compiled(normalizer)
@@ -307,6 +308,7 @@ class PackageRuntimeCore:
             run_context.session_id,
             first_user_input=session_user_input,
             user_input=session_user_input,
+            reasoning_content=session_reasoning_content(final_state),
             final_answer=session_final_answer(final_state),
             status=final_state.execution.finish_status,
             trace_ref=session_trace_ref(compiled, final_state),
@@ -370,6 +372,7 @@ class PackageRuntimeCore:
             session_id,
             first_user_input=session_user_input,
             user_input=session_user_input,
+            reasoning_content=session_reasoning_content(final_state),
             final_answer=session_final_answer(final_state),
             status=final_state.execution.finish_status,
             trace_ref=session_trace_ref(compiled, final_state),
@@ -496,6 +499,7 @@ class PackageRuntimeCore:
                 run_context.session_id,
                 first_user_input=run_context.first_user_input,
                 user_input=run_context.first_user_input,
+                reasoning_content=session_reasoning_content(final_state),
                 final_answer=session_final_answer(final_state),
                 status=final_state.execution.finish_status,
                 trace_ref=session_trace_ref(runtime.compiled, final_state),

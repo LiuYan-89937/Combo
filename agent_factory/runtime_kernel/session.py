@@ -15,6 +15,7 @@ class AgentSessionTurn(BaseModel):
     index: int
     created_at: str
     user_input: str | None = None
+    reasoning_content: str | None = None
     final_answer: str | None = None
     status: str | None = None
     trace_ref: dict[str, str] | None = None
@@ -91,6 +92,7 @@ class AgentSessionManager:
         *,
         first_user_input: str | None = None,
         user_input: str | None = None,
+        reasoning_content: str | None = None,
         final_answer: str | None = None,
         status: str | None = None,
         trace_ref: dict[str, str] | None = None,
@@ -109,6 +111,7 @@ class AgentSessionManager:
                 index=record.turn_count,
                 created_at=_now(),
                 user_input=turn_input,
+                reasoning_content=(reasoning_content or "").strip() or None,
                 final_answer=(final_answer or "").strip() or None,
                 status=(status or "").strip() or None,
                 trace_ref=trace_ref or None,

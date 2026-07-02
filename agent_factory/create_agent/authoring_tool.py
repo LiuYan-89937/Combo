@@ -171,7 +171,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                             "profile_id": {"type": "string"},
                             "capability": {
                                 "type": "string",
-                                "enum": ["image_input", "image_output", "audio_input", "audio_output"],
+                                "enum": ["image_input", "image_output", "image_edit", "audio_input", "audio_output"],
                             },
                             "selection_source": {"type": "string", "enum": ["auto", "manual"]},
                             "reason": {"type": "string"},

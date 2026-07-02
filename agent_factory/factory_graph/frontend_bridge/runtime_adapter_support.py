@@ -48,10 +48,12 @@ def _messages_from_turns(value: Any) -> list[dict[str, Any]]:
                 }
             )
         if str(turn.get("final_answer") or "").strip():
+            reasoning_content = str(turn.get("reasoning_content") or "").strip()
             messages.append(
                 {
                     "role": "assistant",
                     "content": str(turn["final_answer"]),
+                    **({"reasoning_content": reasoning_content} if reasoning_content else {}),
                     "turn_index": turn.get("index"),
                     "created_at": turn.get("created_at"),
                 }
@@ -79,10 +81,12 @@ def _messages_from_session_turns(value: Any) -> list[dict[str, Any]]:
             )
         final_answer = str(turn.get("final_answer") or "").strip()
         if final_answer:
+            reasoning_content = str(turn.get("reasoning_content") or "").strip()
             messages.append(
                 {
                     "role": "assistant",
                     "content": final_answer,
+                    **({"reasoning_content": reasoning_content} if reasoning_content else {}),
                     "turn_index": turn_index,
                     "created_at": turn.get("updated_at") or turn.get("created_at"),
                 }

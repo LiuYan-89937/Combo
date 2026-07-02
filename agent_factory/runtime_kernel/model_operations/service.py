@@ -19,6 +19,8 @@ from agent_factory.runtime_kernel.adapters.model import (
 )
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
+from agent_factory.models.reasoning import reasoning_content_from_message
+from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
     count_messages_tokens,
@@ -80,7 +82,7 @@ class ModelOperationService:
         node_id: str | None = None,
         model_role: ModelRole | None = None,
     ) -> ModelInvocationResult:
-        model, metadata = self._resolve_model(model_role)
+        model, metadata = self._resolve_model(model_role, state=state)
         effective_model_role = str(metadata.get("model_role") or model_role or self.model_role)
         tool_list = list(tools or [])
         envelope = build_runtime_model_input(
@@ -89,6 +91,7 @@ class ModelOperationService:
             messages=messages or [],
             tools=tool_list,
             node_id=node_id,
+            image_input_enabled=bool(metadata.get("multimodal")),
         )
         _emit_context_window(
             state=state,
@@ -133,6 +136,7 @@ class ModelOperationService:
             )
             raise
         text = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
+        reasoning_content = reasoning_content_from_message(response)
         tool_calls = _tool_calls_from_response(response)
         usage_metadata = getattr(response, "usage_metadata", None) or {}
         cache_metrics = _model_cache_metrics_payload(
@@ -184,6 +188,7 @@ class ModelOperationService:
                 "tool_count": len(tool_list),
                 "usage_metadata": usage_metadata,
                 "provider_input_tokens": token_count_from_usage_metadata(usage_metadata),
+                "reasoning_content": reasoning_content,
                 **envelope.diagnostics(),
             },
         )
@@ -205,7 +210,7 @@ class ModelOperationService:
         node_id: str | None = None,
         model_role: ModelRole | None = None,
     ) -> BaseModel:
-        model, metadata = self._resolve_model(model_role)
+        model, metadata = self._resolve_model(model_role, state=state)
         effective_model_role = str(metadata.get("model_role") or model_role or self.model_role)
         envelope = None
         if prebuilt_messages is not None:
@@ -217,6 +222,7 @@ class ModelOperationService:
                 messages=messages or [],
                 tools=[],
                 node_id=node_id,
+                image_input_enabled=bool(metadata.get("multimodal")),
             )
             request_messages = envelope.messages
         attempts = max(1, int(max_attempts))
@@ -361,8 +367,16 @@ class ModelOperationService:
         )
         raise RuntimeError(f"structured model operation failed after {attempts} attempts: {last_error}")
 
-    def _resolve_model(self, role: ModelRole | None = None) -> tuple[Any, dict[str, Any]]:
+    def _resolve_model(self, role: ModelRole | None = None, *, state: Any | None = None) -> tuple[Any, dict[str, Any]]:
         requested_role = role or self.model_role
+        if requested_role == "main" and state is not None:
+            override = resolve_runtime_main_chat_model_from_state(state)
+            if override is not None:
+                return override.model, {
+                    **override.settings.metadata(),
+                    "runtime_model_override": True,
+                    "runtime_model_override_role": requested_role,
+                }
         if self._models_by_role:
             item = self._models_by_role.get(requested_role)
             if item is None:
@@ -413,9 +427,22 @@ def _invoke_tool_bound_chat(
         _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
         return response
     chunks: list[Any] = []
+    reasoning_parts: list[str] = []
     try:
         for chunk in stream(messages):
             chunks.append(chunk)
+            reasoning_delta = reasoning_content_from_message(chunk)
+            if reasoning_delta:
+                reasoning_parts.append(reasoning_delta)
+                _emit(
+                    emit_event,
+                    "model_reasoning_delta",
+                    {
+                        "stream_id": stream_id,
+                        "delta": reasoning_delta,
+                        "content_mode": "delta",
+                    },
+                )
             delta = strip_internal_snapshot_blocks(_content_to_text(getattr(chunk, "content", chunk)))
             if delta:
                 _emit(
@@ -438,6 +465,8 @@ def _invoke_tool_bound_chat(
         _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
         return response
     response = _merge_stream_chunks(chunks)
+    if reasoning_parts and not reasoning_content_from_message(response):
+        _attach_reasoning_content(response, "".join(reasoning_parts))
     _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
     return response
 
@@ -452,8 +481,31 @@ def _merge_stream_chunks(chunks: list[Any]) -> Any:
     return merged
 
 
+def _attach_reasoning_content(response: Any, reasoning_content: str) -> None:
+    additional_kwargs = getattr(response, "additional_kwargs", None)
+    if isinstance(additional_kwargs, dict):
+        additional_kwargs["reasoning_content"] = reasoning_content
+        return
+    try:
+        response.additional_kwargs = {"reasoning_content": reasoning_content}
+    except Exception:
+        return
+
+
 def _emit_model_message_completed(emit_event, *, stream_id: str, response: Any) -> None:
     content = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
+    reasoning_content = reasoning_content_from_message(response)
+    if reasoning_content:
+        _emit(
+            emit_event,
+            "model_reasoning_completed",
+            {
+                "stream_id": stream_id,
+                "content": reasoning_content,
+                "content_mode": "snapshot",
+                "completion_reason": "model_completed",
+            },
+        )
     _emit(
         emit_event,
         "model_message_completed",
@@ -462,6 +514,7 @@ def _emit_model_message_completed(emit_event, *, stream_id: str, response: Any) 
             "content": content,
             "content_mode": "snapshot",
             "completion_reason": "model_completed",
+            **({"reasoning_content": reasoning_content} if reasoning_content else {}),
         },
     )
 

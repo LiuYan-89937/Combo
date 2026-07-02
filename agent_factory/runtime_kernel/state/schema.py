@@ -27,6 +27,7 @@ class ConversationState(BaseModel):
     current_user_input: str | None = None
     current_user_input_id: str | None = None
     assistant_draft: str | None = None
+    reasoning_content: str | None = None
     final_answer: str | None = None
     clarification_question: str | None = None
     turn_index: int = 0

@@ -279,6 +279,7 @@
           "enum": [
             "image_input",
             "image_output",
+            "image_edit",
             "audio_input",
             "audio_output"
           ]

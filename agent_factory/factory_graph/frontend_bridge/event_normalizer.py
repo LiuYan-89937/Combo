@@ -25,6 +25,8 @@ INTERNAL_MODEL_MESSAGE_NODES = {"intent_gate"}
 NODE_EVENT_TYPES: set[str] = {
     "model_cache_metrics",
     "model_call_started",
+    "model_reasoning_delta",
+    "model_reasoning_completed",
     "model_stream_delta",
     "model_message_completed",
 }
@@ -66,6 +68,7 @@ class ModelStreamState:
     span_id: str
     parent_span_id: str | None
     content: str = ""
+    reasoning_content: str = ""
     completed: bool = False
 
 
@@ -382,7 +385,13 @@ class RuntimeEventNormalizer:
         event_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         node_id = _optional_str(payload.get("node_id"))
         frontend_payload = {key: value for key, value in json_safe(event_payload).items() if key != "event_type"}
-        if event_type in {"model_call_started", "model_stream_delta", "model_message_completed"}:
+        if event_type in {
+            "model_call_started",
+            "model_reasoning_delta",
+            "model_reasoning_completed",
+            "model_stream_delta",
+            "model_message_completed",
+        }:
             frontend_payload.setdefault("visible_to_user", self._model_message_visible_to_user(node_id))
             self._record_model_stream_event(event_type, node_id=node_id, payload=frontend_payload)
         self.runtime_event(
@@ -638,6 +647,7 @@ class RuntimeEventNormalizer:
                 continue
             stream.completed = True
             stream.content = ""
+            stream.reasoning_content = ""
             self.runtime_event(
                 "model_message_completed",
                 node_id=stream.node_id,
@@ -662,6 +672,22 @@ class RuntimeEventNormalizer:
             stream.completed = True
             return
         stream.completed = True
+        if stream.reasoning_content.strip():
+            self.runtime_event(
+                "model_reasoning_completed",
+                node_id=stream.node_id,
+                stage_id=self.current_stage_id,
+                span_id=stream.span_id,
+                parent_span_id=stream.parent_span_id,
+                payload={
+                    "stream_id": stream.stream_id,
+                    "content": stream.reasoning_content,
+                    "content_mode": "snapshot",
+                    "completion_reason": reason,
+                    "completion_inferred": True,
+                    "visible_to_user": self._model_message_visible_to_user(stream.node_id),
+                },
+            )
         self.runtime_event(
             "model_message_completed",
             node_id=stream.node_id,
@@ -675,6 +701,7 @@ class RuntimeEventNormalizer:
                 "completion_reason": reason,
                 "completion_inferred": True,
                 "visible_to_user": self._model_message_visible_to_user(stream.node_id),
+                **({"reasoning_content": stream.reasoning_content} if stream.reasoning_content.strip() else {}),
             },
         )
 
@@ -717,6 +744,14 @@ class RuntimeEventNormalizer:
                 parent_span_id=self._node_span(node_id or "model", self.current_stage_id),
             )
             self.model_streams[stream_id] = stream
+        if event_type == "model_reasoning_delta":
+            stream.reasoning_content += str(payload.get("delta") or "")
+            return
+        if event_type == "model_reasoning_completed":
+            content = payload.get("content")
+            if isinstance(content, str):
+                stream.reasoning_content = content
+            return
         if event_type == "model_stream_delta":
             stream.content += str(payload.get("delta") or "")
             return
@@ -724,6 +759,9 @@ class RuntimeEventNormalizer:
             content = payload.get("content")
             if isinstance(content, str):
                 stream.content = content
+            reasoning_content = payload.get("reasoning_content")
+            if isinstance(reasoning_content, str):
+                stream.reasoning_content = reasoning_content
             stream.completed = True
 
     def _normalize_approval_request(self, request: Any) -> dict[str, Any]:

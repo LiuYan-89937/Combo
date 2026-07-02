@@ -52,7 +52,8 @@ export function upsertAssistantMessageFromStream(
   requestId: string | null = null,
 ) {
   const stream = state.modelStreams[streamId]
-  if (!stream || !stream.content.trim()) return
+  const reasoningContent = stream?.reasoningContent || ''
+  if (!stream || (!stream.content.trim() && !reasoningContent.trim())) return
 
   const existingIdx = state.transcript.findIndex((item) => item.streamId === streamId)
   let item: TranscriptItem
@@ -60,6 +61,13 @@ export function upsertAssistantMessageFromStream(
     item = state.transcript[existingIdx]
     item.content = stream.content
     item.timestamp = timestamp
+    item.reasoning = reasoningContent
+      ? {
+          content: reasoningContent,
+          active: stream.reasoningActive,
+          completedAt: stream.reasoningCompletedAt,
+        }
+      : undefined
   } else {
     item = {
       id: streamId,
@@ -67,6 +75,13 @@ export function upsertAssistantMessageFromStream(
       content: stream.content,
       timestamp,
       streamId,
+      reasoning: reasoningContent
+        ? {
+            content: reasoningContent,
+            active: stream.reasoningActive,
+            completedAt: stream.reasoningCompletedAt,
+          }
+        : undefined,
     }
     state.transcript.push(item)
   }
@@ -76,6 +91,7 @@ export function upsertAssistantMessageFromStream(
   if (existingMessage) {
     existingMessage.content = item.content
     existingMessage.timestamp = item.timestamp
+    existingMessage.reasoning = item.reasoning
   } else {
     turn.assistantMessages.push(item)
   }
@@ -89,6 +105,9 @@ export function discardAssistantMessageStream(
   const stream = state.modelStreams[streamId]
   if (stream) {
     stream.content = ''
+    stream.reasoningContent = ''
+    stream.reasoningActive = false
+    stream.reasoningCompletedAt = timestamp
     stream.active = false
     stream.completedAt = timestamp
     stream.visibleToUser = false
@@ -98,6 +117,9 @@ export function discardAssistantMessageStream(
       requestId: null,
       nodeId: null,
       content: '',
+      reasoningContent: '',
+      reasoningActive: false,
+      reasoningCompletedAt: timestamp,
       active: false,
       completedAt: timestamp,
       visibleToUser: false,

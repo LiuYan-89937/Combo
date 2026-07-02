@@ -50,6 +50,8 @@ import {
 import {
   applyModelCallStarted,
   applyModelMessageCompleted,
+  applyModelReasoningCompleted,
+  applyModelReasoningDelta,
   applyModelStreamDelta,
 } from './runtime/modelMutations'
 import {
@@ -320,6 +322,10 @@ export const useRuntimeStore = defineStore('runtime', {
       // Model streams
       else if (type === 'model_call_started') {
         this._handleModelCallStarted(event)
+      } else if (type === 'model_reasoning_delta') {
+        this._handleModelReasoningDelta(event)
+      } else if (type === 'model_reasoning_completed') {
+        this._handleModelReasoningCompleted(event)
       } else if (type === 'model_stream_delta') {
         this._handleModelStreamDelta(event)
       } else if (type === 'model_message_completed') {
@@ -605,6 +611,14 @@ export const useRuntimeStore = defineStore('runtime', {
      */
     _handleModelCallStarted(event: FactoryFrontendEvent) {
       applyModelCallStarted(this, event)
+    },
+
+    _handleModelReasoningDelta(event: FactoryFrontendEvent) {
+      applyModelReasoningDelta(this, event)
+    },
+
+    _handleModelReasoningCompleted(event: FactoryFrontendEvent) {
+      applyModelReasoningCompleted(this, event)
     },
 
     _handleModelStreamDelta(event: FactoryFrontendEvent) {

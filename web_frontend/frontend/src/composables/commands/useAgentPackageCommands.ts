@@ -84,8 +84,9 @@ export function useAgentPackageCommands() {
     message: string,
     sessionId?: string,
     attachments?: RuntimeAttachmentInput[],
+    runtimeOptions?: commands.RuntimeMainModelOptions,
   ) => {
-    const command = commands.runAgentPackageCommand(packageId, message, sessionId, attachments)
+    const command = commands.runAgentPackageCommand(packageId, message, sessionId, attachments, runtimeOptions)
     transport.sendRuntimeCommand(command)
     return command
   }
@@ -95,14 +96,20 @@ export function useAgentPackageCommands() {
     message: string,
     sessionId?: string,
     attachments?: RuntimeAttachmentInput[],
+    runtimeOptions?: commands.RuntimeMainModelOptions,
   ) => {
-    const command = commands.sendAgentPackageMessageCommand(packageId, message, sessionId, attachments)
+    const command = commands.sendAgentPackageMessageCommand(packageId, message, sessionId, attachments, runtimeOptions)
     transport.sendRuntimeCommand(command)
     return command
   }
 
-  const runAgentEvolution = (packageId: string, message: string, attachments?: RuntimeAttachmentInput[]) => {
-    const command = commands.runAgentEvolutionCommand(packageId, message, attachments)
+  const runAgentEvolution = (
+    packageId: string,
+    message: string,
+    attachments?: RuntimeAttachmentInput[],
+    runtimeOptions?: commands.RuntimeMainModelOptions,
+  ) => {
+    const command = commands.runAgentEvolutionCommand(packageId, message, attachments, runtimeOptions)
     transport.sendRuntimeCommand(command)
     return command
   }

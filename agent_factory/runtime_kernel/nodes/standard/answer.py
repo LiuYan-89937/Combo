@@ -43,11 +43,13 @@ class CognitiveAnswerNode:
             model_role=_model_role_from_payload(_model_operation_payload(context.bindings), default="main"),
         )
         if result.clarification_question:
+            reasoning_content = _reasoning_content_from_metadata(result.metadata)
             return {
                 "messages": [AIMessage(content=result.clarification_question)],
                 **_context_token_budget_patch(result.metadata, context.node_id),
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
+                    "reasoning_content": reasoning_content,
                     "clarification_question": result.clarification_question,
                 },
                 "execution": {
@@ -57,12 +59,21 @@ class CognitiveAnswerNode:
             }
         ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
         tool_calls = _message_tool_calls(ai_message) or list(result.tool_calls or [])
+        reasoning_content = _reasoning_content_from_metadata(result.metadata)
         if tool_calls:
             return {
-                "messages": [_ai_message_with_origin(result.assistant_draft or "", tool_calls, context)],
+                "messages": [
+                    _ai_message_with_origin(
+                        result.assistant_draft or "",
+                        tool_calls,
+                        context,
+                        reasoning_content=reasoning_content,
+                    )
+                ],
                 **_context_token_budget_patch(result.metadata, context.node_id),
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
+                    "reasoning_content": reasoning_content,
                 },
                 "tools": {
                     "pending_tool_call": None,
@@ -74,7 +85,14 @@ class CognitiveAnswerNode:
                 },
             }
         final_answer = result.final_answer or result.assistant_draft or ""
-        response_message = AIMessage(content=final_answer)
+        response_message = AIMessage(
+            content=final_answer,
+            additional_kwargs=(
+                {"reasoning_content": reasoning_content}
+                if reasoning_content
+                else {}
+            ),
+        )
         route_decision = result.route_decision or "model.ready_to_answer"
         if _plan_and_execute_planner_waiting_for_input(context=context, state=state):
             route_decision = "subgraph.need_more_input"
@@ -83,6 +101,7 @@ class CognitiveAnswerNode:
             **_context_token_budget_patch(result.metadata, context.node_id),
             "conversation": {
                 "assistant_draft": result.assistant_draft,
+                "reasoning_content": reasoning_content,
                 "final_answer": final_answer,
             },
             "execution": {
@@ -263,12 +282,28 @@ def _plan_and_execute_planner_waiting_for_input(*, context: NodeExecutionContext
     return getattr(state.plan, "status", "empty") == "empty"
 
 
-def _ai_message_with_origin(content: str, tool_calls: list[dict[str, Any]], context: NodeExecutionContext) -> AIMessage:
+def _reasoning_content_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+    value = (metadata or {}).get("reasoning_content")
+    if isinstance(value, str):
+        return value.strip() or None
+    return None
+
+
+def _ai_message_with_origin(
+    content: str,
+    tool_calls: list[dict[str, Any]],
+    context: NodeExecutionContext,
+    *,
+    reasoning_content: str | None = None,
+) -> AIMessage:
+    additional_kwargs = {
+        "agent_factory_origin_node_id": context.node_id,
+        "agent_factory_origin_impl": context.impl,
+    }
+    if reasoning_content:
+        additional_kwargs["reasoning_content"] = reasoning_content
     return AIMessage(
         content=content,
         tool_calls=tool_calls,
-        additional_kwargs={
-            "agent_factory_origin_node_id": context.node_id,
-            "agent_factory_origin_impl": context.impl,
-        },
+        additional_kwargs=additional_kwargs,
     )

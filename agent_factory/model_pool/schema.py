@@ -7,14 +7,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent_factory.model_pool.providers import (
+    ensure_provider_supported,
+    image_generation_provider_capabilities,
+    provider_supports_kind,
+)
 from agent_factory.models.capabilities import resolve_provider_profile
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
 
 
-ModelPoolProfileKind = Literal["chat"]
+ModelPoolProfileKind = Literal["chat", "image_generation"]
 ModelBindingRole = Literal["main", "task", "compression"]
 ModelPoolModality = Literal["text", "image", "audio"]
-ModelToolCapability = Literal["image_input", "image_output", "audio_input", "audio_output"]
+ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input", "audio_output"]
 ModelSelectionSource = Literal["auto", "manual"]
 ModelSelectionOptimizeFor = Literal["balanced", "quality", "cost", "latency", "context"]
 
@@ -39,6 +44,12 @@ class ModelPoolCapabilities(BaseModel):
     reasoning_efforts: list[str] = Field(default_factory=list)
     reasoning_content: bool = False
     cache_usage: bool = False
+    text_to_image: bool = False
+    image_to_image: bool = False
+    image_edit: bool = False
+    multi_image_reference: bool = False
+    batch_generation: bool = False
+    async_job: bool = False
 
     @field_validator("input_modalities", "output_modalities", "structured_output_methods", "reasoning_efforts")
     @classmethod
@@ -73,6 +84,7 @@ class ModelPoolPricing(BaseModel):
     reasoning_per_1m_tokens: float | None = Field(default=None, ge=0)
     image_input_unit_price: float | None = Field(default=None, ge=0)
     image_output_unit_price: float | None = Field(default=None, ge=0)
+    image_edit_unit_price: float | None = Field(default=None, ge=0)
 
 
 class ModelPoolCredential(BaseModel):
@@ -96,8 +108,7 @@ class ModelPoolCredential(BaseModel):
     @classmethod
     def _provider(cls, value: str) -> str:
         provider = str(value or "").strip().lower()
-        resolve_provider_profile(provider)
-        return provider
+        return ensure_provider_supported(provider)
 
     @field_validator("display_name", "base_url")
     @classmethod
@@ -167,8 +178,7 @@ class ModelPoolProfile(BaseModel):
     @classmethod
     def _provider(cls, value: str) -> str:
         provider = str(value or "").strip().lower()
-        resolve_provider_profile(provider)
-        return provider
+        return ensure_provider_supported(provider)
 
     @field_validator("display_name", "model_name")
     @classmethod
@@ -177,6 +187,12 @@ class ModelPoolProfile(BaseModel):
         if not text:
             raise ValueError("value must not be empty")
         return text
+
+    @model_validator(mode="after")
+    def _provider_matches_kind(self) -> "ModelPoolProfile":
+        if not provider_supports_kind(self.provider, self.kind):
+            raise ValueError(f"provider {self.provider!r} does not support model kind {self.kind}")
+        return self
 
     def to_public(self, credential: ModelPoolCredential | None = None) -> "ModelPoolProfilePublic":
         return ModelPoolProfilePublic(
@@ -290,6 +306,7 @@ class ModelToolSelectionRequirement(BaseModel):
         return ModelSelectionRequirement(
             role="task",
             purpose=self.purpose,
+            kind=model_kind_requirement_for_tool_capability(self.capability),
             input_modalities=inputs,
             output_modalities=outputs,
             min_context_window_tokens=self.min_context_window_tokens,
@@ -340,11 +357,19 @@ def modality_requirement_for_tool_capability(
         return ["image"], ["text"]
     if capability == "image_output":
         return ["text"], ["image"]
+    if capability == "image_edit":
+        return ["image"], ["image"]
     if capability == "audio_input":
         return ["audio"], ["text"]
     if capability == "audio_output":
         return ["text"], ["audio"]
     raise ValueError(f"unsupported model tool capability: {capability}")
+
+
+def model_kind_requirement_for_tool_capability(capability: ModelToolCapability) -> ModelPoolProfileKind:
+    if capability in {"image_output", "image_edit"}:
+        return "image_generation"
+    return "chat"
 
 
 def validate_pool_id(value: str, *, field_name: str) -> str:
@@ -370,7 +395,27 @@ def api_key_fingerprint(value: str | None) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def provider_default_capabilities(provider: str) -> ModelPoolCapabilities:
+def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind = "chat") -> ModelPoolCapabilities:
+    if kind == "image_generation":
+        capabilities = image_generation_provider_capabilities(provider)
+        return ModelPoolCapabilities(
+            input_modalities=["text", "image"] if capabilities.get("image_to_image") or capabilities.get("image_edit") else ["text"],
+            output_modalities=["image"],
+            tool_calling=False,
+            streaming_tool_calls=False,
+            strict_tool_schema=False,
+            structured_output_methods=[],
+            reasoning_supported=False,
+            reasoning_efforts=[],
+            reasoning_content=False,
+            cache_usage=False,
+            text_to_image=capabilities.get("text_to_image", False),
+            image_to_image=capabilities.get("image_to_image", False),
+            image_edit=capabilities.get("image_edit", False),
+            multi_image_reference=capabilities.get("multi_image_reference", False),
+            batch_generation=capabilities.get("batch_generation", False),
+            async_job=capabilities.get("async_job", False),
+        )
     profile = resolve_provider_profile(provider)
     capabilities = profile.capabilities
     input_modalities = ["text"]

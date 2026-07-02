@@ -35,6 +35,7 @@ class FactorySessionTurn(BaseModel):
     updated_at: str
     request_id: str | None = None
     user_input: str | None = None
+    reasoning_content: str | None = None
     final_answer: str | None = None
     status: str | None = None
 
@@ -235,6 +236,7 @@ class FactorySessionManager:
         request_id: str | None,
         final_answer: str | None,
         status: str,
+        reasoning_content: str | None = None,
     ) -> FactorySessionRecord:
         record = self.load(session_id)
         turns = _turns_for_mode(record, mode)
@@ -243,6 +245,7 @@ class FactorySessionManager:
             turn = turns[-1]
         if turn is not None:
             turn.final_answer = (final_answer or "").strip() or None
+            turn.reasoning_content = (reasoning_content or "").strip() or None
             turn.status = status.strip() or None
             turn.updated_at = _now()
         _sync_turn_count(record, mode)
@@ -261,6 +264,7 @@ class FactorySessionManager:
             if not isinstance(raw_turn, dict):
                 continue
             user_input = str(raw_turn.get("user_input") or "").strip() or None
+            reasoning_content = str(raw_turn.get("reasoning_content") or "").strip() or None
             final_answer = str(raw_turn.get("final_answer") or "").strip() or None
             if not user_input and not final_answer:
                 continue
@@ -271,6 +275,7 @@ class FactorySessionManager:
                     created_at=created_at,
                     updated_at=created_at,
                     user_input=user_input,
+                    reasoning_content=reasoning_content,
                     final_answer=final_answer,
                     status=str(raw_turn.get("status") or "").strip() or None,
                 )

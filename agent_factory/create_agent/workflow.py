@@ -16,6 +16,7 @@ from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
+from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
 
@@ -30,6 +31,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     publish_confirmation_response: dict[str, Any]
     graph_kind: str
     evolution_context: dict[str, Any]
+    runtime_main_model_profile_id: str
     done: bool
     final_answer: str
 
@@ -71,7 +73,8 @@ class CreateAgentWorkflow:
                 "publish_confirmation_response": {},
                 "done": False,
             }
-        model = self.model or get_main_model()
+        runtime_model = resolve_runtime_main_chat_model_from_state(state)
+        model = runtime_model.model if runtime_model is not None else self.model or get_main_model()
         if model is None:
             raise RuntimeError("main model is not configured for create-agent")
         if self.workflow_kind == "evolution":
@@ -92,7 +95,11 @@ class CreateAgentWorkflow:
             node_id = "create_agent_supervisor"
         messages = prompt_payload.messages
         prompt_binding, chat_messages = _operation_prompt(messages)
-        result = ModelOperationService(role="main", model=model).tool_bound_chat(
+        result = ModelOperationService(
+            role="main",
+            model=model,
+            settings=runtime_model.settings if runtime_model is not None else None,
+        ).tool_bound_chat(
             state=state,
             prompt_binding=prompt_binding,
             messages=chat_messages,

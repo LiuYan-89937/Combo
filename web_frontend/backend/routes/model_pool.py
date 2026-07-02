@@ -12,9 +12,9 @@ from agent_factory.model_pool import (
     ModelPoolSelector,
     ModelPoolStore,
     ModelSelectionRequest,
+    list_model_pool_provider_profiles,
 )
 from agent_factory.model_pool.store import ModelPoolStoreError
-from agent_factory.models import list_supported_chat_model_profiles
 
 
 def create_model_pool_router() -> APIRouter:
@@ -22,7 +22,7 @@ def create_model_pool_router() -> APIRouter:
 
     @router.get("/providers")
     async def list_providers():
-        return {"providers": list_supported_chat_model_profiles()}
+        return {"providers": list_model_pool_provider_profiles()}
 
     @router.get("/credentials")
     async def list_credentials():
@@ -59,9 +59,9 @@ def create_model_pool_router() -> APIRouter:
     async def list_profiles(kind: str | None = None):
         store = ModelPoolStore()
         credentials = {item.credential_id: item for item in store.list_credentials()}
-        profile_kind = (kind or "chat").strip().lower()
-        if profile_kind != "chat":
-            raise HTTPException(status_code=400, detail="model pool web API only manages chat model profiles")
+        profile_kind = (kind or "").strip().lower() or None
+        if profile_kind not in {None, "chat", "image_generation"}:
+            raise HTTPException(status_code=400, detail="unsupported model profile kind")
         profiles = [
             profile.to_public(credentials.get(profile.credential_id)).model_dump(mode="json")
             for profile in store.list_profiles(kind=profile_kind)
@@ -124,9 +124,9 @@ def _credential_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) 
 def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> ModelPoolProfile:
     data = dict(payload)
     requested_kind = str(data.get("kind") or "chat").strip().lower()
-    if requested_kind != "chat":
-        raise ValueError("model pool web API only manages chat model profiles")
-    data["kind"] = "chat"
+    if requested_kind not in {"chat", "image_generation"}:
+        raise ValueError("unsupported model profile kind")
+    data["kind"] = requested_kind
     if not str(data.get("profile_id") or "").strip():
         data["profile_id"] = _unique_id(
             _slug(str(data.get("display_name") or data.get("model_name") or "model")),

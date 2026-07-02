@@ -11,6 +11,7 @@ from langgraph.graph.message import add_messages
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
+from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_attachments import format_attachments_for_model
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
@@ -20,6 +21,7 @@ class CreateAgentAssistState(TypedDict, total=False):
     messages: Annotated[list[BaseMessage], add_messages]
     workspace_path: str
     runtime_attachments: list[dict[str, Any]]
+    runtime_main_model_profile_id: str
     done: bool
     final_answer: str
     tool_rounds: int
@@ -48,12 +50,17 @@ class CreateAgentAssistWorkflow:
         return graph.compile(checkpointer=checkpointer)
 
     def _assistant(self, state: CreateAgentAssistState) -> dict[str, Any]:
-        model = self.model or get_main_model()
+        runtime_model = resolve_runtime_main_chat_model_from_state(state)
+        model = runtime_model.model if runtime_model is not None else self.model or get_main_model()
         if model is None:
             raise RuntimeError("main model is not configured for create-agent assist")
         messages = _messages_with_system(state, self.tools)
         prompt_binding, chat_messages = _operation_prompt(messages)
-        result = ModelOperationService(role="main", model=model).tool_bound_chat(
+        result = ModelOperationService(
+            role="main",
+            model=model,
+            settings=runtime_model.settings if runtime_model is not None else None,
+        ).tool_bound_chat(
             state=state,
             prompt_binding=prompt_binding,
             messages=chat_messages,

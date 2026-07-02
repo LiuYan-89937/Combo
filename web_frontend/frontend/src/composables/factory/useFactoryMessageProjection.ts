@@ -20,13 +20,20 @@ export function useFactoryMessageProjection() {
   const untrackedActiveStreamMessages = computed<TranscriptItem[]>(() => {
     return activeStreams.value
       .filter((stream) => !transcriptStreamIds.value.has(stream.streamId))
-      .filter((stream) => stream.content.trim().length > 0)
+      .filter(hasStreamDisplayContent)
       .map((stream) => ({
         id: stream.streamId,
         role: 'assistant',
         content: stream.content,
         timestamp: new Date().toISOString(),
         streamId: stream.streamId,
+        reasoning: stream.reasoningContent
+          ? {
+              content: stream.reasoningContent,
+              active: stream.reasoningActive,
+              completedAt: stream.reasoningCompletedAt,
+            }
+          : undefined,
       }))
   })
   const thinkingMessages = computed<TranscriptItem[]>(() => {
@@ -34,7 +41,7 @@ export function useFactoryMessageProjection() {
     const activeTurn = runtimeStore.activeTurn
     if (!activeTurn?.userMessage) return []
     if (activeTurn.assistantMessages.some((message) => message.content.trim().length > 0)) return []
-    if (activeStreams.value.some((stream) => stream.content.trim().length > 0)) return []
+    if (activeStreams.value.some(hasStreamDisplayContent)) return []
     return [
       {
         id: `thinking-${activeTurn.id}`,
@@ -62,7 +69,7 @@ export function useFactoryMessageProjection() {
   })
   const activeStreamContentKey = computed(() => {
     return [
-      activeStreams.value.map((stream) => stream.content).join(''),
+      activeStreams.value.map((stream) => `${stream.reasoningContent || ''}${stream.content}`).join(''),
       toolActivityHint.value,
       thinkingMessages.value.length,
     ].join('')
@@ -82,6 +89,10 @@ export function useFactoryMessageProjection() {
     toolActivityHint,
     untrackedActiveStreamMessages,
   }
+}
+
+function hasStreamDisplayContent(stream: { content: string; reasoningContent?: string }): boolean {
+  return stream.content.trim().length > 0 || String(stream.reasoningContent || '').trim().length > 0
 }
 
 function isToolActivityRunning(tool: ToolActivity): boolean {

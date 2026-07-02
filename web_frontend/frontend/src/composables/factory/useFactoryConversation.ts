@@ -1,5 +1,6 @@
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { modelPoolApi, type ModelPoolProfile } from '@/api/modelPool'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
@@ -7,6 +8,8 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
+
+const MAIN_MODEL_PROFILE_STORAGE_KEY = 'fastagentfactory.runtimeMainModelProfileId'
 
 export function useFactoryConversation() {
   const route = useRoute()
@@ -16,6 +19,8 @@ export function useFactoryConversation() {
   const workspaceStore = useWorkspaceStore()
   const commands = useCommand()
   const { t } = useI18n()
+  const chatModelProfiles = ref<ModelPoolProfile[]>([])
+  const selectedMainModelProfileId = ref(localStorage.getItem(MAIN_MODEL_PROFILE_STORAGE_KEY) || '')
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
   const isManufacturingRoute = computed(() => route.name === 'Manufacturing')
@@ -40,6 +45,13 @@ export function useFactoryConversation() {
     label: pkg.agent_name || pkg.name || pkg.package_id,
     value: pkg.package_id,
   })))
+  const runtimeMainModelOptions = computed(() => [
+    { label: t('chat.defaultMainModel'), value: '' },
+    ...chatModelProfiles.value.map((profile) => ({
+      label: profile.display_name || profile.model_name || profile.profile_id,
+      value: profile.profile_id,
+    })),
+  ])
   const inputPlaceholder = computed(() => (
     isAgentChatActive.value
       ? t('factory.sendToAgentPlaceholder', { name: activeChatPackageTitle.value })
@@ -78,13 +90,55 @@ export function useFactoryConversation() {
     void commands.selectAgentPackage(packageId, 'evolution')
   }
 
+  async function loadRuntimeMainModelProfiles() {
+    try {
+      const response = await modelPoolApi.profiles()
+      chatModelProfiles.value = response.profiles.filter((profile) => (
+        profile.kind === 'chat' && profile.enabled && profile.credential?.enabled !== false
+      ))
+      if (
+        selectedMainModelProfileId.value
+        && !chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)
+      ) {
+        setSelectedMainModelProfileId('')
+      }
+    } catch (error) {
+      uiStore.addNotification({
+        type: 'warning',
+        title: t('modelPool.loadFailedTitle'),
+        message: error instanceof Error ? error.message : String(error),
+        duration: 3000,
+      })
+    }
+  }
+
+  function setSelectedMainModelProfileId(profileId: string) {
+    selectedMainModelProfileId.value = profileId
+    if (profileId) {
+      localStorage.setItem(MAIN_MODEL_PROFILE_STORAGE_KEY, profileId)
+    } else {
+      localStorage.removeItem(MAIN_MODEL_PROFILE_STORAGE_KEY)
+    }
+  }
+
+  function runtimeModelOptions() {
+    const profileId = selectedMainModelProfileId.value.trim()
+    return profileId ? { mainModelProfileId: profileId } : undefined
+  }
+
   function sendMessage(message: string, attachments: RuntimeAttachmentInput[]): boolean {
     const payloadAttachments = attachments.length > 0 ? attachments : undefined
     const visibleAttachments = attachmentViews(attachments)
     const packageId = agentStore.activeChatPackageId
     if (packageId) {
       const agentSessionId = agentStore.selectedSessionId || undefined
-      const command = commands.sendAgentPackageMessage(packageId, message, agentSessionId, payloadAttachments)
+      const command = commands.sendAgentPackageMessage(
+        packageId,
+        message,
+        agentSessionId,
+        payloadAttachments,
+        runtimeModelOptions()
+      )
       runtimeStore.addUserMessage(message, command.request_id, {
         mode: 'agent_package',
         package_id: packageId,
@@ -105,7 +159,7 @@ export function useFactoryConversation() {
         })
         return false
       }
-      const command = commands.runAgentEvolution(evolutionPackageId, message, payloadAttachments)
+      const command = commands.runAgentEvolution(evolutionPackageId, message, payloadAttachments, runtimeModelOptions())
       runtimeStore.addUserMessage(message, command.request_id, {
         mode,
         package_id: evolutionPackageId,
@@ -115,7 +169,7 @@ export function useFactoryConversation() {
 
     const command = runtimeStore.isAwaitingUserInputInterrupt
       ? commands.answerInterrupt(message)
-      : commands.sendMessage(message, mode, payloadAttachments)
+      : commands.sendMessage(message, mode, payloadAttachments, runtimeModelOptions())
     runtimeStore.addUserMessage(message, command.request_id, {
       mode,
       package_id: mode === 'evolve_agent' ? selectedEvolutionPackageId.value : undefined,
@@ -171,7 +225,11 @@ export function useFactoryConversation() {
     applyRouteMode,
     cancelRequest,
     handleEvolutionPackageSelect,
+    loadRuntimeMainModelProfiles,
+    runtimeMainModelOptions,
+    selectedMainModelProfileId,
     sendMessage,
+    setSelectedMainModelProfileId,
   }
 }
 

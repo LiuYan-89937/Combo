@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_openai import ChatOpenAI
+
+from agent_factory.models.reasoning import (
+    coerce_reasoning_content,
+    reasoning_content_from_blocks,
+    reasoning_content_from_message,
+    reasoning_content_from_raw_message,
+    reasoning_content_from_stream_chunk,
+)
 
 
 class ThinkingCompatibleChatOpenAI(ChatOpenAI):
@@ -34,6 +42,28 @@ class ThinkingCompatibleChatOpenAI(ChatOpenAI):
                 message.additional_kwargs["reasoning_content"] = reasoning_content
         return result
 
+    def _convert_chunk_to_generation_chunk(
+        self,
+        chunk: dict,
+        default_chunk_class: type,
+        base_generation_info: dict | None,
+    ):
+        generation_chunk = super()._convert_chunk_to_generation_chunk(
+            chunk,
+            default_chunk_class,
+            base_generation_info,
+        )
+        if generation_chunk is None:
+            return None
+        reasoning_content = reasoning_content_from_stream_chunk(chunk)
+        if reasoning_content is None:
+            return generation_chunk
+        message = getattr(generation_chunk, "message", None)
+        if isinstance(message, AIMessageChunk):
+            message.additional_kwargs["reasoning_content"] = reasoning_content
+            message.response_metadata["reasoning_content"] = reasoning_content
+        return generation_chunk
+
 
 def _patch_reasoning_content_payload(
     payload_messages: list[dict[str, Any]],
@@ -63,52 +93,16 @@ def _next_ai_message(messages: list[BaseMessage], start: int) -> tuple[int, AIMe
 
 
 def _reasoning_content_from_raw_message(message: dict[str, Any]) -> str | None:
-    return _coerce_reasoning_content(message.get("reasoning_content") or message.get("reasoning"))
+    return reasoning_content_from_raw_message(message)
 
 
 def _reasoning_content_from_ai_message(message: AIMessage) -> str | None:
-    candidates = [
-        message.additional_kwargs.get("reasoning_content"),
-        message.response_metadata.get("reasoning_content"),
-        message.additional_kwargs.get("reasoning"),
-        message.response_metadata.get("reasoning"),
-        _reasoning_content_from_blocks(message.content),
-    ]
-    for candidate in candidates:
-        reasoning_content = _coerce_reasoning_content(candidate)
-        if reasoning_content is not None:
-            return reasoning_content
-    return None
+    return reasoning_content_from_message(message)
 
 
 def _reasoning_content_from_blocks(content: Any) -> str | None:
-    if not isinstance(content, list):
-        return None
-    parts: list[str] = []
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") not in {"reasoning_content", "thinking", "reasoning"}:
-            continue
-        text = block.get("reasoning_content") or block.get("thinking") or block.get("text") or block.get("content")
-        if text:
-            parts.append(str(text))
-    if not parts:
-        return None
-    return "\n".join(parts)
+    return reasoning_content_from_blocks(content)
 
 
 def _coerce_reasoning_content(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("reasoning_content", "text", "content", "summary"):
-            if key in value:
-                return _coerce_reasoning_content(value[key])
-        return str(value)
-    if isinstance(value, list):
-        parts = [_coerce_reasoning_content(item) for item in value]
-        return "\n".join(part for part in parts if part)
-    return str(value)
+    return coerce_reasoning_content(value)

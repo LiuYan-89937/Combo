@@ -30,6 +30,10 @@ from agent_factory.factory_graph.frontend_bridge.event_normalizer import Runtime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.session import build_factory_checkpointer_handle
+from agent_factory.model_pool.runtime_override import (
+    RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
+    main_model_profile_id_from_user_config,
+)
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR, import_runtime_attachments, time_named_attachment_scope
 from agent_factory.runtime_contracts import AgentPackageLoader
@@ -56,6 +60,7 @@ class _EvolutionRunContext:
     backup_path: Path | None
     before_fingerprint: dict[str, str]
     runtime_attachments: list[dict[str, Any]]
+    runtime_main_model_profile_id: str | None = None
 
 
 class AgentEvolutionRuntime:
@@ -83,6 +88,7 @@ class AgentEvolutionRuntime:
         request_id: str | None,
         session_id: str | None,
         attachments: Any = None,
+        user_config: dict[str, Any] | None = None,
     ) -> AgentEvolutionStreamRun:
         safe_package_id = _safe_id(package_id, label="package_id")
         trace_id = self.latest_failed_trace_id(safe_package_id)
@@ -97,6 +103,7 @@ class AgentEvolutionRuntime:
                 session_id=session_id,
                 resume_payload=None,
                 attachments=attachments,
+                user_config=user_config,
             ),
         )
 
@@ -124,6 +131,7 @@ class AgentEvolutionRuntime:
                 session_id=session_id,
                 resume_payload=resume_payload or {},
                 attachments=None,
+                user_config=None,
             ),
         )
 
@@ -154,6 +162,7 @@ class AgentEvolutionRuntime:
         session_id: str | None,
         resume_payload: dict[str, Any] | None,
         attachments: Any,
+        user_config: dict[str, Any] | None,
     ) -> Iterator[tuple[str, Any]]:
         pending_events: list[FactoryFrontendEvent] = []
 
@@ -185,6 +194,7 @@ class AgentEvolutionRuntime:
                 backup_path=None,
                 before_fingerprint={},
                 runtime_attachments=[],
+                runtime_main_model_profile_id=main_model_profile_id_from_user_config(user_config),
             )
         resolved_thread_id = context.graph_thread_id
         normalizer.emit_run_started({"package_id": package_id, "trace_id": context.trace_id})
@@ -343,6 +353,7 @@ class AgentEvolutionRuntime:
                     "request": context.user_input,
                     "workspace_path": str(package_path),
                     "runtime_attachments": context.runtime_attachments,
+                    RUNTIME_MAIN_MODEL_PROFILE_ID_KEY: context.runtime_main_model_profile_id or "",
                     "graph_kind": "evolution",
                     "evolution_context": {
                         "package_id": package_id,

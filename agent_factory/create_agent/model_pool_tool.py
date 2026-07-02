@@ -30,7 +30,7 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                         "properties": {
                             "role": {"type": "string", "enum": ["main", "task", "compression"]},
                             "purpose": {"type": "string"},
-                            "kind": {"type": "string", "enum": ["chat"]},
+                            "kind": {"type": "string", "enum": ["chat", "image_generation"]},
                             "input_modalities": {
                                 "type": "array",
                                 "items": {"type": "string", "enum": ["text", "image", "audio"]},
@@ -65,7 +65,7 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                             "tool_id": {"type": "string"},
                             "capability": {
                                 "type": "string",
-                                "enum": ["image_input", "image_output", "audio_input", "audio_output"],
+                                "enum": ["image_input", "image_output", "image_edit", "audio_input", "audio_output"],
                             },
                             "purpose": {"type": "string"},
                             "min_context_window_tokens": {"type": "integer", "minimum": 1},

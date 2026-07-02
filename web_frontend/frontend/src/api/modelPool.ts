@@ -3,14 +3,17 @@ import { requestJson } from './http'
 export interface ModelProviderProfile {
   provider_id: string
   display_name: string
+  kind: 'chat' | 'image_generation'
   adapter_id: string
   transport: string
-  content_parts: Record<string, string>
-  tools: Record<string, string>
-  structured_output_methods: string[]
-  default_structured_output_method: string
-  reasoning: Record<string, unknown>
-  cache_usage: string
+  default_base_url?: string
+  content_parts?: Record<string, string>
+  tools?: Record<string, string>
+  structured_output_methods?: string[]
+  default_structured_output_method?: string
+  reasoning?: Record<string, unknown>
+  cache_usage?: string
+  capabilities?: Record<string, unknown>
   notes: string[]
 }
 
@@ -30,7 +33,7 @@ export interface ModelPoolCredential {
 export interface ModelPoolProfile {
   profile_id: string
   display_name: string
-  kind: 'chat'
+  kind: 'chat' | 'image_generation'
   provider: string
   credential_id: string
   model_name: string
@@ -46,6 +49,12 @@ export interface ModelPoolProfile {
     reasoning_efforts: string[]
     reasoning_content: boolean
     cache_usage: boolean
+    text_to_image?: boolean
+    image_to_image?: boolean
+    image_edit?: boolean
+    multi_image_reference?: boolean
+    batch_generation?: boolean
+    async_job?: boolean
   }
   limits: {
     max_input_tokens?: number | null
@@ -57,6 +66,9 @@ export interface ModelPoolProfile {
     input_per_1m_tokens?: number | null
     output_per_1m_tokens?: number | null
     cache_hit_per_1m_tokens?: number | null
+    image_input_unit_price?: number | null
+    image_output_unit_price?: number | null
+    image_edit_unit_price?: number | null
   }
   notes: string
   credential?: ModelPoolCredential | null
@@ -79,7 +91,7 @@ export const modelPoolApi = {
     requestJson<{ deleted: boolean }>(`/api/model-pool/credentials/${encodeURIComponent(credentialId)}`, {
       method: 'DELETE',
     }),
-  profiles: () => requestJson<{ profiles: ModelPoolProfile[] }>('/api/model-pool/profiles?kind=chat'),
+  profiles: () => requestJson<{ profiles: ModelPoolProfile[] }>('/api/model-pool/profiles'),
   saveProfile: (payload: Record<string, unknown>) =>
     requestJson<{ profile: ModelPoolProfile }>('/api/model-pool/profiles', {
       method: 'POST',

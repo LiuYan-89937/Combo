@@ -33,6 +33,7 @@
                   <n-space align="center">
                     <n-text strong>{{ profile.display_name }}</n-text>
                     <n-tag size="small" :bordered="false">{{ profile.model_name }}</n-tag>
+                    <n-tag size="small" :bordered="false">{{ profile.kind === 'image_generation' ? t('modelPool.imageGenerationModel') : t('modelPool.chatModel') }}</n-tag>
                     <n-tag size="small" :type="profile.enabled ? 'success' : 'default'">
                       {{ profile.enabled ? t('common.enabled') : t('common.disabled') }}
                     </n-tag>
@@ -160,13 +161,16 @@
         <n-form-item :label="t('modelPool.displayName')">
           <n-input v-model:value="profileForm.display_name" :placeholder="t('modelPool.profileNamePlaceholder')" />
         </n-form-item>
+        <n-form-item :label="t('modelPool.modelType')">
+          <n-select v-model:value="profileForm.kind" :options="modelKindOptions" />
+        </n-form-item>
         <n-form-item :label="t('modelPool.credential')">
           <n-select v-model:value="profileForm.credential_id" :options="credentialOptions" :placeholder="t('modelPool.credentialPlaceholder')" />
         </n-form-item>
         <n-form-item :label="t('modelPool.modelName')">
           <n-input v-model:value="profileForm.model_name" :placeholder="t('modelPool.modelNamePlaceholder')" />
         </n-form-item>
-        <n-form-item :label="t('modelPool.capabilities')">
+        <n-form-item v-if="profileForm.kind === 'chat'" :label="t('modelPool.capabilities')">
           <n-space vertical>
             <n-checkbox v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
             <n-checkbox v-model:checked="profileForm.image_input">{{ t('modelPool.imageInput') }}</n-checkbox>
@@ -176,7 +180,17 @@
             <n-checkbox v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
           </n-space>
         </n-form-item>
-        <div class="form-grid">
+        <n-form-item v-else :label="t('modelPool.imageCapabilities')">
+          <n-space vertical>
+            <n-checkbox v-model:checked="profileForm.text_to_image">{{ t('modelPool.textToImage') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.image_to_image">{{ t('modelPool.imageToImage') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.image_edit">{{ t('modelPool.imageEdit') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.multi_image_reference">{{ t('modelPool.multiImageReference') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.batch_generation">{{ t('modelPool.batchGeneration') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.async_job">{{ t('modelPool.asyncJob') }}</n-checkbox>
+          </n-space>
+        </n-form-item>
+        <div v-if="profileForm.kind === 'chat'" class="form-grid">
           <n-form-item :label="t('modelPool.maxInput')">
             <n-input-number v-model:value="profileForm.max_input_tokens" :min="1" clearable />
           </n-form-item>
@@ -188,6 +202,20 @@
           </n-form-item>
           <n-form-item :label="t('modelPool.outputPrice')">
             <n-input-number v-model:value="profileForm.output_per_1m_tokens" :min="0" clearable />
+          </n-form-item>
+        </div>
+        <div v-else class="form-grid">
+          <n-form-item :label="t('modelPool.defaultImageCount')">
+            <n-input-number v-model:value="profileForm.max_output_tokens" :min="1" :max="4" clearable />
+          </n-form-item>
+          <n-form-item :label="t('modelPool.timeoutSeconds')">
+            <n-input-number v-model:value="profileForm.timeout_seconds" :min="1" clearable />
+          </n-form-item>
+          <n-form-item :label="t('modelPool.imageOutputPrice')">
+            <n-input-number v-model:value="profileForm.image_output_unit_price" :min="0" clearable />
+          </n-form-item>
+          <n-form-item :label="t('modelPool.imageEditPrice')">
+            <n-input-number v-model:value="profileForm.image_edit_unit_price" :min="0" clearable />
           </n-form-item>
         </div>
         <n-form-item :label="t('common.description')">
@@ -205,7 +233,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   NButton,
   NCheckbox,
@@ -255,6 +283,7 @@ const credentialForm = reactive({
 })
 
 const profileForm = reactive({
+  kind: 'chat' as 'chat' | 'image_generation',
   display_name: '',
   credential_id: '',
   model_name: '',
@@ -264,21 +293,46 @@ const profileForm = reactive({
   image_output: false,
   audio_input: false,
   audio_output: false,
+  text_to_image: true,
+  image_to_image: false,
+  image_edit: false,
+  multi_image_reference: false,
+  batch_generation: true,
+  async_job: false,
   max_input_tokens: null as number | null,
   max_output_tokens: null as number | null,
+  timeout_seconds: null as number | null,
   input_per_1m_tokens: null as number | null,
   output_per_1m_tokens: null as number | null,
+  image_output_unit_price: null as number | null,
+  image_edit_unit_price: null as number | null,
   notes: '',
 })
 
+const modelKindOptions = computed(() => [
+  { label: t('modelPool.chatModel'), value: 'chat' },
+  { label: t('modelPool.imageGenerationModel'), value: 'image_generation' },
+])
 const providerOptions = computed(() =>
-  providers.value.map((item) => ({ label: item.display_name, value: item.provider_id })),
+  uniqueProviders().map((item) => ({ label: item.display_name, value: item.provider_id })),
 )
 const credentialOptions = computed(() =>
-  credentials.value.map((item) => ({ label: `${item.display_name} · ${providerLabel(item.provider)}`, value: item.credential_id })),
+  credentials.value
+    .filter((item) => providerSupportsKind(item.provider, profileForm.kind))
+    .map((item) => ({ label: `${item.display_name} · ${providerLabel(item.provider)}`, value: item.credential_id })),
 )
 
 onMounted(refresh)
+
+watch(
+  () => profileForm.kind,
+  (kind) => {
+    if (!profileModalOpen.value) return
+    const selected = credentials.value.find((item) => item.credential_id === profileForm.credential_id)
+    if (selected && providerSupportsKind(selected.provider, kind)) return
+    profileForm.credential_id = firstCredentialForKind(kind)?.credential_id || ''
+  },
+)
 
 async function refresh(): Promise<void> {
   loading.value = true
@@ -290,7 +344,7 @@ async function refresh(): Promise<void> {
     ])
     providers.value = providerData.providers
     credentials.value = credentialData.credentials
-    profiles.value = profileData.profiles.filter((item) => item.kind === 'chat')
+    profiles.value = profileData.profiles
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
@@ -333,8 +387,9 @@ async function saveCredential(): Promise<void> {
 
 function openProfile(item?: ModelPoolProfile): void {
   profileEditing.value = item || null
+  profileForm.kind = item?.kind || 'chat'
   profileForm.display_name = item?.display_name || ''
-  profileForm.credential_id = item?.credential_id || credentials.value[0]?.credential_id || ''
+  profileForm.credential_id = item?.credential_id || firstCredentialForKind(profileForm.kind)?.credential_id || ''
   profileForm.model_name = item?.model_name || ''
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
@@ -342,10 +397,19 @@ function openProfile(item?: ModelPoolProfile): void {
   profileForm.image_output = item?.capabilities.output_modalities.includes('image') ?? false
   profileForm.audio_input = item?.capabilities.input_modalities.includes('audio') ?? false
   profileForm.audio_output = item?.capabilities.output_modalities.includes('audio') ?? false
+  profileForm.text_to_image = item?.capabilities.text_to_image ?? true
+  profileForm.image_to_image = item?.capabilities.image_to_image ?? false
+  profileForm.image_edit = item?.capabilities.image_edit ?? false
+  profileForm.multi_image_reference = item?.capabilities.multi_image_reference ?? false
+  profileForm.batch_generation = item?.capabilities.batch_generation ?? true
+  profileForm.async_job = item?.capabilities.async_job ?? false
   profileForm.max_input_tokens = item?.limits.max_input_tokens ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
+  profileForm.timeout_seconds = item?.limits.timeout_seconds ?? null
   profileForm.input_per_1m_tokens = item?.pricing.input_per_1m_tokens ?? null
   profileForm.output_per_1m_tokens = item?.pricing.output_per_1m_tokens ?? null
+  profileForm.image_output_unit_price = item?.pricing.image_output_unit_price ?? null
+  profileForm.image_edit_unit_price = item?.pricing.image_edit_unit_price ?? null
   profileForm.notes = item?.notes || ''
   profileModalOpen.value = true
 }
@@ -356,17 +420,23 @@ async function saveProfile(): Promise<void> {
     message.error(t('modelPool.selectCredentialFirst'))
     return
   }
+  if (!providerSupportsKind(credential.provider, profileForm.kind)) {
+    message.error(t('modelPool.credentialKindMismatch'))
+    return
+  }
   saving.value = true
   try {
+    const isImageModel = profileForm.kind === 'image_generation'
     const inputModalities = ['text']
-    const outputModalities = ['text']
-    if (profileForm.image_input) inputModalities.push('image')
-    if (profileForm.image_output) outputModalities.push('image')
-    if (profileForm.audio_input) inputModalities.push('audio')
-    if (profileForm.audio_output) outputModalities.push('audio')
+    const outputModalities = isImageModel ? ['image'] : ['text']
+    if (!isImageModel && profileForm.image_input) inputModalities.push('image')
+    if (!isImageModel && profileForm.image_output) outputModalities.push('image')
+    if (!isImageModel && profileForm.audio_input) inputModalities.push('audio')
+    if (!isImageModel && profileForm.audio_output) outputModalities.push('audio')
+    if (isImageModel && (profileForm.image_to_image || profileForm.image_edit)) inputModalities.push('image')
     const payload = {
       display_name: profileForm.display_name,
-      kind: 'chat',
+      kind: profileForm.kind,
       provider: credential.provider,
       credential_id: profileForm.credential_id,
       model_name: profileForm.model_name,
@@ -374,23 +444,32 @@ async function saveProfile(): Promise<void> {
       capabilities: {
         input_modalities: inputModalities,
         output_modalities: outputModalities,
-        tool_calling: profileForm.tool_calling,
+        tool_calling: !isImageModel && profileForm.tool_calling,
         streaming_tool_calls: false,
         strict_tool_schema: false,
-        structured_output_methods: ['json_mode', 'function_calling'],
-        reasoning_supported: profileForm.reasoning_supported,
+        structured_output_methods: isImageModel ? [] : ['json_mode', 'function_calling'],
+        reasoning_supported: !isImageModel && profileForm.reasoning_supported,
         reasoning_efforts: [],
-        reasoning_content: profileForm.reasoning_supported,
+        reasoning_content: !isImageModel && profileForm.reasoning_supported,
         cache_usage: false,
+        text_to_image: isImageModel && profileForm.text_to_image,
+        image_to_image: isImageModel && profileForm.image_to_image,
+        image_edit: isImageModel && profileForm.image_edit,
+        multi_image_reference: isImageModel && profileForm.multi_image_reference,
+        batch_generation: isImageModel && profileForm.batch_generation,
+        async_job: isImageModel && profileForm.async_job,
       },
       limits: {
-        max_input_tokens: profileForm.max_input_tokens,
+        max_input_tokens: isImageModel ? null : profileForm.max_input_tokens,
         max_output_tokens: profileForm.max_output_tokens,
+        timeout_seconds: profileForm.timeout_seconds,
       },
       pricing: {
         currency: 'CNY',
-        input_per_1m_tokens: profileForm.input_per_1m_tokens,
-        output_per_1m_tokens: profileForm.output_per_1m_tokens,
+        input_per_1m_tokens: isImageModel ? null : profileForm.input_per_1m_tokens,
+        output_per_1m_tokens: isImageModel ? null : profileForm.output_per_1m_tokens,
+        image_output_unit_price: isImageModel ? profileForm.image_output_unit_price : null,
+        image_edit_unit_price: isImageModel ? profileForm.image_edit_unit_price : null,
       },
       notes: profileForm.notes,
     }
@@ -456,8 +535,35 @@ function providerLabel(providerId: string): string {
   return providers.value.find((item) => item.provider_id === providerId)?.display_name || providerId
 }
 
+function providerSupportsKind(providerId: string, kind: 'chat' | 'image_generation'): boolean {
+  return providers.value.some((item) => item.provider_id === providerId && item.kind === kind)
+}
+
+function firstCredentialForKind(kind: 'chat' | 'image_generation'): ModelPoolCredential | undefined {
+  return credentials.value.find((item) => providerSupportsKind(item.provider, kind))
+}
+
+function uniqueProviders(): ModelProviderProfile[] {
+  const seen = new Set<string>()
+  const result: ModelProviderProfile[] = []
+  for (const provider of providers.value) {
+    if (seen.has(provider.provider_id)) continue
+    seen.add(provider.provider_id)
+    result.push(provider)
+  }
+  return result
+}
+
 function capabilityTags(profile: ModelPoolProfile): string[] {
   const tags: string[] = []
+  if (profile.kind === 'image_generation') {
+    if (profile.capabilities.text_to_image) tags.push(t('modelPool.textToImage'))
+    if (profile.capabilities.image_to_image) tags.push(t('modelPool.imageToImage'))
+    if (profile.capabilities.image_edit) tags.push(t('modelPool.imageEdit'))
+    if (profile.capabilities.multi_image_reference) tags.push(t('modelPool.multiImageReference'))
+    if (profile.capabilities.async_job) tags.push(t('modelPool.asyncJob'))
+    return tags
+  }
   if (profile.capabilities.tool_calling) tags.push(t('modelPool.toolsTag'))
   if (profile.capabilities.input_modalities.includes('image')) tags.push(t('modelPool.imageInput'))
   if (profile.capabilities.output_modalities.includes('image')) tags.push(t('modelPool.imageOutput'))

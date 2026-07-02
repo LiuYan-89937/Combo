@@ -26,11 +26,31 @@
           <span class="thinking-dot"></span>
           <span class="thinking-dot"></span>
         </div>
-        <div
-          v-else-if="message.role === 'assistant'"
-          class="markdown-content"
-          v-html="renderedContent"
-        ></div>
+        <template v-else-if="message.role === 'assistant'">
+          <details
+            v-if="hasReasoning"
+            class="reasoning-panel"
+            :open="reasoningOpen"
+          >
+            <summary class="reasoning-summary">
+              <span
+                v-if="message.reasoning?.active"
+                class="reasoning-live-dot"
+                aria-hidden="true"
+              ></span>
+              <span>{{ reasoningLabel }}</span>
+            </summary>
+            <div
+              class="markdown-content reasoning-markdown"
+              v-html="renderedReasoning"
+            ></div>
+          </details>
+          <div
+            v-if="message.content.trim()"
+            class="markdown-content"
+            v-html="renderedContent"
+          ></div>
+        </template>
         <div v-else class="plain-content">
           {{ message.content }}
         </div>
@@ -118,6 +138,17 @@ const avatarText = computed(() => {
 
 const renderedContent = computed(() => {
   return renderMarkdown(props.message.content, { streaming: props.streaming })
+})
+
+const hasReasoning = computed(() => Boolean(props.message.reasoning?.content?.trim()))
+const reasoningOpen = computed(() => Boolean(props.message.reasoning?.active))
+const reasoningLabel = computed(() => (
+  props.message.reasoning?.active
+    ? t('roles.assistantReasoningActive')
+    : t('roles.assistantReasoning')
+))
+const renderedReasoning = computed(() => {
+  return renderMarkdown(props.message.reasoning?.content || '', { streaming: Boolean(props.message.reasoning?.active) })
 })
 
 const messageAttachments = computed(() => props.message.attachments || [])
@@ -320,6 +351,61 @@ function formatTime(timestamp: string): string {
 
 .thinking-dot:nth-child(3) {
   animation-delay: 0.28s;
+}
+
+.reasoning-panel {
+  margin-bottom: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+  overflow: hidden;
+}
+
+.reasoning-summary {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-xs);
+  padding: 6px 10px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+.reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-summary::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--app-transition-fast);
+}
+
+.reasoning-panel[open] .reasoning-summary::before {
+  transform: rotate(45deg);
+}
+
+.reasoning-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--app-text);
+  animation: app-pulse-soft 1.2s ease-in-out infinite;
+}
+
+.reasoning-markdown {
+  max-height: 320px;
+  padding: 0 12px 12px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
+  line-height: var(--app-leading-relaxed);
+  overflow: auto;
 }
 
 @keyframes thinking-pulse {

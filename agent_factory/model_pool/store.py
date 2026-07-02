@@ -103,8 +103,14 @@ class ModelPoolStore:
         existing = self.get_profile(profile.profile_id)
         now = utc_now_text()
         capabilities = profile.capabilities
-        if not capabilities.structured_output_methods:
-            capabilities = provider_default_capabilities(profile.provider)
+        if (
+            profile.kind == "chat"
+            and not capabilities.structured_output_methods
+        ) or (
+            profile.kind == "image_generation"
+            and "image" not in capabilities.output_modalities
+        ):
+            capabilities = provider_default_capabilities(profile.provider, kind=profile.kind)
         profile = profile.model_copy(
             update={
                 "capabilities": capabilities,
@@ -264,4 +270,3 @@ def _profile_row(profile: ModelPoolProfile) -> tuple[Any, ...]:
         profile.created_at,
         profile.updated_at,
     )
-

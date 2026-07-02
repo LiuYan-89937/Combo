@@ -31,6 +31,12 @@ export interface TranscriptAttachmentView {
   mime_type?: string
 }
 
+export interface TranscriptReasoningView {
+  content: string
+  active: boolean
+  completedAt: string | null
+}
+
 // ========== 命令类型 ==========
 
 export interface FactoryFrontendCommand {
@@ -86,6 +92,7 @@ export interface TranscriptItem {
   timestamp: string
   streamId?: string
   attachments?: TranscriptAttachmentView[]
+  reasoning?: TranscriptReasoningView
   metadata?: any
 }
 
@@ -127,6 +134,9 @@ export interface ModelStream {
   requestId?: string | null
   nodeId: string | null
   content: string
+  reasoningContent: string
+  reasoningActive: boolean
+  reasoningCompletedAt: string | null
   active: boolean
   completedAt: string | null
   visibleToUser: boolean

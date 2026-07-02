@@ -36,7 +36,8 @@ def _description(*, capability: str, configured: str) -> str:
         return configured
     descriptions = {
         "image_input": "Use the configured auxiliary vision model to understand an image and return structured text.",
-        "image_output": "Use the configured auxiliary image model to generate or design image content from a text brief.",
+        "image_output": "Use the configured auxiliary image generation model to create images from a text brief.",
+        "image_edit": "Use the configured auxiliary image generation model to edit or transform referenced images.",
         "audio_input": "Use the configured auxiliary audio model to transcribe or understand audio and return text.",
         "audio_output": "Use the configured auxiliary audio model to synthesize audio from text.",
     }
@@ -50,12 +51,19 @@ def _input_schema(capability: str) -> dict[str, Any]:
             "additionalProperties": False,
             "properties": {
                 "prompt": {"type": "string"},
+                "input_attachment_ids": {"type": "array", "items": {"type": "string"}},
+                "input_paths": {"type": "array", "items": {"type": "string"}},
                 "image_url": {"type": "string"},
                 "image_base64": {"type": "string"},
                 "mime_type": {"type": "string"},
             },
             "required": ["prompt"],
-            "anyOf": [{"required": ["image_url"]}, {"required": ["image_base64"]}],
+            "anyOf": [
+                {"required": ["input_attachment_ids"]},
+                {"required": ["input_paths"]},
+                {"required": ["image_url"]},
+                {"required": ["image_base64"]},
+            ],
         }
     if capability == "image_output":
         return {
@@ -64,8 +72,29 @@ def _input_schema(capability: str) -> dict[str, Any]:
             "properties": {
                 "prompt": {"type": "string"},
                 "size": {"type": "string"},
-                "style": {"type": "string"},
+                "aspect_ratio": {"type": "string"},
                 "count": {"type": "integer", "minimum": 1, "maximum": 4},
+                "seed": {"type": "integer"},
+                "negative_prompt": {"type": "string"},
+                "provider_options": {"type": "object", "additionalProperties": True},
+            },
+            "required": ["prompt"],
+        }
+    if capability == "image_edit":
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "prompt": {"type": "string"},
+                "input_attachment_ids": {"type": "array", "items": {"type": "string"}},
+                "input_paths": {"type": "array", "items": {"type": "string"}},
+                "image_url": {"type": "string"},
+                "size": {"type": "string"},
+                "aspect_ratio": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 4},
+                "seed": {"type": "integer"},
+                "negative_prompt": {"type": "string"},
+                "provider_options": {"type": "object", "additionalProperties": True},
             },
             "required": ["prompt"],
         }

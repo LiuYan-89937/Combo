@@ -42,6 +42,7 @@ export function factorySessionSnapshotView(
       role,
       content: String(message.content || ''),
       timestamp: String(message.created_at || message.timestamp || session.updated_at || new Date().toISOString()),
+      reasoning: restoredReasoningView(message),
       metadata: {
         restored: true,
         mode: restoredMode,
@@ -137,6 +138,7 @@ export function agentPackageSessionSnapshotView(
         role: 'assistant',
         content: finalAnswer,
         timestamp,
+        reasoning: restoredReasoningView(turn),
         metadata,
       }
       transcript.push(item)
@@ -152,5 +154,15 @@ export function agentPackageSessionSnapshotView(
     sessionPackageId,
     transcript,
     conversationTurns: turns,
+  }
+}
+
+function restoredReasoningView(value: any) {
+  const content = String(value?.reasoning_content || value?.reasoningContent || '').trim()
+  if (!content) return undefined
+  return {
+    content,
+    active: false,
+    completedAt: value?.updated_at || value?.created_at || value?.timestamp || null,
   }
 }

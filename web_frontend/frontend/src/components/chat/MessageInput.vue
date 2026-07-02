@@ -8,7 +8,8 @@
         class="attachment-item"
       >
         <n-icon size="18">
-          <Document v-if="attachment.kind === 'file'" />
+          <ImageOutline v-if="isImageAttachment(attachment)" />
+          <Document v-else-if="attachment.kind === 'file'" />
           <Link v-else-if="attachment.kind === 'url'" />
           <Text v-else />
         </n-icon>
@@ -30,6 +31,7 @@
         :rows="rows"
         :autosize="{ minRows: rows, maxRows: maxRows }"
         @keydown="handleKeyDown"
+        @paste="handlePaste"
       />
     </div>
 
@@ -42,6 +44,18 @@
           </template>
           {{ t('attachments.add') }}
         </n-button>
+
+        <n-select
+          v-if="modelSelectorEnabled"
+          class="model-selector"
+          size="small"
+          :value="selectedModelProfileId || ''"
+          :options="modelOptions"
+          :placeholder="t('chat.modelSelectorPlaceholder')"
+          :disabled="disabled || modelOptions.length <= 1"
+          filterable
+          @update:value="handleModelSelect"
+        />
 
         <n-button
           v-if="!attachmentsEnabled"
@@ -117,10 +131,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { NInput, NButton, NIcon, NText, NPopover } from 'naive-ui'
-import { AttachOutline, Document, Link, Text, Close, CodeSlash, Send, Stop } from '@vicons/ionicons5'
+import { NInput, NButton, NIcon, NText, NPopover, NSelect } from 'naive-ui'
+import { AttachOutline, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@vicons/ionicons5'
 import AttachmentPickerModal from './AttachmentPickerModal.vue'
 import { useI18n } from '@/composables/useI18n'
+import { extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 
 const { t } = useI18n()
@@ -133,6 +148,9 @@ const props = withDefaults(
     rows?: number
     maxRows?: number
     attachmentsEnabled?: boolean
+    modelSelectorEnabled?: boolean
+    modelOptions?: Array<{ label: string; value: string; disabled?: boolean }>
+    selectedModelProfileId?: string | null
   }>(),
   {
     placeholder: '',
@@ -141,12 +159,16 @@ const props = withDefaults(
     rows: 3,
     maxRows: 10,
     attachmentsEnabled: true,
+    modelSelectorEnabled: false,
+    modelOptions: () => [],
+    selectedModelProfileId: '',
   }
 )
 
 const emit = defineEmits<{
   send: [message: string, attachments: RuntimeAttachmentInput[]]
   cancel: []
+  'update:selectedModelProfileId': [value: string]
 }>()
 
 const inputRef = ref()
@@ -167,6 +189,15 @@ function handleKeyDown(e: KeyboardEvent) {
   handleSend()
 }
 
+async function handlePaste(e: ClipboardEvent) {
+  if (!props.attachmentsEnabled || props.disabled) return
+  const files = pastedImageFiles(e, pastedImageName)
+  if (files.length === 0) return
+  e.preventDefault()
+  const pastedAttachments = await Promise.all(files.map((file) => runtimeFileAttachmentFromFile(file)))
+  attachments.value.push(...pastedAttachments)
+}
+
 function handleSend() {
   if (!canSend.value) return
 
@@ -182,9 +213,33 @@ function handleCancel() {
   emit('cancel')
 }
 
+function handleModelSelect(value: string) {
+  emit('update:selectedModelProfileId', value || '')
+}
+
 function handleAttach(attachment: RuntimeAttachmentInput) {
   if (!props.attachmentsEnabled) return
   attachments.value.push(attachment)
+}
+
+function isImageAttachment(attachment: RuntimeAttachmentInput) {
+  return attachment.kind === 'file' && attachment.mime_type?.startsWith('image/')
+}
+
+function pastedImageName(file: File, index: number) {
+  const indexSuffix = index > 0 ? `-${index + 1}` : ''
+  return `${t('attachments.pastedImageName')}-${pasteTimestamp()}${indexSuffix}.${extensionFromMimeType(file.type)}`
+}
+
+function pasteTimestamp() {
+  const now = new Date()
+  const date = [now.getFullYear(), pad2(now.getMonth() + 1), pad2(now.getDate())].join('')
+  const time = [pad2(now.getHours()), pad2(now.getMinutes()), pad2(now.getSeconds())].join('')
+  return `${date}-${time}`
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, '0')
 }
 
 function removeAttachment(index: number) {
@@ -303,6 +358,10 @@ defineExpose({
   min-width: 0;
 }
 
+.model-selector {
+  width: 180px;
+}
+
 .character-count {
   font-size: var(--app-font-sm);
   font-variant-numeric: tabular-nums;
@@ -317,6 +376,12 @@ defineExpose({
 .send-button:not(:disabled):active,
 .cancel-button:not(:disabled):active {
   transform: scale(0.96);
+}
+
+@media (max-width: 768px) {
+  .model-selector {
+    width: 150px;
+  }
 }
 
 .cancel-button {

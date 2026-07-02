@@ -532,7 +532,11 @@ def _write_runtime_attachment(
     )
 
 
-def format_attachments_for_model(attachments: Any) -> str:
+def format_attachments_for_model(
+    attachments: Any,
+    *,
+    include_extracted_text_for_images: bool = True,
+) -> str:
     if not isinstance(attachments, list) or not attachments:
         return ""
     lines = [
@@ -552,7 +556,7 @@ def format_attachments_for_model(attachments: Any) -> str:
             f"name={display_name or attachment_id}",
             f"path={path}",
         ]
-        mime_type = str(item.get("mime_type") or "").strip()
+        mime_type = _attachment_mime_type(item)
         if mime_type:
             parts.append(f"mime={mime_type}")
         size_bytes = item.get("size_bytes")
@@ -562,7 +566,12 @@ def format_attachments_for_model(attachments: Any) -> str:
         if digest:
             parts.append(f"sha256={digest}")
         lines.append("- " + "; ".join(parts))
-        extracted_text = str(item.get("extracted_text") or "").strip()
+        image_attachment = _is_image_mime_type(mime_type)
+        extracted_text = (
+            str(item.get("extracted_text") or "").strip()
+            if include_extracted_text_for_images or not image_attachment
+            else ""
+        )
         if extracted_text:
             char_count = item.get("extracted_char_count")
             truncated = bool(item.get("extracted_text_truncated"))
@@ -580,6 +589,40 @@ def format_attachments_for_model(attachments: Any) -> str:
         if isinstance(warnings, list) and warnings:
             lines.append("  parse_warnings=" + "; ".join(str(warning) for warning in warnings if str(warning).strip()))
     return "\n".join(lines) if len(lines) > 2 else ""
+
+
+def image_attachment_content_parts(attachments: Any) -> list[dict[str, Any]]:
+    if not isinstance(attachments, list) or not attachments:
+        return []
+    parts: list[dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        mime_type = _attachment_mime_type(item)
+        if not _is_image_mime_type(mime_type):
+            continue
+        path = str(item.get("path") or item.get("runtime_path") or "").strip()
+        if not path:
+            continue
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": _image_data_url(path=Path(path), mime_type=mime_type or "image/png"),
+                },
+            }
+        )
+    return parts
+
+
+def image_attachment_count(attachments: Any) -> int:
+    if not isinstance(attachments, list):
+        return 0
+    return sum(1 for item in attachments if isinstance(item, dict) and _is_image_mime_type(_attachment_mime_type(item)))
+
+
+def has_attachment_payload(attachments: Any) -> bool:
+    return isinstance(attachments, list) and any(isinstance(item, dict) for item in attachments)
 
 
 def format_attachments_for_session_input(user_input: str | None, attachments: Any) -> str | None:
@@ -623,6 +666,34 @@ def _attachment_session_lines(attachments: Any) -> list[str]:
             parts.append(f"sha256={digest}")
         lines.append("- " + "; ".join(parts))
     return lines
+
+
+def _attachment_mime_type(item: dict[str, Any]) -> str:
+    mime_type = str(item.get("mime_type") or "").strip()
+    if mime_type:
+        return mime_type
+    for key in ("display_name", "path", "runtime_path"):
+        value = str(item.get(key) or "").strip()
+        if not value:
+            continue
+        guessed, _encoding = mimetypes.guess_type(value)
+        if guessed:
+            return guessed
+    return ""
+
+
+def _is_image_mime_type(mime_type: str) -> bool:
+    return mime_type.lower().startswith("image/")
+
+
+def _image_data_url(*, path: Path, mime_type: str) -> str:
+    if not path.is_file():
+        raise AttachmentImportError(
+            f"image attachment file does not exist: {path}",
+            path=str(path),
+            code="runtime_image_attachment_missing",
+        )
+    return f"data:{mime_type};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
 def redact_attachment_markers(message: str) -> str:

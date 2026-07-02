@@ -24,10 +24,18 @@ class ArtifactStore:
         )
 
     def write_text(self, *, kind: str, relative_path: str, content: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.write_bytes(
+            kind=kind,
+            relative_path=relative_path,
+            content=content.encode("utf-8"),
+            metadata={**dict(metadata or {}), "encoding": "utf-8"},
+        )
+
+    def write_bytes(self, *, kind: str, relative_path: str, content: bytes, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         self._validate_kind(kind)
         target = self._resolve_relative_path(relative_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        target.write_bytes(content)
         record = {
             "artifact_id": uuid4().hex,
             "kind": kind,

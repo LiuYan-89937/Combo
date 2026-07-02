@@ -7,6 +7,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     SYSTEM_CHAT_PACKAGE_ID,
 )
+from agent_factory.runtime_attachments import has_attachment_payload
 
 
 MESSAGE_MODES = {"chat", "create_agent", "evolve_agent"}
@@ -78,7 +79,7 @@ class RuntimeSessionCommandMixin:
             self._emit_error(command, "enter /chat, /create-agent, or /evolve-agent before sending messages")
             return
         message = (command.message or "").strip()
-        if not message:
+        if not message and not has_attachment_payload(command.payload.get("attachments")):
             self._emit_error(command, "send_message requires message")
             return
         if (
@@ -258,10 +259,12 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
             )
         final_answer = str(turn.get("final_answer") or "").strip()
         if final_answer:
+            reasoning_content = str(turn.get("reasoning_content") or "").strip()
             messages.append(
                 {
                     "role": "assistant",
                     "content": final_answer,
+                    **({"reasoning_content": reasoning_content} if reasoning_content else {}),
                     "turn_index": turn_index,
                     "created_at": created_at,
                 }

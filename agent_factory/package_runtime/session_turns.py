@@ -17,6 +17,14 @@ def session_final_answer(state: Any) -> str | None:
     ).strip() or None
 
 
+def session_reasoning_content(state: Any) -> str | None:
+    conversation = getattr(state, "conversation", None)
+    if conversation is None:
+        return None
+    value = getattr(conversation, "reasoning_content", None)
+    return str(value or "").strip() or None
+
+
 def session_trace_ref(compiled: Any, state: Any) -> dict[str, str] | None:
     trace_id = str(getattr(getattr(state, "observability", None), "trace_id", "") or "").strip()
     run_id = str(getattr(getattr(state, "run", None), "run_id", "") or "").strip()

@@ -62,6 +62,8 @@ class OpenAIChatCompletionsAdapter:
         reasoning = getattr(settings, "reasoning", None)
         if getattr(reasoning, "enabled", None) is not True:
             return False
+        if getattr(reasoning, "send_history", None) is not True:
+            return False
         return self.profile.capabilities.send_reasoning_history != "unsupported"
 
 

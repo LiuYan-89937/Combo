@@ -17,6 +17,8 @@ from agent_factory.models import (
     get_task_model,
     get_task_model_settings,
 )
+from agent_factory.models.reasoning import is_reasoning_content_block
+from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 
@@ -100,7 +102,7 @@ class LangChainModelServiceAdapter:
         messages: list[Any] | None = None,
         tools: list[BaseTool] | None = None,
     ) -> ModelInvocationResult:
-        model, settings = self._resolve_model()
+        model, settings = self._resolve_model(state=state)
         if model is None:
             raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
         bound_model = _bind_tools(model, tools or [])
@@ -109,6 +111,7 @@ class LangChainModelServiceAdapter:
             prompt_binding=prompt_binding or {},
             messages=messages or [],
             tools=tools or [],
+            image_input_enabled=bool(settings.multimodal),
         )
         response = bound_model.invoke(
             envelope.messages
@@ -127,7 +130,11 @@ class LangChainModelServiceAdapter:
             },
         )
 
-    def _resolve_model(self) -> tuple[Any, ChatModelSettings]:
+    def _resolve_model(self, *, state: Any | None = None) -> tuple[Any, ChatModelSettings]:
+        if self.model_role == "main" and state is not None:
+            override = resolve_runtime_main_chat_model_from_state(state)
+            if override is not None:
+                return override.model, override.settings
         if self._model is not None and self._settings is not None:
             return self._model, self._settings
         return _configured_model_for_role(self.model_role)
@@ -208,6 +215,8 @@ def _content_to_text(content: Any) -> str:
             if isinstance(item, str):
                 parts.append(item)
             elif isinstance(item, dict):
+                if is_reasoning_content_block(item):
+                    continue
                 value = item.get("text") or item.get("content")
                 if value:
                     parts.append(str(value))

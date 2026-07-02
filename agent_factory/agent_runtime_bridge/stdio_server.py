@@ -34,7 +34,7 @@ from agent_factory.package_runtime.session_turns import (
     session_trace_ref,
     session_user_input_from_state,
 )
-from agent_factory.runtime_attachments import merge_attachments_into_user_config
+from agent_factory.runtime_attachments import has_attachment_payload, merge_attachments_into_user_config
 
 
 PACKAGE_ROOT = Path("/package")
@@ -481,7 +481,7 @@ def _scheduler_event_payload(payload: SchedulerEventPayload, package: LoadedAgen
 
 def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], runtime: CompiledRuntime) -> int:
     message = str(payload.get("message") or "").strip()
-    if not message:
+    if not message and not has_attachment_payload(payload.get("attachments")):
         normalizer.emit_run_failed(ValueError("run_message requires payload.message"))
         return 1
     package = runtime.package

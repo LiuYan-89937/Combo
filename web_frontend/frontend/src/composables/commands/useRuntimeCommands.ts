@@ -28,8 +28,13 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.setModeCommand(mode))
   }
 
-  const sendMessage = (message: string, mode?: FactoryMode, attachments?: RuntimeAttachmentInput[]) => {
-    const command = commands.sendMessageCommand({ message, mode, attachments })
+  const sendMessage = (
+    message: string,
+    mode?: FactoryMode,
+    attachments?: RuntimeAttachmentInput[],
+    runtimeOptions?: commands.RuntimeMainModelOptions,
+  ) => {
+    const command = commands.sendMessageCommand({ message, mode, attachments, runtimeOptions })
     transport.sendRuntimeCommand(command)
     return command
   }

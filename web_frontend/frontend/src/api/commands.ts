@@ -55,6 +55,11 @@ export interface SendMessageOptions {
   message: string
   mode?: FactoryMode
   attachments?: RuntimeAttachmentInput[]
+  runtimeOptions?: RuntimeMainModelOptions
+}
+
+export interface RuntimeMainModelOptions {
+  mainModelProfileId?: string | null
 }
 
 export function sendMessageCommand(options: SendMessageOptions): FactoryFrontendCommand {
@@ -63,7 +68,10 @@ export function sendMessageCommand(options: SendMessageOptions): FactoryFrontend
     request_id: requestId,
     mode: options.mode,
     message: options.message,
-    payload: options.attachments ? { attachments: options.attachments } : {},
+    payload: runtimePayload(
+      options.attachments ? { attachments: options.attachments } : {},
+      options.runtimeOptions
+    ),
   })
 }
 
@@ -73,17 +81,21 @@ export function runAgentPackageCommand(
   packageId: string,
   message: string,
   sessionId?: string,
-  attachments?: RuntimeAttachmentInput[]
+  attachments?: RuntimeAttachmentInput[],
+  runtimeOptions?: RuntimeMainModelOptions
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_package', {
     request_id: requestId,
-    payload: {
-      package_id: packageId,
-      message,
-      session_id: sessionId,
-      ...(attachments && attachments.length > 0 ? { attachments } : {}),
-    },
+    payload: runtimePayload(
+      {
+        package_id: packageId,
+        message,
+        session_id: sessionId,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      },
+      runtimeOptions
+    ),
   })
 }
 
@@ -91,34 +103,55 @@ export function sendAgentPackageMessageCommand(
   packageId: string,
   message: string,
   sessionId?: string,
-  attachments?: RuntimeAttachmentInput[]
+  attachments?: RuntimeAttachmentInput[],
+  runtimeOptions?: RuntimeMainModelOptions
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('send_agent_package_message', {
     request_id: requestId,
-    payload: {
-      package_id: packageId,
-      message,
-      session_id: sessionId,
-      ...(attachments && attachments.length > 0 ? { attachments } : {}),
-    },
+    payload: runtimePayload(
+      {
+        package_id: packageId,
+        message,
+        session_id: sessionId,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      },
+      runtimeOptions
+    ),
   })
 }
 
 export function runAgentEvolutionCommand(
   packageId: string,
   message: string,
-  attachments?: RuntimeAttachmentInput[]
+  attachments?: RuntimeAttachmentInput[],
+  runtimeOptions?: RuntimeMainModelOptions
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_evolution', {
     request_id: requestId,
-    payload: {
-      package_id: packageId,
-      ...(attachments && attachments.length > 0 ? { attachments } : {}),
-    },
+    payload: runtimePayload(
+      {
+        package_id: packageId,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      },
+      runtimeOptions
+    ),
     message,
   })
+}
+
+function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: RuntimeMainModelOptions): Record<string, unknown> {
+  const profileId = String(runtimeOptions?.mainModelProfileId || '').trim()
+  if (!profileId) return payload
+  return {
+    ...payload,
+    user_config: {
+      model_profile_overrides: {
+        main: profileId,
+      },
+    },
+  }
 }
 
 // ============= Interrupt Commands =============

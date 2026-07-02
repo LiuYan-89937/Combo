@@ -8,7 +8,11 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.runtime_attachments import format_attachments_for_model
+from agent_factory.runtime_attachments import (
+    format_attachments_for_model,
+    image_attachment_content_parts,
+    image_attachment_count,
+)
 from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
@@ -51,6 +55,8 @@ class ModelInputEnvelope:
     dynamic_evidence_chars: int
     history_message_count: int
     tool_count: int
+    image_input_enabled: bool = False
+    image_attachment_count: int = 0
 
     def diagnostics(self) -> dict[str, Any]:
         return {
@@ -61,6 +67,8 @@ class ModelInputEnvelope:
             "dynamic_evidence_chars": self.dynamic_evidence_chars,
             "history_message_count": self.history_message_count,
             "tool_count": self.tool_count,
+            "image_input_enabled": self.image_input_enabled,
+            "image_attachment_count": self.image_attachment_count,
         }
 
 
@@ -71,10 +79,21 @@ def build_runtime_model_input(
     messages: list[Any],
     tools: list[BaseTool],
     node_id: str | None = None,
+    image_input_enabled: bool = False,
 ) -> ModelInputEnvelope:
     stable_system = _stable_system_prompt(prompt_binding=prompt_binding, state=state, node_id=node_id)
-    history_messages = _history_messages(state=state, messages=messages, node_id=node_id)
-    dynamic_evidence = _dynamic_evidence_text(state=state, node_id=node_id)
+    visual_attachment_count = image_attachment_count(_runtime_attachments(state))
+    history_messages = _history_messages(
+        state=state,
+        messages=messages,
+        node_id=node_id,
+        image_input_enabled=image_input_enabled,
+    )
+    dynamic_evidence = _dynamic_evidence_text(
+        state=state,
+        node_id=node_id,
+        include_extracted_text_for_images=not image_input_enabled,
+    )
     request_messages: list[Any] = [SystemMessage(content=stable_system), *history_messages]
     if dynamic_evidence:
         request_messages.append(
@@ -96,6 +115,8 @@ def build_runtime_model_input(
         dynamic_evidence_chars=len(dynamic_evidence),
         history_message_count=len(history_messages),
         tool_count=len(tools),
+        image_input_enabled=image_input_enabled,
+        image_attachment_count=visual_attachment_count,
     )
 
 
@@ -145,14 +166,111 @@ def _builtin_allow_external_paths(state: Any) -> bool:
     return bool(session_config.get("builtin_allow_external_paths", DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS))
 
 
-def _history_messages(*, state: Any, messages: list[Any], node_id: str | None) -> list[Any]:
+def _history_messages(
+    *,
+    state: Any,
+    messages: list[Any],
+    node_id: str | None,
+    image_input_enabled: bool,
+) -> list[Any]:
     normalized = [message for message in messages if isinstance(message, BaseMessage)]
     if normalized and _uses_plan_and_execute_projection(state=state, node_id=node_id):
-        return _plan_and_execute_history_messages(state=state, messages=normalized, node_id=node_id)
+        return _with_current_user_image_attachments(
+            state=state,
+            messages=_plan_and_execute_history_messages(state=state, messages=normalized, node_id=node_id),
+            image_input_enabled=image_input_enabled,
+        )
     if normalized:
-        return normalized
+        return _with_current_user_image_attachments(
+            state=state,
+            messages=normalized,
+            image_input_enabled=image_input_enabled,
+        )
     user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
-    return [HumanMessage(content=user_input)] if user_input else []
+    messages_from_input = [HumanMessage(content=user_input)] if user_input else []
+    return _with_current_user_image_attachments(
+        state=state,
+        messages=messages_from_input,
+        image_input_enabled=image_input_enabled,
+    )
+
+
+def _with_current_user_image_attachments(
+    *,
+    state: Any,
+    messages: list[Any],
+    image_input_enabled: bool,
+) -> list[Any]:
+    if not image_input_enabled:
+        return messages
+    image_parts = image_attachment_content_parts(_runtime_attachments(state))
+    if not image_parts:
+        return messages
+    target_index = _current_user_message_index(state=state, messages=messages)
+    if target_index is None:
+        user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
+        return [
+            *messages,
+            HumanMessage(content=_image_user_content_parts(user_input, image_parts)),
+        ]
+    message = messages[target_index]
+    if _message_has_image_url_part(message):
+        return messages
+    updated = list(messages)
+    text = _message_text(message).strip()
+    if not text:
+        text = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
+    updated[target_index] = _copy_human_message_with_content(
+        message,
+        _image_user_content_parts(text, image_parts),
+    )
+    return updated
+
+
+def _current_user_message_index(*, state: Any, messages: list[Any]) -> int | None:
+    current_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
+    fallback_index: int | None = None
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, HumanMessage):
+            continue
+        if fallback_index is None:
+            fallback_index = index
+        if not current_input or _message_text(message).strip() == current_input:
+            return index
+    return fallback_index
+
+
+def _image_user_content_parts(text: str, image_parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = []
+    if text.strip():
+        content.append({"type": "text", "text": text.strip()})
+    content.extend(image_parts)
+    return content
+
+
+def _copy_human_message_with_content(message: Any, content: list[dict[str, Any]]) -> HumanMessage:
+    if hasattr(message, "model_copy"):
+        copied = message.model_copy(update={"content": content})
+        if isinstance(copied, HumanMessage):
+            return copied
+    return HumanMessage(
+        content=content,
+        additional_kwargs=dict(getattr(message, "additional_kwargs", {}) or {}),
+        response_metadata=dict(getattr(message, "response_metadata", {}) or {}),
+        id=getattr(message, "id", None),
+        name=getattr(message, "name", None),
+    )
+
+
+def _message_has_image_url_part(message: Any) -> bool:
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return False
+    for item in content:
+        if isinstance(item, dict) and str(item.get("type") or "") == "image_url":
+            return True
+    return False
 
 
 def _uses_plan_and_execute_projection(*, state: Any, node_id: str | None) -> bool:
@@ -252,9 +370,17 @@ def _tool_call_ids(message: BaseMessage) -> list[str]:
     return ids
 
 
-def _dynamic_evidence_text(*, state: Any, node_id: str | None) -> str:
+def _dynamic_evidence_text(
+    *,
+    state: Any,
+    node_id: str | None,
+    include_extracted_text_for_images: bool,
+) -> str:
     plan_text = _plan_evidence_text(state)
-    attachments_text = _runtime_attachments_text(state)
+    attachments_text = _runtime_attachments_text(
+        state,
+        include_extracted_text_for_images=include_extracted_text_for_images,
+    )
     model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
     frame = _turn_evidence_frame(model_context=model_context, node_id=node_id)
     if not isinstance(frame, dict) and isinstance(model_context, dict):
@@ -278,11 +404,18 @@ def _dynamic_evidence_text(*, state: Any, node_id: str | None) -> str:
     return "\n\n".join(item for item in [plan_text, attachments_text, context_text] if item)
 
 
-def _runtime_attachments_text(state: Any) -> str:
+def _runtime_attachments(state: Any) -> Any:
     user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
     if not isinstance(user_config, dict):
-        return ""
-    return format_attachments_for_model(user_config.get("attachments"))
+        return None
+    return user_config.get("attachments")
+
+
+def _runtime_attachments_text(state: Any, *, include_extracted_text_for_images: bool) -> str:
+    return format_attachments_for_model(
+        _runtime_attachments(state),
+        include_extracted_text_for_images=include_extracted_text_for_images,
+    )
 
 
 def _plan_evidence_text(state: Any) -> str:
@@ -439,6 +572,16 @@ def _message_text(message: BaseMessage) -> str:
     content = getattr(message, "content", "")
     if isinstance(content, str):
         return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                value = item.get("text") or item.get("content")
+                if value:
+                    parts.append(str(value))
+        return "\n".join(parts)
     return str(content)
 
 

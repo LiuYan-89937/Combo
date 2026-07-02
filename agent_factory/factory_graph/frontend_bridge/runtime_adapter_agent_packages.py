@@ -26,6 +26,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
 from agent_factory.runtime_attachments import (
     AttachmentImportError,
     attachment_import_error_payload,
+    has_attachment_payload,
     redact_attachment_markers,
 )
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
@@ -197,7 +198,7 @@ class RuntimeAgentPackageCommandMixin:
         if not package_id:
             self._emit_error(command, f"{command.type} requires package_id")
             return
-        if not message:
+        if not message and not has_attachment_payload(command.payload.get("attachments")):
             self._emit_error(command, f"{command.type} requires message")
             return
         if self.pending_agent_package_run is not None:
@@ -216,6 +217,7 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 session_id=session_id,
                 request_id=command.request_id,
+                user_config=_runtime_user_config(command),
                 require_ready=require_ready,
                 attachments=command.payload.get("attachments"),
             )
@@ -231,7 +233,7 @@ class RuntimeAgentPackageCommandMixin:
         if not package_id:
             self._emit_error(command, "run_agent_evolution requires package_id")
             return
-        if not message:
+        if not message and not has_attachment_payload(command.payload.get("attachments")):
             self._emit_error(command, "run_agent_evolution requires message")
             return
         if self.pending_evolution_run is not None:
@@ -255,6 +257,7 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 request_id=command.request_id,
                 session_id=self._session_id(),
+                user_config=_runtime_user_config(command),
                 attachments=command.payload.get("attachments"),
             )
             self._consume_evolution_stream(package_id=package_id, run=run)
@@ -287,12 +290,17 @@ class RuntimeAgentPackageCommandMixin:
     def _consume_evolution_stream(self, *, package_id: str, run: Any) -> RuntimeStreamConsumeResult:
         terminal_event: FactoryFrontendEvent | None = None
         final_answer: str | None = None
+        final_reasoning_content: str | None = None
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode != "frontend_event":
                 continue
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            if item.event_type == "model_reasoning_completed":
+                content = _visible_model_reasoning_content(item)
+                if content:
+                    final_reasoning_content = content
             if item.event_type == "model_message_completed":
                 content = _visible_model_message_content(item)
                 if content:
@@ -304,6 +312,7 @@ class RuntimeAgentPackageCommandMixin:
                 self._finish_evolution_turn(
                     request_id=item.request_id,
                     final_answer=final_answer,
+                    reasoning_content=final_reasoning_content,
                     status="interrupted",
                 )
                 self.pending_evolution_run = PendingEvolutionRun(
@@ -322,6 +331,7 @@ class RuntimeAgentPackageCommandMixin:
                 self._finish_evolution_turn(
                     request_id=item.request_id,
                     final_answer=final_answer,
+                    reasoning_content=final_reasoning_content,
                     status=runtime_stream_status(item),
                 )
                 terminal_event = item
@@ -450,11 +460,16 @@ class RuntimeAgentPackageCommandMixin:
         final_state = None
         terminal_event: FactoryFrontendEvent | None = None
         final_answer: str | None = None
+        final_reasoning_content: str | None = None
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode == "frontend_event":
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+                if item.event_type == "model_reasoning_completed":
+                    content = _visible_model_reasoning_content(item)
+                    if content:
+                        final_reasoning_content = content
                 if item.event_type == "model_message_completed":
                     content = _visible_model_message_content(item)
                     if content:
@@ -471,6 +486,7 @@ class RuntimeAgentPackageCommandMixin:
                         self._finish_system_chat_turn(
                             request_id=item.request_id,
                             final_answer=final_answer,
+                            reasoning_content=final_reasoning_content,
                             status="interrupted",
                         )
                     session_id = str(agent_session_id or (run.session or {}).get("session_id") or "")
@@ -501,6 +517,7 @@ class RuntimeAgentPackageCommandMixin:
                         self._finish_system_chat_turn(
                             request_id=item.request_id,
                             final_answer=final_answer,
+                            reasoning_content=final_reasoning_content,
                             status=runtime_stream_status(item),
                         )
                     terminal_event = item
@@ -570,6 +587,7 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
+                user_config=_runtime_user_config(command),
                 attachments=command.payload.get("attachments"),
             )
             self._commit_system_chat_request(redacted_message, request_id=command.request_id)
@@ -603,6 +621,7 @@ class RuntimeAgentPackageCommandMixin:
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
+                user_config=_runtime_user_config(command),
                 attachments=command.payload.get("attachments"),
             )
             self._commit_host_create_agent_request(
@@ -661,6 +680,7 @@ class RuntimeAgentPackageCommandMixin:
         request_id: str | None,
         final_answer: str | None,
         status: str,
+        reasoning_content: str | None = None,
     ) -> None:
         if self.session_record is None:
             return
@@ -669,6 +689,7 @@ class RuntimeAgentPackageCommandMixin:
             "chat",
             request_id=request_id,
             final_answer=final_answer,
+            reasoning_content=reasoning_content,
             status=status,
         )
 
@@ -736,6 +757,7 @@ class RuntimeAgentPackageCommandMixin:
         request_id: str | None,
         final_answer: str | None,
         status: str,
+        reasoning_content: str | None = None,
     ) -> None:
         if self.session_record is None:
             return
@@ -744,18 +766,24 @@ class RuntimeAgentPackageCommandMixin:
             "evolve_agent",
             request_id=request_id,
             final_answer=final_answer,
+            reasoning_content=reasoning_content,
             status=status,
         )
 
     def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
         terminal_event: FactoryFrontendEvent | None = None
         final_answer: str | None = None
+        final_reasoning_content: str | None = None
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode != "frontend_event":
                 raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            if item.event_type == "model_reasoning_completed":
+                content = _visible_model_reasoning_content(item)
+                if content:
+                    final_reasoning_content = content
             if item.event_type == "model_message_completed":
                 content = _visible_model_message_content(item)
                 if content:
@@ -764,6 +792,7 @@ class RuntimeAgentPackageCommandMixin:
                 self._finish_host_create_agent_turn(
                     request_id=item.request_id,
                     final_answer=final_answer,
+                    reasoning_content=final_reasoning_content,
                     status="interrupted",
                 )
                 self.pending_create_agent_run = PendingCreateAgentRun(
@@ -780,6 +809,7 @@ class RuntimeAgentPackageCommandMixin:
                 self._finish_host_create_agent_turn(
                     request_id=item.request_id,
                     final_answer=final_answer,
+                    reasoning_content=final_reasoning_content,
                     status=runtime_stream_status(item),
                 )
                 terminal_event = item
@@ -793,6 +823,7 @@ class RuntimeAgentPackageCommandMixin:
         request_id: str | None,
         final_answer: str | None,
         status: str,
+        reasoning_content: str | None = None,
     ) -> None:
         if self.session_record is None:
             return
@@ -801,6 +832,7 @@ class RuntimeAgentPackageCommandMixin:
             "create_agent",
             request_id=request_id,
             final_answer=final_answer,
+            reasoning_content=reasoning_content,
             status=status,
         )
 
@@ -831,6 +863,21 @@ def _visible_model_message_content(item: FactoryFrontendEvent) -> str | None:
     if item.payload.get("visible_to_user") is False:
         return None
     content = str(item.payload.get("content") or "").strip()
+    return content or None
+
+
+def _runtime_user_config(command: FactoryFrontendCommand) -> dict[str, Any]:
+    payload = command.payload if isinstance(command.payload, dict) else {}
+    user_config = payload.get("user_config")
+    return dict(user_config) if isinstance(user_config, dict) else {}
+
+
+def _visible_model_reasoning_content(item: FactoryFrontendEvent) -> str | None:
+    if not isinstance(item.payload, dict):
+        return None
+    if item.payload.get("visible_to_user") is False:
+        return None
+    content = str(item.payload.get("content") or item.payload.get("reasoning_content") or "").strip()
     return content or None
 
 

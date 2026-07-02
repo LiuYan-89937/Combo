@@ -57,6 +57,8 @@
     "node_failed",
     "plan_updated",
     "model_call_started",
+    "model_reasoning_delta",
+    "model_reasoning_completed",
     "model_stream_delta",
     "model_message_completed",
     "model_call_completed",

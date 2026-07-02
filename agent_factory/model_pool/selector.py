@@ -138,6 +138,12 @@ def _missing_capabilities(requirement: ModelSelectionRequirement, profile: Model
         missing.append("tool_calling")
     if requirement.reasoning_required is True and not capabilities.reasoning_supported:
         missing.append("reasoning")
+    if requirement.kind == "image_generation":
+        if "text" in requirement.input_modalities and "image" in requirement.output_modalities and not capabilities.text_to_image:
+            missing.append("text_to_image")
+        if "image" in requirement.input_modalities and "image" in requirement.output_modalities:
+            if not (capabilities.image_edit or capabilities.image_to_image):
+                missing.append("image_edit")
     if requirement.structured_output_methods:
         supported = set(capabilities.structured_output_methods)
         if not any(method in supported for method in requirement.structured_output_methods):
@@ -166,6 +172,17 @@ def _score_profile(requirement: ModelSelectionRequirement, profile: ModelPoolPro
         score += 0.04 * len(profile.capabilities.structured_output_methods)
         if profile.capabilities.strict_tool_schema:
             score += 0.05
+        if requirement.kind == "image_generation":
+            score += 0.04 * sum(
+                1
+                for supported in (
+                    profile.capabilities.text_to_image,
+                    profile.capabilities.image_to_image,
+                    profile.capabilities.image_edit,
+                    profile.capabilities.multi_image_reference,
+                )
+                if supported
+            )
     if requirement.optimize_for == "latency" and profile.limits.timeout_seconds:
         score += max(0.0, 0.12 - min(profile.limits.timeout_seconds, 120.0) / 1000.0)
     return score

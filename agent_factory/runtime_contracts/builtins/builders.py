@@ -36,7 +36,7 @@ from agent_factory.runtime_contracts.schema import (
     TraceContract,
 )
 from agent_factory.artifact_system import ArtifactStore, ReportStore
-from agent_factory.model_pool import resolve_chat_model_profile
+from agent_factory.model_pool import resolve_chat_model_profile, resolve_image_generation_model_profile
 from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
@@ -411,7 +411,6 @@ class ModelContractBuilder:
     contract_version = "model_contract.v1"
 
     def build(self, contract: ModelContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        del context
         main_binding = contract.config.bindings.get("main")
         if main_binding is None:
             raise ValueError("model_contract.v1 requires config.bindings.main")
@@ -425,7 +424,28 @@ class ModelContractBuilder:
             for role, resolved in resolved_profiles.items()
         }
         model_tool_runtime = {}
+        artifact_store = context.tool_runtime_resources.get("artifact_store")
         for tool_id, binding in contract.config.tool_bindings.items():
+            if binding.capability in {"image_output", "image_edit"}:
+                if not isinstance(artifact_store, ArtifactStore):
+                    raise ValueError("image generation model tools require artifact_store from artifact contract")
+                resolved_image = resolve_image_generation_model_profile(
+                    binding,
+                    artifact_store=artifact_store,
+                )
+                model_tool_runtime[tool_id] = {
+                    "tool_id": tool_id,
+                    "capability": binding.capability,
+                    "description": binding.description,
+                    "profile_id": resolved_image.profile_id,
+                    "provider": resolved_image.settings.provider,
+                    "model_name": resolved_image.settings.model,
+                    "image_generation_service": resolved_image.service,
+                    "settings": resolved_image.settings,
+                    "runtime_root": str(context.runtime_root or context.package_root / ".agent_runtime"),
+                    "package_root": str(context.package_root),
+                }
+                continue
             resolved = resolve_chat_model_profile(binding, role=f"tool:{tool_id}")
             model_tool_runtime[tool_id] = {
                 "tool_id": tool_id,
@@ -436,6 +456,8 @@ class ModelContractBuilder:
                 "model_name": resolved.settings.model or "",
                 "model": resolved.model,
                 "settings": resolved.settings,
+                "runtime_root": str(context.runtime_root or context.package_root / ".agent_runtime"),
+                "package_root": str(context.package_root),
             }
         return RuntimeContribution(
             services={
@@ -544,7 +566,8 @@ class ArtifactContractBuilder:
             services={
                 "artifact_store": artifact_store,
                 "report_store": ReportStore(artifact_store=artifact_store),
-            }
+            },
+            tool_runtime_resources={"artifact_store": artifact_store},
         )
 
 

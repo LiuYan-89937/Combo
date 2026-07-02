@@ -95,6 +95,7 @@ import { NModal, NTabs, NTabPane, NUpload, NUploadDragger, NIcon, NText, NInput,
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import { CloudUploadOutline, Document } from '@vicons/ionicons5'
 import { useI18n } from '@/composables/useI18n'
+import { runtimeFileAttachmentFromFile } from '@/utils/attachments'
 
 const props = defineProps<{
   show: boolean
@@ -139,20 +140,9 @@ const isValidUrl = computed(() => {
 const textContent = ref('')
 const textName = ref('')
 
-function handleFileUpload({ file }: UploadCustomRequestOptions) {
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    const content = e.target?.result as string
-    emit('attach', {
-      kind: 'file',
-      name: file.name,
-      content: content.split(',')[1], // Base64
-      encoding: 'base64',
-      mime_type: file.type,
-    })
-    show.value = false
-  }
-  reader.readAsDataURL(file.file as File)
+async function handleFileUpload({ file }: UploadCustomRequestOptions) {
+  emit('attach', await runtimeFileAttachmentFromFile(file.file as File, { name: file.name }))
+  show.value = false
 }
 
 function handleSelectWorkspaceFile(file: any) {

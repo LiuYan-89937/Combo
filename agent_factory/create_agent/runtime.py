@@ -21,6 +21,10 @@ from agent_factory.factory_graph.frontend_bridge.event_normalizer import Runtime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.session import build_factory_checkpointer_handle
+from agent_factory.model_pool.runtime_override import (
+    RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
+    main_model_profile_id_from_user_config,
+)
 from agent_factory.paths import project_root
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
@@ -64,6 +68,7 @@ class CreateAgentRuntime:
         session_id: str | None,
         request_id: str | None,
         attachments: Any = None,
+        user_config: dict[str, Any] | None = None,
     ) -> CreateAgentStreamRun:
         resolved_session_id = session_id or uuid4().hex
         resolved_request_id = request_id or uuid4().hex
@@ -78,6 +83,7 @@ class CreateAgentRuntime:
             scope=attachment_scope,
         )
         user_input = attachment_result.message
+        runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
         intent = classify_create_agent_intent(
             user_input=user_input,
             workspace=workspace,
@@ -102,6 +108,7 @@ class CreateAgentRuntime:
                 resume_payload=None,
                 graph_kind=graph_kind,
                 attachments=attachment_result.attachments,
+                runtime_main_model_profile_id=runtime_main_model_profile_id,
                 intent={
                     **intent.model_dump(mode="json"),
                     **({"task_analysis": task_analysis.model_dump(mode="json")} if task_analysis is not None else {}),
@@ -167,6 +174,7 @@ class CreateAgentRuntime:
                 resume_payload=resume_payload or {},
                 graph_kind=graph_kind,
                 attachments=[],
+                runtime_main_model_profile_id=None,
                 intent=None,
             ),
         )
@@ -181,6 +189,7 @@ class CreateAgentRuntime:
         resume_payload: dict[str, Any] | None,
         graph_kind: str,
         attachments: list[dict[str, Any]],
+        runtime_main_model_profile_id: str | None,
         intent: dict[str, Any] | None,
     ) -> Iterator[tuple[str, Any]]:
         request_id = request_id or uuid4().hex
@@ -291,6 +300,7 @@ class CreateAgentRuntime:
                     "request": user_input,
                     "workspace_path": str(workspace.root),
                     "runtime_attachments": attachments,
+                    RUNTIME_MAIN_MODEL_PROFILE_ID_KEY: runtime_main_model_profile_id or "",
                     "iteration": 0,
                     "done": False,
                     "messages": [HumanMessage(content=user_input)],
