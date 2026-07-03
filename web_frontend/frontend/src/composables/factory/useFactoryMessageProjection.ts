@@ -4,6 +4,10 @@ import { useRuntimeStore } from '@/stores/runtime'
 import type { ToolActivity, TranscriptItem } from '@/types/protocol'
 import { isToolActivityActive, isToolActivityPendingApproval } from '@/utils/toolActivityState'
 
+export type FactoryTimelineItem =
+  | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem }
+  | { kind: 'tool'; id: string; timestamp: string; order: number; tool: ToolActivity }
+
 export function useFactoryMessageProjection() {
   const runtimeStore = useRuntimeStore()
   const { t } = useI18n()
@@ -35,6 +39,28 @@ export function useFactoryMessageProjection() {
             }
           : undefined,
       }))
+  })
+  const timelineItems = computed<FactoryTimelineItem[]>(() => {
+    const items: FactoryTimelineItem[] = []
+    runtimeStore.transcript.forEach((message, index) => {
+      items.push({
+        kind: 'message',
+        id: message.id,
+        timestamp: message.timestamp,
+        order: index,
+        message,
+      })
+    })
+    runtimeStore.tools.forEach((tool, index) => {
+      items.push({
+        kind: 'tool',
+        id: tool.activityKey,
+        timestamp: tool.createdAt || tool.timestamp,
+        order: runtimeStore.transcript.length + index,
+        tool,
+      })
+    })
+    return items.sort(compareTimelineItems)
   })
   const thinkingMessages = computed<TranscriptItem[]>(() => {
     if (!runtimeStore.hasActiveRun || runtimeStore.isAwaitingUserInputInterrupt) return []
@@ -86,9 +112,19 @@ export function useFactoryMessageProjection() {
     hasApprovalRequests,
     isMessageStreaming,
     thinkingMessages,
+    timelineItems,
     toolActivityHint,
     untrackedActiveStreamMessages,
   }
+}
+
+function compareTimelineItems(left: FactoryTimelineItem, right: FactoryTimelineItem): number {
+  const leftTime = Date.parse(left.timestamp)
+  const rightTime = Date.parse(right.timestamp)
+  const normalizedLeft = Number.isFinite(leftTime) ? leftTime : 0
+  const normalizedRight = Number.isFinite(rightTime) ? rightTime : 0
+  if (normalizedLeft !== normalizedRight) return normalizedLeft - normalizedRight
+  return left.order - right.order
 }
 
 function hasStreamDisplayContent(stream: { content: string; reasoningContent?: string }): boolean {

@@ -64,7 +64,9 @@ export function useFactoryConversation() {
           : t('chat.inputPlaceholder')
   ))
   const inputDisabled = computed(() => (
-    runtimeStore.isInputLocked || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
+    runtimeStore.isInputLocked
+    || runtimeStore.isPublishConfirmationPending
+    || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
   ))
   const emptyDescription = computed(() => {
     if (isEvolutionRoute.value) return selectedEvolutionPackageId.value ? t('factory.emptyEvolutionReady') : t('factory.emptyEvolutionSelect')

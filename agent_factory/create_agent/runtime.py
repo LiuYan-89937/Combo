@@ -21,6 +21,7 @@ from agent_factory.factory_graph.frontend_bridge.event_normalizer import Runtime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
 from agent_factory.factory_graph.session import build_factory_checkpointer_handle
+from agent_factory.context_system.token_counter import context_window_payload
 from agent_factory.model_pool.runtime_override import (
     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
     main_model_profile_id_from_user_config,
@@ -337,7 +338,19 @@ class CreateAgentRuntime:
                 if stream_mode == "custom" and graph_kind == "manufacture":
                     model_trace.flush()
                     if _is_model_cache_chunk(chunk):
-                        record_trace("model_cache", _json_safe(chunk.get("payload") or {}))
+                        cache_payload = _json_safe(chunk.get("payload") or {})
+                        record_trace("model_cache", cache_payload)
+                        node_id = str(cache_payload.get("node_id") or "create_agent_supervisor")
+                        normalizer.runtime_event(
+                            "model_cache_metrics",
+                            node_id=node_id,
+                            payload=cache_payload,
+                        )
+                        normalizer.runtime_event(
+                            "context_window_updated",
+                            node_id=node_id,
+                            payload=_context_window_payload_from_model_cache(cache_payload, node_id=node_id),
+                        )
                         continue
                     for record in _tool_trace_records(chunk):
                         record_trace("tool_call", record)
@@ -437,7 +450,7 @@ def _manufacture_resume_update(*, workspace: CreateAgentWorkspace, resume_payloa
         return {}
     if not _is_publish_confirmation_resume(resume_payload):
         return {}
-    decision = str(resume_payload.get("decision") or "").strip()
+    decision = _publish_confirmation_decision(resume_payload)
     input_text = _resume_input_text(resume_payload)
     if decision in {"publish", "approve"}:
         _write_publish_decision(workspace=workspace, decision="approve", input_text=input_text or "发布")
@@ -486,10 +499,26 @@ def _checkpoint_user_input(values: dict[str, Any]) -> str | None:
 
 def _is_publish_confirmation_resume(payload: dict[str, Any]) -> bool:
     payload_type = str(payload.get("type") or "").strip()
-    if payload_type == "create_agent_publish_confirmation_result":
+    if payload_type in {"create_agent_publish_confirmation", "create_agent_publish_confirmation_result"}:
         return True
     decision = str(payload.get("decision") or "").strip()
     return decision == "approve" and ("input_text" in payload or "answer" in payload)
+
+
+def _publish_confirmation_decision(payload: dict[str, Any]) -> str:
+    decision = str(payload.get("decision") or "").strip().lower()
+    if decision in {"approve", "publish", "save_draft"}:
+        return decision
+    if _looks_like_publish_confirmation_text(_resume_input_text(payload)):
+        return "approve"
+    return decision or "pending"
+
+
+def _looks_like_publish_confirmation_text(value: str) -> bool:
+    text = "".join(str(value or "").strip().lower().split())
+    if not text or text.startswith(("不要", "别", "先别", "暂不", "不")):
+        return False
+    return text in {"确认", "确认发布", "发布", "approve", "approved", "yes", "y", "ok"} or text.startswith("确认发布")
 
 
 def _write_publish_decision(*, workspace: CreateAgentWorkspace, decision: str, input_text: str) -> None:
@@ -668,6 +697,26 @@ def _tool_trace_records(chunk: Any) -> list[dict[str, Any]]:
 
 def _is_model_cache_chunk(chunk: Any) -> bool:
     return isinstance(chunk, dict) and chunk.get("type") == "create_agent_model_cache" and isinstance(chunk.get("payload"), dict)
+
+
+def _context_window_payload_from_model_cache(payload: dict[str, Any], *, node_id: str) -> dict[str, Any]:
+    provider_cache = payload.get("provider_cache") if isinstance(payload.get("provider_cache"), dict) else {}
+    return context_window_payload(
+        node_id=node_id,
+        token_count=_positive_int(provider_cache.get("input_tokens")),
+        token_count_method="provider_usage.input_tokens",
+        compression_threshold_tokens=None,
+        model_role="main",
+        source="create_agent.model_cache_metrics",
+    )
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _json_safe(value: Any) -> Any:

@@ -119,7 +119,7 @@ export function applyModelMessageCompleted(state: ModelMutationState, event: Fac
     }
   } else {
     state.modelStreams[streamId].requestId = state.modelStreams[streamId].requestId || event.request_id || null
-    if (content && content.length > state.modelStreams[streamId].content.length) {
+    if (typeof content === 'string') {
       state.modelStreams[streamId].content = content
     }
     if (event.payload?.reasoning_content != null) {

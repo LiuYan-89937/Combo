@@ -96,8 +96,13 @@ export function agentPackageSessionSnapshotView(
   const transcript: TranscriptItem[] = []
   const turns: ConversationTurn[] = []
   const rawTurns = Array.isArray(session?.turns) ? session.turns : []
+  const restoredTurns = rawTurns.length > 0
+    ? rawTurns
+    : session?.first_user_input
+      ? [{ index: 1, created_at: session.created_at || session.updated_at, user_input: session.first_user_input }]
+      : []
 
-  rawTurns.forEach((turn: any, index: number) => {
+  restoredTurns.forEach((turn: any, index: number) => {
     const turnIndex = String(turn?.index ?? index + 1)
     const timestamp = String(turn?.created_at || session.updated_at || new Date().toISOString())
     const metadata = {

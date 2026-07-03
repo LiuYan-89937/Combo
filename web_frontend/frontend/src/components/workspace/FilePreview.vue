@@ -24,7 +24,12 @@
     </div>
 
     <div class="preview-content" :class="`preview-${previewKind}`">
-      <div v-if="previewKind === 'markdown'" class="markdown-preview markdown-content" v-html="renderedMarkdown"></div>
+      <div
+        v-if="previewKind === 'markdown'"
+        ref="markdownPreviewRef"
+        class="markdown-preview markdown-content"
+        v-html="renderedMarkdown"
+      ></div>
 
       <img
         v-else-if="previewKind === 'image' && previewSource"
@@ -63,12 +68,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NIcon, NSpace, NText } from 'naive-ui'
 import { Close, DocumentOutline, Download } from '@vicons/ionicons5'
 import { workspaceApi } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
-import { useMarkdown } from '@/composables/useMarkdown'
+import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import type { WorkspaceScope } from '@/api/resourceTypes'
 import type { WorkspaceFileView } from '@/types/protocol'
 
@@ -82,8 +87,9 @@ const emit = defineEmits<{
   close: []
 }>()
 
-const { renderMarkdown } = useMarkdown()
 const { t } = useI18n()
+const markdownPreviewRef = ref<HTMLElement | null>(null)
+const { renderMarkdown } = useMarkdownRenderer(markdownPreviewRef)
 
 const extension = computed(() => props.file.name.split('.').pop()?.toLowerCase() || '')
 const mimeType = computed(() => String(props.file.mimeType || '').toLowerCase())
@@ -102,7 +108,7 @@ const previewLabel = computed(() => {
   if (previewKind.value === 'text') return t('workspace.preview.text')
   return t('workspace.preview.binary')
 })
-const renderedMarkdown = computed(() => renderMarkdown(props.file.content || ''))
+const renderedMarkdown = computed(() => renderMarkdown(props.file.content || '', { surface: 'workspace_preview' }))
 const packageId = computed(() => {
   const payload = props.file.payload || {}
   return String(payload.package_id || payload.packageId || '').trim() || null
@@ -178,6 +184,7 @@ function base64Blob(content: string, mimeType: string): Blob {
 function handleClose() {
   emit('close')
 }
+
 </script>
 
 <style scoped>

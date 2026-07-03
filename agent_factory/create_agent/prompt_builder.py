@@ -138,7 +138,9 @@ def _invariant_system_prompt_text() -> str:
             "最终出厂流程固定为：当前 focus 是 validation_publish；"
             "先显式调用 create_agent_validate(scope='full_static', reason=...)；"
             "full_static validation passed 后再调用 create_agent_control(action=finalize)，系统会向用户做发布前确认。"
-            "发布确认阶段的用户输入仍是普通自然语言：问题先回答，修改请求再改文件，明确确认发布才调用 create_agent_publish。"
+            "不要调用 create_agent_control(action='ask_user') 来索要发布确认；发布确认只能由 finalize 触发的系统确认门处理。"
+            "发布确认阶段由系统确认门返回结构化结果：用户选择发布才调用 create_agent_publish；"
+            "用户选择继续修改或输入自然语言时，先按普通用户消息处理，必要时继续修改、校验，再重新 finalize。"
             "create_agent_publish 只有在发布确认 gate 记录到明确用户确认后才会通过；不要把修改意见当作发布确认。"
         ),
         (

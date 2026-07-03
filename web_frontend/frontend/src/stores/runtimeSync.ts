@@ -17,6 +17,9 @@ import { normalizeResourcePackageId } from '@/utils/resourceScope'
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
+  const hasRunAgentSession =
+    (event.event_type === 'run_completed' || event.event_type === 'run_failed') &&
+    Boolean(event.payload?.agent_session)
 
   if (
     event.event_type === 'session_started' ||
@@ -45,7 +48,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     event.event_type === 'agent_package_selected' ||
     event.event_type === 'agent_package_sessions_listed' ||
     event.event_type === 'agent_package_session_loaded' ||
-    (event.event_type === 'run_completed' && Boolean(event.payload?.agent_session))
+    hasRunAgentSession
   ) {
     const agentStore = useAgentStore()
     agentStore.setPackages(runtimeStore.agentPackages as any)
@@ -64,13 +67,13 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     if (event.event_type === 'agent_package_session_loaded' && event.payload?.session) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.session, event.payload.package_id)])
     }
-    if (event.event_type === 'run_completed' && event.payload?.agent_session) {
+    if (hasRunAgentSession && event.payload?.agent_session) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.agent_session, event.payload.package_id)])
     }
     if (event.event_type === 'agent_package_session_loaded' && event.payload?.session?.session_id) {
       agentStore.setActiveAgentSession(event.payload.session.session_id)
     }
-    if (event.event_type === 'run_completed' && runtimeStore.activeAgentSessionId) {
+    if (hasRunAgentSession && runtimeStore.activeAgentSessionId) {
       agentStore.setActiveAgentSession(runtimeStore.activeAgentSessionId)
     }
   }

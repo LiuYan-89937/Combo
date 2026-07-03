@@ -421,7 +421,14 @@ def _publish_decision_from_resume(value: Any) -> str:
         if decision in {"approve", "publish"}:
             return "approve"
         text = _resume_text(value).strip().lower()
-    return "approve" if text in {"确认", "确认发布", "发布", "approve", "approved", "yes", "y", "ok"} else "pending"
+    return "approve" if _looks_like_publish_confirmation_text(text) else "pending"
+
+
+def _looks_like_publish_confirmation_text(value: str) -> bool:
+    text = "".join(str(value or "").strip().lower().split())
+    if not text or text.startswith(("不要", "别", "先别", "暂不", "不")):
+        return False
+    return text in {"确认", "确认发布", "发布", "approve", "approved", "yes", "y", "ok"} or text.startswith("确认发布")
 
 
 def _publish_resume_text(value: Any, *, decision: str) -> str:

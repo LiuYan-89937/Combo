@@ -1,0 +1,71 @@
+<svg width="960" height="420" viewBox="0 0 960 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FastAgentFactory logo candidates preview">
+  <rect width="960" height="420" fill="#F7F8FA"/>
+  <style>
+    .label { fill: #20242A; font: 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .tile { fill: #FFFFFF; stroke: #E1E4EA; }
+    .mark { fill: #0A0A0A; }
+    .cut { fill: #FFFFFF; }
+  </style>
+  <g transform="translate(40 44)">
+    <rect class="tile" x="0" y="0" width="130" height="130" rx="14"/>
+    <g transform="translate(1 1) scale(1)">
+      <path class="mark" d="M27 22h74v20H51v17h42v20H51v27H27V22Z"/>
+      <path class="mark" d="M79 89h22v22H79V89Z"/>
+    </g>
+    <text class="label" x="0" y="170">block-f</text>
+  </g>
+  <g transform="translate(190 44)">
+    <rect class="tile" x="0" y="0" width="130" height="130" rx="14"/>
+    <g transform="translate(1 1) scale(1)">
+      <path class="mark" d="M24 37c0-7.18 5.82-13 13-13h16c7.18 0 13 5.82 13 13v16c0 7.18-5.82 13-13 13H37c-7.18 0-13-5.82-13-13V37Z"/>
+      <path class="mark" d="M78 75c0-7.18 5.82-13 13-13h10c7.18 0 13 5.82 13 13v10c0 7.18-5.82 13-13 13H91c-7.18 0-13-5.82-13-13V75Z"/>
+      <path class="mark" d="M66 44h21c3.87 0 7 3.13 7 7v11H80v-4H66V44Z"/>
+      <path class="mark" d="M55 74h20v14H55c-3.87 0-7-3.13-7-7V66h14v8Z"/>
+    </g>
+    <text class="label" x="0" y="170">flow</text>
+  </g>
+  <g transform="translate(340 44)">
+    <rect class="tile" x="0" y="0" width="130" height="130" rx="14"/>
+    <g transform="translate(1 1) scale(1)">
+      <path class="mark" d="M20 56h20l16-16 16 16h36v48H20V56Z"/>
+      <path class="cut" d="M38 74h14v14H38V74Z"/>
+      <path class="cut" d="M60 74h14v14H60V74Z"/>
+      <path class="cut" d="M82 74h14v14H82V74Z"/>
+      <path class="mark" d="M34 22h18v18H34V22Z"/>
+      <path class="mark" d="M76 22h18v18H76V22Z"/>
+      <path stroke="#0A0A0A" stroke-width="10" stroke-linecap="round" d="M52 31h24"/>
+    </g>
+    <text class="label" x="0" y="170">node-factory</text>
+  </g>
+  <g transform="translate(490 44)">
+    <rect class="tile" x="0" y="0" width="130" height="130" rx="14"/>
+    <g transform="translate(1 1) scale(1)">
+      <path class="mark" d="M64 18 105 39v49l-41 22-41-22V39l41-21Z"/>
+      <path class="cut" d="M64 37 86 48 64 59 42 48l22-11Z"/>
+      <path class="cut" d="M40 62 58 71v22L40 83V62Z"/>
+      <path class="cut" d="M88 62 70 71v22l18-10V62Z"/>
+    </g>
+    <text class="label" x="0" y="170">cube-stack</text>
+  </g>
+  <g transform="translate(640 44)">
+    <rect class="tile" x="0" y="0" width="130" height="130" rx="14"/>
+    <g transform="translate(1 1) scale(1)">
+      <path class="mark" fill-rule="evenodd" clip-rule="evenodd" d="M64 14 107 39v50l-43 25-43-25V39l43-25Zm-19 26v50h17V73h29V58H62V55h32V40H45Z"/>
+    </g>
+    <text class="label" x="0" y="170">hex-f</text>
+  </g>
+  <g transform="translate(790 44)">
+    <rect class="tile" x="0" y="0" width="130" height="130" rx="14"/>
+    <g transform="translate(1 1) scale(1)">
+      <path class="mark" d="M20 28h34v18H38v36h16v18H20V28Z"/>
+      <path class="mark" d="M108 28H74v18h16v36H74v18h34V28Z"/>
+      <path class="mark" d="M55 55h18v18H55V55Z"/>
+      <path class="mark" d="M55 26h18v18H55V26Z"/>
+      <path class="mark" d="M55 84h18v18H55V84Z"/>
+    </g>
+    <text class="label" x="0" y="170">brackets</text>
+  </g>
+  <g transform="translate(40 260)">
+    <text class="label" x="0" y="0">All candidates: monochrome SVG, transparent background, no wordmark, designed for 28px header use.</text>
+  </g>
+</svg>

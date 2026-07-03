@@ -6,7 +6,7 @@ import json
 from typing import Any, Callable
 import uuid
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 
 from agent_factory.create_agent.output_safety import looks_like_internal_observation_payload
 from agent_factory.factory_graph.frontend_bridge.protocol import (
@@ -15,6 +15,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryMode,
     event,
 )
+from agent_factory.models.reasoning import reasoning_content_from_message
 from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_blocks
 from agent_factory.runtime_render.schema import default_model_message_visible_to_user, default_node_visible_to_user
 
@@ -94,7 +95,6 @@ class RuntimeEventNormalizer:
     proposed_tool_call_ids: set[str] = field(default_factory=set)
     last_plan_fingerprint: str | None = None
     default_payload: dict[str, Any] = field(default_factory=dict)
-    visible_model_message_emitted: bool = False
     runtime_pattern_id: str | None = None
 
     def runtime_event(
@@ -116,8 +116,6 @@ class RuntimeEventNormalizer:
     ) -> FactoryFrontendEvent:
         self.sequence += 1
         event_payload = {**self.default_payload, **(payload or {})}
-        if _is_visible_model_message_event(event_type, event_payload):
-            self.visible_model_message_emitted = True
         item = event(
             event_type,
             request_id=self.request_id,
@@ -154,8 +152,10 @@ class RuntimeEventNormalizer:
         self.complete_open_model_streams(reason="run_completed")
         self.runtime_event("run_completed", span_id=self.run_span_id, payload=payload)
 
-    def emit_run_failed(self, exc: Exception) -> None:
+    def emit_run_failed(self, exc: Exception, extra_payload: dict[str, Any] | None = None) -> None:
         payload = {"where": "runtime_stream", "error_type": type(exc).__name__, "message": str(exc)}
+        if extra_payload:
+            payload.update(extra_payload)
         self.complete_open_model_streams(reason="run_failed")
         self.runtime_event("run_failed", span_id=self.run_span_id, message=f"{type(exc).__name__}: {exc}", payload=payload)
 
@@ -239,6 +239,7 @@ class RuntimeEventNormalizer:
 
     def emit_stream_item(self, stream_mode: str, chunk: Any, *, updates_payload_key: str) -> bool:
         if stream_mode == "messages":
+            self.emit_model_message_stream_item(chunk)
             return True
         if stream_mode == "debug":
             self.emit_debug_event(json_safe(chunk))
@@ -595,6 +596,53 @@ class RuntimeEventNormalizer:
             self.runtime_event("tool_approval_resolved", span_id=self.run_span_id, payload=payload)
         self.runtime_event("runtime_resumed", span_id=self.run_span_id, payload=payload)
 
+    def emit_model_message_stream_item(self, chunk: Any) -> None:
+        message, metadata = _message_stream_parts(chunk)
+        if not isinstance(message, (AIMessage, AIMessageChunk)):
+            return
+        node_id = _message_stream_node_id(metadata)
+        stream_id = _message_stream_id(
+            message=message,
+            metadata=metadata,
+            node_id=node_id,
+            request_id=self.request_id,
+        )
+        stream = self._ensure_model_stream_started(stream_id=stream_id, node_id=node_id)
+        reasoning_content = reasoning_content_from_message(message)
+        if reasoning_content and isinstance(message, AIMessageChunk):
+            self._emit_recorded_model_event(
+                "model_reasoning_delta",
+                stream=stream,
+                payload={
+                    "delta": reasoning_content,
+                    "content_mode": "delta",
+                },
+            )
+        content = strip_internal_snapshot_blocks(_content_to_text(getattr(message, "content", "")))
+        if _looks_like_tool_observation_text(content):
+            content = ""
+        if isinstance(message, AIMessageChunk):
+            if content:
+                self._emit_recorded_model_event(
+                    "model_stream_delta",
+                    stream=stream,
+                    payload={
+                        "delta": content,
+                        "content_mode": "delta",
+                    },
+                )
+            return
+        self._emit_recorded_model_event(
+            "model_message_completed",
+            stream=stream,
+            payload={
+                "content": content,
+                "content_mode": "snapshot",
+                "completion_reason": "message_stream_completed",
+                **({"reasoning_content": reasoning_content} if reasoning_content else {}),
+            },
+        )
+
     def complete_open_model_streams(self, *, reason: str) -> None:
         for stream in list(self.model_streams.values()):
             self._complete_model_stream(stream, reason=reason)
@@ -615,9 +663,7 @@ class RuntimeEventNormalizer:
             return
         if _looks_like_tool_observation_text(text):
             return
-        if self.visible_model_message_emitted:
-            return
-        if self._has_visible_model_stream_content():
+        if self._has_visible_model_stream_content(text):
             return
         stream_id = uuid.uuid4().hex
         self.runtime_event(
@@ -664,6 +710,53 @@ class RuntimeEventNormalizer:
                     "visible_to_user": False,
                 },
             )
+
+    def _ensure_model_stream_started(self, *, stream_id: str, node_id: str) -> ModelStreamState:
+        stream = self.model_streams.get(stream_id)
+        if stream is not None:
+            return stream
+        stream = ModelStreamState(
+            stream_id=stream_id,
+            node_id=node_id,
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self._node_span(node_id, self.current_stage_id),
+        )
+        self.model_streams[stream_id] = stream
+        self.runtime_event(
+            "model_call_started",
+            node_id=node_id,
+            stage_id=self.current_stage_id,
+            span_id=stream.span_id,
+            parent_span_id=stream.parent_span_id,
+            payload={
+                "stream_id": stream.stream_id,
+                "operation": "langgraph_message_stream",
+                "visible_to_user": self._model_message_visible_to_user(node_id),
+            },
+        )
+        return stream
+
+    def _emit_recorded_model_event(
+        self,
+        event_type: FactoryFrontendEventType,
+        *,
+        stream: ModelStreamState,
+        payload: dict[str, Any],
+    ) -> None:
+        event_payload = {
+            "stream_id": stream.stream_id,
+            "visible_to_user": self._model_message_visible_to_user(stream.node_id),
+            **payload,
+        }
+        self._record_model_stream_event(event_type, node_id=stream.node_id, payload=event_payload)
+        self.runtime_event(
+            event_type,
+            node_id=stream.node_id,
+            stage_id=self.current_stage_id,
+            span_id=stream.span_id,
+            parent_span_id=stream.parent_span_id,
+            payload=event_payload,
+        )
 
     def _complete_model_stream(self, stream: ModelStreamState, *, reason: str) -> None:
         if stream.completed:
@@ -725,9 +818,10 @@ class RuntimeEventNormalizer:
             return default_model_message_visible_to_user(pattern_id=self.runtime_pattern_id, node_id=node_id)
         return True
 
-    def _has_visible_model_stream_content(self) -> bool:
+    def _has_visible_model_stream_content(self, text: str) -> bool:
+        target = _normalized_message_text(text)
         return any(
-            (stream.content or "").strip() and self._model_message_visible_to_user(stream.node_id)
+            _normalized_message_text(stream.content) == target and self._model_message_visible_to_user(stream.node_id)
             for stream in self.model_streams.values()
         )
 
@@ -1218,6 +1312,47 @@ def _skill_resource_summary_message(resource: dict[str, Any]) -> str:
     return f"Skill resource summarized: {path} ({purpose}, digest={digest})"
 
 
+def _message_stream_parts(chunk: Any) -> tuple[Any | None, dict[str, Any]]:
+    if isinstance(chunk, (list, tuple)) and chunk:
+        message = chunk[0]
+        metadata = chunk[1] if len(chunk) >= 2 and isinstance(chunk[1], dict) else {}
+        return message, metadata
+    return None, {}
+
+
+def _message_stream_node_id(metadata: dict[str, Any]) -> str:
+    node_id = (
+        metadata.get("langgraph_node")
+        or metadata.get("node_id")
+        or metadata.get("name")
+        or "model"
+    )
+    return str(node_id or "model")
+
+
+def _message_stream_id(
+    *,
+    message: Any,
+    metadata: dict[str, Any],
+    node_id: str,
+    request_id: str | None,
+) -> str:
+    checkpoint_ns = str(
+        metadata.get("langgraph_checkpoint_ns")
+        or metadata.get("checkpoint_ns")
+        or ""
+    ).strip()
+    if checkpoint_ns:
+        return f"message:{node_id}:{checkpoint_ns}"
+    message_id = str(getattr(message, "id", "") or "").strip()
+    if message_id:
+        return f"message:{node_id}:{message_id}"
+    step = str(metadata.get("langgraph_step") or "").strip()
+    if step:
+        return f"message:{node_id}:{request_id or 'request'}:{step}"
+    return f"message:{node_id}:{request_id or 'request'}"
+
+
 def _patch_has_ai_message(patch: dict[str, Any]) -> bool:
     for message in patch.get("messages", []) or []:
         if isinstance(message, dict) and message.get("type") == "AIMessage":
@@ -1286,6 +1421,10 @@ def _content_to_text(content: Any) -> str:
     return str(content) if content else ""
 
 
+def _normalized_message_text(text: str) -> str:
+    return "\n".join(line.rstrip() for line in str(text or "").strip().splitlines()).strip()
+
+
 def _json_text(value: Any) -> str:
     try:
         return json.dumps(json_safe(value), ensure_ascii=False, sort_keys=True)
@@ -1308,26 +1447,19 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _is_tool_approval_resume_payload(payload: dict[str, Any]) -> bool:
-    if "approved" in payload or "action" in payload:
+    if _is_tool_approval_action_payload(payload):
         return True
     for value in payload.values():
-        if isinstance(value, dict) and ("approved" in value or "action" in value):
+        if isinstance(value, dict) and _is_tool_approval_action_payload(value):
             return True
     return False
 
 
-def _is_visible_model_message_event(event_type: str, payload: dict[str, Any]) -> bool:
-    if event_type == "model_stream_delta":
-        content = payload.get("delta")
-    elif event_type == "model_message_completed":
-        if payload.get("discard") is True:
-            return False
-        content = payload.get("content")
-    else:
-        return False
-    if payload.get("visible_to_user") is False:
-        return False
-    return bool(str(content or "").strip())
+def _is_tool_approval_action_payload(payload: dict[str, Any]) -> bool:
+    if "approved" in payload:
+        return True
+    action = str(payload.get("action") or "").strip()
+    return action in {"approve", "deny", "trust_tool", "revise"}
 
 
 def json_safe(value: Any) -> Any:

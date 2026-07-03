@@ -182,7 +182,7 @@ class RuntimeAgentPackageCommandMixin:
                 request_id=command.request_id,
                 session_id=self._session_id(),
                 mode="agent_package",
-                payload={"package_id": package_id, "session": session},
+                payload={"package_id": package_id, "session_id": session_id, "session": session},
             )
         )
 

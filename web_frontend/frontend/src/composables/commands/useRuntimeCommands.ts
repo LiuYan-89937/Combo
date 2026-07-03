@@ -76,14 +76,34 @@ export function useRuntimeCommands() {
   }
 
   const answerInterrupt = (message: string) => {
-    const command = commands.resumeInterruptCommand({
+    const command = commands.resumeInterruptCommand(withPendingInterruptContext(runtimeStore, {
       action: 'answer',
       input_text: message,
       answer: message,
       message,
-    })
+    }))
     transport.sendRuntimeCommand(command)
     return command
+  }
+
+  const confirmPublish = () => {
+    return sendInterruptDecision({
+      action: 'answer',
+      decision: 'publish',
+      input_text: '发布',
+      answer: '发布',
+      message: '发布',
+    })
+  }
+
+  const continuePublishRevision = (guidance: string) => {
+    return sendInterruptDecision({
+      action: 'answer',
+      decision: 'message',
+      input_text: guidance,
+      answer: guidance,
+      message: guidance,
+    })
   }
 
   const cancelRequest = (reason = 'user_cancelled') => {
@@ -102,6 +122,8 @@ export function useRuntimeCommands() {
     trustTool,
     reviseWithGuidance,
     answerInterrupt,
+    confirmPublish,
+    continuePublishRevision,
     cancelRequest,
   }
 }

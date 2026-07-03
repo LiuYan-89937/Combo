@@ -298,26 +298,21 @@ class PackageRuntimeCore:
         if final_state is None:
             normalizer.emit_run_failed(RuntimeError("agent runtime did not produce a final state"))
             return 1
-        if not runtime_completed(final_state):
-            return _emit_failed_runtime_final(normalizer, final_state, command="run_message")
-        session_user_input = session_user_input_from_state(
+        agent_session = _touch_session_turn_from_final_state(
+            run_context,
+            compiled,
             final_state,
             fallback_user_input=run_context.first_user_input,
-        )
-        session_attachments = session_attachments_from_state(
-            final_state,
             fallback_attachments=user_config.get("attachments"),
         )
-        agent_session = run_context.session_manager.touch_turn(
-            run_context.session_id,
-            first_user_input=session_user_input,
-            user_input=session_user_input,
-            attachments=session_attachments,
-            reasoning_content=session_reasoning_content(final_state),
-            final_answer=session_final_answer(final_state),
-            status=final_state.execution.finish_status,
-            trace_ref=session_trace_ref(compiled, final_state),
-        )
+        if not runtime_completed(final_state):
+            return _emit_failed_runtime_final(
+                normalizer,
+                final_state,
+                command="run_message",
+                package=package,
+                agent_session=agent_session.model_dump(mode="json"),
+            )
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
         normalizer.emit_run_completed(
@@ -367,23 +362,21 @@ class PackageRuntimeCore:
         if final_state is None:
             normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
             return 1
-        if not runtime_completed(final_state):
-            return _emit_failed_runtime_final(normalizer, final_state, command="resume_interrupt")
-        session_user_input = session_user_input_from_state(
+        agent_session = _touch_session_turn_from_final_state(
+            run_context,
+            compiled,
             final_state,
+            session_id=session_id,
             fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
         )
-        session_attachments = session_attachments_from_state(final_state)
-        agent_session = run_context.session_manager.touch_turn(
-            session_id,
-            first_user_input=session_user_input,
-            user_input=session_user_input,
-            attachments=session_attachments,
-            reasoning_content=session_reasoning_content(final_state),
-            final_answer=session_final_answer(final_state),
-            status=final_state.execution.finish_status,
-            trace_ref=session_trace_ref(compiled, final_state),
-        )
+        if not runtime_completed(final_state):
+            return _emit_failed_runtime_final(
+                normalizer,
+                final_state,
+                command="resume_interrupt",
+                package=package,
+                agent_session=agent_session.model_dump(mode="json"),
+            )
         normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
         normalizer.emit_run_completed(
@@ -653,9 +646,58 @@ def _handle_stream_item(normalizer: RuntimeEventNormalizer, stream_mode: str, ch
     return False
 
 
-def _emit_failed_runtime_final(normalizer: RuntimeEventNormalizer, final_state: Any, *, command: str) -> int:
+def _touch_session_turn_from_final_state(
+    run_context: Any,
+    compiled: Any,
+    final_state: Any,
+    *,
+    session_id: str | None = None,
+    fallback_user_input: str | None = None,
+    fallback_attachments: Any = None,
+) -> Any:
+    session_user_input = session_user_input_from_state(
+        final_state,
+        fallback_user_input=fallback_user_input or run_context.first_user_input,
+    )
+    session_attachments = session_attachments_from_state(
+        final_state,
+        fallback_attachments=fallback_attachments,
+    )
+    return run_context.session_manager.touch_turn(
+        session_id or run_context.session_id,
+        first_user_input=session_user_input,
+        user_input=session_user_input,
+        attachments=session_attachments,
+        reasoning_content=session_reasoning_content(final_state),
+        final_answer=session_final_answer(final_state),
+        status=getattr(getattr(final_state, "execution", None), "finish_status", None),
+        trace_ref=session_trace_ref(compiled, final_state),
+    )
+
+
+def _emit_failed_runtime_final(
+    normalizer: RuntimeEventNormalizer,
+    final_state: Any,
+    *,
+    command: str,
+    package: LoadedAgentPackage | None = None,
+    agent_session: dict[str, Any] | None = None,
+) -> int:
+    extra_payload: dict[str, Any] = {
+        "status": getattr(getattr(final_state, "execution", None), "finish_status", None) or "failed",
+        "command": command,
+    }
+    if package is not None:
+        extra_payload.update(
+            {
+                "package_id": package.package_root.name,
+                "agent_id": package.assembly_spec.agent.id,
+            }
+        )
+    if agent_session is not None:
+        extra_payload["agent_session"] = agent_session
     normalizer.complete_open_model_streams(reason="run_failed")
-    normalizer.emit_run_failed(RuntimeError(runtime_error_message(final_state, command=command)))
+    normalizer.emit_run_failed(RuntimeError(runtime_error_message(final_state, command=command)), extra_payload)
     return 1
 
 

@@ -17,7 +17,7 @@ from agent_factory.models import (
     get_task_model,
     get_task_model_settings,
 )
-from agent_factory.models.reasoning import is_reasoning_content_block
+from agent_factory.models.reasoning import is_reasoning_content_block, reasoning_content_from_message
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
@@ -118,6 +118,7 @@ class LangChainModelServiceAdapter:
         )
         text = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
         tool_calls = _tool_calls_from_response(response)
+        reasoning_content = reasoning_content_from_message(response)
         return ModelInvocationResult(
             ai_message=response if isinstance(response, BaseMessage) else None,
             assistant_draft=text,
@@ -127,6 +128,7 @@ class LangChainModelServiceAdapter:
                 **settings.metadata(),
                 "tool_count": len(tools or []),
                 **envelope.diagnostics(),
+                **({"reasoning_content": reasoning_content} if reasoning_content else {}),
             },
         )
 

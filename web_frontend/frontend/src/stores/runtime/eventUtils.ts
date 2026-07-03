@@ -18,6 +18,10 @@ const USER_INPUT_INTERRUPT_TYPES = new Set([
   'create_agent_publish_confirmation',
 ])
 
+const DEDICATED_INTERRUPT_PANEL_TYPES = new Set([
+  'create_agent_publish_confirmation',
+])
+
 export function isRequestScopedEvent(eventType: string): boolean {
   return REQUEST_SCOPED_PREFIXES.some((prefix) => eventType.startsWith(prefix))
 }
@@ -43,6 +47,10 @@ export function interruptType(event: FactoryFrontendEvent | null): string {
 
 export function isUserInputInterrupt(event: FactoryFrontendEvent | null): boolean {
   return USER_INPUT_INTERRUPT_TYPES.has(interruptType(event))
+}
+
+export function shouldRenderInterruptMessage(event: FactoryFrontendEvent): boolean {
+  return !DEDICATED_INTERRUPT_PANEL_TYPES.has(interruptType(event))
 }
 
 export function interruptMessage(event: FactoryFrontendEvent): string {

@@ -14,7 +14,7 @@
         </n-text>
       </div>
 
-      <div class="message-body">
+      <div ref="messageBodyRef" class="message-body">
         <div
           v-if="thinking"
           class="thinking-content"
@@ -87,12 +87,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { CSSProperties } from 'vue'
 import { NAvatar, NIcon, NText } from 'naive-ui'
 import { Document, Link, Text } from '@vicons/ionicons5'
 import { useI18n } from '@/composables/useI18n'
-import { useMarkdown } from '@/composables/useMarkdown'
+import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import type { TranscriptAttachmentView, TranscriptItem } from '@/types/protocol'
 
 const props = withDefaults(
@@ -107,8 +107,9 @@ const props = withDefaults(
   }
 )
 
-const { renderMarkdown } = useMarkdown()
 const { locale, t } = useI18n()
+const messageBodyRef = ref<HTMLElement | null>(null)
+const { renderMarkdown } = useMarkdownRenderer(messageBodyRef)
 
 const roleLabel = computed(() => {
   if (props.message.role === 'user') return t('roles.user')
@@ -137,18 +138,21 @@ const avatarText = computed(() => {
 })
 
 const renderedContent = computed(() => {
-  return renderMarkdown(props.message.content, { streaming: props.streaming })
+  return renderMarkdown(props.message.content, { streaming: props.streaming, surface: 'chat_message' })
 })
 
 const hasReasoning = computed(() => Boolean(props.message.reasoning?.content?.trim()))
-const reasoningOpen = computed(() => Boolean(props.message.reasoning?.active))
+const reasoningOpen = computed(() => hasReasoning.value)
 const reasoningLabel = computed(() => (
   props.message.reasoning?.active
     ? t('roles.assistantReasoningActive')
     : t('roles.assistantReasoning')
 ))
 const renderedReasoning = computed(() => {
-  return renderMarkdown(props.message.reasoning?.content || '', { streaming: Boolean(props.message.reasoning?.active) })
+  return renderMarkdown(props.message.reasoning?.content || '', {
+    streaming: Boolean(props.message.reasoning?.active),
+    surface: 'reasoning',
+  })
 })
 
 const messageAttachments = computed(() => props.message.attachments || [])
@@ -192,6 +196,7 @@ function formatTime(timestamp: string): string {
     minute: '2-digit',
   })
 }
+
 </script>
 
 <style scoped>
@@ -444,177 +449,6 @@ function formatTime(timestamp: string): string {
   40% {
     opacity: 1;
     transform: translateY(-3px);
-  }
-}
-</style>
-
-<style>
-/* Markdown 样式 */
-.markdown-content {
-  max-width: 100%;
-  line-height: var(--app-leading-relaxed);
-  color: var(--app-text);
-  overflow-wrap: anywhere;
-}
-
-.markdown-content > :first-child {
-  margin-top: 0;
-}
-
-.markdown-content > :last-child {
-  margin-bottom: 0;
-}
-
-.markdown-content h1,
-.markdown-content h2,
-.markdown-content h3,
-.markdown-content h4,
-.markdown-content h5,
-.markdown-content h6 {
-  margin-top: 24px;
-  margin-bottom: 12px;
-  font-weight: 600;
-  line-height: var(--app-leading-tight);
-  color: var(--app-text-strong);
-  letter-spacing: -0.01em;
-}
-
-.markdown-content h1 {
-  font-size: 1.75em;
-  border-bottom: 1px solid var(--app-divider);
-  padding-bottom: 0.3em;
-}
-
-.markdown-content h2 {
-  font-size: 1.4em;
-  border-bottom: 1px solid var(--app-divider);
-  padding-bottom: 0.3em;
-}
-
-.markdown-content h3 { font-size: 1.2em; }
-.markdown-content h4 { font-size: 1.05em; }
-
-.markdown-content p {
-  margin: 0 0 14px;
-}
-
-.markdown-content code {
-  padding: 0.15em 0.4em;
-  margin: 0;
-  font-size: 88%;
-  background-color: var(--app-code-background);
-  border: 1px solid var(--app-code-border);
-  border-radius: var(--app-radius-sm);
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
-  word-break: break-word;
-}
-
-.markdown-content pre {
-  max-width: 100%;
-  padding: 14px 16px;
-  overflow: auto;
-  font-size: 88%;
-  line-height: 1.55;
-  background-color: var(--app-code-background);
-  border: 1px solid var(--app-code-border);
-  border-radius: var(--app-radius-md);
-  margin-bottom: 16px;
-  white-space: pre;
-}
-
-.markdown-content pre code {
-  padding: 0;
-  background-color: transparent;
-  border: 0;
-  white-space: inherit;
-  word-break: normal;
-}
-
-.markdown-content ul,
-.markdown-content ol {
-  padding-left: 1.75em;
-  margin-bottom: 14px;
-}
-
-.markdown-content li {
-  margin-bottom: 4px;
-}
-
-.markdown-content blockquote {
-  margin: 0 0 14px 0;
-  padding: 4px 12px;
-  color: var(--app-text-secondary);
-  border-left: 3px solid var(--app-border-hover);
-  background: var(--app-surface-muted);
-  border-radius: 0 var(--app-radius-md) var(--app-radius-md) 0;
-}
-
-.markdown-content table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-  width: 100%;
-  margin-bottom: 14px;
-  border-radius: var(--app-radius-md);
-}
-
-.markdown-content hr {
-  margin: 18px 0;
-  border: 0;
-  border-top: 1px solid var(--app-divider);
-}
-
-.markdown-content table th,
-.markdown-content table td {
-  padding: 8px 13px;
-  border: 1px solid var(--app-border);
-}
-
-.markdown-content table th {
-  font-weight: 600;
-  background-color: var(--app-surface-muted);
-  color: var(--app-text-strong);
-}
-
-.markdown-content a {
-  color: var(--app-info);
-  text-decoration: none;
-  border-bottom: 1px solid transparent;
-  transition: border-color var(--app-transition-fast);
-}
-
-.markdown-content a:hover {
-  border-bottom-color: currentColor;
-}
-
-.markdown-content img {
-  max-width: min(600px, 100%);
-  max-height: 400px;
-  height: auto;
-  width: auto;
-  border-radius: var(--app-radius-lg);
-  border: 1px solid var(--app-border);
-  box-shadow: var(--app-shadow-sm);
-  cursor: pointer;
-  transition: transform var(--app-transition-base), box-shadow var(--app-transition-base);
-  animation: image-blur-in 0.6s var(--app-transition-fluid) both;
-  object-fit: contain;
-}
-
-.markdown-content img:hover {
-  transform: scale(1.02);
-  box-shadow: var(--app-shadow-md);
-}
-
-@keyframes image-blur-in {
-  from {
-    opacity: 0;
-    filter: blur(10px);
-  }
-  to {
-    opacity: 1;
-    filter: blur(0);
   }
 }
 </style>

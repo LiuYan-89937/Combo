@@ -37,6 +37,7 @@ import {
   isRequestScopedEvent,
   isSchedulerRequest,
   isUserInputInterrupt,
+  shouldRenderInterruptMessage,
 } from './runtime/eventUtils'
 import {
   applyNodeCompleted,
@@ -145,6 +146,15 @@ export const useRuntimeStore = defineStore('runtime', {
     // 制造 Agent 的业务中断需要用户继续输入，而不是审批按钮。
     isAwaitingUserInputInterrupt: (state): boolean => {
       return state.runStatus === 'interrupted' && isUserInputInterrupt(state.pendingInterrupt)
+    },
+
+    isPublishConfirmationPending: (state): boolean => {
+      return state.runStatus === 'interrupted' && interruptType(state.pendingInterrupt) === 'create_agent_publish_confirmation'
+    },
+
+    publishConfirmationPayload: (state): Record<string, any> | null => {
+      if (interruptType(state.pendingInterrupt) !== 'create_agent_publish_confirmation') return null
+      return state.pendingInterrupt?.payload || null
     },
 
     // 当前是否有活跃的运行
@@ -462,20 +472,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.pendingInterrupt = null
 
       // 同步 agent session
-      if (event.payload?.agent_session?.session_id) {
-        this.activeAgentSessionId = event.payload.agent_session.session_id
-        this._upsertAgentSession(event.payload.agent_session)
-        if (event.mode === 'agent_package' && event.payload?.package_id) {
-          const nextScope = agentPackageConversationScope(
-            String(event.payload.package_id),
-            String(event.payload.agent_session.session_id),
-          )
-          this._renameActiveConversationScope(nextScope)
-          if (event.request_id && this.activeRequests[event.request_id]) {
-            this.activeRequests[event.request_id].conversationScope = nextScope
-          }
-        }
-      }
+      this._syncAgentSessionFromRunEvent(event)
     },
 
     _handleRunFailed(event: FactoryFrontendEvent) {
@@ -487,6 +484,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.runStatus = 'failed'
       const requestId = event.request_id || this.activeRequestId || null
       this.pendingInterrupt = null
+      this._syncAgentSessionFromRunEvent(event)
 
       // 展示错误
       const errorMsg =
@@ -517,6 +515,21 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    _syncAgentSessionFromRunEvent(event: FactoryFrontendEvent) {
+      if (!event.payload?.agent_session?.session_id) return
+      this.activeAgentSessionId = event.payload.agent_session.session_id
+      this._upsertAgentSession(event.payload.agent_session)
+      if (event.mode !== 'agent_package' || !event.payload?.package_id) return
+      const nextScope = agentPackageConversationScope(
+        String(event.payload.package_id),
+        String(event.payload.agent_session.session_id),
+      )
+      this._renameActiveConversationScope(nextScope)
+      if (event.request_id && this.activeRequests[event.request_id]) {
+        this.activeRequests[event.request_id].conversationScope = nextScope
+      }
+    },
+
     _handleInterruptRequested(event: FactoryFrontendEvent) {
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
         this._completeActiveRequest(event, 'interrupted')
@@ -530,7 +543,7 @@ export const useRuntimeStore = defineStore('runtime', {
       const turn = ensureConversationTurn(this, requestId, event.timestamp)
       turn.status = 'interrupted'
       turn.completedAt = event.timestamp
-      const message = interruptMessage(event)
+      const message = shouldRenderInterruptMessage(event) ? interruptMessage(event) : ''
       if (message) {
         const item: TranscriptItem = {
           id: event.event_id,
@@ -790,9 +803,9 @@ export const useRuntimeStore = defineStore('runtime', {
     _restoreAgentPackageSession(session: any, packageId: string | null = null) {
       if (!session?.session_id) return
       const snapshot = agentPackageSessionSnapshotView(session, packageId)
-      this.activeAgentSessionId = String(session.session_id)
       this.currentMode = 'agent_package'
       this._switchConversationScope(agentPackageConversationScope(snapshot.sessionPackageId, session.session_id))
+      this.activeAgentSessionId = String(session.session_id)
       this._upsertAgentSession(session)
       if (this._hasLiveConversationState()) {
         return

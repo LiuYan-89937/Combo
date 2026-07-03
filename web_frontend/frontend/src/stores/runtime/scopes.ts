@@ -49,8 +49,11 @@ export function scopeFromEventPayload(event: FactoryFrontendEvent): string | nul
     const agentSession = event.payload?.agent_session && typeof event.payload.agent_session === 'object'
       ? event.payload.agent_session
       : {}
+    const loadedSession = event.payload?.session && typeof event.payload.session === 'object'
+      ? event.payload.session
+      : {}
     const packageId = String(event.payload?.package_id || agentSession.package_id || '').trim()
-    const sessionId = String(event.session_id || event.payload?.session_id || agentSession.session_id || '').trim()
+    const sessionId = String(event.payload?.session_id || agentSession.session_id || loadedSession.session_id || '').trim()
     if (packageId) {
       return agentPackageConversationScope(packageId, sessionId || null)
     }
@@ -66,8 +69,11 @@ export function agentPackageScopeInfoFromEvent(event: FactoryFrontendEvent): Age
   const agentSession = event.payload?.agent_session && typeof event.payload.agent_session === 'object'
     ? event.payload.agent_session
     : {}
+  const loadedSession = event.payload?.session && typeof event.payload.session === 'object'
+    ? event.payload.session
+    : {}
   const packageId = String(event.payload?.package_id || agentSession.package_id || '').trim()
-  const sessionId = String(event.session_id || event.payload?.session_id || agentSession.session_id || '').trim()
+  const sessionId = String(event.payload?.session_id || agentSession.session_id || loadedSession.session_id || '').trim()
   if (!packageId || !sessionId) return null
   return {
     packageId,

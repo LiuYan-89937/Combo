@@ -1,0 +1,9 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FastAgentFactory node factory logo candidate">
+  <path fill="#0A0A0A" d="M20 56h20l16-16 16 16h36v48H20V56Z"/>
+  <path fill="#FFFFFF" d="M38 74h14v14H38V74Z"/>
+  <path fill="#FFFFFF" d="M60 74h14v14H60V74Z"/>
+  <path fill="#FFFFFF" d="M82 74h14v14H82V74Z"/>
+  <path fill="#0A0A0A" d="M34 22h18v18H34V22Z"/>
+  <path fill="#0A0A0A" d="M76 22h18v18H76V22Z"/>
+  <path stroke="#0A0A0A" stroke-width="10" stroke-linecap="round" d="M52 31h24"/>
+</svg>

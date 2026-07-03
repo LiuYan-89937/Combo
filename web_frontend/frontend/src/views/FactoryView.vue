@@ -34,18 +34,15 @@
               </template>
             </n-empty>
 
-            <template
-              v-for="message in runtimeStore.transcript"
-              :key="message.id"
-            >
+            <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
               <MessageItem
-                :message="message"
-                :streaming="isMessageStreaming(message.streamId)"
+                v-if="item.kind === 'message'"
+                :message="item.message"
+                :streaming="isMessageStreaming(item.message.streamId)"
               />
               <ToolActivityCard
-                v-for="tool in toolsAfterMessage(message)"
-                :key="`${message.id}-${tool.activityKey}`"
-                :tool="tool"
+                v-else
+                :tool="item.tool"
               />
             </template>
 
@@ -68,6 +65,10 @@
 
       <ToolApprovalPanel
         v-if="hasApprovalRequests"
+        class="approval-section"
+      />
+      <PublishConfirmationPanel
+        v-if="runtimeStore.isPublishConfirmationPending"
         class="approval-section"
       />
 
@@ -104,7 +105,8 @@ import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolActivityCard from '@/components/chat/ToolActivityCard.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import type { RuntimeAttachmentInput, ToolActivity, TranscriptItem } from '@/types/protocol'
+import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
+import type { RuntimeAttachmentInput } from '@/types/protocol'
 
 const runtimeStore = useRuntimeStore()
 const route = useRoute()
@@ -136,14 +138,9 @@ const {
   hasApprovalRequests,
   isMessageStreaming,
   thinkingMessages,
+  timelineItems,
   untrackedActiveStreamMessages,
 } = useFactoryMessageProjection()
-
-function toolsAfterMessage(message: TranscriptItem): ToolActivity[] {
-  if (message.role !== 'user') return []
-  const turn = runtimeStore.conversationTurns.find((item) => item.userMessage?.id === message.id)
-  return turn?.tools || []
-}
 
 function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
   if (!sendMessage(message, attachments)) return
