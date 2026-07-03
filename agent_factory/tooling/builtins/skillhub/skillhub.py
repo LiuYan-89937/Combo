@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.skillhub.search_query import normalize_skillhub_search_query
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -59,9 +60,7 @@ def _normalized_payload(arguments: dict[str, Any]) -> dict[str, Any]:
     if action == "status":
         return {"action": action}
     if action == "search":
-        query = str(arguments.get("query") or "").strip()
-        if not query:
-            raise ValueError("SkillHUB search requires query")
+        query = normalize_skillhub_search_query(str(arguments.get("query") or ""))
         return {"action": action, "query": query}
     skill = str(arguments.get("skill") or "").strip()
     if not skill:

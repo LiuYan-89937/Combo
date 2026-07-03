@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from agent_factory.tooling.skillhub.constants import SKILLHUB_RUNTIME_RESOURCE
+from agent_factory.tooling.skillhub.search_query import (
+    SKILLHUB_SEARCH_QUERY_MAX_CHARS,
+    SKILLHUB_SEARCH_QUERY_PATTERN,
+)
 from agent_factory.tooling.spec import ToolOutputCompressionActionConfig, ToolOutputCompressionConfig, ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -33,7 +37,15 @@ def _input_schema() -> dict:
             "action": {"type": "string", "enum": ["status", "search", "install"]},
             "query": {
                 "type": "string",
-                "description": "Search terms for action=search.",
+                "minLength": 1,
+                "maxLength": SKILLHUB_SEARCH_QUERY_MAX_CHARS,
+                "pattern": SKILLHUB_SEARCH_QUERY_PATTERN,
+                "description": (
+                    "仅用于 action=search。必须是 1 到 3 个短关键词或精确技能名，不能是长句、"
+                    "需求描述、或大量中英同义词堆叠。宽泛探索时拆成多次 search，每次只放少量高信号词；"
+                    "例如：frontend、design、frontend design、ppt、web、网页。"
+                ),
+                "examples": ["frontend", "design", "frontend design", "ppt", "web", "网页"],
             },
             "skill": {
                 "type": "string",

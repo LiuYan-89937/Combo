@@ -50,7 +50,7 @@ Guides adding executable package tools and their ToolSpec declarations.
 - create_agent_authoring rejects package tool writes before any files are changed when third-party imports exist but `python_requirements` is empty.
 - Use installable Python distribution names in `python_requirements`; if an import name differs from the distribution name, determine the correct distribution from package documentation or validator evidence instead of guessing.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
-- If a reusable SkillHub skill already provides the capability, call `skillhub(action="search", query=...)`, install with the exact returned `install_name`, and expose the runtime `skill` tool through assembly tool access instead of rebuilding it as a package tool.
+- If a reusable SkillHub skill already provides the capability, call `skillhub(action="search", query=...)`, install with the exact returned `install_name`, and expose the runtime `skill` tool through assembly tool access instead of rebuilding it as a package tool. The search query must be 1 to 3 short keywords or an exact skill name; split broad discovery into multiple focused searches instead of passing a long mixed query.
 - After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. Probe runs inside the Docker runtime image, performs dependency sandbox_init, and returns the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 

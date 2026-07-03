@@ -12,6 +12,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from agent_factory.tooling.providers.skill import EnabledSkillConfig, EnabledSkillsConfig
+from agent_factory.tooling.skillhub.search_query import normalize_skillhub_search_query
 from agent_factory.tooling.skills import parse_skill_directory
 
 
@@ -67,9 +68,7 @@ class SkillHubService:
         }
 
     def search(self, query: str, *, timeout_seconds: int = 60) -> dict[str, Any]:
-        query = str(query or "").strip()
-        if not query:
-            raise ValueError("skillhub search requires query")
+        query = normalize_skillhub_search_query(query)
         self._require_cli()
         result = _run_command([self.command, "search", query], timeout_seconds=timeout_seconds)
         if result.returncode != 0:

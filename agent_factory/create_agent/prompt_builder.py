@@ -165,7 +165,9 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
-            "流程是：skillhub(action='search', query=...) 查找候选；确认需要后只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
+            "流程是：skillhub(action='search', query=...) 查找候选；query 必须是 1 到 3 个短关键词或精确技能名，"
+            "不能传完整需求、长句、或 frontend design UI 网页 web 这类同义词堆叠；宽泛探索时拆成多次 search，例如 frontend、design、frontend design、ppt、web、网页。"
+            "确认需要后只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
             "不要把候选标题、版本号、描述文本或压缩摘要拼成 skill 参数。"
             "如果 produced Agent 需要调用已安装 skill，把运行期工具 id skill 加入 assembly tool_access：react_agent 给 answer；"
             "plan_and_execute 只给 executor 或 casual_react，planner 不调用业务工具或 skill。"
