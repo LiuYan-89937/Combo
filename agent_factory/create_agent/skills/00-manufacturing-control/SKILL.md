@@ -37,7 +37,7 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 ## Capability Write Guidance
 - Use create_agent_stage(action="inspect") instead of reading managed .factory files directly.
 - Only the model changes focus by explicitly calling create_agent_stage(action="set_focus", focus_id=..., reason=...).
-- Capability assembly order is model selection first, SkillHub capability package evaluation second, package tool authoring third. Do not write package tools before model_pool_select and SkillHub guidance/assets/registered execution entries have been evaluated.
+- Capability assembly order is model selection first, inherited MCP candidate evaluation second, SkillHub capability package evaluation third, package tool authoring fourth. Do not write package tools before model_pool_select, needed inherited MCP materialization, and SkillHub guidance/assets/registered execution entries have been evaluated.
 - Ask the user only for missing secrets, accounts, external resources, delivery channels, schedules, or ambiguous product decisions.
 - After a complete capability increment, call create_agent_validate with the appropriate scope.
 

@@ -154,8 +154,9 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "create_agent_authoring 参数必须使用 canonical shape。"
-            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再搜索/安装 SkillHub skill，评估 skill guidance/assets/可注册执行入口，最后才创建 package tool 补齐剩余缺口。"
-            "不要先写 package tool 再补模型选择或 SkillHub 复用，也不要在模型池能力未确认前承诺或实现依赖特定模型能力的工具。"
+            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再评估 inherited MCP candidates，"
+            "再搜索/安装 SkillHub skill 并评估 skill guidance/assets/可注册执行入口，最后才创建 package tool 补齐剩余缺口。"
+            "不要先写 package tool 再补模型选择、MCP 继承或 SkillHub 复用，也不要在模型池能力未确认前承诺或实现依赖特定模型能力的工具。"
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=完整 ToolSpec, tool_source=完整源码, "
@@ -167,7 +168,7 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程、模板资源或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
-            "SkillHub 必须发生在 model_pool_select 和 model bindings 之后、package tool authoring 之前。"
+            "SkillHub 必须发生在 model_pool_select、model bindings 和 inherited MCP candidate evaluation 之后、package tool authoring 之前。"
             "流程是：skillhub(action='search', query=...) 查找候选；query 必须是 1 到 3 个短关键词或精确技能名，"
             "不能传完整需求、长句、或 frontend design UI 网页 web 这类同义词堆叠；宽泛探索时拆成多次 search，例如 frontend、design、frontend design、ppt、web、网页。"
             "确认需要后只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
@@ -206,9 +207,11 @@ def _invariant_system_prompt_text() -> str:
             "如果源码 import 了非 stdlib、非 package-local、非 agent_factory 的 Python 模块，把 installable requirements 传给该工具。"
         ),
         (
-            "MCP inherited candidate 不需要额外继承工具调用。"
-            "如果 produced Agent 需要使用某个 inherited MCP 工具，把该工具 id 加入 assembly_spec 的 tool_access.allowed_tool_ids，"
-            "然后调用 create_agent_authoring(action='materialize_mcp_inheritance') 把对应 MCP server 配置确定性写入 package extensions。"
+            "MCP inherited candidate 不需要手写 MCP 配置。"
+            "model_pool_select 之后先评估 inherited MCP candidates，再评估 SkillHub。"
+            "如果 produced Agent 不需要继承 MCP，跳过 MCP 继承；如果需要某个 inherited MCP 工具，"
+            "把该工具 id 加入 assembly_spec 的 tool_access.allowed_tool_ids，"
+            "然后调用 create_agent_authoring(action='materialize_mcp_inheritance') 把对应 MCP server 配置写入 package extensions。"
             "create_agent_validate、probe 和 publish 都不会修改 MCP 继承文件；如果 full_static validation 之后 package 指纹变化，必须重新 validation。"
         ),
         (
