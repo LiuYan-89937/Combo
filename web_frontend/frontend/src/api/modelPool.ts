@@ -1,4 +1,6 @@
-import { requestJson } from './http'
+import { requestJson, withQuery } from './http'
+
+export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
 
 export interface ModelProviderProfile {
   provider_id: string
@@ -74,6 +76,45 @@ export interface ModelPoolProfile {
   credential?: ModelPoolCredential | null
 }
 
+export interface ModelUsageTotals {
+  call_count: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  reasoning_tokens: number
+  cache_hit_tokens: number
+  cache_miss_tokens: number
+  cache_hit_ratio: number | null
+  estimated_cost: number | null
+}
+
+export interface ModelUsageGroup {
+  key: string
+  label: string
+  provider: string
+  provider_display_name: string
+  model_name: string
+  model_profile_id: string
+  agent_id: string
+  agent_label: string
+  totals: ModelUsageTotals
+}
+
+export interface ModelUsageSeries {
+  key: string
+  label: string
+  points: Array<{ bucket: string } & ModelUsageTotals>
+}
+
+export interface ModelUsageSummary {
+  group_by: ModelUsageGroupBy
+  since: string
+  until: string
+  totals: ModelUsageTotals
+  groups: ModelUsageGroup[]
+  series: ModelUsageSeries[]
+}
+
 export const modelPoolApi = {
   providers: () => requestJson<{ providers: ModelProviderProfile[] }>('/api/model-pool/providers'),
   credentials: () => requestJson<{ credentials: ModelPoolCredential[] }>('/api/model-pool/credentials'),
@@ -106,4 +147,11 @@ export const modelPoolApi = {
     requestJson<{ deleted: boolean }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
       method: 'DELETE',
     }),
+  usage: (params: { groupBy?: ModelUsageGroupBy; days?: number } = {}) =>
+    requestJson<ModelUsageSummary>(
+      withQuery('/api/model-pool/usage', {
+        group_by: params.groupBy,
+        days: params.days,
+      }),
+    ),
 }

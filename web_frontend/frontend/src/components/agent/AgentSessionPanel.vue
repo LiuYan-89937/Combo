@@ -40,8 +40,21 @@
           @click="enterExistingSession(session.session_id)"
         >
           <div class="session-item">
-            <div class="session-title">
-              {{ session.display_title || session.first_user_input || t('sessions.newSession') }}
+            <div class="session-title-row">
+              <div class="session-title">
+                {{ session.display_title || session.first_user_input || t('sessions.newSession') }}
+              </div>
+              <n-button
+                size="tiny"
+                quaternary
+                circle
+                :aria-label="t('agentSessions.delete')"
+                @click.stop="confirmDeleteSession(session)"
+              >
+                <template #icon>
+                  <n-icon><TrashOutline /></n-icon>
+                </template>
+              </n-button>
             </div>
             <div class="session-meta">
               <n-tag size="tiny" type="success">
@@ -76,8 +89,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText } from 'naive-ui'
-import { ChatbubbleEllipses, Refresh, Search } from '@/components/icons'
+import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText, useDialog } from 'naive-ui'
+import { ChatbubbleEllipses, Refresh, Search, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -97,6 +110,7 @@ const commands = useCommand()
 const router = useRouter()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
+const dialog = useDialog()
 
 const currentPackage = computed(() => {
   return agentStore.agentPackages.find((pkg) => pkg.package_id === props.packageId) || null
@@ -135,6 +149,19 @@ function enterNewSession() {
 function enterExistingSession(sessionId: string) {
   enterSession(sessionId)
   commands.loadAgentPackageSession(props.packageId, sessionId)
+}
+
+function confirmDeleteSession(session: { session_id: string; display_title: string | null; first_user_input: string | null }) {
+  const title = session.display_title || session.first_user_input || t('sessions.newSession')
+  dialog.warning({
+    title: t('agentSessions.deleteTitle'),
+    content: t('agentSessions.deleteContent', { title }),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: () => {
+      void commands.deleteAgentPackageSession(props.packageId, session.session_id)
+    },
+  })
 }
 
 function formatTime(timestamp: string): string {
@@ -242,12 +269,20 @@ watch(
   gap: 6px;
 }
 
+.session-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-xs);
+}
+
 .session-title {
   font-size: 14px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .session-meta,

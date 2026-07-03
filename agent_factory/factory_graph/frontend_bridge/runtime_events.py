@@ -22,6 +22,7 @@ REQUEST_TERMINAL_EVENT_TYPES = {
     *INTERRUPT_TERMINAL_EVENT_TYPES,
     "agent_package_sessions_listed",
     "agent_package_session_loaded",
+    "agent_package_session_deleted",
     "agent_package_instance_updated",
     "agent_package_instances_listed",
     "scheduler_job_created",

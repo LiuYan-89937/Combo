@@ -24,6 +24,10 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId))
   }
 
+  const deleteSession = (sessionId: string) => {
+    transport.sendRuntimeCommand(commands.deleteSessionCommand(sessionId))
+  }
+
   const setMode = (mode: FactoryMode) => {
     transport.sendRuntimeCommand(commands.setModeCommand(mode))
   }
@@ -119,6 +123,7 @@ export function useRuntimeCommands() {
     listSessions,
     switchSession,
     newSession,
+    deleteSession,
     setMode,
     sendMessage,
     approveToolCall,

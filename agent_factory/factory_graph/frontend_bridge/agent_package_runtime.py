@@ -13,6 +13,7 @@ from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
+from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
 from agent_factory.mcp_gateway import HostMCPGatewayManager
 from agent_factory.skillhub_gateway import HostSkillHubGatewayManager
 from agent_factory.package_runtime import host_runtime_package_view
@@ -304,6 +305,24 @@ class AgentPackageRuntimeManager:
     def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
         return self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
+
+    def delete_session(self, package_id: str, session_id: str) -> dict[str, Any]:
+        package = self.load_package(package_id)
+        manager = self._session_manager_for_package(package_id, package)
+        result = manager.delete(session_id)
+        deleted_checkpoint_count = _delete_agent_session_checkpoint(
+            package_id=package_id,
+            package=package,
+            thread_id=result.record.thread_id,
+        )
+        return {
+            "package_id": package_id,
+            "session_id": result.record.session_id,
+            "deleted": True,
+            "deleted_trace_count": result.deleted_trace_count,
+            "deleted_checkpoint_count": deleted_checkpoint_count,
+            "sessions": self._list_sessions_for_loaded_package(package),
+        }
 
     def workspace_roots(self, package_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
@@ -1035,6 +1054,22 @@ def _env_int(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _delete_agent_session_checkpoint(
+    *,
+    package_id: str,
+    package: LoadedAgentPackage,
+    thread_id: str,
+) -> int:
+    session_contract = package.contracts.get("session") if isinstance(package.contracts, dict) else None
+    config = session_contract.get("config", {}) if isinstance(session_contract, dict) else {}
+    backend = str(config.get("checkpointer_backend") or "sqlite").strip().lower()
+    if backend != "sqlite":
+        return 0
+    checkpoint_path = str(config.get("checkpoint_path") or ".agent_runtime/checkpoints/agent.sqlite").strip()
+    path = _runtime_contract_path(_host_runtime_root(package_id), checkpoint_path)
+    return 1 if delete_sqlite_checkpoint_thread(path, thread_id) else 0
 
 
 def _sandbox_summary(contract: dict[str, Any]) -> dict[str, Any]:

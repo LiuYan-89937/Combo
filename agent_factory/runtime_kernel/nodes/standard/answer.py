@@ -13,6 +13,7 @@ from agent_factory.runtime_kernel.planning import (
     runtime_plan_model_tool,
 )
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.context_system.token_counter import provider_token_budget_payload
 
 
 class CognitiveAnswerNode:
@@ -157,19 +158,18 @@ def _prompt_binding_by_id(context: NodeExecutionContext, prompt_id: str) -> dict
 
 def _context_token_budget_patch(metadata: dict[str, Any] | None, node_id: str) -> dict[str, Any]:
     data = dict(metadata or {})
-    input_tokens = data.get("provider_input_tokens")
-    if not isinstance(input_tokens, int) and not isinstance(input_tokens, float):
-        return {}
     usage_metadata = data.get("usage_metadata") if isinstance(data.get("usage_metadata"), dict) else {}
+    token_budget = provider_token_budget_payload(
+        usage_metadata=usage_metadata,
+        provider_input_tokens=data.get("provider_input_tokens"),
+        node_id=node_id,
+        model_role=str(data.get("model_role") or ""),
+    )
+    if not token_budget:
+        return {}
     return {
         "context": {
-            "token_budget": {
-                "last_provider_input_tokens": int(input_tokens),
-                "last_provider_token_count_method": "provider_usage",
-                "last_provider_node_id": node_id,
-                "last_provider_model_role": str(data.get("model_role") or ""),
-                "last_provider_usage_metadata": usage_metadata,
-            }
+            "token_budget": token_budget,
         }
     }
 

@@ -16,6 +16,7 @@ from langgraph.types import Command
 from agent_factory.create_agent.models import CreateAgentAction, initial_system_manufacturing_state
 from agent_factory.create_agent.runtime import (
     _ModelTraceAccumulator,
+    _context_window_payload_from_model_cache,
     _is_model_cache_chunk,
     _json_safe,
     _tool_trace_records,
@@ -38,6 +39,7 @@ from agent_factory.model_pool.runtime_override import (
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR, import_runtime_attachments, time_named_attachment_scope
 from agent_factory.runtime_contracts import AgentPackageLoader
+from agent_factory.runtime_kernel.persistence import delete_checkpoint_thread
 from agent_factory.trace_system.diagnostics import TraceDiagnostics
 from agent_factory.trace_system.projector import TraceProjector
 from agent_factory.trace_system.reader import TraceReader
@@ -55,6 +57,8 @@ class AgentEvolutionStreamRun:
 class _EvolutionRunContext:
     package_id: str
     trace_id: str | None
+    session_id: str | None
+    request_id: str
     user_input: str
     package_path: Path
     graph_thread_id: str
@@ -166,6 +170,39 @@ class AgentEvolutionRuntime:
             return None
         return runs[0].trace_id
 
+    def delete_session_artifacts(
+        self,
+        *,
+        package_id: str,
+        session_id: str,
+        request_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        safe_package_id = _safe_id(package_id, label="package_id")
+        safe_session_id = str(session_id or "").strip()
+        if not safe_session_id:
+            raise RuntimeError("session_id must not be empty")
+        active_context = self._active_runs.pop(_active_run_key(safe_session_id, safe_package_id), None)
+        checkpoint_threads = _evolution_checkpoint_threads(
+            session_id=safe_session_id,
+            package_id=safe_package_id,
+            request_ids=request_ids or [],
+            active_context=active_context,
+        )
+        deleted_checkpoint_count = sum(
+            1
+            for thread_id in checkpoint_threads
+            if delete_checkpoint_thread(self.checkpointer, thread_id)
+        )
+        workspace = CreateAgentWorkspace(_safe_child(self.package_root, safe_package_id))
+        trace_deleted = _delete_evolution_trace_for_session(workspace, safe_session_id)
+        return {
+            "package_id": safe_package_id,
+            "session_id": safe_session_id,
+            "trace_path": str(workspace.manufacturing_trace_path),
+            "trace_deleted": trace_deleted,
+            "deleted_checkpoint_count": deleted_checkpoint_count,
+        }
+
     def _events(
         self,
         *,
@@ -203,6 +240,8 @@ class AgentEvolutionRuntime:
             context = _EvolutionRunContext(
                 package_id=package_id,
                 trace_id=trace_id,
+                session_id=session_id,
+                request_id=request_id,
                 user_input=user_input,
                 package_path=package_path,
                 graph_thread_id=_thread_id(f"{session_id or 'sessionless'}:{request_id}", package_id),
@@ -403,6 +442,8 @@ class AgentEvolutionRuntime:
             if resume_payload is None:
                 stream_input: Any = {
                     "request": context.user_input,
+                    "session_id": context.session_id,
+                    "request_id": context.request_id,
                     "workspace_path": str(package_path),
                     "runtime_attachments": context.runtime_attachments,
                     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY: context.runtime_main_model_profile_id or "",
@@ -454,7 +495,26 @@ class AgentEvolutionRuntime:
                     if stream_mode == "custom":
                         model_trace.flush()
                         if _is_model_cache_chunk(chunk):
-                            record_trace("model_cache", _json_safe(chunk.get("payload") or {}))
+                            cache_payload = _json_safe(chunk.get("payload") or {})
+                            record_trace("model_cache", cache_payload)
+                            node_id = str(cache_payload.get("node_id") or "evolution_supervisor")
+                            normalizer.runtime_event(
+                                "model_cache_metrics",
+                                node_id=node_id,
+                                payload={
+                                    **cache_payload,
+                                    "session_id": context.session_id,
+                                    "run_id": context.request_id,
+                                    "agent_id": "agent_evolution",
+                                    "agent_name": "进化 Agent",
+                                    "package_id": package_id,
+                                },
+                            )
+                            normalizer.runtime_event(
+                                "context_window_updated",
+                                node_id=node_id,
+                                payload=_context_window_payload_from_model_cache(cache_payload, node_id=node_id),
+                            )
                             continue
                         for record in _tool_trace_records(chunk):
                             record_trace("tool_call", record)
@@ -699,6 +759,41 @@ def _thread_id(session_id: str, package_id: str) -> str:
 
 def _active_run_key(session_id: str, package_id: str) -> str:
     return f"{session_id}:evolution-active:{package_id}"
+
+
+def _evolution_checkpoint_threads(
+    *,
+    session_id: str,
+    package_id: str,
+    request_ids: list[str],
+    active_context: _EvolutionRunContext | None,
+) -> list[str]:
+    threads: list[str] = []
+    if active_context is not None:
+        threads.append(active_context.graph_thread_id)
+    for request_id in request_ids:
+        normalized_request_id = str(request_id or "").strip()
+        if normalized_request_id:
+            threads.append(_thread_id(f"{session_id}:{normalized_request_id}", package_id))
+    return list(dict.fromkeys(threads))
+
+
+def _delete_evolution_trace_for_session(workspace: CreateAgentWorkspace, session_id: str) -> bool:
+    path = workspace.manufacturing_trace_path
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("version") != "agent_evolution_manufacturing_trace.v0":
+        return False
+    if str(payload.get("session_id") or "").strip() != session_id:
+        return False
+    path.unlink(missing_ok=True)
+    return True
 
 
 def _evolution_trace_payload_with_record(workspace: CreateAgentWorkspace, record: dict[str, Any]) -> dict[str, Any] | None:

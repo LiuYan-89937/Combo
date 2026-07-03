@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import shutil
 import threading
 from typing import Any
 from uuid import uuid4
@@ -27,13 +28,14 @@ from agent_factory.model_pool.runtime_override import (
     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
     main_model_profile_id_from_user_config,
 )
-from agent_factory.paths import project_root
+from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
     import_runtime_attachments,
     normalized_runtime_attachments,
     time_named_attachment_scope,
 )
+from agent_factory.runtime_kernel.persistence import delete_checkpoint_thread
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,23 @@ class CreateAgentRuntime:
         if snapshot is None:
             return {"session_id": session_id, "turn_count": 0, "turns": []}
         return snapshot
+
+    def delete_session_artifacts(self, session_id: str) -> dict[str, Any]:
+        workspace = CreateAgentWorkspace.for_session(session_id)
+        self._active_graph_by_session.pop(session_id, None)
+        deleted_checkpoint_count = sum(
+            1
+            for graph_kind in ("manufacture", "assist")
+            if delete_checkpoint_thread(self.checkpointer, f"{session_id}:{graph_kind}")
+        )
+        workspace_deleted = _delete_create_agent_workspace(workspace.root)
+        return {
+            "session_id": session_id,
+            "workspace_path": str(workspace.root),
+            "workspace_deleted": workspace_deleted,
+            "trace_deleted": workspace_deleted,
+            "deleted_checkpoint_count": deleted_checkpoint_count,
+        }
 
     def stream(
         self,
@@ -363,6 +382,9 @@ class CreateAgentRuntime:
             if resume_payload is None:
                 stream_input = {
                     "request": user_input,
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "graph_kind": graph_kind,
                     "workspace_path": str(workspace.root),
                     "runtime_attachments": attachments,
                     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY: runtime_main_model_profile_id or "",
@@ -411,7 +433,13 @@ class CreateAgentRuntime:
                             normalizer.runtime_event(
                                 "model_cache_metrics",
                                 node_id=node_id,
-                                payload=cache_payload,
+                                payload={
+                                    **cache_payload,
+                                    "session_id": session_id,
+                                    "run_id": request_id,
+                                    "agent_id": "create_agent",
+                                    "agent_name": "制造 Agent",
+                                },
                             )
                             normalizer.runtime_event(
                                 "context_window_updated",
@@ -613,6 +641,19 @@ def _resume_input_text(payload: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _delete_create_agent_workspace(path: Path) -> bool:
+    root = path.expanduser().resolve()
+    workspace_root = factory_artifact_path("create_agent_workspaces").resolve()
+    try:
+        root.relative_to(workspace_root)
+    except ValueError as exc:
+        raise ValueError(f"create-agent workspace escapes workspace root: {root}") from exc
+    if not root.exists():
+        return False
+    shutil.rmtree(root)
+    return True
 
 
 def _message_stream_source(chunk: Any) -> dict[str, Any]:

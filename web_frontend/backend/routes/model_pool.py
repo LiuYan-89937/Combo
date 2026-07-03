@@ -11,6 +11,7 @@ from agent_factory.model_pool import (
     ModelPoolProfile,
     ModelPoolSelector,
     ModelPoolStore,
+    ModelUsageStore,
     ModelSelectionRequest,
     list_model_pool_provider_profiles,
 )
@@ -67,6 +68,13 @@ def create_model_pool_router() -> APIRouter:
             for profile in store.list_profiles(kind=profile_kind)
         ]
         return {"profiles": profiles}
+
+    @router.get("/usage")
+    async def usage_summary(group_by: str = "model", days: int = 14):
+        value = group_by.strip().lower()
+        if value not in {"model", "provider", "agent"}:
+            raise HTTPException(status_code=400, detail="unsupported usage group_by")
+        return ModelUsageStore().summary(group_by=value, days=days)
 
     @router.post("/profiles")
     async def upsert_profile(payload: dict[str, Any]):

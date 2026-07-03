@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 import mimetypes
@@ -20,6 +20,7 @@ ATTACHMENT_MAX_FILES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILES"
 ATTACHMENT_MAX_FILE_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILE_BYTES"
 ATTACHMENT_MAX_TOTAL_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_TOTAL_BYTES"
 ATTACHMENT_MAX_MODEL_CHARS_ENV = "AGENTFACTORY_ATTACHMENT_MAX_MODEL_CHARS"
+DEFAULT_ATTACHMENT_MAX_FILES = 9
 DEFAULT_ATTACHMENT_MAX_MODEL_CHARS = 24000
 
 
@@ -38,7 +39,7 @@ class AttachmentImportError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class AttachmentImportPolicy:
-    max_files: int | None = None
+    max_files: int | None = DEFAULT_ATTACHMENT_MAX_FILES
     max_file_bytes: int | None = None
     max_total_bytes: int | None = None
     max_model_chars: int = DEFAULT_ATTACHMENT_MAX_MODEL_CHARS
@@ -46,7 +47,7 @@ class AttachmentImportPolicy:
     @classmethod
     def from_env(cls) -> "AttachmentImportPolicy":
         return cls(
-            max_files=_optional_positive_int_env(ATTACHMENT_MAX_FILES_ENV),
+            max_files=_attachment_max_files_from_env(),
             max_file_bytes=_optional_positive_int_env(ATTACHMENT_MAX_FILE_BYTES_ENV),
             max_total_bytes=_optional_positive_int_env(ATTACHMENT_MAX_TOTAL_BYTES_ENV),
             max_model_chars=_optional_positive_int_env(ATTACHMENT_MAX_MODEL_CHARS_ENV) or DEFAULT_ATTACHMENT_MAX_MODEL_CHARS,
@@ -207,7 +208,7 @@ def import_runtime_attachments(
         runtime_path_root=runtime_path_root,
         base_dir=base_dir,
         scope=scope,
-        policy=resolved_policy,
+        policy=_remaining_attachment_policy(resolved_policy, len(marked.attachments)),
     )
     return AttachmentImportResult(
         message=marked.message,
@@ -263,6 +264,15 @@ def import_payload_attachments(
             shutil.rmtree(imported_item.target_dir, ignore_errors=True)
         raise
     return [item.ref.model_payload() for item in imported]
+
+
+def _remaining_attachment_policy(
+    policy: AttachmentImportPolicy,
+    imported_count: int,
+) -> AttachmentImportPolicy:
+    if policy.max_files is None:
+        return policy
+    return replace(policy, max_files=max(0, policy.max_files - imported_count))
 
 
 def parse_attachment_markers(message: str) -> list[AttachmentMarker]:
@@ -933,6 +943,13 @@ def _optional_positive_int_env(name: str) -> int | None:
     except ValueError:
         return None
     return parsed if parsed > 0 else None
+
+
+def _attachment_max_files_from_env() -> int:
+    configured = _optional_positive_int_env(ATTACHMENT_MAX_FILES_ENV)
+    if configured is None:
+        return DEFAULT_ATTACHMENT_MAX_FILES
+    return min(configured, DEFAULT_ATTACHMENT_MAX_FILES)
 
 
 def _runtime_attachment_path(*, runtime_path_root: str, filename: str) -> str:

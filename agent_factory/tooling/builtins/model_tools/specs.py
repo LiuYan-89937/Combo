@@ -36,13 +36,13 @@ def _description(*, capability: str, configured: str) -> str:
     if configured:
         return configured
     descriptions = {
-        "image_input": "Use the configured auxiliary vision model to understand an image and return structured text.",
-        "image_output": "Use the configured auxiliary image generation model to create images from a text brief.",
-        "image_edit": "Use the configured auxiliary image generation model to edit or transform referenced images.",
-        "audio_input": "Use the configured auxiliary audio model to transcribe or understand audio and return text.",
-        "audio_output": "Use the configured auxiliary audio model to synthesize audio from text.",
+        "image_input": "调用已配置的辅助视觉模型理解图片，并返回结构化文本。",
+        "image_output": "调用已配置的辅助生图模型，根据文本需求生成图片。",
+        "image_edit": "调用已配置的辅助生图模型，编辑或转换引用图片。",
+        "audio_input": "调用已配置的辅助音频模型转写或理解音频，并返回文本。",
+        "audio_output": "调用已配置的辅助音频模型，根据文本合成音频。",
     }
-    return descriptions.get(capability, "Use the configured auxiliary model for this agent capability.")
+    return descriptions.get(capability, "调用已配置的辅助模型完成当前 Agent 能力。")
 
 
 def _input_schema(capability: str) -> dict[str, Any]:

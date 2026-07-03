@@ -7,8 +7,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.memory_system.config import MemorySystemConfig
-from agent_factory.memory_system.factory import factory_memory_runtime
 from agent_factory.memory_system.injection import MemorySystemRuntime, default_agent_runtime
 from agent_factory.memory_system.retrieval import retrieve_memory_context
 from agent_factory.memory_system.schema import MemoryContextPack
@@ -36,18 +36,20 @@ def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         package_id: str | None = None,
         limit: int = Query(default=8, ge=1, le=32),
     ):
-        runtime = _memory_runtime_for_scope(runtime_bridge, package_id=package_id, limit=limit)
+        resolved_package_id = _memory_package_id(package_id)
+        runtime = _memory_runtime_for_scope(runtime_bridge, package_id=resolved_package_id, limit=limit)
         pack = retrieve_memory_context(
             store=runtime.store,
             namespace=runtime.namespace,
             query=query,
             config=runtime.config,
         )
-        return _pack_response(pack, package_id=package_id)
+        return _pack_response(pack, package_id=resolved_package_id)
 
     @router.delete("/items")
     async def delete_memory_item(payload: MemoryDeleteRequest):
-        runtime = _memory_runtime_for_scope(runtime_bridge, package_id=payload.package_id)
+        resolved_package_id = _memory_package_id(payload.package_id)
+        runtime = _memory_runtime_for_scope(runtime_bridge, package_id=resolved_package_id)
         store = runtime.store
         if store is None:
             raise HTTPException(status_code=400, detail="memory store is not available")
@@ -61,7 +63,7 @@ def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return {
             "deleted": True,
             "memory_id": memory_id,
-            "package_id": payload.package_id,
+            "package_id": resolved_package_id,
             "namespace": list(runtime.namespace),
         }
 
@@ -71,13 +73,10 @@ def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
 def _memory_runtime_for_scope(
     runtime_bridge: RuntimeBridge,
     *,
-    package_id: str | None,
+    package_id: str,
     limit: int | None = None,
 ) -> MemorySystemRuntime:
-    if package_id:
-        runtime = _agent_memory_runtime(runtime_bridge, package_id=package_id)
-    else:
-        runtime = factory_memory_runtime()
+    runtime = _agent_memory_runtime(runtime_bridge, package_id=package_id)
     if limit is None:
         return runtime
     scoped_config = runtime.config.model_copy(
@@ -89,6 +88,10 @@ def _memory_runtime_for_scope(
         deep=True,
     )
     return runtime.model_copy(update={"config": scoped_config})
+
+
+def _memory_package_id(package_id: str | None) -> str:
+    return str(package_id or "").strip() or SYSTEM_CHAT_PACKAGE_ID
 
 
 def _agent_memory_runtime(runtime_bridge: RuntimeBridge, *, package_id: str) -> MemorySystemRuntime:

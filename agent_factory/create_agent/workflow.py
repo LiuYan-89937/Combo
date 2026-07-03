@@ -308,6 +308,10 @@ def _emit_model_cache_metrics(
     if input_tokens and cached_input_tokens is not None:
         hit_ratio = round(float(cached_input_tokens) / float(input_tokens), 6)
     active = workspace.read_system_state().active_stage()
+    graph_kind = str(state.get("graph_kind") or "manufacture")
+    evolution_context = state.get("evolution_context") if isinstance(state.get("evolution_context"), dict) else {}
+    agent_id = "agent_evolution" if graph_kind == "evolution" else "create_agent"
+    agent_name = "进化 Agent" if graph_kind == "evolution" else "制造 Agent"
     payload = {
         "version": "create_agent_model_cache_metrics.v0",
         "node_id": "create_agent_supervisor",
@@ -324,6 +328,16 @@ def _emit_model_cache_metrics(
         },
         "prompt_diagnostics": prompt_diagnostics,
         "model": metadata.get("model"),
+        "provider": metadata.get("provider"),
+        "provider_display_name": metadata.get("provider_display_name"),
+        "model_profile_id": metadata.get("model_profile_id"),
+        "model_role": metadata.get("model_role"),
+        "model_source": metadata.get("model_source"),
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "package_id": evolution_context.get("package_id") if graph_kind == "evolution" else None,
+        "session_id": state.get("session_id"),
+        "run_id": state.get("request_id"),
         "tool_count": metadata.get("tool_count"),
     }
     writer = get_stream_writer()

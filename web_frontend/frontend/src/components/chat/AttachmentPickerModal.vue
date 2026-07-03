@@ -4,9 +4,15 @@
       <!-- 本地文件 -->
       <n-tab-pane name="file" :tab="t('attachments.localFile')">
         <div class="tab-content">
+          <n-text depth="3" class="attachment-limit">
+            {{ t('attachments.limitHint', { count: currentCount, max: maxCount }) }}
+          </n-text>
           <n-upload
             :custom-request="handleFileUpload"
             :show-file-list="false"
+            :multiple="true"
+            :max="remainingCount"
+            :disabled="remainingCount <= 0"
             accept="*/*"
           >
             <n-upload-dragger>
@@ -38,6 +44,7 @@
               v-for="file in filteredWorkspaceFiles"
               :key="file.path"
               class="file-item"
+              :class="{ 'file-item-disabled': remainingCount <= 0 }"
               @click="handleSelectWorkspaceFile(file)"
             >
               <n-icon><Document /></n-icon>
@@ -57,7 +64,7 @@
             <n-form-item :label="t('attachments.displayName')">
               <n-input v-model:value="urlName" :placeholder="t('attachments.urlNamePlaceholder')" />
             </n-form-item>
-            <n-button type="primary" @click="handleAddUrl" :disabled="!isValidUrl">
+            <n-button type="primary" @click="handleAddUrl" :disabled="remainingCount <= 0 || !isValidUrl">
               {{ t('common.add') }}
             </n-button>
           </n-form>
@@ -79,7 +86,7 @@
             <n-form-item :label="t('attachments.displayName')">
               <n-input v-model:value="textName" :placeholder="t('attachments.textName')" />
             </n-form-item>
-            <n-button type="primary" @click="handleAddText" :disabled="!textContent.trim()">
+            <n-button type="primary" @click="handleAddText" :disabled="remainingCount <= 0 || !textContent.trim()">
               {{ t('common.add') }}
             </n-button>
           </n-form>
@@ -96,14 +103,17 @@ import type { UploadCustomRequestOptions } from 'naive-ui'
 import { CloudUploadOutline, Document } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { runtimeFileAttachmentFromFile } from '@/utils/attachments'
+import type { RuntimeAttachmentInput } from '@/types/protocol'
 
 const props = defineProps<{
   show: boolean
+  currentCount: number
+  maxCount: number
 }>()
 
 const emit = defineEmits<{
   'update:show': [value: boolean]
-  attach: [attachment: any]
+  attach: [attachment: RuntimeAttachmentInput]
 }>()
 
 const show = computed({
@@ -112,6 +122,9 @@ const show = computed({
 })
 
 const { t } = useI18n()
+const currentCount = computed(() => props.currentCount)
+const maxCount = computed(() => props.maxCount)
+const remainingCount = computed(() => Math.max(0, props.maxCount - props.currentCount))
 
 // 工作区文件
 const workspaceSearch = ref('')
@@ -140,12 +153,21 @@ const isValidUrl = computed(() => {
 const textContent = ref('')
 const textName = ref('')
 
-async function handleFileUpload({ file }: UploadCustomRequestOptions) {
-  emit('attach', await runtimeFileAttachmentFromFile(file.file as File, { name: file.name }))
-  show.value = false
+async function handleFileUpload({ file, onFinish, onError }: UploadCustomRequestOptions) {
+  if (remainingCount.value <= 0 || !(file.file instanceof File)) {
+    onError()
+    return
+  }
+  try {
+    emit('attach', await runtimeFileAttachmentFromFile(file.file, { name: file.name }))
+    onFinish()
+  } catch (error) {
+    onError()
+  }
 }
 
 function handleSelectWorkspaceFile(file: any) {
+  if (remainingCount.value <= 0) return
   emit('attach', {
     kind: 'file',
     name: file.name,
@@ -156,7 +178,7 @@ function handleSelectWorkspaceFile(file: any) {
 }
 
 function handleAddUrl() {
-  if (!isValidUrl.value) return
+  if (remainingCount.value <= 0 || !isValidUrl.value) return
 
   emit('attach', {
     kind: 'url',
@@ -170,7 +192,7 @@ function handleAddUrl() {
 }
 
 function handleAddText() {
-  if (!textContent.value.trim()) return
+  if (remainingCount.value <= 0 || !textContent.value.trim()) return
 
   emit('attach', {
     kind: 'text',
@@ -187,6 +209,12 @@ function handleAddText() {
 <style scoped>
 .tab-content {
   padding: 16px 0;
+}
+
+.attachment-limit {
+  display: block;
+  margin-bottom: var(--app-space-sm);
+  font-size: var(--app-font-sm);
 }
 
 .upload-area {
@@ -221,5 +249,15 @@ function handleAddText() {
 .file-item:hover {
   background: var(--app-surface-hover);
   border-color: var(--app-border);
+}
+
+.file-item-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.file-item-disabled:hover {
+  background: var(--app-surface-muted);
+  border-color: transparent;
 }
 </style>

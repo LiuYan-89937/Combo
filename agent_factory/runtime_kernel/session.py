@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.runtime_attachments import normalized_runtime_attachments
+from agent_factory.trace_system import JSONLTraceStore
 
 
 class AgentSessionTurn(BaseModel):
@@ -43,6 +44,12 @@ class AgentSessionRecord(BaseModel):
 @dataclass(frozen=True, slots=True)
 class AgentSessionConfig:
     root: Path = Path(".agent_runtime/sessions")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSessionDeletionResult:
+    record: AgentSessionRecord
+    deleted_trace_count: int
 
 
 class AgentSessionManager:
@@ -89,6 +96,12 @@ class AgentSessionManager:
                 continue
             records.append(record)
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
+
+    def delete(self, session_id: str) -> AgentSessionDeletionResult:
+        record = self.load(session_id)
+        deleted_trace_count = _delete_record_traces(record)
+        self._path(record.session_id).unlink(missing_ok=True)
+        return AgentSessionDeletionResult(record=record, deleted_trace_count=deleted_trace_count)
 
     def touch_turn(
         self,
@@ -155,3 +168,47 @@ def _runtime_refs(session_root: Path) -> dict[str, str]:
         "memory": str(runtime_root / "memory"),
         "trace": str(runtime_root / "trace"),
     }
+
+
+def _delete_record_traces(record: AgentSessionRecord) -> int:
+    default_trace_root = _trace_root(record.runtime_refs)
+    deleted = 0
+    seen: set[tuple[str, str]] = set()
+    for turn in record.turns:
+        ref = turn.trace_ref
+        if not isinstance(ref, dict):
+            continue
+        trace_id = str(ref.get("trace_id") or "").strip()
+        if not _is_safe_path_id(trace_id):
+            continue
+        trace_root = _trace_root(ref) or default_trace_root
+        if trace_root is None:
+            continue
+        key = (str(trace_root), trace_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        trace_dir = trace_root / "runs" / trace_id
+        if trace_dir.exists():
+            JSONLTraceStore(trace_root).delete_trace(trace_id)
+            deleted += 1
+    return deleted
+
+
+def _trace_root(payload: dict[str, Any] | None) -> Path | None:
+    if not isinstance(payload, dict):
+        return None
+    root = str(payload.get("trace_root") or payload.get("trace") or "").strip()
+    if root:
+        return Path(root).expanduser().resolve()
+    trace_path = str(payload.get("trace_path") or "").strip()
+    if not trace_path:
+        return None
+    path = Path(trace_path).expanduser().resolve()
+    if path.parent.name != "runs":
+        return None
+    return path.parent.parent
+
+
+def _is_safe_path_id(value: str) -> bool:
+    return bool(value) and value not in {".", ".."} and "/" not in value and "\\" not in value

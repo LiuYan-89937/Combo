@@ -89,6 +89,36 @@ class RuntimeSessionCommandMixin:
         self._restore_session_mode_context()
         self._emit_session_event(command.request_id, session_event_type="session_started")
 
+    def delete_session(self, command: FactoryFrontendCommand) -> None:
+        session_id = str(command.session_id or command.payload.get("session_id") or "").strip()
+        if not session_id:
+            self._emit_error(command, "delete_session requires session_id")
+            return
+        record = self.session_manager.load(session_id)
+        linked_artifacts = self._delete_linked_session_artifacts(record)
+        deleted = self.session_manager.delete(session_id)
+        deleted_active = self.session_record is not None and self.session_record.session_id == session_id
+        if deleted_active:
+            self.session_record = None
+            self.pending_create_agent_run = None
+            self.pending_evolution_run = None
+            self.pending_agent_package_run = None
+        self.emit(
+            event(
+                "session_deleted",
+                request_id=command.request_id,
+                session_id=None if deleted_active else self._session_id(),
+                mode=self.mode,
+                payload={
+                    "session_id": deleted.session_id,
+                    "deleted": True,
+                    "deleted_active": deleted_active,
+                    "linked_artifacts": linked_artifacts,
+                    "sessions": [session_payload(item) for item in self.session_manager.list_sessions()],
+                },
+            )
+        )
+
     def set_mode(self, command: FactoryFrontendCommand) -> None:
         self._ensure_session(command)
         if command.mode == "agent_package":
@@ -183,6 +213,25 @@ class RuntimeSessionCommandMixin:
                 message=message,
             )
         )
+
+    def _delete_linked_session_artifacts(self, record) -> dict[str, object]:
+        artifacts: dict[str, object] = {}
+        chat_session_id = str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
+        if chat_session_id and self.agent_package_runtime is not None:
+            artifacts["chat"] = self.agent_package_runtime.delete_session(SYSTEM_CHAT_PACKAGE_ID, chat_session_id)
+
+        create_session_id = str(getattr(record, "create_agent_session_id", "") or "").strip()
+        if create_session_id and self.create_agent_runtime is not None:
+            artifacts["create_agent"] = self.create_agent_runtime.delete_session_artifacts(create_session_id)
+
+        evolve_package_id = str(getattr(record, "evolve_agent_package_id", "") or "").strip()
+        if evolve_package_id and self.evolution_runtime is not None:
+            artifacts["evolve_agent"] = self.evolution_runtime.delete_session_artifacts(
+                package_id=evolve_package_id,
+                session_id=record.session_id,
+                request_ids=_turn_request_ids(getattr(record, "evolve_agent_turns", [])),
+            )
+        return artifacts
 
     def _recover_create_agent_publish_confirmation(self, command: FactoryFrontendCommand) -> bool:
         if str(command.payload.get("type") or "").strip() != "create_agent_publish_confirmation":
@@ -334,6 +383,17 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
                 }
             )
     return messages
+
+
+def _turn_request_ids(turns: object) -> list[str]:
+    if not isinstance(turns, list):
+        return []
+    request_ids: list[str] = []
+    for turn in turns:
+        request_id = str(getattr(turn, "request_id", "") or "").strip()
+        if request_id:
+            request_ids.append(request_id)
+    return request_ids
 
 
 class _InterruptResumeTarget:

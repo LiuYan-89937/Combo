@@ -218,6 +218,26 @@ class RuntimeAgentPackageCommandMixin:
             )
         )
 
+    def delete_agent_package_session(self, command: FactoryFrontendCommand) -> None:
+        package_id = str(command.payload.get("package_id") or "").strip()
+        session_id = str(command.payload.get("session_id") or command.session_id or "").strip()
+        if not package_id:
+            self._emit_error(command, "delete_agent_package_session requires package_id")
+            return
+        if not session_id:
+            self._emit_error(command, "delete_agent_package_session requires session_id")
+            return
+        result = self.agent_package_runtime.delete_session(package_id, session_id)
+        self.emit(
+            event(
+                "agent_package_session_deleted",
+                request_id=command.request_id,
+                session_id=self._session_id(),
+                mode="agent_package",
+                payload=result,
+            )
+        )
+
     def run_agent_package(self, command: FactoryFrontendCommand) -> None:
         self._send_agent_package_message(command, require_ready=False)
 

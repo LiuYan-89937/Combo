@@ -26,6 +26,7 @@ from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
     count_messages_tokens,
     context_window_payload,
+    provider_token_budget_payload,
     token_count_from_usage_metadata,
 )
 from agent_factory.models.usage import normalize_usage_metadata
@@ -140,6 +141,12 @@ class ModelOperationService:
         reasoning_content = reasoning_content_from_message(response)
         tool_calls = _tool_calls_from_response(response)
         usage_metadata = getattr(response, "usage_metadata", None) or {}
+        _record_provider_token_budget(
+            state=state,
+            node_id=node_id,
+            model_role=effective_model_role,
+            usage_metadata=usage_metadata,
+        )
         cache_metrics = _model_cache_metrics_payload(
             state=state,
             node_id=node_id,
@@ -286,6 +293,12 @@ class ModelOperationService:
                 else:
                     parsed = output_model.model_validate(result)
                 usage_metadata = getattr(result, "usage_metadata", None) or {}
+                _record_provider_token_budget(
+                    state=state,
+                    node_id=node_id,
+                    model_role=effective_model_role,
+                    usage_metadata=usage_metadata,
+                )
                 cache_metrics = _model_cache_metrics_payload(
                     state=state,
                     node_id=node_id,
@@ -414,6 +427,31 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
         return
     emit_event({"event_type": event_type, **payload})
+
+
+def _record_provider_token_budget(
+    *,
+    state: Any,
+    node_id: str | None,
+    model_role: str,
+    usage_metadata: Any,
+) -> None:
+    if state is None or node_id is None:
+        return
+    context = getattr(state, "context", None)
+    if context is None or not hasattr(context, "token_budget"):
+        return
+    payload = provider_token_budget_payload(
+        usage_metadata=usage_metadata,
+        node_id=node_id,
+        model_role=model_role,
+    )
+    if not payload:
+        return
+    context.token_budget = {
+        **dict(getattr(context, "token_budget", {}) or {}),
+        **payload,
+    }
 
 
 def _invoke_tool_bound_chat(
@@ -546,6 +584,10 @@ def _model_cache_metrics_payload(
         "pattern_id": str(getattr(getattr(state, "run", None), "pattern_id", "") or ""),
         "model_role": model_metadata.get("model_role"),
         "model": model_metadata.get("model"),
+        "provider": model_metadata.get("provider"),
+        "provider_display_name": model_metadata.get("provider_display_name"),
+        "model_profile_id": model_metadata.get("model_profile_id"),
+        "model_source": model_metadata.get("model_source"),
         "provider_cache": {
             "available": cached_input_tokens is not None,
             "input_tokens": input_tokens,

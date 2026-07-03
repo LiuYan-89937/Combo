@@ -31,8 +31,21 @@
           @click="handleSelectSession(session)"
         >
           <div class="session-item">
-            <div class="session-title">
-              {{ sessionTitle(session) }}
+            <div class="session-title-row">
+              <div class="session-title">
+                {{ sessionTitle(session) }}
+              </div>
+              <n-button
+                size="tiny"
+                quaternary
+                circle
+                :aria-label="t('sessions.delete')"
+                @click.stop="confirmDeleteSession(session)"
+              >
+                <template #icon>
+                  <n-icon><TrashOutline /></n-icon>
+                </template>
+              </n-button>
             </div>
             <div class="session-meta">
               <n-tag size="tiny" :type="modeTagType(activeSessionMode)">
@@ -66,8 +79,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NButton, NIcon, NText, NInput, NScrollbar, NList, NListItem, NTag, NEmpty } from 'naive-ui'
-import { Add, ChatbubbleEllipses, Search } from '@/components/icons'
+import { NButton, NIcon, NText, NInput, NScrollbar, NList, NListItem, NTag, NEmpty, useDialog } from 'naive-ui'
+import { Add, ChatbubbleEllipses, Search, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useSessionStore } from '@/stores/session'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -90,6 +103,7 @@ const agentStore = useAgentStore()
 const commands = useCommand()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
+const dialog = useDialog()
 
 const panelTitle = computed(() => props.title || t('sessions.main'))
 
@@ -120,6 +134,18 @@ function handleNewSession() {
 
 function handleSelectSession(session: SessionView) {
   commands.switchSession(session.session_id, activeSessionMode.value)
+}
+
+function confirmDeleteSession(session: SessionView) {
+  dialog.warning({
+    title: t('sessions.deleteTitle'),
+    content: t('sessions.deleteContent', { title: sessionTitle(session) }),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: () => {
+      commands.deleteSession(session.session_id)
+    },
+  })
 }
 
 function sessionBelongsToActiveMode(session: SessionView): boolean {
@@ -226,6 +252,12 @@ onMounted(() => {
   padding: var(--app-space-xs) 0;
 }
 
+.session-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-xs);
+}
+
 .session-panel :deep(.n-list-item) {
   transition: background-color var(--app-transition-fast);
   border-radius: var(--app-radius-md);
@@ -255,6 +287,8 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--app-text);
+  flex: 1;
+  min-width: 0;
 }
 
 .session-meta {

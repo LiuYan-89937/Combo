@@ -8,10 +8,9 @@ def get_scheduler_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="scheduler",
             description=(
-                "Create, inspect, pause, resume, delete, or run scheduled graph/script/tool jobs. "
-                "Scheduled scripts and tool calls execute through the AgentFactory tool gateway. "
-                "When creating a job, include job.task_content as the user's plain-language task intent "
-                "so completion feedback can be summarized consistently."
+                "创建、查看、暂停、恢复、删除或立即运行定时任务。"
+                "定时脚本和工具调用会通过 AgentFactory 工具网关执行。"
+                "创建任务时请填写 job.task_content，记录用户的自然语言任务意图，便于完成后统一总结反馈。"
             ),
             entrypoint="agent_factory.scheduler_system.tools:run",
             input_schema=_input_schema(),

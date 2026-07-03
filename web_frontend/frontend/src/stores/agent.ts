@@ -210,6 +210,14 @@ export const useAgentStore = defineStore('agent', () => {
     selectedSessionId.value = sessionId
   }
 
+  function removeSession(sessionId: string): void {
+    agentSessions.value = agentSessions.value.filter((session) => session.session_id !== sessionId)
+    recentAgentSessions.value = recentAgentSessions.value.filter((session) => session.session_id !== sessionId)
+    if (selectedSessionId.value === sessionId) {
+      selectedSessionId.value = null
+    }
+  }
+
   function enterAgentChat(packageId: string, sessionId: string | null = null): void {
     activeChatPackageId.value = packageId
     selectedPackageId.value = packageId
@@ -291,6 +299,7 @@ export const useAgentStore = defineStore('agent', () => {
     setRecentSessions,
     mergeRecentSessions,
     selectSession,
+    removeSession,
     enterAgentChat,
     leaveAgentChat,
     setActiveAgentSession,

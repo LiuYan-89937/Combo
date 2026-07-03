@@ -95,7 +95,7 @@
     <SchedulerHistoryDrawer
       v-model:show="showHistoryDrawer"
       :job-id="selectedJobId"
-      :package-id="resourceContext.packageId.value"
+      :package-id="resourceContext.packageIdForApi.value"
     />
   </div>
 </template>

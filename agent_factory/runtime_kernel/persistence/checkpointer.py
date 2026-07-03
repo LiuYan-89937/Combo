@@ -63,6 +63,29 @@ def is_checkpointer_persistent(checkpointer: object | None) -> bool:
     return id(checkpointer) in _PERSISTENT_CHECKPOINTER_IDS
 
 
+def delete_checkpoint_thread(checkpointer: Any, thread_id: str) -> bool:
+    normalized_thread_id = str(thread_id or "").strip()
+    if not normalized_thread_id:
+        return False
+    delete_thread = getattr(checkpointer, "delete_thread", None)
+    if not callable(delete_thread):
+        return False
+    delete_thread(normalized_thread_id)
+    return True
+
+
+def delete_sqlite_checkpoint_thread(checkpoint_path: Path, thread_id: str) -> bool:
+    normalized_thread_id = str(thread_id or "").strip()
+    if not normalized_thread_id:
+        return False
+    path = checkpoint_path.expanduser().resolve()
+    if not path.is_file():
+        return False
+    sqlite_saver = importlib.import_module("langgraph.checkpoint.sqlite").SqliteSaver
+    with sqlite_saver.from_conn_string(str(path)) as saver:
+        return delete_checkpoint_thread(saver, normalized_thread_id)
+
+
 def _enter_checkpointer_context(checkpointer: Any) -> Any:
     if hasattr(checkpointer, "__enter__"):
         _CHECKPOINTER_CONTEXTS.append(checkpointer)

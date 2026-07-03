@@ -144,6 +144,34 @@ def cached_input_token_count_from_usage_metadata(usage: Any) -> int | None:
     return normalize_usage_metadata(usage).cache_hit_tokens
 
 
+def provider_token_budget_payload(
+    *,
+    usage_metadata: Any,
+    node_id: str,
+    model_role: str,
+    provider_input_tokens: Any = None,
+) -> dict[str, Any]:
+    usage = normalize_usage_metadata(usage_metadata)
+    input_tokens = _token_int(provider_input_tokens)
+    if input_tokens is None:
+        input_tokens = usage.input_tokens
+    if input_tokens is None:
+        return {}
+    output_tokens = usage.output_tokens
+    total_tokens = usage.total_tokens
+    context_tokens_after_call = total_tokens or int(input_tokens) + int(output_tokens or 0)
+    return {
+        "last_provider_input_tokens": int(input_tokens),
+        "last_provider_output_tokens": output_tokens,
+        "last_provider_total_tokens": total_tokens,
+        "last_provider_context_tokens_after_call": context_tokens_after_call,
+        "last_provider_token_count_method": "provider_usage",
+        "last_provider_node_id": node_id,
+        "last_provider_model_role": model_role,
+        "last_provider_usage_metadata": usage_metadata if isinstance(usage_metadata, dict) else {},
+    }
+
+
 def _model_role_from_services(services: Any | None) -> str:
     if services is None:
         return "main"
@@ -176,3 +204,13 @@ def _count_error(exc: Exception, *, model_role: str | None) -> TokenCountResult:
         error=f"{type(exc).__name__}: {exc}",
         model_role=model_role,
     )
+
+
+def _token_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None

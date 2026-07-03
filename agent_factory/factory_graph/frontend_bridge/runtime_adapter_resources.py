@@ -74,6 +74,9 @@ class RuntimeResourceCommandMixin:
             "upsert_skill",
             "set_skill_enabled",
             "remove_skill",
+            "update_tool_permissions",
+            "set_tool_permission",
+            "reset_tool_permission",
         }:
             event_type = "extension_config_updated"
         elif action == "test_mcp":

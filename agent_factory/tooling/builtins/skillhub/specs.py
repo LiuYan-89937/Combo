@@ -9,8 +9,7 @@ def get_skillhub_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="skillhub",
             description=(
-                "Search SkillHUB, check the global SkillHUB CLI, or install a SkillHUB skill into "
-                "this agent's active skills extension directory and enable it."
+                "搜索 SkillHUB、检查全局 SkillHUB CLI 状态，或将 SkillHUB 技能安装到当前 Agent 的技能扩展目录并启用。"
             ),
             entrypoint="agent_factory.tooling.builtins.skillhub.skillhub:run",
             input_schema=_input_schema(),

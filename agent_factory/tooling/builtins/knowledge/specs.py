@@ -8,8 +8,8 @@ def get_knowledge_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="knowledge",
             description=(
-                "Manage and search this agent's explicit knowledge sources. "
-                "Use list/search/open/read for existing knowledge. Use prepare_source before confirming new sources."
+                "管理和检索当前 Agent 显式挂载的知识源。"
+                "已有知识使用 list/search/open/read；新增知识源必须先 prepare_source 预览，再 confirm_source 确认。"
             ),
             entrypoint="agent_factory.knowledge_system.tools:run",
             input_schema=_input_schema(),

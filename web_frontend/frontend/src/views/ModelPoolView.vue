@@ -122,6 +122,64 @@
           </n-empty>
         </div>
       </n-tab-pane>
+
+      <n-tab-pane name="usage" :tab="t('modelPool.usage')">
+        <div class="tab-content">
+          <div class="content-header">
+            <n-space align="center" wrap>
+              <n-radio-group v-model:value="usageGroupBy" class="soft-segmented-control" @update:value="loadUsage">
+                <n-radio-button value="model">{{ t('modelPool.usageByModel') }}</n-radio-button>
+                <n-radio-button value="provider">{{ t('modelPool.usageByProvider') }}</n-radio-button>
+                <n-radio-button value="agent">{{ t('modelPool.usageByAgent') }}</n-radio-button>
+              </n-radio-group>
+              <n-select
+                v-model:value="usageDays"
+                class="usage-range-select"
+                :options="usageDayOptions"
+                @update:value="loadUsage"
+              />
+            </n-space>
+            <n-button @click="loadUsage" :loading="usageLoading">
+              <template #icon>
+                <n-icon><Refresh /></n-icon>
+              </template>
+              {{ t('common.refresh') }}
+            </n-button>
+          </div>
+
+          <div class="usage-overview">
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageCalls') }}</span>
+              <strong>{{ formatNumber(usageSummary?.totals.call_count || 0) }}</strong>
+            </div>
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageTotalTokens') }}</span>
+              <strong>{{ formatTokens(usageSummary?.totals.total_tokens || 0) }}</strong>
+            </div>
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageCacheHit') }}</span>
+              <strong>{{ formatPercent(usageSummary?.totals.cache_hit_ratio) }}</strong>
+            </div>
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageCost') }}</span>
+              <strong>{{ formatCost(usageSummary?.totals.estimated_cost) }}</strong>
+            </div>
+          </div>
+
+          <div class="usage-chart-panel">
+            <v-chart v-if="usageSummary?.series.length" class="usage-chart" :option="usageChartOptions" autoresize />
+            <n-empty v-else class="manager-empty" :description="t('modelPool.noUsage')" />
+          </div>
+
+          <n-data-table
+            :columns="usageColumns"
+            :data="usageSummary?.groups || []"
+            :loading="usageLoading"
+            :row-key="(row) => row.key"
+            size="small"
+          />
+        </div>
+      </n-tab-pane>
     </n-tabs>
 
     <n-modal
@@ -234,9 +292,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { use } from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import VChart from 'vue-echarts'
 import {
   NButton,
   NCheckbox,
+  NDataTable,
   NEmpty,
   NForm,
   NFormItem,
@@ -246,6 +310,8 @@ import {
   NList,
   NListItem,
   NModal,
+  NRadioButton,
+  NRadioGroup,
   NSelect,
   NSpace,
   NSwitch,
@@ -256,10 +322,21 @@ import {
   NThing,
   useDialog,
   useMessage,
+  type DataTableColumns,
 } from 'naive-ui'
 import { Add, Refresh } from '@/components/icons'
-import { modelPoolApi, type ModelPoolCredential, type ModelPoolProfile, type ModelProviderProfile } from '@/api/modelPool'
+import {
+  modelPoolApi,
+  type ModelPoolCredential,
+  type ModelPoolProfile,
+  type ModelProviderProfile,
+  type ModelUsageGroup,
+  type ModelUsageGroupBy,
+  type ModelUsageSummary,
+} from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
+
+use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
 const { t } = useI18n()
 const message = useMessage()
@@ -270,6 +347,10 @@ const saving = ref(false)
 const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
+const usageLoading = ref(false)
+const usageGroupBy = ref<ModelUsageGroupBy>('model')
+const usageDays = ref(14)
+const usageSummary = ref<ModelUsageSummary | null>(null)
 const credentialModalOpen = ref(false)
 const profileModalOpen = ref(false)
 const credentialEditing = ref<ModelPoolCredential | null>(null)
@@ -321,6 +402,72 @@ const credentialOptions = computed(() =>
     .filter((item) => providerSupportsKind(item.provider, profileForm.kind))
     .map((item) => ({ label: `${item.display_name} · ${providerLabel(item.provider)}`, value: item.credential_id })),
 )
+const usageDayOptions = computed(() => [
+  { label: t('modelPool.usageLast7Days'), value: 7 },
+  { label: t('modelPool.usageLast14Days'), value: 14 },
+  { label: t('modelPool.usageLast30Days'), value: 30 },
+  { label: t('modelPool.usageLast90Days'), value: 90 },
+])
+const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
+  { title: t('modelPool.usageName'), key: 'label', minWidth: 180, ellipsis: { tooltip: true } },
+  { title: t('modelPool.usageCalls'), key: 'call_count', width: 96, render: (row) => formatNumber(row.totals.call_count) },
+  { title: t('modelPool.usageInput'), key: 'input_tokens', width: 120, render: (row) => formatTokens(row.totals.input_tokens) },
+  { title: t('modelPool.usageOutput'), key: 'output_tokens', width: 120, render: (row) => formatTokens(row.totals.output_tokens) },
+  { title: t('modelPool.usageTotalTokens'), key: 'total_tokens', width: 120, render: (row) => formatTokens(row.totals.total_tokens) },
+  { title: t('modelPool.usageReasoning'), key: 'reasoning_tokens', width: 120, render: (row) => formatTokens(row.totals.reasoning_tokens) },
+  { title: t('modelPool.usageCacheHit'), key: 'cache_hit_ratio', width: 110, render: (row) => formatPercent(row.totals.cache_hit_ratio) },
+  { title: t('modelPool.usageCost'), key: 'estimated_cost', width: 110, render: (row) => formatCost(row.totals.estimated_cost) },
+])
+const usageChartOptions = computed(() => {
+  const summary = usageSummary.value
+  const buckets = Array.from(
+    new Set((summary?.series || []).flatMap((item) => item.points.map((point) => point.bucket))),
+  ).sort()
+  return {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (value: number) => formatTokens(value),
+    },
+    legend: {
+      top: 0,
+      type: 'scroll',
+    },
+    grid: {
+      left: 12,
+      right: 20,
+      top: 42,
+      bottom: 8,
+      containLabel: true,
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: buckets,
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: {
+        formatter: (value: number) => formatTokens(value),
+      },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(0, 0, 0, 0.08)',
+        },
+      },
+    },
+    series: (summary?.series || []).map((item) => {
+      const pointsByBucket = new Map(item.points.map((point) => [point.bucket, point]))
+      return {
+        name: item.label,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 6,
+        data: buckets.map((bucket) => pointsByBucket.get(bucket)?.total_tokens || 0),
+      }
+    }),
+  }
+})
 
 onMounted(refresh)
 
@@ -337,18 +484,31 @@ watch(
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [providerData, credentialData, profileData] = await Promise.all([
+    const [providerData, credentialData, profileData, usageData] = await Promise.all([
       modelPoolApi.providers(),
       modelPoolApi.credentials(),
       modelPoolApi.profiles(),
+      modelPoolApi.usage({ groupBy: usageGroupBy.value, days: usageDays.value }),
     ])
     providers.value = providerData.providers
     credentials.value = credentialData.credentials
     profiles.value = profileData.profiles
+    usageSummary.value = usageData
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
     loading.value = false
+  }
+}
+
+async function loadUsage(): Promise<void> {
+  usageLoading.value = true
+  try {
+    usageSummary.value = await modelPoolApi.usage({ groupBy: usageGroupBy.value, days: usageDays.value })
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+  } finally {
+    usageLoading.value = false
   }
 }
 
@@ -573,10 +733,25 @@ function capabilityTags(profile: ModelPoolProfile): string[] {
   return tags
 }
 
-function formatTokens(value: number): string {
-  if (value >= 1000000) return `${Math.round(value / 100000) / 10}M`
-  if (value >= 1000) return `${Math.round(value / 1000)}K`
-  return String(value)
+function formatTokens(value: number | null | undefined): string {
+  const numeric = Number(value || 0)
+  if (numeric >= 1000000) return `${Math.round(numeric / 100000) / 10}M`
+  if (numeric >= 1000) return `${Math.round(numeric / 1000)}K`
+  return String(numeric)
+}
+
+function formatNumber(value: number | null | undefined): string {
+  return new Intl.NumberFormat('zh-CN').format(Number(value || 0))
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '-'
+  return `${Math.round(Number(value) * 1000) / 10}%`
+}
+
+function formatCost(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '-'
+  return `¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(Number(value || 0))}`
 }
 </script>
 
@@ -624,6 +799,53 @@ function formatTokens(value: number): string {
   background: var(--app-panel);
 }
 
+.usage-range-select {
+  width: 132px;
+}
+
+.usage-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.usage-metric {
+  display: flex;
+  min-height: 72px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
+.usage-metric span {
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.usage-metric strong {
+  color: var(--app-text);
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.usage-chart-panel {
+  min-height: 320px;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
+.usage-chart {
+  width: 100%;
+  height: 320px;
+}
+
 .capabilities {
   display: flex;
   flex-wrap: wrap;
@@ -650,6 +872,10 @@ function formatTokens(value: number): string {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .usage-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

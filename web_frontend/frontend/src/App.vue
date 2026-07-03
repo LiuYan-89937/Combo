@@ -509,6 +509,54 @@ html {
   border-radius: var(--app-radius-md) !important;
 }
 
+.soft-segmented-control.n-radio-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface-muted);
+}
+
+.soft-segmented-control .n-radio-group__splitor {
+  display: none !important;
+}
+
+.soft-segmented-control .n-radio-button {
+  border: 0 !important;
+  border-radius: calc(var(--app-radius-lg) - 5px) !important;
+  background: transparent !important;
+  color: var(--app-text-secondary) !important;
+}
+
+.soft-segmented-control .n-radio-button:first-child,
+.soft-segmented-control .n-radio-button:last-child {
+  border-left: 0 !important;
+  border-right: 0 !important;
+}
+
+.soft-segmented-control .n-radio-button__state-border {
+  inset: 0 !important;
+  border-radius: inherit !important;
+  box-shadow: none !important;
+}
+
+.soft-segmented-control .n-radio-button:not(.n-radio-button--disabled):not(.n-radio-button--checked):hover {
+  background: var(--app-surface-hover) !important;
+  color: var(--app-text) !important;
+}
+
+.soft-segmented-control .n-radio-button--checked {
+  background: var(--app-surface) !important;
+  color: var(--app-text-strong) !important;
+  box-shadow: var(--app-shadow-sm);
+}
+
+.soft-segmented-control .n-radio-button--focus .n-radio-button__state-border {
+  box-shadow: 0 0 0 2px var(--app-focus-shadow) !important;
+}
+
 .n-menu-item,
 .n-menu-item-content {
   border-radius: var(--app-radius-md) !important;

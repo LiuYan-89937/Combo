@@ -13,6 +13,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendCommand,
     event,
 )
+from agent_factory.model_pool.usage import record_model_usage_frontend_event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter import FactoryRuntimeAdapter
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,10 @@ class RuntimeBridge:
         loop.call_soon_threadsafe(self._record_and_broadcast, event_payload)
 
     def _record_and_broadcast(self, event_payload: dict[str, Any]) -> None:
+        try:
+            record_model_usage_frontend_event(event_payload)
+        except Exception:
+            logger.exception("Failed to record model usage event")
         self.event_history.append(event_payload)
         stale_subscribers: list[asyncio.Queue[dict[str, Any]]] = []
         for queue in list(self.subscribers):

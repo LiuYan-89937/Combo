@@ -24,12 +24,13 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   if (
     event.event_type === 'session_started' ||
     event.event_type === 'session_switched' ||
+    event.event_type === 'session_deleted' ||
     event.event_type === 'sessions_listed' ||
     (event.event_type === 'agent_package_selected' && event.payload?.purpose === 'evolution' && event.payload?.session)
   ) {
     const sessionStore = useSessionStore()
     sessionStore.setSessions(runtimeStore.sessions as any)
-    if (runtimeStore.activeFactorySessionId) {
+    if (runtimeStore.activeFactorySessionId || event.event_type === 'session_deleted') {
       sessionStore.setCurrentSession(runtimeStore.activeFactorySessionId)
     }
     const sessionPayload = event.payload?.session
@@ -49,6 +50,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     event.event_type === 'agent_package_selected' ||
     event.event_type === 'agent_package_sessions_listed' ||
     event.event_type === 'agent_package_session_loaded' ||
+    event.event_type === 'agent_package_session_deleted' ||
     hasRunAgentSession
   ) {
     const agentStore = useAgentStore()
@@ -67,6 +69,9 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     }
     if (event.event_type === 'agent_package_session_loaded' && event.payload?.session) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.session, event.payload.package_id)])
+    }
+    if (event.event_type === 'agent_package_session_deleted' && event.payload?.session_id) {
+      agentStore.removeSession(String(event.payload.session_id))
     }
     if (hasRunAgentSession && event.payload?.agent_session) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.agent_session, event.payload.package_id)])

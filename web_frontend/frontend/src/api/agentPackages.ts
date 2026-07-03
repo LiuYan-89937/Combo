@@ -27,4 +27,9 @@ export const agentPackagesApi = {
     requestEvent(
       `/api/agent-packages/${encodeURIComponent(packageId)}/sessions/${encodeURIComponent(sessionId)}`
     ),
+  deleteSession: (packageId: string, sessionId: string) =>
+    requestEvent(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/sessions/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' }
+    ),
 }

@@ -79,6 +79,10 @@ export function useAgentPackageCommands() {
     return transport.applyEventRequest(agentPackagesApi.session(packageId, sessionId))
   }
 
+  const deleteAgentPackageSession = (packageId: string, sessionId: string) => {
+    return transport.applyEventRequest(agentPackagesApi.deleteSession(packageId, sessionId))
+  }
+
   const runAgentPackage = (
     packageId: string,
     message: string,
@@ -125,6 +129,7 @@ export function useAgentPackageCommands() {
     initializeAgentPackage,
     shutdownAgentPackageInstance,
     loadAgentPackageSession,
+    deleteAgentPackageSession,
     runAgentPackage,
     sendAgentPackageMessage,
     runAgentEvolution,

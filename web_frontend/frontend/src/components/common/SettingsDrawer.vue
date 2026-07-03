@@ -17,7 +17,7 @@
           <div class="group-body">
             <div class="field-row">
               <label class="field-label">{{ t('settings.theme') }}</label>
-              <n-radio-group v-model:value="themeMode" size="small" class="field-control">
+              <n-radio-group v-model:value="themeMode" size="small" class="field-control soft-segmented-control">
                 <n-radio-button
                   v-for="option in themeOptions"
                   :key="option.value"
@@ -32,7 +32,7 @@
 
             <div class="field-row">
               <label class="field-label">{{ t('settings.language') }}</label>
-              <n-radio-group v-model:value="locale" size="small" class="field-control">
+              <n-radio-group v-model:value="locale" size="small" class="field-control soft-segmented-control">
                 <n-radio-button
                   v-for="option in localeOptions"
                   :key="option.value"
@@ -48,7 +48,7 @@
         <!-- 页脚：关于 -->
         <footer class="settings-footer">
           <div class="footer-title">{{ t('settings.about') }}</div>
-          <div class="footer-brand">FastAgentFactory <span class="footer-version">v2.0.0</span></div>
+          <div class="footer-brand">FastAgentFactory <span class="footer-version">v1.0</span></div>
           <div class="footer-desc">{{ t('settings.description') }}</div>
         </footer>
       </div>

@@ -1,5 +1,7 @@
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 
+export const MAX_RUNTIME_ATTACHMENTS = 9
+
 export async function runtimeFileAttachmentFromFile(
   file: File,
   options: { name?: string } = {}

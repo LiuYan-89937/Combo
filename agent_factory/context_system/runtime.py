@@ -18,7 +18,12 @@ from agent_factory.context_system.schema import (
     LLMContextFrame,
 )
 from agent_factory.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
-from agent_factory.context_system.token_counter import TokenCountResult, count_messages_tokens, context_window_payload
+from agent_factory.context_system.token_counter import (
+    TokenCountResult,
+    context_window_tokens_from_env,
+    count_messages_tokens,
+    context_window_payload,
+)
 
 
 class ContextPreparationResult(BaseModel):
@@ -66,28 +71,33 @@ class ContextSystemRuntime:
                 injection_report=injection_report,
             )
         policy = self.policy_for_node(node_id)
+        context_window_tokens = _context_window_token_limit(services)
+        trigger_limit = _compression_trigger_limit(policy=policy, context_window_tokens=context_window_tokens)
+        compression_policy = policy.compression.model_copy(
+            update={"trigger_token_threshold": trigger_limit}
+        )
         working_messages = list(messages)
         working_state = state
-        initial_count = count_messages_tokens(working_messages, services=services)
+        measured_count = count_messages_tokens(working_messages, services=services)
+        effective_count = _effective_context_token_count(
+            state=working_state,
+            measured_count=measured_count,
+        )
         _emit_context_window_if_available(
             services=services,
             state=working_state,
             node_id=node_id,
-            count=initial_count,
-            compression_threshold_tokens=policy.compression.trigger_token_threshold,
+            count=effective_count,
+            compression_threshold_tokens=trigger_limit,
+            context_window_tokens=context_window_tokens,
             source="context_prepare.before_compression",
-        )
-        trigger_count = _compression_trigger_count(
-            state=working_state,
-            current_count=initial_count,
-            threshold=policy.compression.trigger_token_threshold,
         )
         compression_messages, compression_report = maybe_compress_messages(
             messages=working_messages,
-            policy=policy.compression,
+            policy=compression_policy,
             node_id=node_id,
             token_counter=lambda items: count_messages_tokens(items, services=services),
-            trigger_count=trigger_count,
+            trigger_count=effective_count,
             on_start=lambda report: emit_context_event(
                 services=services,
                 state=working_state,
@@ -119,7 +129,8 @@ class ContextSystemRuntime:
                 state=working_state,
                 node_id=node_id,
                 count=compressed_count,
-                compression_threshold_tokens=policy.compression.trigger_token_threshold,
+                compression_threshold_tokens=trigger_limit,
+                context_window_tokens=context_window_tokens,
                 source="context_prepare.after_compression",
             )
         if not enable_dynamic_evidence:
@@ -443,26 +454,47 @@ def _state_with_turn_evidence(*, state: Any, node_id: str, frame: LLMContextFram
     return updated
 
 
-def _compression_trigger_count(
+def _effective_context_token_count(
     *,
     state: Any,
-    current_count: TokenCountResult,
-    threshold: int,
-) -> TokenCountResult | None:
-    if current_count.token_count is not None:
-        return current_count
+    measured_count: TokenCountResult,
+) -> TokenCountResult:
     budget = dict(getattr(getattr(state, "context", None), "token_budget", {}) or {})
-    value = budget.get("last_provider_input_tokens")
+    value = (
+        budget.get("last_provider_context_tokens_after_call")
+        or budget.get("last_provider_total_tokens")
+        or budget.get("last_provider_input_tokens")
+    )
     if not isinstance(value, int) and not isinstance(value, float):
-        return current_count
+        return measured_count
     token_count = int(value)
-    if token_count < threshold:
-        return current_count
+    if token_count <= 0:
+        return measured_count
     return TokenCountResult(
         token_count=token_count,
-        method="previous_provider_usage",
-        model_role=str(budget.get("last_provider_model_role") or current_count.model_role or "main"),
+        method="previous_provider_usage_after_call",
+        model_role=str(budget.get("last_provider_model_role") or measured_count.model_role or "main"),
     )
+
+
+def _compression_trigger_limit(*, policy: ContextPolicy, context_window_tokens: int | None) -> int:
+    configured = int(policy.compression.trigger_token_threshold)
+    if context_window_tokens is None:
+        return configured
+    return min(configured, context_window_tokens)
+
+
+def _context_window_token_limit(services: Any) -> int | None:
+    resources = getattr(services, "runtime_resources", None)
+    if isinstance(resources, dict):
+        value = resources.get("context_window_tokens")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed > 0:
+            return parsed
+    return context_window_tokens_from_env()
 
 
 def _emit_context_window_if_available(
@@ -472,6 +504,7 @@ def _emit_context_window_if_available(
     node_id: str,
     count: TokenCountResult,
     compression_threshold_tokens: int,
+    context_window_tokens: int | None,
     source: str,
 ) -> None:
     if count.token_count is None:
@@ -486,6 +519,7 @@ def _emit_context_window_if_available(
             token_count=count.token_count,
             token_count_method=count.method,
             compression_threshold_tokens=compression_threshold_tokens,
+            context_window_tokens=context_window_tokens,
             model_role=count.model_role,
             source=source,
         ),

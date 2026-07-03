@@ -157,6 +157,11 @@ class FactorySessionManager:
                 continue
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
 
+    def delete(self, session_id: str) -> FactorySessionRecord:
+        record = self.load(session_id)
+        self._path(record.session_id).unlink(missing_ok=True)
+        return record
+
     def set_mode(self, session_id: str, mode: FactorySessionMode | None) -> FactorySessionRecord:
         record = self.load(session_id)
         record.current_mode = mode

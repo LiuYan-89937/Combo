@@ -131,6 +131,16 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         )
         return {"event": event}
 
+    @router.delete("/{package_id}/sessions/{session_id}")
+    async def delete_agent_package_session(package_id: str, session_id: str):
+        event = await send_and_wait(
+            runtime_bridge,
+            "delete_agent_package_session",
+            {"package_id": package_id, "session_id": session_id},
+            {"agent_package_session_deleted"},
+        )
+        return {"event": event}
+
     return router
 
 

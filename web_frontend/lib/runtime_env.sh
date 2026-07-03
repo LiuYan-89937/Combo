@@ -19,12 +19,78 @@ web_require_project_root() {
     [[ -f "${PROJECT_ROOT}/pyproject.toml" ]] || web_fail "pyproject.toml not found at ${PROJECT_ROOT}"
 }
 
+web_warn() {
+    echo "WARNING: $*" >&2
+}
+
 web_require_command() {
     local command_name="$1"
     local install_hint="$2"
     if ! command -v "${command_name}" >/dev/null 2>&1; then
         web_fail "${command_name} not found. ${install_hint}"
     fi
+}
+
+web_check_env_configuration() {
+    local env_file="${PROJECT_ROOT}/.env"
+    local example_file="${PROJECT_ROOT}/.env.example"
+    local missing=()
+    local name
+
+    echo "Checking local environment configuration..."
+
+    if [[ ! -f "${env_file}" ]]; then
+        web_warn ".env not found. Copy ${example_file} to .env and fill in model configuration."
+        echo "         cp .env.example .env"
+        return 0
+    fi
+
+    local required_vars=(
+        "AGENTFACTORY_MODEL_BASE_URL"
+        "AGENTFACTORY_MODEL_API_KEY"
+        "AGENTFACTORY_MAIN_MODEL"
+        "AGENTFACTORY_TASK_MODEL"
+        "AGENTFACTORY_COMPRESSION_MODEL"
+        "AGENTFACTORY_EMBEDDING_BASE_URL"
+        "AGENTFACTORY_EMBEDDING_API_KEY"
+        "AGENTFACTORY_EMBEDDING_MODEL"
+    )
+
+    for name in "${required_vars[@]}"; do
+        if [[ -z "$(web_env_file_value "${env_file}" "${name}")" ]]; then
+            missing+=("${name}")
+        fi
+    done
+
+    if (( ${#missing[@]} == 0 )); then
+        echo ".env looks configured"
+        return 0
+    fi
+
+    web_warn ".env exists but the following model settings are empty:"
+    for name in "${missing[@]}"; do
+        echo "         - ${name}"
+    done
+    echo "         The services can still start, but model calls/RAG may fail until these are filled."
+}
+
+web_env_file_value() {
+    local env_file="$1"
+    local name="$2"
+    local line
+    line="$(grep -E "^[[:space:]]*${name}[[:space:]]*=" "${env_file}" | tail -n 1 || true)"
+    if [[ -z "${line}" ]]; then
+        return 0
+    fi
+    line="${line#*=}"
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    line="${line%\"}"
+    line="${line#\"}"
+    line="${line%\'}"
+    line="${line#\'}"
+    printf '%s' "${line}"
 }
 
 web_sync_python_dependencies() {
@@ -53,6 +119,9 @@ web_sync_frontend_dependencies() {
             else
                 npm install
             fi
+        elif [[ ! -x "node_modules/.bin/vite" ]]; then
+            echo "node_modules exists but required frontend binaries are missing; running npm install..."
+            npm install
         else
             echo "node_modules already exists"
         fi
@@ -65,11 +134,11 @@ web_ensure_runtime_image() {
         return
     fi
 
-    web_require_command "docker" "Install Docker Desktop and ensure docker is on PATH."
+    web_require_command "docker" "Install Docker Desktop and ensure docker is on PATH: https://www.docker.com/products/docker-desktop/"
     [[ -f "${RUNTIME_DOCKERFILE}" ]] || web_fail "runtime Dockerfile not found: ${RUNTIME_DOCKERFILE}"
 
     echo "Checking Docker daemon..."
-    docker info >/dev/null || web_fail "Docker daemon is not available. Start Docker Desktop first."
+    docker info >/dev/null || web_fail "Docker daemon is not available. Start Docker Desktop first, then run ./start.sh again."
 
     echo "Checking Docker runtime image: ${RUNTIME_IMAGE}"
     if docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
@@ -77,7 +146,7 @@ web_ensure_runtime_image() {
         return
     fi
 
-    echo "Docker runtime image missing; building ${RUNTIME_IMAGE}..."
+    echo "Docker runtime image missing; building ${RUNTIME_IMAGE} from ${RUNTIME_DOCKERFILE}..."
     local build_args=()
     if [[ -n "${AGENTFACTORY_PYTHON_BASE_IMAGE:-}" ]]; then
         build_args+=(--build-arg "PYTHON_BASE_IMAGE=${AGENTFACTORY_PYTHON_BASE_IMAGE}")

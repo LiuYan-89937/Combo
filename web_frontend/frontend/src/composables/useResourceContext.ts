@@ -2,6 +2,7 @@ import { computed } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useI18n } from '@/composables/useI18n'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 export function useResourceContext() {
   const agentStore = useAgentStore()
@@ -21,7 +22,7 @@ export function useResourceContext() {
     return agentStore.agentPackages.find((pkg) => pkg.package_id === packageId.value) || null
   })
 
-  const packageIdForApi = computed(() => packageId.value || undefined)
+  const packageIdForApi = computed(() => packageId.value || SYSTEM_CHAT_PACKAGE_ID)
   const isAgentContext = computed(() => Boolean(packageId.value))
   const label = computed(() => {
     if (!packageId.value) return t('resource.chat')

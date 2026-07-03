@@ -185,7 +185,7 @@
             <n-radio-group
               :value="toolPermissionPolicy.mode"
               size="small"
-              class="permission-mode-group"
+              class="permission-mode-group soft-segmented-control"
               :disabled="busyKey === 'tool-permissions:mode'"
               @update:value="handlePermissionModeChange"
             >

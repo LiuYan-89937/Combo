@@ -13,9 +13,8 @@ def get_resource_set_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=RESOURCE_SET_TOOL_ID,
             description=(
-                "Track resource paths explored during this session. "
-                "Use action=add to record paths you have read, action=list to review "
-                "what has been explored, action=remove to discard entries."
+                "记录当前会话中已经探索过的资源路径。"
+                "使用 action=add 记录已读取路径，action=list 查看探索记录，action=remove 移除记录项。"
             ),
             entrypoint="agent_factory.tooling.builtins.resource_set.resource_set:run",
             input_schema={

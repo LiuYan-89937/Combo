@@ -3,6 +3,8 @@ from agent_factory.runtime_kernel.persistence.checkpointer import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
     LangGraphCheckpointerHandle,
+    delete_checkpoint_thread,
+    delete_sqlite_checkpoint_thread,
     is_checkpointer_persistent,
 )
 from agent_factory.runtime_kernel.persistence.memory_store import (
@@ -25,5 +27,7 @@ __all__ = [
     "LangGraphStoreHandle",
     "MemoryRecord",
     "SqliteBaseStore",
+    "delete_checkpoint_thread",
+    "delete_sqlite_checkpoint_thread",
     "is_checkpointer_persistent",
 ]

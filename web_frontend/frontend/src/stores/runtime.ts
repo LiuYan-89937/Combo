@@ -269,6 +269,15 @@ export const useRuntimeStore = defineStore('runtime', {
         this._restoreSessionSnapshot(payload)
       } else if (type === 'sessions_listed') {
         this.sessions = payload?.sessions || []
+      } else if (type === 'session_deleted') {
+        const deletedSessionId = String(payload?.session_id || '')
+        this.sessions = payload?.sessions || this.sessions.filter((session: any) => session.session_id !== deletedSessionId)
+        this._deleteConversationScopesForSession(deletedSessionId)
+        if (deletedSessionId && this.activeFactorySessionId === deletedSessionId) {
+          this.activeFactorySessionId = null
+          this.activeConversationScope = null
+          this._clearConversationViewState()
+        }
       } else if (type === 'mode_changed') {
         this._handleModeChanged(event)
       }
@@ -296,6 +305,15 @@ export const useRuntimeStore = defineStore('runtime', {
         this.agentSessions = payload?.sessions || []
       } else if (type === 'agent_package_session_loaded') {
         this._restoreAgentPackageSession(payload?.session, payload?.package_id)
+      } else if (type === 'agent_package_session_deleted') {
+        const deletedSessionId = String(payload?.session_id || '')
+        this.agentSessions = payload?.sessions || this.agentSessions.filter((session: any) => session.session_id !== deletedSessionId)
+        this._deleteConversationScopesForSession(deletedSessionId)
+        if (deletedSessionId && this.activeAgentSessionId === deletedSessionId) {
+          this.activeAgentSessionId = null
+          this.activeConversationScope = null
+          this._clearConversationViewState()
+        }
       }
 
       // Run lifecycle
@@ -1029,6 +1047,16 @@ export const useRuntimeStore = defineStore('runtime', {
       const previousScope = this.activeConversationScope
       if (!previousScope || previousScope === nextScope) return
       this._renameConversationScope(previousScope, nextScope)
+    },
+
+    _deleteConversationScopesForSession(sessionId: string) {
+      if (!sessionId) return
+      const suffix = `:${sessionId}`
+      Object.keys(this.conversationScopes)
+        .filter((scope) => scope.endsWith(suffix))
+        .forEach((scope) => {
+          delete this.conversationScopes[scope]
+        })
     },
 
     _promoteAgentPackageScopeFromEvent(event: FactoryFrontendEvent) {

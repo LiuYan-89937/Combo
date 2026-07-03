@@ -31,7 +31,7 @@ export const useSessionStore = defineStore('session', () => {
     sessions.value = newSessions
   }
 
-  function setCurrentSession(sessionId: string): void {
+  function setCurrentSession(sessionId: string | null): void {
     currentSessionId.value = sessionId
   }
 

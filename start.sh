@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# One-command startup for the FastAgentFactory web frontend.
+# One-command startup for FastAgentFactory Web.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/runtime_env.sh"
+source "${SCRIPT_DIR}/web_frontend/lib/runtime_env.sh"
 
 web_require_project_root
 cd "${PROJECT_ROOT}"
 
 echo "==================================="
-echo "FastAgentFactory Web Frontend"
+echo "FastAgentFactory Web"
 echo "==================================="
 echo ""
 
+web_check_env_configuration
+echo ""
 web_sync_python_dependencies
 web_sync_frontend_dependencies
 web_ensure_runtime_image

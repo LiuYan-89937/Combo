@@ -18,6 +18,9 @@
           <n-icon><Close /></n-icon>
         </n-button>
       </div>
+      <n-text depth="3" class="attachment-count">
+        {{ t('attachments.limitHint', { count: attachments.length, max: maxAttachments }) }}
+      </n-text>
     </div>
 
     <!-- 输入框 -->
@@ -38,7 +41,12 @@
     <!-- 操作栏 -->
     <div class="input-actions">
       <div class="left-actions">
-        <n-button v-if="attachmentsEnabled" text @click="showAttachmentPicker = true" :disabled="disabled">
+        <n-button
+          v-if="attachmentsEnabled"
+          text
+          @click="showAttachmentPicker = true"
+          :disabled="disabled || remainingAttachmentSlots <= 0"
+        >
           <template #icon>
             <n-icon><AttachOutline /></n-icon>
           </template>
@@ -124,6 +132,8 @@
     <AttachmentPickerModal
       v-if="attachmentsEnabled"
       v-model:show="showAttachmentPicker"
+      :current-count="attachments.length"
+      :max-count="maxAttachments"
       @attach="handleAttach"
     />
   </div>
@@ -131,14 +141,15 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { NInput, NButton, NIcon, NText, NPopover, NSelect } from 'naive-ui'
+import { NInput, NButton, NIcon, NText, NPopover, NSelect, useMessage } from 'naive-ui'
 import { AttachOutline, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
 import AttachmentPickerModal from './AttachmentPickerModal.vue'
 import { useI18n } from '@/composables/useI18n'
-import { extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
+import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 
 const { t } = useI18n()
+const messageApi = useMessage()
 
 const props = withDefaults(
   defineProps<{
@@ -176,6 +187,8 @@ const inputText = ref('')
 const attachments = ref<RuntimeAttachmentInput[]>([])
 const showAttachmentPicker = ref(false)
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
+const maxAttachments = MAX_RUNTIME_ATTACHMENTS
+const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length))
 
 const canSend = computed(() => {
   const hasText = inputText.value.trim().length > 0
@@ -194,8 +207,16 @@ async function handlePaste(e: ClipboardEvent) {
   const files = pastedImageFiles(e, pastedImageName)
   if (files.length === 0) return
   e.preventDefault()
-  const pastedAttachments = await Promise.all(files.map((file) => runtimeFileAttachmentFromFile(file)))
-  attachments.value.push(...pastedAttachments)
+  const selectedFiles = files.slice(0, remainingAttachmentSlots.value)
+  if (selectedFiles.length === 0) {
+    showAttachmentLimitReached()
+    return
+  }
+  const pastedAttachments = await Promise.all(selectedFiles.map((file) => runtimeFileAttachmentFromFile(file)))
+  appendAttachments(pastedAttachments)
+  if (selectedFiles.length < files.length) {
+    showAttachmentLimitPartial(selectedFiles.length)
+  }
 }
 
 function handleSend() {
@@ -217,9 +238,31 @@ function handleModelSelect(value: string) {
   emit('update:selectedModelProfileId', value || '')
 }
 
-function handleAttach(attachment: RuntimeAttachmentInput) {
+function handleAttach(attachment: RuntimeAttachmentInput | RuntimeAttachmentInput[]) {
   if (!props.attachmentsEnabled) return
-  attachments.value.push(attachment)
+  appendAttachments(Array.isArray(attachment) ? attachment : [attachment])
+}
+
+function appendAttachments(nextAttachments: RuntimeAttachmentInput[]) {
+  if (nextAttachments.length === 0) return
+  const remaining = remainingAttachmentSlots.value
+  if (remaining <= 0) {
+    showAttachmentLimitReached()
+    return
+  }
+  const accepted = nextAttachments.slice(0, remaining)
+  attachments.value.push(...accepted)
+  if (accepted.length < nextAttachments.length) {
+    showAttachmentLimitPartial(accepted.length)
+  }
+}
+
+function showAttachmentLimitReached() {
+  messageApi.warning(t('attachments.limitReached', { max: maxAttachments }))
+}
+
+function showAttachmentLimitPartial(accepted: number) {
+  messageApi.warning(t('attachments.limitPartial', { accepted, max: maxAttachments }))
 }
 
 function isImageAttachment(attachment: RuntimeAttachmentInput) {
@@ -317,6 +360,13 @@ defineExpose({
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-count {
+  align-self: center;
+  margin-left: auto;
+  font-size: var(--app-font-sm);
   white-space: nowrap;
 }
 
