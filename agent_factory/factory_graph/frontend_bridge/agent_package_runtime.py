@@ -13,15 +13,13 @@ import re
 import shlex
 import shutil
 import subprocess
-import tempfile
 from typing import Any, Iterator
 from uuid import uuid4
-import zipfile
 
 from agent_factory.document_processing import EMAIL_EXTENSIONS, OFFICE_EXTENSIONS, parse_file
 from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
-from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
+from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.extensions.loader import (
     AgentInstanceExtensionConfigLoader,
@@ -43,6 +41,9 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     AgentRuntimeLaunchError,
     DockerAgentRuntimeLauncher,
 )
+from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
+    AgentPackageRepository,
+)
 from agent_factory.factory_graph.frontend_bridge.container_runtime_handle import AgentRuntimeContainerHandle
 from agent_factory.factory_graph.frontend_bridge.runtime_events import node_event, run_failed_event
 from agent_factory.factory_graph.frontend_bridge.system_package_runtime_handle import SystemPackageRuntimeHandle
@@ -56,8 +57,6 @@ from agent_factory.tooling.providers import (
 from agent_factory.tooling.skills import parse_skill_directory
 
 
-DEFAULT_AGENT_PACKAGE_ROOT = ".agentfactory/packages"
-DEFAULT_SYSTEM_PACKAGE_ROOT = "SystemPackage"
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
 WORKSPACE_BINARY_PREVIEW_EXTENSIONS = {
     ".pdf",
@@ -101,16 +100,16 @@ class AgentPackageRuntimeManager:
         *,
         package_root: str | Path | None = None,
         system_package_root: str | Path | None = None,
+        repository: AgentPackageRepository | None = None,
         launcher: DockerAgentRuntimeLauncher | None = None,
         emit: Emit | None = None,
     ) -> None:
         configured_root = package_root or os.getenv("AGENTFACTORY_PACKAGE_ROOT")
-        self.package_root = Path(configured_root).expanduser() if configured_root else _default_package_root()
         configured_system_root = system_package_root or os.getenv("AGENTFACTORY_SYSTEM_PACKAGE_ROOT")
-        self.system_package_root = (
-            Path(configured_system_root).expanduser() if configured_system_root else _default_system_package_root()
+        self.repository = repository or AgentPackageRepository.from_paths(
+            package_root=configured_root,
+            system_package_root=configured_system_root,
         )
-        self.loader = AgentPackageLoader()
         self.launcher = launcher or DockerAgentRuntimeLauncher()
         self.idle_timeout_seconds = _env_int(
             "AGENTFACTORY_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS",
@@ -132,11 +131,17 @@ class AgentPackageRuntimeManager:
             handle.set_emit(emit)
 
     def list_packages(self) -> list[dict[str, Any]]:
-        self.package_root.mkdir(parents=True, exist_ok=True)
-        packages: list[dict[str, Any]] = []
-        for manifest_path in sorted(self.package_root.glob("*/agent_package.json")):
-            packages.append(self._package_summary(manifest_path))
+        packages = [
+            self._package_summary(manifest_path)
+            for manifest_path in self.repository.manifest_paths()
+        ]
         return sorted(packages, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+
+    def load_package(self, package_id: str) -> LoadedAgentPackage:
+        return self.repository.load(package_id)
+
+    def runtime_root_for_package(self, package_id: str) -> Path:
+        return _host_runtime_root(package_id)
 
     def list_instance_statuses(self) -> list[dict[str, Any]]:
         package_ids = {item.get("package_id") for item in self.list_packages()}
@@ -148,7 +153,7 @@ class AgentPackageRuntimeManager:
         ]
 
     def package_instance_status(self, package_id: str) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         backend = "host" if _is_host_system_package(package) else "container"
         handle = self._system_handles.get(package_id) if backend == "host" else self._containers.get(package_id)
         running = bool(handle is not None and getattr(handle, "is_running", False))
@@ -180,7 +185,7 @@ class AgentPackageRuntimeManager:
         *,
         request_id: str | None = None,
     ) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         initializing_status = self._instance_status_payload(
             package_id=package_id,
             package=package,
@@ -291,7 +296,7 @@ class AgentPackageRuntimeManager:
         payload: dict[str, Any],
         request_id: str | None = None,
     ) -> Iterator[tuple[str, Any]]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         command = {
             "type": "scheduler_manage",
             "request_id": request_id or uuid4().hex,
@@ -304,39 +309,21 @@ class AgentPackageRuntimeManager:
 
     def delete_package(self, package_id: str) -> dict[str, Any]:
         self._close_container(package_id)
-        target = self._package_dir(package_id, include_system_packages=False)
-        if not target.exists():
-            raise FileNotFoundError(f"agent package not found: {package_id}")
-        shutil.rmtree(target)
-        return {"package_id": package_id, "deleted": True}
+        return self.repository.delete_user_package(package_id)
 
     def export_package_archive(self, package_id: str) -> Path:
-        target = self._package_dir(package_id, include_system_packages=False)
-        manifest_path = target / "agent_package.json"
-        if not manifest_path.is_file():
-            raise FileNotFoundError(f"agent package not found: {package_id}")
-        archive_stem = _safe_archive_stem(package_id)
-        with tempfile.NamedTemporaryFile(prefix=f"{archive_stem}-", suffix=".zip", delete=False) as handle:
-            archive_path = Path(handle.name)
-        root_name = target.name
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(item for item in target.rglob("*") if item.is_file()):
-                if path.is_symlink():
-                    continue
-                relative_path = Path(root_name) / path.relative_to(target)
-                archive.write(path, relative_path.as_posix())
-        return archive_path
+        return self.repository.export_user_package_archive(package_id)
 
     def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         return self._list_sessions_for_loaded_package(package)
 
     def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         return self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
 
     def workspace_roots(self, package_id: str) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         roots = self._workspace_roots(package_id, package)
         return {
             "package_id": package_id,
@@ -353,7 +340,7 @@ class AgentPackageRuntimeManager:
         scope: str = "workdir",
         relative_path: str = "",
     ) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         root = self._workspace_scope_root(package_id, package, scope)
         target = _safe_workspace_path(root, relative_path)
         if not target.exists():
@@ -372,7 +359,7 @@ class AgentPackageRuntimeManager:
         relative_path: str,
         max_chars: int = 20000,
     ) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         root = self._workspace_scope_root(package_id, package, scope)
         target = _safe_workspace_path(root, relative_path)
         if not target.is_file():
@@ -423,7 +410,7 @@ class AgentPackageRuntimeManager:
         scope: str = "workdir",
         relative_path: str,
     ) -> Path:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         root = self._workspace_scope_root(package_id, package, scope)
         target = _safe_workspace_path(root, relative_path)
         if not target.is_file():
@@ -431,7 +418,7 @@ class AgentPackageRuntimeManager:
         return target
 
     def extension_config_summary(self, package_id: str) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         extension_root = _extension_root_for_package(package_id, package)
         bundle = _load_extension_bundle(extension_root, package=package)
         return {
@@ -446,7 +433,7 @@ class AgentPackageRuntimeManager:
         }
 
     def extensions_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         extension_root = _extension_root_for_package(package_id, package)
         if action == "list":
             return self.extension_config_summary(package_id)
@@ -496,7 +483,7 @@ class AgentPackageRuntimeManager:
         raise ValueError(f"unsupported extensions action: {action}")
 
     def knowledge_runtime_for_package(self, package_id: str) -> KnowledgeRuntime:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         contract = package.contracts.get("knowledge") if isinstance(package.contracts, dict) else None
         config_payload = contract.get("config", {}) if isinstance(contract, dict) else {}
         config = KnowledgeContractConfig.model_validate(config_payload or {})
@@ -584,7 +571,7 @@ class AgentPackageRuntimeManager:
         session_id: str | None = None,
         first_user_input: str | None = None,
     ) -> dict[str, Any]:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         manager = self._session_manager_for_package(package_id, package)
         if session_id:
             try:
@@ -610,7 +597,7 @@ class AgentPackageRuntimeManager:
         attachments: Any = None,
         require_ready: bool = False,
     ) -> AgentPackageStreamRun:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         del require_ready
         resolved_request_id = request_id or uuid4().hex
         attachment_result = self._prepare_runtime_attachments(
@@ -675,7 +662,7 @@ class AgentPackageRuntimeManager:
         resume_payload: dict[str, Any] | None = None,
         request_id: str | None = None,
     ) -> AgentPackageStreamRun:
-        package = self.loader.load_path(self._manifest_path(package_id))
+        package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
         command = {
             "type": "resume_interrupt",
@@ -702,7 +689,7 @@ class AgentPackageRuntimeManager:
     def _package_summary(self, manifest_path: Path) -> dict[str, Any]:
         package_id = manifest_path.parent.name
         try:
-            package = self.loader.load_path(manifest_path)
+            package = self.repository.load_manifest(manifest_path)
             report = _read_json_object(manifest_path.parent / "package_report.json")
             sessions = self._list_sessions_for_loaded_package(package)
             sandbox = _sandbox_summary(package.sandbox_contract)
@@ -1065,18 +1052,10 @@ class AgentPackageRuntimeManager:
             handle.close()
 
     def _manifest_path(self, package_id: str) -> Path:
-        return self._package_dir(package_id) / "agent_package.json"
+        return self.repository.manifest_path(package_id)
 
     def _package_dir(self, package_id: str, *, include_system_packages: bool = True) -> Path:
-        if not package_id or "/" in package_id or "\\" in package_id or package_id in {".", ".."}:
-            raise ValueError(f"invalid agent package id: {package_id}")
-        user_target = _safe_child(self.package_root, package_id, label="agent package")
-        if user_target.exists() or not include_system_packages:
-            return user_target
-        system_target = _safe_child(self.system_package_root, package_id, label="system package")
-        if system_target.exists():
-            return system_target
-        return user_target
+        return self.repository.package_dir(package_id, include_system_packages=include_system_packages)
 
     def _workspace_roots(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Path]:
         runtime_root = _host_runtime_root(package_id)
@@ -1236,33 +1215,6 @@ def _scoped_runtime_event(chunk: Any, *, package_id: str) -> FactoryFrontendEven
     if payload is None:
         return item
     return item.model_copy(update={"payload": {**payload, "package_id": package_id}})
-
-
-def _default_package_root() -> Path:
-    return project_root() / DEFAULT_AGENT_PACKAGE_ROOT
-
-
-def _default_system_package_root() -> Path:
-    return project_root() / DEFAULT_SYSTEM_PACKAGE_ROOT
-
-
-def _default_project_root() -> Path:
-    return project_root()
-
-
-def _safe_child(root: Path, child_name: str, *, label: str) -> Path:
-    resolved_root = root.resolve()
-    target = (resolved_root / child_name).resolve()
-    try:
-        target.relative_to(resolved_root)
-    except ValueError as exc:
-        raise ValueError(f"{label} escapes package root: {child_name}") from exc
-    return target
-
-
-def _safe_archive_stem(value: str) -> str:
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-")
-    return stem or "agent-package"
 
 
 def _package_fingerprint(package: LoadedAgentPackage) -> str:

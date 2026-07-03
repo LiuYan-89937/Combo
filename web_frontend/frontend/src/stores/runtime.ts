@@ -851,6 +851,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentPlan = null
       this.contextActivity = { status: 'idle' }
       this.contextWindow = null
+      this.memoryActivity = { status: 'idle' }
       this.modelStreams = {}
       this.tools = []
       this.pendingInterrupt = null
@@ -871,6 +872,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentPlan = null
       this.contextActivity = { status: 'idle' }
       this.contextWindow = null
+      this.memoryActivity = { status: 'idle' }
       this.modelStreams = {}
       this.tools = []
       this.pendingInterrupt = null
@@ -929,6 +931,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentPlan = null
       this.contextActivity = { status: 'idle' }
       this.contextWindow = null
+      this.memoryActivity = { status: 'idle' }
       this.transcript = []
       this.conversationTurns = []
       this.timeline = []
@@ -971,6 +974,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentPlan = restored.currentPlan
       this.contextActivity = restored.contextActivity
       this.contextWindow = restored.contextWindow
+      this.memoryActivity = restored.memoryActivity
       this.modelStreams = restored.modelStreams
       this.activeAgentSessionId = restored.activeAgentSessionId
     },
@@ -1056,6 +1060,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentPlan = null
       this.contextActivity = { status: 'idle' }
       this.contextWindow = null
+      this.memoryActivity = { status: 'idle' }
       this.transcript = []
       this.conversationTurns = []
       this.timeline = []
@@ -1122,6 +1127,8 @@ export const useRuntimeStore = defineStore('runtime', {
       const timestamp = new Date().toISOString()
       const request = this.activeRequests[targetRequestId]
       if (request) {
+        request.status = 'stopped'
+        request.completedAt = timestamp
         request.payload = {
           ...(request.payload || {}),
           stop_requested_at: timestamp,
@@ -1138,6 +1145,12 @@ export const useRuntimeStore = defineStore('runtime', {
       turn.metadata = {
         ...(turn.metadata || {}),
         stop_requested_at: timestamp,
+      }
+      turn.status = 'stopped'
+      turn.completedAt = timestamp
+      if (this.activeRequestId === targetRequestId) {
+        this.activeRequestId = null
+        this.runStatus = 'stopped'
       }
     },
 

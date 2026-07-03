@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool
 
 from agent_factory.create_agent.capability_inventory import render_static_capability_inventory
 from agent_factory.create_agent.prompt_builder import CreateAgentPromptPayload
+from agent_factory.models.message_layout import system_messages_first
 
 
 def build_evolution_messages(
@@ -82,7 +83,7 @@ def build_evolution_prompt(
     capability_inventory: dict[str, Any] | None = None,
 ) -> CreateAgentPromptPayload:
     context = state.get("evolution_context") if isinstance(state.get("evolution_context"), dict) else {}
-    messages = [
+    messages = system_messages_first([
         *build_evolution_messages(
             package_id=str(context.get("package_id") or ""),
             package_path=str(state.get("workspace_path") or context.get("package_path") or ""),
@@ -94,7 +95,7 @@ def build_evolution_prompt(
             tools=tools,
         ),
         *list(state.get("messages") or []),
-    ]
+    ])
     stable = {
         "tool_names": sorted(str(getattr(tool, "name", "")) for tool in tools),
         "capability_inventory": render_static_capability_inventory(capability_inventory or {}),

@@ -21,6 +21,7 @@ from agent_factory.tooling.skillhub import ensure_global_skillhub_cli
 from web_frontend.backend.routes.agent_packages import create_agent_package_router
 from web_frontend.backend.routes.extensions import create_extensions_router
 from web_frontend.backend.routes.knowledge import create_knowledge_router
+from web_frontend.backend.routes.memory import create_memory_router
 from web_frontend.backend.routes.model_pool import create_model_pool_router
 from web_frontend.backend.routes.runtime import create_runtime_router
 from web_frontend.backend.routes.scheduler import create_scheduler_router
@@ -46,6 +47,7 @@ app.include_router(create_runtime_router(runtime_bridge, logger))
 app.include_router(create_agent_package_router(runtime_bridge, logger))
 app.include_router(create_workspace_router(runtime_bridge))
 app.include_router(create_knowledge_router(runtime_bridge))
+app.include_router(create_memory_router(runtime_bridge))
 app.include_router(create_extensions_router(runtime_bridge))
 app.include_router(create_scheduler_router(runtime_bridge))
 app.include_router(create_model_pool_router())

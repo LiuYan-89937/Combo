@@ -9,6 +9,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from agent_factory.models.message_layout import system_messages_first
 from agent_factory.runtime_kernel.adapters.model import (
     ModelRole,
     _bind_tools,
@@ -243,6 +244,7 @@ class ModelOperationService:
             output_json_schema=schema_payload,
             structured_method=effective_structured_method,
         )
+        request_messages = system_messages_first(request_messages)
         input_diagnostics = _structured_input_diagnostics(
             envelope=envelope,
             request_messages=request_messages,
@@ -421,6 +423,7 @@ def _invoke_tool_bound_chat(
     emit_event,
     stream_id: str,
 ) -> Any:
+    messages = system_messages_first(messages)
     stream = getattr(model, "stream", None)
     if not callable(stream):
         response = model.invoke(messages)

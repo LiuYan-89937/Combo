@@ -27,6 +27,89 @@
       <n-empty v-else :description="t('status.noContext')" size="small" />
     </section>
 
+    <section class="status-section">
+      <div class="section-heading">
+        <div class="section-title compact">{{ t('status.memory') }}</div>
+        <n-button
+          quaternary
+          circle
+          size="small"
+          :loading="memoryLoading"
+          :title="t('status.memoryRefresh')"
+          @click="refreshMemory"
+        >
+          <template #icon>
+            <n-icon><RefreshOutline /></n-icon>
+          </template>
+        </n-button>
+      </div>
+
+      <div class="memory-activity" :class="memoryActivityClass">
+        <span v-if="runtimeStore.memoryActivity.status === 'writing'" class="memory-pulse"></span>
+        <span>{{ memoryActivityText }}</span>
+      </div>
+
+      <div class="memory-query">
+        <n-input
+          v-model:value="memoryQuery"
+          size="small"
+          clearable
+          :placeholder="t('status.memoryQueryPlaceholder')"
+          @keyup.enter="refreshMemory"
+        />
+        <n-button secondary size="small" :loading="memoryLoading" @click="refreshMemory">
+          <template #icon>
+            <n-icon><SearchOutline /></n-icon>
+          </template>
+        </n-button>
+      </div>
+
+      <div v-if="memoryError" class="memory-error">{{ memoryError }}</div>
+
+      <n-spin :show="memoryLoading" size="small">
+        <n-empty
+          v-if="!memoryItems.length && !memoryLoading"
+          :description="t('status.memoryEmpty')"
+          size="small"
+        />
+        <div v-else class="memory-list">
+          <div v-for="item in memoryItems" :key="item.memory_id" class="memory-item">
+            <div class="memory-item-header">
+              <n-tag size="small" :bordered="false">{{ memoryKindLabel(item.kind) }}</n-tag>
+              <span class="memory-score">{{ t('status.memoryScore', { score: percentLabel(item.score) }) }}</span>
+              <n-popconfirm
+                :positive-text="t('common.delete')"
+                :negative-text="t('common.cancel')"
+                @positive-click="deleteMemoryItem(item.memory_id)"
+              >
+                <template #trigger>
+                  <n-button
+                    quaternary
+                    circle
+                    size="tiny"
+                    :loading="isDeletingMemory(item.memory_id)"
+                    :title="t('status.memoryDelete')"
+                  >
+                    <template #icon>
+                      <n-icon><TrashOutline /></n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                {{ t('status.memoryDeleteConfirm') }}
+              </n-popconfirm>
+            </div>
+            <div class="memory-content">{{ item.content }}</div>
+            <div class="memory-meta">
+              <span v-if="memoryConfidence(item) !== null">
+                {{ t('status.memoryConfidence', { score: percentLabel(memoryConfidence(item)) }) }}
+              </span>
+              <span v-if="item.updated_at">{{ formatMemoryTime(item.updated_at) }}</span>
+            </div>
+          </div>
+        </div>
+      </n-spin>
+    </section>
+
     <section v-if="runtimeStore.currentPlan" class="status-section">
       <div class="section-title">{{ t('right.plan') }}</div>
       <PlanPanel compact />
@@ -52,9 +135,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { NEmpty, NTag } from 'naive-ui'
+import { computed, onMounted, ref, watch } from 'vue'
+import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSpin, NTag } from 'naive-ui'
+import { RefreshOutline, SearchOutline, TrashOutline } from '@/components/icons'
+import { memoryApi, type MemoryContextItemView } from '@/api/memory'
 import { useI18n } from '@/composables/useI18n'
+import { useResourceContext } from '@/composables/useResourceContext'
 import { useRuntimeStore } from '@/stores/runtime'
 import PlanPanel from '@/components/plan/PlanPanel.vue'
 import type { ToolActivity } from '@/types/protocol'
@@ -68,7 +154,14 @@ import {
 } from '@/utils/contextWindowMeter'
 
 const runtimeStore = useRuntimeStore()
+const resourceContext = useResourceContext()
 const { t } = useI18n()
+const memoryQuery = ref('')
+const memoryItems = ref<MemoryContextItemView[]>([])
+const memoryLoading = ref(false)
+const memoryError = ref('')
+const deletingMemoryIds = ref<Record<string, boolean>>({})
+let memoryRequestSerial = 0
 
 const contextWindow = computed(() => runtimeStore.contextWindow)
 const contextWindowPercent = computed(() => (
@@ -96,6 +189,135 @@ const contextThresholdMarker = computed(() => {
   const percent = contextWindowThresholdPercent(contextWindow.value)
   return percent === null ? '' : `${percent}%`
 })
+const memoryActivityText = computed(() => {
+  const activity = runtimeStore.memoryActivity
+  const payload = activity.payload || {}
+  if (activity.status === 'writing') {
+    return t('status.memoryWriting')
+  }
+  if (activity.status === 'failed') {
+    return payload.error ? t('status.memoryFailedWithReason', { reason: String(payload.error) }) : t('status.memoryFailed')
+  }
+  if (activity.eventType === 'memory_retrieval_completed' || activity.eventType === 'memory_injection_completed') {
+    return t('status.memoryRetrieved', { count: Number(payload.item_count || 0) })
+  }
+  if (activity.eventType === 'memory_write_completed') {
+    return t('status.memoryWriteCompleted')
+  }
+  return t('status.memoryIdle')
+})
+const memoryActivityClass = computed(() => ({
+  writing: runtimeStore.memoryActivity.status === 'writing',
+  failed: runtimeStore.memoryActivity.status === 'failed',
+  completed: runtimeStore.memoryActivity.status === 'completed',
+}))
+
+async function refreshMemory() {
+  const serial = ++memoryRequestSerial
+  memoryLoading.value = true
+  memoryError.value = ''
+  try {
+    const response = await memoryApi.query(
+      memoryQuery.value.trim(),
+      resourceContext.packageIdForApi.value,
+      8,
+    )
+    if (serial !== memoryRequestSerial) return
+    memoryItems.value = [...(response.items || [])].sort(memorySort)
+  } catch (error) {
+    if (serial !== memoryRequestSerial) return
+    memoryItems.value = []
+    memoryError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (serial === memoryRequestSerial) {
+      memoryLoading.value = false
+    }
+  }
+}
+
+async function deleteMemoryItem(memoryId: string) {
+  deletingMemoryIds.value = { ...deletingMemoryIds.value, [memoryId]: true }
+  memoryError.value = ''
+  try {
+    await memoryApi.deleteItem(memoryId, resourceContext.packageIdForApi.value)
+    memoryItems.value = memoryItems.value.filter((item) => item.memory_id !== memoryId)
+    await refreshMemory()
+  } catch (error) {
+    memoryError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    const next = { ...deletingMemoryIds.value }
+    delete next[memoryId]
+    deletingMemoryIds.value = next
+  }
+}
+
+function isDeletingMemory(memoryId: string): boolean {
+  return Boolean(deletingMemoryIds.value[memoryId])
+}
+
+function memorySort(a: MemoryContextItemView, b: MemoryContextItemView): number {
+  const scoreDiff = numericScore(b.score) - numericScore(a.score)
+  if (scoreDiff !== 0) return scoreDiff
+  return String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
+}
+
+function numericScore(value: unknown): number {
+  const score = Number(value)
+  return Number.isFinite(score) ? score : 0
+}
+
+function memoryConfidence(item: MemoryContextItemView): number | null {
+  const score = Number(item.metadata?.confidence)
+  return Number.isFinite(score) ? score : null
+}
+
+function percentLabel(value: unknown): string {
+  return `${Math.round(numericScore(value) * 100)}%`
+}
+
+function memoryKindLabel(kind: string): string {
+  if (kind === 'preference') return t('status.memoryKind.preference')
+  if (kind === 'decision') return t('status.memoryKind.decision')
+  if (kind === 'constraint') return t('status.memoryKind.constraint')
+  if (kind === 'artifact') return t('status.memoryKind.artifact')
+  if (kind === 'fact') return t('status.memoryKind.fact')
+  return kind || t('common.unknown')
+}
+
+function formatMemoryTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+onMounted(() => {
+  refreshMemory()
+})
+
+watch(
+  () => resourceContext.packageIdForApi.value,
+  () => refreshMemory(),
+)
+
+watch(
+  () => memoryActivityFingerprint(runtimeStore.memoryActivity),
+  () => {
+    const eventType = runtimeStore.memoryActivity.eventType
+    if (eventType === 'memory_write_completed' || eventType === 'memory_write_failed') {
+      refreshMemory()
+    }
+  },
+)
+
+function memoryActivityFingerprint(activity: { eventType?: string, payload?: Record<string, any> }): string {
+  const payload = activity.payload || {}
+  return [
+    activity.eventType || '',
+    payload.job_id || '',
+    payload.duration_ms || '',
+    payload.updated_at || '',
+  ].join(':')
+}
 
 function toolStatusLabel(tool: ToolActivity): string {
   const status = toolActivityDisplayStatus(tool)
@@ -154,6 +376,18 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   color: var(--app-text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.section-title.compact {
+  margin-bottom: 0;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-md);
 }
 
 .context-meter {
@@ -230,6 +464,101 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   font-variant-numeric: tabular-nums;
 }
 
+.memory-activity {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+  min-height: 26px;
+  padding: var(--app-space-xs) var(--app-space-sm);
+  margin-bottom: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-muted);
+  background: var(--app-surface-muted);
+  font-size: var(--app-font-sm);
+  line-height: 18px;
+}
+
+.memory-activity.writing {
+  color: var(--app-text);
+  border-color: var(--app-text-muted);
+}
+
+.memory-activity.failed {
+  color: var(--app-error);
+  border-color: color-mix(in srgb, var(--app-error) 35%, var(--app-border));
+}
+
+.memory-pulse {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  animation: memory-pulse 1s ease-in-out infinite;
+}
+
+.memory-query {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-md);
+}
+
+.memory-error {
+  margin-bottom: var(--app-space-md);
+  color: var(--app-error);
+  font-size: var(--app-font-sm);
+  line-height: 18px;
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-sm);
+}
+
+.memory-item {
+  padding: var(--app-space-sm);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.memory-item-header {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-xs);
+}
+
+.memory-score {
+  min-width: 0;
+  flex: 1;
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.memory-content {
+  color: var(--app-text);
+  font-size: var(--app-font-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-xs);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 .tools-list {
   display: flex;
   flex-direction: column;
@@ -260,5 +589,17 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   white-space: nowrap;
   min-width: 0;
   flex: 1;
+}
+
+@keyframes memory-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 </style>

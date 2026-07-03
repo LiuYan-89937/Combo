@@ -10,6 +10,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
+from agent_factory.models.message_layout import system_messages_first
 from agent_factory.create_agent.capability_inventory import (
     render_static_capability_inventory,
 )
@@ -50,11 +51,11 @@ def build_create_agent_prompt(
     dynamic_system_text = _dynamic_system_context_text(state=state)
     projected_messages = list(state.get("messages") or [])
     stable_system = SystemMessage(content=stable_system_text)
-    messages = [
+    messages = system_messages_first([
         stable_system,
         *([SystemMessage(content=dynamic_system_text)] if dynamic_system_text else []),
         *projected_messages,
-    ]
+    ])
     diagnostics = {
         "version": "create_agent_prompt_diagnostics.v0",
         "section_digests": {

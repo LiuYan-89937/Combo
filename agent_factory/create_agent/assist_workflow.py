@@ -11,6 +11,7 @@ from langgraph.graph.message import add_messages
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
+from agent_factory.models.message_layout import system_messages_first
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_attachments import format_attachments_for_model
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
@@ -118,7 +119,7 @@ def _messages_with_system(state: CreateAgentAssistState, tools: list[BaseTool]) 
             if item
         )
     )
-    return [system, *list(state.get("messages") or [])]
+    return system_messages_first([system, *list(state.get("messages") or [])])
 
 
 def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list[BaseMessage]]:

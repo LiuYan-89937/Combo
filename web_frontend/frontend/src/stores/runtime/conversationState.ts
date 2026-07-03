@@ -9,6 +9,7 @@ type ConversationScopeSource = Pick<
   | 'currentPlan'
   | 'contextActivity'
   | 'contextWindow'
+  | 'memoryActivity'
   | 'modelStreams'
   | 'activeAgentSessionId'
   | 'activeRequestId'
@@ -41,6 +42,10 @@ export function buildConversationScopeState(source: ConversationScopeSource): Co
     contextWindow: source.contextWindow
       ? { ...source.contextWindow, payload: { ...(source.contextWindow.payload || {}) } }
       : null,
+    memoryActivity: {
+      ...source.memoryActivity,
+      payload: { ...(source.memoryActivity.payload || {}) },
+    },
     modelStreams: Object.fromEntries(
       Object.entries(source.modelStreams).map(([key, stream]) => [key, { ...stream }]),
     ),
@@ -81,6 +86,9 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
     contextWindow: saved.contextWindow
       ? { ...saved.contextWindow, payload: { ...(saved.contextWindow.payload || {}) } }
       : null,
+    memoryActivity: saved.memoryActivity
+      ? { ...saved.memoryActivity, payload: { ...(saved.memoryActivity.payload || {}) } }
+      : { status: 'idle' },
     modelStreams: Object.fromEntries(
       Object.entries(saved.modelStreams).map(([key, stream]) => [key, {
         ...stream,

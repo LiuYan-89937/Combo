@@ -39,9 +39,13 @@ export function applyMemoryActivityEvent(
   event: FactoryFrontendEvent,
 ) {
   const type = event.event_type
-  if (type.includes('queued') && !type.includes('failed')) {
+  if (
+    (type.includes('queued') && !type.includes('failed')) ||
+    type === 'memory_segment_prepared' ||
+    type === 'memory_extraction_completed'
+  ) {
     state.memoryActivity.status = 'writing'
-  } else if (type.includes('completed')) {
+  } else if (type.includes('completed') || type === 'memory_retrieval_completed' || type === 'memory_injection_completed') {
     state.memoryActivity.status = 'completed'
   } else if (type.includes('failed')) {
     state.memoryActivity.status = 'failed'

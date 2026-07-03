@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from agent_factory.models.message_layout import system_messages_first
 from agent_factory.runtime_attachments import (
     format_attachments_for_model,
     image_attachment_content_parts,
@@ -94,9 +95,9 @@ def build_runtime_model_input(
         node_id=node_id,
         include_extracted_text_for_images=not image_input_enabled,
     )
-    request_messages: list[Any] = [SystemMessage(content=stable_system), *history_messages]
+    system_messages: list[Any] = [SystemMessage(content=stable_system)]
     if dynamic_evidence:
-        request_messages.append(
+        system_messages.append(
             SystemMessage(
                 content=f"{DYNAMIC_EVIDENCE_HEADER}\n{dynamic_evidence}",
                 additional_kwargs={
@@ -106,6 +107,7 @@ def build_runtime_model_input(
                 },
             )
         )
+    request_messages = system_messages_first([*system_messages, *history_messages])
     return ModelInputEnvelope(
         messages=request_messages,
         stable_prefix_digest=_digest_text(stable_system),

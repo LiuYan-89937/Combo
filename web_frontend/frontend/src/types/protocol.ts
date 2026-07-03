@@ -117,6 +117,7 @@ export interface ConversationScopeState {
   currentPlan: RuntimePlanView | null
   contextActivity: RuntimeActivityView
   contextWindow: ContextWindowView | null
+  memoryActivity: RuntimeActivityView
   modelStreams: Record<string, ModelStream>
   activeAgentSessionId: string | null
   activeRequestId?: string | null
