@@ -13,6 +13,7 @@ from agent_factory.memory_system.schema import MemoryWriteJob
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.state.checkpoint_projection import runtime_checkpoint_payload
 
 
 LANGGRAPH_TECHNICAL_RECURSION_LIMIT = 1000
@@ -342,7 +343,7 @@ def _prepare_resume_state(state: RuntimeState, *, resume_payload: dict[str, Any]
 
 
 def _graph_input(state: RuntimeState) -> dict[str, Any]:
-    payload: dict[str, Any] = {"runtime": state.model_dump(mode="python")}
+    payload: dict[str, Any] = {"runtime": runtime_checkpoint_payload(state, mode="python")}
     user_input = (state.conversation.current_user_input or "").strip()
     if user_input:
         payload["messages"] = [HumanMessage(content=user_input)]

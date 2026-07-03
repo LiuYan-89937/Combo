@@ -29,7 +29,7 @@ Guide changes to an already published AgentPackage. Evolution is not manufacturi
 - If the only needed change is dependency metadata, use `create_agent_authoring(action="configure_dependencies")` with `python_requirements`, `system_packages`, `system_binaries`, or `install_mode`.
 - Do not manually edit managed files such as `agent_package.json`, `assembly_spec.json`, `contracts/*.json`, `tools/*/manifest.json`, package `resources.json`, `knowledge/`, or `state/`.
 - If a required managed-surface field is not supported by the current authoring actions, stop and report the authoring gap. Do not try `edit` or `write` against managed contracts.
-- For `plan_and_execute`, expose package tools only to `executor`. The planner only maintains `runtime_plan`; final_answer does not call tools.
+- For `plan_and_execute`, planner only maintains `runtime_plan`; executor performs plan steps; final_answer may use delivery tools for final artifacts but must not expose `runtime_plan`.
 - If the user goal is unrelated to a failed trace, do not repair the trace unless it blocks validation or runtime readiness.
 - Docker, model-contract, checkpointer, ToolGateway, and RuntimeKernel infrastructure errors are not package evolution targets. Report them as environment/runtime blockers instead of modifying the package to compensate.
 

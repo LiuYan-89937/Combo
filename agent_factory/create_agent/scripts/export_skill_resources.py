@@ -398,7 +398,7 @@ def _assembly_pattern_authoring_example() -> dict[str, Any]:
                 "prompts": {
                     "planner": "Create and maintain an outcome-oriented plan with runtime_plan before execution. Plan steps must describe analysis, verification, construction, or delivery objectives rather than raw tool calls. Put useful tool ids in tool_hints and define acceptance_criteria for each step. Do not call business tools from the planner.",
                     "executor": "Execute the current plan step with package/domain tools first, then update runtime_plan with the result. Use glob, ls, and read for workspace inspection. Use bash, write, or edit only when available package/runtime tools cannot complete the step, and include fallback_reason when calling them.",
-                    "final_answer": "Summarize the completed plan and deliver the final user-facing answer.",
+                    "final_answer": "Summarize the completed plan, use delivery tools if the final artifact still needs generation or verification, and deliver the final user-facing answer.",
                 },
                 "activation": {
                     "workflow_goal": "complete the user's multi-step workflow",

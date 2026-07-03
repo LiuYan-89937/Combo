@@ -532,12 +532,28 @@ class AgentPackageRuntimeManager:
             user_input=user_input,
             attachments=attachments,
         )
+        session_manager = self._session_manager_for_package(package_id, package)
+        if session_id:
+            session = session_manager.load(session_id)
+        else:
+            session = session_manager.create(
+                agent_id=package.assembly_spec.agent.id,
+                first_user_input=user_input,
+            )
+        session = session_manager.touch_turn(
+            session.session_id,
+            request_id=resolved_request_id,
+            first_user_input=user_input,
+            user_input=user_input,
+            attachments=attachment_result.attachments,
+            status="running",
+        )
         command = {
             "type": "run_message",
             "request_id": resolved_request_id,
             "payload": {
                 "message": attachment_result.message,
-                "session_id": session_id,
+                "session_id": session.session_id,
                 "user_config": dict(user_config or {}),
                 "attachments": attachment_result.attachments,
                 "runtime_request": self.request_policy.as_payload(),
@@ -546,12 +562,12 @@ class AgentPackageRuntimeManager:
         if _is_host_system_package(package):
             return AgentPackageStreamRun(
                 package=package,
-                session={"session_id": session_id} if session_id else {},
+                session=session.model_dump(mode="json"),
                 events=self._system_events(package_id, package=package, command=command),
             )
         return AgentPackageStreamRun(
             package=package,
-            session={"session_id": session_id} if session_id else {},
+            session=session.model_dump(mode="json"),
             events=self._container_events(package_id, package=package, command=command),
         )
 

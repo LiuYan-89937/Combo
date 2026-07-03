@@ -288,7 +288,7 @@ def _task_analysis_context(state: Mapping[str, Any]) -> str:
         "The selected_pattern_id is the authoritative baseline runtime pattern for this workspace. "
         "If package files do not match it, call create_agent_authoring(action='configure_pattern_assembly') before adding unrelated capability work."
         + (
-            " For plan_and_execute, configure planner, executor, final_answer, runtime_plan bindings, and activation. "
+            " For plan_and_execute, configure planner, executor, final_answer delivery tools, runtime_plan bindings, and activation. "
             "Activation must state the workflow goal, what concrete user input starts the workflow, and what to ask when that input is missing."
             if selected_pattern_id == "plan_and_execute"
             else ""

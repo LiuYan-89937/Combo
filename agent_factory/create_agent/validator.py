@@ -1210,15 +1210,18 @@ def _plan_and_execute_binding_issues(package: Any) -> list[PackageValidationIssu
             recommended_skill="12-assembly-pattern-system",
         ))
     final_tools = _tool_access_for_node(bindings, node_id="final_answer")
-    if final_tools:
+    if RUNTIME_PLAN_TOOL_ID in final_tools:
         issues.append(_contract_issue(
             where="assembly.plan_and_execute.final_answer_tools",
-            summary="plan_and_execute final_answer must not expose tools",
-            message="The final_answer node summarizes completed plan state and evidence without additional tool calls.",
+            summary="plan_and_execute final_answer must not expose runtime_plan",
+            message=(
+                "The final_answer node may use delivery tools for final artifacts, but it must not mutate "
+                "dynamic plan state through runtime_plan."
+            ),
             path="assembly_spec.json",
-            expected="no tool_access binding for final_answer, or an empty allowed_tool_ids list.",
+            expected='final_answer tool_access.allowed_tool_ids excludes "runtime_plan".',
             actual=", ".join(final_tools),
-            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute so final_answer has no runtime tools.",
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') for plan_and_execute so final_answer delivery tools are regenerated coherently.",
             target_files=["assembly_spec.json"],
             recommended_skill="12-assembly-pattern-system",
         ))

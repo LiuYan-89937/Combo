@@ -928,6 +928,7 @@ def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool
             *DEFAULT_EXECUTOR_FALLBACK_TOOL_IDS,
         ]
     )
+    final_answer_tools = _unique_strings([tool_id for tool_id in executor_tools if tool_id != "runtime_plan"])
     planner_tools = ["runtime_plan"]
     casual_tools = _unique_strings(
         [
@@ -948,6 +949,7 @@ def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool
             _tool_access_binding("casual_react", "cognitive.answer", casual_tools),
             _model_binding("casual_react", "cognitive.answer", "casual_react_prompt"),
             _prompt_binding("final_answer", "cognitive.answer", "final_answer_prompt", final_prompt),
+            _tool_access_binding("final_answer", "cognitive.answer", final_answer_tools),
             _model_binding("final_answer", "cognitive.answer", "final_answer_prompt"),
         ],
         "hooks": [],

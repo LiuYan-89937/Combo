@@ -654,6 +654,11 @@ class RuntimeAgentPackageCommandMixin:
             producer_type="factory_runtime",
         )
         try:
+            self._commit_system_chat_request(
+                redacted_message,
+                request_id=command.request_id,
+                attachments=transcript_attachment_views(command.payload.get("attachments")),
+            )
             run = self.agent_package_runtime.stream(
                 SYSTEM_CHAT_PACKAGE_ID,
                 user_input=message,
@@ -661,11 +666,6 @@ class RuntimeAgentPackageCommandMixin:
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
                 attachments=command.payload.get("attachments"),
-            )
-            self._commit_system_chat_request(
-                redacted_message,
-                request_id=command.request_id,
-                attachments=transcript_attachment_views(command.payload.get("attachments")),
             )
             self._consume_agent_package_stream(
                 package_id=SYSTEM_CHAT_PACKAGE_ID,
@@ -693,18 +693,18 @@ class RuntimeAgentPackageCommandMixin:
             producer_type="factory_runtime",
         )
         try:
+            self._commit_host_create_agent_request(
+                redacted_message,
+                session_id=agent_session_id,
+                request_id=command.request_id,
+                attachments=transcript_attachment_views(command.payload.get("attachments")),
+            )
             run = self.create_agent_runtime.stream(
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
                 attachments=command.payload.get("attachments"),
-            )
-            self._commit_host_create_agent_request(
-                redacted_message,
-                session_id=agent_session_id,
-                request_id=command.request_id,
-                attachments=transcript_attachment_views(command.payload.get("attachments")),
             )
             self._consume_create_agent_stream(run=run)
         except AttachmentImportError as exc:

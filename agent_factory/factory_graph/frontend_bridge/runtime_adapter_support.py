@@ -55,7 +55,8 @@ def session_payload(record: Any | None, *, snapshot_mode: str | None = None) -> 
     payload["first_user_input"] = first_user_input
     payload["display_title"] = payload.get("display_title") or display_title(first_user_input)
     mode = snapshot_mode or payload.get("current_mode")
-    messages = _messages_from_session_turns(_turns_for_mode(payload, mode))
+    turns = _turns_for_mode(payload, mode)
+    messages = _messages_from_session_turns(turns)
     payload["mode_titles"] = {
         "chat": display_title(_first_turn_input(payload.get("chat_turns"))),
         "create_agent": display_title(_first_turn_input(payload.get("create_agent_turns"))),
@@ -68,6 +69,7 @@ def session_payload(record: Any | None, *, snapshot_mode: str | None = None) -> 
     }
     payload["snapshot"] = {
         "mode": mode,
+        "turns": turns if isinstance(turns, list) else [],
         "messages": messages,
         "pending_interrupt": None,
         "recent_tool_activities": [],
@@ -92,7 +94,10 @@ def _messages_from_session_turns(value: Any) -> list[dict[str, Any]]:
                     "content": user_input,
                     **({"attachments": attachments} if attachments else {}),
                     "turn_index": turn_index,
+                    "request_id": turn.get("request_id"),
+                    "status": turn.get("status"),
                     "created_at": turn.get("created_at"),
+                    "updated_at": turn.get("updated_at"),
                 }
             )
         final_answer = str(turn.get("final_answer") or "").strip()
@@ -104,7 +109,10 @@ def _messages_from_session_turns(value: Any) -> list[dict[str, Any]]:
                     "content": final_answer,
                     **({"reasoning_content": reasoning_content} if reasoning_content else {}),
                     "turn_index": turn_index,
+                    "request_id": turn.get("request_id"),
+                    "status": turn.get("status"),
                     "created_at": turn.get("updated_at") or turn.get("created_at"),
+                    "updated_at": turn.get("updated_at"),
                 }
             )
     return messages

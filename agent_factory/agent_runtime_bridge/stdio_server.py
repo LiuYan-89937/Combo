@@ -609,6 +609,14 @@ def _run_message(
             )
         )
         return 1
+    run_context.session_manager.touch_turn(
+        run_context.session_id,
+        request_id=normalizer.request_id,
+        first_user_input=run_context.first_user_input,
+        user_input=run_context.first_user_input,
+        attachments=user_config.get("attachments"),
+        status="running",
+    )
     final_state = None
     stop_requested = False
     stream_iter = facade.instance.controller.stream(
@@ -636,6 +644,7 @@ def _run_message(
             compiled,
             package=package,
             command="run_message",
+            request_id=normalizer.request_id,
             fallback_user_input=run_context.first_user_input,
             fallback_attachments=user_config.get("attachments"),
             stop_signal=cancel_token,
@@ -648,6 +657,7 @@ def _run_message(
             run_context,
             compiled,
             final_state,
+            request_id=normalizer.request_id,
             fallback_user_input=run_context.first_user_input,
             fallback_attachments=user_config.get("attachments"),
         )
@@ -663,6 +673,7 @@ def _run_message(
         run_context,
         compiled,
         final_state,
+        request_id=normalizer.request_id,
         fallback_user_input=run_context.first_user_input,
         fallback_attachments=user_config.get("attachments"),
         visible_output=visible_output,
@@ -902,6 +913,7 @@ def _touch_session_turn_from_final_state(
     compiled: Any,
     final_state: Any,
     *,
+    request_id: str | None = None,
     session_id: str | None = None,
     fallback_user_input: str | None = None,
     fallback_attachments: Any = None,
@@ -922,6 +934,7 @@ def _touch_session_turn_from_final_state(
     )
     return run_context.session_manager.touch_turn(
         session_id or run_context.session_id,
+        request_id=request_id,
         first_user_input=session_user_input,
         user_input=session_user_input,
         attachments=session_attachments,
@@ -943,6 +956,7 @@ def _emit_stopped_runtime(
     *,
     package: LoadedAgentPackage,
     command: str,
+    request_id: str | None = None,
     session_id: str | None = None,
     fallback_user_input: str | None = None,
     fallback_attachments: Any = None,
@@ -963,6 +977,7 @@ def _emit_stopped_runtime(
     )
     agent_session = run_context.session_manager.touch_turn(
         session_id or run_context.session_id,
+        request_id=request_id,
         first_user_input=fallback_user_input or run_context.first_user_input,
         user_input=fallback_user_input or run_context.first_user_input,
         attachments=fallback_attachments,

@@ -324,17 +324,21 @@ class RuntimeSessionCommandMixin:
         linked_agent_session = self._linked_agent_session_payload()
         if self.mode == "chat" and linked_agent_session is not None:
             messages = _messages_from_agent_session(linked_agent_session)
+            linked_turns = _turns_from_agent_session(linked_agent_session)
             self._sync_factory_turns_from_linked_session(linked_agent_session)
             snapshot = {
                 **snapshot,
+                "turns": linked_turns,
                 "messages": messages,
                 "agent_session": linked_agent_session,
             }
         elif not messages and linked_agent_session is not None:
             messages = _messages_from_agent_session(linked_agent_session)
+            linked_turns = _turns_from_agent_session(linked_agent_session)
             self._sync_factory_turns_from_linked_session(linked_agent_session)
             snapshot = {
                 **snapshot,
+                "turns": linked_turns,
                 "messages": messages,
                 "agent_session": linked_agent_session,
             }
@@ -490,7 +494,10 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
         if not isinstance(turn, dict):
             continue
         created_at = turn.get("created_at")
+        updated_at = turn.get("updated_at") or created_at
         turn_index = turn.get("index")
+        request_id = turn.get("request_id")
+        status = turn.get("status")
         user_input = str(turn.get("user_input") or "").strip()
         if user_input:
             attachments = transcript_attachment_views(turn.get("attachments"))
@@ -500,7 +507,10 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
                     "content": user_input,
                     **({"attachments": attachments} if attachments else {}),
                     "turn_index": turn_index,
+                    "request_id": request_id,
+                    "status": status,
                     "created_at": created_at,
+                    "updated_at": updated_at,
                 }
             )
         final_answer = str(turn.get("final_answer") or "").strip()
@@ -512,10 +522,20 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
                     "content": final_answer,
                     **({"reasoning_content": reasoning_content} if reasoning_content else {}),
                     "turn_index": turn_index,
-                    "created_at": created_at,
+                    "request_id": request_id,
+                    "status": status,
+                    "created_at": updated_at,
+                    "updated_at": updated_at,
                 }
             )
     return messages
+
+
+def _turns_from_agent_session(record: dict[str, object]) -> list[dict[str, object]]:
+    turns = record.get("turns")
+    if not isinstance(turns, list):
+        return []
+    return [dict(turn) for turn in turns if isinstance(turn, dict)]
 
 
 def _canonical_chat_records(records: list[Any], chat_sessions: dict[str, dict[str, Any]]) -> dict[str, Any]:

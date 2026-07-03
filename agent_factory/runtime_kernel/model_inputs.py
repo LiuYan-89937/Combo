@@ -28,6 +28,11 @@ RUNTIME_REACT_PROTOCOL = (
     "After a ToolMessage observation, continue from that observation and do not invent hidden tool results."
 )
 EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step with package/domain tools first."
+FINAL_ANSWER_TOOL_POLICY = (
+    "Final-answer delivery policy: produce the final user-facing answer from completed plan evidence. "
+    "When the deliverable still needs an artifact to be generated or inspected, use available delivery tools "
+    "with native tool calls before claiming completion. Do not call runtime_plan from final_answer."
+)
 DYNAMIC_EVIDENCE_HEADER = (
     "Internal runtime evidence for this turn. Use it only when it is directly relevant. "
     "Do not quote, restate, or expose this evidence to the user unless the user explicitly asks for the underlying context:"
@@ -127,6 +132,8 @@ def _stable_system_prompt(*, prompt_binding: dict[str, Any], state: Any, node_id
     parts = [template]
     if node_id == PLAN_EXECUTE_EXECUTOR_NODE_ID:
         parts.append(_executor_tool_policy(state))
+    if node_id == PLAN_EXECUTE_FINAL_ANSWER_NODE_ID:
+        parts.append(FINAL_ANSWER_TOOL_POLICY)
     parts.append(RUNTIME_REACT_PROTOCOL)
     return "\n\n".join(parts)
 
@@ -284,7 +291,24 @@ def _uses_plan_and_execute_projection(*, state: Any, node_id: str | None) -> boo
 def _plan_and_execute_history_messages(*, state: Any, messages: list[BaseMessage], node_id: str | None) -> list[BaseMessage]:
     user_message = _current_user_message(state=state, messages=messages)
     if node_id == PLAN_EXECUTE_FINAL_ANSWER_NODE_ID:
-        return [user_message] if user_message is not None else []
+        projected: list[BaseMessage] = []
+        if user_message is not None:
+            projected.append(user_message)
+        projected.extend(
+            _recent_tool_exchanges(
+                messages=messages,
+                origin_node_id=PLAN_EXECUTE_EXECUTOR_NODE_ID,
+                limit=EXECUTOR_RECENT_TOOL_EXCHANGE_COUNT,
+            )
+        )
+        projected.extend(
+            _recent_tool_exchanges(
+                messages=messages,
+                origin_node_id=PLAN_EXECUTE_FINAL_ANSWER_NODE_ID,
+                limit=EXECUTOR_RECENT_TOOL_EXCHANGE_COUNT,
+            )
+        )
+        return projected
     if node_id != PLAN_EXECUTE_EXECUTOR_NODE_ID:
         return messages
     projected: list[BaseMessage] = []

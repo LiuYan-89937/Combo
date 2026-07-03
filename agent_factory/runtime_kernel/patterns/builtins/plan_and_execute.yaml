@@ -16,7 +16,7 @@ metadata:
   selection_notes:
     - planner creates and inspects dynamic plan state using runtime_plan.
     - executor runs current steps, calls business tools, and updates plan state using runtime_plan.
-    - final_answer summarizes the dynamic plan and evidence without tools.
+    - final_answer delivers the completed result and may use delivery tools, but it must not mutate runtime_plan.
   tags:
     - plan
     - execute
@@ -88,6 +88,9 @@ edges:
   - from: tool_exec
     to: executor
     when: tool.return.executor
+  - from: tool_exec
+    to: final_answer
+    when: tool.return.final_answer
   - from: tool_exec
     to: casual_react
     when: tool.completed

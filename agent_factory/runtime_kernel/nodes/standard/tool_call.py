@@ -5,6 +5,18 @@ from typing import Any
 from langchain_core.messages import ToolMessage
 
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
+from agent_factory.runtime_kernel.plan_execute_tools import (
+    PLAN_EXECUTE_CASUAL_NODE_ID,
+    PLAN_EXECUTE_EXECUTOR_NODE_ID,
+    PLAN_EXECUTE_FINAL_NODE_ID,
+    PLAN_EXECUTE_PLANNER_NODE_ID,
+    merge_tool_ids,
+    plan_and_execute_delegated_tool_ids,
+    plan_and_execute_runtime_plan_tool_ids,
+    system_tool_ids,
+    tool_access_ids,
+    tool_access_ids_for_node,
+)
 from agent_factory.runtime_kernel.planning import (
     RUNTIME_PLAN_TOOL_ID,
     execute_runtime_plan_action,
@@ -36,7 +48,14 @@ class OperationalToolCallNode:
             return {"execution": {"current_node": context.node_id, "route_decision": "tool.completed"}}
         origin_node_id = _origin_node_id(state, tool_calls)
         runtime_plan_calls, delegated_calls = _partition_runtime_plan_calls(tool_calls)
-        allowed_for_origin = _tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
+        allowed_for_origin = (
+            plan_and_execute_runtime_plan_tool_ids(
+                origin_node_id=origin_node_id,
+                all_bindings=context.all_bindings,
+            )
+            if is_plan_and_execute_pattern_id(state.run.pattern_id)
+            else tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
+        )
         runtime_plan_messages, plan_patch, working_state = _execute_runtime_plan_calls(
             state,
             runtime_plan_calls,
@@ -112,7 +131,7 @@ def _visible_tool_ids(
 ) -> list[str]:
     if is_plan_and_execute_pattern_id(state.run.pattern_id):
         return _plan_and_execute_delegated_tool_ids(context, registry, origin_node_id=origin_node_id)
-    return _merge_tool_ids([*_allowed_tool_ids(context), *_system_tool_ids(registry)])
+    return merge_tool_ids([*_allowed_tool_ids(context), *system_tool_ids(registry)])
 
 
 def _plan_and_execute_delegated_tool_ids(
@@ -121,74 +140,18 @@ def _plan_and_execute_delegated_tool_ids(
     *,
     origin_node_id: str,
 ) -> list[str]:
-    node_tool_ids = _tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
-    if origin_node_id in {"executor", "casual_react"}:
-        return _without_tool_id(
-            _merge_tool_ids([*node_tool_ids, *_system_tool_ids(registry)]),
-            RUNTIME_PLAN_TOOL_ID,
-        )
-    return []
-
-
-def _system_tool_ids(registry: Any) -> list[str]:
-    if not hasattr(registry, "system_tool_ids"):
-        return []
-    return [str(item) for item in registry.system_tool_ids()]
+    return plan_and_execute_delegated_tool_ids(
+        origin_node_id=origin_node_id,
+        all_bindings=context.all_bindings,
+        registry=registry,
+    )
 
 
 def _allowed_tool_ids(context: NodeExecutionContext) -> list[str]:
-    current_node_tool_ids = _tool_access_ids(context.bindings)
+    current_node_tool_ids = tool_access_ids(context.bindings)
     if current_node_tool_ids:
         return current_node_tool_ids
-    return _tool_access_ids(context.all_bindings)
-
-
-def _tool_access_ids(bindings: list[dict[str, Any]]) -> list[str]:
-    ids: list[str] = []
-    seen: set[str] = set()
-    for binding in bindings:
-        if binding.get("binding_type") != "tool_access":
-            continue
-        payload = dict(binding.get("payload") or {})
-        for item in payload.get("allowed_tool_ids", []) or []:
-            tool_id = str(item)
-            if tool_id and tool_id not in seen:
-                ids.append(tool_id)
-                seen.add(tool_id)
-    return ids
-
-
-def _tool_access_ids_for_node(bindings: list[dict[str, Any]], *, node_id: str) -> list[str]:
-    ids: list[str] = []
-    seen: set[str] = set()
-    for binding in bindings:
-        if binding.get("binding_type") != "tool_access":
-            continue
-        target = dict(binding.get("target") or {})
-        if str(target.get("node_id") or "") != node_id:
-            continue
-        payload = dict(binding.get("payload") or {})
-        for item in payload.get("allowed_tool_ids", []) or []:
-            tool_id = str(item)
-            if tool_id and tool_id not in seen:
-                ids.append(tool_id)
-                seen.add(tool_id)
-    return ids
-
-
-def _merge_tool_ids(tool_ids: list[str]) -> list[str]:
-    items: list[str] = []
-    seen: set[str] = set()
-    for tool_id in tool_ids:
-        item = str(tool_id).strip()
-        if item and item not in seen:
-            items.append(item)
-            seen.add(item)
-    return items
-
-
-def _without_tool_id(tool_ids: list[str], blocked_tool_id: str) -> list[str]:
-    return [tool_id for tool_id in tool_ids if tool_id != blocked_tool_id]
+    return tool_access_ids(context.all_bindings)
 
 
 def _tool_registry_missing_messages(tool_calls: list[dict[str, Any]]):
@@ -310,10 +273,14 @@ def _caller_route_decision(state: RuntimeState, origin_node_id: str, route_decis
         return route_decision
     if route_decision == "policy.blocked":
         return route_decision
-    if origin_node_id == "planner":
+    if origin_node_id == PLAN_EXECUTE_PLANNER_NODE_ID:
         if state.plan.status == "active":
             return "tool.return.executor"
         return "tool.return.planner"
-    if origin_node_id == "executor":
+    if origin_node_id == PLAN_EXECUTE_EXECUTOR_NODE_ID:
         return "tool.return.executor"
+    if origin_node_id == PLAN_EXECUTE_FINAL_NODE_ID:
+        return "tool.return.final_answer"
+    if origin_node_id == PLAN_EXECUTE_CASUAL_NODE_ID:
+        return route_decision
     return route_decision

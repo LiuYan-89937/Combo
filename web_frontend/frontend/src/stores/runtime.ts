@@ -901,13 +901,21 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!snapshot.scope) return
 
       this._switchConversationScope(snapshot.scope)
-      if (this._hasLiveConversationState()) {
+      if (this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
         return
       }
       if (!snapshot.hasMessages) return
 
       this.transcript = snapshot.transcript
       this.conversationTurns = snapshot.conversationTurns
+      this._restoreActiveTurnFromSnapshot(snapshot.activeTurn, {
+        mode: snapshot.restoredMode,
+        conversationScope: snapshot.scope,
+        payload: {
+          session_id: payload?.session_id || payload?.session?.session_id || null,
+          package_id: payload?.package_id || payload?.session?.evolve_agent_package_id || null,
+        },
+      })
       this._saveActiveConversationScope()
     },
 
@@ -918,7 +926,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this._switchConversationScope(agentPackageConversationScope(snapshot.sessionPackageId, session.session_id))
       this.activeAgentSessionId = String(session.session_id)
       this._upsertAgentSession(session)
-      if (this._hasLiveConversationState()) {
+      if (this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
         return
       }
       this.currentPlan = null
@@ -931,6 +939,15 @@ export const useRuntimeStore = defineStore('runtime', {
 
       this.transcript = snapshot.transcript
       this.conversationTurns = snapshot.conversationTurns
+      this._restoreActiveTurnFromSnapshot(snapshot.activeTurn, {
+        mode: 'agent_package',
+        conversationScope: agentPackageConversationScope(snapshot.sessionPackageId, session.session_id),
+        payload: {
+          package_id: snapshot.sessionPackageId,
+          session_id: session.session_id,
+          agent_session: session,
+        },
+      })
       this._saveActiveConversationScope()
     },
 
@@ -1132,6 +1149,47 @@ export const useRuntimeStore = defineStore('runtime', {
       )
     },
 
+    _hasVisibleConversationContent(): boolean {
+      return this.transcript.length > 0 || this.conversationTurns.some((turn) => (
+        Boolean(turn.userMessage) ||
+        turn.assistantMessages.length > 0 ||
+        turn.tools.length > 0
+      ))
+    },
+
+    _restoreActiveTurnFromSnapshot(
+      turn: ConversationTurn | null,
+      options: {
+        mode: FactoryMode | null
+        conversationScope: string | null
+        payload?: Record<string, any>
+      },
+    ) {
+      if (!turn?.requestId) return
+      if (turn.status !== 'running' && turn.status !== 'interrupted') return
+      const existing = this.activeRequests[turn.requestId]
+      this.activeRequestId = turn.requestId
+      this.runStatus = turn.status
+      this.currentRunId = existing?.runId || null
+      this.pendingInterrupt = turn.status === 'interrupted' ? this.pendingInterrupt : null
+      this.activeRequests[turn.requestId] = {
+        requestId: turn.requestId,
+        status: turn.status,
+        mode: options.mode || existing?.mode || null,
+        runId: existing?.runId || null,
+        conversationScope: options.conversationScope || existing?.conversationScope || null,
+        background: existing?.background || false,
+        source: existing?.source || 'user',
+        startedAt: existing?.startedAt || turn.startedAt,
+        completedAt: turn.completedAt,
+        payload: {
+          ...(existing?.payload || {}),
+          ...(turn.metadata || {}),
+          ...(options.payload || {}),
+        },
+      }
+    },
+
     _clearConversationViewState() {
       this.activeRequestId = null
       this.runStatus = 'idle'
@@ -1211,8 +1269,8 @@ export const useRuntimeStore = defineStore('runtime', {
       const timestamp = new Date().toISOString()
       const request = this.activeRequests[targetRequestId]
       if (request) {
-        request.status = 'stopped'
-        request.completedAt = timestamp
+        request.status = 'running'
+        request.completedAt = null
         request.payload = {
           ...(request.payload || {}),
           stop_requested_at: timestamp,
@@ -1230,12 +1288,10 @@ export const useRuntimeStore = defineStore('runtime', {
         ...(turn.metadata || {}),
         stop_requested_at: timestamp,
       }
-      turn.status = 'stopped'
-      turn.completedAt = timestamp
-      if (this.activeRequestId === targetRequestId) {
-        this.activeRequestId = null
-        this.runStatus = 'stopped'
-      }
+      turn.status = 'running'
+      turn.completedAt = null
+      this.activeRequestId = targetRequestId
+      this.runStatus = 'running'
     },
 
   },

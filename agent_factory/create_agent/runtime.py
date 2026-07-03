@@ -168,9 +168,12 @@ class CreateAgentRuntime:
         final_answer = str(values.get("final_answer") or "").strip() or None
         if not user_input and not final_answer:
             return None
+        now = datetime.now(UTC).isoformat()
         turn = {
             "index": 1,
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": now,
+            "updated_at": now,
+            "request_id": str(values.get("request_id") or "").strip() or None,
             "user_input": user_input,
             "attachments": normalized_runtime_attachments(values.get("runtime_attachments")),
             "final_answer": final_answer,

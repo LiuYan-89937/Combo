@@ -18,6 +18,8 @@ class AgentSessionTurn(BaseModel):
 
     index: int
     created_at: str
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    request_id: str | None = None
     user_input: str | None = None
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     reasoning_content: str | None = None
@@ -124,6 +126,7 @@ class AgentSessionManager:
         self,
         session_id: str,
         *,
+        request_id: str | None = None,
         first_user_input: str | None = None,
         user_input: str | None = None,
         reasoning_content: str | None = None,
@@ -139,20 +142,34 @@ class AgentSessionManager:
             record.display_title = _display_title(record.first_user_input)
         if not record.runtime_refs:
             record.runtime_refs = _runtime_refs(self.config.root)
-        record.turn_count += 1
         turn_input = (user_input or first_user_input or "").strip() or None
-        record.turns.append(
-            AgentSessionTurn(
-                index=record.turn_count,
-                created_at=_now(),
+        normalized_request_id = (request_id or "").strip() or None
+        turn = _find_turn(record.turns, request_id=normalized_request_id) if normalized_request_id else None
+        now = _now()
+        if turn is None:
+            turn = AgentSessionTurn(
+                index=len(record.turns) + 1,
+                created_at=now,
+                updated_at=now,
+                request_id=normalized_request_id,
                 user_input=turn_input,
                 attachments=normalized_runtime_attachments(attachments),
-                reasoning_content=(reasoning_content or "").strip() or None,
-                final_answer=(final_answer or "").strip() or None,
-                status=(status or "").strip() or None,
-                trace_ref=trace_ref or None,
             )
-        )
+            record.turns.append(turn)
+        elif turn_input and not turn.user_input:
+            turn.user_input = turn_input
+        if not turn.attachments:
+            turn.attachments = normalized_runtime_attachments(attachments)
+        if reasoning_content is not None:
+            turn.reasoning_content = (reasoning_content or "").strip() or None
+        if final_answer is not None:
+            turn.final_answer = (final_answer or "").strip() or None
+        if status is not None:
+            turn.status = (status or "").strip() or None
+        if trace_ref is not None:
+            turn.trace_ref = trace_ref or None
+        turn.updated_at = now
+        record.turn_count = len(record.turns)
         self.save(record)
         return record
 
@@ -171,6 +188,15 @@ def _display_title(value: str | None, *, limit: int = 42) -> str | None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _find_turn(turns: list[AgentSessionTurn], *, request_id: str | None) -> AgentSessionTurn | None:
+    if not request_id:
+        return None
+    for turn in turns:
+        if turn.request_id == request_id:
+            return turn
+    return None
 
 
 def _runtime_refs(session_root: Path) -> dict[str, str]:

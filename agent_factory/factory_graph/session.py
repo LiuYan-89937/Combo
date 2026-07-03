@@ -290,11 +290,13 @@ class FactorySessionManager:
             if not user_input and not final_answer:
                 continue
             created_at = str(raw_turn.get("created_at") or _now())
+            updated_at = str(raw_turn.get("updated_at") or created_at)
             turns.append(
                 FactorySessionTurn(
                     index=_safe_turn_index(raw_turn.get("index"), fallback=index),
                     created_at=created_at,
-                    updated_at=created_at,
+                    updated_at=updated_at,
+                    request_id=str(raw_turn.get("request_id") or "").strip() or None,
                     user_input=user_input,
                     attachments=attachments,
                     reasoning_content=reasoning_content,

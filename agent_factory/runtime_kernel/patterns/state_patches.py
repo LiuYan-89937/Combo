@@ -4,6 +4,7 @@ from typing import Any
 
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.state.checkpoint_projection import runtime_checkpoint_payload
 from agent_factory.runtime_kernel.state_contracts import PackageStateManager
 
 
@@ -12,7 +13,7 @@ def runtime_state_from_graph(raw_state: dict[str, Any]) -> RuntimeState:
 
 
 def runtime_graph_patch(state: RuntimeState, *, messages: list[Any] | None = None) -> dict[str, Any]:
-    patch: dict[str, Any] = {"runtime": state.model_dump(mode="json")}
+    patch: dict[str, Any] = {"runtime": runtime_checkpoint_payload(state, mode="json")}
     if messages:
         patch["messages"] = messages
     return patch
