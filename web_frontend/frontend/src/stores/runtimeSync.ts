@@ -154,6 +154,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     const extensionStore = useExtensionStore()
     extensionStore.setItems(runtimeStore.extensionItems)
     extensionStore.setTestResult(runtimeStore.extensionTestResult)
+    extensionStore.setToolPermissions(runtimeStore.toolPermissions)
   }
 }
 

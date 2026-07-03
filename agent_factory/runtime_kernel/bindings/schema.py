@@ -71,7 +71,7 @@ class ToolAccessBindingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allowed_tool_ids: list[str] = Field(default_factory=list)
-    approval_policy: str = "standard"
+    approval_policy: str = "allow_below_high"
 
 
 class ModelOperationWriteTarget(BaseModel):

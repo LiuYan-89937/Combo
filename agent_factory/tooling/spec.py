@@ -22,6 +22,7 @@ ToolContractStatus = Literal["valid", "invalid"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
 ToolLLMRiskMode = Literal["disabled", "on_uncertain", "always"]
+ToolPermissionScope = Literal["system", "package", "extension", "model"]
 
 ToolEventType = Literal[
     "tool_call_proposed",
@@ -75,6 +76,8 @@ class ToolSpec(BaseModel):
     risk_level: ToolRiskLevel = "low"
     risk_evaluator: ToolRiskEvaluatorConfig = Field(default_factory=ToolRiskEvaluatorConfig)
     concurrent: bool = True
+    permission_scope: ToolPermissionScope = "package"
+    permission_tags: list[str] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -116,6 +119,22 @@ class ToolSpec(BaseModel):
                 raise ValueError("resource local names and global keys must be non-empty")
         return value
 
+    @field_validator("permission_tags")
+    @classmethod
+    def validate_permission_tags(cls, value: list[str]) -> list[str]:
+        tags: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            tag = str(item).strip().lower().replace("-", "_")
+            if not tag:
+                continue
+            if not SNAKE_CASE_ID.fullmatch(tag):
+                raise ValueError("permission tags must be snake_case")
+            if tag not in seen:
+                tags.append(tag)
+                seen.add(tag)
+        return tags
+
 
 class ModelToolView(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -124,6 +143,8 @@ class ModelToolView(BaseModel):
     description: str
     input_schema: dict[str, Any] = Field(default_factory=dict)
     risk_level: ToolRiskLevel = "low"
+    permission_scope: ToolPermissionScope = "package"
+    permission_tags: list[str] = Field(default_factory=list)
 
 
 class ToolObservation(BaseModel):
@@ -173,4 +194,6 @@ def model_tool_view(spec: ToolSpec) -> ModelToolView:
         description=spec.description,
         input_schema=spec.input_schema,
         risk_level=spec.risk_level,
+        permission_scope=spec.permission_scope,
+        permission_tags=spec.permission_tags,
     )

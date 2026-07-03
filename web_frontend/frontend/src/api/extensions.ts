@@ -1,3 +1,4 @@
+import type { ToolPermissionOverrideView, ToolPermissionPolicyView } from '@/types/protocol'
 import type { McpServerConfig, SkillConfig } from './resourceTypes'
 import { requestEvent, withQuery } from './http'
 
@@ -43,6 +44,20 @@ export const extensionsApi = {
     }),
   removeSkill: (skillId: string, packageId?: string) =>
     requestEvent(withQuery(`/api/extensions/skills/${encodeURIComponent(skillId)}`, { package_id: packageId }), {
+      method: 'DELETE',
+    }),
+  updateToolPermissions: (policy: ToolPermissionPolicyView, packageId?: string) =>
+    requestEvent('/api/extensions/tool-permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ policy, package_id: packageId }),
+    }),
+  setToolPermission: (toolId: string, override: ToolPermissionOverrideView, packageId?: string) =>
+    requestEvent(`/api/extensions/tool-permissions/${encodeURIComponent(toolId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ override, package_id: packageId }),
+    }),
+  resetToolPermission: (toolId: string, packageId?: string) =>
+    requestEvent(withQuery(`/api/extensions/tool-permissions/${encodeURIComponent(toolId)}`, { package_id: packageId }), {
       method: 'DELETE',
     }),
 }

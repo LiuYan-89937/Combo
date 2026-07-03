@@ -165,6 +165,99 @@
           </n-empty>
         </div>
       </n-tab-pane>
+
+      <n-tab-pane name="permissions" :tab="t('permissions.title')">
+        <div class="tab-content">
+          <div class="content-header">
+            <div>
+              <n-text>{{ t('permissions.title') }}</n-text>
+              <div class="item-description">{{ t('permissions.description') }}</div>
+            </div>
+          </div>
+
+          <section class="permission-mode-panel">
+            <div class="permission-mode-header">
+              <n-text strong>{{ t('permissions.modeTitle') }}</n-text>
+              <n-tag size="small" :bordered="false">
+                {{ activePermissionModeLabel }}
+              </n-tag>
+            </div>
+            <n-radio-group
+              :value="toolPermissionPolicy.mode"
+              size="small"
+              class="permission-mode-group"
+              :disabled="busyKey === 'tool-permissions:mode'"
+              @update:value="handlePermissionModeChange"
+            >
+              <n-radio-button
+                v-for="option in permissionModeOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </n-radio-button>
+            </n-radio-group>
+          </section>
+
+          <div v-if="toolPermissionTools.length > 0" class="permission-list">
+            <div
+              v-for="tool in toolPermissionTools"
+              :key="tool.tool_id"
+              class="permission-row"
+            >
+              <div class="permission-tool-main">
+                <div class="permission-tool-title">
+                  <n-text strong>{{ tool.name }}</n-text>
+                  <n-tag size="small" :bordered="false">{{ toolSourceLabel(tool.source) }}</n-tag>
+                  <n-tag
+                    v-if="hasToolOverride(tool)"
+                    size="small"
+                    type="info"
+                    :bordered="false"
+                  >
+                    {{ t('permissions.overridden') }}
+                  </n-tag>
+                </div>
+                <div class="item-description">{{ tool.description || t('permissions.noDescription') }}</div>
+                <div class="item-meta">{{ tool.tool_id }}</div>
+              </div>
+              <div class="permission-controls">
+                <n-select
+                  :value="toolRiskValue(tool)"
+                  :options="riskLevelOptions"
+                  size="small"
+                  class="permission-select"
+                  :disabled="busyKey === `permission:${tool.tool_id}`"
+                  @update:value="(value) => handleToolRiskChange(tool, String(value))"
+                />
+                <n-select
+                  :value="toolApprovalValue(tool)"
+                  :options="approvalOptions"
+                  size="small"
+                  class="permission-select"
+                  :disabled="busyKey === `permission:${tool.tool_id}`"
+                  @update:value="(value) => handleToolApprovalChange(tool, String(value))"
+                />
+                <n-button
+                  size="small"
+                  quaternary
+                  :disabled="!hasToolOverride(tool)"
+                  :loading="busyKey === `permission:${tool.tool_id}`"
+                  @click="handleResetToolPermission(tool)"
+                >
+                  {{ t('permissions.reset') }}
+                </n-button>
+              </div>
+            </div>
+          </div>
+
+          <n-empty
+            v-else
+            :description="t('permissions.noTools')"
+            class="manager-empty"
+          />
+        </div>
+      </n-tab-pane>
     </n-tabs>
 
     <McpConfigModal
@@ -190,6 +283,9 @@ import {
   NIcon,
   NList,
   NListItem,
+  NRadioButton,
+  NRadioGroup,
+  NSelect,
   NSpace,
   NSwitch,
   NTabPane,
@@ -208,26 +304,40 @@ const { t } = useI18n()
 
 const {
   activePackageLabel,
+  activePermissionModeLabel,
   busyKey,
   editingMcp,
   editingSkill,
   extensionKey,
   extensionStore,
   handleMcpAction,
+  handlePermissionModeChange,
+  handleResetToolPermission,
   handleSaveMcp,
   handleSaveSkill,
   handleSkillAction,
   handleTestMcp,
+  handleToolApprovalChange,
+  handleToolRiskChange,
   handleToggleMcp,
   handleToggleSkill,
+  hasToolOverride,
   mcpActions,
   mcpCommandLine,
   openAddMcp,
   openAddSkill,
+  permissionModeOptions,
   refreshCurrentExtensions,
+  approvalOptions,
+  riskLevelOptions,
   showMcpModal,
   showSkillModal,
   skillActions,
+  toolApprovalValue,
+  toolPermissionPolicy,
+  toolPermissionTools,
+  toolRiskValue,
+  toolSourceLabel,
   testResultMessage,
   testResultTitle,
   testResultType,
@@ -295,6 +405,65 @@ const {
   border-radius: var(--app-radius-lg);
 }
 
+.permission-mode-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-md);
+  padding: var(--app-space-lg);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.permission-mode-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+}
+
+.permission-mode-group {
+  align-self: flex-start;
+}
+
+.permission-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-lg);
+}
+
+.permission-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--app-space-lg);
+  padding: var(--app-space-md) var(--app-space-lg);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.permission-tool-main {
+  min-width: 0;
+}
+
+.permission-tool-title,
+.permission-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+  flex-wrap: wrap;
+}
+
+.permission-tool-title {
+  margin-bottom: var(--app-space-xs);
+}
+
+.permission-select {
+  width: 128px;
+}
+
 .item-description {
   color: var(--app-text-secondary);
   font-size: var(--app-font-sm);
@@ -319,6 +488,14 @@ const {
 @media (max-width: 640px) {
   .extensions-view {
     padding: var(--app-space-md);
+  }
+
+  .permission-row {
+    grid-template-columns: 1fr;
+  }
+
+  .permission-controls {
+    justify-content: flex-start;
   }
 }
 </style>

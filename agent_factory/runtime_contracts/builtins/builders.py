@@ -51,7 +51,11 @@ from agent_factory.runtime_kernel.persistence import (
     LangGraphStoreFactory,
 )
 from agent_factory.runtime_kernel.types import ToolExecutionResult
-from agent_factory.tooling.approval_policy import resolve_tool_approval_policy
+from agent_factory.tooling.approval_policy import (
+    ToolApprovalPolicyConfig,
+    merge_tool_approval_policy,
+    resolve_tool_approval_policy,
+)
 from agent_factory.tooling.builtins.model_tools import MODEL_TOOL_RUNTIME_RESOURCE, get_model_tool_specs
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
@@ -180,6 +184,10 @@ class ToolsContractBuilder:
             specs.extend(model_tool_specs)
             system_tool_ids.update(spec.id for spec in model_tool_specs)
         registry = ToolRegistry(specs)
+        approval_policy = merge_tool_approval_policy(
+            resolve_tool_approval_policy(config.approval_policy),
+            _instance_tool_approval_policy(instance_extension_root),
+        )
         compiler = ToolCompiler(
             package_root=context.package_root,
             resources=_merge_tool_resources(
@@ -187,7 +195,7 @@ class ToolsContractBuilder:
                 provider_runtime_resources=runtime_resources,
                 tool_runtime_resources=tool_runtime_resources,
             ),
-            approval_policy=resolve_tool_approval_policy(config.approval_policy),
+            approval_policy=approval_policy,
             allowed_python_roots=[instance_extension_root],
             mcp_clients=mcp_clients,
         )
@@ -740,6 +748,19 @@ def _tool_output_root(*, context: RuntimeBuildContext, instance_extension_root: 
     if instance_extension_root.name == "extensions":
         return instance_extension_root.parent / "tool_outputs"
     return instance_extension_root / "tool_outputs"
+
+
+def _instance_tool_approval_policy(instance_extension_root: Path) -> ToolApprovalPolicyConfig | None:
+    path = instance_extension_root / "tool_permissions.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("tool_permissions.json must contain a JSON object")
+    policy_payload = payload.get("policy", payload)
+    if not isinstance(policy_payload, dict):
+        raise ValueError("tool_permissions.json policy must contain a JSON object")
+    return ToolApprovalPolicyConfig.model_validate(policy_payload)
 
 
 def _inherits_builtin_agent_extensions(package: Any) -> bool:

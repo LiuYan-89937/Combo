@@ -108,4 +108,43 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         )
         return {"event": event}
 
+    @router.put("/tool-permissions")
+    async def update_tool_permissions(payload: dict[str, Any]):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {
+                "action": "update_tool_permissions",
+                "policy": payload.get("policy") if isinstance(payload.get("policy"), dict) else payload,
+                **optional_package(payload.get("package_id")),
+            },
+            {"extension_config_updated"},
+        )
+        return {"event": event}
+
+    @router.patch("/tool-permissions/{tool_id}")
+    async def set_tool_permission(tool_id: str, payload: dict[str, Any]):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {
+                "action": "set_tool_permission",
+                "tool_id": tool_id,
+                "override": payload.get("override") if isinstance(payload.get("override"), dict) else payload,
+                **optional_package(payload.get("package_id")),
+            },
+            {"extension_config_updated"},
+        )
+        return {"event": event}
+
+    @router.delete("/tool-permissions/{tool_id}")
+    async def reset_tool_permission(tool_id: str, package_id: str | None = None):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {"action": "reset_tool_permission", "tool_id": tool_id, **optional_package(package_id)},
+            {"extension_config_updated"},
+        )
+        return {"event": event}
+
     return router

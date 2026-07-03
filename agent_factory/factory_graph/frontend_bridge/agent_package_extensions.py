@@ -1,0 +1,752 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import re
+import shlex
+import subprocess
+from typing import Any
+
+from agent_factory.runtime_contracts import LoadedAgentPackage
+from agent_factory.runtime_kernel.extensions.loader import (
+    AgentInstanceExtensionConfigLoader,
+    default_builtin_agent_extension_root,
+)
+from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
+    extension_root_for_package,
+    host_runtime_root,
+    is_system_package,
+)
+from agent_factory.factory_graph.frontend_bridge.agent_package_utils import (
+    humanize_identifier,
+    read_json_object,
+    write_json_object,
+)
+from agent_factory.tooling.approval_policy import ToolApprovalOverrideConfig, ToolApprovalPolicyConfig
+from agent_factory.tooling.mcp_runtime import MCPRuntimeManager
+from agent_factory.tooling.providers import (
+    EnabledSkillConfig,
+    EnabledSkillsConfig,
+    MCPServerConfig,
+    MCPServersConfig,
+)
+from agent_factory.tooling.skills import parse_skill_directory
+
+
+TOOL_PERMISSIONS_FILENAME = "tool_permissions.json"
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionManageResult:
+    payload: dict[str, Any]
+    changed: bool = False
+
+
+class AgentPackageExtensionService:
+    def summary(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
+        extension_root = extension_root_for_package(package_id, package)
+        bundle = load_extension_bundle(extension_root, package=package)
+        return {
+            "package_id": package_id,
+            "mcp_servers": [
+                public_mcp_server(server.model_dump(mode="json"))
+                for server in bundle.mcp_servers.servers
+            ],
+            "skills": [
+                public_skill(skill.model_dump(mode="json"))
+                for skill in bundle.enabled_skills.skills
+            ],
+            "tool_permissions": _tool_permissions_view(package=package, extension_root=extension_root, bundle=bundle),
+            "sources": {
+                "extension_root": str(bundle.sources.extension_root),
+                "mcp_servers_paths": [str(path) for path in bundle.sources.mcp_servers_paths],
+                "enabled_skills_paths": [str(path) for path in bundle.sources.enabled_skills_paths],
+                "tool_permissions_path": str(extension_root / TOOL_PERMISSIONS_FILENAME),
+            },
+        }
+
+    def manage(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+        action: str,
+        payload: dict[str, Any],
+    ) -> ExtensionManageResult:
+        extension_root = extension_root_for_package(package_id, package)
+        if action == "list":
+            return ExtensionManageResult(self.summary(package_id, package))
+        if action == "upsert_mcp":
+            server = _mcp_server_for_upsert(extension_root, payload, package=package)
+            _save_mcp_server(extension_root, server)
+            return ExtensionManageResult(
+                {
+                    "updated": "mcp",
+                    "server": public_mcp_server(server.model_dump(mode="json")),
+                    **self.summary(package_id, package),
+                },
+                changed=True,
+            )
+        if action == "set_mcp_enabled":
+            server_id = _required_config_id(payload, "server_id")
+            server = _set_mcp_server_enabled(
+                extension_root,
+                server_id=server_id,
+                enabled=bool(payload.get("enabled", True)),
+            )
+            return ExtensionManageResult(
+                {
+                    "updated": "mcp",
+                    "server": public_mcp_server(server.model_dump(mode="json")),
+                    **self.summary(package_id, package),
+                },
+                changed=True,
+            )
+        if action == "remove_mcp":
+            server_id = _required_config_id(payload, "server_id")
+            removed = _remove_mcp_server(extension_root, server_id=server_id)
+            return ExtensionManageResult(
+                {"updated": "mcp", "removed": removed, **self.summary(package_id, package)},
+                changed=True,
+            )
+        if action == "test_mcp":
+            server = _mcp_server_for_test(extension_root, payload, package=package)
+            return ExtensionManageResult(
+                {"test": _test_mcp_server(server), **self.summary(package_id, package)}
+            )
+        if action == "update_tool_permissions":
+            policy = _tool_approval_policy_from_payload(payload)
+            _write_tool_permission_policy(extension_root, policy)
+            return ExtensionManageResult(
+                {"updated": "tool_permissions", **self.summary(package_id, package)},
+                changed=True,
+            )
+        if action == "set_tool_permission":
+            policy = _load_tool_permission_policy(extension_root)
+            tool_id = _tool_permission_id(payload)
+            override_payload = payload.get("override") if isinstance(payload.get("override"), dict) else payload
+            next_overrides = dict(policy.tool_overrides)
+            next_overrides[tool_id] = _tool_override_from_payload(override_payload)
+            policy = ToolApprovalPolicyConfig.model_validate(
+                policy.model_copy(update={"tool_overrides": next_overrides}).model_dump(mode="json")
+            )
+            _write_tool_permission_policy(extension_root, policy)
+            return ExtensionManageResult(
+                {"updated": "tool_permissions", **self.summary(package_id, package)},
+                changed=True,
+            )
+        if action == "reset_tool_permission":
+            policy = _load_tool_permission_policy(extension_root)
+            tool_id = _tool_permission_id(payload)
+            next_overrides = dict(policy.tool_overrides)
+            next_overrides.pop(tool_id, None)
+            policy = ToolApprovalPolicyConfig.model_validate(
+                policy.model_copy(update={"tool_overrides": next_overrides}).model_dump(mode="json")
+            )
+            _write_tool_permission_policy(extension_root, policy)
+            return ExtensionManageResult(
+                {"updated": "tool_permissions", **self.summary(package_id, package)},
+                changed=True,
+            )
+        if action == "upsert_skill":
+            skill_payload = payload.get("skill") if isinstance(payload.get("skill"), dict) else payload
+            skill = _skill_from_payload(skill_payload, extension_root=extension_root)
+            replace_skill_id = str(
+                payload.get("replace_skill_id")
+                or skill_payload.get("replace_skill_id")
+                or ""
+            ).strip()
+            if replace_skill_id and replace_skill_id != skill.skill_id:
+                _remove_enabled_skill(extension_root, skill_id=replace_skill_id)
+            _save_enabled_skill(extension_root, skill)
+            return ExtensionManageResult(
+                {
+                    "updated": "skill",
+                    "skill": public_skill(skill.model_dump(mode="json")),
+                    **self.summary(package_id, package),
+                },
+                changed=True,
+            )
+        if action == "set_skill_enabled":
+            skill_id = _required_config_id(payload, "skill_id")
+            skill = _set_skill_enabled(
+                extension_root,
+                skill_id=skill_id,
+                enabled=bool(payload.get("enabled", True)),
+            )
+            return ExtensionManageResult(
+                {
+                    "updated": "skill",
+                    "skill": public_skill(skill.model_dump(mode="json")),
+                    **self.summary(package_id, package),
+                },
+                changed=True,
+            )
+        if action == "remove_skill":
+            skill_id = _required_config_id(payload, "skill_id")
+            removed = _remove_enabled_skill(extension_root, skill_id=skill_id)
+            return ExtensionManageResult(
+                {"updated": "skill", "removed": removed, **self.summary(package_id, package)},
+                changed=True,
+            )
+        raise ValueError(f"unsupported extensions action: {action}")
+
+
+def extensions_summary(package_id: str, *, package: LoadedAgentPackage | None = None) -> dict[str, str]:
+    host_root = (
+        extension_root_for_package(package_id, package)
+        if package is not None
+        else host_runtime_root(package_id) / "extensions"
+    )
+    return {
+        "host_root": str(host_root),
+        "container_root": "/runtime/extensions",
+    }
+
+
+def package_extension_detail(*, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
+    extension_root = extension_root_for_package(package_id, package)
+    try:
+        bundle = load_extension_bundle(extension_root, package=package)
+        return {
+            "mcp_servers": [
+                public_mcp_server(server.model_dump(mode="json"))
+                for server in bundle.mcp_servers.servers
+            ],
+            "skills": [
+                public_skill(skill.model_dump(mode="json"))
+                for skill in bundle.enabled_skills.skills
+            ],
+        }
+    except Exception as exc:
+        return {
+            "mcp_servers": [],
+            "skills": [],
+            "extensions_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _tool_permissions_view(*, package: LoadedAgentPackage, extension_root: Path, bundle: Any) -> dict[str, Any]:
+    policy = _load_tool_permission_policy(extension_root)
+    return {
+        "policy": policy.model_dump(mode="json"),
+        "tools": _tool_permission_tools(package=package, bundle=bundle),
+    }
+
+
+def _load_tool_permission_policy(extension_root: Path) -> ToolApprovalPolicyConfig:
+    payload = read_json_object(extension_root / TOOL_PERMISSIONS_FILENAME)
+    policy_payload = payload.get("policy", payload) if payload else {}
+    return ToolApprovalPolicyConfig.model_validate(policy_payload if isinstance(policy_payload, dict) else {})
+
+
+def _write_tool_permission_policy(extension_root: Path, policy: ToolApprovalPolicyConfig) -> None:
+    write_json_object(
+        extension_root / TOOL_PERMISSIONS_FILENAME,
+        {
+            "version": "tool_permissions.v0",
+            "policy": policy.model_dump(mode="json"),
+        },
+    )
+
+
+def _tool_approval_policy_from_payload(payload: dict[str, Any]) -> ToolApprovalPolicyConfig:
+    policy_payload = payload.get("policy") if isinstance(payload.get("policy"), dict) else payload
+    return ToolApprovalPolicyConfig.model_validate(policy_payload or {})
+
+
+def _tool_override_from_payload(payload: dict[str, Any]) -> ToolApprovalOverrideConfig:
+    return ToolApprovalOverrideConfig.model_validate(payload or {})
+
+
+def _tool_permission_id(payload: dict[str, Any]) -> str:
+    return _required_config_id(payload, "tool_id").lower().replace("-", "_")
+
+
+def _tool_permission_tools(*, package: LoadedAgentPackage, bundle: Any) -> list[dict[str, Any]]:
+    tools: dict[str, dict[str, Any]] = {}
+    for item in _builtin_permission_tools(package):
+        tools[item["tool_id"]] = item
+    for spec in package.assembly_spec.tools:
+        item = _public_tool_permission_item(
+            tool_id=str(getattr(spec, "id", "") or ""),
+            name=humanize_identifier(str(getattr(spec, "id", "") or "")) or "Package Tool",
+            description=str(getattr(spec, "description", "") or ""),
+            source="package",
+            risk_level=str(getattr(spec, "risk_level", "") or "low"),
+            permission_scope=str(getattr(spec, "permission_scope", "") or "package"),
+            permission_tags=list(getattr(spec, "permission_tags", []) or []),
+        )
+        if item:
+            tools[item["tool_id"]] = item
+    if getattr(bundle.enabled_skills, "skills", None):
+        tools["skill"] = _public_tool_permission_item(
+            tool_id="skill",
+            name="Skill",
+            description="Read and use enabled Skill resources for this agent.",
+            source="extension",
+            risk_level="medium",
+            permission_scope="extension",
+            permission_tags=[],
+        )
+    return sorted(tools.values(), key=lambda item: (str(item.get("source") or ""), str(item.get("tool_id") or "")))
+
+
+def _builtin_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any]]:
+    config = _tools_contract_config(package)
+    if config.get("builtin_tools_enabled") is False:
+        return []
+    configured_ids = [str(item) for item in config.get("builtin_tool_ids") or [] if str(item).strip()]
+    try:
+        from agent_factory.tooling.builtins import (
+            get_always_available_system_tool_ids,
+            get_builtin_tool_specs,
+            get_read_only_system_tool_ids,
+        )
+    except Exception:
+        return []
+    always_available = get_always_available_system_tool_ids()
+    read_only_ids = get_read_only_system_tool_ids()
+    allowed_ids = set(configured_ids)
+    specs = get_builtin_tool_specs()
+    if allowed_ids:
+        specs = [spec for spec in specs if spec.id in allowed_ids or spec.id in always_available]
+    tools: list[dict[str, Any]] = []
+    for spec in specs:
+        item = _public_tool_permission_item(
+            tool_id=spec.id,
+            name=humanize_identifier(spec.id) or spec.id,
+            description=spec.description,
+            source="system",
+            risk_level=spec.risk_level,
+            permission_scope="system",
+            permission_tags=["read_only"] if spec.id in read_only_ids else [],
+        )
+        if item:
+            tools.append(item)
+    return tools
+
+
+def _tools_contract_config(package: LoadedAgentPackage) -> dict[str, Any]:
+    contract = package.contracts.get("tools") if isinstance(package.contracts, dict) else None
+    config = contract.get("config") if isinstance(contract, dict) else None
+    return dict(config) if isinstance(config, dict) else {}
+
+
+def _public_tool_permission_item(
+    *,
+    tool_id: str,
+    name: str,
+    description: str,
+    source: str,
+    risk_level: str,
+    permission_scope: str,
+    permission_tags: list[str],
+) -> dict[str, Any] | None:
+    normalized_tool_id = str(tool_id or "").strip()
+    if not normalized_tool_id:
+        return None
+    return {
+        "tool_id": normalized_tool_id,
+        "name": name,
+        "description": description,
+        "source": source,
+        "risk_level": risk_level,
+        "permission_scope": permission_scope,
+        "permission_tags": permission_tags,
+    }
+
+
+def load_extension_bundle(extension_root: Path, *, package: LoadedAgentPackage | None = None) -> Any:
+    return AgentInstanceExtensionConfigLoader(
+        extension_root,
+        inherited_extension_roots=_extension_inherited_roots(extension_root, package=package),
+    ).load()
+
+
+def public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
+    server_id = str(payload.get("server_id") or "").strip()
+    source = dict(payload.get("source") or {})
+    enabled = payload.get("enabled", True) is not False
+    env = payload.get("env") if isinstance(payload.get("env"), dict) else {}
+    name = str(source.get("package") or source.get("name") or humanize_identifier(server_id) or "MCP server")
+    description = str(source.get("description") or source.get("summary") or "").strip()
+    safe_payload = {
+        "server_id": server_id,
+        "display_name": name,
+        "description": description,
+        "transport": payload.get("transport"),
+        "command": payload.get("command"),
+        "args": list(payload.get("args") or []),
+        "cwd": payload.get("cwd"),
+        "source": source,
+        "enabled": enabled,
+        "required": bool(payload.get("required")),
+        "tool_id_prefix": payload.get("tool_id_prefix"),
+        "risk_level_default": payload.get("risk_level_default"),
+        "timeout_seconds": payload.get("timeout_seconds"),
+        "env_keys": sorted(str(key) for key in env),
+    }
+    return {
+        "kind": "mcp",
+        "name": name,
+        "scope": str(source.get("type") or "local"),
+        "status": "enabled" if enabled else "disabled",
+        "enabled": enabled,
+        "transport": payload.get("transport"),
+        "summary": description or _mcp_server_summary(payload),
+        "payload": safe_payload,
+    }
+
+
+def public_skill(payload: dict[str, Any]) -> dict[str, Any]:
+    skill_id = str(payload.get("skill_id") or "").strip()
+    enabled = payload.get("enabled", True) is not False
+    metadata = _skill_metadata_for_public_view(payload)
+    name = metadata.get("name") or skill_id
+    description = str(metadata.get("description") or "").strip()
+    return {
+        "kind": "skill",
+        "name": humanize_identifier(str(name)) or "Skill",
+        "scope": str(payload.get("source") or "local"),
+        "status": "enabled" if enabled else "disabled",
+        "enabled": enabled,
+        "summary": description or _skill_summary(payload),
+        "payload": {
+            "skill_id": skill_id,
+            "description": description,
+            "enabled": enabled,
+            "source": payload.get("source"),
+            "path": payload.get("path"),
+            "required": bool(payload.get("required")),
+            "resource_count": metadata.get("resource_count"),
+            "script_count": metadata.get("script_count"),
+        },
+    }
+
+
+def _extension_inherited_roots(extension_root: Path, *, package: LoadedAgentPackage | None) -> list[Path]:
+    if package is None:
+        return []
+    roots: list[Path] = []
+    if is_system_package(package):
+        builtin_root = default_builtin_agent_extension_root()
+        if builtin_root.resolve() != extension_root.resolve():
+            roots.append(builtin_root)
+    package_extension_root = package.package_root / "extensions"
+    if package_extension_root.resolve() != extension_root.resolve():
+        roots.append(package_extension_root)
+    return roots
+
+
+def _load_local_mcp_config(extension_root: Path) -> MCPServersConfig:
+    return MCPServersConfig.model_validate(read_json_object(extension_root / "mcp_servers.json") or {})
+
+
+def _write_local_mcp_config(extension_root: Path, config: MCPServersConfig) -> None:
+    write_json_object(extension_root / "mcp_servers.json", config.model_dump(mode="json"))
+
+
+def _load_local_skills_config(extension_root: Path) -> EnabledSkillsConfig:
+    return EnabledSkillsConfig.model_validate(read_json_object(extension_root / "enabled_skills.json") or {})
+
+
+def _write_local_skills_config(extension_root: Path, config: EnabledSkillsConfig) -> None:
+    write_json_object(extension_root / "enabled_skills.json", config.model_dump(mode="json"))
+
+
+def _save_mcp_server(extension_root: Path, server: MCPServerConfig) -> None:
+    config = _load_local_mcp_config(extension_root)
+    servers = [item for item in config.servers if item.server_id != server.server_id]
+    servers.append(server)
+    _write_local_mcp_config(
+        extension_root,
+        config.model_copy(update={"servers": sorted(servers, key=lambda item: item.server_id)}),
+    )
+
+
+def _set_mcp_server_enabled(extension_root: Path, *, server_id: str, enabled: bool) -> MCPServerConfig:
+    config = _load_local_mcp_config(extension_root)
+    servers: list[MCPServerConfig] = []
+    updated: MCPServerConfig | None = None
+    for server in config.servers:
+        if server.server_id == server_id:
+            updated = server.model_copy(update={"enabled": enabled})
+            servers.append(updated)
+        else:
+            servers.append(server)
+    if updated is None:
+        raise ValueError(f"MCP server is not configured: {server_id}")
+    _write_local_mcp_config(extension_root, config.model_copy(update={"servers": servers}))
+    return updated
+
+
+def _remove_mcp_server(extension_root: Path, *, server_id: str) -> bool:
+    config = _load_local_mcp_config(extension_root)
+    servers = [server for server in config.servers if server.server_id != server_id]
+    removed = len(servers) != len(config.servers)
+    _write_local_mcp_config(extension_root, config.model_copy(update={"servers": servers}))
+    return removed
+
+
+def _save_enabled_skill(extension_root: Path, skill: EnabledSkillConfig) -> None:
+    config = _load_local_skills_config(extension_root)
+    skills = [item for item in config.skills if item.skill_id != skill.skill_id]
+    skills.append(skill)
+    _write_local_skills_config(
+        extension_root,
+        config.model_copy(update={"skills": sorted(skills, key=lambda item: item.skill_id)}),
+    )
+
+
+def _set_skill_enabled(extension_root: Path, *, skill_id: str, enabled: bool) -> EnabledSkillConfig:
+    config = _load_local_skills_config(extension_root)
+    skills: list[EnabledSkillConfig] = []
+    updated: EnabledSkillConfig | None = None
+    for skill in config.skills:
+        if skill.skill_id == skill_id:
+            updated = skill.model_copy(update={"enabled": enabled})
+            skills.append(updated)
+        else:
+            skills.append(skill)
+    if updated is None:
+        raise ValueError(f"Skill is not configured: {skill_id}")
+    _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
+    return updated
+
+
+def _remove_enabled_skill(extension_root: Path, *, skill_id: str) -> bool:
+    config = _load_local_skills_config(extension_root)
+    skills = [skill for skill in config.skills if skill.skill_id != skill_id]
+    removed = len(skills) != len(config.skills)
+    _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
+    return removed
+
+
+def _mcp_server_for_upsert(
+    extension_root: Path,
+    payload: dict[str, Any],
+    *,
+    package: LoadedAgentPackage | None = None,
+) -> MCPServerConfig:
+    server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else payload
+    server_id = str(server_payload.get("server_id") or "").strip()
+    existing = _find_mcp_server(extension_root, server_id, package=package) if server_id else None
+    return _mcp_server_from_payload(server_payload, existing=existing)
+
+
+def _find_mcp_server(
+    extension_root: Path,
+    server_id: str,
+    *,
+    package: LoadedAgentPackage | None = None,
+) -> MCPServerConfig | None:
+    if not server_id:
+        return None
+    try:
+        bundle = load_extension_bundle(extension_root, package=package)
+    except Exception:
+        bundle = None
+    if bundle is not None:
+        for server in bundle.mcp_servers.servers:
+            if server.server_id == server_id:
+                return server
+    try:
+        for server in _load_local_mcp_config(extension_root).servers:
+            if server.server_id == server_id:
+                return server
+    except Exception:
+        return None
+    return None
+
+
+def _mcp_server_for_test(
+    extension_root: Path,
+    payload: dict[str, Any],
+    *,
+    package: LoadedAgentPackage | None = None,
+) -> MCPServerConfig:
+    server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else payload
+    server_id = str(server_payload.get("server_id") or "").strip()
+    if server_id:
+        bundle = load_extension_bundle(extension_root, package=package)
+        for server in bundle.mcp_servers.servers:
+            if server.server_id == server_id:
+                return _mcp_server_from_payload(server_payload, existing=server)
+    return _mcp_server_from_payload(server_payload)
+
+
+def _mcp_server_from_payload(payload: dict[str, Any], *, existing: MCPServerConfig | None = None) -> MCPServerConfig:
+    raw = dict(payload or {})
+    existing_source = dict(existing.source) if existing is not None else {}
+    source = {**existing_source, **dict(raw.get("source") or {})}
+    display_name = str(raw.get("display_name") or raw.get("name") or source.get("name") or "").strip()
+    if display_name:
+        source["name"] = display_name
+    description = str(raw.get("description") or raw.get("summary") or source.get("description") or "").strip()
+    if description:
+        source["description"] = description
+    command = str(raw.get("command") if "command" in raw else existing.command if existing is not None else "").strip()
+    args = _parse_args(raw["args"]) if "args" in raw else list(existing.args) if existing is not None else []
+    cwd_value = raw.get("cwd") if "cwd" in raw else existing.cwd if existing is not None else None
+    cwd = str(cwd_value or "").strip() or None
+    env = _parse_env(raw["env"]) if "env" in raw else dict(existing.env) if existing is not None else {}
+    enabled = raw.get("enabled") if "enabled" in raw else existing.enabled if existing is not None else True
+    server_id = _config_identifier(
+        str(raw.get("server_id") or ""),
+        fallback=display_name or str(source.get("package") or "") or command or "mcp_server",
+    )
+    tool_id_prefix = raw.get(
+        "tool_id_prefix",
+        existing.tool_id_prefix if existing is not None else None,
+    )
+    return MCPServerConfig(
+        server_id=server_id,
+        transport=str(raw.get("transport") or (existing.transport if existing is not None else "stdio")).strip(),
+        command=command or None,
+        args=args,
+        cwd=cwd,
+        env=env,
+        source=source,
+        enabled=enabled is not False,
+        required=bool(raw.get("required") if "required" in raw else existing.required if existing is not None else False),
+        tool_id_prefix=_optional_identifier(tool_id_prefix),
+        risk_level_default=str(raw.get("risk_level_default") or (existing.risk_level_default if existing is not None else "medium")),
+        concurrent_default=bool(raw.get("concurrent_default") if "concurrent_default" in raw else existing.concurrent_default if existing is not None else False),
+        timeout_seconds=float(raw.get("timeout_seconds") or (existing.timeout_seconds if existing is not None else 30.0)),
+    )
+
+
+def _skill_from_payload(payload: dict[str, Any], *, extension_root: Path | None = None) -> EnabledSkillConfig:
+    raw = dict(payload or {})
+    path = str(raw.get("path") or "").strip()
+    if not path:
+        raise ValueError("Skill path is required")
+    source = str(raw.get("source") or "local").strip() or "local"
+    skill_id = str(raw.get("skill_id") or "").strip()
+    if not skill_id:
+        skill = parse_skill_directory(_skill_path_for_validation(path, extension_root))
+        skill_id = skill.name
+    return EnabledSkillConfig(
+        skill_id=skill_id,
+        enabled=raw.get("enabled", True) is not False,
+        source=source,
+        path=path,
+        required=bool(raw.get("required")),
+    )
+
+
+def _skill_path_for_validation(path: str, extension_root: Path | None) -> str:
+    skill_path = Path(path).expanduser()
+    if not skill_path.is_absolute() and extension_root is not None:
+        skill_path = extension_root / skill_path
+    return str(skill_path)
+
+
+def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
+    manager = MCPRuntimeManager(MCPServersConfig(servers=[server.model_copy(update={"enabled": True})]))
+    client = manager.clients().get(server.server_id)
+    if client is None:
+        return {"status": "failed", "message": "MCP server is disabled or unavailable", "tool_count": 0, "tools": []}
+    try:
+        tools = [tool.model_dump(mode="json") for tool in client.list_tools()]
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "message": f"{type(exc).__name__}: {exc}",
+            "tool_count": 0,
+            "tools": [],
+        }
+    return {
+        "status": "ok",
+        "message": f"Discovered {len(tools)} tools.",
+        "tool_count": len(tools),
+        "tools": [
+            {
+                "name": str(tool.get("name") or "tool"),
+                "description": str(tool.get("description") or ""),
+            }
+            for tool in tools
+        ],
+    }
+
+
+def _required_config_id(payload: dict[str, Any], key: str) -> str:
+    value = str(payload.get(key) or "").strip()
+    if not value:
+        raise ValueError(f"{key} is required")
+    return value
+
+
+def _optional_identifier(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return _config_identifier(text, fallback="") if text else None
+
+
+def _config_identifier(value: str, *, fallback: str) -> str:
+    raw = value.strip() or fallback.strip()
+    identifier = re.sub(r"[^a-z0-9_]+", "_", raw.lower()).strip("_")
+    if not identifier:
+        identifier = "item"
+    if identifier[0].isdigit():
+        identifier = f"item_{identifier}"
+    return identifier[:64]
+
+
+def _parse_args(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return shlex.split(text)
+
+
+def _parse_env(value: Any) -> dict[str, str]:
+    if isinstance(value, dict):
+        return {str(key): str(item) for key, item in value.items() if str(key).strip()}
+    env: dict[str, str] = {}
+    for line in str(value or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, item = stripped.split("=", 1)
+        key = key.strip()
+        if key:
+            env[key] = item.strip()
+    return env
+
+
+def _mcp_server_summary(payload: dict[str, Any]) -> str:
+    transport = str(payload.get("transport") or "unknown")
+    command = str(payload.get("command") or "").strip()
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    package = str(source.get("package") or "").strip()
+    if package:
+        return f"{transport} connection from {package}"
+    if command:
+        return f"{transport} connection via {command}"
+    return f"{transport} connection"
+
+
+def _skill_summary(payload: dict[str, Any]) -> str:
+    source = str(payload.get("source") or "local")
+    path = str(payload.get("path") or "").strip()
+    if path:
+        return f"{source} skill at {path}"
+    return f"{source} skill"
+
+
+def _skill_metadata_for_public_view(payload: dict[str, Any]) -> dict[str, Any]:
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        return {}
+    try:
+        skill = parse_skill_directory(path)
+    except Exception:
+        return {}
+    return {
+        "name": skill.metadata.name,
+        "description": skill.metadata.description,
+        "resource_count": len(skill.resources),
+        "script_count": len(skill.scripts),
+    }

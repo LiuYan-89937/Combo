@@ -5,7 +5,15 @@ import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useExtensionStore } from '@/stores/extension'
 import type { McpServerConfig, SkillConfig } from '@/api/resourceTypes'
-import type { ExtensionItemView } from '@/types/protocol'
+import type {
+  ExtensionItemView,
+  ToolPermissionApproval,
+  ToolPermissionItemView,
+  ToolPermissionMode,
+  ToolPermissionOverrideView,
+  ToolPermissionPolicyView,
+  ToolRiskLevel,
+} from '@/types/protocol'
 
 export function useExtensionsManager() {
   const extensionStore = useExtensionStore()
@@ -32,6 +40,30 @@ export function useExtensionsManager() {
   const testTools = computed(() => (
     Array.isArray(extensionStore.testResult?.tools) ? extensionStore.testResult.tools : []
   ))
+  const toolPermissionPolicy = computed<ToolPermissionPolicyView>(() => (
+    extensionStore.toolPermissions?.policy || defaultToolPermissionPolicy()
+  ))
+  const toolPermissionTools = computed(() => extensionStore.toolPermissions?.tools || [])
+  const permissionModeOptions = computed(() => [
+    { label: t('permissions.mode.strict'), value: 'strict' },
+    { label: t('permissions.mode.allowBelowHigh'), value: 'allow_below_high' },
+    { label: t('permissions.mode.allowAll'), value: 'allow_all' },
+  ])
+  const riskLevelOptions = computed(() => [
+    { label: t('permissions.risk.low'), value: 'low' },
+    { label: t('permissions.risk.medium'), value: 'medium' },
+    { label: t('permissions.risk.high'), value: 'high' },
+  ])
+  const approvalOptions = computed(() => [
+    { label: t('permissions.approval.inherit'), value: 'inherit' },
+    { label: t('permissions.approval.allow'), value: 'allow' },
+    { label: t('permissions.approval.ask'), value: 'ask' },
+    { label: t('permissions.approval.deny'), value: 'deny' },
+  ])
+  const activePermissionModeLabel = computed(() => {
+    const match = permissionModeOptions.value.find((option) => option.value === toolPermissionPolicy.value.mode)
+    return match?.label || t('permissions.mode.allowBelowHigh')
+  })
 
   function refreshCurrentExtensions() {
     extensionStore.reset()
@@ -108,6 +140,44 @@ export function useExtensionsManager() {
     if (event) {
       showSkillModal.value = false
       editingSkill.value = null
+    }
+  }
+
+  async function handlePermissionModeChange(mode: string): Promise<void> {
+    const nextMode = normalizePermissionMode(mode)
+    busyKey.value = 'tool-permissions:mode'
+    try {
+      await commands.updateToolPermissions({ ...toolPermissionPolicy.value, mode: nextMode }, packageId.value)
+    } finally {
+      busyKey.value = null
+    }
+  }
+
+  async function handleToolRiskChange(tool: ToolPermissionItemView, riskLevel: string): Promise<void> {
+    const override = toolOverride(tool.tool_id)
+    await saveToolOverride(tool.tool_id, { ...override, risk_level: normalizeRiskLevel(riskLevel) })
+  }
+
+  async function handleToolApprovalChange(tool: ToolPermissionItemView, approval: string): Promise<void> {
+    const override = toolOverride(tool.tool_id)
+    await saveToolOverride(tool.tool_id, { ...override, approval: normalizeApproval(approval) })
+  }
+
+  async function handleResetToolPermission(tool: ToolPermissionItemView): Promise<void> {
+    busyKey.value = `permission:${tool.tool_id}`
+    try {
+      await commands.resetToolPermission(tool.tool_id, packageId.value)
+    } finally {
+      busyKey.value = null
+    }
+  }
+
+  async function saveToolOverride(toolId: string, override: ToolPermissionOverrideView): Promise<void> {
+    busyKey.value = `permission:${toolId}`
+    try {
+      await commands.setToolPermission(toolId, override, packageId.value)
+    } finally {
+      busyKey.value = null
     }
   }
 
@@ -189,8 +259,32 @@ export function useExtensionsManager() {
     return [command, args].filter(Boolean).join(' ') || t('extensions.commandUnset')
   }
 
+  function toolOverride(toolId: string): ToolPermissionOverrideView {
+    return toolPermissionPolicy.value.tool_overrides?.[toolId] || { approval: 'inherit', risk_level: null }
+  }
+
+  function toolRiskValue(tool: ToolPermissionItemView): ToolRiskLevel {
+    return toolOverride(tool.tool_id).risk_level || tool.risk_level
+  }
+
+  function toolApprovalValue(tool: ToolPermissionItemView): ToolPermissionApproval {
+    return toolOverride(tool.tool_id).approval || 'inherit'
+  }
+
+  function hasToolOverride(tool: ToolPermissionItemView): boolean {
+    return Boolean(toolPermissionPolicy.value.tool_overrides?.[tool.tool_id])
+  }
+
+  function toolSourceLabel(source: string): string {
+    if (source === 'system') return t('permissions.source.system')
+    if (source === 'extension') return t('permissions.source.extension')
+    if (source === 'model') return t('permissions.source.model')
+    return t('permissions.source.package')
+  }
+
   return {
     activePackageLabel,
+    activePermissionModeLabel,
     busyKey,
     editingMcp,
     editingSkill,
@@ -207,10 +301,23 @@ export function useExtensionsManager() {
     mcpCommandLine,
     openAddMcp,
     openAddSkill,
+    permissionModeOptions,
     refreshCurrentExtensions,
+    approvalOptions,
+    handlePermissionModeChange,
+    handleResetToolPermission,
+    handleToolApprovalChange,
+    handleToolRiskChange,
+    hasToolOverride,
+    riskLevelOptions,
     showMcpModal,
     showSkillModal,
     skillActions,
+    toolApprovalValue,
+    toolPermissionPolicy,
+    toolPermissionTools,
+    toolRiskValue,
+    toolSourceLabel,
     testResultMessage,
     testResultTitle,
     testResultType,
@@ -220,4 +327,29 @@ export function useExtensionsManager() {
 
 function extensionKey(item: ExtensionItemView): string {
   return String(item.payload?.server_id || item.payload?.skill_id || item.name || item.kind)
+}
+
+function defaultToolPermissionPolicy(): ToolPermissionPolicyView {
+  return {
+    mode: 'allow_below_high',
+    low: 'allow',
+    medium: 'allow',
+    high: 'ask',
+    tool_overrides: {},
+  }
+}
+
+function normalizePermissionMode(value: string): ToolPermissionMode {
+  if (value === 'strict' || value === 'allow_all' || value === 'custom') return value
+  return 'allow_below_high'
+}
+
+function normalizeRiskLevel(value: string): ToolRiskLevel {
+  if (value === 'medium' || value === 'high') return value
+  return 'low'
+}
+
+function normalizeApproval(value: string): ToolPermissionApproval {
+  if (value === 'allow' || value === 'ask' || value === 'deny') return value
+  return 'inherit'
 }

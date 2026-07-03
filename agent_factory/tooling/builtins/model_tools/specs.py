@@ -26,6 +26,7 @@ def get_model_tool_specs(runtime_tools: Mapping[str, Any] | None) -> list[ToolSp
                 resources={"model_tool": f"{MODEL_TOOL_RUNTIME_RESOURCE}.{tool_id}"},
                 risk_level="low",
                 concurrent=True,
+                permission_scope="model",
             )
         )
     return specs

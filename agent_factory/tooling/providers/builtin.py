@@ -6,6 +6,7 @@ from agent_factory.tooling.builtins import (
     get_always_available_system_tool_ids,
     get_builtin_tool_ids,
     get_builtin_tool_specs,
+    get_read_only_system_tool_ids,
 )
 from agent_factory.tooling.providers.base import ToolProviderContext, ToolProviderResult
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
@@ -27,7 +28,16 @@ class BuiltinToolProvider:
         unknown_ids = sorted(self._tool_ids - known_ids)
         if unknown_ids:
             raise ValueError("unknown builtin tool ids: " + ", ".join(unknown_ids))
-        specs = get_builtin_tool_specs()
+        read_only_ids = get_read_only_system_tool_ids()
+        specs = [
+            spec.model_copy(
+                update={
+                    "permission_scope": "system",
+                    "permission_tags": _permission_tags(spec.id, read_only_ids),
+                }
+            )
+            for spec in get_builtin_tool_specs()
+        ]
         runtime_resources = _runtime_resources(context)
         if SKILLHUB_RUNTIME_RESOURCE not in runtime_resources:
             specs = [spec for spec in specs if spec.id != "skillhub"]
@@ -39,6 +49,10 @@ class BuiltinToolProvider:
             system_tool_ids=[spec.id for spec in specs],
             runtime_resources=runtime_resources,
         )
+
+
+def _permission_tags(tool_id: str, read_only_ids: set[str]) -> list[str]:
+    return ["read_only"] if tool_id in read_only_ids else []
 
 
 def _runtime_resources(context: ToolProviderContext) -> dict[str, object]:

@@ -1,4 +1,5 @@
 import { extensionsApi } from '@/api/extensions'
+import type { ToolPermissionOverrideView, ToolPermissionPolicyView } from '@/types/protocol'
 import type { McpServerConfig, SkillConfig } from '@/api/resourceTypes'
 import { useCommandTransport } from './transport'
 
@@ -37,6 +38,18 @@ export function useExtensionCommands() {
     return transport.applyEventRequest(extensionsApi.removeSkill(skillId, packageId))
   }
 
+  const updateToolPermissions = (policy: ToolPermissionPolicyView, packageId?: string) => {
+    return transport.applyEventRequest(extensionsApi.updateToolPermissions(policy, packageId))
+  }
+
+  const setToolPermission = (toolId: string, override: ToolPermissionOverrideView, packageId?: string) => {
+    return transport.applyEventRequest(extensionsApi.setToolPermission(toolId, override, packageId))
+  }
+
+  const resetToolPermission = (toolId: string, packageId?: string) => {
+    return transport.applyEventRequest(extensionsApi.resetToolPermission(toolId, packageId))
+  }
+
   return {
     refreshExtensions,
     saveMcp,
@@ -46,5 +59,8 @@ export function useExtensionCommands() {
     saveSkill,
     setSkillEnabled,
     removeSkill,
+    updateToolPermissions,
+    setToolPermission,
+    resetToolPermission,
   }
 }

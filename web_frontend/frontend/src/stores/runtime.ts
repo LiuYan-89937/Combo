@@ -131,6 +131,7 @@ export const useRuntimeStore = defineStore('runtime', {
     schedulerRunNotices: [],
     extensionItems: [],
     extensionTestResult: null,
+    toolPermissions: null,
     sessions: [],
     agentPackages: [],
     selectedAgentPackage: null,
@@ -938,6 +939,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.workspaceEntries = []
       this.workspaceFile = null
       this.extensionTestResult = null
+      this.toolPermissions = null
       this.activeConversationScope = null
     },
 

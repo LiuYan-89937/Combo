@@ -915,7 +915,7 @@ def _tool_access_binding(node_id: str, impl: str, allowed_tool_ids: list[str]) -
         "binding_id": f"{node_id}_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": node_id, "impl": impl},
-        "payload": {"allowed_tool_ids": _unique_strings(allowed_tool_ids), "approval_policy": "standard"},
+        "payload": {"allowed_tool_ids": _unique_strings(allowed_tool_ids), "approval_policy": "allow_below_high"},
     }
 
 

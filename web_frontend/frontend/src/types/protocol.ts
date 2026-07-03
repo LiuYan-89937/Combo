@@ -349,6 +349,38 @@ export interface ExtensionItemView {
   payload: Record<string, any>
 }
 
+export type ToolPermissionMode = 'strict' | 'allow_below_high' | 'allow_all' | 'custom'
+export type ToolRiskLevel = 'low' | 'medium' | 'high'
+export type ToolPermissionApproval = 'inherit' | 'allow' | 'ask' | 'deny'
+
+export interface ToolPermissionOverrideView {
+  risk_level?: ToolRiskLevel | null
+  approval?: ToolPermissionApproval
+}
+
+export interface ToolPermissionPolicyView {
+  mode: ToolPermissionMode
+  low?: string
+  medium?: string
+  high?: string
+  tool_overrides: Record<string, ToolPermissionOverrideView>
+}
+
+export interface ToolPermissionItemView {
+  tool_id: string
+  name: string
+  description: string
+  source: string
+  risk_level: ToolRiskLevel
+  permission_scope: string
+  permission_tags: string[]
+}
+
+export interface ToolPermissionsView {
+  policy: ToolPermissionPolicyView
+  tools: ToolPermissionItemView[]
+}
+
 export interface RuntimeActivityView {
   status: string
   eventType?: string
@@ -407,6 +439,7 @@ export interface RuntimeViewState {
   schedulerRunNotices: SchedulerRunNoticeView[]
   extensionItems: ExtensionItemView[]
   extensionTestResult: Record<string, any> | null
+  toolPermissions: ToolPermissionsView | null
   sessions: any[]
   agentPackages: any[]
   selectedAgentPackage: any | null

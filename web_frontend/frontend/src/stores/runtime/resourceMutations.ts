@@ -7,6 +7,7 @@ import {
   schedulerJobView,
   schedulerRunNoticeView,
   schedulerToolOptionView,
+  toolPermissionsView,
   workspaceEntryView,
   workspaceFileView,
   workspaceRootView,
@@ -16,6 +17,7 @@ export type ResourceMutationState = Pick<
   RuntimeViewState,
   | 'extensionItems'
   | 'extensionTestResult'
+  | 'toolPermissions'
   | 'knowledgeDocument'
   | 'knowledgeDocuments'
   | 'knowledgeResults'
@@ -77,6 +79,7 @@ export function applyExtensionsEvent(state: ResourceMutationState, event: Factor
     ...mcpServers.map((item: any) => extensionItemView(item, 'mcp')),
     ...skills.map((item: any) => extensionItemView(item, 'skill')),
   ]
+  state.toolPermissions = toolPermissionsView(event.payload?.tool_permissions)
   if (event.event_type === 'extension_config_tested') {
     state.extensionTestResult = event.payload?.test || event.payload || null
   } else if (event.event_type === 'extension_config_updated') {

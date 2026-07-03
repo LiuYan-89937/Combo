@@ -36,6 +36,7 @@ def build_skill_tool_spec(
         risk_level="medium",
         risk_evaluator=ToolRiskEvaluatorConfig(hard="agent_factory.tooling.skills.skill_tool:evaluate_risk"),
         concurrent=True,
+        permission_scope="extension",
     )
 
 

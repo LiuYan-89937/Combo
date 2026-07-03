@@ -8,6 +8,10 @@ import type {
   SchedulerJobView,
   SchedulerRunNoticeView,
   SchedulerToolOptionView,
+  ToolPermissionApproval,
+  ToolPermissionMode,
+  ToolPermissionsView,
+  ToolRiskLevel,
   WorkspaceEntry,
   WorkspaceFileView,
   WorkspaceRootView,
@@ -179,6 +183,64 @@ export function extensionItemView(item: any, fallbackKind: 'mcp' | 'skill'): Ext
     enabled: item.enabled !== false,
     payload: item.payload || item || {},
   }
+}
+
+export function toolPermissionsView(payload: any): ToolPermissionsView | null {
+  if (!payload || typeof payload !== 'object') return null
+  const policy = payload.policy && typeof payload.policy === 'object' ? payload.policy : {}
+  const tools = Array.isArray(payload.tools) ? payload.tools : []
+  return {
+    policy: {
+      mode: toolPermissionMode(policy.mode),
+      low: typeof policy.low === 'string' ? policy.low : undefined,
+      medium: typeof policy.medium === 'string' ? policy.medium : undefined,
+      high: typeof policy.high === 'string' ? policy.high : undefined,
+      tool_overrides: toolPermissionOverrides(policy.tool_overrides),
+    },
+    tools: tools.map(toolPermissionItemView).filter(Boolean) as ToolPermissionsView['tools'],
+  }
+}
+
+function toolPermissionItemView(item: any) {
+  const toolId = String(item?.tool_id || '').trim()
+  if (!toolId) return null
+  return {
+    tool_id: toolId,
+    name: String(item.name || toolId),
+    description: String(item.description || ''),
+    source: String(item.source || 'package'),
+    risk_level: toolRiskLevel(item.risk_level),
+    permission_scope: String(item.permission_scope || ''),
+    permission_tags: Array.isArray(item.permission_tags) ? item.permission_tags.map(String) : [],
+  }
+}
+
+function toolPermissionOverrides(payload: any): ToolPermissionsView['policy']['tool_overrides'] {
+  if (!payload || typeof payload !== 'object') return {}
+  const overrides: ToolPermissionsView['policy']['tool_overrides'] = {}
+  Object.entries(payload).forEach(([toolId, value]) => {
+    if (!value || typeof value !== 'object') return
+    const item = value as Record<string, any>
+    overrides[toolId] = {
+      risk_level: item.risk_level ? toolRiskLevel(item.risk_level) : null,
+      approval: toolPermissionApproval(item.approval),
+    }
+  })
+  return overrides
+}
+
+function toolPermissionMode(value: unknown): ToolPermissionMode {
+  return value === 'strict' || value === 'allow_all' || value === 'custom'
+    ? value
+    : 'allow_below_high'
+}
+
+function toolRiskLevel(value: unknown): ToolRiskLevel {
+  return value === 'medium' || value === 'high' ? value : 'low'
+}
+
+function toolPermissionApproval(value: unknown): ToolPermissionApproval {
+  return value === 'allow' || value === 'ask' || value === 'deny' ? value : 'inherit'
 }
 
 function schedulerJobTargetLabel(targetType: string | null, payload: Record<string, any>): string {

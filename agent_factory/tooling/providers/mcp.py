@@ -146,6 +146,7 @@ def _tool_spec_from_mcp_tool(server: MCPServerConfig, tool: MCPDiscoveredTool) -
         risk_level=tool.risk_level or server.risk_level_default,
         risk_evaluator=tool.risk_evaluator or ToolRiskEvaluatorConfig(llm_mode="on_uncertain"),
         concurrent=server.concurrent_default if tool.concurrent is None else tool.concurrent,
+        permission_scope="extension",
     )
 
 

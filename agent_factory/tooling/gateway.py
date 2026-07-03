@@ -23,6 +23,7 @@ from agent_factory.models import get_compression_model
 from agent_factory.tooling.approval_policy import (
     ToolApprovalPolicyConfig,
     default_tool_approval_policy,
+    tool_approval_effective_risk_level,
     tool_approval_policy_action,
 )
 from agent_factory.tooling.resource_context import build_tool_resource_context
@@ -234,12 +235,17 @@ class ToolExecutionGateway:
         normalized_arguments, risk = self._evaluate_risk(arguments, risk_context_resources)
         if tool_approval_policy_action(spec=self.spec, risk=risk, policy=self.approval_policy) != "ask":
             return None
+        effective_risk_level = tool_approval_effective_risk_level(
+            spec=self.spec,
+            risk=risk,
+            policy=self.approval_policy,
+        )
         return ToolApprovalRequest(
             tool_call_id=tool_call_id or "",
             tool_name=self.spec.id,
             args=normalized_arguments,
             summary=self.spec.id,
-            risk_level=risk.risk_level,
+            risk_level=effective_risk_level,
             risk_reasons=risk.reasons,
             risk_facts=risk.facts,
         ).model_dump(mode="json")
@@ -315,6 +321,13 @@ class ToolExecutionGateway:
         if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(self.spec.id):
             return ToolApprovalDecision(action="approve")
         handler = self.approval_handler or default_interrupt_approval
+        effective_risk_level = tool_approval_effective_risk_level(
+            spec=self.spec,
+            risk=risk,
+            policy=self.approval_policy,
+        )
+        if effective_risk_level != risk.risk_level:
+            risk = risk.model_copy(update={"risk_level": effective_risk_level})
         return handler(self.spec, arguments, risk)
 
     def _resolve_resources(self) -> dict[str, Any]:
@@ -435,7 +448,7 @@ def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: 
                     "tool_name": spec.id,
                     "args": arguments,
                     "summary": spec.id,
-                    "risk_level": spec.risk_level,
+                    "risk_level": risk.risk_level or spec.risk_level,
                     "risk_reasons": risk.reasons,
                     "risk_facts": risk.facts,
                 }
