@@ -78,7 +78,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": sorted(CREATE_AGENT_AUTHORING_ACTIONS)},
-                "agent": {"type": "object", "additionalProperties": True},
+                "agent": _agent_identity_authoring_schema(),
                 "pattern_id": {"type": "string", "enum": sorted(SUPPORTED_PATTERN_IDS)},
                 "prompts": {
                     "type": "object",
@@ -331,6 +331,37 @@ def _tool_spec_authoring_schema() -> dict[str, Any]:
             "risk_evaluator",
             "concurrent",
         ],
+        "additionalProperties": False,
+    }
+
+
+def _agent_identity_authoring_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Produced Agent identity. Only id, name, description, and version are accepted. "
+            "Do not include author, tags, category, capabilities, tools, metadata, or other descriptive fields here."
+        ),
+        "properties": {
+            "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable snake_case Agent id.",
+            },
+            "name": {
+                "type": "string",
+                "description": "Human-readable Agent name.",
+            },
+            "description": {
+                "type": "string",
+                "description": "Short user-facing Agent description.",
+            },
+            "version": {
+                "type": "string",
+                "description": "Semantic package version, for example 0.1.0.",
+            },
+        },
+        "required": ["id"],
         "additionalProperties": False,
     }
 
