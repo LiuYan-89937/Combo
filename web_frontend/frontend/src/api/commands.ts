@@ -29,8 +29,16 @@ export function createCommand(
 
 // ============= Session Commands =============
 
-export function startSessionCommand(resumeLatest = false, mode?: FactoryMode | null): FactoryFrontendCommand {
-  return createCommand('start_session', { resume_latest: resumeLatest, mode })
+export function startSessionCommand(
+  resumeLatest = false,
+  mode?: FactoryMode | null,
+  packageId?: string | null
+): FactoryFrontendCommand {
+  return createCommand('start_session', {
+    resume_latest: resumeLatest,
+    mode,
+    payload: packageId ? { package_id: packageId } : {},
+  })
 }
 
 export function listSessionsCommand(): FactoryFrontendCommand {
@@ -41,8 +49,11 @@ export function switchSessionCommand(sessionId: string, mode?: FactoryMode | nul
   return createCommand('switch_session', { session_id: sessionId, mode })
 }
 
-export function newSessionCommand(mode?: FactoryMode | null): FactoryFrontendCommand {
-  return createCommand('new_session', { mode })
+export function newSessionCommand(mode?: FactoryMode | null, packageId?: string | null): FactoryFrontendCommand {
+  return createCommand('new_session', {
+    mode,
+    payload: packageId ? { package_id: packageId } : {},
+  })
 }
 
 export function setModeCommand(mode: FactoryMode): FactoryFrontendCommand {
@@ -175,8 +186,16 @@ export function resumeInterruptCommand(options: ResumeInterruptOptions): Factory
   })
 }
 
-export function cancelRuntimeRequestCommand(reason = 'user_cancelled'): FactoryFrontendCommand {
+export function cancelRuntimeRequestCommand(
+  reason = 'user_cancelled',
+  targetRequestId: string | null = null,
+  visibleOutput: Record<string, any> | null = null,
+): FactoryFrontendCommand {
   return createCommand('cancel_runtime_request', {
-    payload: { reason },
+    payload: {
+      reason,
+      ...(targetRequestId ? { target_request_id: targetRequestId } : {}),
+      ...(visibleOutput ? { visible_output: visibleOutput } : {}),
+    },
   })
 }

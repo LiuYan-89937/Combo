@@ -16,7 +16,10 @@ from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     RUN_TERMINAL_EVENT_TYPES,
     runtime_stream_status,
 )
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import extract_interrupt_payload
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import (
+    VisibleAssistantOutputAccumulator,
+    extract_interrupt_payload,
+)
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     PendingAgentPackageRun,
     PendingCreateAgentRun,
@@ -83,10 +86,7 @@ class RuntimeAgentPackageCommandMixin:
         package_id: str,
         package_info: dict[str, Any],
     ) -> None:
-        self._ensure_session(command)
-        self.mode = "evolve_agent"
-        self.evolution_package_id = package_id
-        self.session_record = self.session_manager.set_evolution_package(self.session_record.session_id, package_id)
+        self._ensure_evolution_package_session(command, package_id)
         trace_payload: dict[str, Any] = {}
         try:
             trace_payload["latest_failed_trace_id"] = self.evolution_runtime.latest_failed_trace_id(package_id)
@@ -100,11 +100,43 @@ class RuntimeAgentPackageCommandMixin:
                 mode="evolve_agent",
                 payload={
                     "package": package_info,
+                    "package_id": package_id,
+                    "session": self._session_payload(),
                     "sessions": [],
                     "purpose": "evolution",
                     **trace_payload,
                 },
             )
+        )
+
+    def _ensure_evolution_package_session(self, command: FactoryFrontendCommand, package_id: str) -> None:
+        normalized_package_id = package_id.strip()
+        if not normalized_package_id:
+            raise ValueError("evolution package_id is required")
+
+        current_package_id = (
+            str(getattr(self.session_record, "evolve_agent_package_id", "") or "").strip()
+            if self.session_record is not None
+            else ""
+        )
+        current_is_blank_evolution = (
+            self.session_record is not None
+            and self.session_record.current_mode == "evolve_agent"
+            and not current_package_id
+            and not self.session_record.evolve_agent_turns
+        )
+        if self.session_record is None:
+            existing = self.session_manager.latest_evolution_for_package(normalized_package_id)
+            self.session_record = existing or self.session_manager.create(mode="evolve_agent")
+        elif current_package_id != normalized_package_id and not current_is_blank_evolution:
+            existing = self.session_manager.latest_evolution_for_package(normalized_package_id)
+            self.session_record = existing or self.session_manager.create(mode="evolve_agent")
+
+        self.mode = "evolve_agent"
+        self.evolution_package_id = normalized_package_id
+        self.session_record = self.session_manager.set_evolution_package(
+            self.session_record.session_id,
+            normalized_package_id,
         )
 
     def delete_agent_package(self, command: FactoryFrontendCommand) -> None:
@@ -240,8 +272,7 @@ class RuntimeAgentPackageCommandMixin:
         if self.pending_evolution_run is not None:
             self._emit_error(command, "cannot evolve an agent while an interrupt is pending")
             return
-        self._ensure_session(command)
-        self.mode = "evolve_agent"
+        self._ensure_evolution_package_session(command, package_id)
         redacted_message = redact_attachment_markers(message)
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
@@ -288,6 +319,11 @@ class RuntimeAgentPackageCommandMixin:
                 payload={
                     "package_id": package_id,
                     "message": message,
+                    **(
+                        {"user_config": command.payload.get("user_config")}
+                        if command.payload.get("user_config")
+                        else {}
+                    ),
                     **({"attachments": command.payload.get("attachments")} if command.payload.get("attachments") else {}),
                 },
             )
@@ -295,30 +331,22 @@ class RuntimeAgentPackageCommandMixin:
 
     def _consume_evolution_stream(self, *, package_id: str, run: Any) -> RuntimeStreamConsumeResult:
         terminal_event: FactoryFrontendEvent | None = None
-        final_answer: str | None = None
-        final_reasoning_content: str | None = None
+        visible_output = VisibleAssistantOutputAccumulator()
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode != "frontend_event":
                 continue
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-            if item.event_type == "model_reasoning_completed":
-                content = _visible_model_reasoning_content(item)
-                if content:
-                    final_reasoning_content = content
-            if item.event_type == "model_message_completed":
-                content = _visible_model_message_content(item)
-                if content:
-                    final_answer = content
+            visible_output.accept(item)
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 session_id = self._session_id()
                 if not session_id:
                     raise RuntimeError("agent evolution interrupt missing session_id")
                 self._finish_evolution_turn(
                     request_id=item.request_id,
-                    final_answer=final_answer,
-                    reasoning_content=final_reasoning_content,
+                    final_answer=visible_output.content,
+                    reasoning_content=visible_output.reasoning_content,
                     status="interrupted",
                 )
                 self.pending_evolution_run = PendingEvolutionRun(
@@ -329,15 +357,29 @@ class RuntimeAgentPackageCommandMixin:
                     interrupt_id=_interrupt_id_from_event(item),
                     interrupt_event_id=item.event_id,
                 )
-                self.emit(_frontend_scoped_agent_event(item, mode="evolve_agent", session_id=session_id))
+                self.emit(
+                    _frontend_scoped_agent_event(
+                        item,
+                        mode="evolve_agent",
+                        session_id=session_id,
+                        package_id=package_id,
+                    )
+                )
                 terminal_event = item
                 continue
-            self.emit(_frontend_scoped_agent_event(item, mode="evolve_agent", session_id=self._session_id()))
+            self.emit(
+                _frontend_scoped_agent_event(
+                    item,
+                    mode="evolve_agent",
+                    session_id=self._session_id(),
+                    package_id=package_id,
+                )
+            )
             if item.event_type in RUN_TERMINAL_EVENT_TYPES:
                 self._finish_evolution_turn(
                     request_id=item.request_id,
-                    final_answer=final_answer,
-                    reasoning_content=final_reasoning_content,
+                    final_answer=visible_output.content,
+                    reasoning_content=visible_output.reasoning_content,
                     status=runtime_stream_status(item),
                 )
                 terminal_event = item
@@ -428,13 +470,21 @@ class RuntimeAgentPackageCommandMixin:
 
     def cancel_runtime_request(self, command: FactoryFrontendCommand) -> None:
         reason = str(command.payload.get("reason") or "user_cancelled")
+        target_request_id = str(command.payload.get("target_request_id") or "").strip() or None
+        visible_output = command.payload.get("visible_output") if isinstance(command.payload.get("visible_output"), dict) else None
         cancelled = (
-            self.agent_package_runtime.cancel_active_requests(reason=reason)
+            self.agent_package_runtime.cancel_active_requests(
+                reason=reason,
+                request_id=target_request_id,
+                visible_output=visible_output,
+            )
             if self.agent_package_runtime
             else 0
         )
         if self.evolution_runtime is not None:
-            cancelled += self.evolution_runtime.cancel_active_requests(reason=reason)
+            cancelled += self.evolution_runtime.cancel_active_requests(reason=reason, request_id=target_request_id)
+        if self.create_agent_runtime is not None:
+            cancelled += self.create_agent_runtime.cancel_active_requests(reason=reason, request_id=target_request_id)
         self.pending_agent_package_run = None
         self.pending_evolution_run = None
         if self.pending_create_agent_run is not None:
@@ -448,7 +498,12 @@ class RuntimeAgentPackageCommandMixin:
                 mode=self.mode,
                 graph_id="factory_runtime",
                 producer_type="factory_runtime",
-                payload={"source": "runtime_request_cancel", "reason": reason, "cancelled_requests": cancelled},
+                payload={
+                    "source": "runtime_request_cancel",
+                    "reason": reason,
+                    "target_request_id": target_request_id,
+                    "cancelled_requests": cancelled,
+                },
             )
         )
 
@@ -465,21 +520,13 @@ class RuntimeAgentPackageCommandMixin:
         normalizer.default_payload = {**normalizer.default_payload, "package_id": package_id}
         final_state = None
         terminal_event: FactoryFrontendEvent | None = None
-        final_answer: str | None = None
-        final_reasoning_content: str | None = None
+        visible_output = VisibleAssistantOutputAccumulator()
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode == "frontend_event":
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-                if item.event_type == "model_reasoning_completed":
-                    content = _visible_model_reasoning_content(item)
-                    if content:
-                        final_reasoning_content = content
-                if item.event_type == "model_message_completed":
-                    content = _visible_model_message_content(item)
-                    if content:
-                        final_answer = content
+                visible_output.accept(item)
                 agent_session_id = item.session_id
                 if agent_session_id:
                     run.session["session_id"] = agent_session_id
@@ -491,8 +538,8 @@ class RuntimeAgentPackageCommandMixin:
                     if frontend_mode == "chat" and sync_system_chat_session:
                         self._finish_system_chat_turn(
                             request_id=item.request_id,
-                            final_answer=final_answer,
-                            reasoning_content=final_reasoning_content,
+                            final_answer=visible_output.content,
+                            reasoning_content=visible_output.reasoning_content,
                             status="interrupted",
                         )
                     session_id = str(agent_session_id or (run.session or {}).get("session_id") or "")
@@ -522,8 +569,8 @@ class RuntimeAgentPackageCommandMixin:
                     ):
                         self._finish_system_chat_turn(
                             request_id=item.request_id,
-                            final_answer=final_answer,
-                            reasoning_content=final_reasoning_content,
+                            final_answer=visible_output.content,
+                            reasoning_content=visible_output.reasoning_content,
                             status=runtime_stream_status(item),
                         )
                     terminal_event = item
@@ -564,8 +611,7 @@ class RuntimeAgentPackageCommandMixin:
             normalizer.complete_open_model_streams(reason="run_failed")
             normalizer.emit_run_failed(RuntimeError(message))
             return RuntimeStreamConsumeResult(status="failed", message=message)
-        normalizer.complete_open_model_streams(reason="run_completed")
-        normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
+        normalizer.complete_visible_assistant_output_from_state(final_state, reason="run_completed")
         normalizer.emit_run_completed(
             {
                 "status": final_state.execution.finish_status,
@@ -794,27 +840,19 @@ class RuntimeAgentPackageCommandMixin:
 
     def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
         terminal_event: FactoryFrontendEvent | None = None
-        final_answer: str | None = None
-        final_reasoning_content: str | None = None
+        visible_output = VisibleAssistantOutputAccumulator()
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
                 continue
             if stream_mode != "frontend_event":
                 raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-            if item.event_type == "model_reasoning_completed":
-                content = _visible_model_reasoning_content(item)
-                if content:
-                    final_reasoning_content = content
-            if item.event_type == "model_message_completed":
-                content = _visible_model_message_content(item)
-                if content:
-                    final_answer = content
+            visible_output.accept(item)
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 self._finish_host_create_agent_turn(
                     request_id=item.request_id,
-                    final_answer=final_answer,
-                    reasoning_content=final_reasoning_content,
+                    final_answer=visible_output.content,
+                    reasoning_content=visible_output.reasoning_content,
                     status="interrupted",
                 )
                 self.pending_create_agent_run = PendingCreateAgentRun(
@@ -830,8 +868,8 @@ class RuntimeAgentPackageCommandMixin:
             if item.event_type in RUN_TERMINAL_EVENT_TYPES:
                 self._finish_host_create_agent_turn(
                     request_id=item.request_id,
-                    final_answer=final_answer,
-                    reasoning_content=final_reasoning_content,
+                    final_answer=visible_output.content,
+                    reasoning_content=visible_output.reasoning_content,
                     status=runtime_stream_status(item),
                 )
                 terminal_event = item
@@ -879,28 +917,10 @@ def _frontend_scoped_agent_event(
     return item.model_copy(update=updates) if updates else item
 
 
-def _visible_model_message_content(item: FactoryFrontendEvent) -> str | None:
-    if not isinstance(item.payload, dict):
-        return None
-    if item.payload.get("visible_to_user") is False:
-        return None
-    content = str(item.payload.get("content") or "").strip()
-    return content or None
-
-
 def _runtime_user_config(command: FactoryFrontendCommand) -> dict[str, Any]:
     payload = command.payload if isinstance(command.payload, dict) else {}
     user_config = payload.get("user_config")
     return dict(user_config) if isinstance(user_config, dict) else {}
-
-
-def _visible_model_reasoning_content(item: FactoryFrontendEvent) -> str | None:
-    if not isinstance(item.payload, dict):
-        return None
-    if item.payload.get("visible_to_user") is False:
-        return None
-    content = str(item.payload.get("content") or item.payload.get("reasoning_content") or "").strip()
-    return content or None
 
 
 def _resume_payload_text(payload: Any) -> str:

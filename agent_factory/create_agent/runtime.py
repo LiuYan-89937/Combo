@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import threading
 from typing import Any
 from uuid import uuid4
 
@@ -54,6 +55,28 @@ class CreateAgentRuntime:
         self.checkpointer = checkpointer or build_factory_checkpointer_handle().saver
         self.model = model
         self._active_graph_by_session: dict[str, str] = {}
+        self._cancel_lock = threading.Lock()
+        self._active_cancel_tokens: dict[str, threading.Event] = {}
+
+    def cancel_active_requests(self, *, reason: str = "user_cancelled", request_id: str | None = None) -> int:
+        del reason
+        target = (request_id or "").strip()
+        with self._cancel_lock:
+            request_ids = [target] if target and target in self._active_cancel_tokens else list(self._active_cancel_tokens)
+            for active_request_id in request_ids:
+                self._active_cancel_tokens[active_request_id].set()
+            return len(request_ids)
+
+    def _register_cancel_token(self, request_id: str) -> threading.Event:
+        token = threading.Event()
+        with self._cancel_lock:
+            self._active_cancel_tokens[request_id] = token
+        return token
+
+    def _forget_cancel_token(self, request_id: str, token: threading.Event) -> None:
+        with self._cancel_lock:
+            if self._active_cancel_tokens.get(request_id) is token:
+                self._active_cancel_tokens.pop(request_id, None)
 
     def load_session_snapshot(self, session_id: str) -> dict[str, Any]:
         manufacture = self._checkpoint_snapshot(session_id=session_id, graph_kind="manufacture")
@@ -196,6 +219,7 @@ class CreateAgentRuntime:
         intent: dict[str, Any] | None,
     ) -> Iterator[tuple[str, Any]]:
         request_id = request_id or uuid4().hex
+        cancel_token = self._register_cancel_token(request_id)
         graph_id = "create_agent_react" if graph_kind == "manufacture" else "create_agent_assist"
         node_label = "Create Agent ReAct" if graph_kind == "manufacture" else "Create Agent Assist"
         if resume_payload is None and graph_kind == "manufacture":
@@ -241,6 +265,37 @@ class CreateAgentRuntime:
             producer_type=graph_id,
         )
         model_trace = _ModelTraceAccumulator(record_trace)
+
+        def emit_cancelled() -> Iterator[tuple[str, FactoryFrontendEvent]]:
+            model_trace.flush()
+            normalizer.complete_open_model_streams(reason="user_stopped")
+            normalizer.runtime_event(
+                "node_completed",
+                node_id=graph_id,
+                node_label=node_label,
+                payload={"workspace_path": str(workspace.root), "status": "stopped", "graph_kind": graph_kind},
+            )
+            record_trace(
+                "lifecycle",
+                {
+                    "event_type": "run_completed",
+                    "payload": {
+                        "status": "stopped",
+                        "workspace_path": str(workspace.root),
+                        "graph_kind": graph_kind,
+                    },
+                },
+            )
+            normalizer.emit_run_completed(
+                {
+                    "status": "stopped",
+                    "workspace_path": str(workspace.root),
+                    "graph_kind": graph_kind,
+                    "agent_session": {"session_id": session_id},
+                }
+            )
+            yield from drain_events()
+
         selected_pattern_payload = _selected_runtime_pattern_payload(intent)
         normalizer.emit_run_started(
             payload={
@@ -267,6 +322,10 @@ class CreateAgentRuntime:
             },
         )
         yield from drain_events()
+        if cancel_token.is_set():
+            yield from emit_cancelled()
+            self._forget_cancel_token(request_id, cancel_token)
+            return
         normalizer.runtime_event(
             "node_started",
             node_id=graph_id,
@@ -284,6 +343,9 @@ class CreateAgentRuntime:
         )
         yield from drain_events()
         try:
+            if cancel_token.is_set():
+                yield from emit_cancelled()
+                return
             tool_env = self.tool_environment_builder.build(workspace_root=workspace.root, mode=graph_kind)
             if graph_kind == "manufacture":
                 workflow = CreateAgentWorkflow(
@@ -315,52 +377,61 @@ class CreateAgentRuntime:
                 record_trace("lifecycle", {"event_type": "runtime_resumed", "payload": _json_safe(resume_payload)})
                 yield from drain_events()
             final_state: dict[str, Any] | None = None
-            for stream_mode, chunk in workflow.stream(
+            stream_iter = workflow.stream(
                 stream_input,
                 config=config,
                 stream_mode=["messages", "custom", "values"],
-            ):
-                interrupt_payload = extract_interrupt_payload(chunk)
-                if interrupt_payload is not None:
-                    normalizer.emit_interrupt(frontend_json_safe(interrupt_payload))
-                    record_trace(
-                        "lifecycle",
-                        {"event_type": "interrupt_requested", "payload": _json_safe(interrupt_payload)},
-                    )
-                    model_trace.flush()
-                    yield from drain_events()
-                    return
-                if stream_mode == "values" and isinstance(chunk, dict):
-                    final_state = chunk
-                    continue
-                if stream_mode == "messages" and graph_kind == "manufacture":
-                    model_trace.accept(chunk)
-                if stream_mode == "custom" and graph_kind == "manufacture":
-                    model_trace.flush()
-                    if _is_model_cache_chunk(chunk):
-                        cache_payload = _json_safe(chunk.get("payload") or {})
-                        record_trace("model_cache", cache_payload)
-                        node_id = str(cache_payload.get("node_id") or "create_agent_supervisor")
-                        normalizer.runtime_event(
-                            "model_cache_metrics",
-                            node_id=node_id,
-                            payload=cache_payload,
+            )
+            try:
+                for stream_mode, chunk in stream_iter:
+                    if cancel_token.is_set():
+                        yield from emit_cancelled()
+                        return
+                    interrupt_payload = extract_interrupt_payload(chunk)
+                    if interrupt_payload is not None:
+                        normalizer.emit_interrupt(frontend_json_safe(interrupt_payload))
+                        record_trace(
+                            "lifecycle",
+                            {"event_type": "interrupt_requested", "payload": _json_safe(interrupt_payload)},
                         )
-                        normalizer.runtime_event(
-                            "context_window_updated",
-                            node_id=node_id,
-                            payload=_context_window_payload_from_model_cache(cache_payload, node_id=node_id),
-                        )
+                        model_trace.flush()
+                        yield from drain_events()
+                        return
+                    if stream_mode == "values" and isinstance(chunk, dict):
+                        final_state = chunk
                         continue
-                    for record in _tool_trace_records(chunk):
-                        record_trace("tool_call", record)
-                normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="create_agent_update")
-                yield from drain_events()
+                    if stream_mode == "messages" and graph_kind == "manufacture":
+                        model_trace.accept(chunk)
+                    if stream_mode == "custom" and graph_kind == "manufacture":
+                        model_trace.flush()
+                        if _is_model_cache_chunk(chunk):
+                            cache_payload = _json_safe(chunk.get("payload") or {})
+                            record_trace("model_cache", cache_payload)
+                            node_id = str(cache_payload.get("node_id") or "create_agent_supervisor")
+                            normalizer.runtime_event(
+                                "model_cache_metrics",
+                                node_id=node_id,
+                                payload=cache_payload,
+                            )
+                            normalizer.runtime_event(
+                                "context_window_updated",
+                                node_id=node_id,
+                                payload=_context_window_payload_from_model_cache(cache_payload, node_id=node_id),
+                            )
+                            continue
+                        for record in _tool_trace_records(chunk):
+                            record_trace("tool_call", record)
+                    normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="create_agent_update")
+                    yield from drain_events()
+            finally:
+                close = getattr(stream_iter, "close", None)
+                if callable(close):
+                    close()
             model_trace.flush()
             if not final_state:
                 raise RuntimeError("create-agent workflow did not produce final state")
             if final_state.get("done"):
-                normalizer.emit_final_message_if_needed(
+                normalizer.complete_visible_assistant_output_from_text(
                     str(final_state.get("final_answer") or ""),
                     node_id=graph_id,
                     reason="run_completed",
@@ -443,6 +514,8 @@ class CreateAgentRuntime:
                 },
             )
             yield from drain_events()
+        finally:
+            self._forget_cancel_token(request_id, cancel_token)
 
 
 def _manufacture_resume_update(*, workspace: CreateAgentWorkspace, resume_payload: dict[str, Any]) -> dict[str, Any]:

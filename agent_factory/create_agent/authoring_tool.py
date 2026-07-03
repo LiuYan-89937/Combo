@@ -99,7 +99,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     "additionalProperties": False,
                 },
                 "allowed_tool_ids": {"type": "array", "items": {"type": "string"}},
-                "tool_spec": {"type": "object", "additionalProperties": True},
+                "tool_spec": _tool_spec_authoring_schema(),
                 "tool_id": {"type": "string"},
                 "tool_source": {"type": "string"},
                 "python_requirements": {"type": "array", "items": {"type": "string"}},
@@ -293,6 +293,48 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
     )
 
 
+def _tool_spec_authoring_schema() -> dict[str, Any]:
+    schema_object = {"type": "object", "additionalProperties": True}
+    return {
+        "type": "object",
+        "description": (
+            "Complete ToolSpec object. id, description, entrypoint, input_schema, output_schema, resources, "
+            "risk_level, risk_evaluator, and concurrent are top-level fields. Do not nest ToolSpec fields inside input_schema."
+        ),
+        "properties": {
+            "id": {"type": "string"},
+            "description": {"type": "string"},
+            "entrypoint": {"type": "string"},
+            "input_schema": schema_object,
+            "output_schema": schema_object,
+            "resources": {"type": "object", "additionalProperties": {"type": "string"}},
+            "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+            "risk_evaluator": {
+                "type": "object",
+                "properties": {
+                    "hard": {"type": ["string", "null"]},
+                    "llm": {"type": ["string", "null"]},
+                    "llm_mode": {"type": "string", "enum": ["disabled", "on_uncertain", "always"]},
+                },
+                "additionalProperties": False,
+            },
+            "concurrent": {"type": "boolean"},
+        },
+        "required": [
+            "id",
+            "description",
+            "entrypoint",
+            "input_schema",
+            "output_schema",
+            "resources",
+            "risk_level",
+            "risk_evaluator",
+            "concurrent",
+        ],
+        "additionalProperties": False,
+    }
+
+
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     workspace = _workspace(resources)
     action = str(arguments.get("action") or "").strip()
@@ -455,7 +497,8 @@ def _pattern_prompts(*, pattern_id: str, value: Any) -> dict[str, str]:
 
 
 def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
-    spec = ToolSpec.model_validate(_required_dict(arguments, "tool_spec"))
+    spec_payload = _required_tool_spec_payload(arguments)
+    spec = ToolSpec.model_validate(spec_payload)
     tool_id = _package_tool_id(spec.id)
     source = str(arguments.get("tool_source") or "")
     if not source.strip():
@@ -523,6 +566,46 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     return _result("upsert_package_tool", changed, f"Upserted package tool {tool_id}.")
 
 
+def _required_tool_spec_payload(arguments: dict[str, Any]) -> dict[str, Any]:
+    payload = _required_dict(arguments, "tool_spec")
+    required_fields = {
+        "id",
+        "description",
+        "entrypoint",
+        "input_schema",
+        "output_schema",
+        "resources",
+        "risk_level",
+        "risk_evaluator",
+        "concurrent",
+    }
+    missing = sorted(field for field in required_fields if field not in payload)
+    if missing:
+        raise ValueError(
+            "tool_spec must include complete top-level ToolSpec fields: " + ", ".join(sorted(required_fields))
+            + f". Missing: {', '.join(missing)}"
+        )
+    input_schema = payload.get("input_schema")
+    if isinstance(input_schema, dict):
+        misplaced = sorted(
+            set(input_schema)
+            & {
+                "entrypoint",
+                "output_schema",
+                "resources",
+                "risk_level",
+                "risk_evaluator",
+                "concurrent",
+            }
+        )
+        if misplaced:
+            raise ValueError(
+                "ToolSpec fields must be top-level tool_spec fields, not nested inside tool_spec.input_schema: "
+                + ", ".join(misplaced)
+            )
+    return payload
+
+
 def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
     dependencies_path = workspace.root / "contracts" / "dependencies.json"
     dependencies = _read_json(dependencies_path)
@@ -546,6 +629,8 @@ def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str
 
 def _configure_model_bindings(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
     bindings = _required_dict(arguments, "bindings")
+    if "tool_bindings" in bindings:
+        raise ValueError("tool_bindings must be passed as a top-level create_agent_authoring argument, not inside bindings")
     tool_bindings = arguments.get("tool_bindings")
     if tool_bindings is not None and not isinstance(tool_bindings, dict):
         raise ValueError("tool_bindings must be an object")

@@ -65,7 +65,7 @@ import {
   NRadioButton,
   NRadioGroup,
 } from 'naive-ui'
-import { ColorPalette } from '@vicons/ionicons5'
+import { ColorPalette } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import type { Locale } from '@/i18n'

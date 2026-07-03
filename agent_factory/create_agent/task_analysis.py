@@ -84,6 +84,8 @@ def _task_analysis_messages(*, user_input: str, candidates: list[dict[str, Any]]
                 "generate_image, edit_image, audio_transcribe, or audio_generate. Use image_output for text-to-image "
                 "generation and image_edit when the task must transform or edit referenced images. These auxiliary models are exposed as "
                 "system tools to the runtime executor, not as native main-model capabilities. "
+                "When reusable SkillHub skills may reduce custom package-tool authoring, note the intended SkillHub search query "
+                "in manufacturing_notes. Do not invent concrete SkillHub skill ids before search results exist. "
                 "Do not write concrete plan steps; this is only manufacturing task analysis.\n\n"
                 "Minimal valid shape example:\n"
                 "{"

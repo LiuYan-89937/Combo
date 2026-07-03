@@ -1,6 +1,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useDialog } from 'naive-ui'
-import { DocumentText, FolderOutline, Globe } from '@vicons/ionicons5'
+import { DocumentText, FolderOutline, Globe } from '@/components/icons'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'

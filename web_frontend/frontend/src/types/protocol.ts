@@ -7,7 +7,7 @@
 
 export type FactoryMode = 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package'
 
-export type RunStatus = 'idle' | 'running' | 'interrupted' | 'completed' | 'failed'
+export type RunStatus = 'idle' | 'running' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
 
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped'
 

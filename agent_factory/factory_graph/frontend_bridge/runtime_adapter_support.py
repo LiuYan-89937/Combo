@@ -1,8 +1,50 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.runtime_attachments import transcript_attachment_views
+
+
+@dataclass(slots=True)
+class VisibleAssistantOutputAccumulator:
+    content: str | None = None
+    reasoning_content: str | None = None
+
+    def accept(self, item: FactoryFrontendEvent) -> None:
+        if item.event_type == "model_reasoning_completed":
+            content = visible_model_reasoning_content(item)
+            if content:
+                self.reasoning_content = content
+            return
+        if item.event_type != "model_message_completed":
+            return
+        content = visible_model_message_content(item)
+        if content:
+            self.content = content
+            self.reasoning_content = visible_model_reasoning_content(item)
+
+
+def visible_model_message_content(item: FactoryFrontendEvent) -> str | None:
+    if not isinstance(item.payload, dict):
+        return None
+    if item.payload.get("visible_to_user") is False:
+        return None
+    content = str(item.payload.get("content") or "").strip()
+    return content or None
+
+
+def visible_model_reasoning_content(item: FactoryFrontendEvent) -> str | None:
+    if not isinstance(item.payload, dict):
+        return None
+    if item.payload.get("visible_to_user") is False:
+        return None
+    if item.event_type == "model_reasoning_completed":
+        content = str(item.payload.get("content") or item.payload.get("reasoning_content") or "").strip()
+        return content or None
+    content = str(item.payload.get("reasoning_content") or "").strip()
+    return content or None
 
 
 def session_payload(record: Any | None, *, snapshot_mode: str | None = None) -> dict[str, Any]:
@@ -31,38 +73,6 @@ def session_payload(record: Any | None, *, snapshot_mode: str | None = None) -> 
         "recent_tool_activities": [],
     }
     return payload
-
-
-def _messages_from_turns(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    messages: list[dict[str, Any]] = []
-    for turn in value[-6:]:
-        if not isinstance(turn, dict):
-            continue
-        if str(turn.get("user_input") or "").strip():
-            attachments = transcript_attachment_views(turn.get("attachments"))
-            messages.append(
-                {
-                    "role": "user",
-                    "content": str(turn["user_input"]),
-                    **({"attachments": attachments} if attachments else {}),
-                    "turn_index": turn.get("index"),
-                    "created_at": turn.get("created_at"),
-                }
-            )
-        if str(turn.get("final_answer") or "").strip():
-            reasoning_content = str(turn.get("reasoning_content") or "").strip()
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": str(turn["final_answer"]),
-                    **({"reasoning_content": reasoning_content} if reasoning_content else {}),
-                    "turn_index": turn.get("index"),
-                    "created_at": turn.get("created_at"),
-                }
-            )
-    return messages
 
 
 def _messages_from_session_turns(value: Any) -> list[dict[str, Any]]:

@@ -77,7 +77,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText } from 'naive-ui'
-import { ChatbubbleEllipses, Refresh, Search } from '@vicons/ionicons5'
+import { ChatbubbleEllipses, Refresh, Search } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'

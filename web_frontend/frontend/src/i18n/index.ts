@@ -95,6 +95,8 @@ const zhCN = {
   'run.running': '运行中',
   'run.interrupted': '已暂停',
   'run.completed': '已完成',
+  'run.stopped': '已停止',
+  'run.cancelled': '已停止',
   'run.failed': '失败',
 
   'settings.title': '设置',
@@ -640,6 +642,8 @@ const enUS: Record<MessageKey, string> = {
   'run.running': 'Running',
   'run.interrupted': 'Paused',
   'run.completed': 'Completed',
+  'run.stopped': 'Stopped',
+  'run.cancelled': 'Stopped',
   'run.failed': 'Failed',
 
   'settings.title': 'Settings',

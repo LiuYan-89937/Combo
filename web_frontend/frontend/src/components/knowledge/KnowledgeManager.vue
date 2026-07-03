@@ -160,7 +160,7 @@ import {
   NTag,
   NText,
 } from 'naive-ui'
-import { Add, Document, Library, Settings, EllipsisHorizontal } from '@vicons/ionicons5'
+import { Add, Document, Library, Settings, EllipsisHorizontal } from '@/components/icons'
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
 import { useI18n } from '@/composables/useI18n'

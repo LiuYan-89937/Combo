@@ -8,8 +8,8 @@ export function useRuntimeCommands() {
   const runtimeStore = useRuntimeStore()
   const transport = useCommandTransport()
 
-  const startSession = (resumeLatest = false, mode?: FactoryMode | null) => {
-    transport.sendRuntimeCommand(commands.startSessionCommand(resumeLatest, mode))
+  const startSession = (resumeLatest = false, mode?: FactoryMode | null, packageId?: string | null) => {
+    transport.sendRuntimeCommand(commands.startSessionCommand(resumeLatest, mode, packageId))
   }
 
   const listSessions = () => {
@@ -20,8 +20,8 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode))
   }
 
-  const newSession = (mode?: FactoryMode | null) => {
-    transport.sendRuntimeCommand(commands.newSessionCommand(mode))
+  const newSession = (mode?: FactoryMode | null, packageId?: string | null) => {
+    transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId))
   }
 
   const setMode = (mode: FactoryMode) => {
@@ -106,8 +106,12 @@ export function useRuntimeCommands() {
     })
   }
 
-  const cancelRequest = (reason = 'user_cancelled') => {
-    transport.sendRuntimeCommand(commands.cancelRuntimeRequestCommand(reason))
+  const cancelRequest = (
+    reason = 'user_cancelled',
+    targetRequestId: string | null = null,
+    visibleOutput: Record<string, any> | null = null,
+  ) => {
+    transport.sendRuntimeCommand(commands.cancelRuntimeRequestCommand(reason, targetRequestId, visibleOutput))
   }
 
   return {

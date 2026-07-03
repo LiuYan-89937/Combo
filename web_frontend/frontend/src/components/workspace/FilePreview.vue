@@ -70,7 +70,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NIcon, NSpace, NText } from 'naive-ui'
-import { Close, DocumentOutline, Download } from '@vicons/ionicons5'
+import { Close, DocumentOutline, Download } from '@/components/icons'
 import { workspaceApi } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'

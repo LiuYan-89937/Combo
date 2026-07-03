@@ -611,8 +611,7 @@ class AgentPackageRuntimeManager:
         require_ready: bool = False,
     ) -> AgentPackageStreamRun:
         package = self.loader.load_path(self._manifest_path(package_id))
-        if require_ready and not self._has_ready_runtime(package_id, package):
-            raise RuntimeError(f"agent package instance is not ready: {package_id}")
+        del require_ready
         resolved_request_id = request_id or uuid4().hex
         attachment_result = self._prepare_runtime_attachments(
             package_id=package_id,
@@ -767,12 +766,26 @@ class AgentPackageRuntimeManager:
         self._mcp_gateways.close_all()
         self._skillhub_gateways.close_all()
 
-    def cancel_active_requests(self, *, reason: str = "user_cancelled") -> int:
+    def cancel_active_requests(
+        self,
+        *,
+        reason: str = "user_cancelled",
+        request_id: str | None = None,
+        visible_output: Any = None,
+    ) -> int:
         cancelled = 0
         for handle in list(self._containers.values()):
-            cancelled += handle.cancel_active_requests(reason=reason)
+            cancelled += handle.cancel_active_requests(
+                reason=reason,
+                request_id=request_id,
+                visible_output=visible_output,
+            )
         for handle in list(self._system_handles.values()):
-            cancelled += handle.cancel_active_requests(reason=reason)
+            cancelled += handle.cancel_active_requests(
+                reason=reason,
+                request_id=request_id,
+                visible_output=visible_output,
+            )
         return cancelled
 
     def _system_events(
@@ -1028,7 +1041,7 @@ class AgentPackageRuntimeManager:
 
     def _has_reusable_system_handle(self, package_id: str, package: LoadedAgentPackage) -> bool:
         existing = self._system_handles.get(package_id)
-        if existing is None:
+        if existing is None or not existing.is_running:
             return False
         if existing.package_fingerprint != _runtime_fingerprint(package_id, package):
             return False

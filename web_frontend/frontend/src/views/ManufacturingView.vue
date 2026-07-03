@@ -17,7 +17,7 @@
 
 <script setup lang="ts">
 import { NEmpty, NIcon, NText } from 'naive-ui'
-import { Build } from '@vicons/ionicons5'
+import { Build } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 
 const { t } = useI18n()

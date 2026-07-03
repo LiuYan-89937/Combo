@@ -132,7 +132,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { NInput, NButton, NIcon, NText, NPopover, NSelect } from 'naive-ui'
-import { AttachOutline, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@vicons/ionicons5'
+import { AttachOutline, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
 import AttachmentPickerModal from './AttachmentPickerModal.vue'
 import { useI18n } from '@/composables/useI18n'
 import { extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'

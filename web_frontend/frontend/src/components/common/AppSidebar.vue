@@ -22,7 +22,7 @@
 
 <script setup lang="ts">
 import { NButton, NIcon, NMenu } from 'naive-ui'
-import { ChevronBack } from '@vicons/ionicons5'
+import { ChevronBack } from '@/components/icons'
 import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
 import RecentAgentPanel from './sidebar/RecentAgentPanel.vue'

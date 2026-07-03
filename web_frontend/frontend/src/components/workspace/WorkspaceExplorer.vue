@@ -82,7 +82,7 @@ import {
   FolderOutline,
   ImageOutline,
   Refresh,
-} from '@vicons/ionicons5'
+} from '@/components/icons'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'

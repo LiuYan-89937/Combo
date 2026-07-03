@@ -25,8 +25,13 @@ export function useSidebarNavigation() {
       enterFactoryMode('create_agent')
     } else if (key === '/evolution') {
       agentStore.leaveAgentChat()
-      runtimeStore.enterFactoryConversation('evolve_agent', agentStore.selectedPackageId)
-      commands.startSession(true, 'evolve_agent')
+      const packageId = agentStore.selectedPackageId
+      runtimeStore.enterFactoryConversation('evolve_agent', packageId)
+      if (packageId) {
+        commands.selectAgentPackage(packageId, 'evolution')
+      } else {
+        commands.startSession(true, 'evolve_agent')
+      }
     }
     router.push(key)
   }

@@ -8,6 +8,7 @@ import { isBackgroundEvent } from './eventUtils'
 type ModelMutationState = Pick<
   RuntimeViewState,
   | 'activeRequestId'
+  | 'activeRequests'
   | 'conversationTurns'
   | 'modelStreams'
   | 'runStatus'
@@ -17,6 +18,7 @@ type ModelMutationState = Pick<
 
 export function applyModelCallStarted(state: ModelMutationState, event: FactoryFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
+  if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
   if (!streamId) return
 
@@ -36,6 +38,7 @@ export function applyModelCallStarted(state: ModelMutationState, event: FactoryF
 
 export function applyModelReasoningDelta(state: ModelMutationState, event: FactoryFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
+  if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
   const delta = event.payload?.delta
   if (!streamId || delta == null) return
@@ -56,6 +59,7 @@ export function applyModelReasoningDelta(state: ModelMutationState, event: Facto
 
 export function applyModelReasoningCompleted(state: ModelMutationState, event: FactoryFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
+  if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
   const content = event.payload?.content ?? event.payload?.reasoning_content
   if (!streamId) return
@@ -77,6 +81,7 @@ export function applyModelReasoningCompleted(state: ModelMutationState, event: F
 
 export function applyModelStreamDelta(state: ModelMutationState, event: FactoryFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
+  if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
   const delta = event.payload?.delta
   if (!streamId || delta == null) return
@@ -96,6 +101,7 @@ export function applyModelStreamDelta(state: ModelMutationState, event: FactoryF
 
 export function applyModelMessageCompleted(state: ModelMutationState, event: FactoryFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
+  if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
   const content = event.payload?.content
   if (!streamId) return
@@ -135,6 +141,12 @@ export function applyModelMessageCompleted(state: ModelMutationState, event: Fac
   if (stream.visibleToUser && (stream.content || stream.reasoningContent)) {
     upsertAssistantMessageFromStream(state, streamId, event.timestamp, event.request_id || stream.requestId || null)
   }
+}
+
+function isStoppingRequestEvent(state: ModelMutationState, event: FactoryFrontendEvent): boolean {
+  const requestId = event.request_id
+  if (!requestId) return false
+  return Boolean(state.activeRequests[requestId]?.payload?.stop_requested_at)
 }
 
 function ensureModelStream(

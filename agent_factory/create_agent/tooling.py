@@ -68,6 +68,7 @@ CREATE_AGENT_BUILTIN_TOOL_IDS = {
     "glob",
     "grep",
     "ls",
+    "skillhub",
     "tool_output",
     "resource_set",
 }
@@ -105,23 +106,30 @@ class CreateAgentToolEnvironmentBuilder:
     ) -> CreateAgentToolEnvironment:
         workspace = Path(workspace_root).expanduser().resolve()
         create_agent_workspace = CreateAgentWorkspace(workspace)
-        extension_root = default_factory_extension_root()
-        context = ToolProviderContext(
+        factory_extension_root = default_factory_extension_root()
+        package_extension_root = workspace / "extensions"
+        provider_resources = {
+            "builtin_workspace_root": str(workspace),
+            "builtin_allow_external_paths": False,
+        }
+        builtin_context = ToolProviderContext(
             package_root=workspace,
-            extension_root=extension_root,
-            resources={
-                "builtin_workspace_root": str(workspace),
-                "builtin_allow_external_paths": False,
-            },
+            extension_root=package_extension_root,
+            resources=provider_resources,
+        )
+        extension_context = ToolProviderContext(
+            package_root=workspace,
+            extension_root=factory_extension_root,
+            resources=provider_resources,
         )
         authoring_mode = mode in {"manufacture", "evolution"}
         builtin_tool_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if authoring_mode else CREATE_AGENT_ASSIST_TOOL_IDS
-        builtin_result = BuiltinToolProvider(tool_ids=builtin_tool_ids).discover(context)
+        builtin_result = BuiltinToolProvider(tool_ids=builtin_tool_ids).discover(builtin_context)
         if authoring_mode:
-            extension_result, extension_report = self.extension_manager.discover(context=context)
+            extension_result, extension_report = self.extension_manager.discover(context=extension_context)
         else:
             extension_result = ToolProviderResult()
-            extension_report = FactoryExtensionLoadReport(extension_root=str(extension_root))
+            extension_report = FactoryExtensionLoadReport(extension_root=str(factory_extension_root))
         provider_result = builtin_result.merge(extension_result) if authoring_mode else builtin_result
         runtime_resources = {
             **builtin_result.runtime_resources,
@@ -190,6 +198,8 @@ class CreateAgentToolEnvironmentBuilder:
                 "contracts/render.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/trace.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "extensions/mcp_servers.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "extensions/enabled_skills.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
+                "extensions/skills": {"write_tool": "skillhub"},
                 "tools": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "knowledge": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "state": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
@@ -256,7 +266,7 @@ class CreateAgentToolEnvironmentBuilder:
         compiler = ToolCompiler(
             package_root=workspace,
             resources=runtime_resources,
-            allowed_python_roots=[extension_root],
+            allowed_python_roots=[factory_extension_root, package_extension_root],
             mcp_clients=self.extension_manager.mcp_tool_clients() if authoring_mode else {},
         )
         tools = _stable_tools(compiler.compile_many(registry.all()))

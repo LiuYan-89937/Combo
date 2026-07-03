@@ -18,13 +18,14 @@ import { normalizeResourcePackageId } from '@/utils/resourceScope'
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
   const hasRunAgentSession =
-    (event.event_type === 'run_completed' || event.event_type === 'run_failed') &&
+    (event.event_type === 'run_completed' || event.event_type === 'run_cancelled' || event.event_type === 'run_failed') &&
     Boolean(event.payload?.agent_session)
 
   if (
     event.event_type === 'session_started' ||
     event.event_type === 'session_switched' ||
-    event.event_type === 'sessions_listed'
+    event.event_type === 'sessions_listed' ||
+    (event.event_type === 'agent_package_selected' && event.payload?.purpose === 'evolution' && event.payload?.session)
   ) {
     const sessionStore = useSessionStore()
     sessionStore.setSessions(runtimeStore.sessions as any)

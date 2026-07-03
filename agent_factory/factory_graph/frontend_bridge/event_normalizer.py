@@ -74,6 +74,14 @@ class ModelStreamState:
 
 
 @dataclass(slots=True)
+class VisibleAssistantMessage:
+    content: str | None = None
+    reasoning_content: str | None = None
+    stream_id: str | None = None
+    node_id: str | None = None
+
+
+@dataclass(slots=True)
 class RuntimeEventNormalizer:
     emit: Emit
     request_id: str | None
@@ -96,6 +104,7 @@ class RuntimeEventNormalizer:
     last_plan_fingerprint: str | None = None
     default_payload: dict[str, Any] = field(default_factory=dict)
     runtime_pattern_id: str | None = None
+    visible_assistant_output: VisibleAssistantMessage = field(default_factory=VisibleAssistantMessage)
 
     def runtime_event(
         self,
@@ -151,6 +160,18 @@ class RuntimeEventNormalizer:
     def emit_run_completed(self, payload: dict[str, Any]) -> None:
         self.complete_open_model_streams(reason="run_completed")
         self.runtime_event("run_completed", span_id=self.run_span_id, payload=payload)
+
+    def emit_run_cancelled(self, reason: str = "user_cancelled", extra_payload: dict[str, Any] | None = None) -> None:
+        payload = {"status": "cancelled", "reason": reason}
+        if extra_payload:
+            payload.update(extra_payload)
+        self.complete_open_model_streams(reason="run_cancelled")
+        self.runtime_event(
+            "run_cancelled",
+            span_id=self.run_span_id,
+            message="Runtime request was cancelled.",
+            payload=payload,
+        )
 
     def emit_run_failed(self, exc: Exception, extra_payload: dict[str, Any] | None = None) -> None:
         payload = {"where": "runtime_stream", "error_type": type(exc).__name__, "message": str(exc)}
@@ -647,7 +668,23 @@ class RuntimeEventNormalizer:
         for stream in list(self.model_streams.values()):
             self._complete_model_stream(stream, reason=reason)
 
-    def emit_final_answer_if_needed(self, final_state: Any, *, reason: str) -> None:
+    def complete_visible_assistant_output_from_state(self, final_state: Any, *, reason: str) -> VisibleAssistantMessage:
+        self.complete_open_model_streams(reason=reason)
+        self._fill_visible_assistant_output_from_state(final_state, reason=reason)
+        return self.visible_assistant_output
+
+    def complete_visible_assistant_output_from_text(
+        self,
+        text: str,
+        *,
+        node_id: str,
+        reason: str,
+    ) -> VisibleAssistantMessage:
+        self.complete_open_model_streams(reason=reason)
+        self._fill_visible_assistant_output_from_text(text, node_id=node_id, reason=reason)
+        return self.visible_assistant_output
+
+    def _fill_visible_assistant_output_from_state(self, final_state: Any, *, reason: str) -> None:
         conversation = getattr(final_state, "conversation", None)
         text = str(
             getattr(conversation, "final_answer", None)
@@ -655,31 +692,33 @@ class RuntimeEventNormalizer:
             or ""
         ).strip()
         node_id = _optional_str(getattr(getattr(final_state, "execution", None), "current_node", None)) or "final_answer"
-        self.emit_final_message_if_needed(text, node_id=node_id, reason=reason)
+        self._fill_visible_assistant_output_from_text(text, node_id=node_id, reason=reason)
 
-    def emit_final_message_if_needed(self, text: str, *, node_id: str, reason: str) -> None:
+    def _fill_visible_assistant_output_from_text(self, text: str, *, node_id: str, reason: str) -> None:
         text = strip_internal_snapshot_blocks(text)
         if not text:
             return
         if _looks_like_tool_observation_text(text):
             return
-        if self._has_visible_model_stream_content(text):
+        if self.visible_assistant_output.content:
             return
         stream_id = uuid.uuid4().hex
+        payload = {
+            "stream_id": stream_id,
+            "content": text,
+            "content_mode": "snapshot",
+            "completion_reason": reason,
+            "completion_inferred": True,
+            "visible_to_user": self._model_message_visible_to_user(node_id),
+        }
+        self._record_model_stream_event("model_message_completed", node_id=node_id, payload=payload)
         self.runtime_event(
             "model_message_completed",
             node_id=node_id,
             stage_id=self.current_stage_id,
             span_id=uuid.uuid4().hex,
             parent_span_id=self._node_span(node_id, self.current_stage_id),
-            payload={
-                "stream_id": stream_id,
-                "content": text,
-                "content_mode": "snapshot",
-                "completion_reason": reason,
-                "completion_inferred": True,
-                "visible_to_user": self._model_message_visible_to_user(node_id),
-            },
+            payload=payload,
         )
 
     def _complete_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
@@ -694,6 +733,7 @@ class RuntimeEventNormalizer:
             stream.completed = True
             stream.content = ""
             stream.reasoning_content = ""
+            self._forget_visible_assistant_output_for_stream(stream)
             self.runtime_event(
                 "model_message_completed",
                 node_id=stream.node_id,
@@ -766,36 +806,44 @@ class RuntimeEventNormalizer:
             return
         stream.completed = True
         if stream.reasoning_content.strip():
+            reasoning_payload = {
+                "stream_id": stream.stream_id,
+                "content": stream.reasoning_content,
+                "content_mode": "snapshot",
+                "completion_reason": reason,
+                "completion_inferred": True,
+                "visible_to_user": self._model_message_visible_to_user(stream.node_id),
+            }
+            self._record_model_stream_event(
+                "model_reasoning_completed",
+                node_id=stream.node_id,
+                payload=reasoning_payload,
+            )
             self.runtime_event(
                 "model_reasoning_completed",
                 node_id=stream.node_id,
                 stage_id=self.current_stage_id,
                 span_id=stream.span_id,
                 parent_span_id=stream.parent_span_id,
-                payload={
-                    "stream_id": stream.stream_id,
-                    "content": stream.reasoning_content,
-                    "content_mode": "snapshot",
-                    "completion_reason": reason,
-                    "completion_inferred": True,
-                    "visible_to_user": self._model_message_visible_to_user(stream.node_id),
-                },
+                payload=reasoning_payload,
             )
+        message_payload = {
+            "stream_id": stream.stream_id,
+            "content": stream.content,
+            "content_mode": "snapshot",
+            "completion_reason": reason,
+            "completion_inferred": True,
+            "visible_to_user": self._model_message_visible_to_user(stream.node_id),
+            **({"reasoning_content": stream.reasoning_content} if stream.reasoning_content.strip() else {}),
+        }
+        self._record_model_stream_event("model_message_completed", node_id=stream.node_id, payload=message_payload)
         self.runtime_event(
             "model_message_completed",
             node_id=stream.node_id,
             stage_id=self.current_stage_id,
             span_id=stream.span_id,
             parent_span_id=stream.parent_span_id,
-            payload={
-                "stream_id": stream.stream_id,
-                "content": stream.content,
-                "content_mode": "snapshot",
-                "completion_reason": reason,
-                "completion_inferred": True,
-                "visible_to_user": self._model_message_visible_to_user(stream.node_id),
-                **({"reasoning_content": stream.reasoning_content} if stream.reasoning_content.strip() else {}),
-            },
+            payload=message_payload,
         )
 
     def _node_visible_to_user(self, node_id: str | None) -> bool:
@@ -818,13 +866,6 @@ class RuntimeEventNormalizer:
             return default_model_message_visible_to_user(pattern_id=self.runtime_pattern_id, node_id=node_id)
         return True
 
-    def _has_visible_model_stream_content(self, text: str) -> bool:
-        target = _normalized_message_text(text)
-        return any(
-            _normalized_message_text(stream.content) == target and self._model_message_visible_to_user(stream.node_id)
-            for stream in self.model_streams.values()
-        )
-
     def _record_model_stream_event(self, event_type: str, *, node_id: str | None, payload: dict[str, Any]) -> None:
         stream_id = str(payload.get("stream_id") or "").strip()
         if not stream_id:
@@ -840,16 +881,13 @@ class RuntimeEventNormalizer:
             self.model_streams[stream_id] = stream
         if event_type == "model_reasoning_delta":
             stream.reasoning_content += str(payload.get("delta") or "")
-            return
-        if event_type == "model_reasoning_completed":
+        elif event_type == "model_reasoning_completed":
             content = payload.get("content")
             if isinstance(content, str):
                 stream.reasoning_content = content
-            return
-        if event_type == "model_stream_delta":
+        elif event_type == "model_stream_delta":
             stream.content += str(payload.get("delta") or "")
-            return
-        if event_type == "model_message_completed":
+        elif event_type == "model_message_completed":
             content = payload.get("content")
             if isinstance(content, str):
                 stream.content = content
@@ -857,6 +895,44 @@ class RuntimeEventNormalizer:
             if isinstance(reasoning_content, str):
                 stream.reasoning_content = reasoning_content
             stream.completed = True
+        if payload.get("discard") or payload.get("visible_to_user") is False:
+            self._forget_visible_assistant_output_for_stream(stream)
+        self._remember_visible_assistant_output(event_type, node_id=node_id, payload=payload, stream=stream)
+
+    def _forget_visible_assistant_output_for_stream(self, stream: ModelStreamState) -> None:
+        if self.visible_assistant_output.stream_id != stream.stream_id:
+            return
+        self.visible_assistant_output = VisibleAssistantMessage()
+
+    def _remember_visible_assistant_output(
+        self,
+        event_type: str,
+        *,
+        node_id: str | None,
+        payload: dict[str, Any],
+        stream: ModelStreamState,
+    ) -> None:
+        if payload.get("visible_to_user") is False:
+            return
+        if not self._model_message_visible_to_user(node_id or stream.node_id):
+            return
+        if event_type == "model_reasoning_completed":
+            content = str(payload.get("content") or payload.get("reasoning_content") or "").strip()
+            if content:
+                self.visible_assistant_output.reasoning_content = content
+                self.visible_assistant_output.stream_id = stream.stream_id
+                self.visible_assistant_output.node_id = node_id or stream.node_id
+            return
+        if event_type != "model_message_completed":
+            return
+        content = str(payload.get("content") or "").strip()
+        if not content:
+            return
+        self.visible_assistant_output.content = content
+        reasoning_content = str(payload.get("reasoning_content") or stream.reasoning_content or "").strip()
+        self.visible_assistant_output.reasoning_content = reasoning_content or None
+        self.visible_assistant_output.stream_id = stream.stream_id
+        self.visible_assistant_output.node_id = node_id or stream.node_id
 
     def _normalize_approval_request(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):
@@ -1344,12 +1420,12 @@ def _message_stream_id(
     ).strip()
     if checkpoint_ns:
         return f"message:{node_id}:{checkpoint_ns}"
-    message_id = str(getattr(message, "id", "") or "").strip()
-    if message_id:
-        return f"message:{node_id}:{message_id}"
     step = str(metadata.get("langgraph_step") or "").strip()
     if step:
         return f"message:{node_id}:{request_id or 'request'}:{step}"
+    message_id = str(getattr(message, "id", "") or "").strip()
+    if message_id:
+        return f"message:{node_id}:{message_id}"
     return f"message:{node_id}:{request_id or 'request'}"
 
 
@@ -1419,10 +1495,6 @@ def _content_to_text(content: Any) -> str:
                 parts.append(str(item.get("text") or ""))
         return "".join(parts)
     return str(content) if content else ""
-
-
-def _normalized_message_text(text: str) -> str:
-    return "\n".join(line.rstrip() for line in str(text or "").strip().splitlines()).strip()
 
 
 def _json_text(value: Any) -> str:

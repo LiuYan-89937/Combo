@@ -152,6 +152,22 @@ def _invariant_system_prompt_text() -> str:
             "业务代码内容、知识正文、资源值和自然语言 prompt 内容由你提供给 authoring 工具。"
         ),
         (
+            "create_agent_authoring 参数必须使用 canonical shape。"
+            "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
+            "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
+            "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=完整 ToolSpec, tool_source=完整源码, "
+            "python_requirements=[...], expose_to_nodes=[...])；"
+            "ToolSpec 的 id、description、entrypoint、input_schema、output_schema、resources、risk_level、risk_evaluator、concurrent 都是 tool_spec 顶层字段，"
+            "不要把 output_schema、resources、risk_level、risk_evaluator 或 concurrent 放进 input_schema。"
+        ),
+        (
+            "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
+            "流程是：skillhub(action='search', query=...) 查找候选；确认需要后 skillhub(action='install', skill=...) 安装到当前 package extensions。"
+            "如果 produced Agent 需要调用已安装 skill，把运行期工具 id skill 加入 assembly tool_access：react_agent 给 answer；"
+            "plan_and_execute 只给 executor 或 casual_react，planner 不调用业务工具或 skill。"
+            "不要把 SkillHub skill 复制成 package tool，也不要手写 extensions/enabled_skills.json；skillhub install 会写入 package extension。"
+        ),
+        (
             "skill gateway 只服务能力写法和 validator 修复。正常生产路径：describe 一个相关 skill，读取一个相关 capability example，"
             "然后开始写文件。schema 不是常规资料；只有 validator issue 指向 schema_path、example 缺少关键字段、"
             "或同一路径修复后再次失败时，才读取 schema fragment。full schema content 是最后手段，必须提供 reason。"
@@ -248,6 +264,7 @@ def _task_analysis_context(state: Mapping[str, Any]) -> str:
         "requires_dynamic_plan": bool(payload.get("requires_dynamic_plan")),
         "intent_summary": str(payload.get("intent_summary") or ""),
         "capability_goals": payload.get("capability_goals") if isinstance(payload.get("capability_goals"), list) else [],
+        "manufacturing_notes": payload.get("manufacturing_notes") if isinstance(payload.get("manufacturing_notes"), list) else [],
     }
     return (
         "Create-agent task analysis completed before scaffolding:\n"

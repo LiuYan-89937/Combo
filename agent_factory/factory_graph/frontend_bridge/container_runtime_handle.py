@@ -13,7 +13,6 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     heartbeat_due,
     is_terminal_request_event,
-    request_cancelled_payload,
     request_heartbeat_event,
     request_timed_out,
     request_timeout_payload,
@@ -24,6 +23,13 @@ from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 Emit = Callable[[FactoryFrontendEvent], None]
 ContainerStreamItem = tuple[str, Any]
+
+
+def _target_request_ids(events: dict[str, Deque[ContainerStreamItem]], request_id: str | None) -> list[str]:
+    target = (request_id or "").strip()
+    if not target:
+        return list(events)
+    return [target] if target in events else []
 
 
 class AgentRuntimeContainerHandle:
@@ -44,6 +50,7 @@ class AgentRuntimeContainerHandle:
         self._idle_timer: threading.Timer | None = None
         self._emit = emit
         self._condition = threading.Condition()
+        self._stdin_lock = threading.Lock()
         self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
         self._request_commands: dict[str, str] = {}
         self._reader_error: BaseException | None = None
@@ -99,8 +106,7 @@ class AgentRuntimeContainerHandle:
                 raise RuntimeError(f"agent runtime request is already active: {request_id}")
             self._request_events[request_id] = deque()
             self._request_commands[request_id] = str(command.get("type") or "")
-        self.process.stdin.write(json.dumps(command, ensure_ascii=False) + "\n")
-        self.process.stdin.flush()
+        self._write_command(command)
         self.last_used = time.monotonic()
         self._cancel_idle_shutdown()
         terminal_seen = False
@@ -141,26 +147,45 @@ class AgentRuntimeContainerHandle:
             self.last_used = time.monotonic()
             self._schedule_idle_shutdown()
 
-    def cancel_active_requests(self, *, reason: str) -> int:
+    def cancel_active_requests(
+        self,
+        *,
+        reason: str,
+        request_id: str | None = None,
+        visible_output: Any = None,
+    ) -> int:
         with self._condition:
-            request_ids = list(self._request_events)
-            for request_id in request_ids:
-                self._request_events[request_id].append(
-                    (
-                        "frontend_event",
-                        run_failed_event(
-                            request_id,
-                            request_cancelled_payload(
-                                package_id=self.package_id,
-                                request_id=request_id,
-                                reason=reason,
-                            ),
-                        ),
-                    )
+            request_ids = _target_request_ids(self._request_events, request_id)
+        if not request_ids:
+            return 0
+        try:
+            self._write_command(
+                {
+                    "type": "cancel_runtime_request",
+                    "request_id": uuid4().hex,
+                    "payload": {
+                        "reason": reason,
+                        "target_request_id": (request_id or "").strip(),
+                        "visible_output": visible_output,
+                    },
+                }
+            )
+        except Exception as exc:
+            self._emit_background_event(
+                event(
+                    "debug_patch",
+                    mode="agent_package",
+                    graph_id="agent_package_runtime",
+                    producer_type="agent_runtime_host",
+                    severity="error",
+                    payload={
+                        "source": "runtime_request_cancel",
+                        "package_id": self.package_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
                 )
-            self._condition.notify_all()
-        if request_ids:
-            self.close()
+            )
+            return 0
         return len(request_ids)
 
     def close(self) -> None:
@@ -168,8 +193,7 @@ class AgentRuntimeContainerHandle:
         self._closing = True
         if self.process.stdin is not None and self.is_running:
             try:
-                self.process.stdin.write(json.dumps({"type": "shutdown", "request_id": uuid4().hex}) + "\n")
-                self.process.stdin.flush()
+                self._write_command({"type": "shutdown", "request_id": uuid4().hex})
             except Exception:
                 pass
         try:
@@ -265,6 +289,13 @@ class AgentRuntimeContainerHandle:
             self._emit(item)
         if not self._request_events:
             self._schedule_idle_shutdown()
+
+    def _write_command(self, command: dict[str, Any]) -> None:
+        if self.process.stdin is None:
+            raise RuntimeError("agent runtime container stdio is unavailable")
+        with self._stdin_lock:
+            self.process.stdin.write(json.dumps(command, ensure_ascii=False) + "\n")
+            self.process.stdin.flush()
 
     def _schedule_idle_shutdown(self) -> None:
         self._cancel_idle_shutdown()

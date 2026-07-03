@@ -32,7 +32,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NText, NTag, NIcon } from 'naive-ui'
-import { CheckmarkCircle, CloseCircle, EllipseOutline, TimeOutline } from '@vicons/ionicons5'
+import { CheckmarkCircle, CloseCircle, EllipseOutline, TimeOutline } from '@/components/icons'
 import { useRuntimeStore } from '@/stores/runtime'
 import type { PlanStepStatus } from '@/types/protocol'
 

@@ -12,7 +12,6 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     heartbeat_due,
     is_terminal_request_event,
-    request_cancelled_payload,
     request_heartbeat_event,
     request_timed_out,
     request_timeout_payload,
@@ -25,6 +24,13 @@ from agent_factory.runtime_contracts import LoadedAgentPackage
 
 Emit = Callable[[FactoryFrontendEvent], None]
 ContainerStreamItem = tuple[str, Any]
+
+
+def _target_request_ids(events: dict[str, Deque[ContainerStreamItem]], request_id: str | None) -> list[str]:
+    target = (request_id or "").strip()
+    if not target:
+        return list(events)
+    return [target] if target in events else []
 
 
 class SystemPackageRuntimeHandle:
@@ -176,27 +182,18 @@ class SystemPackageRuntimeHandle:
             self.last_used = time.monotonic()
             self._schedule_idle_shutdown()
 
-    def cancel_active_requests(self, *, reason: str) -> int:
-        with self._condition:
-            request_ids = list(self._request_events)
-            for request_id in request_ids:
-                self._request_events[request_id].append(
-                    (
-                        "frontend_event",
-                        run_failed_event(
-                            request_id,
-                            request_cancelled_payload(
-                                package_id=self.package_id,
-                                request_id=request_id,
-                                reason=reason,
-                            ),
-                        ),
-                    )
-                )
-            self._condition.notify_all()
-        if request_ids:
-            self.close()
-        return len(request_ids)
+    def cancel_active_requests(
+        self,
+        *,
+        reason: str,
+        request_id: str | None = None,
+        visible_output: Any = None,
+    ) -> int:
+        return self.core.cancel_active_requests(
+            reason=reason,
+            request_id=request_id,
+            visible_output=visible_output,
+        )
 
     def close(self) -> None:
         self._cancel_idle_shutdown()

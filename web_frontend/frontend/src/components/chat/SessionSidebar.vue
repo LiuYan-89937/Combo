@@ -67,10 +67,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { NButton, NIcon, NText, NInput, NScrollbar, NList, NListItem, NTag, NEmpty } from 'naive-ui'
-import { Add, ChatbubbleEllipses, Search } from '@vicons/ionicons5'
+import { Add, ChatbubbleEllipses, Search } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useSessionStore } from '@/stores/session'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
 import type { SessionView } from '@/stores/session'
 
@@ -85,6 +86,7 @@ const props = withDefaults(
 
 const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
+const agentStore = useAgentStore()
 const commands = useCommand()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
@@ -110,7 +112,10 @@ const filteredSessions = computed(() => {
 })
 
 function handleNewSession() {
-  commands.newSession(activeSessionMode.value)
+  commands.newSession(
+    activeSessionMode.value,
+    activeSessionMode.value === 'evolve_agent' ? agentStore.selectedPackageId : null,
+  )
 }
 
 function handleSelectSession(session: SessionView) {
@@ -118,6 +123,10 @@ function handleSelectSession(session: SessionView) {
 }
 
 function sessionBelongsToActiveMode(session: SessionView): boolean {
+  if (activeSessionMode.value === 'evolve_agent') {
+    const packageId = agentStore.selectedPackageId
+    if (packageId && session.evolve_agent_package_id !== packageId) return false
+  }
   if (session.session_id === sessionStore.currentSessionId && runtimeStore.currentMode === activeSessionMode.value) {
     return true
   }

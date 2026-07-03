@@ -35,6 +35,7 @@ from agent_factory.runtime_kernel.activation import normalize_plan_and_execute_a
 from agent_factory.runtime_kernel.planning import PLAN_AND_EXECUTE_PATTERN_ID, RUNTIME_PLAN_TOOL_ID
 from agent_factory.tooling.builtins.registry import get_builtin_tool_ids
 from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
+from agent_factory.tooling.skills import SKILL_TOOL_ID
 from agent_factory.tooling.skills.schema import SkillGatewayState
 
 
@@ -1615,9 +1616,13 @@ def _local_module_exists(*, root: Path, source: Path, module: str) -> bool:
     return any(candidate.exists() for candidate in candidates)
 
 
-def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
+def _tool_access_issues(
+    package: Any,
+    package_tools: dict[str, Any],
+    inherited_mcp_tools: set[str],
+) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
-    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools)
+    legal_tool_ids = _legal_runtime_tool_ids(package_tools=package_tools, inherited_mcp_tools=inherited_mcp_tools)
     pattern_id = str(getattr(getattr(package.assembly_spec, "runtime", None), "pattern_id", "") or "")
     if pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
         legal_tool_ids.add(RUNTIME_PLAN_TOOL_ID)
@@ -1645,13 +1650,17 @@ def _tool_access_issues(package: Any, package_tools: dict[str, Any], inherited_m
                     summary=f"tool_access references unknown tool {tool_id}",
                     message=f"{tool_id} is not an implemented runtime builtin tool and not a package tool.",
                     path="assembly_spec.json",
-                    expected="tool_access.allowed_tool_ids contains runtime builtin, generated package, or inherited MCP tool ids.",
+                    expected="tool_access.allowed_tool_ids contains runtime builtin, generated package, inherited MCP, or runtime skill tool ids.",
                     actual=tool_id,
-                    repair_hint="Use create_agent_authoring(action='configure_pattern_assembly') with implemented runtime builtin, generated package, or inherited MCP tool ids. If the tool should be package-owned, create it through create_agent_authoring(action='upsert_package_tool') first.",
+                    repair_hint="Use create_agent_authoring(action='configure_pattern_assembly') with implemented runtime builtin, generated package, inherited MCP, or runtime skill tool ids. If the tool should be package-owned, create it through create_agent_authoring(action='upsert_package_tool') first; if it is a SkillHub skill, install it with skillhub when the skill should be bundled now.",
                     target_files=["assembly_spec.json", "contracts/tools.json", "tools/"],
                     recommended_skill="09-tools-system",
                 ))
     return issues
+
+
+def _legal_runtime_tool_ids(*, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> set[str]:
+    return set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools) | {SKILL_TOOL_ID}
 
 
 def _mcp_inheritance_materialization_issues(root: Path, package: Any, inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
@@ -1706,9 +1715,13 @@ def _referenced_tool_access_ids(package: Any) -> set[str]:
     return ids
 
 
-def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
+def _scheduler_tool_target_issues(
+    package: Any,
+    package_tools: dict[str, Any],
+    inherited_mcp_tools: set[str],
+) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
-    legal_tool_ids = set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools)
+    legal_tool_ids = _legal_runtime_tool_ids(package_tools=package_tools, inherited_mcp_tools=inherited_mcp_tools)
     contract = package.contracts.get("scheduler_seed")
     if not isinstance(contract, SchedulerSeedContract):
         return issues
@@ -1720,7 +1733,7 @@ def _scheduler_tool_target_issues(package: Any, package_tools: dict[str, Any], i
             issues.append(_contract_issue(
                 where="scheduler_seed.target_tool",
                 summary=f"scheduler seed {seed.seed_id} targets unknown tool {tool_id}",
-                message="scheduler_seed tool_call targets must point to an executable runtime builtin, package tool, or inherited MCP tool.",
+                message="scheduler_seed tool_call targets must point to an executable runtime builtin, package tool, inherited MCP tool, or runtime skill tool.",
                 path="contracts/scheduler_seed.json",
                 expected="scheduler_seed.target.payload.tool_id is executable.",
                 actual=tool_id,
@@ -1758,7 +1771,6 @@ def _manufacturing_tool_ids() -> set[str]:
         "create_agent_stage",
         "create_agent_probe_tool",
         "create_agent_publish",
-        "skill",
     }
 
 

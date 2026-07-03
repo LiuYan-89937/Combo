@@ -82,7 +82,7 @@
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
-import { Bug, Settings } from '@vicons/ionicons5'
+import { Bug, Settings } from '@/components/icons'
 import appIcon from '@/assets/fast-agent-factory-icon.png'
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
@@ -152,6 +152,8 @@ const runStatusText = computed(() => {
     running: t('run.running'),
     interrupted: t('run.interrupted'),
     completed: t('run.completed'),
+    stopped: t('run.stopped'),
+    cancelled: t('run.cancelled'),
     failed: t('run.failed'),
   }
   return labels[status]
@@ -164,6 +166,8 @@ const runStatusType = computed(() => {
     running: 'info',
     interrupted: 'warning',
     completed: 'success',
+    stopped: 'default',
+    cancelled: 'default',
     failed: 'error',
   }
   return types[status] as any

@@ -20,20 +20,36 @@ SESSION_MODES = {"chat", "create_agent", "evolve_agent"}
 class RuntimeSessionCommandMixin:
     def start_session(self, command: FactoryFrontendCommand) -> None:
         requested_mode = _session_mode(command.mode)
+        requested_evolution_package_id = _command_evolution_package_id(command, requested_mode)
         if command.session_id:
             self.session_record = self.session_manager.load(command.session_id)
             self.mode = requested_mode or self.session_record.current_mode
             if requested_mode is not None and requested_mode != self.session_record.current_mode:
                 self.session_record = self.session_manager.set_mode(self.session_record.session_id, requested_mode)
+            if requested_evolution_package_id:
+                self.session_record = self.session_manager.set_evolution_package(
+                    self.session_record.session_id,
+                    requested_evolution_package_id,
+                )
             session_event_type = "session_switched"
         elif command.resume_latest:
-            existing = self.session_manager.latest(mode=requested_mode) if requested_mode is not None else self.session_manager.latest()
+            existing = self._latest_session_for_start(requested_mode, requested_evolution_package_id)
             self.session_record = existing or self.session_manager.create(mode=requested_mode)
             self.mode = requested_mode or self.session_record.current_mode
+            if requested_evolution_package_id:
+                self.session_record = self.session_manager.set_evolution_package(
+                    self.session_record.session_id,
+                    requested_evolution_package_id,
+                )
             session_event_type = "session_switched" if existing else "session_started"
         else:
             self.session_record = self.session_manager.create(mode=requested_mode)
             self.mode = requested_mode
+            if requested_evolution_package_id:
+                self.session_record = self.session_manager.set_evolution_package(
+                    self.session_record.session_id,
+                    requested_evolution_package_id,
+                )
             session_event_type = "session_started"
         self._restore_session_mode_context()
         self._emit_session_event(command.request_id, session_event_type=session_event_type)
@@ -64,6 +80,12 @@ class RuntimeSessionCommandMixin:
     def new_session(self, command: FactoryFrontendCommand) -> None:
         self.mode = _session_mode(command.mode)
         self.session_record = self.session_manager.create(mode=self.mode)
+        requested_evolution_package_id = _command_evolution_package_id(command, self.mode)
+        if requested_evolution_package_id:
+            self.session_record = self.session_manager.set_evolution_package(
+                self.session_record.session_id,
+                requested_evolution_package_id,
+            )
         self._restore_session_mode_context()
         self._emit_session_event(command.request_id, session_event_type="session_started")
 
@@ -189,6 +211,17 @@ class RuntimeSessionCommandMixin:
     def _ensure_session(self, command: FactoryFrontendCommand) -> None:
         if self.session_record is None:
             self.start_session(FactoryFrontendCommand(type="start_session", request_id=command.request_id))
+
+    def _latest_session_for_start(
+        self,
+        requested_mode: str | None,
+        requested_evolution_package_id: str | None,
+    ):
+        if requested_evolution_package_id:
+            return self.session_manager.latest_evolution_for_package(requested_evolution_package_id)
+        if requested_mode is not None:
+            return self.session_manager.latest(mode=requested_mode)
+        return self.session_manager.latest()
 
     def _restore_session_mode_context(self) -> None:
         if self.session_record is None:
@@ -414,3 +447,10 @@ def _normalized_optional(value: object) -> str | None:
 
 def _session_mode(mode: str | None) -> str | None:
     return mode if mode in SESSION_MODES else None
+
+
+def _command_evolution_package_id(command: FactoryFrontendCommand, mode: str | None) -> str | None:
+    if mode != "evolve_agent" or not isinstance(command.payload, dict):
+        return None
+    value = str(command.payload.get("package_id") or "").strip()
+    return value or None

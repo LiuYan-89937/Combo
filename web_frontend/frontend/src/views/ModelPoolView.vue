@@ -257,7 +257,7 @@ import {
   useDialog,
   useMessage,
 } from 'naive-ui'
-import { Add, Refresh } from '@vicons/ionicons5'
+import { Add, Refresh } from '@/components/icons'
 import { modelPoolApi, type ModelPoolCredential, type ModelPoolProfile, type ModelProviderProfile } from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
 

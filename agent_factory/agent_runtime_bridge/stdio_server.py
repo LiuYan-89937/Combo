@@ -4,12 +4,17 @@ from dataclasses import dataclass, field, replace
 import errno
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
 from agent_factory.agent_runtime_bridge.dependencies import ensure_dependencies
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
-from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
+from agent_factory.factory_graph.frontend_bridge.event_normalizer import (
+    RuntimeEventNormalizer,
+    VisibleAssistantMessage,
+    json_safe,
+)
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import interrupt_payload
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage, RuntimeBuildPlanner
@@ -27,6 +32,8 @@ from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
+from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
+from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
 from agent_factory.memory_system import default_agent_memory_config
 from agent_factory.package_runtime.session_turns import (
     resume_user_input,
@@ -58,6 +65,11 @@ class BridgeRuntimeState:
     sandbox_initialized: bool = False
     compiled_runtime: CompiledRuntime | None = None
     background_workers: RuntimeBackgroundWorkerManager = field(default_factory=RuntimeBackgroundWorkerManager)
+    sandbox_lock: threading.Lock = field(default_factory=threading.Lock)
+    compile_lock: threading.Lock = field(default_factory=threading.Lock)
+    cancel_lock: threading.Lock = field(default_factory=threading.Lock)
+    active_cancel_tokens: dict[str, RuntimeStopSignal] = field(default_factory=dict)
+    worker_threads: list[threading.Thread] = field(default_factory=list)
 
     def handle(self, command: dict[str, Any]) -> int:
         command_type = str(command.get("type") or "")
@@ -73,6 +85,24 @@ class BridgeRuntimeState:
         )
         if command_type == "shutdown":
             self.shutdown()
+            return 0
+        if command_type == "cancel_runtime_request":
+            reason = str(payload.get("reason") or "user_cancelled")
+            target_request_id = str(payload.get("target_request_id") or "").strip() or None
+            stopped = self.cancel_active_requests(
+                reason=reason,
+                request_id=target_request_id,
+                visible_output=payload.get("visible_output"),
+            )
+            normalizer.runtime_event(
+                "debug_patch",
+                payload={
+                    "source": "runtime_request_cancel",
+                    "reason": reason,
+                    "target_request_id": target_request_id,
+                    "stopped_requests": stopped,
+                },
+            )
             return 0
         if command_type == "initialize_runtime":
             if not self._ensure_sandbox_initialized(normalizer):
@@ -111,118 +141,185 @@ class BridgeRuntimeState:
                 )
                 return 1
         normalizer.emit_run_started({"command": command_type, "attachment_count": _attachment_count(payload)})
+        cancel_token = self._register_cancel_token(str(request_id or ""), command_type)
         if command_type == "list_sessions":
             return _list_sessions(normalizer, self._load_package())
-        if command_type in {"run_message", "resume_interrupt", "run_harness"}:
-            if not self._ensure_sandbox_initialized(normalizer):
-                return 1
-            runtime = self._ensure_compiled(normalizer)
-            if command_type == "run_message":
-                return _run_message(normalizer, payload, runtime)
-            if command_type == "resume_interrupt":
-                return _resume_interrupt(normalizer, payload, runtime)
-            return _run_harness(normalizer, payload, runtime)
-        normalizer.runtime_event("error", severity="error", payload={"message": f"unknown command: {command_type}"})
-        return 1
+        try:
+            if command_type in {"run_message", "resume_interrupt", "run_harness"}:
+                if not self._ensure_sandbox_initialized(normalizer):
+                    return 1
+                runtime = self._ensure_compiled(normalizer)
+                if command_type == "run_message":
+                    return _run_message(normalizer, payload, runtime, cancel_token=cancel_token)
+                if command_type == "resume_interrupt":
+                    return _resume_interrupt(normalizer, payload, runtime, cancel_token=cancel_token)
+                return _run_harness(normalizer, payload, runtime)
+            normalizer.runtime_event("error", severity="error", payload={"message": f"unknown command: {command_type}"})
+            return 1
+        finally:
+            self._forget_cancel_token(str(request_id or ""), cancel_token)
+
+    def start(self, command: dict[str, Any]) -> None:
+        worker = threading.Thread(
+            target=self._run_worker_command,
+            args=(command,),
+            name=f"agent-runtime-stdio-{command.get('request_id') or 'request'}",
+            daemon=True,
+        )
+        self.worker_threads.append(worker)
+        worker.start()
+
+    def cancel_active_requests(
+        self,
+        *,
+        reason: str = "user_cancelled",
+        request_id: str | None = None,
+        visible_output: Any = None,
+    ) -> int:
+        target = (request_id or "").strip()
+        with self.cancel_lock:
+            request_ids = [target] if target and target in self.active_cancel_tokens else list(self.active_cancel_tokens)
+            for active_request_id in request_ids:
+                self.active_cancel_tokens[active_request_id].request(
+                    reason=reason,
+                    visible_output=visible_output,
+                )
+            return len(request_ids)
+
+    def _register_cancel_token(self, request_id: str, command_type: str) -> RuntimeStopSignal | None:
+        if command_type not in {"run_message", "resume_interrupt"} or not request_id:
+            return None
+        token = RuntimeStopSignal()
+        with self.cancel_lock:
+            self.active_cancel_tokens[request_id] = token
+        return token
+
+    def _forget_cancel_token(self, request_id: str, token: RuntimeStopSignal | None) -> None:
+        if token is None or not request_id:
+            return
+        with self.cancel_lock:
+            if self.active_cancel_tokens.get(request_id) is token:
+                self.active_cancel_tokens.pop(request_id, None)
+
+    def _run_worker_command(self, command: dict[str, Any]) -> None:
+        try:
+            self.handle(command)
+        except Exception as exc:
+            _write_event(
+                event(
+                    "run_failed",
+                    request_id=str(command.get("request_id") or "") or None,
+                    mode="agent_package",
+                    graph_id="agent_runtime_bridge",
+                    severity="error",
+                    payload={"message": f"{type(exc).__name__}: {exc}"},
+                )
+            )
 
     def _ensure_sandbox_initialized(self, normalizer: RuntimeEventNormalizer) -> bool:
         if self.sandbox_initialized:
             return True
-        package = self._load_package()
-        sandbox = dict(package.sandbox_contract or {})
-        network_policy = sandbox.get("network_policy") if isinstance(sandbox.get("network_policy"), dict) else {}
-        services = sandbox.get("services") if isinstance(sandbox.get("services"), list) else []
-        normalizer.runtime_event(
-            "node_started",
-            node_id="runtime_container",
-            node_label="Runtime Container",
-            node_kind="system",
-            payload={
-                "package_root": str(PACKAGE_ROOT),
-                "runtime_root": str(RUNTIME_ROOT),
-                "image": sandbox.get("image"),
-                "network_policy": network_policy,
-                "service_count": len(services),
-            },
-        )
-        normalizer.runtime_event(
-            "node_completed",
-            node_id="runtime_container",
-            node_label="Runtime Container",
-            node_kind="system",
-            payload={"status": "ready"},
-        )
-        normalizer.runtime_event(
-            "node_started",
-            node_id="sandbox_init",
-            node_label="Sandbox Init",
-            node_kind="system",
-            payload={"package_root": str(PACKAGE_ROOT)},
-        )
-        dependency_report = ensure_dependencies(PACKAGE_ROOT, ARTIFACTS_ROOT, runtime_root=RUNTIME_ROOT)
-        if dependency_report.get("status") == "failed":
+        with self.sandbox_lock:
+            if self.sandbox_initialized:
+                return True
+            package = self._load_package()
+            sandbox = dict(package.sandbox_contract or {})
+            network_policy = sandbox.get("network_policy") if isinstance(sandbox.get("network_policy"), dict) else {}
+            services = sandbox.get("services") if isinstance(sandbox.get("services"), list) else []
             normalizer.runtime_event(
-                "node_failed",
+                "node_started",
+                node_id="runtime_container",
+                node_label="Runtime Container",
+                node_kind="system",
+                payload={
+                    "package_root": str(PACKAGE_ROOT),
+                    "runtime_root": str(RUNTIME_ROOT),
+                    "image": sandbox.get("image"),
+                    "network_policy": network_policy,
+                    "service_count": len(services),
+                },
+            )
+            normalizer.runtime_event(
+                "node_completed",
+                node_id="runtime_container",
+                node_label="Runtime Container",
+                node_kind="system",
+                payload={"status": "ready"},
+            )
+            normalizer.runtime_event(
+                "node_started",
                 node_id="sandbox_init",
                 node_label="Sandbox Init",
                 node_kind="system",
-                severity="error",
+                payload={"package_root": str(PACKAGE_ROOT)},
+            )
+            dependency_report = ensure_dependencies(PACKAGE_ROOT, ARTIFACTS_ROOT, runtime_root=RUNTIME_ROOT)
+            if dependency_report.get("status") == "failed":
+                normalizer.runtime_event(
+                    "node_failed",
+                    node_id="sandbox_init",
+                    node_label="Sandbox Init",
+                    node_kind="system",
+                    severity="error",
+                    payload=dependency_report,
+                )
+                normalizer.emit_run_failed(RuntimeError("sandbox dependency initialization failed"))
+                return False
+            normalizer.runtime_event(
+                "node_completed",
+                node_id="sandbox_init",
+                node_label="Sandbox Init",
+                node_kind="system",
                 payload=dependency_report,
             )
-            normalizer.emit_run_failed(RuntimeError("sandbox dependency initialization failed"))
-            return False
-        normalizer.runtime_event(
-            "node_completed",
-            node_id="sandbox_init",
-            node_label="Sandbox Init",
-            node_kind="system",
-            payload=dependency_report,
-        )
-        self.sandbox_initialized = True
-        return True
+            self.sandbox_initialized = True
+            return True
 
     def _ensure_compiled(self, normalizer: RuntimeEventNormalizer) -> CompiledRuntime:
         if self.compiled_runtime is not None:
             return self.compiled_runtime
-        normalizer.runtime_event(
-            "node_started",
-            node_id="package_compile",
-            node_label="Package Compile",
-            node_kind="system",
-            payload={"manifest": str(PACKAGE_MANIFEST)},
-        )
-        package = self._load_package()
-        facade = RuntimeKernelFacade(
-            checkpointer_config=LangGraphCheckpointerConfig(
-                backend="sqlite",
-                path=RUNTIME_ROOT / "checkpoints" / "agent.sqlite",
-            ),
-            memory_system_config=_runtime_memory_config(),
-            session_config=AgentSessionConfig(root=RUNTIME_ROOT / "sessions"),
-        )
-        runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
-            package,
-            base_services=facade.instance.services,
-            runtime_root=RUNTIME_ROOT,
-        )
-        compiler = AgentAssemblyCompiler(facade=facade)
-        compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
-        self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
-        _configure_scheduler_runtime(package=package, compiled=compiled, facade=facade)
-        _configure_knowledge_runtime(compiled=compiled)
-        _apply_scheduler_seeds(package=package, compiled=compiled)
-        self.background_workers.add_many(runtime_build.background_workers)
-        for lifecycle_event in self.background_workers.start_all():
-            if lifecycle_event.status == "failed":
-                _emit_worker_lifecycle_failure(package=package, lifecycle_event=lifecycle_event)
-        normalizer.runtime_event(
-            "node_completed",
-            node_id="package_compile",
-            node_label="Package Compile",
-            node_kind="system",
-            payload={"agent_id": package.assembly_spec.agent.id, "package_id": package.package_root.name},
-        )
-        return self.compiled_runtime
+        with self.compile_lock:
+            if self.compiled_runtime is not None:
+                return self.compiled_runtime
+            normalizer.runtime_event(
+                "node_started",
+                node_id="package_compile",
+                node_label="Package Compile",
+                node_kind="system",
+                payload={"manifest": str(PACKAGE_MANIFEST)},
+            )
+            package = self._load_package()
+            facade = RuntimeKernelFacade(
+                checkpointer_config=LangGraphCheckpointerConfig(
+                    backend="sqlite",
+                    path=RUNTIME_ROOT / "checkpoints" / "agent.sqlite",
+                ),
+                memory_system_config=_runtime_memory_config(),
+                session_config=AgentSessionConfig(root=RUNTIME_ROOT / "sessions"),
+            )
+            runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+                package,
+                base_services=facade.instance.services,
+                runtime_root=RUNTIME_ROOT,
+            )
+            compiler = AgentAssemblyCompiler(facade=facade)
+            compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
+            self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
+            _configure_scheduler_runtime(package=package, compiled=compiled, facade=facade)
+            _configure_knowledge_runtime(compiled=compiled)
+            _apply_scheduler_seeds(package=package, compiled=compiled)
+            self.background_workers.add_many(runtime_build.background_workers)
+            for lifecycle_event in self.background_workers.start_all():
+                if lifecycle_event.status == "failed":
+                    _emit_worker_lifecycle_failure(package=package, lifecycle_event=lifecycle_event)
+            normalizer.runtime_event(
+                "node_completed",
+                node_id="package_compile",
+                node_label="Package Compile",
+                node_kind="system",
+                payload={"agent_id": package.assembly_spec.agent.id, "package_id": package.package_root.name},
+            )
+            return self.compiled_runtime
 
     def _load_package(self) -> LoadedAgentPackage:
         return _load_package()
@@ -238,7 +335,6 @@ class BridgeRuntimeState:
 
 def main() -> int:
     state = BridgeRuntimeState()
-    exit_code = 0
     for line in sys.stdin:
         if _STDOUT_WRITER.closed:
             break
@@ -250,30 +346,17 @@ def main() -> int:
                 raise ValueError("command must be a JSON object")
         except Exception as exc:
             _write_event(event("error", mode="agent_package", payload={"message": f"invalid command: {exc}"}))
-            exit_code = 1
             continue
         if str(command.get("type") or "") == "shutdown":
             state.shutdown()
             break
-        try:
-            result = state.handle(command)
-            if result != 0:
-                exit_code = result
-        except Exception as exc:
-            _write_event(
-                event(
-                    "run_failed",
-                    request_id=str(command.get("request_id") or "") or None,
-                    mode="agent_package",
-                    graph_id="agent_runtime_bridge",
-                    severity="error",
-                    payload={"message": f"{type(exc).__name__}: {exc}"},
-                )
-            )
-            exit_code = 1
+        if str(command.get("type") or "") == "cancel_runtime_request":
+            state.handle(command)
+        else:
+            state.start(command)
         if _STDOUT_WRITER.closed:
             break
-    return exit_code
+    return 0
 
 
 def _configure_scheduler_runtime(*, package: LoadedAgentPackage, compiled: Any, facade: RuntimeKernelFacade) -> None:
@@ -380,15 +463,17 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
             error = runtime_error_message(final_state, command="scheduler_graph_run")
             normalizer.emit_run_failed(RuntimeError(error))
             return {"status": "failed", "error": error}
+        visible_output = normalizer.complete_visible_assistant_output_from_state(final_state, reason="run_completed")
+        final_answer = visible_output.content or session_final_answer(final_state)
         agent_session = run_context.session_manager.touch_turn(
             run_context.session_id,
             first_user_input=run_context.first_user_input,
             user_input=run_context.first_user_input,
-            final_answer=session_final_answer(final_state),
+            reasoning_content=visible_output.reasoning_content or session_reasoning_content(final_state),
+            final_answer=final_answer,
             status=final_state.execution.finish_status,
             trace_ref=session_trace_ref(compiled, final_state),
         )
-        normalizer.complete_open_model_streams(reason="run_completed")
         normalizer.emit_run_completed(
             {
                 "status": final_state.execution.finish_status,
@@ -400,8 +485,8 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
         )
         return {
             "status": final_state.execution.finish_status or "completed",
-            "final_answer": final_state.conversation.final_answer,
-            "output_summary": final_state.conversation.final_answer,
+            "final_answer": final_answer,
+            "output_summary": final_answer,
         }
 
     return run
@@ -481,7 +566,13 @@ def _scheduler_event_payload(payload: SchedulerEventPayload, package: LoadedAgen
     return value
 
 
-def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], runtime: CompiledRuntime) -> int:
+def _run_message(
+    normalizer: RuntimeEventNormalizer,
+    payload: dict[str, Any],
+    runtime: CompiledRuntime,
+    *,
+    cancel_token: RuntimeStopSignal | None = None,
+) -> int:
     message = str(payload.get("message") or "").strip()
     if not message and not has_attachment_payload(payload.get("attachments")):
         normalizer.emit_run_failed(ValueError("run_message requires payload.message"))
@@ -519,26 +610,47 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
         )
         return 1
     final_state = None
-    for stream_mode, chunk in facade.instance.controller.stream(
+    stop_requested = False
+    stream_iter = facade.instance.controller.stream(
         compiled.compiled_app,
         run_context.state,
         thread_id=run_context.thread_id,
-    ):
-        if _handle_stream_item(normalizer, stream_mode, chunk):
-            return 0
-        if stream_mode == "runtime_final":
-            final_state = chunk
+    )
+    try:
+        for stream_mode, chunk in stream_iter:
+            if _cancel_requested(cancel_token):
+                stop_requested = True
+                break
+            if _handle_stream_item(normalizer, stream_mode, chunk):
+                return 0
+            if stream_mode == "runtime_final":
+                final_state = chunk
+    finally:
+        close = getattr(stream_iter, "close", None)
+        if callable(close):
+            close()
+    if stop_requested:
+        return _emit_stopped_runtime(
+            normalizer,
+            run_context,
+            compiled,
+            package=package,
+            command="run_message",
+            fallback_user_input=run_context.first_user_input,
+            fallback_attachments=user_config.get("attachments"),
+            stop_signal=cancel_token,
+        )
     if final_state is None:
         normalizer.emit_run_failed(RuntimeError("agent runtime did not produce a final state"))
         return 1
-    agent_session = _touch_session_turn_from_final_state(
-        run_context,
-        compiled,
-        final_state,
-        fallback_user_input=run_context.first_user_input,
-        fallback_attachments=user_config.get("attachments"),
-    )
     if not runtime_completed(final_state):
+        agent_session = _touch_session_turn_from_final_state(
+            run_context,
+            compiled,
+            final_state,
+            fallback_user_input=run_context.first_user_input,
+            fallback_attachments=user_config.get("attachments"),
+        )
         return _emit_failed_runtime_final(
             normalizer,
             final_state,
@@ -546,8 +658,15 @@ def _run_message(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], ru
             package=package,
             agent_session=agent_session.model_dump(mode="json"),
         )
-    normalizer.complete_open_model_streams(reason="run_completed")
-    normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
+    visible_output = normalizer.complete_visible_assistant_output_from_state(final_state, reason="run_completed")
+    agent_session = _touch_session_turn_from_final_state(
+        run_context,
+        compiled,
+        final_state,
+        fallback_user_input=run_context.first_user_input,
+        fallback_attachments=user_config.get("attachments"),
+        visible_output=visible_output,
+    )
     normalizer.emit_run_completed(
         {
             "status": final_state.execution.finish_status,
@@ -584,7 +703,13 @@ def _checkpoint_incomplete_tool_call_ids(compiled_app: Any, thread_id: str) -> l
     return incomplete_tool_call_ids(list(values.get("messages") or []))
 
 
-def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any], runtime: CompiledRuntime) -> int:
+def _resume_interrupt(
+    normalizer: RuntimeEventNormalizer,
+    payload: dict[str, Any],
+    runtime: CompiledRuntime,
+    *,
+    cancel_token: RuntimeStopSignal | None = None,
+) -> int:
     session_id = str(payload.get("session_id") or "").strip()
     resume_payload = payload.get("resume_payload")
     if not session_id:
@@ -606,27 +731,48 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
         payload.get("runtime_request")
     ).timeout_seconds
     final_state = None
-    for stream_mode, chunk in facade.instance.controller.stream_resume(
+    stop_requested = False
+    stream_iter = facade.instance.controller.stream_resume(
         compiled.compiled_app,
         run_context.state,
         thread_id=run_context.thread_id,
         resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
-    ):
-        if _handle_stream_item(normalizer, stream_mode, chunk):
-            return 0
-        if stream_mode == "runtime_final":
-            final_state = chunk
+    )
+    try:
+        for stream_mode, chunk in stream_iter:
+            if _cancel_requested(cancel_token):
+                stop_requested = True
+                break
+            if _handle_stream_item(normalizer, stream_mode, chunk):
+                return 0
+            if stream_mode == "runtime_final":
+                final_state = chunk
+    finally:
+        close = getattr(stream_iter, "close", None)
+        if callable(close):
+            close()
+    if stop_requested:
+        return _emit_stopped_runtime(
+            normalizer,
+            run_context,
+            compiled,
+            package=package,
+            command="resume_interrupt",
+            session_id=session_id,
+            fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
+            stop_signal=cancel_token,
+        )
     if final_state is None:
         normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
         return 1
-    agent_session = _touch_session_turn_from_final_state(
-        run_context,
-        compiled,
-        final_state,
-        session_id=session_id,
-        fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
-    )
     if not runtime_completed(final_state):
+        agent_session = _touch_session_turn_from_final_state(
+            run_context,
+            compiled,
+            final_state,
+            session_id=session_id,
+            fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
+        )
         return _emit_failed_runtime_final(
             normalizer,
             final_state,
@@ -634,8 +780,15 @@ def _resume_interrupt(normalizer: RuntimeEventNormalizer, payload: dict[str, Any
             package=package,
             agent_session=agent_session.model_dump(mode="json"),
         )
-    normalizer.complete_open_model_streams(reason="run_completed")
-    normalizer.emit_final_answer_if_needed(final_state, reason="run_completed")
+    visible_output = normalizer.complete_visible_assistant_output_from_state(final_state, reason="run_completed")
+    agent_session = _touch_session_turn_from_final_state(
+        run_context,
+        compiled,
+        final_state,
+        session_id=session_id,
+        fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
+        visible_output=visible_output,
+    )
     normalizer.emit_run_completed(
         {
             "status": "completed",
@@ -752,6 +905,7 @@ def _touch_session_turn_from_final_state(
     session_id: str | None = None,
     fallback_user_input: str | None = None,
     fallback_attachments: Any = None,
+    visible_output: VisibleAssistantMessage | None = None,
 ) -> Any:
     session_user_input = session_user_input_from_state(
         final_state,
@@ -761,16 +915,72 @@ def _touch_session_turn_from_final_state(
         final_state,
         fallback_attachments=fallback_attachments,
     )
+    final_answer = (visible_output.content if visible_output else None) or session_final_answer(final_state)
+    reasoning_content = (
+        (visible_output.reasoning_content if visible_output else None)
+        or session_reasoning_content(final_state)
+    )
     return run_context.session_manager.touch_turn(
         session_id or run_context.session_id,
         first_user_input=session_user_input,
         user_input=session_user_input,
         attachments=session_attachments,
-        reasoning_content=session_reasoning_content(final_state),
-        final_answer=session_final_answer(final_state),
+        reasoning_content=reasoning_content,
+        final_answer=final_answer,
         status=getattr(getattr(final_state, "execution", None), "finish_status", None),
         trace_ref=session_trace_ref(compiled, final_state),
     )
+
+
+def _cancel_requested(token: RuntimeStopSignal | None) -> bool:
+    return bool(token is not None and token.is_set())
+
+
+def _emit_stopped_runtime(
+    normalizer: RuntimeEventNormalizer,
+    run_context: Any,
+    compiled: Any,
+    *,
+    package: LoadedAgentPackage,
+    command: str,
+    session_id: str | None = None,
+    fallback_user_input: str | None = None,
+    fallback_attachments: Any = None,
+    stop_signal: RuntimeStopSignal | None = None,
+) -> int:
+    normalizer.complete_open_model_streams(reason="user_stopped")
+    visible_output = (
+        stop_signal.resolved_visible_output(normalizer.visible_assistant_output)
+        if stop_signal is not None
+        else normalizer.visible_assistant_output
+    )
+    stopped_turn = close_stopped_turn_checkpoint(
+        compiled_app=compiled.compiled_app,
+        thread_id=run_context.thread_id,
+        base_state=run_context.state,
+        visible_output=visible_output,
+        fallback_user_input=fallback_user_input or run_context.first_user_input,
+    )
+    agent_session = run_context.session_manager.touch_turn(
+        session_id or run_context.session_id,
+        first_user_input=fallback_user_input or run_context.first_user_input,
+        user_input=fallback_user_input or run_context.first_user_input,
+        attachments=fallback_attachments,
+        reasoning_content=stopped_turn.state.conversation.reasoning_content,
+        final_answer=stopped_turn.state.conversation.final_answer,
+        status="stopped",
+        trace_ref=session_trace_ref(compiled, stopped_turn.state),
+    )
+    normalizer.emit_run_completed(
+        {
+            "status": "stopped",
+            "command": command,
+            "package_id": package.package_root.name,
+            "agent_id": package.assembly_spec.agent.id,
+            "agent_session": agent_session.model_dump(mode="json"),
+        }
+    )
+    return 0
 
 
 def _emit_failed_runtime_final(
@@ -828,19 +1038,23 @@ def _write_event(item: FactoryFrontendEvent) -> None:
 class _JsonLineWriter:
     def __init__(self) -> None:
         self.closed = False
+        self._lock = threading.Lock()
 
     def write(self, item: FactoryFrontendEvent) -> None:
         if self.closed:
             return
-        try:
-            sys.stdout.write(item.model_dump_json() + "\n")
-            sys.stdout.flush()
-        except BrokenPipeError:
-            self.closed = True
-        except OSError as exc:
-            if exc.errno != errno.EPIPE:
-                raise
-            self.closed = True
+        with self._lock:
+            if self.closed:
+                return
+            try:
+                sys.stdout.write(item.model_dump_json() + "\n")
+                sys.stdout.flush()
+            except BrokenPipeError:
+                self.closed = True
+            except OSError as exc:
+                if exc.errno != errno.EPIPE:
+                    raise
+                self.closed = True
 
 
 def _runtime_memory_config():

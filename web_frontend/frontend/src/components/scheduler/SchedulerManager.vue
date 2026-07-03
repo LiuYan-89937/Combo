@@ -103,7 +103,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
 import { NText, NButton, NIcon, NScrollbar, NCard, NTag, NSpace, NSwitch, NDivider, NDropdown, NEmpty, useDialog } from 'naive-ui'
-import { Add, Time, LocateOutline, EllipsisHorizontal } from '@vicons/ionicons5'
+import { Add, Time, LocateOutline, EllipsisHorizontal } from '@/components/icons'
 import { useSchedulerStore } from '@/stores/scheduler'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'

@@ -41,7 +41,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NIcon, NTabPane, NTabs } from 'naive-ui'
-import { ChevronForward } from '@vicons/ionicons5'
+import { ChevronForward } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { RIGHT_SIDEBAR_WIDTH, useUiStore } from '@/stores/ui'
 import SessionsSidebarPanel from './right-sidebar/SessionsSidebarPanel.vue'

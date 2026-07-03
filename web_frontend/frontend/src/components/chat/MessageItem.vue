@@ -90,7 +90,7 @@
 import { computed, ref } from 'vue'
 import type { CSSProperties } from 'vue'
 import { NAvatar, NIcon, NText } from 'naive-ui'
-import { Document, Link, Text } from '@vicons/ionicons5'
+import { Document, Link, Text } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import type { TranscriptAttachmentView, TranscriptItem } from '@/types/protocol'

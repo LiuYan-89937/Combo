@@ -177,7 +177,7 @@ import {
   NText,
   useDialog,
 } from 'naive-ui'
-import { Search, Refresh, Build, ChatbubbleEllipses, EllipsisHorizontal, Rocket } from '@vicons/ionicons5'
+import { Search, Refresh, Build, ChatbubbleEllipses, EllipsisHorizontal, Rocket } from '@/components/icons'
 import AgentPackageDetailDrawer from './AgentPackageDetailDrawer.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'

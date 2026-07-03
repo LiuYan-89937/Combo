@@ -52,7 +52,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { NButton, NIcon, NInput, NSpace, NTag } from 'naive-ui'
-import { CheckmarkCircle, CreateOutline, RocketOutline } from '@vicons/ionicons5'
+import { CheckmarkCircle, CreateOutline, RocketOutline } from '@/components/icons'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'

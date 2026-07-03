@@ -37,6 +37,8 @@ Guides runtime tools contract changes and tool access declarations.
 - Do not expose create-agent manufacturing tools as produced-agent runtime tools.
 - Declare only tools that are available through RuntimeKernel built-ins, package files, or inherited MCP candidates.
 - To use an inherited MCP candidate, include its tool id through create_agent_authoring pattern assembly tool access, then call create_agent_authoring(action="materialize_mcp_inheritance") before validation.
+- To use a SkillHub skill at runtime, install it with `skillhub(action="install", skill=...)`. The install writes package `extensions/skills/<skill_id>` and `extensions/enabled_skills.json`; expose the runtime extension tool id `skill` through assembly tool access.
+- Runtime SkillHub skills are package extensions, not `contracts/tools.json` builtins and not package tools.
 - Keep contracts/tools.json aligned with assembly_spec tool_access bindings and package tool manifests.
 - If a required runtime tool is unavailable in built-ins, package tools, or inherited MCP candidates, state the limitation or ask for confirmed integration resources.
 

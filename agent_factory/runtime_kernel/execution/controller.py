@@ -147,7 +147,7 @@ class ExecutionController:
         yield from compiled_app.graph_app.stream(
             _graph_input(state) if stream_input is None else stream_input,
             config=_graph_config(state, thread_id=thread_id),
-            stream_mode=["updates", "values", "messages", "debug", "custom"],
+            stream_mode=["updates", "values", "debug", "custom"],
         )
 
     def _final_state_from_raw(self, raw: dict[str, Any], *, messages: list[Any] | None = None) -> RuntimeState:

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 import shutil
+import threading
 from typing import Any
 from uuid import uuid4
 
@@ -79,6 +80,8 @@ class AgentEvolutionRuntime:
         self.tool_environment_builder = tool_environment_builder or CreateAgentToolEnvironmentBuilder()
         self.checkpointer = checkpointer or build_factory_checkpointer_handle().saver
         self._active_runs: dict[str, _EvolutionRunContext] = {}
+        self._cancel_lock = threading.Lock()
+        self._active_cancel_tokens: dict[str, threading.Event] = {}
 
     def stream(
         self,
@@ -135,14 +138,25 @@ class AgentEvolutionRuntime:
             ),
         )
 
-    def cancel_active_requests(self, *, reason: str = "user_cancelled") -> int:
+    def cancel_active_requests(self, *, reason: str = "user_cancelled", request_id: str | None = None) -> int:
         del reason
-        active_runs = list(self._active_runs.items())
-        self._active_runs.clear()
-        for _, context in active_runs:
-            if context.backup_path is not None and context.backup_path.exists():
-                _restore_package(context.backup_path, context.package_path)
-        return len(active_runs)
+        target = (request_id or "").strip()
+        with self._cancel_lock:
+            request_ids = [target] if target and target in self._active_cancel_tokens else list(self._active_cancel_tokens)
+            for active_request_id in request_ids:
+                self._active_cancel_tokens[active_request_id].set()
+            return len(request_ids)
+
+    def _register_cancel_token(self, request_id: str) -> threading.Event:
+        token = threading.Event()
+        with self._cancel_lock:
+            self._active_cancel_tokens[request_id] = token
+        return token
+
+    def _forget_cancel_token(self, request_id: str, token: threading.Event) -> None:
+        with self._cancel_lock:
+            if self._active_cancel_tokens.get(request_id) is token:
+                self._active_cancel_tokens.pop(request_id, None)
 
     def latest_failed_trace_id(self, package_id: str) -> str | None:
         safe_package_id = _safe_id(package_id, label="package_id")
@@ -164,6 +178,7 @@ class AgentEvolutionRuntime:
         attachments: Any,
         user_config: dict[str, Any] | None,
     ) -> Iterator[tuple[str, Any]]:
+        cancel_token = self._register_cancel_token(request_id)
         pending_events: list[FactoryFrontendEvent] = []
 
         def emit_frontend(item: FactoryFrontendEvent) -> None:
@@ -268,6 +283,37 @@ class AgentEvolutionRuntime:
                 )
 
             model_trace = _ModelTraceAccumulator(record_trace)
+
+            def emit_cancelled() -> Iterator[tuple[str, FactoryFrontendEvent]]:
+                model_trace.flush()
+                normalizer.complete_open_model_streams(reason="user_stopped")
+                if context.backup_path is not None and context.backup_path.exists():
+                    _restore_package(context.backup_path, context.package_path)
+                self._active_runs.pop(active_run_key, None)
+                normalizer.runtime_event(
+                    "node_completed",
+                    node_id="agent_evolution",
+                    node_label="Agent Evolution",
+                    node_kind="create_agent_workflow",
+                    payload={"package_id": package_id, "status": "stopped", "trace_id": context.trace_id},
+                )
+                record_trace(
+                    "lifecycle",
+                    {
+                        "event_type": "run_completed",
+                        "payload": {"status": "stopped", "package_id": package_id, "trace_id": context.trace_id},
+                    },
+                )
+                normalizer.emit_run_completed(
+                    {
+                        "status": "stopped",
+                        "package_id": package_id,
+                        "trace_id": context.trace_id,
+                        "agent_session": {"session_id": session_id} if session_id else {},
+                    }
+                )
+                yield from drain_events()
+
             record_trace(
                 "lifecycle",
                 {
@@ -281,6 +327,9 @@ class AgentEvolutionRuntime:
                     },
                 },
             )
+            if cancel_token.is_set():
+                yield from emit_cancelled()
+                return
             if target_plan.surface == "runtime_blocker":
                 record_trace(
                     "lifecycle",
@@ -293,7 +342,7 @@ class AgentEvolutionRuntime:
                 if context.backup_path is not None:
                     shutil.rmtree(context.backup_path, ignore_errors=True)
                 self._active_runs.pop(active_run_key, None)
-                normalizer.emit_final_message_if_needed(
+                normalizer.complete_visible_assistant_output_from_text(
                     "本次进化被运行环境问题阻塞，不能通过修改 AgentPackage 解决。请先处理 runtime/Docker/model infrastructure blocker。",
                     node_id="agent_evolution",
                     reason="runtime_blocked",
@@ -342,6 +391,9 @@ class AgentEvolutionRuntime:
                 },
             )
             yield from drain_events()
+            if cancel_token.is_set():
+                yield from emit_cancelled()
+                return
             workflow = CreateAgentWorkflow(
                 tools=tool_env.tools,
                 model=self.model,
@@ -374,35 +426,44 @@ class AgentEvolutionRuntime:
                 yield from drain_events()
             final_state: dict[str, Any] | None = None
             config = {"configurable": {"thread_id": resolved_thread_id}}
-            for stream_mode, chunk in workflow.stream(
+            stream_iter = workflow.stream(
                 stream_input,
                 config=config,
                 stream_mode=["messages", "custom", "values"],
-            ):
-                interrupt_payload = extract_interrupt_payload(chunk)
-                if interrupt_payload is not None:
-                    normalizer.emit_interrupt(interrupt_payload)
-                    record_trace(
-                        "lifecycle",
-                        {"event_type": "interrupt_requested", "payload": _json_safe(interrupt_payload)},
-                    )
-                    model_trace.flush()
-                    yield from drain_events()
-                    return
-                if stream_mode == "values" and isinstance(chunk, dict):
-                    final_state = chunk
-                    continue
-                if stream_mode == "messages":
-                    model_trace.accept(chunk)
-                if stream_mode == "custom":
-                    model_trace.flush()
-                    if _is_model_cache_chunk(chunk):
-                        record_trace("model_cache", _json_safe(chunk.get("payload") or {}))
+            )
+            try:
+                for stream_mode, chunk in stream_iter:
+                    if cancel_token.is_set():
+                        yield from emit_cancelled()
+                        return
+                    interrupt_payload = extract_interrupt_payload(chunk)
+                    if interrupt_payload is not None:
+                        normalizer.emit_interrupt(interrupt_payload)
+                        record_trace(
+                            "lifecycle",
+                            {"event_type": "interrupt_requested", "payload": _json_safe(interrupt_payload)},
+                        )
+                        model_trace.flush()
+                        yield from drain_events()
+                        return
+                    if stream_mode == "values" and isinstance(chunk, dict):
+                        final_state = chunk
                         continue
-                    for record in _tool_trace_records(chunk):
-                        record_trace("tool_call", record)
-                normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="evolution_update")
-                yield from drain_events()
+                    if stream_mode == "messages":
+                        model_trace.accept(chunk)
+                    if stream_mode == "custom":
+                        model_trace.flush()
+                        if _is_model_cache_chunk(chunk):
+                            record_trace("model_cache", _json_safe(chunk.get("payload") or {}))
+                            continue
+                        for record in _tool_trace_records(chunk):
+                            record_trace("tool_call", record)
+                    normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="evolution_update")
+                    yield from drain_events()
+            finally:
+                close = getattr(stream_iter, "close", None)
+                if callable(close):
+                    close()
             model_trace.flush()
             if not final_state:
                 raise RuntimeError("agent evolution workflow did not produce final state")
@@ -442,7 +503,7 @@ class AgentEvolutionRuntime:
                     },
                 },
             )
-            normalizer.emit_final_message_if_needed(
+            normalizer.complete_visible_assistant_output_from_text(
                 final_answer,
                 node_id="agent_evolution",
                 reason="run_completed",
@@ -493,6 +554,8 @@ class AgentEvolutionRuntime:
             self._active_runs.pop(active_run_key, None)
             normalizer.emit_run_failed(exc)
             yield from drain_events()
+        finally:
+            self._forget_cancel_token(request_id, cancel_token)
 
 
 def _ensure_evolution_managed_files(workspace: CreateAgentWorkspace) -> None:

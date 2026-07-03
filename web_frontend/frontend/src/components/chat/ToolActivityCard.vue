@@ -51,7 +51,7 @@ import {
   AlertCircleOutline,
   CheckmarkCircleOutline,
   CloseCircleOutline,
-} from '@vicons/ionicons5'
+} from '@/components/icons'
 import type { ToolActivity } from '@/types/protocol'
 import { useI18n } from '@/composables/useI18n'
 import { toolActivityDisplayStatus } from '@/utils/toolActivityState'

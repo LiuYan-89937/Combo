@@ -198,7 +198,7 @@ import {
   NText,
   NThing,
 } from 'naive-ui'
-import { Add, EllipsisHorizontal, Refresh } from '@vicons/ionicons5'
+import { Add, EllipsisHorizontal, Refresh } from '@/components/icons'
 import { useExtensionsManager } from '@/composables/extensions/useExtensionsManager'
 import McpConfigModal from '@/components/extensions/McpConfigModal.vue'
 import SkillConfigModal from '@/components/extensions/SkillConfigModal.vue'

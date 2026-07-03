@@ -174,6 +174,18 @@ export const useRuntimeStore = defineStore('runtime', {
       return state.conversationTurns[state.conversationTurns.length - 1] || null
     },
 
+    activeVisibleAssistantOutput: (state): Record<string, any> | null => {
+      if (!state.activeRequestId) return null
+      const turn = state.conversationTurns.find((item) => item.requestId === state.activeRequestId)
+      const message = turn?.assistantMessages?.[turn.assistantMessages.length - 1]
+      if (!message) return null
+      return {
+        content: message.content || '',
+        reasoning_content: message.reasoning?.content || '',
+        stream_id: message.streamId || null,
+      }
+    },
+
     // 获取当前审批请求
     currentApprovalRequests: (state): any[] => {
       if (!state.pendingInterrupt) return []
@@ -268,13 +280,10 @@ export const useRuntimeStore = defineStore('runtime', {
         this.selectedAgentPackage = payload?.package || null
         this.agentSessions = payload?.sessions || this.agentSessions
         if (payload?.purpose === 'evolution' && payload?.package?.package_id) {
-          const scope = conversationScopeForMode('evolve_agent', {
-            ...(payload || {}),
-            session_id: this.activeFactorySessionId,
-          })
-          if (scope) {
-            this._switchConversationScope(scope)
-          }
+          this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || this.activeFactorySessionId
+          this._upsertFactorySession(payload?.session)
+          this._clearSessionScopedState()
+          this._restoreSessionSnapshot(payload)
         }
       } else if (type === 'agent_package_deleted') {
         const deletedPackageId = payload?.package_id
@@ -293,6 +302,8 @@ export const useRuntimeStore = defineStore('runtime', {
         this._handleRunStarted(event)
       } else if (type === 'run_completed') {
         this._handleRunCompleted(event)
+      } else if (type === 'run_cancelled') {
+        this._handleRunCancelled(event)
       } else if (type === 'run_failed') {
         this._handleRunFailed(event)
       } else if (type === 'runtime_paused') {
@@ -456,15 +467,16 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleRunCompleted(event: FactoryFrontendEvent) {
+      const completedStatus: RunStatus = event.payload?.status === 'stopped' ? 'stopped' : 'completed'
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
-        this._completeActiveRequest(event, 'completed')
+        this._completeActiveRequest(event, completedStatus)
         return
       }
-      this._completeActiveRequest(event, 'completed')
-      this.runStatus = 'completed'
+      this._completeActiveRequest(event, completedStatus)
+      this.runStatus = completedStatus
       const requestId = event.request_id || this.activeRequestId || null
       const turn = ensureConversationTurn(this, requestId, event.timestamp)
-      turn.status = 'completed'
+      turn.status = completedStatus
       turn.completedAt = event.timestamp
       if (!this.activeRequestId || this.activeRequestId === requestId) {
         this.activeRequestId = null
@@ -473,6 +485,32 @@ export const useRuntimeStore = defineStore('runtime', {
 
       // 同步 agent session
       this._syncAgentSessionFromRunEvent(event)
+    },
+
+    _handleRunCancelled(event: FactoryFrontendEvent) {
+      if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
+        this._completeActiveRequest(event, 'cancelled')
+        return
+      }
+      this._completeActiveRequest(event, 'cancelled')
+      this.runStatus = 'cancelled'
+      const requestId = event.request_id || this.activeRequestId || null
+      this.pendingInterrupt = null
+      this._syncAgentSessionFromRunEvent(event)
+      Object.values(this.modelStreams).forEach((stream) => {
+        if (requestId && stream.requestId && stream.requestId !== requestId) return
+        stream.active = false
+        stream.reasoningActive = false
+        stream.completedAt = event.timestamp
+        stream.reasoningCompletedAt = stream.reasoningCompletedAt || event.timestamp
+      })
+      const turn = ensureConversationTurn(this, requestId, event.timestamp)
+      turn.status = 'cancelled'
+      turn.completedAt = event.timestamp
+      turn.errorMessage = null
+      if (!this.activeRequestId || this.activeRequestId === requestId) {
+        this.activeRequestId = null
+      }
     },
 
     _handleRunFailed(event: FactoryFrontendEvent) {
@@ -1075,6 +1113,31 @@ export const useRuntimeStore = defineStore('runtime', {
           completedAt: null,
           payload: { ...metadata },
         }
+      }
+    },
+
+    markActiveRequestStopping(requestId?: string | null) {
+      const targetRequestId = requestId ?? this.activeRequestId
+      if (!targetRequestId) return
+      const timestamp = new Date().toISOString()
+      const request = this.activeRequests[targetRequestId]
+      if (request) {
+        request.payload = {
+          ...(request.payload || {}),
+          stop_requested_at: timestamp,
+        }
+      }
+      Object.values(this.modelStreams).forEach((stream) => {
+        if (stream.requestId && stream.requestId !== targetRequestId) return
+        stream.active = false
+        stream.reasoningActive = false
+        stream.completedAt = stream.completedAt || timestamp
+        stream.reasoningCompletedAt = stream.reasoningCompletedAt || timestamp
+      })
+      const turn = ensureConversationTurn(this, targetRequestId, timestamp)
+      turn.metadata = {
+        ...(turn.metadata || {}),
+        stop_requested_at: timestamp,
       }
     },
 

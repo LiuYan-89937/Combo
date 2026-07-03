@@ -139,6 +139,15 @@ class FactorySessionManager:
             return None
         return records[0]
 
+    def latest_evolution_for_package(self, package_id: str) -> FactorySessionRecord | None:
+        normalized_package_id = package_id.strip()
+        if not normalized_package_id:
+            return None
+        for record in self.list_sessions():
+            if _record_evolution_package_id(record) == normalized_package_id:
+                return record
+        return None
+
     def list_sessions(self) -> list[FactorySessionRecord]:
         records: list[FactorySessionRecord] = []
         for path in self.config.root.glob("*.json"):
@@ -380,6 +389,11 @@ def _record_matches_mode(record: FactorySessionRecord, mode: FactorySessionMode)
         or bool(record.evolve_agent_turns)
         or bool(record.evolve_agent_package_id)
     )
+
+
+def _record_evolution_package_id(record: FactorySessionRecord) -> str | None:
+    value = (record.evolve_agent_package_id or "").strip()
+    return value or None
 
 
 def _turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> list[FactorySessionTurn]:

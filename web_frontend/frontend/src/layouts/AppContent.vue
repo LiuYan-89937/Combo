@@ -76,7 +76,7 @@
 import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NIcon } from 'naive-ui'
-import { ChevronBack, ChevronForward } from '@vicons/ionicons5'
+import { ChevronBack, ChevronForward } from '@/components/icons'
 import { useUiStore } from '@/stores/ui'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'

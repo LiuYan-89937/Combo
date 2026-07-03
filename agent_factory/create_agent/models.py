@@ -480,6 +480,8 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
                 "agent_package.json",
                 "resources.json",
                 "tools/",
+                "extensions/",
+                "extensions/enabled_skills.json",
                 "knowledge/",
                 "contracts/dependencies.json",
                 "contracts/model.json",

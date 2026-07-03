@@ -96,7 +96,7 @@
 import { ref, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
-import { ChatbubbleEllipses } from '@vicons/ionicons5'
+import { ChatbubbleEllipses } from '@/components/icons'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useI18n } from '@/composables/useI18n'
 import { useFactoryConversation } from '@/composables/factory/useFactoryConversation'

@@ -47,6 +47,7 @@
     "mode_changed",
     "run_started",
     "run_completed",
+    "run_cancelled",
     "run_failed",
     "stage_started",
     "stage_completed",

@@ -93,7 +93,7 @@
 import { ref, computed } from 'vue'
 import { NModal, NTabs, NTabPane, NUpload, NUploadDragger, NIcon, NText, NInput, NForm, NFormItem, NButton, NEmpty } from 'naive-ui'
 import type { UploadCustomRequestOptions } from 'naive-ui'
-import { CloudUploadOutline, Document } from '@vicons/ionicons5'
+import { CloudUploadOutline, Document } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { runtimeFileAttachmentFromFile } from '@/utils/attachments'
 

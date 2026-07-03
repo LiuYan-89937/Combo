@@ -181,7 +181,10 @@ export function useFactoryConversation() {
   }
 
   function cancelRequest() {
-    commands.cancelRequest('user_cancelled')
+    const requestId = runtimeStore.activeRequestId
+    const visibleOutput = runtimeStore.activeVisibleAssistantOutput
+    runtimeStore.markActiveRequestStopping(requestId)
+    commands.cancelRequest('user_cancelled', requestId, visibleOutput)
   }
 
   function applyRouteMode() {
@@ -196,9 +199,12 @@ export function useFactoryConversation() {
     }
     if (isEvolutionRoute.value) {
       agentStore.leaveAgentChat()
+      const packageId = agentStore.selectedPackageId
       const shouldSwitchSession = runtimeStore.currentMode !== 'evolve_agent'
-      runtimeStore.enterFactoryConversation('evolve_agent', agentStore.selectedPackageId)
-      if (runtimeStore.activeFactorySessionId && shouldSwitchSession) {
+      runtimeStore.enterFactoryConversation('evolve_agent', packageId)
+      if (packageId) {
+        void commands.selectAgentPackage(packageId, 'evolution')
+      } else if (runtimeStore.activeFactorySessionId && shouldSwitchSession) {
         commands.startSession(true, 'evolve_agent')
       }
       if (agentStore.agentPackages.length === 0) {

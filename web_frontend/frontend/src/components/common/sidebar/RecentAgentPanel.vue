@@ -50,7 +50,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NIcon } from 'naive-ui'
-import { CaretDown, CaretUp } from '@vicons/ionicons5'
+import { CaretDown, CaretUp } from '@/components/icons'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore, type AgentRecentSessionView } from '@/stores/agent'

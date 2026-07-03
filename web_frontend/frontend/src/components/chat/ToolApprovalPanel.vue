@@ -106,7 +106,7 @@ import {
   CreateOutline,
   Shield,
   ShieldCheckmark,
-} from '@vicons/ionicons5'
+} from '@/components/icons'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'

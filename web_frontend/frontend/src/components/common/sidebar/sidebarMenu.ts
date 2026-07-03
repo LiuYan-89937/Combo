@@ -9,7 +9,7 @@ import {
   Library,
   Rocket,
   Time,
-} from '@vicons/ionicons5'
+} from '@/components/icons'
 import type { I18nKey } from '@/i18n'
 
 type Translate = (key: I18nKey) => string

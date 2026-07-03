@@ -8,6 +8,7 @@ from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 RUN_TERMINAL_EVENT_TYPES = {
     "run_completed",
+    "run_cancelled",
     "run_failed",
 }
 
@@ -71,6 +72,18 @@ def run_failed_event(request_id: str, payload: dict[str, Any]) -> FactoryFronten
         producer_type="agent_runtime_host",
         severity="error",
         message=str(payload.get("message") or "agent runtime launch failed"),
+        payload=payload,
+    )
+
+
+def run_cancelled_event(request_id: str, payload: dict[str, Any]) -> FactoryFrontendEvent:
+    return event(
+        "run_cancelled",
+        request_id=request_id,
+        mode="agent_package",
+        graph_id="agent_package_runtime",
+        producer_type="agent_runtime_host",
+        message=str(payload.get("message") or "Runtime request was cancelled."),
         payload=payload,
     )
 
@@ -149,6 +162,8 @@ def is_terminal_request_event(item: Any, request_id: str) -> bool:
 
 
 def runtime_stream_status(item: FactoryFrontendEvent) -> str:
+    if item.event_type == "run_cancelled":
+        return "cancelled"
     if item.event_type in {"run_failed", "error"}:
         return "failed"
     if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
