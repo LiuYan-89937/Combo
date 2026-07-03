@@ -15,8 +15,8 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryMode,
     event,
 )
+from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
 from agent_factory.models.reasoning import reasoning_content_from_message
-from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_blocks
 from agent_factory.runtime_render.schema import default_model_message_visible_to_user, default_node_visible_to_user
 
 
@@ -639,7 +639,7 @@ class RuntimeEventNormalizer:
                     "content_mode": "delta",
                 },
             )
-        content = strip_internal_snapshot_blocks(_content_to_text(getattr(message, "content", "")))
+        content = strip_internal_snapshot_blocks(content_to_text(getattr(message, "content", "")))
         if _looks_like_tool_observation_text(content):
             content = ""
         if isinstance(message, AIMessageChunk):
@@ -1481,20 +1481,6 @@ def _looks_like_keyed_tool_observation_text(text: str) -> bool:
         if key.isidentifier():
             keys.add(key)
     return len(keys & TOOL_OBSERVATION_TEXT_KEYS) >= 3 and ("status" in keys or "content" in keys)
-
-
-def _content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text") or ""))
-        return "".join(parts)
-    return str(content) if content else ""
 
 
 def _json_text(value: Any) -> str:

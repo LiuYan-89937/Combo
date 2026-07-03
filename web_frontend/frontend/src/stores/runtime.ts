@@ -9,6 +9,7 @@ import type {
   FactoryFrontendEvent,
   FactoryMode,
   RuntimeViewState,
+  ActiveRequestView,
   ConversationScopeState,
   ConversationTurn,
   ModelStream,
@@ -255,6 +256,7 @@ export const useRuntimeStore = defineStore('runtime', {
       // Runtime lifecycle
       if (type === 'runtime_ready') {
         this._handleRuntimeOptionsChanged(event)
+        this._restoreActiveRequestsFromRuntimeSnapshot(event)
         console.info('Runtime ready')
       } else if (type === 'session_started') {
         this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
@@ -456,6 +458,58 @@ export const useRuntimeStore = defineStore('runtime', {
         context_window_tokens: optionalPositiveInteger(options.context_window_tokens),
         context_window_tokens_source: String(options.context_window_tokens_source || 'unset'),
       }
+    },
+
+    _restoreActiveRequestsFromRuntimeSnapshot(event: FactoryFrontendEvent) {
+      const activeRequests = Array.isArray(event.payload?.active_requests)
+        ? event.payload.active_requests.map(activeRequestViewFromPayload).filter(Boolean) as ActiveRequestView[]
+        : []
+
+      if (activeRequests.length === 0) {
+        this._clearStaleForegroundRun()
+        return
+      }
+
+      activeRequests.forEach((request) => {
+        const scopeEvent = {
+          ...event,
+          request_id: request.requestId,
+          run_id: request.runId,
+          mode: request.mode,
+          session_id: request.payload?.session_id || null,
+          payload: request.payload,
+        } satisfies FactoryFrontendEvent
+        request.conversationScope = request.conversationScope || scopeFromEventPayload(scopeEvent) || null
+        this.activeRequests[request.requestId] = request
+      })
+
+      const foregroundRequests = activeRequests.filter((request) => !request.background && request.status === 'running')
+      if (foregroundRequests.length === 0) return
+
+      const currentActive = this.activeRequestId ? this.activeRequests[this.activeRequestId] : null
+      const preferred =
+        (currentActive?.status === 'running' && foregroundRequests.find((item) => item.requestId === currentActive.requestId)) ||
+        foregroundRequests.find((request) => request.conversationScope && request.conversationScope === this.activeConversationScope) ||
+        foregroundRequests[foregroundRequests.length - 1]
+
+      this.activeRequestId = preferred.requestId
+      this.runStatus = 'running'
+      this.currentRunId = preferred.runId
+      this.pendingInterrupt = null
+      if (!this.currentMode && preferred.mode) {
+        this.currentMode = preferred.mode
+      }
+      const turn = ensureConversationTurn(this, preferred.requestId, preferred.startedAt)
+      turn.status = 'running'
+      turn.completedAt = null
+    },
+
+    _clearStaleForegroundRun() {
+      if (!this.activeRequestId || this.runStatus !== 'running') return
+      const request = this.activeRequests[this.activeRequestId]
+      if (request?.background) return
+      this.activeRequestId = null
+      this.runStatus = 'idle'
     },
 
     _handleRunStarted(event: FactoryFrontendEvent) {
@@ -1202,6 +1256,37 @@ function optionalPositiveInteger(value: unknown): number | null {
     if (Number.isFinite(parsed) && parsed > 0) {
       return Math.trunc(parsed)
     }
+  }
+  return null
+}
+
+function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null {
+  if (!value || typeof value !== 'object') return null
+  const payload = value as Record<string, any>
+  const requestId = String(payload.requestId || payload.request_id || '').trim()
+  if (!requestId) return null
+  const requestPayload = payload.payload && typeof payload.payload === 'object'
+    ? { ...payload.payload }
+    : {}
+  const status = String(payload.status || 'running') as RunStatus
+  const source = payload.source === 'scheduler' ? 'scheduler' : 'user'
+  return {
+    requestId,
+    status,
+    mode: normalizeFactoryMode(payload.mode),
+    runId: payload.runId || payload.run_id || null,
+    conversationScope: payload.conversationScope || payload.conversation_scope || null,
+    background: Boolean(payload.background || requestId.startsWith('scheduler-')),
+    source,
+    startedAt: String(payload.startedAt || payload.started_at || new Date().toISOString()),
+    completedAt: payload.completedAt || payload.completed_at || null,
+    payload: requestPayload,
+  }
+}
+
+function normalizeFactoryMode(value: unknown): FactoryMode | null {
+  if (value === 'chat' || value === 'create_agent' || value === 'evolve_agent' || value === 'agent_package') {
+    return value
   }
   return null
 }

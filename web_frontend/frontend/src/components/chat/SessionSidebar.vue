@@ -250,11 +250,13 @@ onMounted(() => {
   flex-direction: column;
   gap: var(--app-space-xs);
   padding: var(--app-space-xs) 0;
+  width: 100%;
+  min-width: 0;
 }
 
 .session-title-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--app-space-xs);
 }
 
@@ -262,6 +264,11 @@ onMounted(() => {
   transition: background-color var(--app-transition-fast);
   border-radius: var(--app-radius-md);
   animation: app-fade-in 0.2s ease both;
+}
+
+.session-panel :deep(.n-list-item__main) {
+  min-width: 0;
+  width: 100%;
 }
 
 .session-panel :deep(.n-list-item.active) {
@@ -283,12 +290,17 @@ onMounted(() => {
 .session-title {
   font-size: var(--app-font-lg);
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--app-text);
   flex: 1;
   min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.session-title-row :deep(.n-button) {
+  flex: 0 0 auto;
 }
 
 .session-meta {

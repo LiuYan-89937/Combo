@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict
 
 from agent_factory.models import get_task_model
-from agent_factory.runtime_kernel.adapters.model import strip_internal_snapshot_blocks
+from agent_factory.models.content import strip_internal_snapshot_blocks
 
 
 class TraceRelevanceDecision(BaseModel):

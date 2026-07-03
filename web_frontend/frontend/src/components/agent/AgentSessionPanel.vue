@@ -247,6 +247,11 @@ watch(
   transition: background-color var(--app-transition-fast);
 }
 
+.agent-session-panel :deep(.n-list-item__main) {
+  min-width: 0;
+  width: 100%;
+}
+
 .agent-session-panel :deep(.n-list-item.active) {
   background: var(--app-surface-pressed);
   position: relative;
@@ -267,22 +272,29 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 100%;
+  min-width: 0;
 }
 
 .session-title-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--app-space-xs);
 }
 
 .session-title {
   font-size: 14px;
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   flex: 1;
   min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.session-title-row :deep(.n-button) {
+  flex: 0 0 auto;
 }
 
 .session-meta,

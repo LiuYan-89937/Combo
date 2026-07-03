@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from datetime import UTC, datetime
 import logging
 import threading
 import uuid
@@ -34,6 +35,31 @@ LONG_RUNNING_ACTIONS = {
     "scheduler_manage": {"run_now"},
 }
 
+COMMAND_MODE_HINTS = {
+    "initialize_agent_package": "agent_package",
+    "send_agent_package_message": "agent_package",
+    "run_agent_package": "agent_package",
+    "run_agent_evolution": "evolve_agent",
+}
+
+ACTIVE_REQUEST_METADATA_EVENTS = {
+    "run_started",
+    "session_started",
+    "session_switched",
+    "agent_package_selected",
+    "agent_package_session_loaded",
+    "mode_changed",
+    "runtime_resumed",
+    "interrupt_requested",
+}
+
+TERMINAL_REQUEST_EVENTS = {
+    "run_completed",
+    "run_cancelled",
+    "run_failed",
+    "error",
+}
+
 
 class RuntimeBridge:
     """Owns the in-process factory runtime and SSE event fan-out."""
@@ -43,6 +69,7 @@ class RuntimeBridge:
         self.event_history: deque[dict[str, Any]] = deque(maxlen=500)
         self.subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._background_threads: dict[str, threading.Thread] = {}
+        self._active_requests: dict[str, dict[str, Any]] = {}
         self._background_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -57,18 +84,7 @@ class RuntimeBridge:
 
         self._loop = asyncio.get_running_loop()
         self.adapter = await asyncio.to_thread(FactoryRuntimeAdapter, emit=self._emit_from_runtime)
-        self._emit_from_runtime(
-            event(
-                "runtime_ready",
-                producer_type="factory_bridge",
-                message="factory runtime service ready",
-                graph_id="factory_bridge",
-                payload={
-                    "checkpointer": self.adapter.checkpointer_payload(),
-                    "options": self.adapter._options_payload(),
-                },
-            )
-        )
+        self._emit_from_runtime(self._runtime_ready_event())
         logger.info("Runtime service started")
 
     async def stop(self) -> None:
@@ -86,6 +102,7 @@ class RuntimeBridge:
         self._loop = None
         with self._background_lock:
             self._background_threads.clear()
+            self._active_requests.clear()
         logger.info("Runtime service stopped")
 
     async def send_frontend_command(self, command: FactoryFrontendCommand) -> None:
@@ -132,6 +149,9 @@ class RuntimeBridge:
         if replay_history:
             for event_payload in self.event_history:
                 queue.put_nowait(event_payload)
+            snapshot = self._runtime_ready_event()
+            if snapshot is not None:
+                queue.put_nowait(snapshot.model_dump(mode="json"))
         self.subscribers.add(queue)
         return queue
 
@@ -141,6 +161,7 @@ class RuntimeBridge:
     def _start_background(self, command: FactoryFrontendCommand) -> None:
         request_id = command.request_id or f"{command.type}-{id(command)}"
         with self._background_lock:
+            self._active_requests[request_id] = _active_request_from_command(command, request_id)
             thread = threading.Thread(
                 target=self._run_background_command,
                 args=(command, request_id),
@@ -165,6 +186,7 @@ class RuntimeBridge:
         finally:
             with self._background_lock:
                 self._background_threads.pop(request_id, None)
+                self._active_requests.pop(request_id, None)
 
     def _handle_command(self, command: FactoryFrontendCommand) -> None:
         adapter = self.adapter
@@ -181,6 +203,7 @@ class RuntimeBridge:
             logger.warning("Ignored non-object runtime event: %r", event_payload)
             return
 
+        self._observe_runtime_event(event_payload)
         loop = self._loop
         if loop is None or loop.is_closed():
             self.event_history.append(event_payload)
@@ -202,6 +225,44 @@ class RuntimeBridge:
         for queue in stale_subscribers:
             self.unsubscribe(queue)
 
+    def _runtime_ready_event(self):
+        adapter = self.adapter
+        if adapter is None:
+            return None
+        return event(
+            "runtime_ready",
+            producer_type="factory_bridge",
+            message="factory runtime service ready",
+            graph_id="factory_bridge",
+            payload={
+                "checkpointer": adapter.checkpointer_payload(),
+                "options": adapter._options_payload(),
+                "active_requests": self._active_request_payloads(),
+            },
+        )
+
+    def _active_request_payloads(self) -> list[dict[str, Any]]:
+        with self._background_lock:
+            return [dict(item) for item in self._active_requests.values()]
+
+    def _observe_runtime_event(self, event_payload: dict[str, Any]) -> None:
+        request_id = str(event_payload.get("request_id") or "").strip()
+        if not request_id:
+            return
+        event_type = str(event_payload.get("event_type") or "")
+        if event_type in TERMINAL_REQUEST_EVENTS:
+            with self._background_lock:
+                self._active_requests.pop(request_id, None)
+            return
+        if event_type not in ACTIVE_REQUEST_METADATA_EVENTS:
+            return
+        with self._background_lock:
+            record = self._active_requests.get(request_id)
+            if record is None:
+                record = _active_request_from_event(event_payload, request_id)
+                self._active_requests[request_id] = record
+            _merge_active_request_event(record, event_payload)
+
 
 def _is_long_running_command(command: FactoryFrontendCommand) -> bool:
     if command.type in ALWAYS_LONG_RUNNING_COMMANDS:
@@ -211,3 +272,58 @@ def _is_long_running_command(command: FactoryFrontendCommand) -> bool:
         return False
     action = str(command.payload.get("action") or "").strip()
     return action in long_running_actions
+
+
+def _active_request_from_command(command: FactoryFrontendCommand, request_id: str) -> dict[str, Any]:
+    now = datetime.now(UTC).isoformat()
+    payload = dict(command.payload or {})
+    if command.message:
+        payload.setdefault("message", command.message)
+    if command.session_id:
+        payload.setdefault("session_id", command.session_id)
+    payload.setdefault("command_type", command.type)
+    return {
+        "requestId": request_id,
+        "status": "running",
+        "mode": command.mode or COMMAND_MODE_HINTS.get(command.type),
+        "runId": None,
+        "sessionId": command.session_id,
+        "commandType": command.type,
+        "background": request_id.startswith("scheduler-"),
+        "source": "scheduler" if request_id.startswith("scheduler-") else "user",
+        "startedAt": now,
+        "completedAt": None,
+        "payload": payload,
+    }
+
+
+def _active_request_from_event(event_payload: dict[str, Any], request_id: str) -> dict[str, Any]:
+    timestamp = str(event_payload.get("timestamp") or datetime.now(UTC).isoformat())
+    payload = dict(event_payload.get("payload") or {})
+    return {
+        "requestId": request_id,
+        "status": "running",
+        "mode": event_payload.get("mode"),
+        "runId": event_payload.get("run_id"),
+        "sessionId": event_payload.get("session_id") or payload.get("session_id"),
+        "commandType": payload.get("command_type"),
+        "background": request_id.startswith("scheduler-"),
+        "source": "scheduler" if request_id.startswith("scheduler-") else "user",
+        "startedAt": timestamp,
+        "completedAt": None,
+        "payload": payload,
+    }
+
+
+def _merge_active_request_event(record: dict[str, Any], event_payload: dict[str, Any]) -> None:
+    payload = dict(event_payload.get("payload") or {})
+    record["mode"] = event_payload.get("mode") or record.get("mode")
+    record["runId"] = event_payload.get("run_id") or record.get("runId")
+    session_id = event_payload.get("session_id") or payload.get("session_id") or record.get("sessionId")
+    record["sessionId"] = session_id
+    if session_id:
+        payload.setdefault("session_id", session_id)
+    record["payload"] = {
+        **(record.get("payload") or {}),
+        **payload,
+    }

@@ -9,13 +9,12 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
 from agent_factory.models.message_layout import system_messages_first
 from agent_factory.runtime_kernel.adapters.model import (
     ModelRole,
     _bind_tools,
     _configured_model_for_role,
-    _content_to_text,
-    strip_internal_snapshot_blocks,
     _tool_calls_from_response,
 )
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
@@ -137,7 +136,7 @@ class ModelOperationService:
                 payload={"error": str(exc)},
             )
             raise
-        text = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
+        text = strip_internal_snapshot_blocks(content_to_text(getattr(response, "content", response))).strip()
         reasoning_content = reasoning_content_from_message(response)
         tool_calls = _tool_calls_from_response(response)
         usage_metadata = getattr(response, "usage_metadata", None) or {}
@@ -484,7 +483,7 @@ def _invoke_tool_bound_chat(
                         "content_mode": "delta",
                     },
                 )
-            delta = strip_internal_snapshot_blocks(_content_to_text(getattr(chunk, "content", chunk)))
+            delta = strip_internal_snapshot_blocks(content_to_text(getattr(chunk, "content", chunk)))
             if delta:
                 _emit(
                     emit_event,
@@ -534,7 +533,7 @@ def _attach_reasoning_content(response: Any, reasoning_content: str) -> None:
 
 
 def _emit_model_message_completed(emit_event, *, stream_id: str, response: Any) -> None:
-    content = strip_internal_snapshot_blocks(_content_to_text(getattr(response, "content", response))).strip()
+    content = strip_internal_snapshot_blocks(content_to_text(getattr(response, "content", response))).strip()
     reasoning_content = reasoning_content_from_message(response)
     if reasoning_content:
         _emit(
