@@ -13,7 +13,7 @@ def get_skillhub_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="skillhub",
             description=(
-                "搜索 SkillHUB、检查全局 SkillHUB CLI 状态，或将 SkillHUB 技能安装到当前 Agent 的技能扩展目录并启用。"
+                "搜索 SkillHUB、检查全局 SkillHUB CLI 状态，或安装/移除当前 Agent 技能扩展目录中的 SkillHUB 技能。"
             ),
             entrypoint="agent_factory.tooling.builtins.skillhub.skillhub:run",
             input_schema=_input_schema(),
@@ -34,7 +34,7 @@ def _input_schema() -> dict:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "action": {"type": "string", "enum": ["status", "search", "install"]},
+            "action": {"type": "string", "enum": ["status", "search", "install", "remove"]},
             "query": {
                 "type": "string",
                 "minLength": 1,
@@ -49,7 +49,7 @@ def _input_schema() -> dict:
             },
             "skill": {
                 "type": "string",
-                "description": "SkillHUB skill name to install for action=install.",
+                "description": "SkillHUB skill name for action=install or action=remove.",
             },
         },
         "required": ["action"],
@@ -57,6 +57,7 @@ def _input_schema() -> dict:
             {"properties": {"action": {"const": "status"}}, "required": ["action"]},
             {"properties": {"action": {"const": "search"}}, "required": ["action", "query"]},
             {"properties": {"action": {"const": "install"}}, "required": ["action", "skill"]},
+            {"properties": {"action": {"const": "remove"}}, "required": ["action", "skill"]},
         ],
     }
 
@@ -77,6 +78,7 @@ def _output_schema() -> dict:
             "items": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
             "raw_output": {"type": "string"},
             "installed_skill": {"type": ["object", "null"], "additionalProperties": True},
+            "removed_skill": {"type": ["object", "null"], "additionalProperties": True},
             "restart_required": {"type": "boolean"},
         },
     }
@@ -103,6 +105,12 @@ def _output_compression() -> ToolOutputCompressionConfig:
                 prompt=_skillhub_action_prompt(
                     "Compress SkillHUB install output. Preserve installed_skill.skill_id and path exactly. "
                     "If installation failed, preserve the exact error text."
+                ),
+            ),
+            "remove": ToolOutputCompressionActionConfig(
+                schema=_remove_compression_schema(),
+                prompt=_skillhub_action_prompt(
+                    "Compress SkillHUB remove output. Preserve removed_skill.skill_id, removed paths, and missing paths exactly."
                 ),
             ),
         },
@@ -203,6 +211,31 @@ def _install_compression_schema() -> dict:
             "installed_skill_path",
             "restart_required",
             "errors",
+            "insufficient",
+            "read_original_reason",
+        ],
+    }
+
+
+def _remove_compression_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "summary": {"type": "string"},
+            "removed_skill_id": {"type": "string"},
+            "removed_paths": {"type": "array", "items": {"type": "string"}},
+            "missing_paths": {"type": "array", "items": {"type": "string"}},
+            "restart_required": {"type": "boolean"},
+            "insufficient": {"type": "boolean"},
+            "read_original_reason": {"type": "string"},
+        },
+        "required": [
+            "summary",
+            "removed_skill_id",
+            "removed_paths",
+            "missing_paths",
+            "restart_required",
             "insufficient",
             "read_original_reason",
         ],

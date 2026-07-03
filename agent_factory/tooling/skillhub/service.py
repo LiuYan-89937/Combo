@@ -136,6 +136,51 @@ class SkillHubService:
             "restart_required": True,
         }
 
+    def remove(self, skill: str) -> dict[str, Any]:
+        skill_id = str(skill or "").strip()
+        if not skill_id:
+            raise ValueError("skillhub remove requires skill")
+        config = _load_enabled_skills(self.extension_root)
+        targets = [item for item in config.skills if item.skill_id == skill_id]
+        remaining = [item for item in config.skills if item.skill_id != skill_id]
+        _write_enabled_skills(self.extension_root, config.model_copy(update={"skills": remaining}))
+        removed_paths: list[str] = []
+        missing_paths: list[str] = []
+        for item in targets:
+            path = _resolved_skill_path(self.extension_root, item.path)
+            if not _can_remove_skill_path(self.skills_dir, path):
+                continue
+            if path.exists():
+                shutil.rmtree(path)
+                removed_paths.append(str(path))
+            else:
+                missing_paths.append(str(path))
+        fallback_path = (self.skills_dir / skill_id).resolve()
+        if not targets and _can_remove_skill_path(self.skills_dir, fallback_path) and fallback_path.exists():
+            shutil.rmtree(fallback_path)
+            removed_paths.append(str(fallback_path))
+        removed = bool(targets or removed_paths or missing_paths)
+        return {
+            "action": "remove",
+            "status": "ok",
+            "message": f"Skill removed: {skill_id}" if removed else f"Skill was not installed: {skill_id}",
+            "cli_available": bool(shutil.which(self.command)),
+            "cli_path": shutil.which(self.command),
+            "cli_version": self.status().get("cli_version") or "",
+            "extension_root": str(self.extension_root),
+            "skills_dir": str(self.skills_dir),
+            "items": [],
+            "raw_output": "",
+            "installed_skill": None,
+            "removed_skill": {
+                "skill_id": skill_id,
+                "config": bool(targets),
+                "paths": removed_paths,
+                "missing_paths": missing_paths,
+            },
+            "restart_required": removed,
+        }
+
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = str(payload.get("action") or "status").strip().lower()
         if action == "status":
@@ -144,6 +189,8 @@ class SkillHubService:
             return self.search(str(payload.get("query") or ""))
         if action == "install":
             return self.install(str(payload.get("skill") or payload.get("query") or ""))
+        if action == "remove":
+            return self.remove(str(payload.get("skill") or payload.get("query") or ""))
         raise ValueError(f"unsupported skillhub action: {action}")
 
     def tool_resource_summary(self) -> dict[str, Any]:
@@ -184,7 +231,12 @@ class SkillHubService:
         raise RuntimeError("SkillHUB install completed but no valid SKILL.md was found in the target skills directory.")
 
     def _enable_skill(self, skill_root: Path) -> EnabledSkillConfig:
-        package = parse_skill_directory(skill_root)
+        package = parse_skill_directory(
+            skill_root,
+            allow_directory_name_mismatch=True,
+            allow_missing_frontmatter=True,
+            fallback_name=skill_root.name,
+        )
         relative_path = skill_root.relative_to(self.extension_root).as_posix()
         skill = EnabledSkillConfig(
             skill_id=package.name,
@@ -257,6 +309,23 @@ def _write_enabled_skills(extension_root: Path, config: EnabledSkillsConfig) -> 
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(config.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def _resolved_skill_path(extension_root: Path, skill_path: str) -> Path:
+    path = Path(skill_path).expanduser()
+    if not path.is_absolute():
+        path = extension_root / path
+    return path.resolve()
+
+
+def _can_remove_skill_path(skills_dir: Path, path: Path) -> bool:
+    root = skills_dir.resolve()
+    target = path.resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return False
+    return target != root
 
 
 def _run_command(command: list[str], *, timeout_seconds: int) -> SkillHubCommandResult:
@@ -612,7 +681,12 @@ def _parse_skill_roots(candidate: Path) -> list[tuple[Path, str]]:
             continue
         seen.add(resolved)
         try:
-            package = parse_skill_directory(root)
+            package = parse_skill_directory(
+                root,
+                allow_directory_name_mismatch=True,
+                allow_missing_frontmatter=True,
+                fallback_name=root.name,
+            )
         except Exception:
             continue
         parsed.append((root, package.name))

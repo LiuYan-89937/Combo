@@ -15,9 +15,10 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
         id=CREATE_AGENT_MODEL_POOL_TOOL_ID,
         description=(
             "Select runnable model profiles from the local model pool for the AgentPackage being manufactured. "
-            "Use this after task analysis and before writing contracts/model.json. Pass requirements for main/task/"
-            "compression models and tool_requirements for auxiliary image/audio model tools. The tool returns "
-            "profile ids only; never write provider credentials into the package."
+            "This is the first capability-assembly step after task analysis: run it before SkillHub search/install "
+            "and before authoring package tools. Pass requirements for main/task/compression models and "
+            "tool_requirements for auxiliary image/audio model tools. The tool returns profile ids only; never "
+            "write provider credentials into the package."
         ),
         entrypoint="agent_factory.create_agent.model_pool_tool:run",
         input_schema={

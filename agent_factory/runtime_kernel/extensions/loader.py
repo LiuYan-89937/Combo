@@ -97,7 +97,9 @@ def _merge_enabled_skills(configs: list[tuple[EnabledSkillsConfig, Path]]) -> En
     by_id: dict[str, EnabledSkillConfig] = {}
     for config, root in configs:
         for skill in config.skills:
-            by_id[skill.skill_id] = _normalize_skill_path(skill, root)
+            normalized = _normalize_skill_path(skill, root)
+            if _skill_root_available(normalized):
+                by_id[skill.skill_id] = normalized
     return EnabledSkillsConfig(skills=sorted(by_id.values(), key=lambda item: item.skill_id))
 
 
@@ -106,6 +108,11 @@ def _normalize_skill_path(skill: EnabledSkillConfig, root: Path) -> EnabledSkill
     if path.is_absolute():
         return skill
     return skill.model_copy(update={"path": str((root / path).resolve())})
+
+
+def _skill_root_available(skill: EnabledSkillConfig) -> bool:
+    path = Path(skill.path).expanduser()
+    return (path / "SKILL.md").is_file()
 
 
 def _unique_paths(paths: Any) -> list[Path]:

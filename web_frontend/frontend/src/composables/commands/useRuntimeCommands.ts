@@ -24,8 +24,8 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId))
   }
 
-  const deleteSession = (sessionId: string) => {
-    transport.sendRuntimeCommand(commands.deleteSessionCommand(sessionId))
+  const deleteSession = (sessionId: string, mode?: FactoryMode | null) => {
+    transport.sendRuntimeCommand(commands.deleteSessionCommand(sessionId, mode))
   }
 
   const setMode = (mode: FactoryMode) => {

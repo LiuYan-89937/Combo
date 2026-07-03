@@ -306,10 +306,24 @@ class AgentPackageRuntimeManager:
         package = self.load_package(package_id)
         return self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
 
+    def session_exists(self, package_id: str, session_id: str) -> bool:
+        package = self.load_package(package_id)
+        return self._session_manager_for_package(package_id, package).exists(session_id)
+
     def delete_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
         manager = self._session_manager_for_package(package_id, package)
-        result = manager.delete(session_id)
+        result = manager.delete_if_exists(session_id)
+        if result is None:
+            return {
+                "package_id": package_id,
+                "session_id": session_id,
+                "deleted": False,
+                "missing": True,
+                "deleted_trace_count": 0,
+                "deleted_checkpoint_count": 0,
+                "sessions": self._list_sessions_for_loaded_package(package),
+            }
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
             package_id=package_id,
             package=package,

@@ -143,7 +143,7 @@ function confirmDeleteSession(session: SessionView) {
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
     onPositiveClick: () => {
-      commands.deleteSession(session.session_id)
+      commands.deleteSession(session.session_id, activeSessionMode.value)
     },
   })
 }

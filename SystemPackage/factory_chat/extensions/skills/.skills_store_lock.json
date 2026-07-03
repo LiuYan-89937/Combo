@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "skills": {
+    "my-novel-writer": {
+      "name": "小说创作",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=my-novel-writer",
+      "source": "community",
+      "version": "1.0.0",
+      "installedAt": "2026-07-03T12:16:25Z"
+    },
+    "fiction-crafter": {
+      "name": "小说工匠 Fiction Crafter",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=fiction-crafter",
+      "source": "community",
+      "version": "1.1.0",
+      "installedAt": "2026-07-03T12:16:34Z"
+    }
+  }
+}

@@ -78,6 +78,15 @@ class AgentSessionManager:
             raise FileNotFoundError(f"Agent session not found: {session_id}")
         return AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def exists(self, session_id: str) -> bool:
+        return self._path(session_id).exists()
+
+    def load_optional(self, session_id: str) -> AgentSessionRecord | None:
+        path = self._path(session_id)
+        if not path.exists():
+            return None
+        return AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8"))
+
     def save(self, record: AgentSessionRecord) -> None:
         record.updated_at = _now()
         self._path(record.session_id).write_text(
@@ -99,6 +108,14 @@ class AgentSessionManager:
 
     def delete(self, session_id: str) -> AgentSessionDeletionResult:
         record = self.load(session_id)
+        deleted_trace_count = _delete_record_traces(record)
+        self._path(record.session_id).unlink(missing_ok=True)
+        return AgentSessionDeletionResult(record=record, deleted_trace_count=deleted_trace_count)
+
+    def delete_if_exists(self, session_id: str) -> AgentSessionDeletionResult | None:
+        record = self.load_optional(session_id)
+        if record is None:
+            return None
         deleted_trace_count = _delete_record_traces(record)
         self._path(record.session_id).unlink(missing_ok=True)
         return AgentSessionDeletionResult(record=record, deleted_trace_count=deleted_trace_count)

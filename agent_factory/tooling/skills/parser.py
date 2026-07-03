@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from ruamel.yaml import YAML
@@ -37,14 +38,30 @@ TEXT_SUFFIXES = {
 MAX_SKILL_BODY_CHARS = 80000
 
 
-def parse_skill_directory(skill_root: str | Path) -> SkillPackage:
+def parse_skill_directory(
+    skill_root: str | Path,
+    *,
+    allow_directory_name_mismatch: bool = False,
+    allow_missing_frontmatter: bool = False,
+    fallback_name: str | None = None,
+) -> SkillPackage:
     root = Path(skill_root).expanduser().resolve()
     skill_md = root / "SKILL.md"
     if not skill_md.is_file():
         raise FileNotFoundError(f"SKILL.md not found: {skill_md}")
-    frontmatter, body = _parse_frontmatter(skill_md.read_text(encoding="utf-8"))
+    text = skill_md.read_text(encoding="utf-8").replace("\r\n", "\n")
+    if text.startswith("---\n"):
+        frontmatter, body = _parse_frontmatter(text)
+    elif allow_missing_frontmatter:
+        body = text
+        frontmatter = {
+            "name": fallback_name or root.name,
+            "description": _infer_description_from_body(text, fallback_name or root.name),
+        }
+    else:
+        raise ValueError("SKILL.md must start with YAML frontmatter")
     metadata = SkillMetadata.model_validate(frontmatter)
-    if root.name != metadata.name:
+    if not allow_directory_name_mismatch and root.name != metadata.name:
         raise ValueError(f"skill directory name must match frontmatter name: {root.name} != {metadata.name}")
     if len(body) > MAX_SKILL_BODY_CHARS:
         raise ValueError(f"SKILL.md body exceeds {MAX_SKILL_BODY_CHARS} characters: {skill_md}")
@@ -69,6 +86,17 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not isinstance(frontmatter, dict):
         raise ValueError("SKILL.md frontmatter must be a mapping")
     return dict(frontmatter), text[end + 5 :]
+
+
+def _infer_description_from_body(text: str, fallback_name: str) -> str:
+    lines = [line.strip(" #*\t") for line in text.splitlines()]
+    for line in lines:
+        if not line or line.startswith("---"):
+            continue
+        if re.match(r"^[\w\s-]+:\s*$", line):
+            continue
+        return line[:1024]
+    return f"SkillHub skill: {fallback_name}"
 
 
 def _discover_resources(root: Path) -> list[SkillResourceRef]:

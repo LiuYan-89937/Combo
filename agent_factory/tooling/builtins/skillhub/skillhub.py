@@ -39,11 +39,11 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
             reasons=[f"read-only SkillHUB action: {action}"],
             normalized_arguments=normalized,
         ).model_dump(mode="json")
-    if action == "install":
+    if action in {"install", "remove"}:
         return ToolRiskResult(
             action="ask",
             risk_level="high",
-            reasons=["SkillHUB install writes and enables a skill in this agent's extension directory"],
+            reasons=[f"SkillHUB {action} writes this agent's skill extension directory"],
             normalized_arguments=normalized,
         ).model_dump(mode="json")
     return ToolRiskResult(
@@ -55,7 +55,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 
 def _normalized_payload(arguments: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip().lower()
-    if action not in {"status", "search", "install"}:
+    if action not in {"status", "search", "install", "remove"}:
         raise ValueError(f"unsupported SkillHUB action: {action}")
     if action == "status":
         return {"action": action}
@@ -64,5 +64,5 @@ def _normalized_payload(arguments: dict[str, Any]) -> dict[str, Any]:
         return {"action": action, "query": query}
     skill = str(arguments.get("skill") or "").strip()
     if not skill:
-        raise ValueError("SkillHUB install requires skill")
+        raise ValueError(f"SkillHUB {action} requires skill")
     return {"action": action, "skill": skill}

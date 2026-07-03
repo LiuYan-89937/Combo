@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import shutil
 import shlex
 import subprocess
 from typing import Any
@@ -45,6 +46,7 @@ class ExtensionManageResult:
 class AgentPackageExtensionService:
     def summary(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
         extension_root = extension_root_for_package(package_id, package)
+        _prune_missing_local_skills(extension_root)
         bundle = load_extension_bundle(extension_root, package=package)
         return {
             "package_id": package_id,
@@ -183,7 +185,7 @@ class AgentPackageExtensionService:
             )
         if action == "remove_skill":
             skill_id = _required_config_id(payload, "skill_id")
-            removed = _remove_enabled_skill(extension_root, skill_id=skill_id)
+            removed = _remove_skill(extension_root, skill_id=skill_id)
             return ExtensionManageResult(
                 {"updated": "skill", "removed": removed, **self.summary(package_id, package)},
                 changed=True,
@@ -454,6 +456,15 @@ def _write_local_skills_config(extension_root: Path, config: EnabledSkillsConfig
     write_json_object(extension_root / "enabled_skills.json", config.model_dump(mode="json"))
 
 
+def _prune_missing_local_skills(extension_root: Path) -> bool:
+    config = _load_local_skills_config(extension_root)
+    skills = [skill for skill in config.skills if _skill_path_exists(extension_root, skill)]
+    changed = len(skills) != len(config.skills)
+    if changed:
+        _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
+    return changed
+
+
 def _save_mcp_server(extension_root: Path, server: MCPServerConfig) -> None:
     config = _load_local_mcp_config(extension_root)
     servers = [item for item in config.servers if item.server_id != server.server_id]
@@ -520,6 +531,49 @@ def _remove_enabled_skill(extension_root: Path, *, skill_id: str) -> bool:
     removed = len(skills) != len(config.skills)
     _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
     return removed
+
+
+def _remove_skill(extension_root: Path, *, skill_id: str) -> dict[str, Any]:
+    config = _load_local_skills_config(extension_root)
+    targets = [skill for skill in config.skills if skill.skill_id == skill_id]
+    removed_from_config = _remove_enabled_skill(extension_root, skill_id=skill_id)
+    removed_paths: list[str] = []
+    missing_paths: list[str] = []
+    for skill in targets:
+        path = _resolved_skill_path(extension_root, skill)
+        if not _can_remove_skill_path(extension_root, path):
+            continue
+        if path.exists():
+            shutil.rmtree(path)
+            removed_paths.append(str(path))
+        else:
+            missing_paths.append(str(path))
+    return {
+        "skill_id": skill_id,
+        "config": removed_from_config,
+        "paths": removed_paths,
+        "missing_paths": missing_paths,
+    }
+
+
+def _skill_path_exists(extension_root: Path, skill: EnabledSkillConfig) -> bool:
+    return (_resolved_skill_path(extension_root, skill) / "SKILL.md").is_file()
+
+
+def _resolved_skill_path(extension_root: Path, skill: EnabledSkillConfig) -> Path:
+    path = Path(skill.path).expanduser()
+    if not path.is_absolute():
+        path = extension_root / path
+    return path.resolve()
+
+
+def _can_remove_skill_path(extension_root: Path, path: Path) -> bool:
+    skills_root = (extension_root / "skills").resolve()
+    try:
+        path.resolve().relative_to(skills_root)
+    except ValueError:
+        return False
+    return path.resolve() != skills_root
 
 
 def _mcp_server_for_upsert(

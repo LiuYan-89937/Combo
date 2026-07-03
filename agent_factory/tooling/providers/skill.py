@@ -52,7 +52,12 @@ class SkillProvider:
                 continue
             skill_root = _resolve_skill_root(item.path, context.extension_root)
             try:
-                skill = parse_skill_directory(skill_root)
+                skill = parse_skill_directory(
+                    skill_root,
+                    allow_directory_name_mismatch=item.source == "skillhub",
+                    allow_missing_frontmatter=item.source == "skillhub",
+                    fallback_name=item.skill_id,
+                )
                 if skill.name != item.skill_id:
                     raise ValueError(f"enabled skill_id must match SKILL.md name: {item.skill_id} != {skill.name}")
                 registry.register(skill)

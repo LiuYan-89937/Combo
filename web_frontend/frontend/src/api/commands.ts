@@ -56,10 +56,11 @@ export function newSessionCommand(mode?: FactoryMode | null, packageId?: string 
   })
 }
 
-export function deleteSessionCommand(sessionId: string): FactoryFrontendCommand {
+export function deleteSessionCommand(sessionId: string, mode?: FactoryMode | null): FactoryFrontendCommand {
   return createCommand('delete_session', {
     session_id: sessionId,
-    payload: { session_id: sessionId },
+    mode,
+    payload: { session_id: sessionId, mode },
   })
 }
 

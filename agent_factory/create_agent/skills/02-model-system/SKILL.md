@@ -32,7 +32,7 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 ## Manufacturing Protocol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read `.factory/task_analysis.json` and identify model requirements before writing `contracts/model.json`.
-3. Call `model_pool_select` with the model requirements and any auxiliary `tool_requirements`. If the result is blocked, ask the user to configure matching model pool profiles; do not silently fall back to the factory model.
+3. Call `model_pool_select` with the model requirements and any auxiliary `tool_requirements` before SkillHub search/install and before package tool authoring. If the result is blocked, ask the user to configure matching model pool profiles; do not silently fall back to the factory model.
 4. Write model bindings and auxiliary model tool bindings only through `create_agent_authoring(action="configure_model_bindings", bindings=..., tool_bindings=...)`.
 5. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 6. If the requested capability does not affect dependencies or sandbox, leave those files as-is and move to the next useful focus yourself.
