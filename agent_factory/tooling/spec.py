@@ -23,6 +23,7 @@ ToolRiskLevel = Literal["low", "medium", "high"]
 ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
 ToolLLMRiskMode = Literal["disabled", "on_uncertain", "always"]
 ToolPermissionScope = Literal["system", "package", "extension", "model"]
+ToolOutputCompressionMode = Literal["structured_json", "deterministic"]
 
 ToolEventType = Literal[
     "tool_call_proposed",
@@ -64,6 +65,36 @@ class ToolRiskResult(BaseModel):
     normalized_arguments: dict[str, Any] | None = None
 
 
+class ToolOutputCompressionActionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: ToolOutputCompressionMode = "structured_json"
+    prompt: str = ""
+    schema: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("schema")
+    @classmethod
+    def validate_schema_object(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise ValueError("compression schema must be a JSON object")
+        return value
+
+
+class ToolOutputCompressionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_argument: str = "action"
+    actions: dict[str, ToolOutputCompressionActionConfig] = Field(default_factory=dict)
+
+    @field_validator("action_argument")
+    @classmethod
+    def validate_action_argument(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("action_argument must be non-empty")
+        return text
+
+
 class ToolSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -78,6 +109,7 @@ class ToolSpec(BaseModel):
     concurrent: bool = True
     permission_scope: ToolPermissionScope = "package"
     permission_tags: list[str] = Field(default_factory=list)
+    output_compression: ToolOutputCompressionConfig = Field(default_factory=ToolOutputCompressionConfig)
 
     @field_validator("id")
     @classmethod

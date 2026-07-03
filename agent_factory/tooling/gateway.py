@@ -202,6 +202,7 @@ class ToolExecutionGateway:
             store=self.output_store,
             policy=self.output_policy,
             compression_model=get_compression_model(),
+            compression_config=self.spec.output_compression,
         )
         return self._observation(
             "completed",

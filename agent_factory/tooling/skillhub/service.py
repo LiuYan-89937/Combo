@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +19,13 @@ SKILLHUB_INSTALL_URL_ENV = "AGENTFACTORY_SKILLHUB_INSTALL_URL"
 SKILLHUB_AUTO_INSTALL_ENV = "AGENTFACTORY_SKILLHUB_AUTO_INSTALL"
 DEFAULT_SKILLHUB_INSTALL_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh"
 SKILLHUB_COMMAND = "skillhub"
+SEARCH_RESULT_LIMIT = 10
+RAW_OUTPUT_PREVIEW_CHARS = 1200
+SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+NAME_VERSION_RE = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{0,127}?)[\s@-]?v(?P<version>\d+(?:\.\d+){1,3}(?:[-+.\w]*)?)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,17 +75,19 @@ class SkillHubService:
         if result.returncode != 0:
             raise RuntimeError(result.combined_output or f"skillhub search failed with exit code {result.returncode}")
         raw_output = result.combined_output
+        items = _search_items(raw_output, query=query, limit=SEARCH_RESULT_LIMIT)
         return {
             "action": "search",
             "status": "ok",
-            "message": "SkillHUB search completed.",
+            "message": f"SkillHUB search completed. {len(items)} candidates returned.",
             "cli_available": True,
             "cli_path": shutil.which(self.command),
             "cli_version": self.status().get("cli_version") or "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
-            "items": _search_items(raw_output),
-            "raw_output": raw_output,
+            "query": query,
+            "items": items,
+            "raw_output": _raw_output_preview(raw_output),
             "installed_skill": None,
             "restart_required": False,
         }
@@ -89,13 +99,22 @@ class SkillHubService:
         self._require_cli()
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         before = _skill_dir_snapshots(self.skills_dir)
-        result = _run_command(
-            [self.command, "install", skill, "--dir", str(self.skills_dir)],
-            timeout_seconds=timeout_seconds,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.combined_output or f"skillhub install failed with exit code {result.returncode}")
-        installed = self._resolve_installed_skill(skill, before)
+        requested = _install_name_candidates(skill)
+        result: SkillHubCommandResult | None = None
+        failures: list[str] = []
+        installed_name = requested[0]
+        for candidate in requested:
+            result = _run_command(
+                [self.command, "install", candidate, "--dir", str(self.skills_dir)],
+                timeout_seconds=timeout_seconds,
+            )
+            if result.returncode == 0:
+                installed_name = candidate
+                break
+            failures.append(result.combined_output or f"{candidate}: skillhub install failed with exit code {result.returncode}")
+        if result is None or result.returncode != 0:
+            raise RuntimeError("\n".join(failures) or f"skillhub install failed for {skill}")
+        installed = self._resolve_installed_skill(installed_name, before)
         enabled_skill = self._enable_skill(installed)
         raw_output = result.combined_output
         return {
@@ -108,7 +127,7 @@ class SkillHubService:
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
             "items": [],
-            "raw_output": raw_output,
+            "raw_output": _raw_output_preview(raw_output),
             "installed_skill": {
                 "skill_id": enabled_skill.skill_id,
                 "path": enabled_skill.path,
@@ -148,28 +167,21 @@ class SkillHubService:
                 candidates = [requested_dir]
         parsed: list[tuple[Path, str]] = []
         for candidate in candidates:
-            try:
-                package = parse_skill_directory(candidate)
-            except Exception:
-                continue
-            parsed.append((candidate, package.name))
+            parsed.extend(_parse_skill_roots(candidate))
         if len(parsed) == 1:
             return parsed[0][0]
         normalized_requested = _normalize_skill_name(requested)
         for candidate, skill_id in parsed:
-            if skill_id == normalized_requested or candidate.name == normalized_requested:
+            if _normalize_skill_name(skill_id) == normalized_requested or _normalize_skill_name(candidate.name) == normalized_requested:
                 return candidate
         if parsed:
             return parsed[0][0]
         for child in sorted(self.skills_dir.iterdir() if self.skills_dir.is_dir() else []):
             if not child.is_dir():
                 continue
-            try:
-                package = parse_skill_directory(child)
-            except Exception:
-                continue
-            if package.name == normalized_requested or child.name == normalized_requested:
-                return child
+            for skill_root, skill_id in _parse_skill_roots(child):
+                if _normalize_skill_name(skill_id) == normalized_requested or _normalize_skill_name(skill_root.name) == normalized_requested:
+                    return skill_root
         raise RuntimeError("SkillHUB install completed but no valid SKILL.md was found in the target skills directory.")
 
     def _enable_skill(self, skill_root: Path) -> EnabledSkillConfig:
@@ -315,21 +327,297 @@ def _latest_mtime(path: Path) -> float:
     return latest
 
 
-def _search_items(raw_output: str) -> list[dict[str, str]]:
-    items: list[dict[str, str]] = []
-    for line in raw_output.splitlines():
-        text = line.strip()
-        if not text:
+def _search_items(raw_output: str, *, query: str, limit: int) -> list[dict[str, Any]]:
+    items = _json_search_items(raw_output)
+    if not items:
+        items = _text_search_items(raw_output)
+    for index, item in enumerate(items):
+        item["_score"] = _search_score(item, query=query)
+        item["_index"] = index
+    items.sort(key=lambda item: (-int(item.get("_score") or 0), int(item.get("_index") or 0), str(item.get("name") or "")))
+    projected: list[dict[str, Any]] = []
+    for item in items[: max(limit, 0)]:
+        name = str(item.get("name") or "").strip()
+        if not name:
             continue
-        items.append({"name": _line_name(text), "summary": text, "raw": text})
+        projected.append(
+            {
+                "name": name,
+                "skill": name,
+                "install_name": name,
+                "version": str(item.get("version") or "").strip(),
+                "summary": _compact_text(str(item.get("summary") or item.get("raw") or ""), limit=700),
+                "score": int(item.get("_score") or 0),
+            }
+        )
+    return projected
+
+
+def _json_search_items(raw_output: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(raw_output)
+    except json.JSONDecodeError:
+        return []
+    candidates = payload.get("items") if isinstance(payload, dict) else payload
+    if not isinstance(candidates, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        name = _canonical_skill_name(
+            str(candidate.get("name") or candidate.get("skill") or candidate.get("id") or candidate.get("slug") or "")
+        )
+        if not name:
+            continue
+        items.append(
+            {
+                "name": name,
+                "version": str(candidate.get("version") or ""),
+                "summary": str(candidate.get("summary") or candidate.get("description") or ""),
+                "raw": json.dumps(candidate, ensure_ascii=False, sort_keys=True, default=str),
+            }
+        )
     return items
 
 
-def _line_name(text: str) -> str:
+def _text_search_items(raw_output: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw_line in raw_output.splitlines():
+        text = raw_line.strip()
+        if not text or _is_search_boilerplate(text):
+            continue
+        if _looks_like_search_header(raw_line):
+            if current is not None:
+                items.append(_finalize_text_search_item(current))
+            current = _parse_search_header(text)
+            if current is None:
+                continue
+            continue
+        if current is None:
+            name, version, summary = _parse_search_line(text)
+            if name:
+                items.append({"name": name, "version": version, "summary": summary or text, "raw": text})
+            continue
+        detail = text.lstrip("-").strip()
+        version = _detail_version(detail)
+        if version:
+            current["version"] = version
+            continue
+        if detail and not _is_search_boilerplate(detail):
+            current.setdefault("descriptions", []).append(detail)
+    if current is not None:
+        items.append(_finalize_text_search_item(current))
+    return [item for item in items if item.get("name")]
+
+
+def _looks_like_search_header(raw_line: str) -> bool:
+    if raw_line[:1].isspace() is False:
+        return False
+    stripped = raw_line.strip()
+    if stripped.startswith("-") or _is_search_boilerplate(stripped):
+        return False
+    name = _canonical_skill_name(stripped.split()[0] if stripped.split() else "")
+    return bool(name)
+
+
+def _parse_search_header(text: str) -> dict[str, Any] | None:
+    cleaned = text.strip()
+    parts = re.split(r"\s{2,}", cleaned, maxsplit=1)
+    name = _canonical_skill_name(parts[0] if parts else cleaned)
+    if not name:
+        return None
+    title = parts[1].strip() if len(parts) > 1 else cleaned[len(parts[0]) :].strip()
+    return {"name": name, "title": _clean_summary_text(title), "version": "", "descriptions": [], "raw": cleaned}
+
+
+def _finalize_text_search_item(current: dict[str, Any]) -> dict[str, Any]:
+    parts = [
+        str(current.get("title") or "").strip(),
+        *[str(item or "").strip() for item in current.get("descriptions", []) if str(item or "").strip()],
+    ]
+    summary = "\n".join(_dedupe_texts([part for part in parts if part and part != current.get("name")]))
+    return {
+        "name": str(current.get("name") or ""),
+        "version": str(current.get("version") or ""),
+        "summary": summary,
+        "raw": str(current.get("raw") or ""),
+    }
+
+
+def _detail_version(text: str) -> str:
+    key, sep, value = text.partition(":")
+    if not sep:
+        key, sep, value = text.partition("：")
+    if not sep or key.strip().lower() != "version":
+        return ""
+    return _version_text(value.strip())
+
+
+def _clean_summary_text(text: str) -> str:
+    key, sep, value = text.partition(":")
+    if sep and key.strip().lower() in {"description", "summary"}:
+        return value.strip()
+    key, sep, value = text.partition("：")
+    if sep and key.strip().lower() in {"description", "summary"}:
+        return value.strip()
+    return text.strip()
+
+
+def _dedupe_texts(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = " ".join(value.split())
+        if not normalized or normalized in seen:
+            continue
+        result.append(value)
+        seen.add(normalized)
+    return result
+
+
+def _parse_search_line(text: str) -> tuple[str, str, str]:
     cleaned = text.strip().lstrip("-*0123456789. \t")
     if not cleaned:
+        return "", "", ""
+    head, sep, tail = cleaned.partition(":")
+    if not sep:
+        head, sep, tail = cleaned.partition("：")
+    head = head.strip()
+    tail = tail.strip()
+    tokens = head.split()
+    name = _canonical_skill_name(tokens[0] if tokens else head)
+    version = ""
+    if len(tokens) > 1:
+        version = _version_text(tokens[1])
+    if not version:
+        split_name, split_version = _split_name_version(name)
+        name = split_name
+        version = split_version
+    return name, version, tail
+
+
+def _install_name_candidates(value: str) -> list[str]:
+    raw = str(value or "").strip()
+    candidates: list[str] = []
+    for candidate in [
+        raw,
+        raw.partition(":")[0],
+        raw.partition("：")[0],
+        raw.split()[0] if raw.split() else "",
+    ]:
+        canonical = _canonical_skill_name(candidate)
+        if canonical:
+            name, _version = _split_name_version(canonical)
+            for item in (canonical, name):
+                if item and item not in candidates:
+                    candidates.append(item)
+    if not candidates:
+        raise ValueError("skillhub install requires a valid skill name")
+    return candidates
+
+
+def _canonical_skill_name(value: str) -> str:
+    cleaned = str(value or "").strip().lstrip("-*0123456789. \t").strip("`'\"[](){}<>|,;")
+    if not cleaned:
+        return ""
+    cleaned = cleaned.split("/", 1)[0] if cleaned.startswith("/") else cleaned
+    cleaned = cleaned.split()[0].strip("：:|,;")
+    if not SKILL_NAME_RE.fullmatch(cleaned):
+        return ""
+    return cleaned
+
+
+def _split_name_version(value: str) -> tuple[str, str]:
+    match = NAME_VERSION_RE.fullmatch(value.strip())
+    if not match:
+        return value, ""
+    name = match.group("name") or value
+    version = match.group("version") or ""
+    return name, version
+
+
+def _version_text(value: str) -> str:
+    text = str(value or "").strip()
+    if text.lower().startswith("v") and re.fullmatch(r"v\d+(?:\.\d+){1,3}(?:[-+.\w]*)?", text, re.IGNORECASE):
+        return text[1:]
+    if re.fullmatch(r"\d+(?:\.\d+){1,3}(?:[-+.\w]*)?", text):
         return text
-    return cleaned.split()[0].strip("：:|")
+    return ""
+
+
+def _is_search_boilerplate(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    if not normalized:
+        return True
+    prefixes = (
+        "installed skills",
+        "available skills",
+        "use ",
+        "usage:",
+        "skillhub ",
+        "search results",
+        "found ",
+        "no skills found",
+    )
+    return normalized.startswith(prefixes)
+
+
+def _search_score(item: dict[str, Any], *, query: str) -> int:
+    name = _normalized_search_text(str(item.get("name") or ""))
+    summary = _normalized_search_text(str(item.get("summary") or item.get("raw") or ""))
+    query_text = _normalized_search_text(query)
+    terms = [term for term in query_text.split() if term]
+    score = 0
+    if query_text and name == query_text:
+        score += 100
+    if query_text and query_text in name:
+        score += 80
+    if query_text and query_text in summary:
+        score += 45
+    for term in terms:
+        if term in name:
+            score += 16
+        if term in summary:
+            score += 5
+    return score
+
+
+def _normalized_search_text(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[_./:|]+", " ", text)
+    text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _raw_output_preview(value: str) -> str:
+    return _compact_text(value, limit=RAW_OUTPUT_PREVIEW_CHARS)
+
+
+def _compact_text(value: str, *, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}\n... [raw output truncated, total {len(text)} chars]"
+
+
+def _parse_skill_roots(candidate: Path) -> list[tuple[Path, str]]:
+    roots = [candidate, *[path.parent for path in candidate.rglob("SKILL.md")]]
+    parsed: list[tuple[Path, str]] = []
+    seen: set[Path] = set()
+    for root in roots:
+        resolved = root.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        try:
+            package = parse_skill_directory(root)
+        except Exception:
+            continue
+        parsed.append((root, package.name))
+    return parsed
 
 
 def _normalize_skill_name(value: str) -> str:

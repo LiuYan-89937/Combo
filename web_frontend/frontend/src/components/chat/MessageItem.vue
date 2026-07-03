@@ -230,20 +230,13 @@ function formatTime(timestamp: string): string {
   content: '';
   position: absolute;
   left: 0;
-  top: 12px;
-  bottom: 12px;
-  width: 4px;
-  background: linear-gradient(
-    180deg,
-    transparent,
-    var(--app-primary) 20%,
-    var(--app-primary) 80%,
-    transparent
-  );
-  background-size: 100% 200%;
+  top: 18px;
+  bottom: 18px;
+  width: 2px;
+  background: var(--app-border-hover);
   border-radius: var(--app-radius-pill);
-  animation: glass-gradient-flow 2.5s ease-in-out infinite;
-  box-shadow: 0 0 12px var(--app-primary);
+  opacity: 0.42;
+  animation: app-pulse-soft 2.4s ease-in-out infinite;
 }
 
 .message-item.role-user {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from agent_factory.tooling.skillhub.constants import SKILLHUB_RUNTIME_RESOURCE
-from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
+from agent_factory.tooling.spec import ToolOutputCompressionActionConfig, ToolOutputCompressionConfig, ToolRiskEvaluatorConfig, ToolSpec
 
 
 def get_skillhub_tool_specs() -> list[ToolSpec]:
@@ -20,6 +20,7 @@ def get_skillhub_tool_specs() -> list[ToolSpec]:
                 hard="agent_factory.tooling.builtins.skillhub.skillhub:evaluate_risk",
             ),
             concurrent=False,
+            output_compression=_output_compression(),
         )
     ]
 
@@ -57,7 +58,7 @@ def _output_schema() -> dict:
             "status": {"type": "string"},
             "message": {"type": "string"},
             "cli_available": {"type": "boolean"},
-            "cli_path": {"type": ["string", "null"]},
+            "cli_path": {"type": "string"},
             "cli_version": {"type": "string"},
             "extension_root": {"type": "string"},
             "skills_dir": {"type": "string"},
@@ -66,4 +67,131 @@ def _output_schema() -> dict:
             "installed_skill": {"type": ["object", "null"], "additionalProperties": True},
             "restart_required": {"type": "boolean"},
         },
+    }
+
+
+def _output_compression() -> ToolOutputCompressionConfig:
+    return ToolOutputCompressionConfig(
+        action_argument="action",
+        actions={
+            "status": ToolOutputCompressionActionConfig(
+                schema=_status_compression_schema(),
+                prompt=_skillhub_action_prompt("Keep CLI availability, path, version, extension root, and skills directory."),
+            ),
+            "search": ToolOutputCompressionActionConfig(
+                schema=_search_compression_schema(),
+                prompt=_skillhub_action_prompt(
+                    "Compress SkillHUB search results into candidates. Preserve every candidate install_name exactly. "
+                    "Do not merge install_name with version, title, summary, or punctuation. "
+                    "Keep the highest-signal candidates for the query and include their version and short summary."
+                ),
+            ),
+            "install": ToolOutputCompressionActionConfig(
+                schema=_install_compression_schema(),
+                prompt=_skillhub_action_prompt(
+                    "Compress SkillHUB install output. Preserve installed_skill.skill_id and path exactly. "
+                    "If installation failed, preserve the exact error text."
+                ),
+            ),
+        },
+    )
+
+
+def _skillhub_action_prompt(action_prompt: str) -> str:
+    return (
+        "This is SkillHUB output. Preserve machine-installable skill names exactly. "
+        "Never concatenate a skill name with its version. If a search candidate has install_name, "
+        "copy that install_name verbatim and use it as the only value to pass to action=install. "
+        + action_prompt
+    )
+
+
+def _status_compression_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "summary": {"type": "string"},
+            "cli_available": {"type": "boolean"},
+            "cli_path": {"type": "string"},
+            "cli_version": {"type": "string"},
+            "extension_root": {"type": "string"},
+            "skills_dir": {"type": "string"},
+            "insufficient": {"type": "boolean"},
+            "read_original_reason": {"type": "string"},
+        },
+        "required": [
+            "summary",
+            "cli_available",
+            "cli_path",
+            "cli_version",
+            "extension_root",
+            "skills_dir",
+            "insufficient",
+            "read_original_reason",
+        ],
+    }
+
+
+def _search_compression_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "summary": {"type": "string"},
+            "query": {"type": "string"},
+            "candidates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "install_name": {"type": "string"},
+                        "name": {"type": "string"},
+                        "version": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "score": {"type": "integer"},
+                    },
+                    "required": ["install_name", "name", "version", "summary", "score"],
+                },
+            },
+            "selection_guidance": {"type": "string"},
+            "insufficient": {"type": "boolean"},
+            "read_original_reason": {"type": "string"},
+        },
+        "required": [
+            "summary",
+            "query",
+            "candidates",
+            "selection_guidance",
+            "insufficient",
+            "read_original_reason",
+        ],
+    }
+
+
+def _install_compression_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "summary": {"type": "string"},
+            "installed": {"type": "boolean"},
+            "installed_skill_id": {"type": "string"},
+            "installed_skill_path": {"type": "string"},
+            "restart_required": {"type": "boolean"},
+            "errors": {"type": "array", "items": {"type": "string"}},
+            "insufficient": {"type": "boolean"},
+            "read_original_reason": {"type": "string"},
+        },
+        "required": [
+            "summary",
+            "installed",
+            "installed_skill_id",
+            "installed_skill_path",
+            "restart_required",
+            "errors",
+            "insufficient",
+            "read_original_reason",
+        ],
     }

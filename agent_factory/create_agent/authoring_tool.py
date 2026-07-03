@@ -295,11 +295,32 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
 
 def _tool_spec_authoring_schema() -> dict[str, Any]:
     schema_object = {"type": "object", "additionalProperties": True}
+    compression_action_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": ["structured_json", "deterministic"]},
+            "prompt": {"type": "string"},
+            "schema": schema_object,
+        },
+        "additionalProperties": False,
+    }
+    compression_config_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "action_argument": {"type": "string"},
+            "actions": {
+                "type": "object",
+                "additionalProperties": compression_action_schema,
+            },
+        },
+        "additionalProperties": False,
+    }
     return {
         "type": "object",
         "description": (
             "Complete ToolSpec object. id, description, entrypoint, input_schema, output_schema, resources, "
-            "risk_level, risk_evaluator, and concurrent are top-level fields. Do not nest ToolSpec fields inside input_schema."
+            "risk_level, risk_evaluator, concurrent, and optional output_compression are top-level fields. "
+            "Do not nest ToolSpec fields inside input_schema."
         ),
         "properties": {
             "id": {"type": "string"},
@@ -319,6 +340,7 @@ def _tool_spec_authoring_schema() -> dict[str, Any]:
                 "additionalProperties": False,
             },
             "concurrent": {"type": "boolean"},
+            "output_compression": compression_config_schema,
         },
         "required": [
             "id",

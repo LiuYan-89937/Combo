@@ -158,12 +158,15 @@ def _invariant_system_prompt_text() -> str:
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=完整 ToolSpec, tool_source=完整源码, "
             "python_requirements=[...], expose_to_nodes=[...])；"
-            "ToolSpec 的 id、description、entrypoint、input_schema、output_schema、resources、risk_level、risk_evaluator、concurrent 都是 tool_spec 顶层字段，"
-            "不要把 output_schema、resources、risk_level、risk_evaluator 或 concurrent 放进 input_schema。"
+            "ToolSpec 的 id、description、entrypoint、input_schema、output_schema、resources、risk_level、risk_evaluator、concurrent、output_compression 都是 tool_spec 顶层字段，"
+            "不要把 output_schema、resources、risk_level、risk_evaluator、concurrent 或 output_compression 放进 input_schema。"
+            "如果工具输出包含长列表、搜索候选、外部资源 id/slug/path、日志、报告或其他压缩后仍需保真的机器字段，给 tool_spec.output_compression.actions 写 action 级结构化 schema 和个性化 prompt；"
+            "单链路工具把个性压缩当作唯一 action 配置；多 action 工具使用 output_compression.action_argument 和 actions 分别配置每个 action。没有 action 配置时直接走系统默认压缩。"
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
-            "流程是：skillhub(action='search', query=...) 查找候选；确认需要后 skillhub(action='install', skill=...) 安装到当前 package extensions。"
+            "流程是：skillhub(action='search', query=...) 查找候选；确认需要后只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
+            "不要把候选标题、版本号、描述文本或压缩摘要拼成 skill 参数。"
             "如果 produced Agent 需要调用已安装 skill，把运行期工具 id skill 加入 assembly tool_access：react_agent 给 answer；"
             "plan_and_execute 只给 executor 或 casual_react，planner 不调用业务工具或 skill。"
             "不要把 SkillHub skill 复制成 package tool，也不要手写 extensions/enabled_skills.json；skillhub install 会写入 package extension。"

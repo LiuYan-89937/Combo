@@ -334,6 +334,16 @@ def _tool_spec_expected_shape() -> dict[str, Any]:
         "risk_level": "low|medium|high",
         "risk_evaluator": {"llm_mode": "disabled"},
         "concurrent": True,
+        "output_compression": {
+            "action_argument": "action",
+            "actions": {
+                "run": {
+                    "mode": "structured_json",
+                    "prompt": "<optional action-specific compression prompt>",
+                    "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+                }
+            },
+        },
     }
 
 
@@ -360,6 +370,16 @@ def _tool_spec_repair_template() -> dict[str, Any]:
                 "risk_level": "low",
                 "risk_evaluator": {"llm_mode": "disabled"},
                 "concurrent": True,
+                "output_compression": {
+                    "action_argument": "action",
+                    "actions": {
+                        "run": {
+                            "mode": "structured_json",
+                            "prompt": "<optional action-specific compression prompt>",
+                            "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+                        }
+                    },
+                },
             },
             "tool_source": "<complete tool.py source>",
             "python_requirements": [],

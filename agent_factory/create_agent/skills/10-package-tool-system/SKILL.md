@@ -41,15 +41,16 @@ Guides adding executable package tools and their ToolSpec declarations.
 - Add the complete package tool through create_agent_authoring(action="upsert_package_tool"); do not manually scatter writes across tool.py, manifest ToolSpec, agent_package.json tools index, contracts/tools.json, dependencies, and assembly tool access.
 - Remove stale package tools through create_agent_authoring(action="remove_package_tool", tool_id=...); do not manually delete tool directories or manifest index entries.
 - ToolSpec objects must be objects, not string references.
-- ToolSpec fields are top-level fields: `id`, `description`, `entrypoint`, `input_schema`, `output_schema`, `resources`, `risk_level`, `risk_evaluator`, and `concurrent`.
-- `input_schema` only describes the runtime call arguments. Never put `output_schema`, `resources`, `risk_level`, `risk_evaluator`, `entrypoint`, or `concurrent` inside `input_schema`.
+- ToolSpec fields are top-level fields: `id`, `description`, `entrypoint`, `input_schema`, `output_schema`, `resources`, `risk_level`, `risk_evaluator`, `concurrent`, and optional `output_compression`.
+- `input_schema` only describes the runtime call arguments. Never put `output_schema`, `resources`, `risk_level`, `risk_evaluator`, `entrypoint`, `concurrent`, or `output_compression` inside `input_schema`.
+- Add `tool_spec.output_compression.actions` when the tool output contains long lists, search candidates, external ids/slugs/paths, logs, reports, or other machine fields that must remain usable after compression. A single-link tool uses one action config; a multi-action tool sets `action_argument` and one config per action. Tools without an action config use the system default compression.
 - Package tool entrypoints return the standard tool envelope; output_schema validates only envelope.output.
 - Package tool code must use the `resources` argument for declared runtime selectors such as `runtime_root`; do not rely on `os.getcwd()` as the main resource contract.
 - When tool.py imports non-stdlib Python modules that are not package-local and not `agent_factory`, pass installable distributions as `python_requirements` to create_agent_authoring.
 - create_agent_authoring rejects package tool writes before any files are changed when third-party imports exist but `python_requirements` is empty.
 - Use installable Python distribution names in `python_requirements`; if an import name differs from the distribution name, determine the correct distribution from package documentation or validator evidence instead of guessing.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
-- If a reusable SkillHub skill already provides the capability, install it with `skillhub(action="install", skill=...)` and expose the runtime `skill` tool through assembly tool access instead of rebuilding it as a package tool.
+- If a reusable SkillHub skill already provides the capability, call `skillhub(action="search", query=...)`, install with the exact returned `install_name`, and expose the runtime `skill` tool through assembly tool access instead of rebuilding it as a package tool.
 - After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. Probe runs inside the Docker runtime image, performs dependency sandbox_init, and returns the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 

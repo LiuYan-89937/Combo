@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from agent_factory.tooling.output_compressor import compress_tool_output
 from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.spec import ToolOutputCompressionActionConfig, ToolOutputCompressionConfig
 
 
 TOOL_OUTPUT_STORE_RESOURCE = "tool_output_store"
@@ -163,6 +164,7 @@ def project_tool_output(
     store: ToolOutputStore | None,
     policy: ToolOutputPolicy | None = None,
     compression_model: Any | None = None,
+    compression_config: ToolOutputCompressionConfig | None = None,
 ) -> ToolOutputProjection:
     effective_policy = policy or default_tool_output_policy()
     raw_text = _json_text(output)
@@ -180,25 +182,54 @@ def project_tool_output(
         arguments=arguments or {},
         max_chars=effective_policy.max_model_chars,
         model=compression_model,
+        config=_compression_config_for_arguments(compression_config, arguments or {}),
     )
+    output_id = str(output_ref.get("id") or "") if output_ref else ""
     compacted: dict[str, Any] = {
-        "compressed_output": compression.compressed_text,
+        "compressed_output": compression.compressed_output,
+        "output_id": output_id,
+        "raw_output_read_hint": _raw_output_read_hint(output_id=output_id),
         "_tool_output_compacted": {
             "original_chars": compression.original_chars,
             "compressed_chars": compression.compressed_chars,
             "model_visible_limit_chars": effective_policy.max_model_chars,
-            "compression_method": "llm" if compression_model is not None and compression.compressed else "truncation",
+            "compression_method": compression.method,
             "output_ref": output_ref,
         },
     }
-    summary = "Tool output exceeded the model-visible limit; a compressed summary was returned."
+    summary = "Tool output exceeded the model-visible limit; a compressed observation was returned."
     if output_ref is not None:
-        summary += f" Full output can be read with tool_output using output_id={output_ref['id']}."
+        summary += f" Full output can be read with tool_output using output_id={output_id}."
     return ToolOutputProjection(
         output=compacted,
         output_ref=output_ref,
         output_summary=summary,
         output_truncated=True,
+    )
+
+
+def _compression_config_for_arguments(
+    config: ToolOutputCompressionConfig | None,
+    arguments: dict[str, Any],
+) -> ToolOutputCompressionActionConfig | None:
+    if config is None:
+        return None
+    action_key = str(config.action_argument or "action")
+    action = str(arguments.get(action_key) or "").strip().lower()
+    if action:
+        return config.actions.get(action)
+    if len(config.actions) == 1:
+        return next(iter(config.actions.values()))
+    return None
+
+
+def _raw_output_read_hint(*, output_id: str) -> str:
+    if not output_id:
+        return "The full raw tool output is not available because no tool_output store is configured."
+    return (
+        "If the compressed observation lacks enough detail, call "
+        f"tool_output(action='read', output_id='{output_id}') to inspect the original tool output. "
+        "Use the exact output_id; do not infer or rewrite it."
     )
 
 
