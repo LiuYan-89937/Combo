@@ -5,6 +5,7 @@ from typing import Any
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import bounded_int
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.factory_graph.frontend_bridge.workspace_resources import FrontendWorkspaceService
 
 
 WORKSPACE_FILE_PREVIEW_MAX_CHARS = 1_000_000
@@ -12,23 +13,27 @@ WORKSPACE_FILE_PREVIEW_MAX_CHARS = 1_000_000
 
 class RuntimeResourceCommandMixin:
     def workspace_manage(self, command: FactoryFrontendCommand) -> None:
-        package_id = _package_id_from_payload(command.payload)
         action = str(command.payload.get("action") or "roots").strip()
+        workspace_service = FrontendWorkspaceService(
+            agent_package_runtime=self.agent_package_runtime,
+            session_manager=self.session_manager,
+        )
         if action == "roots":
-            result = self.agent_package_runtime.workspace_roots(package_id)
+            result = workspace_service.roots(command.payload, session_record=self.session_record)
             self._emit_resource_event(command, "workspace_roots_listed", result)
             return
         if action == "list":
-            result = self.agent_package_runtime.list_workspace_entries(
-                package_id,
+            result = workspace_service.list_entries(
+                command.payload,
                 scope=str(command.payload.get("scope") or "workdir"),
                 relative_path=str(command.payload.get("path") or ""),
+                session_record=self.session_record,
             )
             self._emit_resource_event(command, "workspace_entries_listed", result)
             return
         if action == "read":
-            result = self.agent_package_runtime.read_workspace_file(
-                package_id,
+            result = workspace_service.read_file(
+                command.payload,
                 scope=str(command.payload.get("scope") or "workdir"),
                 relative_path=str(command.payload.get("path") or ""),
                 max_chars=bounded_int(
@@ -37,6 +42,7 @@ class RuntimeResourceCommandMixin:
                     minimum=1000,
                     maximum=WORKSPACE_FILE_PREVIEW_MAX_CHARS,
                 ),
+                session_record=self.session_record,
             )
             self._emit_resource_event(command, "workspace_file_read", result)
             return

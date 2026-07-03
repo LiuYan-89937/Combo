@@ -40,13 +40,7 @@ WORKSPACE_BINARY_PREVIEW_EXTENSIONS = {
 class AgentPackageWorkspaceService:
     def roots(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
         roots = workspace_roots(package_id, package)
-        return {
-            "package_id": package_id,
-            "roots": [
-                {"scope": scope, "name": workspace_scope_label(scope), "exists": path.exists()}
-                for scope, path in roots.items()
-            ],
-        }
+        return workspace_roots_payload(context={"package_id": package_id}, roots=roots)
 
     def list_entries(
         self,
@@ -56,18 +50,12 @@ class AgentPackageWorkspaceService:
         scope: str = "workdir",
         relative_path: str = "",
     ) -> dict[str, Any]:
-        root = workspace_scope_root(package_id, package, scope)
-        target = safe_workspace_path(root, relative_path)
-        if not target.exists():
-            return {"package_id": package_id, "scope": scope, "path": relative_path, "entries": []}
-        if target.is_file():
-            entries = [workspace_entry(target, root=root, scope=scope)]
-        else:
-            entries = [
-                workspace_entry(path, root=root, scope=scope)
-                for path in sorted(target.iterdir(), key=workspace_sort_key)
-            ]
-        return {"package_id": package_id, "scope": scope, "path": relative_path, "entries": entries}
+        return list_workspace_entries_from_roots(
+            context={"package_id": package_id},
+            roots=workspace_roots(package_id, package),
+            scope=scope,
+            relative_path=relative_path,
+        )
 
     def read_file(
         self,
@@ -78,48 +66,13 @@ class AgentPackageWorkspaceService:
         relative_path: str,
         max_chars: int = 20000,
     ) -> dict[str, Any]:
-        root = workspace_scope_root(package_id, package, scope)
-        target = safe_workspace_path(root, relative_path)
-        if not target.is_file():
-            raise FileNotFoundError(f"workspace file not found: {relative_path}")
-        stat = target.stat()
-        byte_limit = max(4096, max_chars * 4)
-        with target.open("rb") as handle:
-            data = handle.read(byte_limit + 1)
-        mime_type, _ = mimetypes.guess_type(target.name)
-        is_binary = workspace_file_is_binary(target=target, data=data, mime_type=mime_type)
-        content = ""
-        content_base64 = ""
-        preview_mode = "binary"
-        truncated = stat.st_size > byte_limit
-        extracted_text = workspace_extracted_text_preview(target=target, root=root, max_chars=max_chars)
-        if extracted_text is not None:
-            content, extracted_truncated = extracted_text
-            is_binary = False
-            preview_mode = "extracted_text"
-            truncated = extracted_truncated
-        elif not is_binary:
-            text = data.decode("utf-8", errors="replace")
-            truncated = truncated or len(text) > max_chars
-            content = text[:max_chars]
-            preview_mode = "text"
-        else:
-            preview_bytes = data[:byte_limit]
-            content_base64 = base64.b64encode(preview_bytes).decode("ascii")
-        return {
-            "package_id": package_id,
-            "scope": scope,
-            "path": target.relative_to(root).as_posix(),
-            "name": target.name,
-            "kind": "binary" if is_binary else "text",
-            "mime_type": mime_type or "application/octet-stream",
-            "encoding": "base64" if is_binary else "utf-8",
-            "size_bytes": stat.st_size,
-            "content": content,
-            "content_base64": content_base64,
-            "preview_mode": preview_mode,
-            "truncated": truncated,
-        }
+        return read_workspace_file_from_roots(
+            context={"package_id": package_id},
+            roots=workspace_roots(package_id, package),
+            scope=scope,
+            relative_path=relative_path,
+            max_chars=max_chars,
+        )
 
     def resolve_file(
         self,
@@ -129,11 +82,11 @@ class AgentPackageWorkspaceService:
         scope: str = "workdir",
         relative_path: str,
     ) -> Path:
-        root = workspace_scope_root(package_id, package, scope)
-        target = safe_workspace_path(root, relative_path)
-        if not target.is_file():
-            raise FileNotFoundError(f"workspace file not found: {relative_path}")
-        return target
+        return resolve_workspace_file_from_roots(
+            roots=workspace_roots(package_id, package),
+            scope=scope,
+            relative_path=relative_path,
+        )
 
 
 def workspace_roots(package_id: str, package: LoadedAgentPackage) -> dict[str, Path]:
@@ -148,7 +101,106 @@ def workspace_roots(package_id: str, package: LoadedAgentPackage) -> dict[str, P
 
 
 def workspace_scope_root(package_id: str, package: LoadedAgentPackage, scope: str) -> Path:
-    roots = workspace_roots(package_id, package)
+    return workspace_scope_root_from_roots(workspace_roots(package_id, package), scope)
+
+
+def workspace_roots_payload(*, context: dict[str, Any], roots: dict[str, Path]) -> dict[str, Any]:
+    return {
+        **context,
+        "roots": [
+            {"scope": scope, "name": workspace_scope_label(scope), "exists": path.exists()}
+            for scope, path in roots.items()
+        ],
+    }
+
+
+def list_workspace_entries_from_roots(
+    *,
+    context: dict[str, Any],
+    roots: dict[str, Path],
+    scope: str = "workdir",
+    relative_path: str = "",
+) -> dict[str, Any]:
+    root = workspace_scope_root_from_roots(roots, scope)
+    target = safe_workspace_path(root, relative_path)
+    if not target.exists():
+        return {**context, "scope": scope, "path": relative_path, "entries": []}
+    if target.is_file():
+        entries = [workspace_entry(target, root=root, scope=scope)]
+    else:
+        entries = [
+            workspace_entry(path, root=root, scope=scope)
+            for path in sorted(target.iterdir(), key=workspace_sort_key)
+        ]
+    return {**context, "scope": scope, "path": relative_path, "entries": entries}
+
+
+def read_workspace_file_from_roots(
+    *,
+    context: dict[str, Any],
+    roots: dict[str, Path],
+    scope: str = "workdir",
+    relative_path: str,
+    max_chars: int = 20000,
+) -> dict[str, Any]:
+    root = workspace_scope_root_from_roots(roots, scope)
+    target = safe_workspace_path(root, relative_path)
+    if not target.is_file():
+        raise FileNotFoundError(f"workspace file not found: {relative_path}")
+    stat = target.stat()
+    byte_limit = max(4096, max_chars * 4)
+    with target.open("rb") as handle:
+        data = handle.read(byte_limit + 1)
+    mime_type, _ = mimetypes.guess_type(target.name)
+    is_binary = workspace_file_is_binary(target=target, data=data, mime_type=mime_type)
+    content = ""
+    content_base64 = ""
+    preview_mode = "binary"
+    truncated = stat.st_size > byte_limit
+    extracted_text = workspace_extracted_text_preview(target=target, root=root, max_chars=max_chars)
+    if extracted_text is not None:
+        content, extracted_truncated = extracted_text
+        is_binary = False
+        preview_mode = "extracted_text"
+        truncated = extracted_truncated
+    elif not is_binary:
+        text = data.decode("utf-8", errors="replace")
+        truncated = truncated or len(text) > max_chars
+        content = text[:max_chars]
+        preview_mode = "text"
+    else:
+        preview_bytes = data[:byte_limit]
+        content_base64 = base64.b64encode(preview_bytes).decode("ascii")
+    return {
+        **context,
+        "scope": scope,
+        "path": target.relative_to(root).as_posix(),
+        "name": target.name,
+        "kind": "binary" if is_binary else "text",
+        "mime_type": mime_type or "application/octet-stream",
+        "encoding": "base64" if is_binary else "utf-8",
+        "size_bytes": stat.st_size,
+        "content": content,
+        "content_base64": content_base64,
+        "preview_mode": preview_mode,
+        "truncated": truncated,
+    }
+
+
+def resolve_workspace_file_from_roots(
+    *,
+    roots: dict[str, Path],
+    scope: str = "workdir",
+    relative_path: str,
+) -> Path:
+    root = workspace_scope_root_from_roots(roots, scope)
+    target = safe_workspace_path(root, relative_path)
+    if not target.is_file():
+        raise FileNotFoundError(f"workspace file not found: {relative_path}")
+    return target
+
+
+def workspace_scope_root_from_roots(roots: dict[str, Path], scope: str) -> Path:
     normalized = str(scope or "workdir").strip()
     if normalized not in roots:
         raise ValueError(f"unsupported workspace scope: {scope}")

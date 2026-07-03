@@ -15,7 +15,7 @@
       </div>
       <WorkspaceExplorer
         class="workspace-sidebar-explorer"
-        :package-id="workspacePackageId"
+        :workspace-context="workspaceRequestContext"
         @select-file="handleWorkspaceFileSelect"
       />
     </div>
@@ -44,14 +44,14 @@ const { t } = useI18n()
 const previewLoading = ref(false)
 const WORKSPACE_PREVIEW_MAX_CHARS = 1_000_000
 
-const workspacePackageId = computed(() => resourceContext.packageIdForApi.value)
+const workspaceRequestContext = computed(() => resourceContext.workspaceContext.value)
 const workspaceContextLabel = computed(() => resourceContext.label.value)
 
 async function handleWorkspaceFileSelect(entry: WorkspaceEntry) {
   uiStore.setRightSidebarTab('workspace')
   previewLoading.value = true
   runtimeStore.workspaceFile = null
-  await commands.readFile(workspaceStore.currentScope, entry.path, workspacePackageId.value, WORKSPACE_PREVIEW_MAX_CHARS)
+  await commands.readFile(workspaceStore.currentScope, entry.path, workspaceRequestContext.value, WORKSPACE_PREVIEW_MAX_CHARS)
   if (!runtimeStore.workspaceFile) {
     previewLoading.value = false
   }
@@ -70,10 +70,12 @@ watch(
 )
 
 watch(
-  () => workspacePackageId.value,
+  () => resourceContext.workspaceContextKey.value,
   () => {
+    workspaceStore.setScope(resourceContext.workspaceDefaultScope.value)
     closeWorkspacePreview()
-  }
+  },
+  { immediate: true }
 )
 </script>
 

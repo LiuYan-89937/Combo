@@ -52,7 +52,10 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_utils import (
     path_updated_at as _path_updated_at,
     read_json_object as _read_json_object,
 )
-from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import AgentPackageWorkspaceService
+from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import (
+    AgentPackageWorkspaceService,
+    workspace_roots,
+)
 from agent_factory.factory_graph.frontend_bridge.container_runtime_handle import AgentRuntimeContainerHandle
 from agent_factory.factory_graph.frontend_bridge.runtime_events import node_event, run_failed_event
 from agent_factory.factory_graph.frontend_bridge.system_package_runtime_handle import SystemPackageRuntimeHandle
@@ -341,6 +344,10 @@ class AgentPackageRuntimeManager:
     def workspace_roots(self, package_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
         return self.workspace.roots(package_id, package)
+
+    def workspace_root_paths(self, package_id: str) -> dict[str, Path]:
+        package = self.load_package(package_id)
+        return workspace_roots(package_id, package)
 
     def list_workspace_entries(
         self,

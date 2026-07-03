@@ -87,6 +87,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
+import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import type { FactoryFrontendEvent, WorkspaceEntry, WorkspaceScope } from '@/types/protocol'
 
 interface TreeRow {
@@ -102,6 +103,7 @@ const emit = defineEmits<{
 
 const props = defineProps<{
   packageId?: string | null
+  workspaceContext?: WorkspaceRequestContext | null
 }>()
 
 const workspaceStore = useWorkspaceStore()
@@ -112,6 +114,9 @@ const loadingPaths = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
 const selectedPath = ref('')
 const rootLoading = computed(() => loadingPaths.value.has('') && !entriesByPath.value[''])
+const requestContext = computed<WorkspaceRequestContext | string | undefined>(() => (
+  props.workspaceContext || props.packageId || undefined
+))
 
 const scopeOptions = computed(() => [
   { label: t('workspace.scope.package'), value: 'package' },
@@ -159,7 +164,7 @@ async function loadDirectory(path: string) {
     const event = await commands.refreshWorkspace(
       workspaceStore.currentScope,
       path,
-      props.packageId || undefined,
+      requestContext.value,
     )
     entriesByPath.value = {
       ...entriesByPath.value,
@@ -259,12 +264,23 @@ onMounted(() => {
 })
 
 watch(
-  () => props.packageId,
+  () => workspaceContextKey(requestContext.value),
   () => {
     resetTree()
     void loadDirectory('')
   },
 )
+
+function workspaceContextKey(context: WorkspaceRequestContext | string | undefined): string {
+  if (typeof context === 'string') return `package:${context}`
+  if (!context) return ''
+  return [
+    context.resourceMode || '',
+    context.packageId || '',
+    context.factorySessionId || '',
+    context.createAgentSessionId || '',
+  ].join(':')
+}
 </script>
 
 <style scoped>

@@ -74,7 +74,7 @@ import { Close, DocumentOutline, Download } from '@/components/icons'
 import { workspaceApi } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
-import type { WorkspaceScope } from '@/api/resourceTypes'
+import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceTypes'
 import type { WorkspaceFileView } from '@/types/protocol'
 
 type PreviewKind = 'text' | 'markdown' | 'image' | 'pdf' | 'unsupported'
@@ -113,10 +113,19 @@ const packageId = computed(() => {
   const payload = props.file.payload || {}
   return String(payload.package_id || payload.packageId || '').trim() || null
 })
+const workspaceContext = computed<WorkspaceRequestContext>(() => {
+  const payload = props.file.payload || {}
+  return {
+    resourceMode: payload.resource_mode || payload.resourceMode || 'package',
+    packageId: packageId.value,
+    factorySessionId: String(payload.factory_session_id || payload.factorySessionId || '').trim() || null,
+    createAgentSessionId: String(payload.create_agent_session_id || payload.createAgentSessionId || '').trim() || null,
+  }
+})
 const rawFileUrl = computed(() => {
   if (!props.file.path) return ''
   const scope = (props.file.scope || 'workdir') as WorkspaceScope
-  return workspaceApi.rawUrl(scope, props.file.path, packageId.value)
+  return workspaceApi.rawUrl(scope, props.file.path, workspaceContext.value)
 })
 const dataUrl = computed(() => {
   if (props.file.contentBase64) {

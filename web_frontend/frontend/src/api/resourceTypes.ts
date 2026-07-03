@@ -1,4 +1,14 @@
 export type WorkspaceScope = 'package' | 'runtime' | 'workdir' | 'artifacts' | 'extensions'
+export type WorkspaceResourceMode = 'package' | 'create_agent' | 'evolve_agent'
+
+export interface WorkspaceRequestContext {
+  resourceMode?: WorkspaceResourceMode
+  packageId?: string | null
+  factorySessionId?: string | null
+  createAgentSessionId?: string | null
+}
+
+export type WorkspaceContextInput = WorkspaceRequestContext | string | null | undefined
 
 export interface KnowledgeSourceInput {
   kind: 'folder' | 'file' | 'url' | 'note'

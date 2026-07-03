@@ -162,8 +162,9 @@ def _tool_description(registry: SkillRegistry) -> str:
             "Full schema content is a last resort and requires a reason; repeated content reads return summaries."
         ),
         (
-            "This tool does not execute scripts. If a loaded skill exposes scripts, "
-            "execute them through a dedicated allowed execution tool so Gateway risk approval still applies."
+            "This gateway does not execute scripts directly. A skill script becomes executable capability only "
+            "when it is exposed as a registered ToolSpec or wrapped by a dedicated allowed execution tool, "
+            "so permission, risk approval, trace, and output validation still apply."
         ),
     ]
     if skill_names:

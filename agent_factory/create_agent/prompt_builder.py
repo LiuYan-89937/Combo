@@ -154,8 +154,8 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "create_agent_authoring 参数必须使用 canonical shape。"
-            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再搜索/安装 SkillHub skill，最后才创建 package tool。"
-            "不要先写 package tool 再补模型选择，也不要在模型池能力未确认前承诺或实现依赖特定模型能力的工具。"
+            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再搜索/安装 SkillHub skill，评估 skill guidance/assets/可注册执行入口，最后才创建 package tool 补齐剩余缺口。"
+            "不要先写 package tool 再补模型选择或 SkillHub 复用，也不要在模型池能力未确认前承诺或实现依赖特定模型能力的工具。"
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=完整 ToolSpec, tool_source=完整源码, "
@@ -166,14 +166,18 @@ def _invariant_system_prompt_text() -> str:
             "单链路工具把个性压缩当作唯一 action 配置；多 action 工具使用 output_compression.action_argument 和 actions 分别配置每个 action。没有 action 配置时直接走系统默认压缩。"
         ),
         (
-            "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
+            "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程、模板资源或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
             "SkillHub 必须发生在 model_pool_select 和 model bindings 之后、package tool authoring 之前。"
             "流程是：skillhub(action='search', query=...) 查找候选；query 必须是 1 到 3 个短关键词或精确技能名，"
             "不能传完整需求、长句、或 frontend design UI 网页 web 这类同义词堆叠；宽泛探索时拆成多次 search，例如 frontend、design、frontend design、ppt、web、网页。"
             "确认需要后只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
             "不要把候选标题、版本号、描述文本或压缩摘要拼成 skill 参数。"
-            "如果 produced Agent 需要调用已安装 skill，把运行期工具 id skill 加入 assembly tool_access：react_agent 给 answer；"
+            "Skill 是能力包：可以提供 guidance、assets、templates、scripts 或受控执行入口；"
+            "只有已注册为 ToolSpec 的 skill-derived tool 才是正式执行能力，未注册脚本不能绕过工具系统直接执行。"
+            "如果 produced Agent 需要读取/使用已安装 skill，把运行期工具 id skill 加入 assembly tool_access：react_agent 给 answer；"
             "plan_and_execute 只给 executor 或 casual_react，planner 不调用业务工具或 skill。"
+            "如果 SkillHub skill 已经提供可注册执行入口，优先暴露该 skill-derived tool；"
+            "如果只提供 guidance/assets，则用 skill 指导现有工具完成；只有剩余执行缺口才创建 package tool。"
             "不要把 SkillHub skill 复制成 package tool，也不要手写 extensions/enabled_skills.json；skillhub install 会写入 package extension。"
         ),
         (

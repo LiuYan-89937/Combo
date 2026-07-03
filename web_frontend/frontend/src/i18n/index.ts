@@ -255,6 +255,7 @@ const zhCN = {
   'publish.defaultMessage': 'AgentPackage 已通过验证，确认后将发布。',
 
   'resource.chat': '闲聊',
+  'resource.manufacturing': 'Agent 制造',
   'resource.evolution': '进化',
   'resource.subAgent': '子 Agent',
   'resource.currentContext': '当前上下文：{label}',
@@ -868,6 +869,7 @@ const enUS: Record<MessageKey, string> = {
   'publish.defaultMessage': 'AgentPackage passed validation and is ready to publish.',
 
   'resource.chat': 'Chat',
+  'resource.manufacturing': 'Agent Builder',
   'resource.evolution': 'Evolution',
   'resource.subAgent': 'Sub-agent',
   'resource.currentContext': 'Current context: {label}',
