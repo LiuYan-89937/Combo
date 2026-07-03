@@ -6,6 +6,7 @@ import {
   ChatbubbleEllipses,
   ExtensionPuzzle,
   GitCompare,
+  Layers,
   Library,
   Rocket,
   Time,
@@ -62,7 +63,7 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
         {
           label: t('route.modelPool'),
           key: '/model-pool',
-          icon: renderIcon(ExtensionPuzzle),
+          icon: renderIcon(Layers),
         },
       ],
     },

@@ -23,7 +23,7 @@ FastAgentFactory 是一个 Web 端的 Agent 工厂。你可以用它闲聊、制
 - npm
 - uv
 - Docker Desktop 或可用 Docker daemon
-- 一个兼容 OpenAI Chat Completions 的文本模型服务
+- 一个受支持的文本模型服务，例如 OpenAI 兼容服务、DeepSeek、千问或 Anthropic Claude
 - 一个 embedding 模型服务，用于知识库、RAG 和记忆检索
 
 ## 安装
@@ -140,12 +140,13 @@ npm run dev
 
 ## 支持的文本模型 Provider
 
-文本模型统一走 OpenAI Chat Completions 兼容格式。具体模型名由你在 `.env` 或模型池里填写。
+文本模型统一走模型协议适配层。具体模型名由你在 `.env` 或模型池里填写。
 
 | Provider | 配置值 | 工具调用 | 结构化输出 | 思考模式 | 图片输入 | 音频输入 |
 | --- | --- | --- | --- | --- | --- | --- |
 | OpenAI Chat Completions | `openai_chat` | 支持 | `json_schema` / `json_mode` / `function_calling` | 当前不启用 | 取决于模型 | 不声明 |
 | 通用 OpenAI 兼容服务 | `openai_compatible_chat` | 支持 | `json_mode` / `function_calling` | 不默认启用 | 取决于服务 | 取决于服务 |
+| Anthropic Claude Messages | `anthropic` | 取决于模型 | `json_schema` / `function_calling` | 支持 thinking | 取决于模型 | 不声明 |
 | DeepSeek | `deepseek` | 取决于模型 | `json_mode` / `function_calling` | 支持 `reasoning_content` | 不声明 | 不声明 |
 | 千问 / 百炼 / DashScope | `qwen` | 取决于模型 | `json_schema` / `json_mode` / `function_calling` | 支持 thinking 参数 | 取决于模型 | 取决于模型 |
 | 智谱 / Z.ai GLM | `zhipu` | 取决于模型 | `json_mode` / `function_calling` | 支持 reasoning 参数 | 取决于模型 | 取决于模型 |

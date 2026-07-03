@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 
 StructuredOutputMethod = Literal["function_calling", "json_mode", "json_schema"]
-ModelTransport = Literal["openai_chat_completions", "openai_responses"]
+ModelTransport = Literal["openai_chat_completions", "openai_responses", "anthropic_messages"]
 ContentPartType = Literal["text", "image", "file", "audio", "video"]
 ModelStreamEventType = Literal[
     "message_start",

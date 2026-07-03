@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agent_factory.models.adapters.anthropic import AnthropicChatAdapter
 from agent_factory.models.adapters.base import ChatModelAdapter
 from agent_factory.models.adapters.deepseek import DeepSeekChatAdapter
 from agent_factory.models.adapters.hunyuan import HunyuanChatAdapter
@@ -25,6 +26,7 @@ def adapter_for_profile(profile: ProviderProfile) -> ChatModelAdapter:
 _ADAPTERS = {
     "openai_chat": OpenAIChatAdapter,
     "openai_compatible_chat": GenericOpenAICompatibleChatAdapter,
+    "anthropic": AnthropicChatAdapter,
     "deepseek": DeepSeekChatAdapter,
     "qwen": QwenChatAdapter,
     "zhipu": ZhipuChatAdapter,

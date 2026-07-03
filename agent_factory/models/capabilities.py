@@ -59,6 +59,22 @@ GENERIC_OPENAI_COMPATIBLE_CHAT_CAPABILITIES = ModelProviderCapabilities(
     default_structured_output_method="json_mode",
 )
 
+ANTHROPIC_CAPABILITIES = ModelProviderCapabilities(
+    transport="anthropic_messages",
+    image_input="model_specific",
+    tool_calling="model_specific",
+    streaming_tool_calls="adapter",
+    strict_tool_schema="model_specific",
+    structured_output_methods=("function_calling", "json_schema"),
+    default_structured_output_method="json_schema",
+    reasoning="model_specific",
+    reasoning_efforts=("max", "xhigh", "high", "medium", "low"),
+    reasoning_summaries=("summarized",),
+    reasoning_content="model_specific",
+    send_reasoning_history="adapter",
+    cache_usage="model_specific",
+)
+
 DEEPSEEK_CAPABILITIES = ModelProviderCapabilities(
     transport="openai_chat_completions",
     tool_calling="model_specific",
@@ -158,6 +174,14 @@ PROVIDER_PROFILES: dict[str, ProviderProfile] = {
         adapter_id="openai_compatible_chat",
         capabilities=GENERIC_OPENAI_COMPATIBLE_CHAT_CAPABILITIES,
         aliases=("openai_compatible", "generic_openai_chat", "generic"),
+    ),
+    "anthropic": ProviderProfile(
+        provider_id="anthropic",
+        display_name="Anthropic Claude Messages",
+        adapter_id="anthropic",
+        capabilities=ANTHROPIC_CAPABILITIES,
+        aliases=("claude",),
+        notes=("Uses Anthropic native Messages API through langchain-anthropic.",),
     ),
     "deepseek": ProviderProfile(
         provider_id="deepseek",

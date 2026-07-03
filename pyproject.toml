@@ -26,6 +26,7 @@ dependencies = [
     "pydantic>=2.8",
     "pypdf>=4.0",
     "ruamel.yaml>=0.18",
+    "langchain-anthropic>=1.1,<2",
 ]
 
 [build-system]
