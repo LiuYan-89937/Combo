@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "title": "Model, dependency, and sandbox contracts",
+  "title": "Model and dependency contracts",
   "description": "System resource map. Each property is the schema for the named package file.",
   "additionalProperties": false,
   "properties": {
@@ -130,59 +130,11 @@
       },
       "title": "contracts/dependencies.json",
       "type": "object"
-    },
-    "contracts/sandbox.json": {
-      "$defs": {
-        "SandboxRuntimeContractConfig": {
-          "additionalProperties": false,
-          "properties": {
-            "sandbox_contract_path": {
-              "default": "sandbox_contract.json",
-              "title": "Sandbox Contract Path",
-              "type": "string"
-            }
-          },
-          "title": "SandboxRuntimeContractConfig",
-          "type": "object"
-        }
-      },
-      "additionalProperties": false,
-      "properties": {
-        "type": {
-          "const": "sandbox",
-          "default": "sandbox",
-          "title": "Type",
-          "type": "string"
-        },
-        "version": {
-          "const": "sandbox_contract.v0",
-          "default": "sandbox_contract.v0",
-          "title": "Version",
-          "type": "string"
-        },
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "config": {
-          "$ref": "#/properties/contracts~1sandbox.json/$defs/SandboxRuntimeContractConfig"
-        }
-      },
-      "title": "contracts/sandbox.json",
-      "type": "object"
-    },
-    "sandbox_contract.json": {
-      "type": "object",
-      "title": "sandbox_contract.json",
-      "additionalProperties": true
     }
   },
   "required": [
     "contracts/model.json",
-    "contracts/dependencies.json",
-    "contracts/sandbox.json",
-    "sandbox_contract.json"
+    "contracts/dependencies.json"
   ],
   "$defs": {
     "ModelProfileBinding": {

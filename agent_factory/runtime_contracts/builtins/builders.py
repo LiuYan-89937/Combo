@@ -14,7 +14,8 @@ from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
-from agent_factory.runtime_contracts.contribution import RuntimeContribution, RuntimeDiagnostic
+from agent_factory.runtime_contracts.contribution import RuntimeContribution
+from agent_factory.runtime_contracts.memory_config import resolve_memory_system_config
 from agent_factory.runtime_contracts.paths import package_runtime_path_text, resolve_package_runtime_path
 from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
@@ -25,9 +26,7 @@ from agent_factory.runtime_contracts.schema import (
     ModelContract,
     ModelContractV0,
     NodeProviderContract,
-    RenderContract,
     ResourcesContract,
-    SandboxRuntimeContract,
     SchedulerContract,
     SchedulerSeedContract,
     SessionContract,
@@ -43,7 +42,6 @@ from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
 from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
 from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
-from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
@@ -53,6 +51,7 @@ from agent_factory.runtime_kernel.persistence import (
 from agent_factory.runtime_kernel.types import ToolExecutionResult
 from agent_factory.tooling.approval_policy import (
     ToolApprovalPolicyConfig,
+    load_tool_approval_policy_file,
     merge_tool_approval_policy,
     resolve_tool_approval_policy,
 )
@@ -102,13 +101,15 @@ class ToolsContractBuilder:
     def build(self, contract: ToolsContract, context: RuntimeBuildContext) -> RuntimeContribution:
         config = contract.config
         specs = []
-        diagnostics: list[RuntimeDiagnostic] = []
         runtime_resources: dict[str, Any] = {}
         tool_runtime_resources = dict(context.tool_runtime_resources)
         if context.runtime_root is not None:
-            tool_runtime_resources.setdefault("runtime_root", str(context.runtime_root))
+            runtime_root = context.runtime_root
         else:
-            tool_runtime_resources.setdefault("runtime_root", str(context.package_root / ".agent_runtime"))
+            runtime_root = context.package_root / ".agent_runtime"
+        tool_runtime_resources.setdefault("runtime_root", str(runtime_root))
+        tool_runtime_resources.setdefault("artifacts_root", str(runtime_root / "artifacts"))
+        tool_runtime_resources.setdefault("workdir_root", str(runtime_root / "workdir"))
         tool_runtime_resources.setdefault("package_root", str(context.package_root))
         tool_runtime_resources.setdefault("workspace_root", str(context.package_root))
         mcp_clients = {}
@@ -147,33 +148,22 @@ class ToolsContractBuilder:
             specs.extend(builtin_result.tool_specs)
             system_tool_ids.update(builtin_result.system_tool_ids)
             runtime_resources.update(builtin_result.runtime_resources)
-            diagnostics.extend(_provider_diagnostics(builtin_result.diagnostics))
         if config.package_tools_enabled:
             package_result = PackageToolProvider().discover(provider_context)
             specs.extend(package_result.tool_specs)
             system_tool_ids.update(package_result.system_tool_ids)
             runtime_resources.update(package_result.runtime_resources)
-            diagnostics.extend(_provider_diagnostics(package_result.diagnostics))
         if config.instance_extensions_enabled:
             manager = AgentInstanceExtensionManager(
                 extension_root=instance_extension_root,
                 inherit_builtin_extensions=_inherits_builtin_agent_extensions(context.package),
                 inherited_extension_roots=_package_extension_roots(context),
             )
-            extension_result, extension_report = manager.discover(context=provider_context)
+            extension_result, _ = manager.discover(context=provider_context)
             specs.extend(extension_result.tool_specs)
             system_tool_ids.update(extension_result.system_tool_ids)
             runtime_resources.update(extension_result.runtime_resources)
             mcp_clients = manager.mcp_tool_clients()
-            diagnostics.extend(_provider_diagnostics(extension_result.diagnostics))
-            diagnostics.append(
-                RuntimeDiagnostic(
-                    where="tools.extensions",
-                    level="info",
-                    message="agent extension discovery completed",
-                    details=extension_report.model_dump(mode="json"),
-                )
-            )
         if TOOL_OUTPUT_STORE_RESOURCE in tool_runtime_resources and not any(spec.id == "tool_output" for spec in specs):
             tool_output_spec = get_tool_output_tool_specs()[0]
             specs.append(tool_output_spec)
@@ -210,7 +200,6 @@ class ToolsContractBuilder:
         )
         return RuntimeContribution(
             services={"tool_registry": runtime_registry},
-            diagnostics=diagnostics,
             session_config={
                 "builtin_workspace_root": config.builtin_workspace_root,
                 "builtin_allow_external_paths": config.builtin_allow_external_paths,
@@ -223,7 +212,7 @@ class MemoryContractBuilder:
     contract_version = "memory_contract.v0"
 
     def build(self, contract: MemoryContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = _resolved_memory_config(contract.config.memory_system, context)
+        config = resolve_memory_system_config(contract.config.memory_system, context)
         if not config.enabled:
             return RuntimeContribution(
                 services={
@@ -309,15 +298,7 @@ class TraceContractBuilder:
                 "trace_reader": reader,
                 "trace_projector": projector,
                 "trace_diagnostics": diagnostics,
-            },
-            diagnostics=[
-                RuntimeDiagnostic(
-                    where="trace.runtime",
-                    level="info",
-                    message="trace recorder configured",
-                    details={"root": config.root, "producer_type": producer_type},
-                )
-            ],
+            }
         )
 
 
@@ -381,21 +362,7 @@ class KnowledgeContractBuilder:
                 "knowledge_runtime": runtime,
                 "knowledge_context_source": context_source,
             },
-            context_sources=[context_source],
             background_workers=[KnowledgeIngestionWorker(runtime)],
-            diagnostics=[
-                RuntimeDiagnostic(
-                    where="knowledge.runtime",
-                    level="info",
-                    message="knowledge runtime configured",
-                    details={
-                        "root": config.root,
-                        "catalog_path": config.catalog_path,
-                        "rag_store_backend": config.rag_store.backend,
-                        "semantic_index_enabled": store_handle.semantic_index_enabled,
-                    },
-                )
-            ],
         )
 
 
@@ -484,23 +451,6 @@ class ModelContractBuilder:
                 if model_tool_runtime
                 else {}
             ),
-            diagnostics=[
-                RuntimeDiagnostic(
-                    where="model.runtime",
-                    level="info",
-                    message="model pool bindings resolved",
-                    details={
-                        "profile_ids_by_role": {
-                            role: resolved.profile_id
-                            for role, resolved in resolved_profiles.items()
-                        },
-                        "model_tool_profile_ids": {
-                            tool_id: item["profile_id"]
-                            for tool_id, item in model_tool_runtime.items()
-                        },
-                    },
-                )
-            ],
         )
 
 
@@ -579,31 +529,12 @@ class ArtifactContractBuilder:
         )
 
 
-class RenderContractBuilder:
-    contract_type = "render"
-    contract_version = "render_contract.v0"
-
-    def build(self, contract: RenderContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        return RuntimeContribution(
-            render_manifest=context.package.render_manifest,
-            system_wrappers=[RENDER_NODE_SYSTEM_WRAPPER_ID],
-        )
-
-
 class ResourcesContractBuilder:
     contract_type = "resources"
     contract_version = "resources_contract.v0"
 
     def build(self, contract: ResourcesContract, context: RuntimeBuildContext) -> RuntimeContribution:
         return RuntimeContribution(resources=context.resources)
-
-
-class SandboxContractBuilder:
-    contract_type = "sandbox"
-    contract_version = "sandbox_contract.v0"
-
-    def build(self, contract: SandboxRuntimeContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        return RuntimeContribution(sandbox_contract=context.sandbox_contract)
 
 
 class SchedulerContractBuilder:
@@ -634,14 +565,6 @@ class SchedulerContractBuilder:
             services={"scheduler_store": store, "scheduler_runtime": runtime},
             tool_runtime_resources={"scheduler_runtime": runtime},
             background_workers=[worker],
-            diagnostics=[
-                RuntimeDiagnostic(
-                    where="scheduler.runtime",
-                    level="info",
-                    message="scheduler runtime configured",
-                    details={"store_path": config.store_path, "owner_id": owner_id},
-                )
-            ],
         )
 
 
@@ -659,7 +582,8 @@ class DependenciesContractBuilder:
     contract_version = "dependencies_contract.v0"
 
     def build(self, contract: DependenciesContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        return RuntimeContribution(dependency_plan=contract.config.model_dump(mode="json"))
+        del contract, context
+        return RuntimeContribution()
 
 
 def _runtime_tool_executor(tool_id: str, tool) -> Any:
@@ -711,18 +635,6 @@ def _tool_observation_result(observation: dict[str, Any]) -> ToolExecutionResult
     )
 
 
-def _provider_diagnostics(items) -> list[RuntimeDiagnostic]:
-    return [
-        RuntimeDiagnostic(
-            where=f"tools.provider.{item.provider_id}",
-            level=item.level,
-            message=item.message,
-            details=item.details,
-        )
-        for item in items
-    ]
-
-
 def _merge_tool_resources(
     *,
     serializable_resources: dict[str, object],
@@ -751,16 +663,7 @@ def _tool_output_root(*, context: RuntimeBuildContext, instance_extension_root: 
 
 
 def _instance_tool_approval_policy(instance_extension_root: Path) -> ToolApprovalPolicyConfig | None:
-    path = instance_extension_root / "tool_permissions.json"
-    if not path.is_file():
-        return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("tool_permissions.json must contain a JSON object")
-    policy_payload = payload.get("policy", payload)
-    if not isinstance(policy_payload, dict):
-        raise ValueError("tool_permissions.json policy must contain a JSON object")
-    return ToolApprovalPolicyConfig.model_validate(policy_payload)
+    return load_tool_approval_policy_file(instance_extension_root / "tool_permissions.json")
 
 
 def _inherits_builtin_agent_extensions(package: Any) -> bool:
@@ -770,38 +673,6 @@ def _inherits_builtin_agent_extensions(package: Any) -> bool:
 
 def _package_extension_roots(context: RuntimeBuildContext) -> list[Path]:
     return [context.package_root / "extensions"]
-
-
-def _resolved_memory_config(config: Any, context: RuntimeBuildContext) -> Any:
-    store = config.store
-    background = config.background
-    return config.model_copy(
-        update={
-            "store": (
-                store.model_copy(
-                    update={
-                        "path": package_runtime_path_text(
-                            context,
-                            store.path,
-                            field_path="memory.config.memory_system.store.path",
-                        )
-                    }
-                )
-                if store.backend == "sqlite" and store.path.strip()
-                else store
-            ),
-            "background": background.model_copy(
-                update={
-                    "journal_root": package_runtime_path_text(
-                        context,
-                        background.journal_root,
-                        field_path="memory.config.memory_system.background.journal_root",
-                    )
-                }
-            ),
-        },
-        deep=True,
-    )
 
 
 def _runtime_root_from_session_contract(context: RuntimeBuildContext) -> Path | None:

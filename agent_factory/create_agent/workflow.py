@@ -374,8 +374,8 @@ def _publish_readiness_error(*, workspace: CreateAgentWorkspace, report: Package
     if active is None or active.system_id != "validation_publish":
         return (
             "Finalize blocked: active focus must be validation_publish. "
-            "Set focus explicitly with create_agent_stage(action='set_focus', focus_id='validation_publish', reason=...), "
-            "then run create_agent_validate(scope='full_static', reason=...)."
+            "Run create_agent_validate(scope='full_static', reason=...) after implementation is complete; "
+            "a passed full_static validation synchronizes validation_publish readiness."
         )
     if report is None:
         return "Finalize blocked: no validation report exists. Call create_agent_validate(scope='full_static', reason=...) first."

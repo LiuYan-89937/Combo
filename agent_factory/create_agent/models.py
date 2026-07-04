@@ -499,7 +499,7 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
             "experience_assembly",
             3,
             "Experience assembly",
-            ["assembly_spec.json", "render_manifest.json"],
+            ["assembly_spec.json"],
             [],
             "assembly_compile",
             "Bind implemented capabilities into runtime assembly and user-visible experience only after capability files exist.",

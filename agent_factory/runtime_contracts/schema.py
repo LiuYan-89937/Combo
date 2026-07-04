@@ -18,65 +18,21 @@ from agent_factory.runtime_defaults import (
 )
 
 
-ContractType = Literal[
-    "session",
-    "tools",
-    "memory",
-    "render",
-    "resources",
-    "sandbox",
-    "dependencies",
-    "model",
-    "knowledge",
-    "scheduler",
-    "scheduler_seed",
-    "context",
-    "trace",
-    "state",
-    "node_provider",
-    "artifact",
-]
-ContractVersion = Literal[
-    "session_contract.v0",
-    "tools_contract.v0",
-    "memory_contract.v0",
-    "render_contract.v0",
-    "resources_contract.v0",
-    "sandbox_contract.v0",
-    "dependencies_contract.v0",
-    "model_contract.v0",
-    "model_contract.v1",
-    "knowledge_contract.v0",
-    "scheduler_contract.v0",
-    "scheduler_seed_contract.v0",
-    "context_contract.v0",
-    "trace_contract.v0",
-    "state_contract.v0",
-    "node_provider_contract.v0",
-    "artifact_contract.v0",
-]
+PACKAGE_INFRASTRUCTURE_CONTRACTS = frozenset({"artifact", "render", "sandbox", "trace"})
 REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
     {
-        "artifact",
         "context",
         "dependencies",
         "model",
         "knowledge",
         "memory",
-        "render",
         "resources",
-        "sandbox",
         "scheduler",
         "session",
         "state",
         "tools",
-        "trace",
     }
 )
-
-
-class ContractValidationError(ValueError):
-    pass
 
 
 class AgentIdentitySpec(BaseModel):
@@ -99,9 +55,7 @@ class AgentPackageManifest(BaseModel):
     agent: AgentPackageAgentSpec
     runtime: dict[str, Any] = Field(default_factory=dict)
     assembly_spec_path: str
-    render_manifest_path: str
     resources_path: str
-    sandbox_contract_path: str
     contracts: dict[str, str] = Field(default_factory=dict)
     tools: list[str] = Field(default_factory=list)
 
@@ -110,11 +64,15 @@ class AgentPackageManifest(BaseModel):
         missing_contracts = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - set(self.contracts))
         if missing_contracts:
             raise ValueError("agent package missing required contracts: " + ", ".join(missing_contracts))
+        infrastructure_contracts = sorted(PACKAGE_INFRASTRUCTURE_CONTRACTS & set(self.contracts))
+        if infrastructure_contracts:
+            raise ValueError(
+                "agent package must not declare runtime infrastructure contracts: "
+                + ", ".join(infrastructure_contracts)
+            )
         for key in (
             "assembly_spec_path",
-            "render_manifest_path",
             "resources_path",
-            "sandbox_contract_path",
         ):
             _validate_package_relative_path(str(getattr(self, key)), field_name=key)
         for key, value in self.contracts.items():
@@ -442,26 +400,6 @@ class ArtifactContract(BaseModel):
     config: ArtifactContractConfig = Field(default_factory=ArtifactContractConfig)
 
 
-class RenderContractConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    manifest_path: str = "render_manifest.json"
-
-    @field_validator("manifest_path")
-    @classmethod
-    def _path_is_relative(cls, value: str) -> str:
-        return _validate_package_relative_path(value, field_name="manifest_path")
-
-
-class RenderContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["render"] = "render"
-    version: Literal["render_contract.v0"] = "render_contract.v0"
-    enabled: bool = True
-    config: RenderContractConfig = Field(default_factory=RenderContractConfig)
-
-
 class ResourceDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -504,26 +442,6 @@ class ResourcesContract(BaseModel):
     config: ResourcesContractConfig = Field(default_factory=ResourcesContractConfig)
 
 
-class SandboxRuntimeContractConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sandbox_contract_path: str = "sandbox_contract.json"
-
-    @field_validator("sandbox_contract_path")
-    @classmethod
-    def _path_is_relative(cls, value: str) -> str:
-        return _validate_package_relative_path(value, field_name="sandbox_contract_path")
-
-
-class SandboxRuntimeContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["sandbox"] = "sandbox"
-    version: Literal["sandbox_contract.v0"] = "sandbox_contract.v0"
-    enabled: bool = True
-    config: SandboxRuntimeContractConfig = Field(default_factory=SandboxRuntimeContractConfig)
-
-
 class DependenciesContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -558,27 +476,6 @@ class SchedulerSeedContract(BaseModel):
     version: Literal["scheduler_seed_contract.v0"] = "scheduler_seed_contract.v0"
     enabled: bool = True
     config: SchedulerSeedContractConfig = Field(default_factory=SchedulerSeedContractConfig)
-
-
-RuntimeContract = (
-    SessionContract
-    | ToolsContract
-    | MemoryContract
-    | ContextContract
-    | TraceContract
-    | KnowledgeContract
-    | RenderContract
-    | ResourcesContract
-    | SandboxRuntimeContract
-    | DependenciesContract
-    | ModelContractV0
-    | ModelContract
-    | SchedulerContract
-    | SchedulerSeedContract
-    | StateContract
-    | NodeProviderContract
-    | ArtifactContract
-)
 
 
 def _validate_package_relative_path(value: str, *, field_name: str) -> str:

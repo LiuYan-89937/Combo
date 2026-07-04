@@ -10,6 +10,7 @@ from typing import Any
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.create_agent.models import PUBLISH_FILE
 from agent_factory.create_agent.package_paths import is_transient_package_path, normalize_package_relative
+from agent_factory.create_agent.stage_sync import sync_publish_stage
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.paths import factory_artifact_path
@@ -142,6 +143,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     report_path = target / "package_report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     workspace.write_publish_report(report)
+    sync_publish_stage(workspace)
     return tool_envelope({
         "published": True,
         "package_id": package_id,
@@ -268,7 +270,7 @@ def _read_manifest_payload(root: Path) -> dict[str, Any]:
 def _publishable_paths(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
     files = {"agent_package.json"}
     dirs: set[str] = set()
-    for key in ("assembly_spec_path", "render_manifest_path", "resources_path", "sandbox_contract_path"):
+    for key in ("assembly_spec_path", "resources_path"):
         _add_manifest_file(files, manifest.get(key))
     contracts = manifest.get("contracts")
     if isinstance(contracts, dict):

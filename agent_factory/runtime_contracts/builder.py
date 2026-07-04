@@ -5,11 +5,16 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from agent_factory.runtime_contracts.contribution import RuntimeBuildResult, RuntimeContributionMerger
+from agent_factory.runtime_contracts.contribution import RuntimeBuildResult, RuntimeContribution, RuntimeContributionMerger
 from agent_factory.runtime_contracts.loader import LoadedAgentPackage
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
-from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRACTS
+from agent_factory.runtime_contracts.schema import (
+    ArtifactContract,
+    REQUIRED_AGENT_PACKAGE_CONTRACTS,
+    TraceContract,
+)
 from agent_factory.runtime_kernel.bindings import RuntimeServices
+from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYSTEM_WRAPPER_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +24,22 @@ class RuntimeBuildContext:
     package: LoadedAgentPackage
     resources: dict[str, object]
     tool_runtime_resources: dict[str, object]
-    sandbox_contract: dict[str, object]
+
+
+def runtime_build_context(
+    package: LoadedAgentPackage,
+    *,
+    runtime_root: str | Path | None = None,
+    resources: dict[str, object] | None = None,
+    tool_runtime_resources: dict[str, object] | None = None,
+) -> RuntimeBuildContext:
+    return RuntimeBuildContext(
+        package_root=package.package_root,
+        runtime_root=Path(runtime_root).expanduser().resolve() if runtime_root is not None else None,
+        package=package,
+        resources=_resource_values(package.resources) if resources is None else dict(resources),
+        tool_runtime_resources=dict(tool_runtime_resources or {}),
+    )
 
 
 class RuntimeBuildPlanner:
@@ -36,31 +56,22 @@ class RuntimeBuildPlanner:
         missing = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - set(package.contracts))
         if missing:
             raise ValueError("agent package missing required runtime contracts: " + ", ".join(missing))
-        context = RuntimeBuildContext(
-            package_root=package.package_root,
-            runtime_root=Path(runtime_root).expanduser().resolve() if runtime_root is not None else None,
-            package=package,
-            resources=_resource_values(package.resources),
-            tool_runtime_resources={},
-            sandbox_contract=package.sandbox_contract,
-        )
+        context = runtime_build_context(package, runtime_root=runtime_root)
         contracts = sorted(
             [self.registry.parse(payload) for payload in package.contracts.values()],
             key=_contract_build_priority,
         )
-        contributions = []
+        contributions = [RuntimeContribution(system_wrappers=[RENDER_NODE_SYSTEM_WRAPPER_ID])]
         build_resources = dict(context.resources)
         build_tool_runtime_resources: dict[str, object] = {}
-        for contract in contracts:
+        for contract in [*_default_runtime_infrastructure_contracts(), *contracts]:
             if not bool(getattr(contract, "enabled", True)):
                 continue
-            contract_context = RuntimeBuildContext(
-                package_root=context.package_root,
+            contract_context = runtime_build_context(
+                context.package,
                 runtime_root=context.runtime_root,
-                package=context.package,
                 resources=build_resources,
                 tool_runtime_resources=build_tool_runtime_resources,
-                sandbox_contract=context.sandbox_contract,
             )
             contribution = self.registry.builder_for(contract).build(contract, contract_context)
             for key, value in contribution.resources.items():
@@ -72,9 +83,7 @@ class RuntimeBuildPlanner:
                     raise ValueError(f"conflicting tool runtime build resource: {key}")
                 build_tool_runtime_resources[key] = value
             contributions.append(contribution)
-        result = RuntimeContributionMerger(base_services=base_services).merge(contributions)
-        result.contracts = {str(getattr(contract, "type")): _contract_dump(contract) for contract in contracts}
-        return result
+        return RuntimeContributionMerger(base_services=base_services).merge(contributions)
 
 
 def _resource_values(payload: dict[str, object]) -> dict[str, object]:
@@ -84,8 +93,11 @@ def _resource_values(payload: dict[str, object]) -> dict[str, object]:
     return dict(resources)
 
 
-def _contract_dump(contract: BaseModel) -> dict[str, object]:
-    return contract.model_dump(mode="json")
+def _default_runtime_infrastructure_contracts() -> list[BaseModel]:
+    return [
+        TraceContract(),
+        ArtifactContract(),
+    ]
 
 
 def _contract_build_priority(contract: BaseModel) -> tuple[int, str]:
@@ -102,10 +114,8 @@ def _contract_build_priority(contract: BaseModel) -> tuple[int, str]:
         "model": 48,
         "tools": 50,
         "node_provider": 55,
-        "render": 60,
         "memory": 70,
         "context": 80,
-        "sandbox": 90,
         "dependencies": 100,
     }
     return (priority.get(contract_type, 100), contract_type)

@@ -144,7 +144,7 @@ def skill_error_guidance(arguments: dict[str, Any], exc: Exception) -> str:
             "Read the resource in outline mode or use one of the available top-level keys before retrying mode=fragment."
         )
     if action == "read_resource" and isinstance(exc, KeyError):
-        return "Unknown skill resource path. Call describe for this skill and choose one of the returned resources."
+        return "Unknown skill resource path. Call describe for this skill and choose one of the returned resources or scripts."
     if action == "load" and isinstance(exc, PermissionError):
         name = str(arguments.get("name") or "").strip()
         current_system = str(arguments.get("current_system") or "").strip()
@@ -156,7 +156,8 @@ def skill_error_guidance(arguments: dict[str, Any], exc: Exception) -> str:
     if action == "read_resource":
         return (
             "Read resource failed. Verify action, name, path, current_system, mode, and pointer. "
-            "For schema resources, prefer mode=fragment with a JSON pointer; full schema content requires a reason."
+            "For schema resources, prefer mode=fragment with a JSON pointer; full schema content requires a reason. "
+            "For scripts, use the exact scripts path listed by describe."
         )
     if action == "read_repair_resources":
         return "Read repair resources failed. Use recommended_skill and recommended_resources from the validator without renaming paths."
@@ -177,7 +178,7 @@ def skill_error_facts(arguments: dict[str, Any], exc: Exception) -> dict[str, An
         facts["error_category"] = "skill_resource_fragment_not_found"
         facts["available_top_level_keys"] = exc.available_keys
     elif isinstance(exc, KeyError):
-        facts["error_category"] = "skill_resource_not_found"
+        facts["error_category"] = "skill_resource_or_script_not_found"
     elif facts["action"] == "load" and isinstance(exc, PermissionError):
         facts["error_category"] = "second_primary_skill_requires_describe"
         facts["required_next_tool"] = "skill"

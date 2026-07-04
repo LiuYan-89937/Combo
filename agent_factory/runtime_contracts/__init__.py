@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from agent_factory.runtime_contracts.builder import RuntimeBuildContext, RuntimeBuildPlanner
+from agent_factory.runtime_contracts.builder import RuntimeBuildContext, RuntimeBuildPlanner, runtime_build_context
 from agent_factory.runtime_contracts.contribution import (
     RuntimeBuildResult,
     RuntimeContribution,
     RuntimeContributionMerger,
-    RuntimeDiagnostic,
 )
 from agent_factory.runtime_contracts.loader import AgentPackageLoader, LoadedAgentPackage
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
@@ -18,15 +17,12 @@ from agent_factory.runtime_contracts.schema import (
     MemoryContract,
     ModelContract,
     ModelContractV0,
-    RenderContract,
     ResourcesContract,
     RuntimeContractEnvelope,
-    SandboxRuntimeContract,
     SchedulerContract,
     SchedulerSeedContract,
     SessionContract,
     ToolsContract,
-    TraceContract,
 )
 
 __all__ = [
@@ -40,20 +36,17 @@ __all__ = [
     "MemoryContract",
     "ModelContract",
     "ModelContractV0",
-    "RenderContract",
     "ResourcesContract",
     "RuntimeBuildContext",
     "RuntimeBuildPlanner",
     "RuntimeBuildResult",
+    "runtime_build_context",
     "RuntimeContractEnvelope",
     "RuntimeContractRegistry",
     "RuntimeContribution",
     "RuntimeContributionMerger",
-    "RuntimeDiagnostic",
-    "SandboxRuntimeContract",
     "SchedulerContract",
     "SchedulerSeedContract",
     "SessionContract",
     "ToolsContract",
-    "TraceContract",
 ]

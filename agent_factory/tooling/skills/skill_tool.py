@@ -59,7 +59,7 @@ def _input_schema() -> dict[str, Any]:
                     "Skill Gateway action. Use describe before read_resource for the same current_system. "
                     "list/search/describe expose metadata only. "
                     "load returns SKILL.md for one tracked manufacturing focus. list_loaded returns loaded state. "
-                    "read_resource reads one referenced skill resource. "
+                    "read_resource reads one referenced skill resource or script source listed by describe/load. "
                     "read_repair_resources reads validator-recommended resources as a compact bundle."
                 ),
             },
@@ -83,7 +83,7 @@ def _input_schema() -> dict[str, Any]:
                 "description": (
                     "Optional for read_resource. outline returns a compact resource index; "
                     "fragment returns one JSON pointer subtree; content returns raw text only for non-schema resources "
-                    "that have not already been read. Schema resources should use fragment."
+                    "or text script sources that have not already been read. Schema resources should use fragment."
                 ),
             },
             "pointer": {
@@ -156,9 +156,9 @@ def _tool_description(registry: SkillRegistry) -> str:
             "Use action=list/search/describe to inspect metadata before loading content. "
             "Use action=load with current_system and reason only when the current manufacturing context needs that SKILL.md body. "
             "Use action=list_loaded to inspect loaded state. "
-            "Use action=read_resource with current_system only for resources explicitly listed by describe/load. "
+            "Use action=read_resource with current_system only for resources or scripts explicitly listed by describe/load. "
             "read_resource defaults to a compact outline. Use mode=fragment for schema pointers. "
-            "Use mode=content for capability examples or guidance, not for scaffold audits. "
+            "Use mode=content for capability examples, guidance, or script source inspection, not for scaffold audits. "
             "Full schema content is a last resort and requires a reason; repeated content reads return summaries."
         ),
         (

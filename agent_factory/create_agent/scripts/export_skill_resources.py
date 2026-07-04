@@ -8,24 +8,19 @@ from typing import Any
 from agent_factory.create_agent.models import PackageValidationReport, SystemManufacturingState, initial_system_manufacturing_state
 from agent_factory.create_agent.package_scaffold import materialize_empty_agent_package
 from agent_factory.runtime_contracts.builtins import (
-    default_artifact_contract,
     default_context_contract,
     default_dependencies_contract,
     default_knowledge_contract,
     default_memory_contract,
     default_model_contract,
-    default_render_contract,
     default_resources_contract,
-    default_sandbox_contract,
     default_scheduler_contract,
-    default_scheduler_seed_contract,
     default_session_contract,
     default_state_contract,
     default_tools_contract,
-    default_trace_contract,
 )
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
-from agent_factory.runtime_render import RenderManifest
+from agent_factory.tooling.package_tool_spec import package_tool_entrypoint, package_tool_manifest_path, package_tool_source_path
 from agent_factory.tooling.spec import ToolSpec
 
 
@@ -44,10 +39,8 @@ RESOURCE_IDS = {
     "09-tools-system": "tools_system",
     "10-package-tool-system": "package_tool_system",
     "12-assembly-pattern-system": "assembly_pattern_system",
-    "13-render-event-system": "render_event_system",
     "14-scheduler-system": "scheduler_system",
     "15-scheduler-seed-system": "scheduler_seed_system",
-    "16-trace-artifact-system": "trace_artifact_system",
     "17-final-validation-repair": "final_validation",
 }
 CAPABILITY_EXAMPLE_SKILLS = frozenset(
@@ -75,12 +68,10 @@ def main() -> None:
             files={"agent_package.json": (AgentPackageManifest, scaffold["agent_package.json"])},
         ),
         "02-model-system": _export(
-            title="Model, dependency, and sandbox contracts",
+            title="Model and dependency contracts",
             files={
                 "contracts/model.json": (type(default_model_contract()), scaffold["contracts/model.json"]),
                 "contracts/dependencies.json": (type(default_dependencies_contract()), scaffold["contracts/dependencies.json"]),
-                "contracts/sandbox.json": (type(default_sandbox_contract()), scaffold["contracts/sandbox.json"]),
-                "sandbox_contract.json": (dict, scaffold["sandbox_contract.json"]),
             },
         ),
         "03-session-system": _export(
@@ -132,13 +123,6 @@ def main() -> None:
                 "assembly_pattern_authoring": (dict, _assembly_pattern_authoring_example()),
             },
         ),
-        "13-render-event-system": _export(
-            title="Render contract and manifest",
-            files={
-                "contracts/render.json": (type(default_render_contract()), scaffold["contracts/render.json"]),
-                "render_manifest.json": (RenderManifest, scaffold["render_manifest.json"]),
-            },
-        ),
         "14-scheduler-system": _export(
             title="Scheduler contract",
             files={"contracts/scheduler.json": (type(default_scheduler_contract()), default_scheduler_contract())},
@@ -146,13 +130,6 @@ def main() -> None:
         "15-scheduler-seed-system": _export(
             title="Scheduler seed authoring call",
             files={"scheduler_seed_authoring": (dict, _scheduler_seed_capability_example())},
-        ),
-        "16-trace-artifact-system": _export(
-            title="Trace and artifact contracts",
-            files={
-                "contracts/trace.json": (type(default_trace_contract()), default_trace_contract()),
-                "contracts/artifact.json": (type(default_artifact_contract()), default_artifact_contract()),
-            },
         ),
         "17-final-validation-repair": _export(
             title="Package validation report",
@@ -279,7 +256,7 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
     tool_spec = ToolSpec(
         id="package_action",
         description="Performs one package-defined runtime action.",
-        entrypoint="python:tools/package_action/tool.py:run",
+        entrypoint=package_tool_entrypoint("package_action"),
         input_schema={
             "type": "object",
             "properties": {"query": {"type": "string"}},
@@ -332,8 +309,8 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
                         "expose_to_nodes": ["answer"],
                     },
                     "writes": [
-                        "tools/package_action/manifest.json",
-                        "tools/package_action/tool.py",
+                        package_tool_manifest_path("package_action"),
+                        package_tool_source_path("package_action"),
                         "agent_package.json",
                         "assembly_spec.json",
                         "contracts/tools.json",
@@ -388,7 +365,7 @@ def _assembly_pattern_authoring_example() -> dict[str, Any]:
                 },
                 "allowed_tool_ids": ["package_action"],
             },
-            "writes": ["agent_package.json", "assembly_spec.json", "render_manifest.json"],
+            "writes": ["agent_package.json", "assembly_spec.json"],
         },
         "plan_and_execute": {
             "tool": "create_agent_authoring",
@@ -397,7 +374,8 @@ def _assembly_pattern_authoring_example() -> dict[str, Any]:
                 "pattern_id": "plan_and_execute",
                 "prompts": {
                     "planner": "Create and maintain an outcome-oriented plan with runtime_plan before execution. Plan steps must describe analysis, verification, construction, or delivery objectives rather than raw tool calls. Put useful tool ids in tool_hints and define acceptance_criteria for each step. Do not call business tools from the planner.",
-                    "executor": "Execute the current plan step with package/domain tools first, then update runtime_plan with the result. Use glob, ls, and read for workspace inspection. Use bash, write, or edit only when available package/runtime tools cannot complete the step, and include fallback_reason when calling them.",
+                    "executor": "Execute the current plan step with package/domain tools first, then update runtime_plan with the result. Use glob, ls, and read for workspace inspection. If read reports a missing file or the path is uncertain, inspect the parent or nearby directory with ls before retrying read with the exact path. Use bash, write, or edit only when available package/runtime tools cannot complete the step, and include fallback_reason when calling them.",
+                    "casual": "Handle non-main-workflow requests with normal ReAct tool use. Inspect workspace context with tools when needed. If read reports a missing file or the path is uncertain, inspect the parent or nearby directory with ls before retrying read with the exact path. Ask only when discovery cannot identify a safe target, and do not update runtime_plan.",
                     "final_answer": "Summarize the completed plan, use delivery tools if the final artifact still needs generation or verification, and deliver the final user-facing answer.",
                 },
                 "activation": {
@@ -407,7 +385,7 @@ def _assembly_pattern_authoring_example() -> dict[str, Any]:
                 },
                 "allowed_tool_ids": ["package_action"],
             },
-            "writes": ["agent_package.json", "assembly_spec.json", "render_manifest.json"],
+            "writes": ["agent_package.json", "assembly_spec.json"],
         },
         "rules": [
             "Do not hand-write node_bindings for built-in patterns during normal production.",

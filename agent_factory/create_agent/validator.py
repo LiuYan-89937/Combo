@@ -11,9 +11,9 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
-from agent_factory.create_agent.contract_catalog import contract_resources, contract_skill, system_resources
+from agent_factory.create_agent.contract_catalog import system_resources
 from agent_factory.create_agent.mcp_inheritance import factory_mcp_tool_ids, materialized_package_mcp_tool_ids
-from agent_factory.create_agent.package_paths import is_transient_package_path
+from agent_factory.create_agent.model_tool_access import model_tool_ids_from_contract
 from agent_factory.create_agent.validation_state import package_fingerprint, package_tool_digest
 from agent_factory.create_agent.models import (
     PackageToolProbeState,
@@ -25,6 +25,7 @@ from agent_factory.runtime_contracts.builtins import default_runtime_contract_re
 from agent_factory.runtime_contracts.schema import (
     AgentPackageManifest,
     DependenciesContract,
+    PACKAGE_INFRASTRUCTURE_CONTRACTS,
     REQUIRED_AGENT_PACKAGE_CONTRACTS,
     SchedulerSeedContract,
     ToolsContract,
@@ -34,6 +35,12 @@ from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig
 from agent_factory.runtime_kernel.activation import normalize_plan_and_execute_activation
 from agent_factory.runtime_kernel.planning import PLAN_AND_EXECUTE_PATTERN_ID, RUNTIME_PLAN_TOOL_ID
 from agent_factory.tooling.builtins.registry import get_builtin_tool_ids
+from agent_factory.tooling.package_tool_spec import (
+    package_tool_directory_path,
+    package_tool_entrypoint,
+    package_tool_manifest_path,
+    package_tool_source_path,
+)
 from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.skills import SKILL_TOOL_ID
 from agent_factory.tooling.skills.schema import SkillGatewayState
@@ -327,7 +334,7 @@ def _tool_spec_expected_shape() -> dict[str, Any]:
     return {
         "id": "snake_case_tool_id",
         "description": "What the tool does.",
-        "entrypoint": "python:tools/snake_case_tool_id/tool.py:run",
+        "entrypoint": package_tool_entrypoint("snake_case_tool_id"),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
         "output_schema": {"type": "object", "properties": {}, "additionalProperties": True},
         "resources": {},
@@ -355,7 +362,7 @@ def _tool_spec_repair_template() -> dict[str, Any]:
             "tool_spec": {
                 "id": "<tool_id>",
                 "description": "<specific runtime capability>",
-                "entrypoint": "python:tools/<tool_id>/tool.py:run",
+                "entrypoint": package_tool_entrypoint("<tool_id>"),
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -427,24 +434,32 @@ def _manifest_shape_report(
     contracts = payload.get("contracts")
     if not isinstance(contracts, dict):
         return None
-    missing_contracts = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - {str(key) for key in contracts})
+    contract_keys = {str(key) for key in contracts}
+    missing_contracts = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - contract_keys)
+    infrastructure_contracts = sorted(PACKAGE_INFRASTRUCTURE_CONTRACTS & contract_keys)
     missing_files = [
         (str(key), str(value))
         for key, value in sorted(contracts.items())
         if isinstance(value, str) and value.strip() and not (root / value).is_file()
     ]
-    if not missing_contracts and not missing_files:
+    if not missing_contracts and not infrastructure_contracts and not missing_files:
         return None
     target_files = sorted(
         {
             "agent_package.json",
             *(f"contracts/{contract_key}.json" for contract_key in missing_contracts),
+            *(f"contracts/{contract_key}.json" for contract_key in infrastructure_contracts),
             *(relative_path for _contract_key, relative_path in missing_files),
         }
     )
     summary_parts = []
     if missing_contracts:
         summary_parts.append("missing required contracts: " + ", ".join(missing_contracts))
+    if infrastructure_contracts:
+        summary_parts.append(
+            "runtime infrastructure contracts must not be package-declared: "
+            + ", ".join(infrastructure_contracts)
+        )
     if missing_files:
         summary_parts.append("missing referenced package files: " + ", ".join(path for _key, path in missing_files))
     summary = "; ".join(summary_parts)
@@ -461,6 +476,7 @@ def _manifest_shape_report(
         recommended_resources=list(system_resources("package_identity")),
         details={
             "missing_contracts": missing_contracts,
+            "infrastructure_contracts": infrastructure_contracts,
             "missing_files": [{"contract_key": key, "target_file": path} for key, path in missing_files],
         },
     )
@@ -496,7 +512,6 @@ def _runtime_path_report(
 
 
 RUNTIME_CONTRACT_PATH_FIELDS: dict[str, tuple[str, ...]] = {
-    "artifact": ("config.root", "config.index_path"),
     "knowledge": ("config.root", "config.catalog_path", "config.rag_store.path"),
     "memory": (
         "config.memory_system.store.path",
@@ -505,7 +520,6 @@ RUNTIME_CONTRACT_PATH_FIELDS: dict[str, tuple[str, ...]] = {
     "scheduler": ("config.store_path",),
     "session": ("config.session_root", "config.checkpoint_path"),
     "tools": ("config.instance_extension_root",),
-    "trace": ("config.root",),
 }
 
 
@@ -758,7 +772,6 @@ def _json_syntax_report(
     critical_json_files = [
         ("agent_package.json", None),
         ("assembly_spec.json", None),
-        ("render_manifest.json", None),
         (".factory/skill_gateway_state.json", SkillGatewayState),
         (".factory/todo.json", None),
         (".factory/action.json", None),
@@ -872,7 +885,7 @@ def _json_schema_repair_hint(relative_path: str) -> str:
     if relative_path == "agent_package.json":
         return "Use create_agent_authoring(action='set_identity') or create_agent_authoring(action='configure_pattern_assembly') for manifest-owned fields; reset malformed scaffold contract files with create_agent_authoring(action='reset_contract', contract_key=...)."
     if relative_path == "assembly_spec.json":
-        return "Regenerate built-in pattern assembly through create_agent_authoring(action='configure_pattern_assembly') so prompt, model_operation, tool_access, render, and activation stay coherent."
+        return "Regenerate built-in pattern assembly through create_agent_authoring(action='configure_pattern_assembly') so prompt, model_operation, tool_access, and activation stay coherent."
     if relative_path == "resources.json" or relative_path == "contracts/resources.json":
         return "Regenerate runtime resources through create_agent_authoring(action='upsert_resources') instead of hand-editing resource contract shape."
     if relative_path == "contracts/scheduler_seed.json":
@@ -953,9 +966,10 @@ def _package_file_contract_report(
     issues.extend(_tool_dependency_issues(root, package, package_tools))
     issues.extend(_assembly_tool_issues(package, package_tools))
     inherited_mcp_tools = _inherited_mcp_tool_ids()
-    issues.extend(_tool_access_issues(package, package_tools, inherited_mcp_tools))
+    model_tool_ids = model_tool_ids_from_contract(package.contracts.get("model"))
+    issues.extend(_tool_access_issues(package, package_tools, inherited_mcp_tools, model_tool_ids))
     issues.extend(_mcp_inheritance_materialization_issues(root, package, inherited_mcp_tools))
-    issues.extend(_scheduler_tool_target_issues(package, package_tools, inherited_mcp_tools))
+    issues.extend(_scheduler_tool_target_issues(package, package_tools, inherited_mcp_tools, model_tool_ids))
     if not issues:
         return None
     return _issues_report(
@@ -980,8 +994,8 @@ def _runtime_pattern_alignment_issues(package: Any) -> list[PackageValidationIss
             path="agent_package.json",
             expected="agent_package.json.runtime.pattern_id equals assembly_spec.json.runtime.pattern_id.",
             actual=f"agent_package.json={manifest_pattern or '<empty>'}; assembly_spec.json={assembly_pattern or '<empty>'}",
-            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') with the selected built-in pattern so manifest, assembly, and render stay aligned.",
-            target_files=["agent_package.json", "assembly_spec.json", "render_manifest.json"],
+            repair_hint="Call create_agent_authoring(action='configure_pattern_assembly') with the selected built-in pattern so manifest and assembly stay aligned.",
+            target_files=["agent_package.json", "assembly_spec.json"],
             recommended_skill="01-package-identity-system",
         )
     ]
@@ -1382,7 +1396,7 @@ def _package_tool_probe_report(
 
 def _manifest_asset_index_issues(root: Path, manifest: Any, package_tools: dict[str, Any]) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
-    expected_tools = {f"tools/{tool_id}/manifest.json" for tool_id in package_tools}
+    expected_tools = {package_tool_manifest_path(tool_id) for tool_id in package_tools}
     issues.extend(_asset_index_issues(
         root,
         field_name="tools",
@@ -1445,12 +1459,13 @@ def _assembly_tool_issues(package: Any, package_tools: dict[str, Any]) -> list[P
                 expected="assembly_spec.tools contains a ToolSpec object for every package tool manifest.",
                 actual=f"missing {tool_id}",
                 repair_hint="Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') so assembly_spec.tools matches the package tool manifest.",
-                target_files=["assembly_spec.json", f"tools/{tool_id}/manifest.json"],
+                target_files=["assembly_spec.json", package_tool_manifest_path(tool_id)],
                 recommended_skill="12-assembly-pattern-system",
             ))
             continue
         mismatches = _tool_spec_mismatches(package_spec, assembly_spec)
         if mismatches:
+            mismatch_details = _tool_spec_mismatch_details(package_spec, assembly_spec, mismatches)
             issues.append(_contract_issue(
                 where="assembly.tools_manifest_mismatch",
                 summary=f"assembly ToolSpec for {tool_id} does not match package manifest",
@@ -1459,8 +1474,9 @@ def _assembly_tool_issues(package: Any, package_tools: dict[str, Any]) -> list[P
                 expected="assembly_spec.tools ToolSpec fields match tools/<id>/manifest.json.",
                 actual=", ".join(mismatches),
                 repair_hint="Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') so assembly_spec.tools and the package tool manifest match.",
-                target_files=["assembly_spec.json", f"tools/{tool_id}/manifest.json"],
+                target_files=["assembly_spec.json", package_tool_manifest_path(tool_id)],
                 recommended_skill="12-assembly-pattern-system",
+                details={"mismatches": mismatch_details},
             ))
     return issues
 
@@ -1517,7 +1533,7 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
             where="dependencies.package_tool_imports",
             summary=f"package tool {tool_id} imports undeclared Python dependencies",
             message=(
-                f"tools/{tool_id} imports third-party modules but contracts/dependencies.json "
+                f"{package_tool_directory_path(tool_id)} imports third-party modules but contracts/dependencies.json "
                 f"config.python_requirements is empty. External imports: {', '.join(external_imports)}"
             ),
             path="contracts/dependencies.json",
@@ -1546,7 +1562,7 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
                     "tool_spec": {
                         "id": tool_id,
                         "description": "<specific runtime capability>",
-                        "entrypoint": f"python:tools/{tool_id}/tool.py:run",
+                        "entrypoint": package_tool_entrypoint(tool_id),
                         "input_schema": {"type": "object", "additionalProperties": True},
                         "output_schema": {"type": "object", "additionalProperties": True},
                         "resources": {},
@@ -1643,9 +1659,14 @@ def _tool_access_issues(
     package: Any,
     package_tools: dict[str, Any],
     inherited_mcp_tools: set[str],
+    model_tool_ids: set[str],
 ) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
-    legal_tool_ids = _legal_runtime_tool_ids(package_tools=package_tools, inherited_mcp_tools=inherited_mcp_tools)
+    legal_tool_ids = _legal_runtime_tool_ids(
+        package_tools=package_tools,
+        inherited_mcp_tools=inherited_mcp_tools,
+        model_tool_ids=model_tool_ids,
+    )
     pattern_id = str(getattr(getattr(package.assembly_spec, "runtime", None), "pattern_id", "") or "")
     if pattern_id == PLAN_AND_EXECUTE_PATTERN_ID:
         legal_tool_ids.add(RUNTIME_PLAN_TOOL_ID)
@@ -1671,19 +1692,24 @@ def _tool_access_issues(
                 issues.append(_contract_issue(
                     where="assembly.tool_access.unknown_tool",
                     summary=f"tool_access references unknown tool {tool_id}",
-                    message=f"{tool_id} is not an implemented runtime builtin tool and not a package tool.",
+                    message=f"{tool_id} is not an implemented runtime builtin, model, MCP, skill, or package tool.",
                     path="assembly_spec.json",
-                    expected="tool_access.allowed_tool_ids contains runtime builtin, generated package, inherited MCP, or runtime skill tool ids.",
+                    expected="tool_access.allowed_tool_ids contains runtime builtin, model, generated package, inherited MCP, or runtime skill tool ids.",
                     actual=tool_id,
-                    repair_hint="Use create_agent_authoring(action='configure_pattern_assembly') with implemented runtime builtin, generated package, inherited MCP, or runtime skill tool ids. If the tool should be package-owned, create it through create_agent_authoring(action='upsert_package_tool') first; if it is a SkillHub skill, install it with skillhub when the skill should be bundled now.",
+                    repair_hint="Use create_agent_authoring(action='configure_pattern_assembly') with implemented runtime builtin, model, generated package, inherited MCP, or runtime skill tool ids. If the tool is an auxiliary model tool, bind it through create_agent_authoring(action='configure_model_bindings', tool_bindings=...). If the tool should be package-owned, create it through create_agent_authoring(action='upsert_package_tool') first; if it is a SkillHub skill, install it with skillhub when the skill should be bundled now.",
                     target_files=["assembly_spec.json", "contracts/tools.json", "tools/"],
                     recommended_skill="09-tools-system",
                 ))
     return issues
 
 
-def _legal_runtime_tool_ids(*, package_tools: dict[str, Any], inherited_mcp_tools: set[str]) -> set[str]:
-    return set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools) | {SKILL_TOOL_ID}
+def _legal_runtime_tool_ids(
+    *,
+    package_tools: dict[str, Any],
+    inherited_mcp_tools: set[str],
+    model_tool_ids: set[str],
+) -> set[str]:
+    return set(get_builtin_tool_ids()) | set(package_tools) | set(inherited_mcp_tools) | set(model_tool_ids) | {SKILL_TOOL_ID}
 
 
 def _mcp_inheritance_materialization_issues(root: Path, package: Any, inherited_mcp_tools: set[str]) -> list[PackageValidationIssue]:
@@ -1742,9 +1768,14 @@ def _scheduler_tool_target_issues(
     package: Any,
     package_tools: dict[str, Any],
     inherited_mcp_tools: set[str],
+    model_tool_ids: set[str],
 ) -> list[PackageValidationIssue]:
     issues: list[PackageValidationIssue] = []
-    legal_tool_ids = _legal_runtime_tool_ids(package_tools=package_tools, inherited_mcp_tools=inherited_mcp_tools)
+    legal_tool_ids = _legal_runtime_tool_ids(
+        package_tools=package_tools,
+        inherited_mcp_tools=inherited_mcp_tools,
+        model_tool_ids=model_tool_ids,
+    )
     contract = package.contracts.get("scheduler_seed")
     if not isinstance(contract, SchedulerSeedContract):
         return issues
@@ -1785,6 +1816,18 @@ def _tool_spec_mismatches(left: Any, right: Any) -> list[str]:
     right_payload = right.model_dump(mode="json") if hasattr(right, "model_dump") else dict(right)
     keys = ("description", "entrypoint", "input_schema", "output_schema", "resources", "risk_level", "concurrent")
     return [key for key in keys if left_payload.get(key) != right_payload.get(key)]
+
+
+def _tool_spec_mismatch_details(left: Any, right: Any, keys: list[str]) -> dict[str, dict[str, Any]]:
+    left_payload = left.model_dump(mode="json") if hasattr(left, "model_dump") else dict(left)
+    right_payload = right.model_dump(mode="json") if hasattr(right, "model_dump") else dict(right)
+    return {
+        key: {
+            "package_manifest": left_payload.get(key),
+            "assembly_spec": right_payload.get(key),
+        }
+        for key in keys
+    }
 
 
 def _manufacturing_tool_ids() -> set[str]:
@@ -1867,11 +1910,11 @@ def _probe_issue(
         where="package_tool_probe",
         summary=summary,
         message=summary,
-        path=f"tools/{tool_id}",
+        path=package_tool_directory_path(tool_id),
         expected="Generated package tools have fresh successful-path create_agent_probe_tool evidence before publish.",
         actual=actual,
         repair_hint=repair_hint,
-        target_files=[f"tools/{tool_id}/manifest.json", f"tools/{tool_id}/tool.py", "assembly_spec.json"],
+        target_files=[package_tool_manifest_path(tool_id), package_tool_source_path(tool_id), "assembly_spec.json"],
         recommended_skill="10-package-tool-system",
         details=details,
     )
@@ -1947,10 +1990,8 @@ def _recommended_resources(skill: str, target_files: list[str]) -> list[str]:
         "07-memory-system": "memory_system",
         "08-knowledge-system": "knowledge_system",
         "09-tools-system": "tools_system",
-        "13-render-event-system": "render_event_system",
         "14-scheduler-system": "scheduler_system",
         "15-scheduler-seed-system": "scheduler_seed_system",
-        "16-trace-artifact-system": "trace_artifact_system",
         "17-final-validation-repair": "final_validation",
     }.get(skill, skill.replace("-", "_"))
     return [f"references/{artifact}.repair_hints.md"]
@@ -1970,9 +2011,6 @@ def _skill_for_targets(target_files: list[str]) -> str:
         ("contracts/tools", "10-package-tool-system"),
         ("contracts/scheduler_seed", "15-scheduler-seed-system"),
         ("contracts/scheduler", "14-scheduler-system"),
-        ("contracts/trace", "16-trace-artifact-system"),
-        ("contracts/artifact", "16-trace-artifact-system"),
-        ("contracts/render", "13-render-event-system"),
         ("agent_package.json", "01-package-identity-system"),
         ("assembly_spec.json", "12-assembly-pattern-system"),
     ]

@@ -6,7 +6,7 @@ Use this reference only when deciding where a requested evolution belongs.
 | --- | --- | --- |
 | Add or change executable behavior | `tools/<tool_id>/tool.py`, ToolSpec, dependencies, assembly exposure | `create_agent_authoring(action="upsert_package_tool")` |
 | Change only dependency metadata | `contracts/dependencies.json` | `create_agent_authoring(action="configure_dependencies")` |
-| Change plan/executor/final answer behavior | `assembly_spec.json`, `render_manifest.json` | `create_agent_authoring(action="configure_pattern_assembly")` |
+| Change plan/executor/final answer behavior | `assembly_spec.json` | `create_agent_authoring(action="configure_pattern_assembly")` |
 | Change package identity text | `agent_package.json`, `assembly_spec.json` | `create_agent_authoring(action="set_identity")` |
 | Add package knowledge file | `knowledge/*`, `contracts/knowledge.json` if needed | `create_agent_authoring(action="upsert_knowledge_file")` |
 | Add runtime resources | `resources.json`, `contracts/resources.json` | `create_agent_authoring(action="upsert_resources")` |

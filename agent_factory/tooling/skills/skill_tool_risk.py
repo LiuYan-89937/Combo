@@ -67,7 +67,7 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
-                reasons=["skill resource read is restricted to enabled skill resources"],
+                reasons=["skill resource read is restricted to enabled skill resources or script sources"],
                 facts={"skill": name, "path": path, "mode": mode, "current_system": current_system},
             ).model_dump(mode="json")
         if action == "read_repair_resources":

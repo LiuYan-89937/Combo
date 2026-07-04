@@ -19,6 +19,7 @@ from agent_factory.tooling.spec import ToolRiskResult, ToolSpec
 PACKAGE_ROOT = Path("/package")
 ARTIFACTS_ROOT = Path("/artifacts")
 RUNTIME_ROOT = Path("/runtime")
+WORKDIR_ROOT = Path("/workdir")
 
 
 def main() -> int:
@@ -141,6 +142,8 @@ def _probe_resources() -> dict[str, Any]:
     return {
         "package_root": str(PACKAGE_ROOT),
         "runtime_root": str(RUNTIME_ROOT),
+        "artifacts_root": str(ARTIFACTS_ROOT),
+        "workdir_root": str(WORKDIR_ROOT),
         "workspace_root": str(PACKAGE_ROOT),
         TOOL_OUTPUT_STORE_RESOURCE: ToolOutputStore(RUNTIME_ROOT / "tool_outputs"),
     }

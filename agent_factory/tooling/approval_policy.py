@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -130,6 +132,19 @@ def default_tool_approval_policy() -> ToolApprovalPolicyConfig:
 def resolve_tool_approval_policy(package_policy: ToolApprovalPolicyConfig | None) -> ToolApprovalPolicyConfig:
     policy = default_tool_approval_policy()
     return merge_tool_approval_policy(policy, package_policy)
+
+
+def load_tool_approval_policy_file(path: str | Path) -> ToolApprovalPolicyConfig | None:
+    policy_path = Path(path).expanduser()
+    if not policy_path.is_file():
+        return None
+    payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{policy_path.name} must contain a JSON object")
+    policy_payload = payload.get("policy", payload)
+    if not isinstance(policy_payload, dict):
+        raise ValueError(f"{policy_path.name} policy must contain a JSON object")
+    return ToolApprovalPolicyConfig.model_validate(policy_payload)
 
 
 def merge_tool_approval_policy(

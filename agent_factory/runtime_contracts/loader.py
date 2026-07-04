@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
-from agent_factory.runtime_render import RenderManifest
+
+DEFAULT_SANDBOX_CONTRACT: dict[str, Any] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +17,6 @@ class LoadedAgentPackage:
     manifest_path: Path
     manifest: AgentPackageManifest
     assembly_spec: Any
-    render_manifest: RenderManifest
     resources: dict[str, Any]
     sandbox_contract: dict[str, Any]
     contracts: dict[str, dict[str, Any]]
@@ -31,11 +31,7 @@ class AgentPackageLoader:
         assembly_spec = _agent_assembly_spec_model().model_validate_json(
             _read_package_file(package_root, manifest.assembly_spec_path)
         )
-        render_manifest = RenderManifest.model_validate_json(
-            _read_package_file(package_root, manifest.render_manifest_path)
-        )
         resources = _json_object(_read_package_file(package_root, manifest.resources_path), "resources")
-        sandbox_contract = _json_object(_read_package_file(package_root, manifest.sandbox_contract_path), "sandbox_contract")
         contracts = {
             key: _json_object(_read_package_file(package_root, value), f"contracts.{key}")
             for key, value in manifest.contracts.items()
@@ -45,9 +41,8 @@ class AgentPackageLoader:
             manifest_path=manifest_path,
             manifest=manifest,
             assembly_spec=assembly_spec,
-            render_manifest=render_manifest,
             resources=resources,
-            sandbox_contract=sandbox_contract,
+            sandbox_contract=dict(DEFAULT_SANDBOX_CONTRACT),
             contracts=contracts,
         )
 

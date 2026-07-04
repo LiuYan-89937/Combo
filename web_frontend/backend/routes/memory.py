@@ -13,8 +13,8 @@ from agent_factory.memory_system.injection import MemorySystemRuntime, default_a
 from agent_factory.memory_system.retrieval import retrieve_memory_context
 from agent_factory.memory_system.schema import MemoryContextPack
 from agent_factory.memory_system.store_index import build_memory_store_index
-from agent_factory.runtime_contracts.builder import RuntimeBuildContext
-from agent_factory.runtime_contracts.paths import package_runtime_path_text
+from agent_factory.runtime_contracts.builder import runtime_build_context
+from agent_factory.runtime_contracts.memory_config import resolve_memory_system_config
 from agent_factory.runtime_contracts.schema import MemoryContract
 from agent_factory.runtime_kernel.persistence import LangGraphStoreConfig, LangGraphStoreFactory
 from web_frontend.backend.runtime_bridge import RuntimeBridge
@@ -144,46 +144,11 @@ def _build_existing_store(*, config: MemorySystemConfig, store_config: LangGraph
 def _agent_memory_config(*, package: Any, runtime_root: Path) -> MemorySystemConfig:
     payload = package.contracts.get("memory")
     contract = MemoryContract.model_validate(payload or {})
-    context = RuntimeBuildContext(
-        package_root=package.package_root,
-        runtime_root=runtime_root,
-        package=package,
-        resources=dict(package.resources or {}),
-        tool_runtime_resources={},
-        sandbox_contract=dict(package.sandbox_contract or {}),
-    )
+    context = runtime_build_context(package, runtime_root=runtime_root)
     config = contract.config.memory_system
     if not contract.enabled:
         config = config.model_copy(update={"enabled": False}, deep=True)
-    store = config.store
-    background = config.background
-    return config.model_copy(
-        update={
-            "store": (
-                store.model_copy(
-                    update={
-                        "path": package_runtime_path_text(
-                            context,
-                            store.path,
-                            field_path="memory.config.memory_system.store.path",
-                        )
-                    }
-                )
-                if store.backend == "sqlite" and store.path.strip()
-                else store
-            ),
-            "background": background.model_copy(
-                update={
-                    "journal_root": package_runtime_path_text(
-                        context,
-                        background.journal_root,
-                        field_path="memory.config.memory_system.background.journal_root",
-                    )
-                }
-            ),
-        },
-        deep=True,
-    )
+    return resolve_memory_system_config(config, context)
 
 
 def _pack_response(pack: MemoryContextPack, *, package_id: str | None) -> dict[str, Any]:

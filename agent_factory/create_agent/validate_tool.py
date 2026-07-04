@@ -5,6 +5,7 @@ from typing import Any
 
 from agent_factory.create_agent.control_tool import CREATE_AGENT_WORKSPACE_RESOURCE
 from agent_factory.create_agent.models import PackageValidationState
+from agent_factory.create_agent.stage_sync import sync_validation_stage
 from agent_factory.create_agent.validation_state import (
     changed_files,
     package_fingerprint,
@@ -88,12 +89,14 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     changed = changed_files(previous_state.package_fingerprint if previous_state else {}, current_fingerprint)
     report = CreateAgentPackageValidator().validate(workspace.root, scope=scope, changed_files=changed)
     workspace.write_validation(report)
+    synced_state = sync_validation_stage(workspace, report)
+    synced_active = synced_state.active_stage()
     workspace.write_validation_state(
         PackageValidationState(
             package_fingerprint=current_fingerprint,
             probe_digest=current_probe_digest,
             validation_scope=report.validation_scope,
-            active_focus_id=active_focus_id,
+            active_focus_id=synced_active.system_id if synced_active else active_focus_id,
             updated_at=datetime.now(UTC).isoformat(),
         )
     )
@@ -101,7 +104,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         {
             "scope": requested_scope,
             "reason": reason,
-            "active_focus_id": active_focus_id,
+            "active_focus_id": synced_active.system_id if synced_active else active_focus_id,
             "validation_path": str(workspace.validation_path),
             "validation_state_path": str(workspace.validation_state_path),
             "package_fingerprint": current_fingerprint,

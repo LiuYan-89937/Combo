@@ -10,7 +10,8 @@ from typing import Any
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.create_agent.contract_catalog import base_contract_paths, default_contract_payload
 from agent_factory.create_agent.mcp_inheritance import materialize_referenced_factory_mcp
-from agent_factory.create_agent.package_scaffold import _default_render_manifest
+from agent_factory.create_agent.model_tool_access import model_tool_ids_from_package_root
+from agent_factory.create_agent.stage_sync import sync_authoring_stage
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.runtime_kernel.activation import PLAN_AND_EXECUTE_ACTIVATION_FIELDS
 from agent_factory.runtime_contracts.schema import (
@@ -26,6 +27,13 @@ from agent_factory.runtime_contracts.schema import (
 )
 from agent_factory.scheduler_system.schema import SchedulerSeedPlan
 from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.package_tool_spec import (
+    package_tool_directory_path,
+    package_tool_manifest_path,
+    package_tool_source_path,
+    validate_package_tool_entrypoint,
+    validate_package_tool_source,
+)
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
 
 
@@ -325,10 +333,20 @@ def _tool_spec_authoring_schema() -> dict[str, Any]:
         "properties": {
             "id": {"type": "string"},
             "description": {"type": "string"},
-            "entrypoint": {"type": "string"},
+            "entrypoint": {
+                "type": "string",
+                "description": "Generated package tools must use the canonical package-local entrypoint.",
+            },
             "input_schema": schema_object,
             "output_schema": schema_object,
-            "resources": {"type": "object", "additionalProperties": {"type": "string"}},
+            "resources": {
+                "type": "object",
+                "description": (
+                    "Map local resource names to runtime selectors. Common selectors include artifacts_root, "
+                    "workdir_root, runtime_root, package_root, and workspace_root. Values must be strings."
+                ),
+                "additionalProperties": {"type": "string"},
+            },
             "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
             "risk_evaluator": {
                 "type": "object",
@@ -418,6 +436,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         result = _materialize_mcp_inheritance(workspace)
     else:
         result = _upsert_state(workspace, arguments)
+    sync_authoring_stage(workspace, action)
     return tool_envelope(result, evidence={"authoring": result}, summary=result["summary"])
 
 
@@ -473,10 +492,12 @@ def _configure_pattern_assembly(workspace: CreateAgentWorkspace, arguments: dict
     if pattern_id not in SUPPORTED_PATTERN_IDS:
         raise ValueError("pattern_id must be react_agent or plan_and_execute")
     prompts = _pattern_prompts(pattern_id=pattern_id, value=arguments.get("prompts"))
-    allowed_tool_ids = _string_list(arguments.get("allowed_tool_ids"))
+    allowed_tool_ids = _runtime_tool_ids_for_assembly(
+        workspace,
+        _string_list(arguments.get("allowed_tool_ids")),
+    )
     manifest_path = workspace.root / "agent_package.json"
     assembly_path = workspace.root / "assembly_spec.json"
-    render_path = workspace.root / "render_manifest.json"
     manifest = _read_json(manifest_path)
     assembly = _read_json(assembly_path)
     manifest.setdefault("runtime", {})["pattern_id"] = pattern_id
@@ -491,10 +512,8 @@ def _configure_pattern_assembly(workspace: CreateAgentWorkspace, arguments: dict
     assembly["bindings"] = _standard_bindings(pattern_id=pattern_id, prompts=prompts, allowed_tool_ids=allowed_tool_ids)
     manifest_payload = AgentPackageManifest.model_validate(manifest).model_dump(mode="json", exclude_none=True)
     assembly_payload = _validated_assembly(assembly)
-    render_payload = _default_render_manifest(pattern_id).model_dump(mode="json")
     _write_json(manifest_path, manifest_payload)
     _write_json(assembly_path, assembly_payload)
-    _write_json(render_path, render_payload)
     written = _configured_pattern_written_summary(
         pattern_id=pattern_id,
         agent_config=agent_config,
@@ -503,7 +522,7 @@ def _configure_pattern_assembly(workspace: CreateAgentWorkspace, arguments: dict
     )
     return _result(
         "configure_pattern_assembly",
-        ["agent_package.json", "assembly_spec.json", "render_manifest.json"],
+        ["agent_package.json", "assembly_spec.json"],
         f"Configured standard {pattern_id} assembly.",
         written=written,
     )
@@ -551,16 +570,17 @@ def _pattern_prompts(*, pattern_id: str, value: Any) -> dict[str, str]:
 
 def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
     spec_payload = _required_tool_spec_payload(arguments)
+    tool_id = _package_tool_id(str(spec_payload.get("id") or ""))
+    validate_package_tool_entrypoint(tool_id, str(spec_payload.get("entrypoint") or ""))
     spec = ToolSpec.model_validate(spec_payload)
-    tool_id = _package_tool_id(spec.id)
     source = str(arguments.get("tool_source") or "")
     if not source.strip():
         raise ValueError("tool_source is required")
-    ast.parse(source)
+    source_tree = validate_package_tool_source(source)
     python_requirements = _string_list(arguments.get("python_requirements"))
     system_packages = _string_list(arguments.get("system_packages"))
     system_binaries = _string_list(arguments.get("system_binaries"))
-    third_party_imports = _third_party_import_roots(source)
+    third_party_imports = _third_party_import_roots(source_tree)
     if third_party_imports and not python_requirements:
         raise ValueError(
             "python_requirements is required before package tool files are written because tool_source imports third-party modules: "
@@ -570,11 +590,11 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     tools_contract_path = workspace.root / "contracts" / "tools.json"
     dependencies_path = workspace.root / "contracts" / "dependencies.json"
     assembly_path = workspace.root / "assembly_spec.json"
-    tool_dir = workspace.root / "tools" / tool_id
+    tool_dir = workspace.root / package_tool_directory_path(tool_id)
     tool_manifest_path = tool_dir / "manifest.json"
     tool_source_path = tool_dir / "tool.py"
     manifest = _read_json(manifest_path)
-    _append_unique(manifest.setdefault("tools", []), f"tools/{tool_id}/manifest.json")
+    _append_unique(manifest.setdefault("tools", []), package_tool_manifest_path(tool_id))
     manifest_payload = AgentPackageManifest.model_validate(manifest).model_dump(mode="json", exclude_none=True)
 
     tools_contract = _read_json(tools_contract_path)
@@ -609,8 +629,8 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     _write_json(dependencies_path, dependencies_payload)
     _write_json(assembly_path, assembly_payload)
     changed = [
-        f"tools/{tool_id}/manifest.json",
-        f"tools/{tool_id}/tool.py",
+        package_tool_manifest_path(tool_id),
+        package_tool_source_path(tool_id),
         "agent_package.json",
         "contracts/tools.json",
         "contracts/dependencies.json",
@@ -640,23 +660,44 @@ def _required_tool_spec_payload(arguments: dict[str, Any]) -> dict[str, Any]:
         )
     input_schema = payload.get("input_schema")
     if isinstance(input_schema, dict):
-        misplaced = sorted(
-            set(input_schema)
-            & {
-                "entrypoint",
-                "output_schema",
-                "resources",
-                "risk_level",
-                "risk_evaluator",
-                "concurrent",
-            }
-        )
+        misplaced = _misplaced_tool_spec_fields(input_schema)
         if misplaced:
             raise ValueError(
-                "ToolSpec fields must be top-level tool_spec fields, not nested inside tool_spec.input_schema: "
+                "ToolSpec fields must be top-level tool_spec fields, not nested inside tool_spec.input_schema or "
+                "tool_spec.input_schema.properties: "
                 + ", ".join(misplaced)
             )
+    resources = payload.get("resources")
+    if isinstance(resources, dict):
+        non_string_resources = sorted(
+            str(key)
+            for key, value in resources.items()
+            if not isinstance(value, str) or not value.strip()
+        )
+        if non_string_resources:
+            raise ValueError(
+                "tool_spec.resources must map local resource names to string runtime selectors, "
+                "for example {'artifacts_root': 'artifacts_root'}. Invalid keys: "
+                + ", ".join(non_string_resources)
+            )
     return payload
+
+
+def _misplaced_tool_spec_fields(input_schema: dict[str, Any]) -> list[str]:
+    reserved = {
+        "entrypoint",
+        "output_schema",
+        "resources",
+        "risk_level",
+        "risk_evaluator",
+        "concurrent",
+        "output_compression",
+    }
+    misplaced = set(input_schema) & reserved
+    properties = input_schema.get("properties")
+    if isinstance(properties, dict):
+        misplaced.update(set(properties) & reserved)
+    return sorted(misplaced)
 
 
 def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -701,9 +742,18 @@ def _configure_model_bindings(workspace: CreateAgentWorkspace, arguments: dict[s
     payload = contract.model_dump(mode="json")
     path = workspace.root / "contracts" / "model.json"
     _write_json(path, payload)
+    changed_files = ["contracts/model.json"]
+    assembly_path = workspace.root / "assembly_spec.json"
+    if assembly_path.is_file():
+        assembly = _read_json(assembly_path)
+        if _model_tools_need_assembly_sync(assembly):
+            _add_runtime_model_tool_access(assembly, sorted(contract.config.tool_bindings))
+            assembly_payload = _validated_assembly(assembly)
+            _write_json(assembly_path, assembly_payload)
+            changed_files.append("assembly_spec.json")
     return _result(
         "configure_model_bindings",
-        ["contracts/model.json"],
+        changed_files,
         "Updated model pool profile bindings.",
         written={"model": payload.get("config", {})},
     )
@@ -747,30 +797,30 @@ def _remove_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     manifest["tools"] = [
         item
         for item in (manifest.get("tools") if isinstance(manifest.get("tools"), list) else [])
-        if str(item) != f"tools/{tool_id}/manifest.json"
+        if str(item) != package_tool_manifest_path(tool_id)
     ]
     assembly["tools"] = [
         item
         for item in (assembly.get("tools") if isinstance(assembly.get("tools"), list) else [])
         if not (isinstance(item, dict) and str(item.get("id") or "") == tool_id)
     ]
-    _remove_tool_access(assembly, tool_id)
+    if tool_id not in model_tool_ids_from_package_root(workspace.root):
+        _remove_tool_access(assembly, tool_id)
     manifest_payload = AgentPackageManifest.model_validate(manifest).model_dump(mode="json", exclude_none=True)
     assembly_payload = _validated_assembly(assembly)
-    tool_dir = workspace.root / "tools" / tool_id
+    tool_dir = workspace.root / package_tool_directory_path(tool_id)
     _write_json(manifest_path, manifest_payload)
     _write_json(assembly_path, assembly_payload)
     if tool_dir.exists():
         shutil.rmtree(tool_dir)
     return _result(
         "remove_package_tool",
-        ["agent_package.json", "assembly_spec.json", f"tools/{tool_id}"],
+        ["agent_package.json", "assembly_spec.json", package_tool_directory_path(tool_id)],
         f"Removed package tool {tool_id}.",
     )
 
 
-def _third_party_import_roots(source: str) -> set[str]:
-    tree = ast.parse(source)
+def _third_party_import_roots(tree: ast.AST) -> set[str]:
     imports: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -918,7 +968,7 @@ def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool
     final_prompt = str(prompts["final_answer"])
     casual_prompt = str(
         prompts.get("casual")
-        or "Handle non-main-workflow user requests with normal ReAct tool use. Use available tools to inspect workspace context when needed, ask a concise clarification only when tool/context discovery cannot identify a safe target, and do not create or update runtime_plan."
+        or "Handle non-main-workflow user requests with normal ReAct tool use. Use available tools to inspect workspace context when needed. If read reports a missing file or the path is uncertain, inspect the parent or nearby directory with ls before retrying read with the exact path. Ask a concise clarification only when tool/context discovery cannot identify a safe target, and do not create or update runtime_plan."
     )
     executor_tools = _unique_strings(
         [
@@ -954,6 +1004,35 @@ def _standard_bindings(*, pattern_id: str, prompts: dict[str, Any], allowed_tool
         ],
         "hooks": [],
     }
+
+
+def _runtime_tool_ids_for_assembly(workspace: CreateAgentWorkspace, allowed_tool_ids: list[str]) -> list[str]:
+    return _unique_strings([*allowed_tool_ids, *sorted(model_tool_ids_from_package_root(workspace.root))])
+
+
+def _model_tools_need_assembly_sync(assembly: dict[str, Any]) -> bool:
+    pattern_id = str((assembly.get("runtime") if isinstance(assembly.get("runtime"), dict) else {}).get("pattern_id") or "")
+    if pattern_id not in SUPPORTED_PATTERN_IDS:
+        return False
+    bindings = assembly.get("bindings") if isinstance(assembly.get("bindings"), dict) else {}
+    node_bindings = bindings.get("node_bindings")
+    return isinstance(node_bindings, list) and any(
+        isinstance(binding, dict) and binding.get("binding_type") == "tool_access"
+        for binding in node_bindings
+    )
+
+
+def _add_runtime_model_tool_access(assembly: dict[str, Any], tool_ids: list[str]) -> None:
+    pattern_id = str((assembly.get("runtime") if isinstance(assembly.get("runtime"), dict) else {}).get("pattern_id") or "react_agent")
+    nodes = _execution_tool_nodes(pattern_id)
+    for tool_id in _unique_strings(tool_ids):
+        _add_tool_access(assembly, tool_id, expose_to_nodes=nodes)
+
+
+def _execution_tool_nodes(pattern_id: str) -> list[str]:
+    if pattern_id == "plan_and_execute":
+        return ["executor", "casual_react", "final_answer"]
+    return ["answer"]
 
 
 def _prompt_binding(node_id: str, impl: str, prompt_id: str, template: str) -> dict[str, Any]:
@@ -1029,11 +1108,11 @@ def _add_tool_access(assembly: dict[str, Any], tool_id: str, *, expose_to_nodes:
     default_nodes = ["executor", "casual_react"] if pattern_id == "plan_and_execute" else ["answer"]
     node_ids = expose_to_nodes or default_nodes
     if pattern_id == "plan_and_execute":
-        valid_nodes = {"executor", "casual_react"}
+        valid_nodes = {"executor", "casual_react", "final_answer"}
         invalid_nodes = sorted({node_id for node_id in node_ids if node_id not in valid_nodes})
         if invalid_nodes:
             raise ValueError(
-                "plan_and_execute package tools can only be exposed to executor or casual_react; "
+                "plan_and_execute tools can only be exposed to executor, casual_react, or final_answer; "
                 f"invalid expose_to_nodes: {', '.join(invalid_nodes)}"
             )
     bindings = assembly.setdefault("bindings", {}).setdefault("node_bindings", [])
@@ -1042,6 +1121,7 @@ def _add_tool_access(assembly: dict[str, Any], tool_id: str, *, expose_to_nodes:
         "planner": "cognitive.answer",
         "executor": "cognitive.answer",
         "casual_react": "cognitive.answer",
+        "final_answer": "cognitive.answer",
     }
     for node_id in node_ids:
         binding = _find_tool_access_binding(bindings, node_id)

@@ -14,12 +14,14 @@ from agent_factory.tooling.entrypoint import ToolEntrypointLoader
 from agent_factory.tooling.entrypoints import EntrypointAdapterRegistry, MCPToolClient
 from agent_factory.tooling.execution_context import current_tool_call
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig, default_tool_approval_policy
+from agent_factory.tooling.envelope import is_tool_envelope, tool_envelope
 from agent_factory.tooling.gateway import (
     ToolApprovalHandler,
     ToolExecutionGateway,
     default_tool_max_revisions,
 )
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore, default_tool_output_policy
+from agent_factory.tooling.package_tool_spec import is_package_tool_entrypoint
 from agent_factory.tooling.risk import ToolRiskEvaluator
 from agent_factory.tooling.schema_compiler import compile_json_schema
 from agent_factory.tooling.spec import ToolSpec
@@ -65,6 +67,7 @@ class ToolCompiler:
             input_schema = compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_args")
             output_schema = compile_json_schema(schema=spec.output_schema, model_name=f"{spec.id}_output")
             entrypoint = self.loader.load(spec.entrypoint)
+            entrypoint = _entrypoint_for_spec(spec, entrypoint)
             hard_risk_evaluator = self._load_hard_risk_evaluator(spec)
             llm_risk_prompt = self._load_llm_risk_prompt(spec)
         except Exception as exc:
@@ -217,6 +220,25 @@ def _schema_accepts_null(schema: dict[str, Any]) -> bool:
 def _output_store_from_resources(resources: Mapping[str, Any]) -> ToolOutputStore | None:
     value = resources.get(TOOL_OUTPUT_STORE_RESOURCE)
     return value if isinstance(value, ToolOutputStore) else None
+
+
+def _entrypoint_for_spec(spec: ToolSpec, entrypoint):
+    if spec.permission_scope != "package" or not is_package_tool_entrypoint(spec.id, spec.entrypoint):
+        return entrypoint
+
+    def invoke(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+        output = entrypoint(arguments=arguments, resources=resources)
+        if is_tool_envelope(output):
+            return output
+        if isinstance(output, dict):
+            return tool_envelope(
+                output,
+                evidence={"package_tool_output": {"wrapped_raw_output": True}},
+                summary=f"Package tool {spec.id} completed.",
+            )
+        return output
+
+    return invoke
 
 
 @contextmanager

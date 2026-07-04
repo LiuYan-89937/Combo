@@ -634,7 +634,6 @@ class AgentPackageRuntimeManager:
             package = self.repository.load_manifest(manifest_path)
             report = _read_json_object(manifest_path.parent / "package_report.json")
             sessions = self._list_sessions_for_loaded_package(package)
-            sandbox = _sandbox_summary(package.sandbox_contract)
             detail = _package_detail_summary(self, package_id=package_id, package=package)
             return {
                 "package_id": package_id,
@@ -648,7 +647,6 @@ class AgentPackageRuntimeManager:
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "tool_count": len(package.assembly_spec.tools),
                 "session_count": len(sessions),
-                "sandbox": sandbox,
                 "model_contract": _model_contract_summary(package),
                 "extensions": _extensions_summary(package_id, package=package),
                 **detail,
@@ -661,7 +659,6 @@ class AgentPackageRuntimeManager:
                 "status": "invalid",
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "error": f"{type(exc).__name__}: {exc}",
-                "sandbox": {"status": "unknown"},
                 "model_contract": {"version": "", "bindings": {}, "tool_bindings": {}},
                 "extensions": _extensions_summary(package_id),
                 "tools": [],
@@ -1107,16 +1104,6 @@ def _delete_agent_session_checkpoint(
     checkpoint_path = str(config.get("checkpoint_path") or ".agent_runtime/checkpoints/agent.sqlite").strip()
     path = _runtime_contract_path(_host_runtime_root(package_id), checkpoint_path)
     return 1 if delete_sqlite_checkpoint_thread(path, thread_id) else 0
-
-
-def _sandbox_summary(contract: dict[str, Any]) -> dict[str, Any]:
-    backend = contract.get("backend")
-    if not backend and isinstance(contract.get("config"), dict):
-        backend = contract["config"].get("backend")
-    return {
-        "status": "contract_ready" if contract else "missing_contract",
-        "backend": backend or "unknown",
-    }
 
 
 def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:

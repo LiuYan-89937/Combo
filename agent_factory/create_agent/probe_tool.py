@@ -13,6 +13,7 @@ from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ConfigDict
 
 from agent_factory.create_agent.models import PackageToolProbeRecord
+from agent_factory.create_agent.stage_sync import sync_probe_stage
 from agent_factory.create_agent.validation_state import package_digest, package_fingerprint, package_tool_digest
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import AgentRuntimeLaunchError, DockerAgentRuntimeLauncher
@@ -215,6 +216,11 @@ def _call(
     state.records.append(record)
     state = state.model_copy(update={"updated_at": datetime.now(UTC).isoformat()})
     workspace.write_tool_probe_state(state)
+    sync_probe_stage(
+        workspace,
+        passed=record.status == "passed",
+        success_path=record.probe_kind == "success_path" and not record.only_error_handling_verified,
+    )
     changed_files = _changed_files(before, after)
     transcript = _probe_transcript(direct_probe=direct_probe, record=record)
     _emit_probe_progress(

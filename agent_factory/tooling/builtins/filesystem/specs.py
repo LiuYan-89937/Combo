@@ -14,7 +14,12 @@ _PATH_BOUNDARY_DESCRIPTION = (
     f"默认 sandbox workspace root 是 {DEFAULT_BUILTIN_WORKSPACE_ROOT}。"
     "不要使用 /tmp、宿主机路径或其他任意绝对路径，除非 runtime 显式允许外部路径。"
 )
-_READ_PATH_DESCRIPTION = f"要读取的文件路径。{_PATH_BOUNDARY_DESCRIPTION}"
+_READ_MISSING_GUIDANCE = (
+    "如果 read 提示文件不存在或路径不确定，不要直接断定文件不可用；"
+    "先调用 ls 查看父目录或相近目录，确认真实文件名、大小写、后缀或路径层级后再重试 read。"
+)
+_READ_PATH_DESCRIPTION = f"要读取的文件路径。{_PATH_BOUNDARY_DESCRIPTION}{_READ_MISSING_GUIDANCE}"
+_LS_PATH_DESCRIPTION = f"要列出的目录路径。{_PATH_BOUNDARY_DESCRIPTION}"
 _WRITE_PATH_DESCRIPTION = (
     f"要写入的文件路径。{_PATH_BOUNDARY_DESCRIPTION}"
     "新生成的文件应写入工作区内，例如 output/report.md 或 "
@@ -26,7 +31,10 @@ _BASE_PATH_DESCRIPTION = f"可选搜索根目录。{_PATH_BOUNDARY_DESCRIPTION}"
 FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="read",
-        description="读取 workspace 边界内的指定文本文件内容，按行号返回可控范围。",
+        description=(
+            "读取 workspace 边界内的指定文本文件内容，按行号返回可控范围。"
+            f"{_READ_MISSING_GUIDANCE}"
+        ),
         entrypoint="agent_factory.tooling.builtins.filesystem.read:run",
         input_schema={
             "type": "object",
@@ -275,7 +283,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
         input_schema={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": _READ_PATH_DESCRIPTION},
+                "path": {"type": "string", "description": _LS_PATH_DESCRIPTION},
                 "recursive": {"type": "boolean", "default": False},
                 "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 200},
             },

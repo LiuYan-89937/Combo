@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,16 +38,29 @@ from agent_factory.create_agent.publish_tool import (
     build_create_agent_publish_tool_spec,
 )
 from agent_factory.create_agent.probe_tool import CREATE_AGENT_PROBE_TOOL_ID, build_create_agent_probe_tool_spec
+from agent_factory.create_agent.skillhub_runtime import wrap_create_agent_skillhub_runtime
 from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.create_agent.stage_tool import CREATE_AGENT_STAGE_TOOL_ID, build_create_agent_stage_tool_spec
 from agent_factory.create_agent.validate_tool import CREATE_AGENT_VALIDATE_TOOL_ID, build_create_agent_validate_tool_spec
+from agent_factory.tooling.skillhub.constants import SKILLHUB_RUNTIME_RESOURCE
 from agent_factory.tooling.builtins.resource_set.resource_set import RESOURCE_SET_STORE_KEY, ResourceSetStore
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
+from agent_factory.tooling.approval_policy import (
+    default_tool_approval_policy,
+    load_tool_approval_policy_file,
+    merge_tool_approval_policy,
+)
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.factory_extensions import FactoryExtensionLoadReport, FactoryExtensionManager, default_factory_extension_root
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
-from agent_factory.tooling.providers import BuiltinToolProvider, ToolProviderContext, ToolProviderResult
+from agent_factory.tooling.providers import (
+    BuiltinToolProvider,
+    EnabledSkillsConfig,
+    SkillProvider,
+    ToolProviderContext,
+    ToolProviderResult,
+)
 from agent_factory.tooling.registry import ToolRegistry
 from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
@@ -127,9 +141,12 @@ class CreateAgentToolEnvironmentBuilder:
         builtin_result = BuiltinToolProvider(tool_ids=builtin_tool_ids).discover(builtin_context)
         if authoring_mode:
             extension_result, extension_report = self.extension_manager.discover(context=extension_context)
+            workspace_skill_result = _discover_workspace_skills(package_extension_root, context=builtin_context)
+            _append_workspace_skill_report(extension_report, package_extension_root, workspace_skill_result)
         else:
             extension_result = ToolProviderResult()
             extension_report = FactoryExtensionLoadReport(extension_root=str(factory_extension_root))
+            workspace_skill_result = ToolProviderResult()
         provider_result = builtin_result.merge(extension_result) if authoring_mode else builtin_result
         runtime_resources = {
             **builtin_result.runtime_resources,
@@ -143,6 +160,26 @@ class CreateAgentToolEnvironmentBuilder:
         if authoring_mode:
             runtime_resources[RESOURCE_SET_STORE_KEY] = ResourceSetStore()
             runtime_resources[CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE] = str(factory_artifact_path("packages"))
+        factory_skill_payload = extension_result.runtime_resources.get("skills")
+        workspace_skill_payload = workspace_skill_result.runtime_resources.get("skills")
+        if authoring_mode:
+            def refresh_skill_resource() -> None:
+                _refresh_create_agent_skill_resource(
+                    runtime_resources=runtime_resources,
+                    factory_skill_payload=factory_skill_payload,
+                    package_extension_root=package_extension_root,
+                    package_context=builtin_context,
+                    gateway_state_path=create_agent_workspace.skill_gateway_state_path,
+                    mode=mode,
+                )
+        else:
+            refresh_skill_resource = None
+        if authoring_mode and SKILLHUB_RUNTIME_RESOURCE in runtime_resources:
+            runtime_resources[SKILLHUB_RUNTIME_RESOURCE] = wrap_create_agent_skillhub_runtime(
+                runtime_resources[SKILLHUB_RUNTIME_RESOURCE],
+                package_root=workspace,
+                on_skill_config_changed=refresh_skill_resource,
+            )
         filesystem_resource = runtime_resources.get("filesystem")
         if isinstance(filesystem_resource, dict) and authoring_mode:
             filesystem_resource[CREATE_AGENT_STAGE_CONTEXT_RESOURCE] = runtime_resources[CREATE_AGENT_STAGE_CONTEXT_RESOURCE]
@@ -180,23 +217,18 @@ class CreateAgentToolEnvironmentBuilder:
             filesystem_resource["managed_write_paths"] = {
                 "agent_package.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "assembly_spec.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "render_manifest.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "resources.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/tools.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/dependencies.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/resources.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/scheduler_seed.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/artifact.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/context.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/knowledge.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/model.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/sandbox.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/scheduler.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/session.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/state.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/memory.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/render.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/trace.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "extensions/mcp_servers.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "extensions/enabled_skills.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "extensions/skills": {"write_tool": "skillhub"},
@@ -206,7 +238,7 @@ class CreateAgentToolEnvironmentBuilder:
             }
         if authoring_mode:
             skill_registry = _create_agent_skill_registry(
-                runtime_resources.get("skills"),
+                [factory_skill_payload, workspace_skill_payload],
                 gateway_state=_load_skill_gateway_state(create_agent_workspace.skill_gateway_state_path),
                 mode=mode,
             )
@@ -263,9 +295,14 @@ class CreateAgentToolEnvironmentBuilder:
             extension_specs=extension_specs,
         )
         registry = ToolRegistry(specs)
+        approval_policy = merge_tool_approval_policy(
+            default_tool_approval_policy(),
+            load_tool_approval_policy_file(package_extension_root / "tool_permissions.json"),
+        )
         compiler = ToolCompiler(
             package_root=workspace,
             resources=runtime_resources,
+            approval_policy=approval_policy,
             allowed_python_roots=[factory_extension_root, package_extension_root],
             mcp_clients=self.extension_manager.mcp_tool_clients() if authoring_mode else {},
         )
@@ -302,17 +339,52 @@ def _unique_specs(result: ToolProviderResult, *, extra_specs=()):
     return specs
 
 
+def _discover_workspace_skills(extension_root: Path, *, context: ToolProviderContext) -> ToolProviderResult:
+    config = _load_enabled_skills_config(extension_root)
+    if not config.skills:
+        return ToolProviderResult()
+    return SkillProvider(config=config).discover(context)
+
+
+def _load_enabled_skills_config(extension_root: Path) -> EnabledSkillsConfig:
+    path = extension_root / "enabled_skills.json"
+    if not path.is_file():
+        return EnabledSkillsConfig()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"enabled_skills.json must contain a JSON object: {path}")
+    return EnabledSkillsConfig.model_validate(payload)
+
+
+def _append_workspace_skill_report(
+    report: FactoryExtensionLoadReport,
+    extension_root: Path,
+    result: ToolProviderResult,
+) -> None:
+    enabled_skills_path = extension_root / "enabled_skills.json"
+    if enabled_skills_path.is_file():
+        report.enabled_skills_path = str(enabled_skills_path)
+        report.enabled_skills_paths = _unique_texts([*report.enabled_skills_paths, str(enabled_skills_path)])
+    report.tool_ids = _unique_texts([*report.tool_ids, *(spec.id for spec in result.tool_specs)])
+    report.system_tool_ids = _unique_texts([*report.system_tool_ids, *result.system_tool_ids])
+    report.runtime_dependency_ids = _unique_texts(
+        [*report.runtime_dependency_ids, *(dependency.dependency_id for dependency in result.runtime_dependencies)]
+    )
+    report.diagnostics.extend(diagnostic.model_dump(mode="json") for diagnostic in result.diagnostics)
+
+
 def _create_agent_skill_registry(
     existing_payload: Any,
     *,
     gateway_state: SkillGatewayState | None = None,
     mode: Literal["manufacture", "assist", "evolution"] = "manufacture",
 ) -> SkillRegistry:
-    registry = (
-        SkillRegistry.from_resource_payload(existing_payload)
-        if isinstance(existing_payload, dict)
-        else SkillRegistry()
-    )
+    registry = SkillRegistry()
+    for payload in _skill_payloads(existing_payload):
+        if not isinstance(payload, dict):
+            continue
+        for skill in SkillRegistry.from_resource_payload(payload).packages():
+            registry.register(skill)
     if gateway_state is not None:
         registry.gateway_state = gateway_state
     roots = [EVOLUTION_SKILLS_ROOT] if mode == "evolution" else [CREATE_AGENT_SKILLS_ROOT]
@@ -320,6 +392,33 @@ def _create_agent_skill_registry(
         if root.is_dir():
             _register_skill_root(registry, root)
     return registry
+
+
+def _refresh_create_agent_skill_resource(
+    *,
+    runtime_resources: dict[str, Any],
+    factory_skill_payload: Any,
+    package_extension_root: Path,
+    package_context: ToolProviderContext,
+    gateway_state_path: Path,
+    mode: Literal["manufacture", "assist", "evolution"],
+) -> None:
+    workspace_skill_result = _discover_workspace_skills(package_extension_root, context=package_context)
+    registry = _create_agent_skill_registry(
+        [factory_skill_payload, workspace_skill_result.runtime_resources.get("skills")],
+        gateway_state=_load_skill_gateway_state(gateway_state_path),
+        mode=mode,
+    )
+    if registry.list_metadata():
+        runtime_resources["skills"] = registry.to_resource_payload()
+    else:
+        runtime_resources.pop("skills", None)
+
+
+def _skill_payloads(payload: Any) -> list[Any]:
+    if isinstance(payload, (list, tuple)):
+        return list(payload)
+    return [payload]
 
 
 def _register_skill_root(registry: SkillRegistry, root: Path) -> None:
@@ -339,3 +438,15 @@ def _load_skill_gateway_state(path: Path) -> SkillGatewayState | None:
         # Invalid skill gateway state is non-fatal during tool environment setup.
         # The validator will detect and report the broken JSON so the LLM can repair it.
         return None
+
+
+def _unique_texts(values: list[Any]) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        items.append(item)
+    return items

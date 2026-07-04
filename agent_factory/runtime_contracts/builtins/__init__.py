@@ -9,9 +9,7 @@ from agent_factory.runtime_contracts.builtins.builders import (
     ModelContractBuilder,
     ModelContractV0Builder,
     NodeProviderContractBuilder,
-    RenderContractBuilder,
     ResourcesContractBuilder,
-    SandboxContractBuilder,
     SchedulerContractBuilder,
     SchedulerSeedContractBuilder,
     SessionContractBuilder,
@@ -20,22 +18,17 @@ from agent_factory.runtime_contracts.builtins.builders import (
     TraceContractBuilder,
 )
 from agent_factory.runtime_contracts.builtins.defaults import (
-    default_artifact_contract,
     default_context_contract,
     default_dependencies_contract,
     default_knowledge_contract,
     default_memory_contract,
     default_model_contract,
-    default_node_provider_contract,
-    default_render_contract,
     default_resources_contract,
-    default_sandbox_contract,
     default_scheduler_contract,
     default_scheduler_seed_contract,
     default_session_contract,
     default_state_contract,
     default_tools_contract,
-    default_trace_contract,
 )
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
 from agent_factory.runtime_contracts.schema import (
@@ -47,9 +40,7 @@ from agent_factory.runtime_contracts.schema import (
     ModelContract,
     ModelContractV0,
     NodeProviderContract,
-    RenderContract,
     ResourcesContract,
-    SandboxRuntimeContract,
     SchedulerContract,
     SchedulerSeedContract,
     SessionContract,
@@ -136,22 +127,10 @@ def default_runtime_contract_registry(
         builder=ArtifactContractBuilder(),
     )
     registry.register(
-        contract_type="render",
-        version="render_contract.v0",
-        model=RenderContract,
-        builder=RenderContractBuilder(),
-    )
-    registry.register(
         contract_type="resources",
         version="resources_contract.v0",
         model=ResourcesContract,
         builder=ResourcesContractBuilder(),
-    )
-    registry.register(
-        contract_type="sandbox",
-        version="sandbox_contract.v0",
-        model=SandboxRuntimeContract,
-        builder=SandboxContractBuilder(),
     )
     registry.register(
         contract_type="scheduler",
@@ -175,21 +154,16 @@ def default_runtime_contract_registry(
 
 
 __all__ = [
-    "default_artifact_contract",
     "default_context_contract",
     "default_dependencies_contract",
     "default_knowledge_contract",
     "default_memory_contract",
     "default_model_contract",
-    "default_node_provider_contract",
-    "default_render_contract",
     "default_resources_contract",
     "default_runtime_contract_registry",
-    "default_sandbox_contract",
     "default_scheduler_contract",
     "default_scheduler_seed_contract",
     "default_session_contract",
     "default_state_contract",
     "default_tools_contract",
-    "default_trace_contract",
 ]

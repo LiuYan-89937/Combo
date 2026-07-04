@@ -1,8 +1,0 @@
-{
-  "type": "node_provider",
-  "version": "node_provider_contract.v0",
-  "enabled": true,
-  "config": {
-    "providers": []
-  }
-}

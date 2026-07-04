@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent_factory.create_agent.package_paths import is_transient_package_path
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.tooling.package_tool_spec import package_tool_directory_path
 
 ValidationScope = str
 PACKAGE_TOOL_DIGEST_KIND = "package_tool_surface.v1"
@@ -32,7 +33,7 @@ def package_tool_fingerprint(root: Path, tool_id: str, *, fingerprint: dict[str,
     if not tool_id or "/" in tool_id or "\\" in tool_id or tool_id in {".", ".."}:
         return {}
     package_files = fingerprint if fingerprint is not None else package_fingerprint(root)
-    prefix = f"tools/{tool_id}/"
+    prefix = f"{package_tool_directory_path(tool_id)}/"
     return {path: digest for path, digest in package_files.items() if path.startswith(prefix)}
 
 
@@ -67,7 +68,6 @@ def validation_scope_for_focus(validation_focus: str) -> ValidationScope:
     if validation_focus in {
         "runtime_contract_build_subset",
         "tools_contract_validate",
-        "render_manifest_validate",
         "scheduler_seed_validate",
     }:
         return "runtime_contract_build"

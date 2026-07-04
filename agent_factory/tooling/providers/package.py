@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
 
 from agent_factory.tooling.providers.base import ToolProviderContext, ToolProviderResult, diagnostic
+from agent_factory.tooling.package_tool_spec import PACKAGE_TOOLS_DIR, validate_package_tool_entrypoint
 from agent_factory.tooling.spec import ToolSpec
 
 
@@ -17,14 +16,19 @@ class PackageToolProvider:
                 diagnostics=[diagnostic(self.provider_id, "warning", "package_root is not configured")]
             )
         package_root = context.package_root.resolve()
-        tools_root = package_root / "tools"
+        tools_root = package_root / PACKAGE_TOOLS_DIR
         if not tools_root.exists():
             return ToolProviderResult()
         result = ToolProviderResult()
         for manifest_path in sorted(tools_root.glob("*/manifest.json")):
             try:
                 payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-                payload["entrypoint"] = normalize_python_entrypoint(str(payload.get("entrypoint") or ""))
+                tool_id = str(payload.get("id") or "").strip()
+                if tool_id != manifest_path.parent.name:
+                    raise ValueError(
+                        f"package tool id must match its directory name: id={tool_id}, directory={manifest_path.parent.name}"
+                    )
+                validate_package_tool_entrypoint(tool_id, str(payload.get("entrypoint") or ""))
                 result.tool_specs.append(ToolSpec.model_validate(payload))
             except Exception as exc:
                 result.diagnostics.append(
@@ -37,16 +41,3 @@ class PackageToolProvider:
                     )
                 )
         return result
-
-
-def normalize_python_entrypoint(entrypoint: str) -> str:
-    if entrypoint.startswith(("python:", "python-import:", "mcp:")):
-        return entrypoint
-    if _looks_like_package_path(entrypoint):
-        return f"python:{entrypoint}"
-    return f"python-import:{entrypoint}"
-
-
-def _looks_like_package_path(entrypoint: str) -> bool:
-    target = entrypoint.rsplit(":", 1)[0] if ":" in entrypoint else entrypoint
-    return target.endswith(".py") or "/" in target or target.startswith(".")

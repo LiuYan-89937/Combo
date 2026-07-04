@@ -3,6 +3,6 @@
   "resources": {
     "system_package_id": "factory_chat",
     "system_package_role": "chat_mode",
-    "runtime_surface": "cli_chat"
+    "runtime_surface": "web_chat"
   }
 }

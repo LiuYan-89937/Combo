@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -11,6 +12,18 @@ from agent_factory.tooling.skills.schema import SkillGatewayState, SkillLoadResu
 MAX_RESOURCE_READ_CHARS = 12000
 MAX_INLINE_RESOURCE_CHARS = 6000
 SKILL_REGISTRY_VERSION = "skill_registry.v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadableSkillSource:
+    path: str
+    kind: str
+    purpose: str
+    media_type: str
+    size_bytes: int
+    readable: bool
+    target: Path
+    content_ref: str
 
 
 class SkillResourceFragmentNotFound(LookupError):
@@ -125,50 +138,47 @@ class SkillRegistry:
     ) -> dict[str, Any]:
         skill = self.get(name)
         system_state = self.gateway_state.system_state(_require_system(current_system))
-        resource = next((item for item in skill.resources if item.path == path), None)
-        if resource is None:
-            raise KeyError(f"unknown skill resource: {name}/{path}")
         root = Path(skill.root).resolve()
-        target = (root / resource.path).resolve()
-        _assert_inside(root, target)
-        if not target.is_file():
-            raise FileNotFoundError(str(target))
+        source = _readable_skill_source(skill, path, root=root)
+        _assert_inside(root, source.target)
+        if not source.target.is_file():
+            raise FileNotFoundError(str(source.target))
         payload: dict[str, Any] = {
             "name": name,
-            "path": resource.path,
-            "kind": resource.kind,
-            "purpose": _resource_purpose(resource.path),
-            "media_type": resource.media_type,
-            "size_bytes": resource.size_bytes,
-            "readable": resource.readable,
+            "path": source.path,
+            "kind": source.kind,
+            "purpose": source.purpose,
+            "media_type": source.media_type,
+            "size_bytes": source.size_bytes,
+            "readable": source.readable,
             "truncated": False,
             "content": "",
             "mode": mode,
             "pointer": pointer,
-            "content_ref": f"skill://{name}/{resource.path}",
+            "content_ref": source.content_ref,
         }
-        previous_read = system_state.resource_read_record(name, resource.path, mode=mode, pointer=pointer)
-        if not resource.readable:
-            payload["message"] = "Resource is not text-readable; returning metadata only."
+        previous_read = system_state.resource_read_record(name, source.path, mode=mode, pointer=pointer)
+        if not source.readable:
+            payload["message"] = "Skill source is not text-readable; returning metadata only."
             payload["already_read"] = previous_read is not None
             payload["read_record"] = system_state.mark_resource_read(
                 name,
-                resource.path,
+                source.path,
                 mode=mode,
                 pointer=pointer,
                 digest="",
             ).model_dump(mode="json")
             return payload
-        content = target.read_text(encoding="utf-8")
+        content = source.target.read_text(encoding="utf-8")
         digest = sha256(content.encode("utf-8")).hexdigest()
         if mode == "outline":
-            payload["outline"] = _resource_outline(resource.path, content)
-            payload["task_model_summary"] = _task_model_summary(resource.path, content)
+            payload["outline"] = _resource_outline(source.path, content)
+            payload["task_model_summary"] = _task_model_summary(source.path, content)
             return _with_read_record(
                 payload,
                 system_state=system_state,
                 name=name,
-                path=resource.path,
+                path=source.path,
                 mode=mode,
                 pointer=pointer,
                 digest=digest,
@@ -179,17 +189,17 @@ class SkillRegistry:
                 fragment = _json_pointer_fragment(content, pointer)
             except KeyError as exc:
                 raise SkillResourceFragmentNotFound(
-                    path=resource.path,
+                    path=source.path,
                     pointer=pointer,
                     available_keys=_json_top_level_keys(content),
                 ) from exc
             payload["fragment"] = fragment
-            payload["task_model_summary"] = _fragment_summary(resource.path, pointer, fragment)
+            payload["task_model_summary"] = _fragment_summary(source.path, pointer, fragment)
             return _with_read_record(
                 payload,
                 system_state=system_state,
                 name=name,
-                path=resource.path,
+                path=source.path,
                 mode=mode,
                 pointer=pointer,
                 digest=digest,
@@ -197,12 +207,12 @@ class SkillRegistry:
             )
         if mode != "content":
             raise ValueError("resource read mode must be one of: outline, fragment, content")
-        is_schema = _is_schema_resource(resource.path)
+        is_schema = _is_schema_resource(source.path)
         if is_schema and not reason.strip():
             raise ValueError("full schema content requires reason; use mode=fragment for schema fields by default")
         payload["schema_read_level"] = "full" if is_schema else ""
         payload["read_reason"] = reason.strip()
-        payload["task_model_summary"] = _task_model_summary(resource.path, content)
+        payload["task_model_summary"] = _task_model_summary(source.path, content)
         if is_schema or previous_read is not None or len(content) > MAX_INLINE_RESOURCE_CHARS:
             payload["content"] = ""
             payload["content_omitted"] = True
@@ -222,7 +232,7 @@ class SkillRegistry:
             payload,
             system_state=system_state,
             name=name,
-            path=resource.path,
+            path=source.path,
             mode=mode,
             pointer=pointer,
             digest=digest,
@@ -257,6 +267,34 @@ def _assert_inside(root: Path, path: Path) -> None:
         path.relative_to(root)
     except ValueError as exc:
         raise ValueError(f"Skill resource path escapes skill root: {path}") from exc
+
+
+def _readable_skill_source(skill: SkillPackage, path: str, *, root: Path) -> _ReadableSkillSource:
+    resource = next((item for item in skill.resources if item.path == path), None)
+    if resource is not None:
+        return _ReadableSkillSource(
+            path=resource.path,
+            kind=resource.kind,
+            purpose=_resource_purpose(resource.path),
+            media_type=resource.media_type,
+            size_bytes=resource.size_bytes,
+            readable=resource.readable,
+            target=(root / resource.path).resolve(),
+            content_ref=f"skill://{skill.name}/{resource.path}",
+        )
+    script = next((item for item in skill.scripts if item.path == path), None)
+    if script is not None:
+        return _ReadableSkillSource(
+            path=script.path,
+            kind="script",
+            purpose="script_source",
+            media_type=_source_media_type(script.path),
+            size_bytes=script.size_bytes,
+            readable=_is_text_source_path(script.path),
+            target=(root / script.path).resolve(),
+            content_ref=script.script_ref,
+        )
+    raise KeyError(f"unknown skill resource or script: {skill.name}/{path}")
 
 
 def _query_terms(query: str) -> list[str]:
@@ -366,6 +404,8 @@ def _resource_outline(path: str, content: str) -> dict[str, Any]:
 
 
 def _resource_purpose(path: str) -> str:
+    if path.startswith("scripts/"):
+        return "script_source"
     if path.startswith("examples/"):
         return "capability_example"
     if path.endswith(".repair_hints.md") or path.endswith(".common_errors.md") or path.endswith(".validator_scope.md"):
@@ -375,6 +415,44 @@ def _resource_purpose(path: str) -> str:
     if path.startswith("guidance/") or path.endswith(".guidance.md"):
         return "guidance"
     return "reference"
+
+
+def _source_media_type(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    if suffix == ".py":
+        return "text/x-python"
+    if suffix in {".sh", ".bash", ".zsh"}:
+        return "text/x-shellscript"
+    if suffix in {".md", ".txt"}:
+        return "text/markdown" if suffix == ".md" else "text/plain"
+    if suffix == ".json":
+        return "application/json"
+    if suffix in {".yaml", ".yml"}:
+        return "application/yaml"
+    if suffix == ".csv":
+        return "text/csv"
+    return "text/plain" if _is_text_source_path(path) else "application/octet-stream"
+
+
+def _is_text_source_path(path: str) -> bool:
+    return Path(path).suffix.lower() in {
+        "",
+        ".bash",
+        ".cfg",
+        ".conf",
+        ".csv",
+        ".ini",
+        ".json",
+        ".md",
+        ".py",
+        ".sh",
+        ".sql",
+        ".toml",
+        ".txt",
+        ".yaml",
+        ".yml",
+        ".zsh",
+    }
 
 
 def _is_schema_resource(path: str) -> bool:
@@ -442,8 +520,6 @@ def _writable_targets_from_text(content: str) -> list[str]:
         "agent_package.json",
         "assembly_spec.json",
         "resources.json",
-        "render_manifest.json",
-        "sandbox_contract.json",
         "contracts/",
         "tools/",
         "nodes/",
@@ -457,6 +533,8 @@ def _writable_targets_from_text(content: str) -> list[str]:
 
 def _recommended_next_action(path: str) -> str:
     purpose = _resource_purpose(path)
+    if purpose == "script_source":
+        return "Inspect this source to understand the skill implementation; execution still requires a registered ToolSpec or dedicated allowed execution tool."
     if purpose == "capability_example":
         return "Adapt this capability example to the current empty package, then stop tool calls so validation can run."
     if purpose == "schema_fragment":

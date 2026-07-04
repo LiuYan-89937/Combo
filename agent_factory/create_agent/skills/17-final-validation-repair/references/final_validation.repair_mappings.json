@@ -47,8 +47,7 @@
     "when": "validator issue schema_path is AgentAssemblySpec.bindings.node_bindings[] or Pydantic error mentions bindings.node_bindings.N missing target/payload",
     "target_files": [
       "agent_package.json",
-      "assembly_spec.json",
-      "render_manifest.json"
+      "assembly_spec.json"
     ],
     "preferred_repair": {
       "tool": "create_agent_authoring",
@@ -69,8 +68,7 @@
     "when": "validator issue reports extra_forbidden for node_id, impl, provider_id, or similar fields inside a binding item",
     "target_files": [
       "agent_package.json",
-      "assembly_spec.json",
-      "render_manifest.json"
+      "assembly_spec.json"
     ],
     "preferred_repair": {
       "tool": "create_agent_authoring",

@@ -68,16 +68,8 @@
       "title": "Assembly Spec Path",
       "type": "string"
     },
-    "render_manifest_path": {
-      "title": "Render Manifest Path",
-      "type": "string"
-    },
     "resources_path": {
       "title": "Resources Path",
-      "type": "string"
-    },
-    "sandbox_contract_path": {
-      "title": "Sandbox Contract Path",
       "type": "string"
     },
     "contracts": {
@@ -99,9 +91,7 @@
     "factory_run_id",
     "agent",
     "assembly_spec_path",
-    "render_manifest_path",
-    "resources_path",
-    "sandbox_contract_path"
+    "resources_path"
   ],
   "title": "Agent package manifest",
   "type": "object"

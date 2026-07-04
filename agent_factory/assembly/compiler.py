@@ -7,8 +7,9 @@ from agent_factory.assembly.validator import AgentAssemblyValidator
 from agent_factory.runtime_contracts.contribution import RuntimeBuildResult
 from agent_factory.runtime_kernel.bindings import RuntimeServices
 from agent_factory.runtime_kernel.kernel import CompiledKernelApp, RuntimeKernelFacade
+from agent_factory.runtime_kernel.kernel.compile_support import resolve_render_manifest
 from agent_factory.runtime_kernel.patterns.schema import GraphPatternSpec
-from agent_factory.runtime_render import RenderManifest, validate_render_manifest
+from agent_factory.runtime_render import RenderManifest
 
 
 @dataclass(slots=True)
@@ -49,7 +50,6 @@ class AgentAssemblyCompiler:
         assembled_pattern = self._assemble_pattern(spec)
         resolved_render_manifest = self._render_manifest_for_compile(
             assembled_pattern,
-            runtime_build=runtime_build,
             render_manifest=render_manifest,
         )
         self.facade.instance.pattern_registry.register(assembled_pattern)
@@ -82,7 +82,6 @@ class AgentAssemblyCompiler:
             compiled = self.compile(
                 compiled.spec,
                 services=services,
-                render_manifest=compiled.runtime_build.render_manifest if compiled.runtime_build else None,
                 system_wrapper_ids=compiled.runtime_build.system_wrappers if compiled.runtime_build else None,
             )
         return self.facade.run(
@@ -109,10 +108,6 @@ class AgentAssemblyCompiler:
         self,
         pattern: GraphPatternSpec,
         *,
-        runtime_build: RuntimeBuildResult | None,
         render_manifest: RenderManifest | None,
     ) -> RenderManifest:
-        manifest = runtime_build.render_manifest if runtime_build else render_manifest
-        if manifest is None:
-            raise ValueError("render_manifest is required for assembly compilation")
-        return validate_render_manifest(manifest, {node.id for node in pattern.nodes})
+        return resolve_render_manifest(pattern, render_manifest)

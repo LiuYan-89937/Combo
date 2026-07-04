@@ -1,6 +1,6 @@
 ---
 name: 02-model-system
-description: Guides model, dependency, and sandbox runtime contract changes for produced agents.
+description: Guides model and dependency contract changes for produced agents.
 metadata:
   system_id: model_system
   stage_order: 2
@@ -9,7 +9,7 @@ metadata:
 # Model System
 
 ## Role
-Guides model, dependency, and sandbox runtime contract changes for produced agents.
+Guides model and dependency contract changes for produced agents.
 
 ## Baseline Package Assumption
 - The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
@@ -19,15 +19,13 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
-- The agent needs a non-default model role, output behavior, dependency declaration, or sandbox resource boundary.
-- A package tool/node introduces runtime dependencies or sandbox resource requirements.
-- Validator reports model/dependency/sandbox contract issues.
+- The agent needs a non-default model role, output behavior, or dependency declaration.
+- A package tool/node introduces runtime dependencies.
+- Validator reports model/dependency contract issues.
 
 ## Focus Files
 - `contracts/model.json`
 - `contracts/dependencies.json`
-- `contracts/sandbox.json`
-- `sandbox_contract.json`
 
 ## Manufacturing Protocol
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
@@ -35,7 +33,7 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 3. Call `model_pool_select` with the model requirements and any auxiliary `tool_requirements` before inherited MCP evaluation, SkillHub search/install, and package tool authoring. If the result is blocked, ask the user to configure matching model pool profiles; do not silently fall back to the factory model.
 4. Write model bindings and auxiliary model tool bindings only through `create_agent_authoring(action="configure_model_bindings", bindings=..., tool_bindings=...)`.
 5. Read the current target package files before editing. Preserve unrelated valid scaffold content.
-6. If the requested capability does not affect dependencies or sandbox, leave those files as-is and move to the next useful focus yourself.
+6. If the requested capability does not affect dependencies, leave those files as-is and move to the next useful focus yourself.
 7. When a complete capability increment is ready, update all required package surfaces coherently, then call create_agent_validate with the appropriate scope.
 8. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
@@ -46,7 +44,7 @@ Guides model, dependency, and sandbox runtime contract changes for produced agen
 - In the authoring call, `tool_bindings` is a top-level argument beside `bindings`; never nest it inside `bindings`.
 - For `plan_and_execute`, auxiliary model tools are available to the executor through system tool exposure; the planner should not call business or model tools directly.
 - Do not write provider `base_url`, `api_key`, account ids, or credentials into the AgentPackage.
-- Leave dependency/sandbox contracts as-is when the request does not require changes.
+- Leave dependency contracts as-is when the request does not require changes.
 - Do not invent provider credentials, account ids, API keys, endpoints, or local paths.
 - Declare dependencies and sandbox resources only for capabilities that are actually implemented in package files.
 - Every non-stdlib, non-package-local, non-`agent_factory` Python import used by package tools must be represented in `contracts/dependencies.json` `config.python_requirements`.

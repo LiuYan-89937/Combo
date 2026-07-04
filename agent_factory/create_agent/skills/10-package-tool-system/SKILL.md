@@ -42,17 +42,18 @@ Guides adding executable package tools and their ToolSpec declarations.
 - Remove stale package tools through create_agent_authoring(action="remove_package_tool", tool_id=...); do not manually delete tool directories or manifest index entries.
 - ToolSpec objects must be objects, not string references.
 - ToolSpec fields are top-level fields: `id`, `description`, `entrypoint`, `input_schema`, `output_schema`, `resources`, `risk_level`, `risk_evaluator`, `concurrent`, and optional `output_compression`.
+- Generated package tools are written to `tools/<tool_id>/tool.py`; therefore `entrypoint` must be `python:tools/<tool_id>/tool.py:run`, and `tool_source` must define a top-level synchronous `run(arguments, resources)` function. Do not use `main`, `tool:main`, or `python-import` entrypoints for generated package tools.
 - `input_schema` only describes the runtime call arguments. Never put `output_schema`, `resources`, `risk_level`, `risk_evaluator`, `entrypoint`, `concurrent`, or `output_compression` inside `input_schema`.
 - Add `tool_spec.output_compression.actions` when the tool output contains long lists, search candidates, external ids/slugs/paths, logs, reports, or other machine fields that must remain usable after compression. A single-link tool uses one action config; a multi-action tool sets `action_argument` and one config per action. Tools without an action config use the system default compression.
-- Package tool entrypoints return the standard tool envelope; output_schema validates only envelope.output.
-- Package tool code must use the `resources` argument for declared runtime selectors such as `runtime_root`; do not rely on `os.getcwd()` as the main resource contract.
+- Package tool entrypoints may return either a plain dict matching `output_schema` or `tool_envelope(...)`. Plain dict outputs are wrapped by the package-tool adapter. Use `tool_envelope` only when the tool needs explicit evidence or a custom summary.
+- Package tool code must use the `resources` argument for declared runtime selectors such as `artifacts_root`, `workdir_root`, or `runtime_root`; do not rely on `os.getcwd()` as the main resource contract. Generated user-facing files should normally be written below `artifacts_root`.
 - When tool.py imports non-stdlib Python modules that are not package-local and not `agent_factory`, pass installable distributions as `python_requirements` to create_agent_authoring.
 - create_agent_authoring rejects package tool writes before any files are changed when third-party imports exist but `python_requirements` is empty.
 - Use installable Python distribution names in `python_requirements`; if an import name differs from the distribution name, determine the correct distribution from package documentation or validator evidence instead of guessing.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
-- Create package tools only after model_pool_select/model bindings are complete, inherited MCP candidates have been evaluated, and reusable SkillHub skills have been evaluated.
+- Create package tools only after model_pool_select/model bindings are complete, pattern assembly tool access plus needed inherited MCP materialization are complete, and reusable SkillHub skills have been evaluated.
 - If a reusable SkillHub skill already provides the capability, call `skillhub(action="search", query=...)`, install with the exact returned `install_name`, and expose the runtime `skill` tool or registered skill-derived ToolSpec through assembly tool access instead of rebuilding it as a package tool. The search query must be 1 to 3 short keywords or an exact skill name; split broad discovery into multiple focused searches instead of passing a long mixed query.
-- Treat SkillHub scripts as executable assets, not executable tools, unless they are explicitly registered as ToolSpec entries. Do not copy a skill script into a package tool unless the skill lacks a registered execution entry and a package-owned execution gap still remains.
+- Treat SkillHub scripts as source assets, not executable tools, unless they are explicitly registered as ToolSpec entries. Inspect listed script source with `skill(action="read_resource", path="scripts/...", ...)` when needed. Do not copy a skill script into a package tool unless the skill lacks a registered execution entry and a package-owned execution gap still remains.
 - After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. Probe runs inside the Docker runtime image, performs dependency sandbox_init, and returns the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 
@@ -63,9 +64,9 @@ Guides adding executable package tools and their ToolSpec declarations.
 - If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.
 
 ## Validation And Focus
-- Validator evidence should guide repairs but must not automatically change focus.
-- Only explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) changes focus.
-- Run final validation only from validation_publish after the package behavior is actually implemented.
+- Validator evidence should guide repairs.
+- Explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) can still manually correct focus, but deterministic authoring, probe, validation, and publish tools also synchronize manufacturing focus after successful operations.
+- Run final validation after the package behavior is actually implemented; a passed full_static validation moves the package into validation_publish readiness.
 
 ## Resource Loading
 - Use a listed capability example when this skill provides one; otherwise rely on current package files and validator evidence.

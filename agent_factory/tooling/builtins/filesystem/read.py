@@ -13,6 +13,21 @@ from agent_factory.tooling.builtins.filesystem.common import (
 from agent_factory.tooling.envelope import tool_envelope
 
 
+def _missing_file_message(*, requested: str, resolved: str, parent: str) -> str:
+    return (
+        f"file not found: requested={requested!r}; resolved={resolved}. "
+        f"请先调用 ls 查看父目录或相近目录，例如 path={parent!r}，"
+        "确认真实文件名、大小写、后缀或路径层级后，再用准确路径重试 read。"
+    )
+
+
+def _directory_read_message(*, requested: str, resolved: str) -> str:
+    return (
+        f"path is a directory, not a file: requested={requested!r}; resolved={resolved}. "
+        f"请先调用 ls 查看该目录内容，例如 path={resolved!r}，选择具体文件后再调用 read。"
+    )
+
+
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     return path_risk_result(arguments, context, default_action="allow", sensitive_action="ask")
 
@@ -26,9 +41,11 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     root, allow_external = filesystem_boundary(resources)
     target = resolve_path(path=path, root=root, allow_external=allow_external)
     if not target.exists():
-        raise FileNotFoundError(str(target))
+        raise FileNotFoundError(
+            _missing_file_message(requested=path, resolved=str(target), parent=str(target.parent))
+        )
     if not target.is_file():
-        raise IsADirectoryError(str(target))
+        raise IsADirectoryError(_directory_read_message(requested=path, resolved=str(target)))
     raw = target.read_bytes()
     try:
         text = raw.decode("utf-8")

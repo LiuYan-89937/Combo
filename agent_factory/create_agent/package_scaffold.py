@@ -7,8 +7,6 @@ from typing import Any
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.create_agent.contract_catalog import base_contract_paths, default_contract_payload
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
-from agent_factory.runtime_kernel.patterns.registry import PatternRegistry
-from agent_factory.runtime_render import RenderManifest, default_node_render_spec
 
 
 PACKAGE_ASSET_DIRECTORIES = (
@@ -45,9 +43,7 @@ def materialize_empty_agent_package(
             agent=manifest_agent,
             runtime={"pattern_id": selected_pattern_id},
             assembly_spec_path="assembly_spec.json",
-            render_manifest_path="render_manifest.json",
             resources_path="resources.json",
-            sandbox_contract_path="sandbox_contract.json",
             contracts=contracts,
             tools=[],
         ).model_dump(mode="json", exclude_none=True),
@@ -59,9 +55,7 @@ def materialize_empty_agent_package(
             runtime={"pattern_id": selected_pattern_id},
         ).model_dump(mode="json", exclude_none=True),
     )
-    _write_json(package_root / "render_manifest.json", _default_render_manifest(selected_pattern_id).model_dump(mode="json"))
     _write_json(package_root / "resources.json", {})
-    _write_json(package_root / "sandbox_contract.json", {"version": "sandbox_contract.v0", "resources": {}})
     for contract_key in sorted(contracts):
         _write_json(package_root / contracts[contract_key], default_contract_payload(contract_key))
 
@@ -79,24 +73,6 @@ def _assembly_agent_identity(*, user_input: str) -> dict[str, Any]:
         "description": description,
         "version": "0.1.0",
     }
-
-
-def _default_render_manifest(pattern_id: str) -> RenderManifest:
-    pattern = PatternRegistry(
-        builtins_dir=Path(__file__).resolve().parents[1] / "runtime_kernel" / "patterns" / "builtins"
-    ).get(_selected_pattern_id(pattern_id))
-    return RenderManifest(
-        graph_id=pattern.pattern_id,
-        nodes={
-            node.id: default_node_render_spec(
-                node_id=node.id,
-                node_type=node.type,
-                impl=node.impl,
-                pattern_id=pattern.pattern_id,
-            )
-            for node in pattern.nodes
-        },
-    )
 
 
 def _selected_pattern_id(pattern_id: str) -> str:
