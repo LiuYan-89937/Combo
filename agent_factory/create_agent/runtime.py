@@ -13,10 +13,8 @@ from langgraph.types import Command
 
 from agent_factory.create_agent.assist_workflow import CreateAgentAssistWorkflow
 from agent_factory.create_agent.intent import classify_create_agent_intent
-from agent_factory.create_agent.models import CreateAgentPublishDecision
 from agent_factory.create_agent.task_analysis import analyze_create_agent_task
 from agent_factory.create_agent.tooling import CreateAgentToolEnvironmentBuilder
-from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workflow import CreateAgentWorkflow
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe as frontend_json_safe
@@ -396,8 +394,7 @@ class CreateAgentRuntime:
                     "messages": [HumanMessage(content=user_input)],
                 }
             else:
-                resume_update = _manufacture_resume_update(workspace=workspace, resume_payload=resume_payload) if graph_kind == "manufacture" else {}
-                stream_input = Command(resume=resume_payload, update=resume_update or None)
+                stream_input = Command(resume=resume_payload)
                 normalizer.emit_runtime_resumed(resume_payload)
                 record_trace("lifecycle", {"event_type": "runtime_resumed", "payload": _json_safe(resume_payload)})
                 yield from drain_events()
@@ -549,42 +546,6 @@ class CreateAgentRuntime:
             self._forget_cancel_token(request_id, cancel_token)
 
 
-def _manufacture_resume_update(*, workspace: CreateAgentWorkspace, resume_payload: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(resume_payload, dict):
-        return {}
-    if not _is_publish_confirmation_resume(resume_payload):
-        return {}
-    decision = _publish_confirmation_decision(resume_payload)
-    input_text = _resume_input_text(resume_payload)
-    if decision in {"publish", "approve"}:
-        _write_publish_decision(workspace=workspace, decision="approve", input_text=input_text or "发布")
-        message = "用户在发布确认面板选择了发布。下一步应调用 create_agent_publish。"
-        normalized_decision = "approve"
-    elif decision == "save_draft":
-        _write_publish_decision(workspace=workspace, decision="pending", input_text=input_text or "保存草稿")
-        message = "用户在发布确认面板选择了保存草稿。不要发布；向用户说明当前工作区已保留为草稿。"
-        normalized_decision = "pending"
-    else:
-        _write_publish_decision(workspace=workspace, decision="pending", input_text=input_text)
-        message = (
-            "用户在发布确认面板输入了自然语言内容。不要发布；"
-            f"把下面内容作为用户最新消息处理：{input_text}"
-        )
-        normalized_decision = "pending"
-    return {
-        "messages": [HumanMessage(content=message)],
-        "publish_confirmation_response": {
-            "decision": normalized_decision,
-            "input_text": input_text,
-            "instruction": (
-                "User selected publish in the structured publish confirmation panel."
-                if normalized_decision == "approve"
-                else "Publish is still pending. Treat input_text as the user's latest message, not as publish approval."
-            ),
-        },
-    }
-
-
 def _checkpoint_user_input(values: dict[str, Any]) -> str | None:
     request = str(values.get("request") or "").strip()
     if request:
@@ -599,51 +560,6 @@ def _checkpoint_user_input(values: dict[str, Any]) -> str | None:
         if isinstance(content, str) and content.strip():
             return content.strip()
     return None
-
-
-def _is_publish_confirmation_resume(payload: dict[str, Any]) -> bool:
-    payload_type = str(payload.get("type") or "").strip()
-    if payload_type in {"create_agent_publish_confirmation", "create_agent_publish_confirmation_result"}:
-        return True
-    decision = str(payload.get("decision") or "").strip()
-    return decision == "approve" and ("input_text" in payload or "answer" in payload)
-
-
-def _publish_confirmation_decision(payload: dict[str, Any]) -> str:
-    decision = str(payload.get("decision") or "").strip().lower()
-    if decision in {"approve", "publish", "save_draft"}:
-        return decision
-    if _looks_like_publish_confirmation_text(_resume_input_text(payload)):
-        return "approve"
-    return decision or "pending"
-
-
-def _looks_like_publish_confirmation_text(value: str) -> bool:
-    text = "".join(str(value or "").strip().lower().split())
-    if not text or text.startswith(("不要", "别", "先别", "暂不", "不")):
-        return False
-    return text in {"确认", "确认发布", "发布", "approve", "approved", "yes", "y", "ok"} or text.startswith("确认发布")
-
-
-def _write_publish_decision(*, workspace: CreateAgentWorkspace, decision: str, input_text: str) -> None:
-    validation = workspace.read_validation()
-    workspace.write_publish_decision(
-        CreateAgentPublishDecision(
-            decision=decision,  # type: ignore[arg-type]
-            input_text=input_text,
-            package_fingerprint=package_fingerprint(workspace.root),
-            validation_scope=validation.validation_scope if validation else "",
-            validation_status=validation.status if validation else "",
-        )
-    )
-
-
-def _resume_input_text(payload: dict[str, Any]) -> str:
-    for key in ("input_text", "answer", "message"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
 
 
 def _delete_create_agent_workspace(path: Path) -> bool:

@@ -13,6 +13,7 @@ from langgraph.types import interrupt
 from agent_factory.create_agent.models import CreateAgentAction, CreateAgentPublishDecision, PackageValidationReport
 from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
 from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
+from agent_factory.create_agent.publish_tool import confirm_and_publish
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
@@ -206,10 +207,18 @@ class CreateAgentWorkflow:
             }
         )
         publish_decision = _publish_decision_from_resume(answer)
+        resume_text = _resume_text(answer)
+        if publish_decision == "approve":
+            publish_result = confirm_and_publish(workspace=workspace, confirmation=resume_text or "发布")
+            return {
+                "validation": report.to_digest().model_dump(mode="json"),
+                "done": True,
+                "final_answer": f"AgentPackage 已发布：{publish_result['package_id']} ({publish_result['package_path']})",
+            }
         workspace.write_publish_decision(
             CreateAgentPublishDecision(
                 decision=publish_decision,
-                input_text=_resume_text(answer),
+                input_text=resume_text,
                 package_fingerprint=package_fingerprint(workspace.root),
                 validation_scope=report.validation_scope,
                 validation_status=report.status,

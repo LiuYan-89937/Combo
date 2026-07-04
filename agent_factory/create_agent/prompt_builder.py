@@ -140,9 +140,9 @@ def _invariant_system_prompt_text() -> str:
             "先显式调用 create_agent_validate(scope='full_static', reason=...)；"
             "full_static validation passed 后再调用 create_agent_control(action=finalize)，系统会向用户做发布前确认。"
             "不要调用 create_agent_control(action='ask_user') 来索要发布确认；发布确认只能由 finalize 触发的系统确认门处理。"
-            "发布确认阶段由系统确认门返回结构化结果：用户选择发布才调用 create_agent_publish；"
+            "用户选择发布时，系统确认门会直接完成物理发布并结束本次制造链路，不再回到模型继续决策。"
             "用户选择继续修改或输入自然语言时，先按普通用户消息处理，必要时继续修改、校验，再重新 finalize。"
-            "create_agent_publish 只有在发布确认 gate 记录到明确用户确认后才会通过；不要把修改意见当作发布确认。"
+            "不要把修改意见当作发布确认。"
         ),
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
@@ -311,12 +311,7 @@ def _publish_confirmation_context(value: Any) -> str:
     if not decision and not input_text:
         return ""
     if decision == "approve":
-        return (
-            "High-priority publish confirmation response:\n"
-            f"- decision: approve\n"
-            f"- user_input: {input_text}\n"
-            "- next_required_action: call create_agent_publish if publish readiness still holds."
-        )
+        return ""
     return (
         "High-priority publish confirmation response:\n"
         "- decision: pending\n"

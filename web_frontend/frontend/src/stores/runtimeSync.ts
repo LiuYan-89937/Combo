@@ -13,7 +13,7 @@ import { useRuntimeStore } from './runtime'
 import { useSchedulerStore } from './scheduler'
 import { useSessionStore } from './session'
 import { useWorkspaceStore } from './workspace'
-import { normalizeResourcePackageId } from '@/utils/resourceScope'
+import { SYSTEM_CHAT_PACKAGE_ID, normalizeResourcePackageId } from '@/utils/resourceScope'
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
@@ -164,19 +164,36 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
 }
 
 function resourceEventMatchesCurrentContext(event: FactoryFrontendEvent): boolean {
+  const eventMode = resourceEventMode(event)
+  const currentMode = currentResourceMode()
+  if (eventMode || currentMode) {
+    return eventMode === currentMode && resourceEventPackageId(event) === currentResourcePackageId()
+  }
   return resourceEventPackageId(event) === currentResourcePackageId()
+}
+
+function currentResourceMode(): string | null {
+  const runtimeStore = useRuntimeStore()
+  if (runtimeStore.currentMode === 'create_agent') return 'create_agent'
+  if (runtimeStore.currentMode === 'evolve_agent') return 'evolve_agent'
+  return null
 }
 
 function currentResourcePackageId(): string | null {
   const runtimeStore = useRuntimeStore()
   const agentStore = useAgentStore()
+  if (runtimeStore.currentMode === 'create_agent') return normalizeResourcePackageId('create_agent')
+  if (runtimeStore.currentMode === 'evolve_agent') return normalizeResourcePackageId('evolve_agent')
   if (agentStore.activeChatPackageId) {
     return normalizeResourcePackageId(agentStore.activeChatPackageId)
   }
-  if (runtimeStore.currentMode === 'evolve_agent' && agentStore.selectedPackageId) {
-    return normalizeResourcePackageId(agentStore.selectedPackageId)
-  }
-  return null
+  return normalizeResourcePackageId(SYSTEM_CHAT_PACKAGE_ID)
+}
+
+function resourceEventMode(event: FactoryFrontendEvent): string | null {
+  const payload = event.payload || {}
+  const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
+  return normalizeResourceMode(payload.resource_mode || nested.resource_mode || null)
 }
 
 function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
@@ -189,6 +206,11 @@ function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
       execution.package_id ||
       null
   )
+}
+
+function normalizeResourceMode(value: unknown): string | null {
+  const mode = String(value || '').trim()
+  return mode === 'create_agent' || mode === 'evolve_agent' ? mode : null
 }
 
 function sessionWithPackage(session: any, packageId: unknown): any {

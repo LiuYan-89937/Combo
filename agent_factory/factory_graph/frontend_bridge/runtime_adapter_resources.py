@@ -69,9 +69,13 @@ class RuntimeResourceCommandMixin:
         self._emit_resource_event(command, event_type, {"package_id": package_id, **result})
 
     def extensions_manage(self, command: FactoryFrontendCommand) -> None:
+        resource_mode = str(command.payload.get("resource_mode") or "").strip()
         package_id = _package_id_from_payload(command.payload)
         action = str(command.payload.get("action") or "list").strip()
-        result = self.agent_package_runtime.extensions_manage(package_id, action, command.payload)
+        if resource_mode in {"create_agent", "evolve_agent"}:
+            result = self.agent_package_runtime.system_extensions_manage(resource_mode, action, command.payload)
+        else:
+            result = self.agent_package_runtime.extensions_manage(package_id, action, command.payload)
         event_type = "extension_configs_listed"
         if action in {
             "upsert_mcp",

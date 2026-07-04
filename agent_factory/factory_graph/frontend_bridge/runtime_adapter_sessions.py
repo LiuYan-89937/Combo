@@ -757,6 +757,8 @@ def _pending_common_matches(
 
 
 def _publish_confirmation_ready(workspace: CreateAgentWorkspace) -> bool:
+    if workspace.read_publish_report().get("status") == "available":
+        return False
     active = workspace.read_system_state().active_stage()
     if active is None or active.system_id != "validation_publish":
         return False

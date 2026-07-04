@@ -52,7 +52,11 @@ from agent_factory.tooling.approval_policy import (
     merge_tool_approval_policy,
 )
 from agent_factory.tooling.compiler import ToolCompiler
-from agent_factory.tooling.factory_extensions import FactoryExtensionLoadReport, FactoryExtensionManager, default_factory_extension_root
+from agent_factory.tooling.factory_extensions import (
+    FactoryExtensionLoadReport,
+    FactoryExtensionManager,
+    default_system_agent_extension_root,
+)
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import (
     BuiltinToolProvider,
@@ -109,7 +113,7 @@ class CreateAgentToolEnvironment:
 
 class CreateAgentToolEnvironmentBuilder:
     def __init__(self, *, extension_manager: FactoryExtensionManager | None = None) -> None:
-        self.extension_manager = extension_manager or FactoryExtensionManager()
+        self.extension_manager = extension_manager
 
     def build(
         self,
@@ -120,7 +124,12 @@ class CreateAgentToolEnvironmentBuilder:
     ) -> CreateAgentToolEnvironment:
         workspace = Path(workspace_root).expanduser().resolve()
         create_agent_workspace = CreateAgentWorkspace(workspace)
-        factory_extension_root = default_factory_extension_root()
+        system_agent_owner = "evolve_agent" if mode == "evolution" else "create_agent"
+        extension_manager = self.extension_manager or FactoryExtensionManager(
+            extension_root=default_system_agent_extension_root(system_agent_owner),
+            include_builtin_extension_root=True,
+        )
+        factory_extension_root = extension_manager.extension_root
         package_extension_root = workspace / "extensions"
         provider_resources = {
             "builtin_workspace_root": str(workspace),
@@ -140,7 +149,7 @@ class CreateAgentToolEnvironmentBuilder:
         builtin_tool_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if authoring_mode else CREATE_AGENT_ASSIST_TOOL_IDS
         builtin_result = BuiltinToolProvider(tool_ids=builtin_tool_ids).discover(builtin_context)
         if authoring_mode:
-            extension_result, extension_report = self.extension_manager.discover(context=extension_context)
+            extension_result, extension_report = extension_manager.discover(context=extension_context)
             workspace_skill_result = _discover_workspace_skills(package_extension_root, context=builtin_context)
             _append_workspace_skill_report(extension_report, package_extension_root, workspace_skill_result)
         else:
@@ -297,14 +306,14 @@ class CreateAgentToolEnvironmentBuilder:
         registry = ToolRegistry(specs)
         approval_policy = merge_tool_approval_policy(
             default_tool_approval_policy(),
-            load_tool_approval_policy_file(package_extension_root / "tool_permissions.json"),
+            load_tool_approval_policy_file(factory_extension_root / "tool_permissions.json"),
         )
         compiler = ToolCompiler(
             package_root=workspace,
             resources=runtime_resources,
             approval_policy=approval_policy,
             allowed_python_roots=[factory_extension_root, package_extension_root],
-            mcp_clients=self.extension_manager.mcp_tool_clients() if authoring_mode else {},
+            mcp_clients=extension_manager.mcp_tool_clients() if authoring_mode else {},
         )
         tools = _stable_tools(compiler.compile_many(registry.all()))
         return CreateAgentToolEnvironment(

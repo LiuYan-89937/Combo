@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +27,7 @@ from agent_factory.tooling.providers import (
 
 
 FACTORY_EXTENSION_ROOT_ENV = "AGENTFACTORY_FACTORY_EXTENSION_ROOT"
+SystemAgentExtensionOwner = Literal["create_agent", "evolve_agent"]
 
 
 class FactoryExtensionLoadReport(BaseModel):
@@ -52,12 +53,14 @@ class FactoryExtensionManager:
         self,
         *,
         extension_root: str | Path | None = None,
+        include_builtin_extension_root: bool | None = None,
         mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
         mcp_tool_clients: Mapping[str, MCPToolClient] | None = None,
     ) -> None:
         explicit_extension_root = extension_root is not None
         self.extension_root = Path(extension_root).expanduser().resolve() if extension_root else default_factory_extension_root()
-        self.builtin_extension_root = None if explicit_extension_root else default_builtin_factory_extension_root()
+        include_builtin = (not explicit_extension_root) if include_builtin_extension_root is None else include_builtin_extension_root
+        self.builtin_extension_root = default_builtin_factory_extension_root() if include_builtin else None
         self.loader = FactoryExtensionConfigLoader(
             extension_root=self.extension_root,
             builtin_extension_root=self.builtin_extension_root,
@@ -190,3 +193,14 @@ def default_factory_extension_root() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return project_root() / ".agentfactory" / "factory" / "extensions"
+
+
+def default_system_agent_extension_root(owner: SystemAgentExtensionOwner) -> Path:
+    env_name = {
+        "create_agent": "AGENTFACTORY_CREATE_AGENT_EXTENSION_ROOT",
+        "evolve_agent": "AGENTFACTORY_EVOLVE_AGENT_EXTENSION_ROOT",
+    }[owner]
+    configured = os.getenv(env_name)
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return project_root() / ".agentfactory" / "factory" / owner / "extensions"

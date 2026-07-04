@@ -8,7 +8,7 @@ from uuid import uuid4
 from typing import Any
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
-from agent_factory.create_agent.models import PUBLISH_FILE
+from agent_factory.create_agent.models import CreateAgentPublishDecision, PUBLISH_FILE
 from agent_factory.create_agent.package_paths import is_transient_package_path, normalize_package_relative
 from agent_factory.create_agent.stage_sync import sync_publish_stage
 from agent_factory.create_agent.validation_state import package_fingerprint
@@ -94,9 +94,50 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     confirmation = str(arguments.get("confirmation") or "").strip()
     if not confirmation:
         raise ValueError("confirmation is required")
-    registry_root = _registry_root(resources)
-    _assert_publish_ready(workspace)
+    return tool_envelope(publish_workspace(
+        workspace=workspace,
+        confirmation=confirmation,
+        registry_root=_registry_root(resources),
+    ))
 
+
+def confirm_and_publish(
+    *,
+    workspace: CreateAgentWorkspace,
+    confirmation: str,
+    registry_root: Path | None = None,
+) -> dict[str, Any]:
+    confirmation_text = str(confirmation or "").strip()
+    if not confirmation_text:
+        raise ValueError("confirmation is required")
+    validation = workspace.read_validation()
+    workspace.write_publish_decision(
+        CreateAgentPublishDecision(
+            decision="approve",
+            input_text=confirmation_text,
+            package_fingerprint=package_fingerprint(workspace.root),
+            validation_scope=validation.validation_scope if validation else "",
+            validation_status=validation.status if validation else "",
+        )
+    )
+    return publish_workspace(
+        workspace=workspace,
+        confirmation=confirmation_text,
+        registry_root=registry_root,
+    )
+
+
+def publish_workspace(
+    *,
+    workspace: CreateAgentWorkspace,
+    confirmation: str,
+    registry_root: Path | None = None,
+) -> dict[str, Any]:
+    confirmation_text = str(confirmation or "").strip()
+    if not confirmation_text:
+        raise ValueError("confirmation is required")
+    registry_root = registry_root or factory_artifact_path("packages")
+    _assert_publish_ready(workspace)
     package = AgentPackageLoader().load_path(workspace.package_manifest_path())
     package_id = _package_id(package)
     target = _safe_child(registry_root, package_id)
@@ -136,7 +177,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "package_path": str(target),
         "manifest_path": str(target / "agent_package.json"),
         "published_at": published_at,
-        "confirmation": confirmation,
+        "confirmation": confirmation_text,
         "validation": workspace.read_validation().to_digest().model_dump(mode="json") if workspace.read_validation() else None,
         "package_fingerprint": package_fingerprint(target),
     }
@@ -144,7 +185,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     workspace.write_publish_report(report)
     sync_publish_stage(workspace)
-    return tool_envelope({
+    return {
         "published": True,
         "package_id": package_id,
         "package_path": str(target),
@@ -152,7 +193,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "published_at": published_at,
         "report_path": str(report_path),
         "publish_state_path": str(workspace.publish_path),
-    })
+    }
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

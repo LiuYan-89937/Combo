@@ -66,7 +66,11 @@ class ToolCompiler:
         try:
             input_schema = compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_args")
             output_schema = compile_json_schema(schema=spec.output_schema, model_name=f"{spec.id}_output")
-            entrypoint = self.loader.load(spec.entrypoint)
+            entrypoint = (
+                _lazy_package_entrypoint(spec, self.loader)
+                if _is_package_tool_spec(spec)
+                else self.loader.load(spec.entrypoint)
+            )
             entrypoint = _entrypoint_for_spec(spec, entrypoint)
             hard_risk_evaluator = self._load_hard_risk_evaluator(spec)
             llm_risk_prompt = self._load_llm_risk_prompt(spec)
@@ -223,7 +227,7 @@ def _output_store_from_resources(resources: Mapping[str, Any]) -> ToolOutputStor
 
 
 def _entrypoint_for_spec(spec: ToolSpec, entrypoint):
-    if spec.permission_scope != "package" or not is_package_tool_entrypoint(spec.id, spec.entrypoint):
+    if not _is_package_tool_spec(spec):
         return entrypoint
 
     def invoke(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
@@ -237,6 +241,25 @@ def _entrypoint_for_spec(spec: ToolSpec, entrypoint):
                 summary=f"Package tool {spec.id} completed.",
             )
         return output
+
+    return invoke
+
+
+def _is_package_tool_spec(spec: ToolSpec) -> bool:
+    return spec.permission_scope == "package" and is_package_tool_entrypoint(spec.id, spec.entrypoint)
+
+
+def _lazy_package_entrypoint(spec: ToolSpec, loader: ToolEntrypointLoader):
+    cached_entrypoint = None
+    load_lock = RLock()
+
+    def invoke(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+        nonlocal cached_entrypoint
+        if cached_entrypoint is None:
+            with load_lock:
+                if cached_entrypoint is None:
+                    cached_entrypoint = loader.load(spec.entrypoint)
+        return cached_entrypoint(arguments=arguments, resources=resources)
 
     return invoke
 

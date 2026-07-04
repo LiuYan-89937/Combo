@@ -19,36 +19,32 @@
 .markdown-content h4,
 .markdown-content h5,
 .markdown-content h6 {
-  margin-top: 24px;
-  margin-bottom: 12px;
-  font-weight: 600;
+  margin-top: 18px;
+  margin-bottom: 8px;
+  font-weight: 580;
   line-height: var(--app-leading-tight);
   color: var(--app-text-strong);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .markdown-content h1 {
-  font-size: 1.75em;
-  border-bottom: 1px solid var(--app-divider);
-  padding-bottom: 0.3em;
+  font-size: 1.24em;
 }
 
 .markdown-content h2 {
-  font-size: 1.4em;
-  border-bottom: 1px solid var(--app-divider);
-  padding-bottom: 0.3em;
+  font-size: 1.16em;
 }
 
 .markdown-content h3 {
-  font-size: 1.2em;
+  font-size: 1.08em;
 }
 
 .markdown-content h4 {
-  font-size: 1.05em;
+  font-size: 1em;
 }
 
 .markdown-content p {
-  margin: 0 0 14px;
+  margin: 0 0 10px;
 }
 
 .markdown-content code {

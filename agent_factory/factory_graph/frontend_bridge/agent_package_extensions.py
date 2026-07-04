@@ -24,6 +24,11 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_utils import (
     write_json_object,
 )
 from agent_factory.tooling.approval_policy import ToolApprovalOverrideConfig, ToolApprovalPolicyConfig
+from agent_factory.tooling.factory_extensions import (
+    SystemAgentExtensionOwner,
+    default_builtin_factory_extension_root,
+    default_system_agent_extension_root,
+)
 from agent_factory.tooling.mcp_runtime import MCPRuntimeManager
 from agent_factory.tooling.providers import (
     EnabledSkillConfig,
@@ -46,26 +51,32 @@ class ExtensionManageResult:
 class AgentPackageExtensionService:
     def summary(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
         extension_root = extension_root_for_package(package_id, package)
-        _prune_missing_local_skills(extension_root)
-        bundle = load_extension_bundle(extension_root, package=package)
-        return {
-            "package_id": package_id,
-            "mcp_servers": [
-                public_mcp_server(server.model_dump(mode="json"))
-                for server in bundle.mcp_servers.servers
-            ],
-            "skills": [
-                public_skill(skill.model_dump(mode="json"))
-                for skill in bundle.enabled_skills.skills
-            ],
-            "tool_permissions": _tool_permissions_view(package=package, extension_root=extension_root, bundle=bundle),
-            "sources": {
-                "extension_root": str(bundle.sources.extension_root),
-                "mcp_servers_paths": [str(path) for path in bundle.sources.mcp_servers_paths],
-                "enabled_skills_paths": [str(path) for path in bundle.sources.enabled_skills_paths],
-                "tool_permissions_path": str(extension_root / TOOL_PERMISSIONS_FILENAME),
-            },
-        }
+        return _extension_summary(
+            scope_id=package_id,
+            extension_root=extension_root,
+            package=package,
+        )
+
+    def system_summary(self, owner: SystemAgentExtensionOwner) -> dict[str, Any]:
+        return _extension_summary(
+            scope_id=owner,
+            extension_root=default_system_agent_extension_root(owner),
+            system_owner=owner,
+        )
+
+    def system_manage(
+        self,
+        owner: SystemAgentExtensionOwner,
+        action: str,
+        payload: dict[str, Any],
+    ) -> ExtensionManageResult:
+        return _manage_extension_root(
+            scope_id=owner,
+            extension_root=default_system_agent_extension_root(owner),
+            action=action,
+            payload=payload,
+            system_owner=owner,
+        )
 
     def manage(
         self,
@@ -74,123 +85,185 @@ class AgentPackageExtensionService:
         action: str,
         payload: dict[str, Any],
     ) -> ExtensionManageResult:
-        extension_root = extension_root_for_package(package_id, package)
-        if action == "list":
-            return ExtensionManageResult(self.summary(package_id, package))
-        if action == "upsert_mcp":
-            server = _mcp_server_for_upsert(extension_root, payload, package=package)
-            _save_mcp_server(extension_root, server)
-            return ExtensionManageResult(
-                {
-                    "updated": "mcp",
-                    "server": public_mcp_server(server.model_dump(mode="json")),
-                    **self.summary(package_id, package),
-                },
-                changed=True,
-            )
-        if action == "set_mcp_enabled":
-            server_id = _required_config_id(payload, "server_id")
-            server = _set_mcp_server_enabled(
-                extension_root,
-                server_id=server_id,
-                enabled=bool(payload.get("enabled", True)),
-            )
-            return ExtensionManageResult(
-                {
-                    "updated": "mcp",
-                    "server": public_mcp_server(server.model_dump(mode="json")),
-                    **self.summary(package_id, package),
-                },
-                changed=True,
-            )
-        if action == "remove_mcp":
-            server_id = _required_config_id(payload, "server_id")
-            removed = _remove_mcp_server(extension_root, server_id=server_id)
-            return ExtensionManageResult(
-                {"updated": "mcp", "removed": removed, **self.summary(package_id, package)},
-                changed=True,
-            )
-        if action == "test_mcp":
-            server = _mcp_server_for_test(extension_root, payload, package=package)
-            return ExtensionManageResult(
-                {"test": _test_mcp_server(server), **self.summary(package_id, package)}
-            )
-        if action == "update_tool_permissions":
-            policy = _tool_approval_policy_from_payload(payload)
-            _write_tool_permission_policy(extension_root, policy)
-            return ExtensionManageResult(
-                {"updated": "tool_permissions", **self.summary(package_id, package)},
-                changed=True,
-            )
-        if action == "set_tool_permission":
-            policy = _load_tool_permission_policy(extension_root)
-            tool_id = _tool_permission_id(payload)
-            override_payload = payload.get("override") if isinstance(payload.get("override"), dict) else payload
-            next_overrides = dict(policy.tool_overrides)
-            next_overrides[tool_id] = _tool_override_from_payload(override_payload)
-            policy = ToolApprovalPolicyConfig.model_validate(
-                policy.model_copy(update={"tool_overrides": next_overrides}).model_dump(mode="json")
-            )
-            _write_tool_permission_policy(extension_root, policy)
-            return ExtensionManageResult(
-                {"updated": "tool_permissions", **self.summary(package_id, package)},
-                changed=True,
-            )
-        if action == "reset_tool_permission":
-            policy = _load_tool_permission_policy(extension_root)
-            tool_id = _tool_permission_id(payload)
-            next_overrides = dict(policy.tool_overrides)
-            next_overrides.pop(tool_id, None)
-            policy = ToolApprovalPolicyConfig.model_validate(
-                policy.model_copy(update={"tool_overrides": next_overrides}).model_dump(mode="json")
-            )
-            _write_tool_permission_policy(extension_root, policy)
-            return ExtensionManageResult(
-                {"updated": "tool_permissions", **self.summary(package_id, package)},
-                changed=True,
-            )
-        if action == "upsert_skill":
-            skill_payload = payload.get("skill") if isinstance(payload.get("skill"), dict) else payload
-            skill = _skill_from_payload(skill_payload, extension_root=extension_root)
-            replace_skill_id = str(
-                payload.get("replace_skill_id")
-                or skill_payload.get("replace_skill_id")
-                or ""
-            ).strip()
-            if replace_skill_id and replace_skill_id != skill.skill_id:
-                _remove_enabled_skill(extension_root, skill_id=replace_skill_id)
-            _save_enabled_skill(extension_root, skill)
-            return ExtensionManageResult(
-                {
-                    "updated": "skill",
-                    "skill": public_skill(skill.model_dump(mode="json")),
-                    **self.summary(package_id, package),
-                },
-                changed=True,
-            )
-        if action == "set_skill_enabled":
-            skill_id = _required_config_id(payload, "skill_id")
-            skill = _set_skill_enabled(
-                extension_root,
-                skill_id=skill_id,
-                enabled=bool(payload.get("enabled", True)),
-            )
-            return ExtensionManageResult(
-                {
-                    "updated": "skill",
-                    "skill": public_skill(skill.model_dump(mode="json")),
-                    **self.summary(package_id, package),
-                },
-                changed=True,
-            )
-        if action == "remove_skill":
-            skill_id = _required_config_id(payload, "skill_id")
-            removed = _remove_skill(extension_root, skill_id=skill_id)
-            return ExtensionManageResult(
-                {"updated": "skill", "removed": removed, **self.summary(package_id, package)},
-                changed=True,
-            )
-        raise ValueError(f"unsupported extensions action: {action}")
+        return _manage_extension_root(
+            scope_id=package_id,
+            extension_root=extension_root_for_package(package_id, package),
+            action=action,
+            payload=payload,
+            package=package,
+        )
+
+
+def _extension_summary(
+    *,
+    scope_id: str,
+    extension_root: Path,
+    package: LoadedAgentPackage | None = None,
+    system_owner: SystemAgentExtensionOwner | None = None,
+) -> dict[str, Any]:
+    _prune_missing_local_skills(extension_root)
+    bundle = (
+        load_system_agent_extension_bundle(extension_root)
+        if system_owner is not None
+        else load_extension_bundle(extension_root, package=package)
+    )
+    return {
+        "package_id": scope_id,
+        "resource_mode": system_owner or "package",
+        "mcp_servers": [
+            public_mcp_server(server.model_dump(mode="json"))
+            for server in bundle.mcp_servers.servers
+        ],
+        "skills": [
+            public_skill(skill.model_dump(mode="json"))
+            for skill in bundle.enabled_skills.skills
+        ],
+        "tool_permissions": _tool_permissions_view(
+            package=package,
+            extension_root=extension_root,
+            bundle=bundle,
+            system_owner=system_owner,
+        ),
+        "sources": {
+            "extension_root": str(bundle.sources.extension_root),
+            "mcp_servers_paths": [str(path) for path in bundle.sources.mcp_servers_paths],
+            "enabled_skills_paths": [str(path) for path in bundle.sources.enabled_skills_paths],
+            "tool_permissions_path": str(extension_root / TOOL_PERMISSIONS_FILENAME),
+        },
+    }
+
+
+def _manage_extension_root(
+    *,
+    scope_id: str,
+    extension_root: Path,
+    action: str,
+    payload: dict[str, Any],
+    package: LoadedAgentPackage | None = None,
+    system_owner: SystemAgentExtensionOwner | None = None,
+) -> ExtensionManageResult:
+    def summary() -> dict[str, Any]:
+        return _extension_summary(
+            scope_id=scope_id,
+            extension_root=extension_root,
+            package=package,
+            system_owner=system_owner,
+        )
+
+    if action == "list":
+        return ExtensionManageResult(summary())
+    if action == "upsert_mcp":
+        server = _mcp_server_for_upsert(extension_root, payload, package=package)
+        _save_mcp_server(extension_root, server)
+        return ExtensionManageResult(
+            {
+                "updated": "mcp",
+                "server": public_mcp_server(server.model_dump(mode="json")),
+                **summary(),
+            },
+            changed=True,
+        )
+    if action == "set_mcp_enabled":
+        server_id = _required_config_id(payload, "server_id")
+        server = _set_mcp_server_enabled(
+            extension_root,
+            server_id=server_id,
+            enabled=bool(payload.get("enabled", True)),
+        )
+        return ExtensionManageResult(
+            {
+                "updated": "mcp",
+                "server": public_mcp_server(server.model_dump(mode="json")),
+                **summary(),
+            },
+            changed=True,
+        )
+    if action == "remove_mcp":
+        server_id = _required_config_id(payload, "server_id")
+        removed = _remove_mcp_server(extension_root, server_id=server_id)
+        return ExtensionManageResult(
+            {"updated": "mcp", "removed": removed, **summary()},
+            changed=True,
+        )
+    if action == "test_mcp":
+        server = _mcp_server_for_test(extension_root, payload, package=package)
+        return ExtensionManageResult({"test": _test_mcp_server(server), **summary()})
+    if action == "update_tool_permissions":
+        policy = _tool_approval_policy_from_payload(payload)
+        _write_tool_permission_policy(extension_root, policy)
+        return ExtensionManageResult(
+            {"updated": "tool_permissions", **summary()},
+            changed=True,
+        )
+    if action == "set_tool_permission":
+        policy = _load_tool_permission_policy(extension_root)
+        tool_id = _tool_permission_id(payload)
+        override_payload = payload.get("override") if isinstance(payload.get("override"), dict) else payload
+        next_overrides = dict(policy.tool_overrides)
+        next_overrides[tool_id] = _tool_override_from_payload(override_payload)
+        policy = ToolApprovalPolicyConfig.model_validate(
+            policy.model_copy(update={"tool_overrides": next_overrides}).model_dump(mode="json")
+        )
+        _write_tool_permission_policy(extension_root, policy)
+        return ExtensionManageResult(
+            {"updated": "tool_permissions", **summary()},
+            changed=True,
+        )
+    if action == "reset_tool_permission":
+        policy = _load_tool_permission_policy(extension_root)
+        tool_id = _tool_permission_id(payload)
+        next_overrides = dict(policy.tool_overrides)
+        next_overrides.pop(tool_id, None)
+        policy = ToolApprovalPolicyConfig.model_validate(
+            policy.model_copy(update={"tool_overrides": next_overrides}).model_dump(mode="json")
+        )
+        _write_tool_permission_policy(extension_root, policy)
+        return ExtensionManageResult(
+            {"updated": "tool_permissions", **summary()},
+            changed=True,
+        )
+    if action == "upsert_skill":
+        skill_payload = payload.get("skill") if isinstance(payload.get("skill"), dict) else payload
+        skill = _skill_from_payload(skill_payload, extension_root=extension_root)
+        replace_skill_id = str(
+            payload.get("replace_skill_id")
+            or skill_payload.get("replace_skill_id")
+            or ""
+        ).strip()
+        if replace_skill_id and replace_skill_id != skill.skill_id:
+            _remove_enabled_skill(extension_root, skill_id=replace_skill_id)
+        _save_enabled_skill(extension_root, skill)
+        return ExtensionManageResult(
+            {
+                "updated": "skill",
+                "skill": public_skill(skill.model_dump(mode="json")),
+                **summary(),
+            },
+            changed=True,
+        )
+    if action == "set_skill_enabled":
+        skill_id = _required_config_id(payload, "skill_id")
+        skill = _set_skill_enabled(
+            extension_root,
+            skill_id=skill_id,
+            enabled=bool(payload.get("enabled", True)),
+        )
+        return ExtensionManageResult(
+            {
+                "updated": "skill",
+                "skill": public_skill(skill.model_dump(mode="json")),
+                **summary(),
+            },
+            changed=True,
+        )
+    if action == "remove_skill":
+        skill_id = _required_config_id(payload, "skill_id")
+        removed = _remove_skill(extension_root, skill_id=skill_id)
+        return ExtensionManageResult(
+            {"updated": "skill", "removed": removed, **summary()},
+            changed=True,
+        )
+    raise ValueError(f"unsupported extensions action: {action}")
 
 
 def extensions_summary(package_id: str, *, package: LoadedAgentPackage | None = None) -> dict[str, str]:
@@ -227,11 +300,17 @@ def package_extension_detail(*, package_id: str, package: LoadedAgentPackage) ->
         }
 
 
-def _tool_permissions_view(*, package: LoadedAgentPackage, extension_root: Path, bundle: Any) -> dict[str, Any]:
+def _tool_permissions_view(
+    *,
+    package: LoadedAgentPackage | None,
+    extension_root: Path,
+    bundle: Any,
+    system_owner: SystemAgentExtensionOwner | None = None,
+) -> dict[str, Any]:
     policy = _load_tool_permission_policy(extension_root)
     return {
         "policy": policy.model_dump(mode="json"),
-        "tools": _tool_permission_tools(package=package, bundle=bundle),
+        "tools": _tool_permission_tools(package=package, bundle=bundle, system_owner=system_owner),
     }
 
 
@@ -264,22 +343,31 @@ def _tool_permission_id(payload: dict[str, Any]) -> str:
     return _required_config_id(payload, "tool_id").lower().replace("-", "_")
 
 
-def _tool_permission_tools(*, package: LoadedAgentPackage, bundle: Any) -> list[dict[str, Any]]:
+def _tool_permission_tools(
+    *,
+    package: LoadedAgentPackage | None,
+    bundle: Any,
+    system_owner: SystemAgentExtensionOwner | None = None,
+) -> list[dict[str, Any]]:
     tools: dict[str, dict[str, Any]] = {}
-    for item in _builtin_permission_tools(package):
-        tools[item["tool_id"]] = item
-    for spec in package.assembly_spec.tools:
-        item = _public_tool_permission_item(
-            tool_id=str(getattr(spec, "id", "") or ""),
-            name=humanize_identifier(str(getattr(spec, "id", "") or "")) or "Package Tool",
-            description=str(getattr(spec, "description", "") or ""),
-            source="package",
-            risk_level=str(getattr(spec, "risk_level", "") or "low"),
-            permission_scope=str(getattr(spec, "permission_scope", "") or "package"),
-            permission_tags=list(getattr(spec, "permission_tags", []) or []),
-        )
-        if item:
+    if package is None:
+        for item in _system_agent_permission_tools(system_owner):
             tools[item["tool_id"]] = item
+    else:
+        for item in _builtin_permission_tools(package):
+            tools[item["tool_id"]] = item
+        for spec in package.assembly_spec.tools:
+            item = _public_tool_permission_item(
+                tool_id=str(getattr(spec, "id", "") or ""),
+                name=humanize_identifier(str(getattr(spec, "id", "") or "")) or "Package Tool",
+                description=str(getattr(spec, "description", "") or ""),
+                source="package",
+                risk_level=str(getattr(spec, "risk_level", "") or "low"),
+                permission_scope=str(getattr(spec, "permission_scope", "") or "package"),
+                permission_tags=list(getattr(spec, "permission_tags", []) or []),
+            )
+            if item:
+                tools[item["tool_id"]] = item
     if getattr(bundle.enabled_skills, "skills", None):
         tools["skill"] = _public_tool_permission_item(
             tool_id="skill",
@@ -291,6 +379,68 @@ def _tool_permission_tools(*, package: LoadedAgentPackage, bundle: Any) -> list[
             permission_tags=[],
         )
     return sorted(tools.values(), key=lambda item: (str(item.get("source") or ""), str(item.get("tool_id") or "")))
+
+
+def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | None) -> list[dict[str, Any]]:
+    try:
+        from agent_factory.create_agent.tooling import (
+            CREATE_AGENT_ASSIST_TOOL_IDS,
+            CREATE_AGENT_BUILTIN_TOOL_IDS,
+            CREATE_AGENT_AUTHORING_TOOL_ID,
+            CREATE_AGENT_CONTROL_TOOL_ID,
+            CREATE_AGENT_MODEL_POOL_TOOL_ID,
+            CREATE_AGENT_PROBE_TOOL_ID,
+            CREATE_AGENT_PUBLISH_TOOL_ID,
+            CREATE_AGENT_STAGE_TOOL_ID,
+            CREATE_AGENT_VALIDATE_TOOL_ID,
+        )
+        from agent_factory.tooling.builtins import (
+            get_always_available_system_tool_ids,
+            get_builtin_tool_specs,
+            get_read_only_system_tool_ids,
+        )
+    except Exception:
+        return []
+    authoring_tool_ids = {
+        CREATE_AGENT_AUTHORING_TOOL_ID,
+        CREATE_AGENT_CONTROL_TOOL_ID,
+        CREATE_AGENT_MODEL_POOL_TOOL_ID,
+        CREATE_AGENT_PROBE_TOOL_ID,
+        CREATE_AGENT_VALIDATE_TOOL_ID,
+    }
+    if system_owner == "create_agent":
+        authoring_tool_ids.update({CREATE_AGENT_STAGE_TOOL_ID, CREATE_AGENT_PUBLISH_TOOL_ID})
+    builtin_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if system_owner in {"create_agent", "evolve_agent"} else CREATE_AGENT_ASSIST_TOOL_IDS
+    read_only_ids = get_read_only_system_tool_ids()
+    allowed_builtin_ids = set(builtin_ids) | set(get_always_available_system_tool_ids())
+    tools: list[dict[str, Any]] = []
+    for spec in get_builtin_tool_specs():
+        if spec.id not in allowed_builtin_ids:
+            continue
+        item = _public_tool_permission_item(
+            tool_id=spec.id,
+            name=humanize_identifier(spec.id) or spec.id,
+            description=spec.description,
+            source="system",
+            risk_level=spec.risk_level,
+            permission_scope="system",
+            permission_tags=["read_only"] if spec.id in read_only_ids else [],
+        )
+        if item:
+            tools.append(item)
+    for tool_id in sorted(authoring_tool_ids):
+        item = _public_tool_permission_item(
+            tool_id=tool_id,
+            name=humanize_identifier(tool_id) or tool_id,
+            description="System authoring tool used by this workflow.",
+            source="system",
+            risk_level="high",
+            permission_scope="system",
+            permission_tags=[],
+        )
+        if item:
+            tools.append(item)
+    return tools
 
 
 def _builtin_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any]]:
@@ -362,6 +512,15 @@ def load_extension_bundle(extension_root: Path, *, package: LoadedAgentPackage |
     return AgentInstanceExtensionConfigLoader(
         extension_root,
         inherited_extension_roots=_extension_inherited_roots(extension_root, package=package),
+    ).load()
+
+
+def load_system_agent_extension_bundle(extension_root: Path) -> Any:
+    builtin_root = default_builtin_factory_extension_root()
+    inherited_roots = [] if builtin_root.resolve() == extension_root.resolve() else [builtin_root]
+    return AgentInstanceExtensionConfigLoader(
+        extension_root,
+        inherited_extension_roots=inherited_roots,
     ).load()
 
 

@@ -400,12 +400,23 @@ class AgentPackageRuntimeManager:
         package = self.load_package(package_id)
         return self.extensions.summary(package_id, package)
 
+    def system_extension_config_summary(self, resource_mode: str) -> dict[str, Any]:
+        if resource_mode not in {"create_agent", "evolve_agent"}:
+            raise ValueError(f"unsupported system extension resource mode: {resource_mode}")
+        return self.extensions.system_summary(resource_mode)
+
     def extensions_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         package = self.load_package(package_id)
         result = self.extensions.manage(package_id, package, action, payload)
         if result.changed:
             self._close_container(package_id)
             self._close_system(package_id)
+        return result.payload
+
+    def system_extensions_manage(self, resource_mode: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if resource_mode not in {"create_agent", "evolve_agent"}:
+            raise ValueError(f"unsupported system extension resource mode: {resource_mode}")
+        result = self.extensions.system_manage(resource_mode, action, payload)
         return result.payload
 
     def knowledge_runtime_for_package(self, package_id: str) -> KnowledgeRuntime:

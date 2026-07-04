@@ -36,7 +36,21 @@ export default defineConfig({
           'vue-vendor': ['vue', 'vue-router', 'pinia'],
           'ui-vendor': ['naive-ui'],
           'editor': ['monaco-editor'],
-          'markdown': ['marked', 'highlight.js', 'katex', 'mermaid']
+          'markdown': [
+            'unified',
+            'remark-parse',
+            'remark-gfm',
+            'remark-math',
+            'remark-rehype',
+            'rehype-highlight',
+            'rehype-katex',
+            'rehype-sanitize',
+            'rehype-stringify',
+            'unist-util-visit',
+            'highlight.js',
+            'katex',
+            'mermaid',
+          ]
         }
       }
     }

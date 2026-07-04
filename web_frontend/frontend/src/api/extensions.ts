@@ -1,63 +1,86 @@
 import type { ToolPermissionOverrideView, ToolPermissionPolicyView } from '@/types/protocol'
-import type { McpServerConfig, SkillConfig } from './resourceTypes'
+import type { McpServerConfig, SkillConfig, WorkspaceContextInput, WorkspaceRequestContext } from './resourceTypes'
 import { requestEvent, withQuery } from './http'
 
+type ExtensionContext = Pick<WorkspaceRequestContext, 'packageId' | 'resourceMode'>
+
 export const extensionsApi = {
-  list: (packageId?: string) => requestEvent(withQuery('/api/extensions', { package_id: packageId })),
-  saveMcp: (server: McpServerConfig, packageId?: string) =>
+  list: (context?: WorkspaceContextInput) => requestEvent(withQuery('/api/extensions', extensionContextQuery(context))),
+  saveMcp: (server: McpServerConfig, context?: WorkspaceContextInput) =>
     requestEvent('/api/extensions/mcp', {
       method: 'POST',
-      body: JSON.stringify({ server, package_id: packageId }),
+      body: JSON.stringify({ server, ...extensionContextPayload(context) }),
     }),
-  testMcp: (serverIdOrConfig: string | McpServerConfig, packageId?: string) => {
+  testMcp: (serverIdOrConfig: string | McpServerConfig, context?: WorkspaceContextInput) => {
     const payload =
       typeof serverIdOrConfig === 'string'
-        ? { server_id: serverIdOrConfig, package_id: packageId }
-        : { server: serverIdOrConfig, package_id: packageId }
+        ? { server_id: serverIdOrConfig, ...extensionContextPayload(context) }
+        : { server: serverIdOrConfig, ...extensionContextPayload(context) }
     return requestEvent('/api/extensions/mcp/test', {
       method: 'POST',
       body: JSON.stringify(payload),
     })
   },
-  setMcpEnabled: (serverId: string, enabled: boolean, packageId?: string) =>
+  setMcpEnabled: (serverId: string, enabled: boolean, context?: WorkspaceContextInput) =>
     requestEvent(`/api/extensions/mcp/${encodeURIComponent(serverId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ enabled, package_id: packageId }),
+      body: JSON.stringify({ enabled, ...extensionContextPayload(context) }),
     }),
-  removeMcp: (serverId: string, packageId?: string) =>
-    requestEvent(withQuery(`/api/extensions/mcp/${encodeURIComponent(serverId)}`, { package_id: packageId }), {
+  removeMcp: (serverId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery(`/api/extensions/mcp/${encodeURIComponent(serverId)}`, extensionContextQuery(context)), {
       method: 'DELETE',
     }),
-  saveSkill: (skill: SkillConfig, packageId?: string) =>
+  saveSkill: (skill: SkillConfig, context?: WorkspaceContextInput) =>
     requestEvent('/api/extensions/skills', {
       method: 'POST',
       body: JSON.stringify({
         skill,
         replace_skill_id: skill.replace_skill_id,
-        package_id: packageId,
+        ...extensionContextPayload(context),
       }),
     }),
-  setSkillEnabled: (skillId: string, enabled: boolean, packageId?: string) =>
+  setSkillEnabled: (skillId: string, enabled: boolean, context?: WorkspaceContextInput) =>
     requestEvent(`/api/extensions/skills/${encodeURIComponent(skillId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ enabled, package_id: packageId }),
+      body: JSON.stringify({ enabled, ...extensionContextPayload(context) }),
     }),
-  removeSkill: (skillId: string, packageId?: string) =>
-    requestEvent(withQuery(`/api/extensions/skills/${encodeURIComponent(skillId)}`, { package_id: packageId }), {
+  removeSkill: (skillId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery(`/api/extensions/skills/${encodeURIComponent(skillId)}`, extensionContextQuery(context)), {
       method: 'DELETE',
     }),
-  updateToolPermissions: (policy: ToolPermissionPolicyView, packageId?: string) =>
+  updateToolPermissions: (policy: ToolPermissionPolicyView, context?: WorkspaceContextInput) =>
     requestEvent('/api/extensions/tool-permissions', {
       method: 'PUT',
-      body: JSON.stringify({ policy, package_id: packageId }),
+      body: JSON.stringify({ policy, ...extensionContextPayload(context) }),
     }),
-  setToolPermission: (toolId: string, override: ToolPermissionOverrideView, packageId?: string) =>
+  setToolPermission: (toolId: string, override: ToolPermissionOverrideView, context?: WorkspaceContextInput) =>
     requestEvent(`/api/extensions/tool-permissions/${encodeURIComponent(toolId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ override, package_id: packageId }),
+      body: JSON.stringify({ override, ...extensionContextPayload(context) }),
     }),
-  resetToolPermission: (toolId: string, packageId?: string) =>
-    requestEvent(withQuery(`/api/extensions/tool-permissions/${encodeURIComponent(toolId)}`, { package_id: packageId }), {
+  resetToolPermission: (toolId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery(`/api/extensions/tool-permissions/${encodeURIComponent(toolId)}`, extensionContextQuery(context)), {
       method: 'DELETE',
     }),
+}
+
+function extensionContextPayload(context?: WorkspaceContextInput): { package_id?: string; resource_mode?: string } {
+  const normalized = normalizeExtensionContext(context)
+  return {
+    ...(normalized.packageId ? { package_id: normalized.packageId } : {}),
+    ...(normalized.resourceMode ? { resource_mode: normalized.resourceMode } : {}),
+  }
+}
+
+function extensionContextQuery(context?: WorkspaceContextInput): { package_id?: string; resource_mode?: string } {
+  return extensionContextPayload(context)
+}
+
+function normalizeExtensionContext(context?: WorkspaceContextInput): ExtensionContext {
+  if (typeof context === 'string') return { packageId: context || undefined }
+  if (!context) return {}
+  return {
+    packageId: context.packageId || undefined,
+    resourceMode: context.resourceMode,
+  }
 }

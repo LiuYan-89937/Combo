@@ -38,7 +38,12 @@
           </template>
           {{ t('publish.continueRevision') }}
         </n-button>
-        <n-button size="small" type="primary" @click="handleConfirmPublish">
+        <n-button
+          size="small"
+          type="primary"
+          :loading="publishSubmitting"
+          @click="handleConfirmPublish"
+        >
           <template #icon>
             <n-icon><CheckmarkCircle /></n-icon>
           </template>
@@ -61,6 +66,7 @@ const runtimeStore = useRuntimeStore()
 const commands = useCommand()
 const { t } = useI18n()
 const revisionGuidance = ref('')
+const publishSubmitting = ref(false)
 
 const payload = computed(() => runtimeStore.publishConfirmationPayload || {})
 const messageText = computed(() => String(payload.value.message || t('publish.defaultMessage')))
@@ -73,6 +79,8 @@ const validationLabel = computed(() => {
 })
 
 function handleConfirmPublish() {
+  if (publishSubmitting.value) return
+  publishSubmitting.value = true
   commands.confirmPublish()
 }
 

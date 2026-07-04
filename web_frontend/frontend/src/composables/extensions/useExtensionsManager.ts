@@ -28,7 +28,7 @@ export function useExtensionsManager() {
   const editingSkill = ref<ExtensionItemView | null>(null)
   const busyKey = ref<string | null>(null)
 
-  const packageId = computed(() => resourceContext.packageIdForApi.value)
+  const extensionContext = computed(() => resourceContext.workspaceContext.value)
   const activePackageLabel = computed(() => t('resource.currentConfigTarget', { label: resourceContext.label.value }))
   const testResultType = computed(() => (
     extensionStore.testResult?.status === 'ok' ? 'success' : 'error'
@@ -71,7 +71,7 @@ export function useExtensionsManager() {
     editingSkill.value = null
     showMcpModal.value = false
     showSkillModal.value = false
-    return commands.refreshExtensions(packageId.value)
+    return commands.refreshExtensions(extensionContext.value)
   }
 
   function openAddMcp(): void {
@@ -99,7 +99,7 @@ export function useExtensionsManager() {
     if (!serverId) return
     busyKey.value = `test:${extensionKey(item)}`
     try {
-      await commands.testMcp(serverId, packageId.value)
+      await commands.testMcp(serverId, extensionContext.value)
     } finally {
       busyKey.value = null
     }
@@ -110,7 +110,7 @@ export function useExtensionsManager() {
     if (!serverId) return
     busyKey.value = `toggle:${extensionKey(item)}`
     try {
-      await commands.setMcpEnabled(serverId, enabled, packageId.value)
+      await commands.setMcpEnabled(serverId, enabled, extensionContext.value)
     } finally {
       busyKey.value = null
     }
@@ -121,14 +121,14 @@ export function useExtensionsManager() {
     if (!skillId) return
     busyKey.value = `toggle:${extensionKey(item)}`
     try {
-      await commands.setSkillEnabled(skillId, enabled, packageId.value)
+      await commands.setSkillEnabled(skillId, enabled, extensionContext.value)
     } finally {
       busyKey.value = null
     }
   }
 
   async function handleSaveMcp(config: McpServerConfig): Promise<void> {
-    const event = await commands.saveMcp(config, packageId.value)
+    const event = await commands.saveMcp(config, extensionContext.value)
     if (event) {
       showMcpModal.value = false
       editingMcp.value = null
@@ -136,7 +136,7 @@ export function useExtensionsManager() {
   }
 
   async function handleSaveSkill(config: SkillConfig): Promise<void> {
-    const event = await commands.saveSkill(config, packageId.value)
+    const event = await commands.saveSkill(config, extensionContext.value)
     if (event) {
       showSkillModal.value = false
       editingSkill.value = null
@@ -147,7 +147,10 @@ export function useExtensionsManager() {
     const nextMode = normalizePermissionMode(mode)
     busyKey.value = 'tool-permissions:mode'
     try {
-      await commands.updateToolPermissions({ ...toolPermissionPolicy.value, mode: nextMode }, packageId.value)
+      await commands.updateToolPermissions(
+        { mode: nextMode, tool_overrides: toolPermissionPolicy.value.tool_overrides || {} },
+        extensionContext.value,
+      )
     } finally {
       busyKey.value = null
     }
@@ -166,7 +169,7 @@ export function useExtensionsManager() {
   async function handleResetToolPermission(tool: ToolPermissionItemView): Promise<void> {
     busyKey.value = `permission:${tool.tool_id}`
     try {
-      await commands.resetToolPermission(tool.tool_id, packageId.value)
+      await commands.resetToolPermission(tool.tool_id, extensionContext.value)
     } finally {
       busyKey.value = null
     }
@@ -175,7 +178,7 @@ export function useExtensionsManager() {
   async function saveToolOverride(toolId: string, override: ToolPermissionOverrideView): Promise<void> {
     busyKey.value = `permission:${toolId}`
     try {
-      await commands.setToolPermission(toolId, override, packageId.value)
+      await commands.setToolPermission(toolId, override, extensionContext.value)
     } finally {
       busyKey.value = null
     }
@@ -210,7 +213,7 @@ export function useExtensionsManager() {
       positiveText: t('common.delete'),
       negativeText: t('common.cancel'),
       onPositiveClick: () => {
-        void commands.removeMcp(serverId, packageId.value)
+        void commands.removeMcp(serverId, extensionContext.value)
       },
     })
   }
@@ -224,13 +227,13 @@ export function useExtensionsManager() {
       positiveText: t('common.delete'),
       negativeText: t('common.cancel'),
       onPositiveClick: () => {
-        void commands.removeSkill(skillId, packageId.value)
+        void commands.removeSkill(skillId, extensionContext.value)
       },
     })
   }
 
   watch(
-    () => resourceContext.packageId.value,
+    () => resourceContext.workspaceContextKey.value,
     () => {
       void refreshCurrentExtensions()
     },

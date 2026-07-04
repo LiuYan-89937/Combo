@@ -36,11 +36,9 @@ class ToolApprovalPolicyConfig(BaseModel):
     def _apply_mode_defaults(self) -> "ToolApprovalPolicyConfig":
         if self.mode == "custom":
             return self
-        explicit_fields = set(self.model_fields_set)
         defaults = _mode_defaults(self.mode)
         for field_name, value in defaults.items():
-            if field_name not in explicit_fields:
-                setattr(self, field_name, value)
+            setattr(self, field_name, value)
         return self
 
     @field_validator("mode", mode="before")

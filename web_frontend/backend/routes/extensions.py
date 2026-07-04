@@ -12,11 +12,11 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     router = APIRouter(prefix="/api/extensions")
 
     @router.get("")
-    async def list_extensions(package_id: str | None = None):
+    async def list_extensions(package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "extensions_manage",
-            {"action": "list", **optional_package(package_id)},
+            {"action": "list", **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"extension_configs_listed"},
         )
         return {"event": event}
@@ -26,7 +26,7 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         event = await resource_command(
             runtime_bridge,
             "extensions_manage",
-            {"action": "upsert_mcp", **payload},
+            {"action": "upsert_mcp", **payload, **optional_resource_mode(payload.get("resource_mode"))},
             {"extension_config_updated"},
         )
         return {"event": event}
@@ -36,7 +36,7 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         event = await resource_command(
             runtime_bridge,
             "extensions_manage",
-            {"action": "test_mcp", **payload},
+            {"action": "test_mcp", **payload, **optional_resource_mode(payload.get("resource_mode"))},
             {"extension_config_tested"},
             timeout_seconds=60.0,
         )
@@ -52,17 +52,23 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "server_id": server_id,
                 "enabled": payload.get("enabled", True),
                 **optional_package(payload.get("package_id")),
+                **optional_resource_mode(payload.get("resource_mode")),
             },
             {"extension_config_updated"},
         )
         return {"event": event}
 
     @router.delete("/mcp/{server_id}")
-    async def remove_mcp(server_id: str, package_id: str | None = None):
+    async def remove_mcp(server_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "extensions_manage",
-            {"action": "remove_mcp", "server_id": server_id, **optional_package(package_id)},
+            {
+                "action": "remove_mcp",
+                "server_id": server_id,
+                **optional_package(package_id),
+                **optional_resource_mode(resource_mode),
+            },
             {"extension_config_updated"},
         )
         return {"event": event}
@@ -78,6 +84,7 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "skill": payload.get("skill") if isinstance(payload.get("skill"), dict) else payload,
                 "replace_skill_id": payload.get("replace_skill_id"),
                 **optional_package(package_id),
+                **optional_resource_mode(payload.get("resource_mode")),
             },
             {"extension_config_updated"},
         )
@@ -93,17 +100,23 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "skill_id": skill_id,
                 "enabled": payload.get("enabled", True),
                 **optional_package(payload.get("package_id")),
+                **optional_resource_mode(payload.get("resource_mode")),
             },
             {"extension_config_updated"},
         )
         return {"event": event}
 
     @router.delete("/skills/{skill_id}")
-    async def remove_skill(skill_id: str, package_id: str | None = None):
+    async def remove_skill(skill_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "extensions_manage",
-            {"action": "remove_skill", "skill_id": skill_id, **optional_package(package_id)},
+            {
+                "action": "remove_skill",
+                "skill_id": skill_id,
+                **optional_package(package_id),
+                **optional_resource_mode(resource_mode),
+            },
             {"extension_config_updated"},
         )
         return {"event": event}
@@ -117,6 +130,7 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "action": "update_tool_permissions",
                 "policy": payload.get("policy") if isinstance(payload.get("policy"), dict) else payload,
                 **optional_package(payload.get("package_id")),
+                **optional_resource_mode(payload.get("resource_mode")),
             },
             {"extension_config_updated"},
         )
@@ -132,19 +146,30 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "tool_id": tool_id,
                 "override": payload.get("override") if isinstance(payload.get("override"), dict) else payload,
                 **optional_package(payload.get("package_id")),
+                **optional_resource_mode(payload.get("resource_mode")),
             },
             {"extension_config_updated"},
         )
         return {"event": event}
 
     @router.delete("/tool-permissions/{tool_id}")
-    async def reset_tool_permission(tool_id: str, package_id: str | None = None):
+    async def reset_tool_permission(tool_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "extensions_manage",
-            {"action": "reset_tool_permission", "tool_id": tool_id, **optional_package(package_id)},
+            {
+                "action": "reset_tool_permission",
+                "tool_id": tool_id,
+                **optional_package(package_id),
+                **optional_resource_mode(resource_mode),
+            },
             {"extension_config_updated"},
         )
         return {"event": event}
 
     return router
+
+
+def optional_resource_mode(value: Any) -> dict[str, str]:
+    resource_mode = str(value or "").strip()
+    return {"resource_mode": resource_mode} if resource_mode else {}

@@ -1,53 +1,53 @@
 import { extensionsApi } from '@/api/extensions'
 import type { ToolPermissionOverrideView, ToolPermissionPolicyView } from '@/types/protocol'
-import type { McpServerConfig, SkillConfig } from '@/api/resourceTypes'
+import type { McpServerConfig, SkillConfig, WorkspaceContextInput } from '@/api/resourceTypes'
 import { useCommandTransport } from './transport'
 
 export function useExtensionCommands() {
   const transport = useCommandTransport()
 
-  const refreshExtensions = (packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.list(packageId))
+  const refreshExtensions = (context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.list(context))
   }
 
-  const saveMcp = (server: McpServerConfig, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.saveMcp(server, packageId))
+  const saveMcp = (server: McpServerConfig, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.saveMcp(server, context))
   }
 
-  const testMcp = (serverIdOrConfig: string | McpServerConfig, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.testMcp(serverIdOrConfig, packageId))
+  const testMcp = (serverIdOrConfig: string | McpServerConfig, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.testMcp(serverIdOrConfig, context))
   }
 
-  const setMcpEnabled = (serverId: string, enabled: boolean, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.setMcpEnabled(serverId, enabled, packageId))
+  const setMcpEnabled = (serverId: string, enabled: boolean, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.setMcpEnabled(serverId, enabled, context))
   }
 
-  const removeMcp = (serverId: string, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.removeMcp(serverId, packageId))
+  const removeMcp = (serverId: string, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.removeMcp(serverId, context))
   }
 
-  const saveSkill = (skill: SkillConfig, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.saveSkill(skill, packageId))
+  const saveSkill = (skill: SkillConfig, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.saveSkill(skill, context))
   }
 
-  const setSkillEnabled = (skillId: string, enabled: boolean, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.setSkillEnabled(skillId, enabled, packageId))
+  const setSkillEnabled = (skillId: string, enabled: boolean, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.setSkillEnabled(skillId, enabled, context))
   }
 
-  const removeSkill = (skillId: string, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.removeSkill(skillId, packageId))
+  const removeSkill = (skillId: string, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.removeSkill(skillId, context))
   }
 
-  const updateToolPermissions = (policy: ToolPermissionPolicyView, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.updateToolPermissions(policy, packageId))
+  const updateToolPermissions = (policy: ToolPermissionPolicyView, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.updateToolPermissions(policy, context))
   }
 
-  const setToolPermission = (toolId: string, override: ToolPermissionOverrideView, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.setToolPermission(toolId, override, packageId))
+  const setToolPermission = (toolId: string, override: ToolPermissionOverrideView, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.setToolPermission(toolId, override, context))
   }
 
-  const resetToolPermission = (toolId: string, packageId?: string) => {
-    return transport.applyEventRequest(extensionsApi.resetToolPermission(toolId, packageId))
+  const resetToolPermission = (toolId: string, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.resetToolPermission(toolId, context))
   }
 
   return {

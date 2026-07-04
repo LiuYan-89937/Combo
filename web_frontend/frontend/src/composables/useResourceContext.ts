@@ -30,12 +30,6 @@ export function useResourceContext() {
     String(activeFactorySession.value?.create_agent_session_id || '').trim() || null
   ))
   const workspaceContext = computed<WorkspaceRequestContext>(() => {
-    if (agentStore.activeChatPackageId) {
-      return {
-        resourceMode: 'package',
-        packageId: agentStore.activeChatPackageId,
-      }
-    }
     if (runtimeStore.currentMode === 'create_agent') {
       return {
         resourceMode: 'create_agent',
@@ -48,6 +42,12 @@ export function useResourceContext() {
         resourceMode: 'evolve_agent',
         packageId: agentStore.selectedPackageId,
         factorySessionId: runtimeStore.activeFactorySessionId,
+      }
+    }
+    if (agentStore.activeChatPackageId) {
+      return {
+        resourceMode: 'package',
+        packageId: agentStore.activeChatPackageId,
       }
     }
     return {
