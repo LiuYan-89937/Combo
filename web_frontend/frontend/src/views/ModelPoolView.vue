@@ -132,6 +132,10 @@
                 <n-radio-button value="provider">{{ t('modelPool.usageByProvider') }}</n-radio-button>
                 <n-radio-button value="agent">{{ t('modelPool.usageByAgent') }}</n-radio-button>
               </n-radio-group>
+              <n-radio-group v-model:value="usageChartType" class="soft-segmented-control">
+                <n-radio-button value="line">{{ t('modelPool.usageLineChart') }}</n-radio-button>
+                <n-radio-button value="bar">{{ t('modelPool.usageBarChart') }}</n-radio-button>
+              </n-radio-group>
               <n-select
                 v-model:value="usageDays"
                 class="usage-range-select"
@@ -293,7 +297,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { use } from 'echarts/core'
-import { LineChart } from 'echarts/charts'
+import { BarChart, LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
@@ -336,7 +340,7 @@ import {
 } from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
 
-use([CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
+use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
 const { t } = useI18n()
 const message = useMessage()
@@ -349,6 +353,7 @@ const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
 const usageLoading = ref(false)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
+const usageChartType = ref<'line' | 'bar'>('line')
 const usageDays = ref(14)
 const usageSummary = ref<ModelUsageSummary | null>(null)
 const credentialModalOpen = ref(false)
@@ -420,6 +425,7 @@ const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
 ])
 const usageChartOptions = computed(() => {
   const summary = usageSummary.value
+  const chartType = usageChartType.value
   const buckets = Array.from(
     new Set((summary?.series || []).flatMap((item) => item.points.map((point) => point.bucket))),
   ).sort()
@@ -433,16 +439,20 @@ const usageChartOptions = computed(() => {
       type: 'scroll',
     },
     grid: {
-      left: 12,
-      right: 20,
-      top: 42,
-      bottom: 8,
+      left: 18,
+      right: 42,
+      top: 48,
+      bottom: 32,
       containLabel: true,
     },
     xAxis: {
       type: 'category',
-      boundaryGap: false,
+      boundaryGap: chartType === 'bar',
       data: buckets,
+      axisLabel: {
+        hideOverlap: true,
+        margin: 12,
+      },
     },
     yAxis: {
       type: 'value',
@@ -459,10 +469,12 @@ const usageChartOptions = computed(() => {
       const pointsByBucket = new Map(item.points.map((point) => [point.bucket, point]))
       return {
         name: item.label,
-        type: 'line',
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 6,
+        type: chartType,
+        smooth: chartType === 'line',
+        symbol: chartType === 'line' ? 'circle' : undefined,
+        symbolSize: chartType === 'line' ? 6 : undefined,
+        barMaxWidth: chartType === 'bar' ? 28 : undefined,
+        barCategoryGap: chartType === 'bar' ? '32%' : undefined,
         data: buckets.map((bucket) => pointsByBucket.get(bucket)?.total_tokens || 0),
       }
     }),

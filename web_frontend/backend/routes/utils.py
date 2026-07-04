@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
 from web_frontend.backend.runtime_bridge import RuntimeBridge
@@ -14,6 +14,7 @@ async def resource_command(
     event_types: set[str],
     *,
     timeout_seconds: float = 30.0,
+    event_filter: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     return await send_and_wait(
         runtime_bridge,
@@ -21,6 +22,7 @@ async def resource_command(
         payload,
         event_types,
         timeout_seconds=timeout_seconds,
+        event_filter=event_filter,
     )
 
 
@@ -31,9 +33,15 @@ async def send_and_wait(
     event_types: set[str],
     *,
     timeout_seconds: float = 30.0,
+    event_filter: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     command = FactoryFrontendCommand(type=command_type, request_id=request_id(), payload=payload)
-    return await runtime_bridge.send_and_wait(command, event_types=event_types, timeout_seconds=timeout_seconds)
+    return await runtime_bridge.send_and_wait(
+        command,
+        event_types=event_types,
+        timeout_seconds=timeout_seconds,
+        event_filter=event_filter,
+    )
 
 
 def request_id() -> str:

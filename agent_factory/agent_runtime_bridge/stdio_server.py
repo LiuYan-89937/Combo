@@ -118,11 +118,7 @@ class BridgeRuntimeState:
                 normalizer.runtime_event(
                     "agent_package_instance_updated",
                     severity="error",
-                    payload={
-                        "status": "failed",
-                        "ready": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    },
+                    payload=_instance_status_payload(status="failed", error=f"{type(exc).__name__}: {exc}"),
                 )
                 return 1
         if command_type == "scheduler_manage":

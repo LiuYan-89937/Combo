@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import logging
 import threading
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException
 
@@ -121,6 +121,7 @@ class RuntimeBridge:
         *,
         event_types: set[str],
         timeout_seconds: float = 30.0,
+        event_filter: Callable[[dict[str, Any]], bool] | None = None,
     ) -> dict[str, Any]:
         event_queue = self.subscribe(replay_history=False)
         try:
@@ -139,7 +140,9 @@ class RuntimeBridge:
                         status_code=400,
                         detail=event_payload.get("message") or "Runtime command failed",
                     )
-                if event_payload.get("event_type") in event_types:
+                if event_payload.get("event_type") in event_types and (
+                    event_filter is None or event_filter(event_payload)
+                ):
                     return event_payload
         finally:
             self.unsubscribe(event_queue)

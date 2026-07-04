@@ -367,9 +367,7 @@ def _group_label(record: dict[str, Any], *, group_by: ModelUsageGroupBy) -> str:
         return str(record.get("provider_display_name") or record.get("provider") or "未知厂商")
     if group_by == "agent":
         return str(record.get("agent_label") or record.get("agent_id") or "未知 Agent")
-    model = str(record.get("model_name") or "未知模型")
-    provider = str(record.get("provider_display_name") or record.get("provider") or "").strip()
-    return f"{model} · {provider}" if provider else model
+    return str(record.get("model_name") or "未知模型")
 
 
 def _agent_id(*, event_payload: dict[str, Any], payload: dict[str, Any], package_id: str, mode: str) -> str:
