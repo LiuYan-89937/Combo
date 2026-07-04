@@ -20,7 +20,7 @@ class ToolEntrypointError(EntrypointAdapterError):
 
 
 class ToolEntrypointLoader:
-    """Compatibility facade over the protocol-based entrypoint adapter registry."""
+    """Facade over the protocol-based entrypoint adapter registry."""
 
     def __init__(
         self,

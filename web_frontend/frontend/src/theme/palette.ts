@@ -213,8 +213,3 @@ export const darkPalette: AppPalette = {
 export function getPalette(isDark: boolean): AppPalette {
   return isDark ? darkPalette : lightPalette
 }
-
-/**
- * 向后兼容的默认导出
- */
-export const appPalette = lightPalette

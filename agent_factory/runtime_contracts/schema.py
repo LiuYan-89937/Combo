@@ -208,22 +208,6 @@ class KnowledgeContract(BaseModel):
     config: KnowledgeContractConfig = Field(default_factory=KnowledgeContractConfig)
 
 
-class ModelContractV0Config(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    role: Literal["main", "task"] = "main"
-    source: Literal["factory_runtime_env"] = "factory_runtime_env"
-
-
-class ModelContractV0(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["model"] = "model"
-    version: Literal["model_contract.v0"] = "model_contract.v0"
-    enabled: bool = True
-    config: ModelContractV0Config = Field(default_factory=ModelContractV0Config)
-
-
 class ModelContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

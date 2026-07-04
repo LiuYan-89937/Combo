@@ -8,8 +8,6 @@ from typing import Any
 
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
 
-DEFAULT_SANDBOX_CONTRACT: dict[str, Any] = {}
-
 
 @dataclass(frozen=True, slots=True)
 class LoadedAgentPackage:
@@ -18,7 +16,6 @@ class LoadedAgentPackage:
     manifest: AgentPackageManifest
     assembly_spec: Any
     resources: dict[str, Any]
-    sandbox_contract: dict[str, Any]
     contracts: dict[str, dict[str, Any]]
 
 
@@ -42,7 +39,6 @@ class AgentPackageLoader:
             manifest=manifest,
             assembly_spec=assembly_spec,
             resources=resources,
-            sandbox_contract=dict(DEFAULT_SANDBOX_CONTRACT),
             contracts=contracts,
         )
 

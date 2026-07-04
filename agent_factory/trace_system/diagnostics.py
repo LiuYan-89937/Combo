@@ -105,7 +105,7 @@ def _repair_targets(category: str | None) -> list[str]:
         "timeout": ["runtime_request_policy", "tool_timeout_policy", "external_service_health"],
         "context_budget_error": ["context_policy", "compression_policy", "context_source_limits"],
         "model_call_error": ["model_contract", "model_adapter", "message_protocol"],
-        "sandbox_runtime_error": ["sandbox_contract", "dependencies_contract", "docker_runtime"],
+        "sandbox_runtime_error": ["runtime_container", "dependencies_contract", "docker_runtime"],
         "memory_system_error": ["memory_contract", "memory_store", "memory_injection"],
         "knowledge_system_error": ["knowledge_contract", "knowledge_catalog", "knowledge_ingestion"],
         "scheduler_system_error": ["scheduler_contract", "scheduler_job", "scheduler_executor"],

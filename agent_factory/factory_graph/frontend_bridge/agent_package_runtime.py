@@ -28,6 +28,7 @@ from agent_factory.runtime_attachments import (
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     AgentRuntimeLaunchError,
+    DEFAULT_RUNTIME_IMAGE,
     DockerAgentRuntimeLauncher,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
@@ -1038,7 +1039,7 @@ def _package_fingerprint(package: LoadedAgentPackage) -> str:
     if _is_host_system_package(package):
         digest.update(b"host-system-package")
     else:
-        digest.update(_runtime_image_identity(package).encode("utf-8"))
+        digest.update(_runtime_image_identity().encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -1070,10 +1071,8 @@ def _hash_tree(digest: "hashlib._Hash", root: Path) -> None:
         digest.update(str(stat.st_size).encode("ascii"))
 
 
-def _runtime_image_identity(package: LoadedAgentPackage) -> str:
-    image = str((package.sandbox_contract or {}).get("image") or "")
-    if not image:
-        return "image:"
+def _runtime_image_identity() -> str:
+    image = DEFAULT_RUNTIME_IMAGE
     docker = shutil.which("docker")
     if docker is None:
         return f"image:{image}"

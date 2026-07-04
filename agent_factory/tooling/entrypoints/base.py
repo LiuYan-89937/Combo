@@ -59,4 +59,4 @@ def parse_protocol(entrypoint: str) -> ParsedEntrypoint:
         if not target:
             raise EntrypointAdapterError("entrypoint target must be non-empty")
         return ParsedEntrypoint(protocol=protocol, target=target)
-    return ParsedEntrypoint(protocol="legacy", target=entrypoint.strip())
+    return ParsedEntrypoint(protocol="python-import", target=entrypoint.strip())

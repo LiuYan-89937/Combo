@@ -22,25 +22,15 @@ class PythonEntrypointAdapter:
 
     def can_load(self, entrypoint: str) -> bool:
         parsed = parse_protocol(entrypoint)
-        return parsed.protocol in {"python", "python-import", "legacy"}
+        return parsed.protocol in {"python", "python-import"}
 
     def load(self, entrypoint: str) -> ToolEntrypointCallable:
         parsed = parse_protocol(entrypoint)
-        errors: list[str] = []
         if parsed.protocol == "python":
             return self._load_package_relative_target(parsed.target)
         if parsed.protocol == "python-import":
             return self._load_import_target(parsed.target)
-        if self.package_root is not None:
-            try:
-                return self._load_package_relative_target(parsed.target)
-            except EntrypointAdapterError as exc:
-                errors.append(str(exc))
-        try:
-            return self._load_import_target(parsed.target)
-        except EntrypointAdapterError as exc:
-            errors.append(str(exc))
-        raise EntrypointAdapterError("; ".join(errors) if errors else f"cannot load entrypoint: {entrypoint}")
+        raise EntrypointAdapterError(f"cannot load entrypoint: {entrypoint}")
 
     def _load_package_relative_target(self, target: str) -> Callable[..., Any]:
         path_text, function_name = _split_target(target)

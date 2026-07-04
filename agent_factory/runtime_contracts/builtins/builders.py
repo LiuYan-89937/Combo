@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
-import json
 
 from langgraph.errors import GraphInterrupt
 
+from agent_factory.artifact_system import ArtifactStore, ReportStore
 from agent_factory.context_system.runtime import ContextSystemRuntime
 from agent_factory.context_system.sources import default_context_sources
 from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeContextSource, KnowledgeIngestionWorker, KnowledgeRuntime
@@ -13,6 +14,7 @@ from agent_factory.knowledge_system.store_index import build_knowledge_store_ind
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
+from agent_factory.model_pool import resolve_chat_model_profile, resolve_image_generation_model_profile
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution
 from agent_factory.runtime_contracts.memory_config import resolve_memory_system_config
@@ -20,11 +22,10 @@ from agent_factory.runtime_contracts.paths import package_runtime_path_text, res
 from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
+    DependenciesContract,
     KnowledgeContract,
     MemoryContract,
-    DependenciesContract,
     ModelContract,
-    ModelContractV0,
     NodeProviderContract,
     ResourcesContract,
     SchedulerContract,
@@ -34,21 +35,20 @@ from agent_factory.runtime_contracts.schema import (
     ToolsContract,
     TraceContract,
 )
-from agent_factory.artifact_system import ArtifactStore, ReportStore
-from agent_factory.model_pool import resolve_chat_model_profile, resolve_image_generation_model_profile
-from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
+from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
-from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
-from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
     LangGraphStoreConfig,
     LangGraphStoreFactory,
 )
+from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
 from agent_factory.runtime_kernel.types import ToolExecutionResult
+from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
+from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.tooling.approval_policy import (
     ToolApprovalPolicyConfig,
     load_tool_approval_policy_file,
@@ -56,12 +56,11 @@ from agent_factory.tooling.approval_policy import (
     resolve_tool_approval_policy,
 )
 from agent_factory.tooling.builtins.model_tools import MODEL_TOOL_RUNTIME_RESOURCE, get_model_tool_specs
-from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
+from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import BuiltinToolProvider, PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.registry import ToolRegistry
-from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
 from agent_factory.trace_system import JSONLTraceStore, TraceDiagnostics, TraceProjector, TraceReader, TraceRecorder
 from agent_factory.trace_system.runtime_log import RuntimeLogStore
 
@@ -363,21 +362,6 @@ class KnowledgeContractBuilder:
                 "knowledge_context_source": context_source,
             },
             background_workers=[KnowledgeIngestionWorker(runtime)],
-        )
-
-
-class ModelContractV0Builder:
-    contract_type = "model"
-    contract_version = "model_contract.v0"
-
-    def build(self, contract: ModelContractV0, context: RuntimeBuildContext) -> RuntimeContribution:
-        if contract.config.source != "factory_runtime_env":
-            raise ValueError(f"unsupported model contract source: {contract.config.source}")
-        return RuntimeContribution(
-            services={
-                "model_service": LangChainModelServiceAdapter(role=contract.config.role),
-                "model_operation_service": ModelOperationService(role=contract.config.role),
-            }
         )
 
 

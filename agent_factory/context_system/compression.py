@@ -140,7 +140,7 @@ def _count_messages(
     token_counter: Callable[[list[Any]], TokenCountResult] | None,
 ) -> TokenCountResult:
     if token_counter is None:
-        return TokenCountResult(token_count=estimate_messages_tokens(messages), method="legacy_approximation")
+        return TokenCountResult(token_count=estimate_messages_tokens(messages), method="text_estimation")
     return token_counter(messages)
 
 

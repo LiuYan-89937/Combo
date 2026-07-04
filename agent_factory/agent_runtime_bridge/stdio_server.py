@@ -218,10 +218,7 @@ class BridgeRuntimeState:
         with self.sandbox_lock:
             if self.sandbox_initialized:
                 return True
-            package = self._load_package()
-            sandbox = dict(package.sandbox_contract or {})
-            network_policy = sandbox.get("network_policy") if isinstance(sandbox.get("network_policy"), dict) else {}
-            services = sandbox.get("services") if isinstance(sandbox.get("services"), list) else []
+            self._load_package()
             normalizer.runtime_event(
                 "node_started",
                 node_id="runtime_container",
@@ -230,9 +227,9 @@ class BridgeRuntimeState:
                 payload={
                     "package_root": str(PACKAGE_ROOT),
                     "runtime_root": str(RUNTIME_ROOT),
-                    "image": sandbox.get("image"),
-                    "network_policy": network_policy,
-                    "service_count": len(services),
+                    "image": None,
+                    "network_policy": {},
+                    "service_count": 0,
                 },
             )
             normalizer.runtime_event(

@@ -737,7 +737,6 @@ def host_runtime_package_view(
     return replace(
         package,
         contracts=translate(package.contracts),
-        sandbox_contract=translate(package.sandbox_contract),
         resources=translate(package.resources),
     )
 

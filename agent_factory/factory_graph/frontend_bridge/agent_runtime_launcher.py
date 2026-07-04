@@ -75,7 +75,7 @@ class DockerAgentRuntimeLauncher:
         skillhub_gateway_url: str | None = None,
     ) -> DockerAgentRuntimePlan:
         docker = self._docker_executable()
-        sandbox = dict(package.sandbox_contract or {})
+        sandbox: dict[str, Any] = {}
         image = str(sandbox.get("image") or DEFAULT_RUNTIME_IMAGE)
         self._assert_daemon_available(docker)
         resolved_image = self._resolve_image_reference(docker, image)
