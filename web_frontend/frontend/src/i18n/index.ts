@@ -661,6 +661,9 @@ const zhCN = {
   'collaboration.finalPlaceholder': '整理最终交付内容...',
   'collaboration.completeSession': '完成协作',
   'collaboration.members': '成员',
+  'collaboration.noDynamicWorkers': '暂无动态子 Agent',
+  'collaboration.workerTaskCount': '{count} 个任务',
+  'collaboration.workerActiveTaskCount': '{count} 个进行中',
 
   'debug.title': '调试面板',
   'debug.events': '事件流',
@@ -1333,6 +1336,9 @@ const enUS: Record<MessageKey, string> = {
   'collaboration.finalPlaceholder': 'Summarize the final delivery...',
   'collaboration.completeSession': 'Complete',
   'collaboration.members': 'Members',
+  'collaboration.noDynamicWorkers': 'No dynamic worker Agents',
+  'collaboration.workerTaskCount': '{count} tasks',
+  'collaboration.workerActiveTaskCount': '{count} active',
 
   'debug.title': 'Debug panel',
   'debug.events': 'Event stream',

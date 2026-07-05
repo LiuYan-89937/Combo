@@ -57,6 +57,19 @@ export interface CollaborationTaskView {
   updated_at: string
 }
 
+export interface CollaborationManufacturingRequestView {
+  request_id: string
+  collaboration_id: string
+  agent_name: string
+  purpose: string
+  status: string
+  create_agent_session_id?: string | null
+  result_payload?: Record<string, any>
+  message?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
 export interface CollaborationSessionView {
   collaboration_id: string
   title: string
@@ -73,6 +86,7 @@ export interface CollaborationSessionView {
   }
   messages?: CollaborationMessageView[]
   tasks?: CollaborationTaskView[]
+  manufacturing_requests?: CollaborationManufacturingRequestView[]
 }
 
 export const collaborationApi = {

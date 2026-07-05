@@ -12,6 +12,17 @@ import {
 export const SYSTEM_CHAT_PACKAGE_ID = 'factory_chat'
 const ACTIVE_COLLABORATION_SESSION_STORAGE_KEY = 'fastagentfactory.activeCollaborationSessionId'
 
+export interface DynamicCollaborationWorkerView {
+  package_id: string
+  agent_name: string
+  agent_description: string
+  task_count: number
+  active_task_count: number
+  statuses: string[]
+  session_ids: string[]
+  source: 'task' | 'manufacturing'
+}
+
 export const useCollaborationStore = defineStore('collaboration', () => {
   const agents = ref<CollaborationAgentView[]>([])
   const sessions = ref<CollaborationSessionView[]>([])
@@ -28,10 +39,66 @@ export const useCollaborationStore = defineStore('collaboration', () => {
   const tasks = computed(() => activeSession.value?.tasks || [])
   const openTasks = computed(() => tasks.value.filter((task) => !['completed', 'cancelled', 'failed'].includes(task.status)))
   const acceptanceTasks = computed(() => tasks.value.filter((task) => ['submitted', 'revision_requested', 'completed'].includes(task.status)))
+  const dynamicWorkerAgents = computed<DynamicCollaborationWorkerView[]>(() => {
+    const byPackageId = new Map<string, DynamicCollaborationWorkerView>()
+    for (const task of tasks.value) {
+      const packageId = String(task.assignee_package_id || '').trim()
+      if (!packageId) continue
+      const worker = ensureDynamicWorker(byPackageId, packageId, 'task')
+      worker.task_count += 1
+      if (!['completed', 'cancelled', 'failed'].includes(task.status)) {
+        worker.active_task_count += 1
+      }
+      if (task.status && !worker.statuses.includes(task.status)) {
+        worker.statuses.push(task.status)
+      }
+      const sessionId = String(task.assignee_session_id || '').trim()
+      if (sessionId && !worker.session_ids.includes(sessionId)) {
+        worker.session_ids.push(sessionId)
+      }
+    }
+    for (const request of activeSession.value?.manufacturing_requests || []) {
+      const packageId = String(request.result_payload?.package_id || '').trim()
+      if (!packageId) continue
+      const worker = ensureDynamicWorker(byPackageId, packageId, 'manufacturing')
+      if (request.status && !worker.statuses.includes(request.status)) {
+        worker.statuses.push(request.status)
+      }
+    }
+    return Array.from(byPackageId.values()).sort((left, right) => {
+      if (right.active_task_count !== left.active_task_count) return right.active_task_count - left.active_task_count
+      return left.agent_name.localeCompare(right.agent_name)
+    })
+  })
 
   function agentById(packageId: string | null | undefined): CollaborationAgentView | null {
     if (!packageId) return null
     return agents.value.find((agent) => agent.package_id === packageId) || null
+  }
+
+  function ensureDynamicWorker(
+    workers: Map<string, DynamicCollaborationWorkerView>,
+    packageId: string,
+    source: DynamicCollaborationWorkerView['source'],
+  ): DynamicCollaborationWorkerView {
+    const existing = workers.get(packageId)
+    if (existing) {
+      if (existing.source !== 'task') existing.source = source
+      return existing
+    }
+    const agent = agentById(packageId)
+    const worker: DynamicCollaborationWorkerView = {
+      package_id: packageId,
+      agent_name: agent?.agent_name || packageId,
+      agent_description: agent?.agent_description || '',
+      task_count: 0,
+      active_task_count: 0,
+      statuses: [],
+      session_ids: [],
+      source,
+    }
+    workers.set(packageId, worker)
+    return worker
   }
 
   async function refreshAgents(): Promise<void> {
@@ -305,6 +372,7 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     mainAgentId,
     mainAgent,
     workerAgents,
+    dynamicWorkerAgents,
     messages,
     tasks,
     openTasks,

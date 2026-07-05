@@ -253,13 +253,41 @@
           <span>{{ t('collaboration.mainAgent') }}</span>
           <strong>{{ agentName(store.mainAgentId) }}</strong>
         </div>
-        <div v-for="agent in store.workerAgents" :key="agent.package_id" class="member-item">
+        <n-empty
+          v-if="store.dynamicWorkerAgents.length === 0"
+          :description="t('collaboration.noDynamicWorkers')"
+          size="small"
+        />
+        <div v-for="agent in store.dynamicWorkerAgents" :key="agent.package_id" class="member-item">
           <span>{{ t('collaboration.workerAgent') }}</span>
           <div class="member-name-row">
             <strong>{{ agent.agent_name }}</strong>
             <n-tag size="tiny" :type="workerStatusTagType(agent.package_id)" :bordered="false">
               {{ workerStatusText(agent.package_id) }}
             </n-tag>
+          </div>
+          <p v-if="agent.agent_description" class="member-desc">{{ agent.agent_description }}</p>
+          <div class="member-meta">
+            <span>{{ t('collaboration.workerTaskCount', { count: agent.task_count }) }}</span>
+            <span v-if="agent.active_task_count">
+              {{ t('collaboration.workerActiveTaskCount', { count: agent.active_task_count }) }}
+            </span>
+          </div>
+          <div v-if="agent.statuses.length" class="member-statuses">
+            <n-tag
+              v-for="status in agent.statuses"
+              :key="status"
+              size="tiny"
+              :type="taskStatusType(status as CollaborationTaskStatus)"
+              :bordered="false"
+            >
+              {{ status }}
+            </n-tag>
+          </div>
+          <div v-if="agent.session_ids.length" class="member-actions">
+            <n-button size="tiny" @click="openWorkerSessionByIds(agent.package_id, agent.session_ids[0])">
+              {{ t('collaboration.openWorkerSession') }}
+            </n-button>
           </div>
         </div>
       </div>
@@ -400,6 +428,10 @@ async function startTask(task: CollaborationTaskView) {
 async function openWorkerSession(task: CollaborationTaskView) {
   const packageId = String(task.assignee_package_id || '').trim()
   const sessionId = String(task.assignee_session_id || '').trim()
+  await openWorkerSessionByIds(packageId, sessionId)
+}
+
+async function openWorkerSessionByIds(packageId: string, sessionId: string) {
   if (!packageId || !sessionId) return
   agentStore.enterAgentChat(packageId, sessionId)
   await router.push({ name: 'Factory' })
@@ -758,5 +790,21 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
 .member-name-row strong {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.member-desc {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-xs);
+  line-height: 1.45;
+}
+
+.member-meta,
+.member-statuses,
+.member-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--app-space-xs);
 }
 </style>
