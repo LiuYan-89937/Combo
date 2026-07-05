@@ -17,6 +17,10 @@ def host_session_workdir(package_id: str, session_id: str) -> Path:
     return host_runtime_root(package_id) / "workdirs" / normalized
 
 
+def host_scratch_workdir(package_id: str) -> Path:
+    return host_runtime_root(package_id) / "_scratch" / "workdir"
+
+
 def host_session_root(*, package_id: str, package: LoadedAgentPackage, configured: str) -> Path:
     value = configured.strip()
     runtime_root = host_runtime_root(package_id)

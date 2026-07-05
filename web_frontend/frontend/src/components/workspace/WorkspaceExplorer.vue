@@ -121,10 +121,10 @@ const requestContext = computed<WorkspaceRequestContext | string | undefined>(()
 const scopeOptions = computed(() => [
   { label: t('workspace.scope.package'), value: 'package' },
   { label: t('workspace.scope.workdir'), value: 'workdir' },
-  { label: t('workspace.scope.runtime'), value: 'runtime' },
   { label: t('workspace.scope.artifacts'), value: 'artifacts' },
   { label: t('workspace.scope.extensions'), value: 'extensions' },
 ])
+const visibleScopes = computed(() => new Set(scopeOptions.value.map((option) => option.value)))
 
 const visibleRows = computed<TreeRow[]>(() => {
   const rows: TreeRow[] = []
@@ -260,16 +260,24 @@ function formatFileSize(bytes: number): string {
 }
 
 onMounted(() => {
+  ensureVisibleScope()
   void loadDirectory('')
 })
 
 watch(
   () => workspaceContextKey(requestContext.value),
   () => {
+    ensureVisibleScope()
     resetTree()
     void loadDirectory('')
   },
 )
+
+function ensureVisibleScope() {
+  if (!visibleScopes.value.has(workspaceStore.currentScope)) {
+    workspaceStore.setScope('workdir')
+  }
+}
 
 function workspaceContextKey(context: WorkspaceRequestContext | string | undefined): string {
   if (typeof context === 'string') return `package:${context}`

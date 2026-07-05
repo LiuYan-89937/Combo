@@ -118,7 +118,6 @@ class FrontendWorkspaceService:
                 **({"package_session_id": package_session_id} if package_session_id else {}),
             },
             roots=roots,
-            unavailable_reason=None if package_session_id else "select a conversation before opening the session workdir",
         )
 
     def _create_agent_target(

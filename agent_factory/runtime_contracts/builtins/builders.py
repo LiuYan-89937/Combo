@@ -108,7 +108,7 @@ class ToolsContractBuilder:
             runtime_root = context.package_root / ".agent_runtime"
         tool_runtime_resources.setdefault("runtime_root", str(runtime_root))
         tool_runtime_resources.setdefault("artifacts_root", str(runtime_root / "artifacts"))
-        tool_runtime_resources.setdefault("workdir_root", str(runtime_root / "workdir"))
+        tool_runtime_resources.setdefault("workdir_root", config.builtin_workspace_root)
         tool_runtime_resources.setdefault("package_root", str(context.package_root))
         tool_runtime_resources.setdefault("workspace_root", str(context.package_root))
         mcp_clients = {}

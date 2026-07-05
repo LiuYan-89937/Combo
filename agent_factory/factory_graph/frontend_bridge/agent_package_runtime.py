@@ -50,6 +50,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_extensions import
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     extension_root_for_package as _extension_root_for_package,
     host_runtime_root as _host_runtime_root,
+    host_scratch_workdir as _host_scratch_workdir,
     host_session_workdir as _host_session_workdir,
     host_session_root as _host_session_root,
     is_host_system_package as _is_host_system_package,
@@ -1043,7 +1044,7 @@ class AgentPackageRuntimeManager:
         self._close_container(runtime_key)
         runtime_root = _host_runtime_root(package_id)
         artifacts_root = runtime_root / "artifacts" / uuid4().hex
-        workdir_root = workdir_root or runtime_root / "workdir"
+        workdir_root = workdir_root or _host_scratch_workdir(package_id)
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
@@ -1101,7 +1102,7 @@ class AgentPackageRuntimeManager:
         self._close_system(runtime_key)
         runtime_root = _host_runtime_root(package_id)
         artifacts_root = runtime_root / "artifacts"
-        workdir_root = workdir_root or runtime_root / "workdir"
+        workdir_root = workdir_root or _host_scratch_workdir(package_id)
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
