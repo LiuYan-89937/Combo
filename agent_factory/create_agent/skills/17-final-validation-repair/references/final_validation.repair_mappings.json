@@ -16,7 +16,6 @@
         "tool_spec": {
           "id": "<tool_id>",
           "description": "<specific runtime capability>",
-          "entrypoint": "python:tools/<tool_id>/tool.py:run",
           "input_schema": {
             "type": "object",
             "properties": {},
@@ -29,9 +28,6 @@
           },
           "resources": {},
           "risk_level": "low",
-          "risk_evaluator": {
-            "llm_mode": "disabled"
-          },
           "concurrent": true
         },
         "tool_source": "<complete tool.py source>",

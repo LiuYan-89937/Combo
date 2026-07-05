@@ -433,7 +433,11 @@ def _run_docker_probe(*, workspace: CreateAgentWorkspace, spec: ToolSpec, argume
             "captured_stderr": exc.stderr or "",
             "dependency_report": {},
         }
-    payload = _parse_docker_probe_stdout(completed.stdout)
+    payload = _parse_docker_probe_output(
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        returncode=completed.returncode,
+    )
     payload["runtime_paths"] = {
         "runtime_root": str(runtime_root),
         "artifacts_root": str(artifacts_root),
@@ -442,8 +446,6 @@ def _run_docker_probe(*, workspace: CreateAgentWorkspace, spec: ToolSpec, argume
     }
     if completed.returncode != 0 and not payload.get("errors"):
         payload["errors"] = [f"docker probe exited with code {completed.returncode}"]
-    if completed.stderr:
-        payload["docker_stderr"] = completed.stderr
     return payload
 
 
@@ -451,7 +453,7 @@ def _probe_runtime_root(workspace: CreateAgentWorkspace) -> Path:
     return workspace.root / ".agent_runtime" / "tool_probe"
 
 
-def _parse_docker_probe_stdout(stdout: str) -> dict[str, Any]:
+def _parse_docker_probe_output(*, stdout: str, stderr: str, returncode: int) -> dict[str, Any]:
     lines = [line.strip() for line in str(stdout or "").splitlines() if line.strip()]
     for line in reversed(lines):
         try:
@@ -459,14 +461,19 @@ def _parse_docker_probe_stdout(stdout: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
+            if stderr:
+                payload["captured_stderr"] = str(payload.get("captured_stderr") or "") + stderr
             return payload
+    stderr_text = str(stderr or "").strip()
+    stdout_text = str(stdout or "").strip()
+    detail = stderr_text or stdout_text or f"docker probe exited with code {returncode} before emitting JSON"
     return {
         "status": "failed",
-        "phase": "docker_output",
+        "phase": "docker_process",
         "observation": {},
-        "errors": ["docker probe did not return a JSON object"],
+        "errors": [f"docker probe process failed before emitting JSON: {detail}"],
         "captured_stdout": stdout,
-        "captured_stderr": "",
+        "captured_stderr": stderr,
         "dependency_report": {},
     }
 

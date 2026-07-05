@@ -10,6 +10,13 @@ def host_runtime_root(package_id: str) -> Path:
     return factory_artifact_path("agent_runtime", package_id)
 
 
+def host_session_workdir(package_id: str, session_id: str) -> Path:
+    normalized = str(session_id or "").strip()
+    if not normalized:
+        raise ValueError("agent package session_id is required for session workdir")
+    return host_runtime_root(package_id) / "workdirs" / normalized
+
+
 def host_session_root(*, package_id: str, package: LoadedAgentPackage, configured: str) -> Path:
     value = configured.strip()
     runtime_root = host_runtime_root(package_id)

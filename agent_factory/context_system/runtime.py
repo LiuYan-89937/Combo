@@ -23,6 +23,7 @@ from agent_factory.context_system.token_counter import (
     context_window_tokens_from_env,
     count_messages_tokens,
     context_window_payload,
+    effective_compression_threshold,
 )
 
 
@@ -478,10 +479,11 @@ def _effective_context_token_count(
 
 
 def _compression_trigger_limit(*, policy: ContextPolicy, context_window_tokens: int | None) -> int:
-    configured = int(policy.compression.trigger_token_threshold)
-    if context_window_tokens is None:
-        return configured
-    return min(configured, context_window_tokens)
+    threshold = effective_compression_threshold(
+        configured_threshold=int(policy.compression.trigger_token_threshold),
+        context_window_tokens=context_window_tokens,
+    )
+    return int(threshold or policy.compression.trigger_token_threshold)
 
 
 def _context_window_token_limit(services: Any) -> int | None:

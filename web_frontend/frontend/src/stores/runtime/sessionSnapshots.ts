@@ -158,6 +158,7 @@ function conversationFromTurns(rawTurns: any[], context: TurnRestoreContext) {
     const updatedAt = String(turn.updated_at || createdAt)
     const finalAnswer = String(turn.final_answer || '').trim()
     const userInput = String(turn.user_input || '').trim()
+    const toolActivities = Array.isArray(turn.tool_activities) ? turn.tool_activities : []
     if (!userInput && !finalAnswer) return
     const status = normalizeTurnStatus(turn.status, finalAnswer ? 'completed' : 'running')
     const metadata = {
@@ -172,7 +173,7 @@ function conversationFromTurns(rawTurns: any[], context: TurnRestoreContext) {
       status,
       userMessage: null,
       assistantMessages: [],
-      tools: [],
+      tools: toolActivities,
       startedAt: createdAt,
       completedAt: isActiveTurnStatus(status) ? null : updatedAt,
       errorMessage: null,

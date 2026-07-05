@@ -29,6 +29,9 @@ export function useResourceContext() {
   const createAgentSessionId = computed(() => (
     String(activeFactorySession.value?.create_agent_session_id || '').trim() || null
   ))
+  const chatAgentPackageSessionId = computed(() => (
+    String(activeFactorySession.value?.chat_agent_package_session_id || runtimeStore.activeAgentSessionId || '').trim() || null
+  ))
   const workspaceContext = computed<WorkspaceRequestContext>(() => {
     if (runtimeStore.currentMode === 'create_agent') {
       return {
@@ -48,18 +51,23 @@ export function useResourceContext() {
       return {
         resourceMode: 'package',
         packageId: agentStore.activeChatPackageId,
+        packageSessionId: agentStore.selectedSessionId || runtimeStore.activeAgentSessionId,
       }
     }
     return {
       resourceMode: 'package',
       packageId: SYSTEM_CHAT_PACKAGE_ID,
+      packageSessionId: chatAgentPackageSessionId.value,
+      factorySessionId: runtimeStore.activeFactorySessionId,
     }
   })
   const workspaceContextKey = computed(() => [
     workspaceContext.value.resourceMode || '',
     workspaceContext.value.packageId || '',
+    workspaceContext.value.packageSessionId || '',
     workspaceContext.value.factorySessionId || '',
     workspaceContext.value.createAgentSessionId || '',
+    workspaceContext.value.collaborationId || '',
   ].join(':'))
   const workspaceDefaultScope = computed<WorkspaceScope>(() => (
     workspaceContext.value.resourceMode === 'create_agent' || workspaceContext.value.resourceMode === 'evolve_agent'

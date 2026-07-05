@@ -3,14 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from agent_factory.create_agent.validation_state import package_fingerprint
-from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
-    PendingCreateAgentRun,
-    SYSTEM_CHAT_PACKAGE_ID,
-)
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.runtime_attachments import has_attachment_payload, transcript_attachment_views
 
 
@@ -208,8 +203,6 @@ class RuntimeSessionCommandMixin:
         if self.pending_agent_package_run is not None and _pending_agent_package_matches(self.pending_agent_package_run, target):
             self._resume_agent_package_interrupt(command)
             return
-        if self._recover_create_agent_publish_confirmation(command):
-            return
         if target.explicit:
             self._emit_error(command, "no matching pending interrupt to resume")
             return
@@ -258,30 +251,6 @@ class RuntimeSessionCommandMixin:
                 request_ids=_turn_request_ids(getattr(record, "evolve_agent_turns", [])),
             )
         return artifacts
-
-    def _recover_create_agent_publish_confirmation(self, command: FactoryFrontendCommand) -> bool:
-        if str(command.payload.get("type") or "").strip() != "create_agent_publish_confirmation":
-            return False
-        payload_mode = str(command.payload.get("mode") or self.mode or "").strip()
-        if payload_mode != "create_agent":
-            return False
-        if self.session_record is None or not self.session_record.create_agent_session_id:
-            return False
-        frontend_session_id = str(command.payload.get("frontend_session_id") or "").strip()
-        if frontend_session_id and frontend_session_id != str(self.session_record.session_id):
-            return False
-        agent_session_id = str(self.session_record.create_agent_session_id)
-        workspace = CreateAgentWorkspace.for_session(agent_session_id)
-        if not _publish_confirmation_ready(workspace):
-            return False
-        self.pending_create_agent_run = PendingCreateAgentRun(
-            session_id=agent_session_id,
-            request_id=str(command.payload.get("pending_request_id") or command.request_id or "").strip() or None,
-            interrupt_id=str(command.payload.get("interrupt_id") or "").strip() or None,
-            interrupt_event_id=str(command.payload.get("interrupt_event_id") or "").strip() or None,
-        )
-        self._resume_create_agent_interrupt(command)
-        return True
 
     def _ensure_session(self, command: FactoryFrontendCommand) -> None:
         if self.session_record is None:
@@ -754,23 +723,6 @@ def _pending_common_matches(
     if target.interrupt_id and target.interrupt_id != _normalized_optional(interrupt_id):
         return False
     return True
-
-
-def _publish_confirmation_ready(workspace: CreateAgentWorkspace) -> bool:
-    if workspace.read_publish_report().get("status") == "available":
-        return False
-    active = workspace.read_system_state().active_stage()
-    if active is None or active.system_id != "validation_publish":
-        return False
-    validation = workspace.read_validation()
-    if validation is None or validation.status != "passed":
-        return False
-    validation_state = workspace.read_validation_state()
-    if validation_state is None or validation_state.validation_scope != "full_static":
-        return False
-    if validation.validation_scope != "full_static":
-        return False
-    return validation_state.package_fingerprint == package_fingerprint(workspace.root)
 
 
 def _normalized_optional(value: object) -> str | None:

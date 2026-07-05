@@ -34,16 +34,17 @@ Guides adding executable package tools and their ToolSpec declarations.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When a package tool capability is ready, pass the complete ToolSpec, tool source, dependency list, and exposure targets to create_agent_authoring(action="upsert_package_tool"), then call create_agent_validate with the appropriate scope.
+4. When a package tool capability is ready, pass the package tool business fields, tool source, dependency list, and exposure targets to create_agent_authoring(action="upsert_package_tool"), then call create_agent_validate with the appropriate scope.
 5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Add the complete package tool through create_agent_authoring(action="upsert_package_tool"); do not manually scatter writes across tool.py, manifest ToolSpec, agent_package.json tools index, contracts/tools.json, dependencies, and assembly tool access.
 - Remove stale package tools through create_agent_authoring(action="remove_package_tool", tool_id=...); do not manually delete tool directories or manifest index entries.
-- ToolSpec objects must be objects, not string references.
-- ToolSpec fields are top-level fields: `id`, `description`, `entrypoint`, `input_schema`, `output_schema`, `resources`, `risk_level`, `risk_evaluator`, `concurrent`, and optional `output_compression`.
-- Generated package tools are written to `tools/<tool_id>/tool.py`; therefore `entrypoint` must be `python:tools/<tool_id>/tool.py:run`, and `tool_source` must define a top-level synchronous `run(arguments, resources)` function. Do not use `main`, `tool:main`, or `python-import` entrypoints for generated package tools.
-- `input_schema` only describes the runtime call arguments. Never put `output_schema`, `resources`, `risk_level`, `risk_evaluator`, `entrypoint`, `concurrent`, or `output_compression` inside `input_schema`.
+- ToolSpec payloads must be objects, not string references.
+- For `create_agent_authoring(action="upsert_package_tool")`, `tool_spec` contains only business-controlled fields: `id`, `description`, `input_schema`, `output_schema`, `resources`, `risk_level`, `concurrent`, and optional `output_compression`.
+- Do not provide `entrypoint`, `risk_evaluator`, `permission_scope`, or `permission_tags` in `tool_spec`; create_agent_authoring generates those system-controlled fields.
+- Generated package tools are written to `tools/<tool_id>/tool.py`; create_agent_authoring generates `entrypoint=python:tools/<tool_id>/tool.py:run`, and `tool_source` must define a top-level synchronous `run(arguments, resources)` function. Do not use `main`, `tool:main`, or `python-import` entrypoints for generated package tools.
+- `input_schema` only describes the runtime call arguments. Never put `output_schema`, `resources`, `risk_level`, `concurrent`, or `output_compression` inside `input_schema`.
 - Add `tool_spec.output_compression.actions` when the tool output contains long lists, search candidates, external ids/slugs/paths, logs, reports, or other machine fields that must remain usable after compression. A single-link tool uses one action config; a multi-action tool sets `action_argument` and one config per action. Tools without an action config use the system default compression.
 - Package tool entrypoints may return either a plain dict matching `output_schema` or `tool_envelope(...)`. Plain dict outputs are wrapped by the package-tool adapter. Use `tool_envelope` only when the tool needs explicit evidence or a custom summary.
 - Package tool code must use the `resources` argument for declared runtime selectors such as `artifacts_root`, `workdir_root`, or `runtime_root`; do not rely on `os.getcwd()` as the main resource contract. Generated user-facing files should normally be written below `artifacts_root`.

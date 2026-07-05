@@ -263,9 +263,14 @@ class ContextContractBuilder:
         knowledge_source = context.tool_runtime_resources.get("knowledge_context_source")
         if knowledge_source is not None:
             sources["knowledge"] = knowledge_source
+        resources: dict[str, Any] = {}
+        if contract.config.context_window_tokens is not None:
+            resources["context_window_tokens"] = contract.config.context_window_tokens
+            resources["context_window_tokens_source"] = "package"
         return RuntimeContribution(
             services={"context_system": ContextSystemRuntime(config=contract.config, sources=sources)},
             system_wrappers=[CONTEXT_PREPARE_SYSTEM_WRAPPER_ID],
+            resources=resources,
         )
 
 

@@ -20,8 +20,7 @@ from agent_factory.runtime_contracts.builtins import (
     default_tools_contract,
 )
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
-from agent_factory.tooling.package_tool_spec import package_tool_entrypoint, package_tool_manifest_path, package_tool_source_path
-from agent_factory.tooling.spec import ToolSpec
+from agent_factory.tooling.package_tool_spec import package_tool_manifest_path, package_tool_source_path
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -253,34 +252,33 @@ def _scaffold_example_files() -> dict[str, Any]:
 
 
 def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
-    tool_spec = ToolSpec(
-        id="package_action",
-        description="Performs one package-defined runtime action.",
-        entrypoint=package_tool_entrypoint("package_action"),
-        input_schema={
+    tool_spec = {
+        "id": "package_action",
+        "description": "Performs one package-defined runtime action.",
+        "input_schema": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
             "additionalProperties": False,
         },
-        output_schema={
+        "output_schema": {
             "type": "object",
             "properties": {"result": {"type": "string"}},
             "required": ["result"],
             "additionalProperties": True,
         },
-        resources={"runtime_root": "runtime_root"},
-        risk_level="low",
-    )
+        "resources": {"artifacts_root": "artifacts_root"},
+        "risk_level": "low",
+        "concurrent": True,
+    }
     source = (
-        "from agent_factory.tooling.envelope import tool_envelope\n"
         "from pathlib import Path\n"
         "import json\n\n\n"
-        "def _state_path(resources):\n"
-        "    return Path(str(resources[\"runtime_root\"])) / \"state\" / \"package_action.json\"\n\n\n"
+        "def _output_path(resources):\n"
+        "    return Path(str(resources[\"artifacts_root\"])) / \"package_action.json\"\n\n\n"
         "def run(arguments, resources):\n"
         "    query = str(arguments.get(\"query\") or \"\").strip()\n"
-        "    path = _state_path(resources)\n"
+        "    path = _output_path(resources)\n"
         "    path.parent.mkdir(parents=True, exist_ok=True)\n"
         "    history = []\n"
         "    if path.is_file():\n"
@@ -288,11 +286,7 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
         "    history.append({\"query\": query})\n"
         "    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n"
         "    result = query if query else \"No query provided.\"\n"
-        "    return tool_envelope(\n"
-        "        {\"result\": result},\n"
-        "        evidence={\"tool_id\": \"package_action\", \"state_path\": str(path)},\n"
-        "        summary=\"Package action completed.\",\n"
-        "    )\n"
+        "    return {\"result\": result}\n"
     )
     return {
         "package_tool_authoring": (
@@ -303,7 +297,7 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
                     "tool": "create_agent_authoring",
                     "arguments": {
                         "action": "upsert_package_tool",
-                        "tool_spec": tool_spec.model_dump(mode="json", exclude_none=True),
+                        "tool_spec": tool_spec,
                         "tool_source": source,
                         "python_requirements": [],
                         "expose_to_nodes": ["answer"],
@@ -332,7 +326,7 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
                     "Do not manually update agent_package.json, assembly_spec.json, contracts/tools.json, or contracts/dependencies.json for package tool registration during normal production.",
                     "Declare external Python dependencies in python_requirements when the source imports third-party packages.",
                     "Remove stale package tools through create_agent_authoring(action=\"remove_package_tool\", tool_id=...).",
-                    "Use resources passed to the tool entrypoint for runtime paths instead of assuming os.getcwd().",
+                    "Use resources passed to the tool entrypoint for runtime paths instead of assuming os.getcwd(); generated files should normally use artifacts_root.",
                 ],
             },
         ),

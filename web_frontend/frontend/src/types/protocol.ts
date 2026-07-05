@@ -123,6 +123,7 @@ export interface ConversationScopeState {
   activeRequestId?: string | null
   runStatus?: RunStatus
   pendingInterrupt?: FactoryFrontendEvent | null
+  createAgentPublishReady?: Record<string, any> | null
   currentRunId?: string | null
   nodes?: Record<string, NodeViewState>
   stages?: Record<string, StageStatus>
@@ -407,6 +408,7 @@ export interface RuntimeViewState {
   activeRequests: Record<string, ActiveRequestView>
   runStatus: RunStatus
   pendingInterrupt: FactoryFrontendEvent | null
+  createAgentPublishReady: Record<string, any> | null
   currentMode: FactoryMode | null
   activeFactorySessionId: string | null
   activeAgentSessionId: string | null

@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+from typing import Any
+
+from agent_factory.runtime_kernel.plan_execute_tools import merge_tool_ids
+from agent_factory.runtime_kernel.state import RuntimeState
+
+
+COLLABORATION_TOOL_ID = "collaboration"
+
+
+def runtime_extra_allowed_tool_ids(state: RuntimeState) -> list[str]:
+    user_config = state.runtime_config.user_config
+    if not isinstance(user_config, dict):
+        return []
+    access = user_config.get("runtime_tool_access")
+    if not isinstance(access, dict):
+        return []
+    ids = access.get("extra_allowed_tool_ids")
+    if not isinstance(ids, list):
+        return []
+    allowed: list[str] = []
+    for item in ids:
+        tool_id = str(item or "").strip()
+        if tool_id == COLLABORATION_TOOL_ID and _collaboration_context_enabled(user_config):
+            allowed.append(tool_id)
+    return merge_tool_ids(allowed)
+
+
+def _collaboration_context_enabled(user_config: dict[str, Any]) -> bool:
+    value = str(user_config.get("collaboration_id") or "").strip()
+    return bool(value)

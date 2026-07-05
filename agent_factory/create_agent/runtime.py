@@ -494,6 +494,11 @@ class CreateAgentRuntime:
                         "workspace_path": str(workspace.root),
                         "graph_kind": graph_kind,
                         "agent_session": {"session_id": session_id},
+                        **(
+                            {"publish_ready": final_state.get("publish_ready")}
+                            if isinstance(final_state.get("publish_ready"), dict)
+                            else {}
+                        ),
                     },
                 )
                 record_trace(
@@ -505,6 +510,11 @@ class CreateAgentRuntime:
                             "workspace_path": str(workspace.root),
                             "graph_kind": graph_kind,
                             "agent_session": {"session_id": session_id},
+                            **(
+                                {"publish_ready": _json_safe(final_state.get("publish_ready"))}
+                                if isinstance(final_state.get("publish_ready"), dict)
+                                else {}
+                            ),
                         },
                     },
                 )

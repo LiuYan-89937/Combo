@@ -390,7 +390,6 @@ def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | Non
             CREATE_AGENT_CONTROL_TOOL_ID,
             CREATE_AGENT_MODEL_POOL_TOOL_ID,
             CREATE_AGENT_PROBE_TOOL_ID,
-            CREATE_AGENT_PUBLISH_TOOL_ID,
             CREATE_AGENT_STAGE_TOOL_ID,
             CREATE_AGENT_VALIDATE_TOOL_ID,
         )
@@ -409,7 +408,7 @@ def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | Non
         CREATE_AGENT_VALIDATE_TOOL_ID,
     }
     if system_owner == "create_agent":
-        authoring_tool_ids.update({CREATE_AGENT_STAGE_TOOL_ID, CREATE_AGENT_PUBLISH_TOOL_ID})
+        authoring_tool_ids.add(CREATE_AGENT_STAGE_TOOL_ID)
     builtin_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if system_owner in {"create_agent", "evolve_agent"} else CREATE_AGENT_ASSIST_TOOL_IDS
     read_only_ids = get_read_only_system_tool_ids()
     allowed_builtin_ids = set(builtin_ids) | set(get_always_available_system_tool_ids())

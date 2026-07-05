@@ -149,11 +149,13 @@
       :instance="detailPackage ? packageInstance(detailPackage) : null"
       :instance-busy="detailPackage ? isInstanceBusy(detailPackage) : false"
       :export-busy="busyAction === 'export'"
+      :context-config-saving="contextConfigSaving"
       @initialize="handleInitializeInstance"
       @shutdown="handleShutdownInstance"
       @run="handleRun"
       @evolve="handleEvolve"
       @export="handleExport"
+      @save-context-config="handleSaveContextConfig"
     />
   </div>
 </template>
@@ -214,6 +216,7 @@ const detailDrawerOpen = ref(false)
 const detailPackage = ref<AgentPackageView | null>(null)
 const busyAction = ref<'delete' | 'export' | 'instance' | null>(null)
 const busyInstancePackageId = ref<string | null>(null)
+const contextConfigSaving = ref(false)
 
 const statusOptions = computed(() => [
   { label: t('common.all'), value: null },
@@ -388,6 +391,22 @@ async function handleExport(pkg: AgentPackageView) {
     await commands.exportAgentPackage(pkg)
   } finally {
     busyAction.value = null
+  }
+}
+
+async function handleSaveContextConfig(payload: { context_window_tokens: number | null; compression_threshold_tokens: number | null }) {
+  if (!detailPackage.value || contextConfigSaving.value) return
+  contextConfigSaving.value = true
+  try {
+    const updated = await commands.updateAgentPackageContextConfig(
+      detailPackage.value.package_id,
+      payload,
+    )
+    if (updated) {
+      detailPackage.value = updated
+    }
+  } finally {
+    contextConfigSaving.value = false
   }
 }
 

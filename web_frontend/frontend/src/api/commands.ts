@@ -75,10 +75,12 @@ export interface SendMessageOptions {
   mode?: FactoryMode
   attachments?: RuntimeAttachmentInput[]
   runtimeOptions?: RuntimeMainModelOptions
+  displayUserInput?: string | null
 }
 
 export interface RuntimeMainModelOptions {
   mainModelProfileId?: string | null
+  userConfig?: Record<string, unknown> | null
 }
 
 export function sendMessageCommand(options: SendMessageOptions): FactoryFrontendCommand {
@@ -88,7 +90,10 @@ export function sendMessageCommand(options: SendMessageOptions): FactoryFrontend
     mode: options.mode,
     message: options.message,
     payload: runtimePayload(
-      options.attachments ? { attachments: options.attachments } : {},
+      {
+        ...(options.attachments ? { attachments: options.attachments } : {}),
+        ...(options.displayUserInput ? { display_user_input: options.displayUserInput } : {}),
+      },
       options.runtimeOptions
     ),
   })
@@ -101,7 +106,8 @@ export function runAgentPackageCommand(
   message: string,
   sessionId?: string,
   attachments?: RuntimeAttachmentInput[],
-  runtimeOptions?: RuntimeMainModelOptions
+  runtimeOptions?: RuntimeMainModelOptions,
+  displayUserInput?: string | null
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_package', {
@@ -112,6 +118,7 @@ export function runAgentPackageCommand(
         message,
         session_id: sessionId,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        ...(displayUserInput ? { display_user_input: displayUserInput } : {}),
       },
       runtimeOptions
     ),
@@ -123,7 +130,8 @@ export function sendAgentPackageMessageCommand(
   message: string,
   sessionId?: string,
   attachments?: RuntimeAttachmentInput[],
-  runtimeOptions?: RuntimeMainModelOptions
+  runtimeOptions?: RuntimeMainModelOptions,
+  displayUserInput?: string | null
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('send_agent_package_message', {
@@ -134,6 +142,7 @@ export function sendAgentPackageMessageCommand(
         message,
         session_id: sessionId,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        ...(displayUserInput ? { display_user_input: displayUserInput } : {}),
       },
       runtimeOptions
     ),
@@ -162,13 +171,28 @@ export function runAgentEvolutionCommand(
 
 function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: RuntimeMainModelOptions): Record<string, unknown> {
   const profileId = String(runtimeOptions?.mainModelProfileId || '').trim()
-  if (!profileId) return payload
+  const payloadUserConfig = payload.user_config && typeof payload.user_config === 'object'
+    ? payload.user_config as Record<string, unknown>
+    : null
+  const extraUserConfig = runtimeOptions?.userConfig && typeof runtimeOptions.userConfig === 'object'
+    ? runtimeOptions.userConfig
+    : null
+  if (!profileId && !extraUserConfig && !payloadUserConfig) return payload
   return {
     ...payload,
     user_config: {
-      model_profile_overrides: {
-        main: profileId,
-      },
+      ...(payloadUserConfig || {}),
+      ...(extraUserConfig || {}),
+      ...(profileId
+        ? {
+            model_profile_overrides: {
+              ...((extraUserConfig?.model_profile_overrides && typeof extraUserConfig.model_profile_overrides === 'object')
+                ? extraUserConfig.model_profile_overrides as Record<string, unknown>
+                : {}),
+              main: profileId,
+            },
+          }
+        : {}),
     },
   }
 }

@@ -22,7 +22,9 @@
       </n-button>
     </div>
 
-    <n-tabs v-model:value="uiStore.activeRightSidebarTab" type="line" animated class="right-tabs">
+    <CollaborationSidebarPanel v-if="isCollaborationRoute" class="right-panel-body" />
+
+    <n-tabs v-else v-model:value="uiStore.activeRightSidebarTab" type="line" animated class="right-tabs">
       <n-tab-pane name="workspace" :tab="t('right.workspace')">
         <WorkspaceSidebarPanel />
       </n-tab-pane>
@@ -40,10 +42,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { NButton, NIcon, NTabPane, NTabs } from 'naive-ui'
 import { ChevronForward } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { RIGHT_SIDEBAR_WIDTH, useUiStore } from '@/stores/ui'
+import CollaborationSidebarPanel from './right-sidebar/CollaborationSidebarPanel.vue'
 import SessionsSidebarPanel from './right-sidebar/SessionsSidebarPanel.vue'
 import StatusSidebarPanel from './right-sidebar/StatusSidebarPanel.vue'
 import WorkspaceSidebarPanel from './right-sidebar/WorkspaceSidebarPanel.vue'
@@ -51,6 +55,7 @@ import WorkspaceSidebarPanel from './right-sidebar/WorkspaceSidebarPanel.vue'
 const MAIN_CONTENT_MIN_WIDTH = 520
 
 const uiStore = useUiStore()
+const route = useRoute()
 const { t } = useI18n()
 const allowedTabs = new Set(['workspace', 'sessions', 'status'])
 const isResizing = ref(false)
@@ -63,6 +68,7 @@ let previousBodyUserSelect = ''
 const displayedRightSidebarWidth = computed(() => {
   return Math.min(uiStore.rightSidebarWidth, availableRightSidebarWidth())
 })
+const isCollaborationRoute = computed(() => route.name === 'Collaboration')
 
 watch(
   () => uiStore.activeRightSidebarTab,
@@ -189,6 +195,11 @@ function availableRightSidebarWidth(): number {
 
 .right-sidebar :deep(.n-tabs-nav) {
   padding: 0 var(--app-space-md);
+}
+
+.right-panel-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .right-sidebar :deep(.n-tabs-pane-wrapper),

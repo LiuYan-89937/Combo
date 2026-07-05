@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.collaboration_system import CollaborationStore
 from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import (
     list_workspace_entries_from_roots,
     read_workspace_file_from_roots,
@@ -14,7 +15,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 
 
-WORKSPACE_RESOURCE_MODES = {"package", "create_agent", "evolve_agent"}
+WORKSPACE_RESOURCE_MODES = {"package", "create_agent", "evolve_agent", "collaboration"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,15 +102,23 @@ class FrontendWorkspaceService:
             return self._create_agent_target(payload, session_record=session_record)
         if resource_mode == "evolve_agent":
             return self._evolution_target(payload, session_record=session_record)
+        if resource_mode == "collaboration":
+            return self._collaboration_target(payload)
         return self._package_target(payload)
 
     def _package_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
         package_id = str(payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
-        roots = self.agent_package_runtime.workspace_root_paths(package_id)
+        package_session_id = self._package_session_id(payload)
+        roots = self.agent_package_runtime.workspace_root_paths(package_id, session_id=package_session_id)
         return FrontendWorkspaceTarget(
             resource_mode="package",
-            context={"resource_mode": "package", "package_id": package_id},
+            context={
+                "resource_mode": "package",
+                "package_id": package_id,
+                **({"package_session_id": package_session_id} if package_session_id else {}),
+            },
             roots=roots,
+            unavailable_reason=None if package_session_id else "select a conversation before opening the session workdir",
         )
 
     def _create_agent_target(
@@ -172,6 +181,37 @@ class FrontendWorkspaceService:
             roots=_factory_workspace_roots(package.package_root),
         )
 
+    def _collaboration_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
+        collaboration_id = str(payload.get("collaboration_id") or "").strip()
+        context = {
+            "resource_mode": "collaboration",
+            **({"collaboration_id": collaboration_id} if collaboration_id else {}),
+        }
+        if not collaboration_id:
+            return FrontendWorkspaceTarget(
+                resource_mode="collaboration",
+                context=context,
+                roots={},
+                unavailable_reason="select a collaboration session before opening the acceptance workspace",
+            )
+        session = CollaborationStore().get_session(collaboration_id)
+        workspace = session.get("acceptance_workspace") if isinstance(session, dict) else None
+        workdir_text = str((workspace or {}).get("workdir") or "").strip()
+        if not workdir_text:
+            return FrontendWorkspaceTarget(
+                resource_mode="collaboration",
+                context=context,
+                roots={},
+                unavailable_reason="collaboration acceptance workspace is not available",
+            )
+        workdir = Path(workdir_text).expanduser()
+        workdir.mkdir(parents=True, exist_ok=True)
+        return FrontendWorkspaceTarget(
+            resource_mode="collaboration",
+            context=context,
+            roots=_factory_workspace_roots(workdir),
+        )
+
     def _session_record(self, payload: dict[str, Any], *, session_record: Any | None) -> Any | None:
         if session_record is not None:
             return session_record
@@ -184,6 +224,15 @@ class FrontendWorkspaceService:
             return self.session_manager.load(factory_session_id)
         except Exception:
             return None
+
+    def _package_session_id(self, payload: dict[str, Any]) -> str:
+        explicit = str(payload.get("package_session_id") or payload.get("agent_session_id") or "").strip()
+        if explicit:
+            return explicit
+        record = self._session_record(payload, session_record=None)
+        if record is None:
+            return ""
+        return str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
 
 
 def _resource_mode(payload: dict[str, Any]) -> str:

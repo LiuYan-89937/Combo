@@ -61,12 +61,13 @@ function repairPlainSegment(segment: string): string {
     .map(normalizeListMarkerSpacing)
 
   const tableLineIndexes = findTableLineIndexes(lines)
-  return lines
+  const repairedLines = lines
     .flatMap((line, index) => (
       tableLineIndexes.has(index)
         ? [line.trim()]
         : splitArtifactFields(line)
     ))
+  return separateTableBlocks(repairedLines)
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
@@ -114,18 +115,46 @@ function parseCompactTableRows(line: string): string[] | null {
   const pipeCount = (line.match(/\|/g) || []).length
   if (pipeCount < 6) return null
 
-  const rows = line
-    .split(/\|\|+/)
-    .map((row) => normalizeTableRow(row))
+  const rows = splitCompactTableCandidate(line)
     .filter(Boolean)
 
   if (rows.length < 2) return null
   if (isTableDelimiterRow(rows[1])) {
     if (!hasCompatibleTableShape(rows[0], rows[1])) return null
-    return rows
+    return tableRowsWithCompatibleBody(rows)
   }
   if (!hasCompatibleTableDataShape(rows)) return null
   return [rows[0], tableDelimiterForRow(rows[0]), ...rows.slice(1)]
+}
+
+function splitCompactTableCandidate(line: string): string[] {
+  return line
+    .split(/\|\|+/)
+    .map((row) => normalizeTableRow(row))
+}
+
+function tableRowsWithCompatibleBody(rows: string[]): string[] | null {
+  const columnCount = splitTableCells(rows[0]).length
+  const accepted = rows.slice(0, 2)
+  const remainder: string[] = []
+  let acceptingRows = true
+
+  for (const row of rows.slice(2)) {
+    if (acceptingRows && splitTableCells(row).length === columnCount) {
+      accepted.push(row)
+      continue
+    }
+    acceptingRows = false
+    remainder.push(row)
+  }
+
+  if (accepted.length < 3) return null
+  if (!remainder.length) return accepted
+  return [...accepted, ...remainder.map(tableRowToPlainText)]
+}
+
+function tableRowToPlainText(row: string): string {
+  return splitTableCells(row).join(' | ')
 }
 
 function hasCompatibleTableDataShape(rows: string[]): boolean {
@@ -200,6 +229,28 @@ function findTableLineIndexes(lines: string[]): Set<number> {
     }
   }
   return indexes
+}
+
+function separateTableBlocks(lines: string[]): string[] {
+  const tableLineIndexes = findTableLineIndexes(lines)
+  if (!tableLineIndexes.size) return lines
+
+  const output: string[] = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    const isTableLine = tableLineIndexes.has(index)
+    const previousIsTableLine = tableLineIndexes.has(index - 1)
+    const nextIsTableLine = tableLineIndexes.has(index + 1)
+
+    if (isTableLine && !previousIsTableLine && output.length > 0 && output[output.length - 1].trim()) {
+      output.push('')
+    }
+    output.push(line)
+    if (isTableLine && !nextIsTableLine && index < lines.length - 1 && lines[index + 1].trim()) {
+      output.push('')
+    }
+  }
+  return output
 }
 
 function isTableDataRow(line: string): boolean {

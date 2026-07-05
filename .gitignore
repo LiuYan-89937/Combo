@@ -9,6 +9,7 @@ docs/*
 !docs/basic_capability_construction.md
 !docs/factory_runtime_kernel_stages.md
 !docs/runtime_render_pipeline.md
+!docs/multi-agent-collaboration.md
 开发规范以及架构初版.md
 examples/customer_service_agent/memory/
 examples/customer_service_agent/traces/

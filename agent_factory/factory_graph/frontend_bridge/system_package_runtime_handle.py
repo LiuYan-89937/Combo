@@ -26,11 +26,29 @@ Emit = Callable[[FactoryFrontendEvent], None]
 ContainerStreamItem = tuple[str, Any]
 
 
-def _target_request_ids(events: dict[str, Deque[ContainerStreamItem]], request_id: str | None) -> list[str]:
+def _target_request_ids(
+    events: dict[str, Deque[ContainerStreamItem]],
+    request_sessions: dict[str, str],
+    *,
+    request_id: str | None,
+    session_id: str | None,
+) -> list[str]:
     target = (request_id or "").strip()
-    if not target:
-        return list(events)
-    return [target] if target in events else []
+    if target:
+        return [target] if target in events else []
+    session_target = (session_id or "").strip()
+    if session_target:
+        return [
+            active_request_id
+            for active_request_id in events
+            if request_sessions.get(active_request_id) == session_target
+        ]
+    return list(events)
+
+
+def _command_session_id(command: dict[str, Any]) -> str:
+    payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+    return str(payload.get("session_id") or command.get("session_id") or "").strip()
 
 
 class SystemPackageRuntimeHandle:
@@ -57,6 +75,7 @@ class SystemPackageRuntimeHandle:
         self._condition = threading.Condition()
         self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
         self._request_commands: dict[str, str] = {}
+        self._request_session_ids: dict[str, str] = {}
         self._request_done: dict[str, bool] = {}
         self._request_errors: dict[str, BaseException] = {}
         self.last_used = time.monotonic()
@@ -103,6 +122,9 @@ class SystemPackageRuntimeHandle:
                 raise RuntimeError(f"system package runtime request is already active: {request_id}")
             self._request_events[request_id] = deque()
             self._request_commands[request_id] = str(command.get("type") or "")
+            session_id = _command_session_id(command)
+            if session_id:
+                self._request_session_ids[request_id] = session_id
             self._request_done[request_id] = False
 
         def collect(item: FactoryFrontendEvent) -> None:
@@ -177,6 +199,7 @@ class SystemPackageRuntimeHandle:
             with self._condition:
                 self._request_events.pop(request_id, None)
                 self._request_commands.pop(request_id, None)
+                self._request_session_ids.pop(request_id, None)
                 self._request_done.pop(request_id, None)
                 self._request_errors.pop(request_id, None)
             self.last_used = time.monotonic()
@@ -187,13 +210,24 @@ class SystemPackageRuntimeHandle:
         *,
         reason: str,
         request_id: str | None = None,
+        session_id: str | None = None,
         visible_output: Any = None,
     ) -> int:
-        return self.core.cancel_active_requests(
-            reason=reason,
-            request_id=request_id,
-            visible_output=visible_output,
-        )
+        with self._condition:
+            request_ids = _target_request_ids(
+                self._request_events,
+                self._request_session_ids,
+                request_id=request_id,
+                session_id=session_id,
+            )
+        cancelled = 0
+        for active_request_id in request_ids:
+            cancelled += self.core.cancel_active_requests(
+                reason=reason,
+                request_id=active_request_id,
+                visible_output=visible_output,
+            )
+        return cancelled
 
     def close(self) -> None:
         self._cancel_idle_shutdown()

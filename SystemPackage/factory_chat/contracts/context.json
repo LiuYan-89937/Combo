@@ -9,7 +9,6 @@
       "version": "context_policy.v0",
       "compression": {
         "enabled": true,
-        "trigger_token_threshold": 258000,
         "keep_recent_messages": 20
       },
       "retrieval": {

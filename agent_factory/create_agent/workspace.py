@@ -204,7 +204,7 @@ class CreateAgentWorkspace:
             self.publish_decision_path,
             CreateAgentPublishDecision,
             missing=CreateAgentPublishDecision(),
-            owner_tool="the internal create-agent publish confirmation gate",
+            owner_tool="the create-agent publish API",
         ) or CreateAgentPublishDecision()
 
     def write_publish_decision(self, decision: CreateAgentPublishDecision) -> None:

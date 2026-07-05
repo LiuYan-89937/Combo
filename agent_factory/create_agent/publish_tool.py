@@ -18,11 +18,8 @@ from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlan
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
-from agent_factory.tooling.envelope import tool_envelope
-from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
 
 
-CREATE_AGENT_PUBLISH_TOOL_ID = "create_agent_publish"
 CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE = "create_agent_package_registry"
 PACKAGE_ASSET_DIRS = {
     "artifacts",
@@ -36,69 +33,6 @@ PACKAGE_ASSET_DIRS = {
     "strategies",
     "tools",
 }
-
-
-def build_create_agent_publish_tool_spec() -> ToolSpec:
-    return ToolSpec(
-        id=CREATE_AGENT_PUBLISH_TOOL_ID,
-        description=(
-            "Publish a fully validated create-agent workspace into the AgentPackage registry. "
-            "Use only after the user confirms publication."
-        ),
-        entrypoint="agent_factory.create_agent.publish_tool:run",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "confirmation": {
-                    "type": "string",
-                    "description": "Short natural-language record of the user's publish confirmation.",
-                }
-            },
-            "required": ["confirmation"],
-            "additionalProperties": False,
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "published": {"type": "boolean"},
-                "package_id": {"type": "string"},
-                "package_path": {"type": "string"},
-                "manifest_path": {"type": "string"},
-                "published_at": {"type": "string"},
-                "report_path": {"type": "string"},
-                "publish_state_path": {"type": "string"},
-            },
-            "required": [
-                "published",
-                "package_id",
-                "package_path",
-                "manifest_path",
-                "published_at",
-                "report_path",
-                "publish_state_path",
-            ],
-            "additionalProperties": False,
-        },
-        resources={
-            "workspace": "create_agent_workspace",
-            "package_registry": CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE,
-        },
-        risk_level="medium",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard="agent_factory.create_agent.publish_tool:evaluate_risk"),
-        concurrent=False,
-    )
-
-
-def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    workspace = _workspace(resources)
-    confirmation = str(arguments.get("confirmation") or "").strip()
-    if not confirmation:
-        raise ValueError("confirmation is required")
-    return tool_envelope(publish_workspace(
-        workspace=workspace,
-        confirmation=confirmation,
-        registry_root=_registry_root(resources),
-    ))
 
 
 def confirm_and_publish(
@@ -196,21 +130,6 @@ def publish_workspace(
     }
 
 
-def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    confirmation = str(arguments.get("confirmation") or "").strip()
-    if not confirmation:
-        return ToolRiskResult(
-            action="deny",
-            risk_level="medium",
-            reasons=["confirmation is required before publishing"],
-        ).model_dump(mode="json")
-    return ToolRiskResult(
-        action="allow",
-        risk_level="medium",
-        reasons=["publish confirmation is present; runtime readiness is checked by the tool"],
-    ).model_dump(mode="json")
-
-
 def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:
     active = workspace.read_system_state().active_stage()
     if active is None or active.system_id != "validation_publish":
@@ -228,9 +147,9 @@ def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:
         raise ValueError("package files changed after validation; run final validation again before publishing")
     decision = workspace.read_publish_decision()
     if decision.decision != "approve":
-        raise ValueError("publish requires explicit user approval from the publish confirmation gate")
+        raise ValueError("publish requires explicit user approval from the Web publish API")
     if decision.package_fingerprint != current_fingerprint:
-        raise ValueError("package files changed after user approval; run final validation and ask for publish confirmation again")
+        raise ValueError("package files changed after user approval; run final validation and publish from the Web UI again")
     if decision.validation_scope != "full_static" or decision.validation_status != "passed":
         raise ValueError("publish approval must correspond to a passed full_static validation")
     if not workspace.package_manifest_path().is_file():
@@ -257,22 +176,6 @@ def _package_id(package: Any) -> str:
     if not value or value in {".", ".."} or "/" in value or "\\" in value:
         raise ValueError(f"invalid package id: {value!r}")
     return value
-
-
-def _workspace(resources: dict[str, Any]) -> CreateAgentWorkspace:
-    raw = resources.get("workspace")
-    if isinstance(raw, str):
-        return CreateAgentWorkspace(raw)
-    if isinstance(raw, dict) and isinstance(raw.get("root"), str):
-        return CreateAgentWorkspace(raw["root"])
-    raise ValueError("create_agent workspace resource is missing")
-
-
-def _registry_root(resources: dict[str, Any]) -> Path:
-    raw = resources.get("package_registry")
-    if isinstance(raw, str) and raw.strip():
-        return Path(raw).expanduser().resolve()
-    return factory_artifact_path("packages")
 
 
 def _safe_child(root: Path, child: str) -> Path:

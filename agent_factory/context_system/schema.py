@@ -103,6 +103,7 @@ class ContextContractConfig(BaseModel):
 
     version: Literal["context_system.v0"] = "context_system.v0"
     enabled: bool = True
+    context_window_tokens: int | None = Field(default=None, ge=1000)
     default_policy: ContextPolicy = Field(default_factory=ContextPolicy)
     node_policies: dict[str, ContextPolicy] = Field(default_factory=dict)
 

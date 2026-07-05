@@ -25,19 +25,22 @@ def plan_and_execute_model_tool_ids(
     node_bindings: list[dict[str, Any]],
     all_bindings: list[dict[str, Any]],
     registry: Any,
+    extra_tool_ids: list[str] | None = None,
 ) -> list[str]:
     node_tool_ids = tool_access_ids(node_bindings)
+    runtime_tool_ids = extra_tool_ids or []
     if node_id == PLAN_EXECUTE_PLANNER_NODE_ID:
         return node_tool_ids
     if node_id == PLAN_EXECUTE_EXECUTOR_NODE_ID:
-        return merge_tool_ids([*node_tool_ids, *system_tool_ids(registry)])
+        return merge_tool_ids([*node_tool_ids, *runtime_tool_ids, *system_tool_ids(registry)])
     if node_id == PLAN_EXECUTE_CASUAL_NODE_ID:
-        return without_runtime_plan(merge_tool_ids([*node_tool_ids, *system_tool_ids(registry)]))
+        return without_runtime_plan(merge_tool_ids([*node_tool_ids, *runtime_tool_ids, *system_tool_ids(registry)]))
     if node_id == PLAN_EXECUTE_FINAL_NODE_ID:
         return plan_and_execute_delivery_tool_ids(
             node_bindings=node_bindings,
             all_bindings=all_bindings,
             registry=registry,
+            extra_tool_ids=runtime_tool_ids,
         )
     return node_tool_ids
 
@@ -47,7 +50,9 @@ def plan_and_execute_delegated_tool_ids(
     origin_node_id: str,
     all_bindings: list[dict[str, Any]],
     registry: Any,
+    extra_tool_ids: list[str] | None = None,
 ) -> list[str]:
+    runtime_tool_ids = extra_tool_ids or []
     if origin_node_id == PLAN_EXECUTE_PLANNER_NODE_ID:
         return []
     if origin_node_id in {PLAN_EXECUTE_EXECUTOR_NODE_ID, PLAN_EXECUTE_CASUAL_NODE_ID}:
@@ -55,6 +60,7 @@ def plan_and_execute_delegated_tool_ids(
             merge_tool_ids(
                 [
                     *tool_access_ids_for_node(all_bindings, node_id=origin_node_id),
+                    *runtime_tool_ids,
                     *system_tool_ids(registry),
                 ]
             )
@@ -64,6 +70,7 @@ def plan_and_execute_delegated_tool_ids(
             node_bindings=tool_access_bindings_for_node(all_bindings, node_id=PLAN_EXECUTE_FINAL_NODE_ID),
             all_bindings=all_bindings,
             registry=registry,
+            extra_tool_ids=runtime_tool_ids,
         )
     return []
 
@@ -80,10 +87,11 @@ def plan_and_execute_delivery_tool_ids(
     node_bindings: list[dict[str, Any]],
     all_bindings: list[dict[str, Any]],
     registry: Any,
+    extra_tool_ids: list[str] | None = None,
 ) -> list[str]:
     final_tool_ids = tool_access_ids(node_bindings)
     source_tool_ids = final_tool_ids or tool_access_ids_for_node(all_bindings, node_id=PLAN_EXECUTE_EXECUTOR_NODE_ID)
-    return without_runtime_plan(merge_tool_ids([*source_tool_ids, *system_tool_ids(registry)]))
+    return without_runtime_plan(merge_tool_ids([*source_tool_ids, *(extra_tool_ids or []), *system_tool_ids(registry)]))
 
 
 def tool_access_bindings_for_node(bindings: list[dict[str, Any]], *, node_id: str) -> list[dict[str, Any]]:

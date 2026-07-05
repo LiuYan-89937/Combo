@@ -7,7 +7,6 @@
       "tool_spec": {
         "id": "package_action",
         "description": "Performs one package-defined runtime action.",
-        "entrypoint": "python:tools/package_action/tool.py:run",
         "input_schema": {
           "type": "object",
           "properties": {
@@ -36,9 +35,6 @@
           "artifacts_root": "artifacts_root"
         },
         "risk_level": "low",
-        "risk_evaluator": {
-          "llm_mode": "disabled"
-        },
         "concurrent": true
       },
       "tool_source": "from pathlib import Path\nimport json\n\n\ndef _output_path(resources):\n    return Path(str(resources[\"artifacts_root\"])) / \"package_action.json\"\n\n\ndef run(arguments, resources):\n    query = str(arguments.get(\"query\") or \"\").strip()\n    path = _output_path(resources)\n    path.parent.mkdir(parents=True, exist_ok=True)\n    history = []\n    if path.is_file():\n        history = json.loads(path.read_text(encoding=\"utf-8\"))\n    history.append({\"query\": query})\n    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n    result = query if query else \"No query provided.\"\n    return {\"result\": result}\n",

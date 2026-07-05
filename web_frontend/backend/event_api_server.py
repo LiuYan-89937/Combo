@@ -17,8 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from agent_factory.env import load_agentfactory_dotenv
+from agent_factory.collaboration_system import CollaborationService
+from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.tooling.skillhub import ensure_global_skillhub_cli
 from web_frontend.backend.routes.agent_packages import create_agent_package_router
+from web_frontend.backend.routes.collaboration import create_collaboration_router
+from web_frontend.backend.routes.create_agent import create_create_agent_router
 from web_frontend.backend.routes.extensions import create_extensions_router
 from web_frontend.backend.routes.knowledge import create_knowledge_router
 from web_frontend.backend.routes.memory import create_memory_router
@@ -34,6 +38,10 @@ load_agentfactory_dotenv()
 
 app = FastAPI(title="FastAgentFactory Web Runtime Service")
 runtime_bridge = RuntimeBridge()
+collaboration_service = CollaborationService(
+    runtime_factory=lambda: _agent_package_runtime(runtime_bridge),
+    logger=logger,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +53,8 @@ app.add_middleware(
 
 app.include_router(create_runtime_router(runtime_bridge, logger))
 app.include_router(create_agent_package_router(runtime_bridge, logger))
+app.include_router(create_collaboration_router(runtime_bridge, collaboration_service))
+app.include_router(create_create_agent_router())
 app.include_router(create_workspace_router(runtime_bridge))
 app.include_router(create_knowledge_router(runtime_bridge))
 app.include_router(create_memory_router(runtime_bridge))
@@ -73,11 +83,19 @@ async def _ensure_skillhub_cli() -> None:
 async def startup_event():
     await _ensure_skillhub_cli()
     await runtime_bridge.start()
+    collaboration_service.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    collaboration_service.stop()
     await runtime_bridge.stop()
+
+
+def _agent_package_runtime(runtime_bridge: RuntimeBridge) -> AgentPackageRuntimeManager:
+    adapter = runtime_bridge.adapter
+    runtime = getattr(adapter, "agent_package_runtime", None) if adapter is not None else None
+    return runtime if isinstance(runtime, AgentPackageRuntimeManager) else AgentPackageRuntimeManager()
 
 
 if __name__ == "__main__":

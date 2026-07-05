@@ -57,13 +57,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { NButton, NIcon, NInput, NSpace, NTag } from 'naive-ui'
+import { createAgentApi } from '@/api/createAgent'
 import { CheckmarkCircle, CreateOutline, RocketOutline } from '@/components/icons'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useUiStore } from '@/stores/ui'
 
 const runtimeStore = useRuntimeStore()
 const commands = useCommand()
+const uiStore = useUiStore()
 const { t } = useI18n()
 const revisionGuidance = ref('')
 const publishSubmitting = ref(false)
@@ -78,16 +81,47 @@ const validationLabel = computed(() => {
   return [scope, status].filter(Boolean).join(' / ') || t('publish.ready')
 })
 
-function handleConfirmPublish() {
+async function handleConfirmPublish() {
   if (publishSubmitting.value) return
+  const sessionId = String(payload.value.session_id || '').trim()
+  if (!sessionId) {
+    uiStore.addNotification({
+      type: 'error',
+      title: t('publish.failedTitle'),
+      message: t('publish.missingSession'),
+      duration: 3500,
+    })
+    return
+  }
   publishSubmitting.value = true
-  commands.confirmPublish()
+  try {
+    await createAgentApi.publish(sessionId)
+    runtimeStore.clearCreateAgentPublishReady()
+    commands.listAgentPackages()
+    uiStore.addNotification({
+      type: 'success',
+      title: t('publish.successTitle'),
+      message: t('publish.successMessage'),
+      duration: 3000,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    uiStore.addNotification({
+      type: 'error',
+      title: t('publish.failedTitle'),
+      message,
+      duration: 5000,
+    })
+  } finally {
+    publishSubmitting.value = false
+  }
 }
 
 function handleContinueRevision() {
   const guidance = revisionGuidance.value.trim()
   if (!guidance) return
-  commands.continuePublishRevision(guidance)
+  runtimeStore.clearCreateAgentPublishReady()
+  commands.sendMessage(guidance, 'create_agent')
   revisionGuidance.value = ''
 }
 </script>

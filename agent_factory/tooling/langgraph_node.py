@@ -155,7 +155,8 @@ class AgentFactoryToolNode:
                 tool_call_id=tool_call_id,
                 message=message,
                 arguments=arguments,
-                retryable=False,
+                output={"visible_tool_ids": sorted(self.allowed_tool_ids)},
+                retryable=True,
             )
             self._emit(
                 {
@@ -434,13 +435,7 @@ def tool_messages_to_runtime_patch(
             results.append(payload)
             continue
         failures.append(payload)
-        if payload.get("status") == "tool_not_allowed":
-            route_decision = "policy.blocked"
-            policy_patch = {
-                "blocked": True,
-                "block_reason": str(payload.get("message") or "Tool is not visible to this node."),
-            }
-        elif route_decision == "tool.completed":
+        if route_decision == "tool.completed":
             route_decision = "tool.failed"
     return results, failures, policy_patch, route_decision
 

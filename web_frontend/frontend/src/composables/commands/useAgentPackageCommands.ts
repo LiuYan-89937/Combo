@@ -48,6 +48,26 @@ export function useAgentPackageCommands() {
     }
   }
 
+  const updateAgentPackageContextConfig = async (
+    packageId: string,
+    payload: { context_window_tokens?: number | null; compression_threshold_tokens?: number | null },
+  ) => {
+    try {
+      const response = await agentPackagesApi.updateContextConfig(packageId, payload)
+      agentStore.addPackage(response.package)
+      uiStore.addNotification({
+        type: 'success',
+        title: t('agentDetail.contextConfigSavedTitle'),
+        message: t('agentDetail.contextConfigSavedMessage'),
+        duration: 2500,
+      })
+      return response.package as AgentPackageView
+    } catch (error) {
+      transport.reportError(error)
+      return null
+    }
+  }
+
   const listAgentPackageSessions = (packageId: string) => {
     return transport.applyEventRequest(agentPackagesApi.sessions(packageId))
   }
@@ -89,8 +109,9 @@ export function useAgentPackageCommands() {
     sessionId?: string,
     attachments?: RuntimeAttachmentInput[],
     runtimeOptions?: commands.RuntimeMainModelOptions,
+    displayUserInput?: string | null,
   ) => {
-    const command = commands.runAgentPackageCommand(packageId, message, sessionId, attachments, runtimeOptions)
+    const command = commands.runAgentPackageCommand(packageId, message, sessionId, attachments, runtimeOptions, displayUserInput)
     transport.sendRuntimeCommand(command)
     return command
   }
@@ -101,8 +122,9 @@ export function useAgentPackageCommands() {
     sessionId?: string,
     attachments?: RuntimeAttachmentInput[],
     runtimeOptions?: commands.RuntimeMainModelOptions,
+    displayUserInput?: string | null,
   ) => {
-    const command = commands.sendAgentPackageMessageCommand(packageId, message, sessionId, attachments, runtimeOptions)
+    const command = commands.sendAgentPackageMessageCommand(packageId, message, sessionId, attachments, runtimeOptions, displayUserInput)
     transport.sendRuntimeCommand(command)
     return command
   }
@@ -123,6 +145,7 @@ export function useAgentPackageCommands() {
     selectAgentPackage,
     deleteAgentPackage,
     exportAgentPackage,
+    updateAgentPackageContextConfig,
     listAgentPackageSessions,
     listAgentPackageInstances,
     listRecentAgentSessions,

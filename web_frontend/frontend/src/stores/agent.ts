@@ -71,6 +71,19 @@ export interface AgentPackageModelContractView {
   }>
 }
 
+export interface AgentPackageContextContractView {
+  version: string
+  context_window_tokens?: number | null
+  context_window_tokens_source?: string | null
+  context_window_tokens_env?: number | null
+  context_window_tokens_custom?: number | null
+  compression_threshold_tokens?: number | null
+  compression_threshold_tokens_source?: string | null
+  compression_threshold_tokens_env?: number | null
+  compression_threshold_tokens_custom?: number | null
+  error?: string | null
+}
+
 export interface AgentPackageView {
   package_id: string
   package_path?: string
@@ -87,6 +100,7 @@ export interface AgentPackageView {
   updated_at: string | null
   sandbox?: Record<string, any>
   model_contract?: AgentPackageModelContractView
+  context_contract?: AgentPackageContextContractView
   extensions?: Record<string, any>
   tools?: AgentPackageToolView[]
   mcp_servers?: AgentPackageExtensionView[]

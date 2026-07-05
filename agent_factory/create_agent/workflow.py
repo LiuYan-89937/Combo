@@ -10,10 +10,9 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
-from agent_factory.create_agent.models import CreateAgentAction, CreateAgentPublishDecision, PackageValidationReport
+from agent_factory.create_agent.models import CreateAgentAction, PackageValidationReport
 from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
 from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
-from agent_factory.create_agent.publish_tool import confirm_and_publish
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
@@ -29,12 +28,12 @@ class CreateAgentGraphState(TypedDict, total=False):
     runtime_attachments: list[dict[str, Any]]
     iteration: int
     validation: dict[str, Any]
-    publish_confirmation_response: dict[str, Any]
     graph_kind: str
     evolution_context: dict[str, Any]
     runtime_main_model_profile_id: str
     done: bool
     final_answer: str
+    publish_ready: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -71,7 +70,6 @@ class CreateAgentWorkflow:
         _ai_message, unresolved_tool_calls = latest_ai_tool_calls(state.get("messages") or [])
         if unresolved_tool_calls:
             return {
-                "publish_confirmation_response": {},
                 "done": False,
             }
         runtime_model = resolve_runtime_main_chat_model_from_state(state)
@@ -117,7 +115,6 @@ class CreateAgentWorkflow:
         return {
             "messages": [response],
             "iteration": int(state.get("iteration") or 0) + 1,
-            "publish_confirmation_response": {},
         }
 
     def _tools(self, state: CreateAgentGraphState) -> dict[str, Any]:
@@ -144,6 +141,10 @@ class CreateAgentWorkflow:
             }
         action = workspace.read_action()
         if action.action == "ask_user":
+            ready_report = workspace.read_validation()
+            if not _publish_readiness_error(workspace=workspace, report=ready_report):
+                workspace.write_action(CreateAgentAction())
+                return _publish_ready_result(workspace, ready_report)
             answer = interrupt(
                 {
                     "type": "create_agent_question",
@@ -178,68 +179,7 @@ class CreateAgentWorkflow:
                 "done": False,
             }
         workspace.write_action(CreateAgentAction())
-        answer = interrupt(
-            {
-                "type": "create_agent_publish_confirmation",
-                "presentation": "assistant_dialogue",
-                "resume_kind": "confirmation",
-                "title": "发布前确认",
-                "message": _publish_confirmation_text(workspace, report),
-                "options": [
-                    {
-                        "id": "publish",
-                        "label": "发布",
-                        "description": "发布已通过最终校验的 AgentPackage。",
-                    },
-                    {
-                        "id": "save_draft",
-                        "label": "保存草稿",
-                        "description": "保留当前工作区，不发布。",
-                    },
-                    {
-                        "id": "message",
-                        "label": "输入",
-                        "description": "输入问题、调整意见或其他自然语言内容。",
-                    },
-                ],
-                "workspace_path": str(workspace.root),
-                "validation": report.to_digest().model_dump(mode="json"),
-            }
-        )
-        publish_decision = _publish_decision_from_resume(answer)
-        resume_text = _resume_text(answer)
-        if publish_decision == "approve":
-            publish_result = confirm_and_publish(workspace=workspace, confirmation=resume_text or "发布")
-            return {
-                "validation": report.to_digest().model_dump(mode="json"),
-                "done": True,
-                "final_answer": f"AgentPackage 已发布：{publish_result['package_id']} ({publish_result['package_path']})",
-            }
-        workspace.write_publish_decision(
-            CreateAgentPublishDecision(
-                decision=publish_decision,
-                input_text=resume_text,
-                package_fingerprint=package_fingerprint(workspace.root),
-                validation_scope=report.validation_scope,
-                validation_status=report.status,
-            )
-        )
-        resume_text = _publish_resume_text(answer, decision=publish_decision)
-        publish_response = {
-            "decision": publish_decision,
-            "input_text": _resume_text(answer),
-            "instruction": (
-                "User explicitly approved publish."
-                if publish_decision == "approve"
-                else "Publish is still pending. Treat input_text as the user's latest message, not as an automatic modification request."
-            ),
-        }
-        return {
-            "validation": report.to_digest().model_dump(mode="json"),
-            "messages": [HumanMessage(content=resume_text)],
-            "publish_confirmation_response": publish_response,
-            "done": False,
-        }
+        return _publish_ready_result(workspace, report)
 
     def _evolution_control_gate(self, state: CreateAgentGraphState, workspace: CreateAgentWorkspace) -> dict[str, Any]:
         action = workspace.read_action()
@@ -438,47 +378,39 @@ def _evolution_final_answer(message: str) -> str:
     return "AgentPackage 进化已通过 full_static validation，变更已完成并自动发布。"
 
 
-def _publish_decision_from_resume(value: Any) -> str:
-    if isinstance(value, dict):
-        decision = str(value.get("decision") or "").strip().lower()
-        if decision in {"approve", "publish"}:
-            return "approve"
-        text = _resume_text(value).strip().lower()
-    return "approve" if _looks_like_publish_confirmation_text(text) else "pending"
-
-
-def _looks_like_publish_confirmation_text(value: str) -> bool:
-    text = "".join(str(value or "").strip().lower().split())
-    if not text or text.startswith(("不要", "别", "先别", "暂不", "不")):
-        return False
-    return text in {"确认", "确认发布", "发布", "approve", "approved", "yes", "y", "ok"} or text.startswith("确认发布")
-
-
-def _publish_resume_text(value: Any, *, decision: str) -> str:
-    text = _resume_text(value)
-    if decision == "approve":
-        return f"用户已明确确认发布 AgentPackage。确认内容：{text}"
-    return (
-        "用户在发布确认阶段回复了一条消息，但尚未明确确认发布。"
-        f"请把下面内容作为用户最新消息处理，而不是自动当作修改需求：{text}\n"
-        "如果这是问题或质疑，先基于当前 AgentPackage 状态回答；"
-        "如果这是修改要求，再进入制造修改和校验；"
-        "如果用户随后明确确认发布，再调用 create_agent_publish。"
-    )
-
-
 def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list[BaseMessage]]:
     if messages and isinstance(messages[0], SystemMessage):
         return {"template": str(messages[0].content or "")}, messages[1:]
     return {}, messages
 
 
-def _publish_confirmation_text(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> str:
+def _publish_ready_text(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> str:
     return (
-        "AgentPackage 已通过最终静态校验。\n\n"
+        "AgentPackage 已完成制造并通过最终静态校验。\n\n"
         f"- Workspace: {workspace.root}\n"
         f"- Validation: {report.validation_scope} / {report.status}\n"
         f"- Summary: {report.summary}\n\n"
-        "如果还需要调整，请直接用自然语言说明要改哪里；"
-        "如果确认发布，请直接回复确认发布。"
+        "当前包已进入待发布状态。发布只由用户在界面中点击发布按钮执行，制造 Agent 不再参与物理发布。"
     )
+
+
+def _publish_ready_payload(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> dict[str, Any]:
+    return {
+        "version": "agent_package_publish_report.v0",
+        "status": "ready",
+        "source_workspace": str(workspace.root),
+        "message": _publish_ready_text(workspace, report),
+        "validation": report.to_digest().model_dump(mode="json"),
+        "package_fingerprint": package_fingerprint(workspace.root),
+    }
+
+
+def _publish_ready_result(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> dict[str, Any]:
+    publish_ready = _publish_ready_payload(workspace, report)
+    workspace.write_publish_report(publish_ready)
+    return {
+        "validation": report.to_digest().model_dump(mode="json"),
+        "publish_ready": publish_ready,
+        "done": True,
+        "final_answer": _publish_ready_text(workspace, report),
+    }

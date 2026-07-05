@@ -25,11 +25,29 @@ Emit = Callable[[FactoryFrontendEvent], None]
 ContainerStreamItem = tuple[str, Any]
 
 
-def _target_request_ids(events: dict[str, Deque[ContainerStreamItem]], request_id: str | None) -> list[str]:
+def _target_request_ids(
+    events: dict[str, Deque[ContainerStreamItem]],
+    request_sessions: dict[str, str],
+    *,
+    request_id: str | None,
+    session_id: str | None,
+) -> list[str]:
     target = (request_id or "").strip()
-    if not target:
-        return list(events)
-    return [target] if target in events else []
+    if target:
+        return [target] if target in events else []
+    session_target = (session_id or "").strip()
+    if session_target:
+        return [
+            active_request_id
+            for active_request_id in events
+            if request_sessions.get(active_request_id) == session_target
+        ]
+    return list(events)
+
+
+def _command_session_id(command: dict[str, Any]) -> str:
+    payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+    return str(payload.get("session_id") or command.get("session_id") or "").strip()
 
 
 class AgentRuntimeContainerHandle:
@@ -53,6 +71,7 @@ class AgentRuntimeContainerHandle:
         self._stdin_lock = threading.Lock()
         self._request_events: dict[str, Deque[ContainerStreamItem]] = {}
         self._request_commands: dict[str, str] = {}
+        self._request_session_ids: dict[str, str] = {}
         self._reader_error: BaseException | None = None
         self._stdout_closed = False
         self._closing = False
@@ -106,6 +125,9 @@ class AgentRuntimeContainerHandle:
                 raise RuntimeError(f"agent runtime request is already active: {request_id}")
             self._request_events[request_id] = deque()
             self._request_commands[request_id] = str(command.get("type") or "")
+            session_id = _command_session_id(command)
+            if session_id:
+                self._request_session_ids[request_id] = session_id
         self._write_command(command)
         self.last_used = time.monotonic()
         self._cancel_idle_shutdown()
@@ -144,6 +166,7 @@ class AgentRuntimeContainerHandle:
             with self._condition:
                 self._request_events.pop(request_id, None)
                 self._request_commands.pop(request_id, None)
+                self._request_session_ids.pop(request_id, None)
             self.last_used = time.monotonic()
             self._schedule_idle_shutdown()
 
@@ -152,24 +175,31 @@ class AgentRuntimeContainerHandle:
         *,
         reason: str,
         request_id: str | None = None,
+        session_id: str | None = None,
         visible_output: Any = None,
     ) -> int:
         with self._condition:
-            request_ids = _target_request_ids(self._request_events, request_id)
+            request_ids = _target_request_ids(
+                self._request_events,
+                self._request_session_ids,
+                request_id=request_id,
+                session_id=session_id,
+            )
         if not request_ids:
             return 0
         try:
-            self._write_command(
-                {
-                    "type": "cancel_runtime_request",
-                    "request_id": uuid4().hex,
-                    "payload": {
-                        "reason": reason,
-                        "target_request_id": (request_id or "").strip(),
-                        "visible_output": visible_output,
-                    },
-                }
-            )
+            for active_request_id in request_ids:
+                self._write_command(
+                    {
+                        "type": "cancel_runtime_request",
+                        "request_id": uuid4().hex,
+                        "payload": {
+                            "reason": reason,
+                            "target_request_id": active_request_id,
+                            "visible_output": visible_output,
+                        },
+                    }
+                )
         except Exception as exc:
             self._emit_background_event(
                 event(

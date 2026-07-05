@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import os
 
 from agent_factory.tooling.builtins import (
     get_always_available_system_tool_ids,
@@ -15,6 +16,7 @@ from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
 )
 from agent_factory.tooling.skillhub import SKILLHUB_RUNTIME_RESOURCE, build_skillhub_runtime_resource
+from agent_factory.paths import factory_artifact_path
 
 
 class BuiltinToolProvider:
@@ -44,9 +46,10 @@ class BuiltinToolProvider:
         if self._tool_ids:
             always_available = get_always_available_system_tool_ids()
             specs = [spec for spec in specs if spec.id in self._tool_ids or spec.id in always_available]
+        always_available = get_always_available_system_tool_ids()
         return ToolProviderResult(
             tool_specs=specs,
-            system_tool_ids=[spec.id for spec in specs],
+            system_tool_ids=[spec.id for spec in specs if spec.id in always_available],
             runtime_resources=runtime_resources,
         )
 
@@ -71,6 +74,7 @@ def _runtime_resources(context: ToolProviderContext) -> dict[str, object]:
             "allow_external": allow_external,
             "read_only_paths": read_only_paths,
         },
+        "collaboration_root": os.getenv("AGENTFACTORY_COLLABORATION_ROOT") or str(factory_artifact_path("collaboration")),
     }
     skillhub = build_skillhub_runtime_resource(context.extension_root)
     if skillhub is not None:

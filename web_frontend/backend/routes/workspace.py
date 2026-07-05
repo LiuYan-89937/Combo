@@ -21,7 +21,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         package_id: str | None = None,
         resource_mode: str | None = None,
         factory_session_id: str | None = None,
+        package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
+        collaboration_id: str | None = None,
     ):
         event = await resource_command(
             runtime_bridge,
@@ -32,7 +34,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     package_id=package_id,
                     resource_mode=resource_mode,
                     factory_session_id=factory_session_id,
+                    package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
+                    collaboration_id=collaboration_id,
                 ),
             },
             {"workspace_roots_listed"},
@@ -46,7 +50,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         package_id: str | None = None,
         resource_mode: str | None = None,
         factory_session_id: str | None = None,
+        package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
+        collaboration_id: str | None = None,
     ):
         event = await resource_command(
             runtime_bridge,
@@ -59,7 +65,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     package_id=package_id,
                     resource_mode=resource_mode,
                     factory_session_id=factory_session_id,
+                    package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
+                    collaboration_id=collaboration_id,
                 ),
             },
             {"workspace_entries_listed"},
@@ -74,7 +82,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         package_id: str | None = None,
         resource_mode: str | None = None,
         factory_session_id: str | None = None,
+        package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
+        collaboration_id: str | None = None,
     ):
         event = await resource_command(
             runtime_bridge,
@@ -88,7 +98,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     package_id=package_id,
                     resource_mode=resource_mode,
                     factory_session_id=factory_session_id,
+                    package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
+                    collaboration_id=collaboration_id,
                 ),
             },
             {"workspace_file_read"},
@@ -102,7 +114,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         package_id: str | None = None,
         resource_mode: str | None = None,
         factory_session_id: str | None = None,
+        package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
+        collaboration_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
             agent_package_runtime=AgentPackageRuntimeManager(),
@@ -114,7 +128,9 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     package_id=package_id,
                     resource_mode=resource_mode,
                     factory_session_id=factory_session_id,
+                    package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
+                    collaboration_id=collaboration_id,
                 ),
                 scope=scope,
                 relative_path=path,
@@ -141,11 +157,15 @@ def workspace_context_payload(
     package_id: str | None,
     resource_mode: str | None,
     factory_session_id: str | None,
+    package_session_id: str | None,
     create_agent_session_id: str | None,
+    collaboration_id: str | None,
 ) -> dict[str, str]:
     return {
         **optional_package(package_id),
         **({"resource_mode": resource_mode} if resource_mode else {}),
         **({"factory_session_id": factory_session_id} if factory_session_id else {}),
+        **({"package_session_id": package_session_id} if package_session_id else {}),
         **({"create_agent_session_id": create_agent_session_id} if create_agent_session_id else {}),
+        **({"collaboration_id": collaboration_id} if collaboration_id else {}),
     }

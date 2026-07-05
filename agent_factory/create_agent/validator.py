@@ -37,7 +37,6 @@ from agent_factory.runtime_kernel.planning import PLAN_AND_EXECUTE_PATTERN_ID, R
 from agent_factory.tooling.builtins.registry import get_builtin_tool_ids
 from agent_factory.tooling.package_tool_spec import (
     package_tool_directory_path,
-    package_tool_entrypoint,
     package_tool_manifest_path,
     package_tool_source_path,
 )
@@ -334,12 +333,10 @@ def _tool_spec_expected_shape() -> dict[str, Any]:
     return {
         "id": "snake_case_tool_id",
         "description": "What the tool does.",
-        "entrypoint": package_tool_entrypoint("snake_case_tool_id"),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
         "output_schema": {"type": "object", "properties": {}, "additionalProperties": True},
         "resources": {},
         "risk_level": "low|medium|high",
-        "risk_evaluator": {"llm_mode": "disabled"},
         "concurrent": True,
         "output_compression": {
             "action_argument": "action",
@@ -362,7 +359,6 @@ def _tool_spec_repair_template() -> dict[str, Any]:
             "tool_spec": {
                 "id": "<tool_id>",
                 "description": "<specific runtime capability>",
-                "entrypoint": package_tool_entrypoint("<tool_id>"),
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -375,7 +371,6 @@ def _tool_spec_repair_template() -> dict[str, Any]:
                 },
                 "resources": {},
                 "risk_level": "low",
-                "risk_evaluator": {"llm_mode": "disabled"},
                 "concurrent": True,
                 "output_compression": {
                     "action_argument": "action",
@@ -1562,12 +1557,10 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
                     "tool_spec": {
                         "id": tool_id,
                         "description": "<specific runtime capability>",
-                        "entrypoint": package_tool_entrypoint(tool_id),
                         "input_schema": {"type": "object", "additionalProperties": True},
                         "output_schema": {"type": "object", "additionalProperties": True},
                         "resources": {},
                         "risk_level": "low",
-                        "risk_evaluator": {"llm_mode": "disabled"},
                         "concurrent": True,
                     },
                     "tool_source": "<current corrected tool.py source>",
@@ -1836,7 +1829,6 @@ def _manufacturing_tool_ids() -> set[str]:
         "create_agent_control",
         "create_agent_stage",
         "create_agent_probe_tool",
-        "create_agent_publish",
     }
 
 

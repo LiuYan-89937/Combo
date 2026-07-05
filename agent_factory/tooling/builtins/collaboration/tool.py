@@ -1,0 +1,240 @@
+from __future__ import annotations
+
+import os
+import mimetypes
+from pathlib import Path
+from typing import Any
+
+from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
+from agent_factory.document_processing import SUPPORTED_FILE_EXTENSIONS, parse_file
+from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.spec import ToolRiskResult
+
+
+COLLABORATION_ROOT_ENV = "AGENTFACTORY_COLLABORATION_ROOT"
+ACTIVE_TASK_STATUSES = {"assigned", "queued", "accepted", "planning", "working", "revision_requested"}
+IMMEDIATE_ATTENTION_TASK_STATUSES = {"submitted", "blocked", "failed"}
+
+
+def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    output = _run_action(arguments, resources)
+    return tool_envelope(output, summary=str(output.get("message") or ""))
+
+
+def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    action = str(arguments.get("action") or "").strip()
+    collaboration_id = _required_text(arguments, "collaboration_id")
+    store = CollaborationStore(_store_path(resources))
+    if action == "inspect":
+        session = store.get_session(collaboration_id)
+        gate = _inspect_gate(session)
+        if gate is not None:
+            return gate
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "协作会话状态已读取。",
+            "session": session,
+        }
+    if action == "create_task":
+        session = store.create_task(collaboration_id, _task_payload(arguments))
+        task = (session.get("tasks") or [])[-1] if session.get("tasks") else {}
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "子任务已创建。宿主协作调度器会启动依赖已满足的任务。",
+            "session": session,
+            "task": task,
+            "dispatch_hint": "任务已进入协作队列；依赖满足后可由 dispatch-ready 或右侧任务启动按钮调度 worker。",
+        }
+    if action == "update_task":
+        task_id = _required_text(arguments, "task_id")
+        session = store.update_task(collaboration_id, task_id, _task_update_payload(arguments))
+        task = next((item for item in session.get("tasks") or [] if item.get("task_id") == task_id), {})
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "子任务已更新。",
+            "session": session,
+            "task": task,
+        }
+    if action == "cancel_task":
+        task_id = _required_text(arguments, "task_id")
+        session = store.get_session(collaboration_id)
+        task = next((item for item in session.get("tasks") or [] if item.get("task_id") == task_id), {})
+        result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+        notes = str(arguments.get("review_notes") or arguments.get("result_summary") or "主 Agent 停止了该子任务。").strip()
+        session = store.update_task(
+            collaboration_id,
+            task_id,
+            {
+                "status": "cancelled",
+                "review_notes": notes,
+                "result_summary": notes,
+                "result_payload": {
+                    **result_payload,
+                    "runtime_status": "cancelled",
+                    "cancellation_requested": True,
+                },
+            },
+        )
+        task = next((item for item in session.get("tasks") or [] if item.get("task_id") == task_id), {})
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "子任务已标记停止；宿主协作服务会取消对应 worker 请求。",
+            "session": session,
+            "task": task,
+        }
+    if action == "read_shared":
+        path = _safe_shared_path(store.session_workdir(collaboration_id), _required_text(arguments, "path"))
+        if not path.is_file():
+            raise FileNotFoundError(f"shared workspace file not found: {arguments.get('path')}")
+        max_chars = int(arguments.get("max_chars") or 20000)
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "共享工作区文件已读取。",
+            "path": str(arguments.get("path") or ""),
+            "content": _shared_artifact_text(path, store.session_workdir(collaboration_id), max_chars=max_chars),
+        }
+    if action == "write_shared":
+        relative = _required_text(arguments, "path")
+        path = _safe_shared_path(store.session_workdir(collaboration_id), relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(arguments.get("content") or "") + "\n", encoding="utf-8")
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "共享工作区文件已写入。",
+            "path": relative,
+        }
+    if action == "complete_session":
+        session = store.complete_session(
+            collaboration_id,
+            {
+                "final_summary": _required_text(arguments, "content"),
+                "speaker_type": "main_agent",
+            },
+        )
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "协作会话已完成。",
+            "session": session,
+            "path": "final/final-delivery.md",
+        }
+    raise ValueError(f"unsupported collaboration action: {action}")
+
+
+def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    action = str(arguments.get("action") or "").strip()
+    if action in {"inspect", "read_shared"}:
+        return ToolRiskResult(action="allow", risk_level="low", reasons=["collaboration read action"]).model_dump(mode="json")
+    if action in {"create_task", "update_task", "cancel_task", "write_shared", "complete_session"}:
+        return ToolRiskResult(
+            action="inherit",
+            risk_level="medium",
+            reasons=["collaboration action mutates task state or shared workspace"],
+        ).model_dump(mode="json")
+    return ToolRiskResult(action="deny", risk_level="medium", reasons=[f"unsupported action: {action}"]).model_dump(mode="json")
+
+
+def _inspect_gate(session: dict[str, Any]) -> dict[str, Any] | None:
+    tasks = session.get("tasks") if isinstance(session.get("tasks"), list) else []
+    if not tasks:
+        return None
+    statuses = {str(task.get("status") or "").strip() for task in tasks}
+    if statuses & IMMEDIATE_ATTENTION_TASK_STATUSES:
+        return None
+    if statuses and statuses <= ACTIVE_TASK_STATUSES:
+        active = [
+            {
+                "task_id": task.get("task_id"),
+                "assignee_package_id": task.get("assignee_package_id"),
+                "status": task.get("status"),
+                "updated_at": task.get("updated_at"),
+            }
+            for task in tasks
+        ]
+        return {
+            "action": "inspect",
+            "status": "deferred",
+            "message": "当前只有运行中任务，尚无 submitted/blocked 状态；请等待协作状态变化后再继续验收或调度。",
+            "active_tasks": active,
+            "updated_at": session.get("updated_at"),
+        }
+    return None
+
+
+def _task_payload(arguments: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: arguments[key]
+        for key in (
+            "assignee_package_id",
+            "task_text",
+            "depends_on",
+            "delivery_standard",
+            "visible_context",
+            "input_artifacts",
+        )
+        if key in arguments
+    }
+
+
+def _task_update_payload(arguments: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: arguments[key]
+        for key in (
+            "status",
+            "task_text",
+            "depends_on",
+            "delivery_standard",
+            "visible_context",
+            "input_artifacts",
+            "result_summary",
+            "review_notes",
+            "artifact_refs",
+        )
+        if key in arguments
+    }
+
+
+def _store_path(resources: dict[str, Any]) -> Path:
+    root = str(resources.get("collaboration_root") or os.getenv(COLLABORATION_ROOT_ENV) or "").strip()
+    if root:
+        return Path(root).expanduser().resolve() / "factory.sqlite"
+    return resolve_collaboration_store_path()
+
+
+def _required_text(arguments: dict[str, Any], key: str) -> str:
+    value = str(arguments.get(key) or "").strip()
+    if not value:
+        raise ValueError(f"{key} is required")
+    return value
+
+
+def _safe_shared_path(root: Path, relative: str) -> Path:
+    root = root.resolve()
+    target = (root / relative).resolve()
+    if root != target and root not in target.parents:
+        raise ValueError(f"shared workspace path escapes collaboration workdir: {relative}")
+    return target
+
+
+def _shared_artifact_text(path: Path, root: Path, *, max_chars: int) -> str:
+    suffix = path.suffix.lower()
+    if suffix in SUPPORTED_FILE_EXTENSIONS:
+        try:
+            parsed = parse_file(path, root=root)
+            text = "\n\n".join(str(document.content or "").strip() for document in parsed.documents).strip()
+            if text:
+                return text[:max_chars]
+        except Exception:
+            pass
+    data = path.read_bytes()[:8192]
+    mime_type, _ = mimetypes.guess_type(path.name)
+    if b"\x00" in data or str(mime_type or "").startswith(("image/", "application/")):
+        stat = path.stat()
+        return f"二进制交付物，mime_type={mime_type or 'application/octet-stream'}, size_bytes={stat.st_size}。"
+    return path.read_text(encoding="utf-8", errors="replace")[:max_chars]

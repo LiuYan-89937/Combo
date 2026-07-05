@@ -112,6 +112,19 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             background=BackgroundTask(unlink_file, archive_path),
         )
 
+    @router.patch("/{package_id}/context-config")
+    async def update_agent_package_context_config(package_id: str, payload: dict[str, Any]):
+        try:
+            summary = AgentPackageRuntimeManager().update_context_config(
+                package_id,
+                _validated_context_config_payload(payload),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"package": summary}
+
     @router.get("/{package_id}/sessions")
     async def list_agent_package_sessions(package_id: str):
         event = await send_and_wait(
@@ -155,6 +168,24 @@ def _is_initialize_terminal_event(item: dict[str, Any], *, package_id: str) -> b
         return False
     status = str(payload.get("status") or "").strip()
     return payload.get("ready") is True or status == "failed"
+
+
+def _validated_context_config_payload(payload: dict[str, Any]) -> dict[str, int | None]:
+    result: dict[str, int | None] = {}
+    for key in ("context_window_tokens", "compression_threshold_tokens"):
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if value is None:
+            result[key] = None
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{key} must be an integer or null")
+        minimum = 1000
+        if value < minimum:
+            raise ValueError(f"{key} must be greater than or equal to {minimum}")
+        result[key] = value
+    return result
 
 
 def unlink_file(path: Path) -> None:

@@ -4,6 +4,10 @@ interface RecentAgentSessionsResponse {
   sessions: any[]
 }
 
+interface AgentPackageContextConfigResponse {
+  package: any
+}
+
 export const agentPackagesApi = {
   list: () => requestEvent('/api/agent-packages'),
   select: (packageId: string, purpose?: 'run' | 'evolution') =>
@@ -22,6 +26,17 @@ export const agentPackagesApi = {
     requestEvent(`/api/agent-packages/${encodeURIComponent(packageId)}`, { method: 'DELETE' }),
   exportArchive: (packageId: string) =>
     requestBlob(`/api/agent-packages/${encodeURIComponent(packageId)}/export`),
+  updateContextConfig: (
+    packageId: string,
+    payload: { context_window_tokens?: number | null; compression_threshold_tokens?: number | null },
+  ) =>
+    requestJson<AgentPackageContextConfigResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/context-config`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }
+    ),
   sessions: (packageId: string) => requestEvent(`/api/agent-packages/${encodeURIComponent(packageId)}/sessions`),
   session: (packageId: string, sessionId: string) =>
     requestEvent(

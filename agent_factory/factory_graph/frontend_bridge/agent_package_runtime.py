@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,7 +12,12 @@ from uuid import uuid4
 
 from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
-from agent_factory.runtime_contracts import LoadedAgentPackage
+from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
+from agent_factory.context_system.schema import (
+    DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
+    MODEL_COMPRESSION_TRIGGER_TOKENS_ENV,
+)
+from agent_factory.context_system.token_counter import context_window_tokens_from_env
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
 from agent_factory.mcp_gateway import HostMCPGatewayManager
@@ -43,6 +49,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_extensions import
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     extension_root_for_package as _extension_root_for_package,
     host_runtime_root as _host_runtime_root,
+    host_session_workdir as _host_session_workdir,
     host_session_root as _host_session_root,
     is_host_system_package as _is_host_system_package,
     is_system_package as _is_system_package,
@@ -131,10 +138,13 @@ class AgentPackageRuntimeManager:
     def runtime_root_for_package(self, package_id: str) -> Path:
         return _host_runtime_root(package_id)
 
+    def session_workdir_for_package(self, package_id: str, session_id: str) -> Path:
+        return _host_session_workdir(package_id, session_id)
+
     def list_instance_statuses(self) -> list[dict[str, Any]]:
         package_ids = {item.get("package_id") for item in self.list_packages()}
-        package_ids.update(self._containers)
-        package_ids.update(self._system_handles)
+        package_ids.update(handle.package_id for handle in self._containers.values())
+        package_ids.update(handle.package_id for handle in self._system_handles.values())
         return [
             self.package_instance_status(str(package_id))
             for package_id in sorted(item for item in package_ids if item)
@@ -143,10 +153,12 @@ class AgentPackageRuntimeManager:
     def package_instance_status(self, package_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
         backend = "host" if _is_host_system_package(package) else "container"
-        handle = self._system_handles.get(package_id) if backend == "host" else self._containers.get(package_id)
-        running = bool(handle is not None and getattr(handle, "is_running", False))
-        active_request_count = int(getattr(handle, "active_request_count", 0)) if handle is not None else 0
-        active_command_types = set(getattr(handle, "active_command_types", ())) if handle is not None else set()
+        handles = self._runtime_handles_for_package(package_id, backend=backend)
+        running = any(bool(getattr(handle, "is_running", False)) for handle in handles)
+        active_request_count = sum(int(getattr(handle, "active_request_count", 0)) for handle in handles)
+        active_command_types: set[str] = set()
+        for handle in handles:
+            active_command_types.update(str(item) for item in getattr(handle, "active_command_types", ()))
         base = {
             "package_id": package_id,
             "agent_id": package.assembly_spec.agent.id,
@@ -259,8 +271,8 @@ class AgentPackageRuntimeManager:
         *,
         request_id: str | None = None,
     ) -> dict[str, Any]:
-        self._close_container(package_id)
-        self._close_system(package_id)
+        self._close_package_containers(package_id)
+        self._close_package_system_handles(package_id)
         status = self.package_instance_status(package_id)
         status = {**status, "status": "stopped", "ready": False}
         self._instance_status_overrides.pop(package_id, None)
@@ -295,8 +307,45 @@ class AgentPackageRuntimeManager:
     def package_summary(self, package_id: str) -> dict[str, Any]:
         return self._package_summary(self._manifest_path(package_id))
 
+    def update_context_config(
+        self,
+        package_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        package_dir = self.repository.package_dir(package_id)
+        contract_path = package_dir / "contracts" / "context.json"
+        if not contract_path.is_file():
+            raise FileNotFoundError(f"context contract not found: {package_id}")
+        document = _read_json_object(contract_path)
+        config = document.setdefault("config", {})
+        if not isinstance(config, dict):
+            raise ValueError("context contract config must be an object")
+        if "context_window_tokens" in payload:
+            if payload["context_window_tokens"] is None:
+                config.pop("context_window_tokens", None)
+            else:
+                config["context_window_tokens"] = payload["context_window_tokens"]
+        if "compression_threshold_tokens" in payload:
+            default_policy = config.setdefault("default_policy", {})
+            if not isinstance(default_policy, dict):
+                raise ValueError("context default_policy must be an object")
+            compression = default_policy.setdefault("compression", {})
+            if not isinstance(compression, dict):
+                raise ValueError("context compression policy must be an object")
+            if payload["compression_threshold_tokens"] is None:
+                compression.pop("trigger_token_threshold", None)
+            else:
+                compression["trigger_token_threshold"] = payload["compression_threshold_tokens"]
+        ContextContract.model_validate(document)
+        contract_path.write_text(
+            json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return self.package_summary(package_id)
+
     def delete_package(self, package_id: str) -> dict[str, Any]:
-        self._close_container(package_id)
+        self._close_package_containers(package_id)
+        self._close_package_system_handles(package_id)
         return self.repository.delete_user_package(package_id)
 
     def export_package_archive(self, package_id: str) -> Path:
@@ -316,6 +365,11 @@ class AgentPackageRuntimeManager:
 
     def delete_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
+        cancelled_active_request_count = self.cancel_active_requests(
+            reason="session_deleted",
+            package_id=package_id,
+            session_id=session_id,
+        )
         manager = self._session_manager_for_package(package_id, package)
         result = manager.delete_if_exists(session_id)
         if result is None:
@@ -326,6 +380,7 @@ class AgentPackageRuntimeManager:
                 "missing": True,
                 "deleted_trace_count": 0,
                 "deleted_checkpoint_count": 0,
+                "cancelled_active_request_count": cancelled_active_request_count,
                 "sessions": self._list_sessions_for_loaded_package(package),
             }
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
@@ -333,22 +388,25 @@ class AgentPackageRuntimeManager:
             package=package,
             thread_id=result.record.thread_id,
         )
+        deleted_workdir = _delete_session_workdir(package_id, result.record.session_id)
         return {
             "package_id": package_id,
             "session_id": result.record.session_id,
             "deleted": True,
             "deleted_trace_count": result.deleted_trace_count,
             "deleted_checkpoint_count": deleted_checkpoint_count,
+            "deleted_workdir": deleted_workdir,
+            "cancelled_active_request_count": cancelled_active_request_count,
             "sessions": self._list_sessions_for_loaded_package(package),
         }
 
-    def workspace_roots(self, package_id: str) -> dict[str, Any]:
+    def workspace_roots(self, package_id: str, *, session_id: str | None = None) -> dict[str, Any]:
         package = self.load_package(package_id)
-        return self.workspace.roots(package_id, package)
+        return self.workspace.roots(package_id, package, session_id=session_id)
 
-    def workspace_root_paths(self, package_id: str) -> dict[str, Path]:
+    def workspace_root_paths(self, package_id: str, *, session_id: str | None = None) -> dict[str, Path]:
         package = self.load_package(package_id)
-        return workspace_roots(package_id, package)
+        return workspace_roots(package_id, package, session_id=session_id)
 
     def list_workspace_entries(
         self,
@@ -356,6 +414,7 @@ class AgentPackageRuntimeManager:
         *,
         scope: str = "workdir",
         relative_path: str = "",
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
         return self.workspace.list_entries(
@@ -363,6 +422,7 @@ class AgentPackageRuntimeManager:
             package,
             scope=scope,
             relative_path=relative_path,
+            session_id=session_id,
         )
 
     def read_workspace_file(
@@ -372,6 +432,7 @@ class AgentPackageRuntimeManager:
         scope: str = "workdir",
         relative_path: str,
         max_chars: int = 20000,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
         return self.workspace.read_file(
@@ -380,6 +441,7 @@ class AgentPackageRuntimeManager:
             scope=scope,
             relative_path=relative_path,
             max_chars=max_chars,
+            session_id=session_id,
         )
 
     def resolve_workspace_file(
@@ -388,6 +450,7 @@ class AgentPackageRuntimeManager:
         *,
         scope: str = "workdir",
         relative_path: str,
+        session_id: str | None = None,
     ) -> Path:
         package = self.load_package(package_id)
         return self.workspace.resolve_file(
@@ -395,6 +458,7 @@ class AgentPackageRuntimeManager:
             package,
             scope=scope,
             relative_path=relative_path,
+            session_id=session_id,
         )
 
     def extension_config_summary(self, package_id: str) -> dict[str, Any]:
@@ -410,8 +474,8 @@ class AgentPackageRuntimeManager:
         package = self.load_package(package_id)
         result = self.extensions.manage(package_id, package, action, payload)
         if result.changed:
-            self._close_container(package_id)
-            self._close_system(package_id)
+            self._close_package_containers(package_id)
+            self._close_package_system_handles(package_id)
         return result.payload
 
     def system_extensions_manage(self, resource_mode: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -529,6 +593,7 @@ class AgentPackageRuntimeManager:
         package_id: str,
         *,
         user_input: str,
+        display_user_input: str | None = None,
         session_id: str | None = None,
         request_id: str | None = None,
         user_config: dict[str, Any] | None = None,
@@ -538,25 +603,28 @@ class AgentPackageRuntimeManager:
         package = self.load_package(package_id)
         del require_ready
         resolved_request_id = request_id or uuid4().hex
-        attachment_result = self._prepare_runtime_attachments(
-            package_id=package_id,
-            package=package,
-            user_input=user_input,
-            attachments=attachments,
-        )
+        session_user_input = str(display_user_input or "").strip() or user_input
         session_manager = self._session_manager_for_package(package_id, package)
         if session_id:
             session = session_manager.load(session_id)
         else:
             session = session_manager.create(
                 agent_id=package.assembly_spec.agent.id,
-                first_user_input=user_input,
+                first_user_input=session_user_input,
             )
+        workdir_root = self.session_workdir_for_package(package_id, session.session_id)
+        attachment_result = self._prepare_runtime_attachments(
+            package_id=package_id,
+            package=package,
+            workdir_root=workdir_root,
+            user_input=user_input,
+            attachments=attachments,
+        )
         session = session_manager.touch_turn(
             session.session_id,
             request_id=resolved_request_id,
-            first_user_input=user_input,
-            user_input=user_input,
+            first_user_input=session_user_input,
+            user_input=session_user_input,
             attachments=attachment_result.attachments,
             status="running",
         )
@@ -575,12 +643,12 @@ class AgentPackageRuntimeManager:
             return AgentPackageStreamRun(
                 package=package,
                 session=session.model_dump(mode="json"),
-                events=self._system_events(package_id, package=package, command=command),
+                events=self._system_events(package_id, package=package, command=command, workdir_root=workdir_root),
             )
         return AgentPackageStreamRun(
             package=package,
             session=session.model_dump(mode="json"),
-            events=self._container_events(package_id, package=package, command=command),
+            events=self._container_events(package_id, package=package, command=command, workdir_root=workdir_root),
         )
 
     def _prepare_runtime_attachments(
@@ -588,11 +656,10 @@ class AgentPackageRuntimeManager:
         *,
         package_id: str,
         package: LoadedAgentPackage,
+        workdir_root: Path,
         user_input: str,
         attachments: Any,
     ) -> AttachmentImportResult:
-        runtime_root = _host_runtime_root(package_id)
-        workdir_root = runtime_root / "workdir"
         attachment_scope = time_named_attachment_scope()
         runtime_path_root = (
             str(workdir_root / ATTACHMENT_INPUT_DIR / attachment_scope)
@@ -618,6 +685,7 @@ class AgentPackageRuntimeManager:
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
+        workdir_root = self.session_workdir_for_package(package_id, session.session_id)
         command = {
             "type": "resume_interrupt",
             "request_id": request_id or uuid4().hex,
@@ -632,13 +700,35 @@ class AgentPackageRuntimeManager:
             return AgentPackageStreamRun(
                 package=package,
                 session=session.model_dump(mode="json"),
-                events=self._system_events(package_id, package=package, command=command),
+                events=self._system_events(package_id, package=package, command=command, workdir_root=workdir_root),
             )
         return AgentPackageStreamRun(
             package=package,
             session=session.model_dump(mode="json"),
-            events=self._container_events(package_id, package=package, command=command),
+            events=self._container_events(package_id, package=package, command=command, workdir_root=workdir_root),
         )
+
+    def finish_session_turn(
+        self,
+        package_id: str,
+        *,
+        session_id: str,
+        request_id: str | None = None,
+        final_answer: str | None,
+        reasoning_content: str | None = None,
+        status: str,
+        tool_activities: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        package = self.load_package(package_id)
+        session = self._session_manager_for_package(package_id, package).finish_turn(
+            session_id,
+            request_id=request_id,
+            final_answer=final_answer,
+            reasoning_content=reasoning_content,
+            status=status,
+            tool_activities=tool_activities,
+        )
+        return session.model_dump(mode="json")
 
     def _package_summary(self, manifest_path: Path) -> dict[str, Any]:
         package_id = manifest_path.parent.name
@@ -660,6 +750,7 @@ class AgentPackageRuntimeManager:
                 "tool_count": len(package.assembly_spec.tools),
                 "session_count": len(sessions),
                 "model_contract": _model_contract_summary(package),
+                "context_contract": _context_contract_summary(manifest_path.parent),
                 "extensions": _extensions_summary(package_id, package=package),
                 **detail,
             }
@@ -672,6 +763,7 @@ class AgentPackageRuntimeManager:
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "error": f"{type(exc).__name__}: {exc}",
                 "model_contract": {"version": "", "bindings": {}, "tool_bindings": {}},
+                "context_contract": _context_contract_summary(manifest_path.parent),
                 "extensions": _extensions_summary(package_id),
                 "tools": [],
                 "mcp_servers": [],
@@ -697,10 +789,10 @@ class AgentPackageRuntimeManager:
         ]
 
     def close_all(self) -> None:
-        for package_id in list(self._containers):
-            self._close_container(package_id)
-        for package_id in list(self._system_handles):
-            self._close_system(package_id)
+        for runtime_key in list(self._containers):
+            self._close_container(runtime_key)
+        for runtime_key in list(self._system_handles):
+            self._close_system(runtime_key)
         self._mcp_gateways.close_all()
         self._skillhub_gateways.close_all()
 
@@ -709,19 +801,34 @@ class AgentPackageRuntimeManager:
         *,
         reason: str = "user_cancelled",
         request_id: str | None = None,
+        package_id: str | None = None,
+        session_id: str | None = None,
         visible_output: Any = None,
     ) -> int:
         cancelled = 0
-        for handle in list(self._containers.values()):
+        target_package_id = str(package_id or "").strip()
+        container_items = [
+            (key, handle)
+            for key, handle in self._containers.items()
+            if not target_package_id or handle.package_id == target_package_id
+        ]
+        system_items = [
+            (key, handle)
+            for key, handle in self._system_handles.items()
+            if not target_package_id or handle.package_id == target_package_id
+        ]
+        for _, handle in container_items:
             cancelled += handle.cancel_active_requests(
                 reason=reason,
                 request_id=request_id,
+                session_id=session_id,
                 visible_output=visible_output,
             )
-        for handle in list(self._system_handles.values()):
+        for _, handle in system_items:
             cancelled += handle.cancel_active_requests(
                 reason=reason,
                 request_id=request_id,
+                session_id=session_id,
                 visible_output=visible_output,
             )
         return cancelled
@@ -732,10 +839,12 @@ class AgentPackageRuntimeManager:
         *,
         package: LoadedAgentPackage,
         command: dict[str, Any],
+        workdir_root: Path | None = None,
     ) -> Iterator[tuple[str, Any]]:
         request_id = str(command.get("request_id") or uuid4().hex)
         command["request_id"] = request_id
-        will_start = not self._has_reusable_system_handle(package_id, package)
+        runtime_key = _runtime_handle_key(package_id, command)
+        will_start = not self._has_reusable_system_handle(runtime_key, package)
         if will_start:
             yield "frontend_event", node_event(
                 request_id,
@@ -744,7 +853,12 @@ class AgentPackageRuntimeManager:
                 payload={"package_id": package_id, "backend": "host", "status": "preflight"},
             )
         try:
-            handle = self._system_handle(package_id, package)
+            handle = self._system_handle(
+                package_id,
+                package,
+                runtime_key=runtime_key,
+                workdir_root=workdir_root,
+            )
             if handle.startup_payload is not None:
                 yield "frontend_event", node_event(
                     request_id,
@@ -778,10 +892,12 @@ class AgentPackageRuntimeManager:
         *,
         package: LoadedAgentPackage,
         command: dict[str, Any],
+        workdir_root: Path | None = None,
     ) -> Iterator[tuple[str, Any]]:
         request_id = str(command.get("request_id") or uuid4().hex)
         command["request_id"] = request_id
-        will_start = not self._has_reusable_container(package_id, package)
+        runtime_key = _runtime_handle_key(package_id, command)
+        will_start = not self._has_reusable_container(runtime_key, package)
         if will_start:
             yield "frontend_event", node_event(
                 request_id,
@@ -790,7 +906,12 @@ class AgentPackageRuntimeManager:
                 payload={"package_id": package_id, "status": "preflight"},
             )
         try:
-            handle = self._container(package_id, package)
+            handle = self._container(
+                package_id,
+                package,
+                runtime_key=runtime_key,
+                workdir_root=workdir_root,
+            )
             if handle.startup_payload is not None:
                 yield "frontend_event", node_event(
                     request_id,
@@ -833,7 +954,7 @@ class AgentPackageRuntimeManager:
         try:
             yield from _scoped_runtime_events(handle.send(command), package_id=package_id)
         except Exception:
-            self._close_container(package_id)
+            self._close_container(runtime_key)
             raise
 
     def _runtime_events(
@@ -872,8 +993,15 @@ class AgentPackageRuntimeManager:
             payload["error"] = error
         return payload
 
-    def _container(self, package_id: str, package: LoadedAgentPackage) -> "AgentRuntimeContainerHandle":
-        existing = self._containers.get(package_id)
+    def _container(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+        *,
+        runtime_key: str,
+        workdir_root: Path | None = None,
+    ) -> "AgentRuntimeContainerHandle":
+        existing = self._containers.get(runtime_key)
         fingerprint = _runtime_fingerprint(package_id, package)
         if (
             existing is not None
@@ -882,10 +1010,10 @@ class AgentPackageRuntimeManager:
             and not existing.is_idle(self.idle_timeout_seconds)
         ):
             return existing
-        self._close_container(package_id)
+        self._close_container(runtime_key)
         runtime_root = _host_runtime_root(package_id)
         artifacts_root = runtime_root / "artifacts" / uuid4().hex
-        workdir_root = runtime_root / "workdir"
+        workdir_root = workdir_root or runtime_root / "workdir"
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
@@ -921,11 +1049,18 @@ class AgentPackageRuntimeManager:
             "extension_root": str(plan.extension_root),
             "preflight": plan.preflight,
         }
-        self._containers[package_id] = handle
+        self._containers[runtime_key] = handle
         return handle
 
-    def _system_handle(self, package_id: str, package: LoadedAgentPackage) -> "SystemPackageRuntimeHandle":
-        existing = self._system_handles.get(package_id)
+    def _system_handle(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+        *,
+        runtime_key: str,
+        workdir_root: Path | None = None,
+    ) -> "SystemPackageRuntimeHandle":
+        existing = self._system_handles.get(runtime_key)
         fingerprint = _runtime_fingerprint(package_id, package)
         if (
             existing is not None
@@ -933,10 +1068,10 @@ class AgentPackageRuntimeManager:
             and not existing.is_idle(self.idle_timeout_seconds)
         ):
             return existing
-        self._close_system(package_id)
+        self._close_system(runtime_key)
         runtime_root = _host_runtime_root(package_id)
         artifacts_root = runtime_root / "artifacts"
-        workdir_root = runtime_root / "workdir"
+        workdir_root = workdir_root or runtime_root / "workdir"
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
@@ -966,41 +1101,65 @@ class AgentPackageRuntimeManager:
             "workdir": str(workdir_root),
             "extension_root": str(extension_root),
         }
-        self._system_handles[package_id] = handle
+        self._system_handles[runtime_key] = handle
         return handle
 
-    def _has_reusable_container(self, package_id: str, package: LoadedAgentPackage) -> bool:
-        existing = self._containers.get(package_id)
+    def _has_reusable_container(self, runtime_key: str, package: LoadedAgentPackage) -> bool:
+        existing = self._containers.get(runtime_key)
         if existing is None or not existing.is_running:
             return False
-        if existing.package_fingerprint != _runtime_fingerprint(package_id, package):
+        if existing.package_fingerprint != _runtime_fingerprint(existing.package_id, package):
             return False
         return not existing.is_idle(self.idle_timeout_seconds)
 
-    def _has_reusable_system_handle(self, package_id: str, package: LoadedAgentPackage) -> bool:
-        existing = self._system_handles.get(package_id)
+    def _has_reusable_system_handle(self, runtime_key: str, package: LoadedAgentPackage) -> bool:
+        existing = self._system_handles.get(runtime_key)
         if existing is None or not existing.is_running:
             return False
-        if existing.package_fingerprint != _runtime_fingerprint(package_id, package):
+        if existing.package_fingerprint != _runtime_fingerprint(existing.package_id, package):
             return False
         return not existing.is_idle(self.idle_timeout_seconds)
 
     def _has_ready_runtime(self, package_id: str, package: LoadedAgentPackage) -> bool:
         if _is_host_system_package(package):
-            return self._has_reusable_system_handle(package_id, package)
-        return self._has_reusable_container(package_id, package)
+            return any(
+                self._has_reusable_system_handle(key, package)
+                for key, handle in self._system_handles.items()
+                if handle.package_id == package_id
+            )
+        return any(
+            self._has_reusable_container(key, package)
+            for key, handle in self._containers.items()
+            if handle.package_id == package_id
+        )
 
-    def _close_container(self, package_id: str) -> None:
-        handle = self._containers.pop(package_id, None)
+    def _close_container(self, runtime_key: str) -> None:
+        handle = self._containers.pop(runtime_key, None)
+        package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
         self._instance_status_overrides.pop(package_id, None)
         if handle is not None:
             handle.close()
 
-    def _close_system(self, package_id: str) -> None:
-        handle = self._system_handles.pop(package_id, None)
+    def _close_system(self, runtime_key: str) -> None:
+        handle = self._system_handles.pop(runtime_key, None)
+        package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
         self._instance_status_overrides.pop(package_id, None)
         if handle is not None:
             handle.close()
+
+    def _close_package_containers(self, package_id: str) -> None:
+        for runtime_key, handle in list(self._containers.items()):
+            if handle.package_id == package_id:
+                self._close_container(runtime_key)
+
+    def _close_package_system_handles(self, package_id: str) -> None:
+        for runtime_key, handle in list(self._system_handles.items()):
+            if handle.package_id == package_id:
+                self._close_system(runtime_key)
+
+    def _runtime_handles_for_package(self, package_id: str, *, backend: str) -> list[Any]:
+        handles = self._system_handles if backend == "host" else self._containers
+        return [handle for handle in handles.values() if handle.package_id == package_id]
 
     def _manifest_path(self, package_id: str) -> Path:
         return self.repository.manifest_path(package_id)
@@ -1026,6 +1185,24 @@ def _scoped_runtime_event(chunk: Any, *, package_id: str) -> FactoryFrontendEven
     if payload is None:
         return item
     return item.model_copy(update={"payload": {**payload, "package_id": package_id}})
+
+
+def _runtime_handle_key(package_id: str, command: dict[str, Any]) -> str:
+    payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+    session_id = str(payload.get("session_id") or "").strip()
+    return f"{package_id}:session:{session_id}" if session_id else f"{package_id}:package"
+
+
+def _runtime_key_package_id(runtime_key: str) -> str:
+    return runtime_key.split(":", 1)[0]
+
+
+def _delete_session_workdir(package_id: str, session_id: str) -> bool:
+    workdir = _host_session_workdir(package_id, session_id)
+    if not workdir.exists():
+        return False
+    shutil.rmtree(workdir)
+    return True
 
 
 def _package_fingerprint(package: LoadedAgentPackage) -> str:
@@ -1152,6 +1329,67 @@ def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
         "bindings": public_bindings,
         "tool_bindings": public_tool_bindings,
     }
+
+
+def _context_contract_summary(package_root: Path) -> dict[str, Any]:
+    contract_path = package_root / "contracts" / "context.json"
+    env_context_window = context_window_tokens_from_env()
+    env_compression_threshold = _compression_threshold_from_env()
+    env_effective_compression_threshold = (
+        min(env_compression_threshold, env_context_window)
+        if isinstance(env_context_window, int) and env_context_window > 0
+        else env_compression_threshold
+    )
+    base = {
+        "version": "",
+        "context_window_tokens": None,
+        "context_window_tokens_source": "env" if env_context_window is not None else "unset",
+        "context_window_tokens_env": env_context_window,
+        "context_window_tokens_custom": None,
+        "compression_threshold_tokens": env_effective_compression_threshold,
+        "compression_threshold_tokens_source": "env",
+        "compression_threshold_tokens_env": env_compression_threshold,
+        "compression_threshold_tokens_custom": None,
+    }
+    if not contract_path.is_file():
+        return base
+    try:
+        document = _read_json_object(contract_path)
+        validated = ContextContract.model_validate(document)
+    except Exception as exc:
+        return {**base, "error": f"{type(exc).__name__}: {exc}"}
+    config = document.get("config") if isinstance(document.get("config"), dict) else {}
+    custom_window = config.get("context_window_tokens")
+    window = custom_window if isinstance(custom_window, int) and custom_window > 0 else env_context_window
+    compression = {}
+    default_policy = config.get("default_policy") if isinstance(config.get("default_policy"), dict) else {}
+    if isinstance(default_policy, dict):
+        compression = default_policy.get("compression") if isinstance(default_policy.get("compression"), dict) else {}
+    custom_threshold = compression.get("trigger_token_threshold") if isinstance(compression, dict) else None
+    threshold = custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else env_compression_threshold
+    effective_threshold = min(threshold, window) if isinstance(window, int) and window > 0 else threshold
+    return {
+        **base,
+        "version": validated.version,
+        "context_window_tokens": window,
+        "context_window_tokens_source": "package" if isinstance(custom_window, int) and custom_window > 0 else base["context_window_tokens_source"],
+        "context_window_tokens_custom": custom_window if isinstance(custom_window, int) and custom_window > 0 else None,
+        "compression_threshold_tokens": effective_threshold,
+        "compression_threshold_tokens_source": "package" if isinstance(custom_threshold, int) and custom_threshold > 0 else "env",
+        "compression_threshold_tokens_custom": custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else None,
+    }
+
+
+def _compression_threshold_from_env() -> int:
+    value = os.getenv(MODEL_COMPRESSION_TRIGGER_TOKENS_ENV)
+    if value:
+        try:
+            parsed = int(value)
+        except ValueError:
+            parsed = 0
+        if parsed >= 1000:
+            return parsed
+    return DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD
 
 
 def _package_detail_summary(

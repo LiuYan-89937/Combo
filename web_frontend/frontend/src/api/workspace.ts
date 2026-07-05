@@ -20,8 +20,10 @@ function workspaceQuery(context: WorkspaceContextInput): Record<string, string |
   return {
     resource_mode: normalized.resourceMode,
     package_id: normalized.packageId,
+    package_session_id: normalized.packageSessionId,
     factory_session_id: normalized.factorySessionId,
     create_agent_session_id: normalized.createAgentSessionId,
+    collaboration_id: normalized.collaborationId,
   }
 }
 

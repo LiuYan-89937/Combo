@@ -38,6 +38,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/PublishedView.vue'),
   },
   {
+    path: '/collaboration',
+    name: 'Collaboration',
+    component: () => import('@/views/CollaborationView.vue'),
+  },
+  {
     path: '/knowledge',
     name: 'Knowledge',
     component: () => import('@/views/KnowledgeView.vue'),

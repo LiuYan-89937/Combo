@@ -8,6 +8,7 @@ FRONTEND_DIR="${WEB_FRONTEND_DIR}/frontend"
 PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
 RUNTIME_IMAGE="${AGENTFACTORY_RUNTIME_IMAGE:-agentfactory-runtime-python:3.12}"
 RUNTIME_DOCKERFILE="${AGENTFACTORY_RUNTIME_DOCKERFILE:-${PROJECT_ROOT}/docker/agent-runtime/Dockerfile}"
+RUNTIME_SOURCE_DIGEST_LABEL="org.fastagentfactory.runtime.source_digest"
 BACKEND_HEALTH_URL="${AGENTFACTORY_WEB_BACKEND_HEALTH_URL:-http://localhost:8000/health}"
 
 web_fail() {
@@ -141,12 +142,78 @@ web_ensure_runtime_image() {
     docker info >/dev/null || web_fail "Docker daemon is not available. Start Docker Desktop first, then run ./start.sh again."
 
     echo "Checking Docker runtime image: ${RUNTIME_IMAGE}"
+    local source_digest
+    source_digest="$(web_runtime_source_digest)"
     if docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
-        echo "Docker runtime image exists: ${RUNTIME_IMAGE}"
-        return
+        local image_digest
+        image_digest="$(docker image inspect "${RUNTIME_IMAGE}" --format "{{ index .Config.Labels \"${RUNTIME_SOURCE_DIGEST_LABEL}\" }}" 2>/dev/null || true)"
+        if [[ "${image_digest}" == "${source_digest}" ]]; then
+            echo "Docker runtime image exists and is up to date: ${RUNTIME_IMAGE}"
+            return
+        fi
+        echo "Docker runtime image is stale; rebuilding ${RUNTIME_IMAGE}"
+    else
+        echo "Docker runtime image missing; building ${RUNTIME_IMAGE} from ${RUNTIME_DOCKERFILE}..."
     fi
 
-    echo "Docker runtime image missing; building ${RUNTIME_IMAGE} from ${RUNTIME_DOCKERFILE}..."
+    web_build_runtime_image "${source_digest}"
+}
+
+web_runtime_source_digest() {
+    "${PYTHON_BIN}" - "${PROJECT_ROOT}" "${RUNTIME_DOCKERFILE}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+import sys
+
+project_root = Path(sys.argv[1]).resolve()
+dockerfile = Path(sys.argv[2]).resolve()
+inputs = [
+    dockerfile,
+    project_root / "pyproject.toml",
+    project_root / "uv.lock",
+]
+roots = [
+    project_root / "agent_factory",
+    project_root / "docker" / "agent-runtime",
+]
+ignored_dirs = {"__pycache__", ".mypy_cache", ".ruff_cache"}
+ignored_suffixes = {".pyc", ".pyo"}
+
+digest = hashlib.sha256()
+
+
+def add_file(path: Path) -> None:
+    if not path.is_file() or path.suffix in ignored_suffixes:
+        return
+    rel = path.relative_to(project_root).as_posix()
+    digest.update(rel.encode("utf-8"))
+    digest.update(b"\0")
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    digest.update(b"\0")
+
+
+for path in inputs:
+    add_file(path)
+
+for root in roots:
+    if not root.exists():
+        continue
+    for current_root, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(name for name in dirnames if name not in ignored_dirs)
+        for filename in sorted(filenames):
+            add_file(Path(current_root) / filename)
+
+print(digest.hexdigest())
+PY
+}
+
+web_build_runtime_image() {
+    local source_digest="$1"
     local build_args=()
     if [[ -n "${AGENTFACTORY_PYTHON_BASE_IMAGE:-}" ]]; then
         build_args+=(--build-arg "PYTHON_BASE_IMAGE=${AGENTFACTORY_PYTHON_BASE_IMAGE}")
@@ -160,7 +227,18 @@ web_ensure_runtime_image() {
 
     (
         cd "${PROJECT_ROOT}"
-        docker build -t "${RUNTIME_IMAGE}" "${build_args[@]}" -f "${RUNTIME_DOCKERFILE}" .
+        if (( ${#build_args[@]} > 0 )); then
+            docker build \
+                -t "${RUNTIME_IMAGE}" \
+                --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}" \
+                "${build_args[@]}" \
+                -f "${RUNTIME_DOCKERFILE}" .
+        else
+            docker build \
+                -t "${RUNTIME_IMAGE}" \
+                --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}" \
+                -f "${RUNTIME_DOCKERFILE}" .
+        fi
     )
 }
 

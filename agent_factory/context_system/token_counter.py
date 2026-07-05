@@ -31,6 +31,19 @@ def context_window_tokens_from_env() -> int | None:
     return parsed if parsed > 0 else None
 
 
+def effective_compression_threshold(
+    *,
+    configured_threshold: int | None,
+    context_window_tokens: int | None,
+) -> int | None:
+    if configured_threshold is None:
+        return None
+    threshold = int(configured_threshold)
+    if context_window_tokens is None:
+        return threshold
+    return min(threshold, int(context_window_tokens))
+
+
 def count_messages_tokens(
     messages: list[Any],
     *,

@@ -15,12 +15,9 @@ const REQUEST_SCOPED_PREFIXES = [
 
 const USER_INPUT_INTERRUPT_TYPES = new Set([
   'create_agent_question',
-  'create_agent_publish_confirmation',
 ])
 
-const DEDICATED_INTERRUPT_PANEL_TYPES = new Set([
-  'create_agent_publish_confirmation',
-])
+const DEDICATED_INTERRUPT_PANEL_TYPES = new Set<string>()
 
 export function isRequestScopedEvent(eventType: string): boolean {
   return REQUEST_SCOPED_PREFIXES.some((prefix) => eventType.startsWith(prefix))

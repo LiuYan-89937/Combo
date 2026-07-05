@@ -277,8 +277,10 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
   return [
     context.resourceMode || '',
     context.packageId || '',
+    context.packageSessionId || '',
     context.factorySessionId || '',
     context.createAgentSessionId || '',
+    context.collaborationId || '',
   ].join(':')
 }
 </script>

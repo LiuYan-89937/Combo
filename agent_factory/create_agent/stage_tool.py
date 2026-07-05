@@ -196,7 +196,7 @@ def _manufacturing_guidance(active: Any) -> dict[str, Any]:
     elif focus_id == "experience_assembly":
         guidance["next_action_hint"] = "bind implemented capabilities to the selected runtime pattern"
     elif focus_id == "validation_publish":
-        guidance["next_action_hint"] = "run full_static validation or handle publish confirmation"
+        guidance["next_action_hint"] = "run full_static validation, then finalize to mark the package publish-ready"
     return guidance
 
 

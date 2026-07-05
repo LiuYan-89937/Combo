@@ -136,8 +136,11 @@ class ToolCompiler:
     def _load_hard_risk_evaluator(self, spec: ToolSpec) -> ToolRiskEvaluator | None:
         if not spec.risk_evaluator.hard:
             return None
-        evaluator = self.loader.load_risk_evaluator(spec.risk_evaluator.hard)
-        return evaluator
+        value = spec.risk_evaluator.hard
+        try:
+            return self.loader.load_risk_evaluator(value)
+        except Exception as exc:
+            raise ValueError(f"risk_evaluator.hard invalid entrypoint {value!r}: {exc}") from exc
 
     def _load_llm_risk_prompt(self, spec: ToolSpec) -> str | None:
         value = spec.risk_evaluator.llm

@@ -247,6 +247,7 @@ class RuntimeAgentPackageCommandMixin:
     def _send_agent_package_message(self, command: FactoryFrontendCommand, *, require_ready: bool) -> None:
         package_id = str(command.payload.get("package_id") or "").strip()
         message = str(command.payload.get("message") or command.message or "").strip()
+        display_user_input = str(command.payload.get("display_user_input") or "").strip() or None
         session_id = str(command.payload.get("session_id") or "").strip() or None
         if not package_id:
             self._emit_error(command, f"{command.type} requires package_id")
@@ -268,6 +269,7 @@ class RuntimeAgentPackageCommandMixin:
             run = self.agent_package_runtime.stream(
                 package_id,
                 user_input=message,
+                display_user_input=display_user_input,
                 session_id=session_id,
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
@@ -644,6 +646,7 @@ class RuntimeAgentPackageCommandMixin:
 
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
         redacted_message = redact_attachment_markers(message)
+        display_user_input = str(command.payload.get("display_user_input") or "").strip() or redacted_message
         agent_session_id = self._planned_system_chat_agent_session_id()
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
@@ -655,13 +658,14 @@ class RuntimeAgentPackageCommandMixin:
         )
         try:
             self._commit_system_chat_request(
-                redacted_message,
+                display_user_input,
                 request_id=command.request_id,
                 attachments=transcript_attachment_views(command.payload.get("attachments")),
             )
             run = self.agent_package_runtime.stream(
                 SYSTEM_CHAT_PACKAGE_ID,
                 user_input=message,
+                display_user_input=display_user_input,
                 session_id=agent_session_id,
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),

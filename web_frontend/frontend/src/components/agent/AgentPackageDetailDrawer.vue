@@ -44,6 +44,90 @@
 
         <section class="detail-section">
           <div class="section-header">
+            <div class="section-label">{{ t('agentDetail.contextPolicy') }}</div>
+            <n-tag size="small" :bordered="false">
+              {{ agentPackage.context_contract?.version || t('common.unknown') }}
+            </n-tag>
+          </div>
+          <div class="context-policy-panel">
+            <div class="context-config-row">
+              <div class="context-config-main">
+                <div class="context-config-heading">
+                  <div class="item-title">{{ t('agentDetail.contextWindowLimit') }}</div>
+                  <div class="context-window-meta">
+                    <span>{{ t('agentDetail.contextEffective', { tokens: formatTokens(agentPackage.context_contract?.context_window_tokens) }) }}</span>
+                    <span>{{ t('agentDetail.contextEnvDefault', { tokens: formatTokens(agentPackage.context_contract?.context_window_tokens_env) }) }}</span>
+                    <span v-if="agentPackage.context_contract?.context_window_tokens_custom">
+                      {{ t('agentDetail.contextPackageCustom', { tokens: formatTokens(agentPackage.context_contract.context_window_tokens_custom) }) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div class="context-config-control">
+                <n-radio-group v-model:value="contextModes.window" size="small" class="context-window-mode soft-segmented-control">
+                  <n-radio-button value="env">{{ t('agentDetail.contextFollowEnv') }}</n-radio-button>
+                  <n-radio-button value="custom">{{ t('agentDetail.contextCustom') }}</n-radio-button>
+                </n-radio-group>
+                <n-input-number
+                  v-model:value="contextDrafts.window"
+                  class="context-window-input"
+                  :disabled="contextModes.window !== 'custom'"
+                  :min="1000"
+                  :show-button="false"
+                  :formatter="formatTokenInput"
+                  :parser="parseTokenInput"
+                  :placeholder="t('agentDetail.contextTokenPlaceholder')"
+                />
+              </div>
+            </div>
+
+            <div class="context-config-row">
+              <div class="context-config-main">
+                <div class="context-config-heading">
+                  <div class="item-title">{{ t('agentDetail.compressionThreshold') }}</div>
+                  <div class="context-window-meta">
+                    <span>{{ t('agentDetail.contextEffective', { tokens: formatTokens(agentPackage.context_contract?.compression_threshold_tokens) }) }}</span>
+                    <span>{{ t('agentDetail.contextEnvDefault', { tokens: formatTokens(agentPackage.context_contract?.compression_threshold_tokens_env) }) }}</span>
+                    <span v-if="agentPackage.context_contract?.compression_threshold_tokens_custom">
+                      {{ t('agentDetail.contextPackageCustom', { tokens: formatTokens(agentPackage.context_contract.compression_threshold_tokens_custom) }) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div class="context-config-control">
+                <n-radio-group v-model:value="contextModes.compression" size="small" class="context-window-mode soft-segmented-control">
+                  <n-radio-button value="env">{{ t('agentDetail.contextFollowEnv') }}</n-radio-button>
+                  <n-radio-button value="custom">{{ t('agentDetail.contextCustom') }}</n-radio-button>
+                </n-radio-group>
+                <n-input-number
+                  v-model:value="contextDrafts.compression"
+                  class="context-window-input"
+                  :disabled="contextModes.compression !== 'custom'"
+                  :min="1000"
+                  :show-button="false"
+                  :formatter="formatTokenInput"
+                  :parser="parseTokenInput"
+                  :placeholder="t('agentDetail.contextTokenPlaceholder')"
+                />
+              </div>
+            </div>
+
+            <div class="context-window-help">{{ t('agentDetail.contextPolicyHint') }}</div>
+            <n-button
+              size="small"
+              type="primary"
+              class="context-save-button"
+              :loading="contextConfigSaving"
+              :disabled="!contextConfigDirty"
+              @click="emit('saveContextConfig', contextConfigSavePayload())"
+            >
+              {{ t('common.save') }}
+            </n-button>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-header">
             <div class="section-label">{{ t('agentDetail.models') }}</div>
             <n-tag size="small" :bordered="false">{{ modelBindings.length }}</n-tag>
           </div>
@@ -223,12 +307,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   NButton,
   NDrawer,
   NDrawerContent,
   NEmpty,
+  NInputNumber,
+  NRadioButton,
+  NRadioGroup,
   NTag,
 } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
@@ -259,6 +346,7 @@ const props = defineProps<{
   instance: AgentPackageInstanceView | null
   instanceBusy: boolean
   exportBusy: boolean
+  contextConfigSaving: boolean
 }>()
 
 const emit = defineEmits<{
@@ -268,6 +356,7 @@ const emit = defineEmits<{
   run: [agentPackage: AgentPackageView]
   evolve: [agentPackage: AgentPackageView]
   export: [agentPackage: AgentPackageView]
+  saveContextConfig: [payload: { context_window_tokens: number | null; compression_threshold_tokens: number | null }]
 }>()
 
 const ready = computed(() => isPackageReady(props.instance))
@@ -284,6 +373,66 @@ const modelToolBindings = computed(() => {
   const bindings = props.agentPackage?.model_contract?.tool_bindings || {}
   return Object.entries(bindings).map(([tool_id, binding]) => ({ tool_id, ...binding }))
 })
+const contextDrafts = ref<{ window: number | null; compression: number | null }>({
+  window: null,
+  compression: null,
+})
+const contextModes = ref<{ window: 'env' | 'custom'; compression: 'env' | 'custom' }>({
+  window: 'env',
+  compression: 'env',
+})
+const contextConfigDirty = computed(() => {
+  const contract = props.agentPackage?.context_contract
+  return (
+    contextConfigSavePayload().context_window_tokens !== (contract?.context_window_tokens_custom ?? null) ||
+    contextConfigSavePayload().compression_threshold_tokens !== (contract?.compression_threshold_tokens_custom ?? null)
+  )
+})
+
+watch(
+  () => props.agentPackage?.context_contract,
+  (contract) => {
+    contextDrafts.value = {
+      window: contract?.context_window_tokens_custom ?? null,
+      compression: contract?.compression_threshold_tokens_custom ?? null,
+    }
+    contextModes.value = {
+      window: contract?.context_window_tokens_custom ? 'custom' : 'env',
+      compression: contract?.compression_threshold_tokens_custom ? 'custom' : 'env',
+    }
+  },
+  { immediate: true },
+)
+
+function contextConfigSavePayload(): { context_window_tokens: number | null; compression_threshold_tokens: number | null } {
+  return {
+    context_window_tokens: contextModes.value.window === 'custom' ? contextDrafts.value.window ?? null : null,
+    compression_threshold_tokens: contextModes.value.compression === 'custom' ? contextDrafts.value.compression ?? null : null,
+  }
+}
+
+function formatTokens(value: number | null | undefined): string {
+  if (!value) return t('common.unset')
+  return `${formatTokenK(value)}k`
+}
+
+function formatTokenInput(value: number | null): string {
+  if (!value) return ''
+  return formatTokenK(value)
+}
+
+function parseTokenInput(input: string): number | null {
+  const normalized = input.trim().replace(/[kK]$/u, '')
+  if (!normalized) return null
+  const parsed = Number(normalized)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.round(parsed * 1000)
+}
+
+function formatTokenK(value: number): string {
+  const kValue = value / 1000
+  return Number.isInteger(kValue) ? String(kValue) : String(Math.round(kValue * 10) / 10)
+}
 
 function packageStatusLabel(status: string | null | undefined): string {
   const value = status || ''
@@ -400,6 +549,79 @@ function packageStatusLabel(status: string | null | undefined): string {
   color: var(--app-text-muted);
   font-size: var(--app-font-xs);
   line-height: 1.4;
+}
+
+.context-policy-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-md);
+}
+
+.context-config-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-sm);
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.context-config-main {
+  min-width: 0;
+}
+
+.context-config-heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-xs);
+}
+
+.context-config-control {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.context-window-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-xs) var(--app-space-sm);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+  line-height: 1.4;
+}
+
+.context-window-mode {
+  width: fit-content;
+}
+
+.context-window-input {
+  width: 150px;
+}
+
+.context-window-help {
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+  line-height: 1.45;
+}
+
+.context-save-button {
+  align-self: flex-end;
+}
+
+@media (max-width: 560px) {
+  .context-config-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .context-window-mode,
+  .context-window-input {
+    width: 100%;
+  }
 }
 
 .item-uri {

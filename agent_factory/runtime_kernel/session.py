@@ -24,6 +24,7 @@ class AgentSessionTurn(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     reasoning_content: str | None = None
     final_answer: str | None = None
+    tool_activities: list[dict[str, Any]] = Field(default_factory=list)
     status: str | None = None
     trace_ref: dict[str, str] | None = None
 
@@ -173,6 +174,46 @@ class AgentSessionManager:
         self.save(record)
         return record
 
+    def finish_turn(
+        self,
+        session_id: str,
+        *,
+        request_id: str | None = None,
+        reasoning_content: str | None = None,
+        final_answer: str | None = None,
+        status: str | None = None,
+        trace_ref: dict[str, str] | None = None,
+        tool_activities: list[dict[str, Any]] | None = None,
+    ) -> AgentSessionRecord:
+        record = self.load(session_id)
+        normalized_request_id = (request_id or "").strip() or None
+        turn = _find_turn(record.turns, request_id=normalized_request_id) if normalized_request_id else None
+        if turn is None:
+            turn = _latest_running_turn(record.turns) or (record.turns[-1] if record.turns else None)
+        if turn is None:
+            now = _now()
+            turn = AgentSessionTurn(
+                index=1,
+                created_at=now,
+                updated_at=now,
+                request_id=normalized_request_id,
+            )
+            record.turns.append(turn)
+        if reasoning_content is not None:
+            turn.reasoning_content = (reasoning_content or "").strip() or None
+        if final_answer is not None:
+            turn.final_answer = (final_answer or "").strip() or None
+        if status is not None:
+            turn.status = (status or "").strip() or None
+        if trace_ref is not None:
+            turn.trace_ref = trace_ref or None
+        if tool_activities is not None:
+            turn.tool_activities = list(tool_activities)
+        turn.updated_at = _now()
+        record.turn_count = len(record.turns)
+        self.save(record)
+        return record
+
     def _path(self, session_id: str) -> Path:
         return self.config.root / f"{session_id}.json"
 
@@ -195,6 +236,13 @@ def _find_turn(turns: list[AgentSessionTurn], *, request_id: str | None) -> Agen
         return None
     for turn in turns:
         if turn.request_id == request_id:
+            return turn
+    return None
+
+
+def _latest_running_turn(turns: list[AgentSessionTurn]) -> AgentSessionTurn | None:
+    for turn in reversed(turns):
+        if turn.status in {"running", "interrupted"}:
             return turn
     return None
 

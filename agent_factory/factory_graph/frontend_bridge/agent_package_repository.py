@@ -39,7 +39,13 @@ class AgentPackageRepository:
 
     def manifest_paths(self) -> list[Path]:
         self.package_root.mkdir(parents=True, exist_ok=True)
-        return sorted(self.package_root.glob("*/agent_package.json"))
+        self.system_package_root.mkdir(parents=True, exist_ok=True)
+        paths_by_package_id: dict[str, Path] = {}
+        for path in sorted(self.system_package_root.glob("*/agent_package.json")):
+            paths_by_package_id[path.parent.name] = path
+        for path in sorted(self.package_root.glob("*/agent_package.json")):
+            paths_by_package_id[path.parent.name] = path
+        return sorted(paths_by_package_id.values())
 
     def load(self, package_id: str) -> LoadedAgentPackage:
         return self.loader.load_path(self.manifest_path(package_id))

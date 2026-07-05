@@ -125,11 +125,13 @@ export function applyModelMessageCompleted(state: ModelMutationState, event: Fac
     }
   } else {
     state.modelStreams[streamId].requestId = state.modelStreams[streamId].requestId || event.request_id || null
-    if (typeof content === 'string') {
+    if (typeof content === 'string' && !state.modelStreams[streamId].content) {
       state.modelStreams[streamId].content = content
     }
     if (event.payload?.reasoning_content != null) {
-      state.modelStreams[streamId].reasoningContent = String(event.payload.reasoning_content)
+      if (!state.modelStreams[streamId].reasoningContent) {
+        state.modelStreams[streamId].reasoningContent = String(event.payload.reasoning_content)
+      }
       state.modelStreams[streamId].reasoningActive = false
       state.modelStreams[streamId].reasoningCompletedAt = event.timestamp
     }

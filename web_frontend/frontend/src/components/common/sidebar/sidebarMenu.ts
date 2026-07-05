@@ -8,6 +8,7 @@ import {
   GitCompare,
   Layers,
   Library,
+  People,
   Rocket,
   Time,
 } from '@/components/icons'
@@ -36,6 +37,11 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
       label: t('route.agents'),
       key: '/agents',
       icon: renderIcon(Rocket),
+    },
+    {
+      label: t('route.collaboration'),
+      key: '/collaboration',
+      icon: renderIcon(People),
     },
     {
       type: 'divider',

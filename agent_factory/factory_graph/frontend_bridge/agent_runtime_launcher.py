@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from typing import Any
 
-from agent_factory.paths import project_root
+from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.model_pool import MODEL_POOL_STORE_PATH_ENV, ModelPoolStore, resolve_model_pool_store_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 from agent_factory.runtime_contracts import LoadedAgentPackage
@@ -27,7 +27,8 @@ RUNTIME_IMAGE_MIRROR_BUILD_COMMAND = (
 IMAGE_INSPECT_COMMAND_LABEL = "docker image inspect"
 
 MODEL_ENV_ALLOWLIST: tuple[str, ...] = ()
-CONTAINER_MODEL_POOL_STORE_PATH = "/runtime/model_pool/factory.sqlite"
+CONTAINER_MODEL_POOL_STORE_PATH = "/model_pool/factory.sqlite"
+CONTAINER_COLLABORATION_ROOT = "/collaboration"
 
 SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ALLOWED_CONTAINER_ROOTS = (
@@ -88,14 +89,20 @@ class DockerAgentRuntimeLauncher:
             )
         network = self._network_mode(sandbox)
         extension_root = extension_root or runtime_root / "extensions"
-        extension_root.mkdir(parents=True, exist_ok=True)
+        extension_root = self._prepare_runtime_extension_root(
+            source_extension_root=extension_root,
+            runtime_root=runtime_root,
+        )
         input_files_root = workdir_root / ATTACHMENT_INPUT_DIR
         input_files_root.mkdir(parents=True, exist_ok=True)
         service_env = self._service_environment(sandbox)
         model_pool_path = resolve_model_pool_store_path()
         ModelPoolStore(model_pool_path)
+        collaboration_root = factory_artifact_path("collaboration")
+        collaboration_root.mkdir(parents=True, exist_ok=True)
         env = {**self._environment(sandbox), **service_env}
         env[MODEL_POOL_STORE_PATH_ENV] = CONTAINER_MODEL_POOL_STORE_PATH
+        env["AGENTFACTORY_COLLABORATION_ROOT"] = CONTAINER_COLLABORATION_ROOT
         if mcp_gateway_url:
             env["AGENTFACTORY_MCP_GATEWAY_URL"] = mcp_gateway_url
         if skillhub_gateway_url:
@@ -116,13 +123,11 @@ class DockerAgentRuntimeLauncher:
             "-v",
             f"{workdir_root.resolve()}:/workdir:rw",
             "-v",
-            f"{input_files_root.resolve()}:/workdir/{ATTACHMENT_INPUT_DIR}:ro",
-            "-v",
             f"{runtime_root.resolve()}:/runtime:rw",
             "-v",
-            f"{extension_root.resolve()}:/runtime/extensions:rw",
+            f"{model_pool_path.parent.resolve()}:/model_pool:ro",
             "-v",
-            f"{model_pool_path.resolve()}:{CONTAINER_MODEL_POOL_STORE_PATH}:ro",
+            f"{collaboration_root.resolve()}:{CONTAINER_COLLABORATION_ROOT}:rw",
         ]
         contract_mounts = [*(sandbox.get("mounts") or []), *(sandbox.get("volumes") or [])]
         for mount in contract_mounts:
@@ -138,7 +143,7 @@ class DockerAgentRuntimeLauncher:
             resolved_image=resolved_image,
             network=network,
             extension_root=extension_root,
-            mount_count=6 + 2 + len(contract_mounts),
+            mount_count=7 + len(contract_mounts),
             service_env=service_env,
             preflight={
                 "status": "ok",
@@ -148,12 +153,27 @@ class DockerAgentRuntimeLauncher:
                 "image_check": IMAGE_INSPECT_COMMAND_LABEL,
                 "network": network,
                 "extension_root": str(extension_root),
-                "mount_count": 6 + 2 + len(contract_mounts),
+                "mount_count": 7 + len(contract_mounts),
                 "service_env_keys": sorted(service_env),
                 "mcp_gateway_url": mcp_gateway_url,
                 "skillhub_gateway_url": skillhub_gateway_url,
             },
         )
+
+    def _prepare_runtime_extension_root(self, *, source_extension_root: Path, runtime_root: Path) -> Path:
+        runtime_extension_root = runtime_root / "extensions"
+        source = source_extension_root.expanduser().resolve()
+        target = runtime_extension_root.resolve()
+        if source == target:
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+        if source.exists():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target)
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+        return target
 
     def build_command(
         self,

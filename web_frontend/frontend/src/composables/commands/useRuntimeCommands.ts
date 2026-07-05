@@ -37,8 +37,9 @@ export function useRuntimeCommands() {
     mode?: FactoryMode,
     attachments?: RuntimeAttachmentInput[],
     runtimeOptions?: commands.RuntimeMainModelOptions,
+    displayUserInput?: string | null,
   ) => {
-    const command = commands.sendMessageCommand({ message, mode, attachments, runtimeOptions })
+    const command = commands.sendMessageCommand({ message, mode, attachments, runtimeOptions, displayUserInput })
     transport.sendRuntimeCommand(command)
     return command
   }
@@ -90,26 +91,6 @@ export function useRuntimeCommands() {
     return command
   }
 
-  const confirmPublish = () => {
-    return sendInterruptDecision({
-      action: 'answer',
-      decision: 'publish',
-      input_text: '发布',
-      answer: '发布',
-      message: '发布',
-    })
-  }
-
-  const continuePublishRevision = (guidance: string) => {
-    return sendInterruptDecision({
-      action: 'answer',
-      decision: 'message',
-      input_text: guidance,
-      answer: guidance,
-      message: guidance,
-    })
-  }
-
   const cancelRequest = (
     reason = 'user_cancelled',
     targetRequestId: string | null = null,
@@ -131,8 +112,6 @@ export function useRuntimeCommands() {
     trustTool,
     reviseWithGuidance,
     answerInterrupt,
-    confirmPublish,
-    continuePublishRevision,
     cancelRequest,
   }
 }

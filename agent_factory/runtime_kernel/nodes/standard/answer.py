@@ -20,6 +20,7 @@ from agent_factory.runtime_kernel.planning import (
     runtime_plan_model_tool,
 )
 from agent_factory.runtime_kernel.state import RuntimeState
+from agent_factory.runtime_kernel.nodes.standard.tool_visibility import runtime_extra_allowed_tool_ids
 from agent_factory.context_system.token_counter import provider_token_budget_payload
 
 
@@ -209,8 +210,13 @@ def _model_visible_tool_ids(context: NodeExecutionContext, state: RuntimeState, 
             node_bindings=context.bindings,
             all_bindings=context.all_bindings,
             registry=registry,
+            extra_tool_ids=runtime_extra_allowed_tool_ids(state),
         )
-    return merge_tool_ids([*_allowed_tool_ids(context), *system_tool_ids(registry)])
+    return merge_tool_ids([
+        *_allowed_tool_ids(context),
+        *runtime_extra_allowed_tool_ids(state),
+        *system_tool_ids(registry),
+    ])
 
 
 def _allowed_tool_ids(context: NodeExecutionContext) -> list[str]:

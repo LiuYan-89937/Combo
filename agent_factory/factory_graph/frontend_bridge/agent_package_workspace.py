@@ -12,6 +12,7 @@ from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     extension_root_for_package,
     host_runtime_root,
+    host_session_workdir,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_utils import humanize_identifier
 
@@ -38,9 +39,15 @@ WORKSPACE_BINARY_PREVIEW_EXTENSIONS = {
 
 
 class AgentPackageWorkspaceService:
-    def roots(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
-        roots = workspace_roots(package_id, package)
-        return workspace_roots_payload(context={"package_id": package_id}, roots=roots)
+    def roots(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        roots = workspace_roots(package_id, package, session_id=session_id)
+        return workspace_roots_payload(context=_workspace_context(package_id, session_id), roots=roots)
 
     def list_entries(
         self,
@@ -49,10 +56,11 @@ class AgentPackageWorkspaceService:
         *,
         scope: str = "workdir",
         relative_path: str = "",
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         return list_workspace_entries_from_roots(
-            context={"package_id": package_id},
-            roots=workspace_roots(package_id, package),
+            context=_workspace_context(package_id, session_id),
+            roots=workspace_roots(package_id, package, session_id=session_id),
             scope=scope,
             relative_path=relative_path,
         )
@@ -65,10 +73,11 @@ class AgentPackageWorkspaceService:
         scope: str = "workdir",
         relative_path: str,
         max_chars: int = 20000,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         return read_workspace_file_from_roots(
-            context={"package_id": package_id},
-            roots=workspace_roots(package_id, package),
+            context=_workspace_context(package_id, session_id),
+            roots=workspace_roots(package_id, package, session_id=session_id),
             scope=scope,
             relative_path=relative_path,
             max_chars=max_chars,
@@ -81,27 +90,42 @@ class AgentPackageWorkspaceService:
         *,
         scope: str = "workdir",
         relative_path: str,
+        session_id: str | None = None,
     ) -> Path:
         return resolve_workspace_file_from_roots(
-            roots=workspace_roots(package_id, package),
+            roots=workspace_roots(package_id, package, session_id=session_id),
             scope=scope,
             relative_path=relative_path,
         )
 
 
-def workspace_roots(package_id: str, package: LoadedAgentPackage) -> dict[str, Path]:
+def workspace_roots(package_id: str, package: LoadedAgentPackage, *, session_id: str | None = None) -> dict[str, Path]:
     runtime_root = host_runtime_root(package_id)
+    normalized_session_id = str(session_id or "").strip()
+    workdir_root = (
+        host_session_workdir(package_id, normalized_session_id)
+        if normalized_session_id
+        else runtime_root / "workdirs" / "__no_session_selected__"
+    )
     return {
         "package": package.package_root,
         "runtime": runtime_root,
-        "workdir": runtime_root / "workdir",
+        "workdir": workdir_root,
         "artifacts": runtime_root / "artifacts",
         "extensions": extension_root_for_package(package_id, package),
     }
 
 
-def workspace_scope_root(package_id: str, package: LoadedAgentPackage, scope: str) -> Path:
-    return workspace_scope_root_from_roots(workspace_roots(package_id, package), scope)
+def workspace_scope_root(package_id: str, package: LoadedAgentPackage, scope: str, *, session_id: str | None = None) -> Path:
+    return workspace_scope_root_from_roots(workspace_roots(package_id, package, session_id=session_id), scope)
+
+
+def _workspace_context(package_id: str, session_id: str | None) -> dict[str, str]:
+    normalized_session_id = str(session_id or "").strip()
+    return {
+        "package_id": package_id,
+        **({"package_session_id": normalized_session_id} if normalized_session_id else {}),
+    }
 
 
 def workspace_roots_payload(*, context: dict[str, Any], roots: dict[str, Path]) -> dict[str, Any]:

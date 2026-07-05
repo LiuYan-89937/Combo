@@ -138,11 +138,10 @@ def _invariant_system_prompt_text() -> str:
         (
             "最终出厂流程固定为：当前 focus 是 validation_publish；"
             "先显式调用 create_agent_validate(scope='full_static', reason=...)；"
-            "full_static validation passed 后再调用 create_agent_control(action=finalize)，系统会向用户做发布前确认。"
-            "不要调用 create_agent_control(action='ask_user') 来索要发布确认；发布确认只能由 finalize 触发的系统确认门处理。"
-            "用户选择发布时，系统确认门会直接完成物理发布并结束本次制造链路，不再回到模型继续决策。"
-            "用户选择继续修改或输入自然语言时，先按普通用户消息处理，必要时继续修改、校验，再重新 finalize。"
-            "不要把修改意见当作发布确认。"
+            "full_static validation passed 后再调用 create_agent_control(action=finalize)，制造链路到此结束并进入待发布状态。"
+            "发布不是制造 Agent 的职责；不要索要发布确认，不要调用发布工具，不要把用户的确认文本当作制造消息。"
+            "物理发布只由用户在 Web 界面点击发布按钮触发，走系统 API 直接发布。"
+            "如果用户继续提出修改意见，把它当作新的制造需求处理，修改后重新 full_static validation 和 finalize。"
         ),
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
@@ -159,12 +158,14 @@ def _invariant_system_prompt_text() -> str:
             "不要先写 package tool 再补模型选择、MCP 继承或 SkillHub 复用，也不要在模型池能力未确认前承诺或实现依赖特定模型能力的工具。"
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
-            "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=完整 ToolSpec, tool_source=完整源码, "
+            "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=业务 ToolSpec 字段, tool_source=完整源码, "
             "python_requirements=[...], expose_to_nodes=[...])；"
-            "生成的 package tool 固定写入 tools/<tool_id>/tool.py，所以 tool_spec.entrypoint 必须是 python:tools/<tool_id>/tool.py:run，"
+            "tool_spec 只允许包含 id、description、input_schema、output_schema、resources、risk_level、concurrent、output_compression；"
+            "不要传 entrypoint、risk_evaluator、permission_scope 或 permission_tags，这些系统字段由 create_agent_authoring 统一生成。"
+            "生成的 package tool 固定写入 tools/<tool_id>/tool.py，系统会生成 entrypoint=python:tools/<tool_id>/tool.py:run；"
             "tool_source 必须定义同步函数 run(arguments, resources)，不要使用 main、tool:main 或 python-import entrypoint。"
-            "ToolSpec 的 id、description、entrypoint、input_schema、output_schema、resources、risk_level、risk_evaluator、concurrent、output_compression 都是 tool_spec 顶层字段，"
-            "不要把 output_schema、resources、risk_level、risk_evaluator、concurrent 或 output_compression 放进 input_schema。"
+            "ToolSpec 的 input_schema 只描述运行期调用参数；"
+            "不要把 output_schema、resources、risk_level、concurrent 或 output_compression 放进 input_schema。"
             "如果工具输出包含长列表、搜索候选、外部资源 id/slug/path、日志、报告或其他压缩后仍需保真的机器字段，给 tool_spec.output_compression.actions 写 action 级结构化 schema 和个性化 prompt；"
             "单链路工具把个性压缩当作唯一 action 配置；多 action 工具使用 output_compression.action_argument 和 actions 分别配置每个 action。没有 action 配置时直接走系统默认压缩。"
         ),
@@ -190,7 +191,10 @@ def _invariant_system_prompt_text() -> str:
             "读取 skill 资源只能通过 skill(action='read_resource', ...)；不存在 read_source action；不要通过项目源码 inspect 或 shell 推断 schema。"
         ),
         (
-            "通用 bash 不在 create-agent 默认工具集中。系统不会自动运行 validator。"
+            "工具作用域必须分清：create-agent supervisor 的制造期工具集不包含通用 bash，不能直接执行 shell；"
+            "最终子 Agent 的运行期工具集由 assembly tool_access 显式配置，可以按需求加入受控 bash。"
+            "验证运行期 bash 或 package tool 行为时，必须走 create_agent_probe_tool 的 Docker/runtime 探测链路。"
+            "系统不会自动运行 validator。"
             "完成一个完整能力增量后，必须显式调用 create_agent_validate(scope='current_focus', reason=...)。"
             "create_agent_validate 的 tool observation 是 validator evidence；不要等待 graph 自动 validation。"
         ),
@@ -231,7 +235,8 @@ def _invariant_system_prompt_text() -> str:
             "如需解释 tool observation 或确认跨文件契约，可以读取相关 package 文件。"
             "如果 write/edit observation 中出现 outside_focus=true，把它当作提醒，而不是权限失败；"
             "确认该写入属于当前能力增量后继续。"
-            "制造期 read/write/edit/glob/grep/bash 等工具不得默认暴露给最终子 Agent；"
+            "制造期可见工具和最终子 Agent 运行期工具是两个不同作用域；"
+            "不要把制造期 read/write/edit/glob/grep 等工具默认照搬给最终子 Agent，bash 也只能在运行期确有需求时显式加入；"
             "运行期工具必须在 tools_system/package_tool_system 中做来源决策。"
         ),
         (
@@ -259,10 +264,9 @@ def _dynamic_system_context_text(
     *,
     state: Mapping[str, Any],
 ) -> str:
-    publish_confirmation = _publish_confirmation_context(state.get("publish_confirmation_response"))
     task_analysis = _task_analysis_context(state)
     attachments = format_attachments_for_model(state.get("runtime_attachments"))
-    return "\n\n".join(item for item in [task_analysis, attachments, publish_confirmation] if item)
+    return "\n\n".join(item for item in [task_analysis, attachments] if item)
 
 
 def _task_analysis_context(state: Mapping[str, Any]) -> str:
@@ -300,22 +304,3 @@ def _task_analysis_context(state: Mapping[str, Any]) -> str:
 
 def _stable_tool_names(tools: list[BaseTool]) -> list[str]:
     return sorted(str(tool.name) for tool in tools)
-
-
-def _publish_confirmation_context(value: Any) -> str:
-    if not isinstance(value, dict):
-        return ""
-    decision = str(value.get("decision") or "").strip()
-    input_text = str(value.get("input_text") or "").strip()
-    instruction = str(value.get("instruction") or "").strip()
-    if not decision and not input_text:
-        return ""
-    if decision == "approve":
-        return ""
-    return (
-        "High-priority publish confirmation response:\n"
-        "- decision: pending\n"
-        f"- user_input: {input_text}\n"
-        f"- instruction: {instruction or 'Treat user_input as the user latest message, not as an automatic package modification request.'}\n"
-        "- next_required_action: do not publish. If user_input is a question, answer it from current package evidence; if it asks for changes, modify then validate."
-    )
