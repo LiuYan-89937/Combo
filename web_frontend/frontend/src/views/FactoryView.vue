@@ -36,22 +36,10 @@
 
             <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
               <MessageItem
-                v-if="item.kind === 'message'"
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
               />
-              <ToolActivityCard
-                v-else
-                :tool="item.tool"
-              />
             </template>
-
-            <MessageItem
-              v-for="message in untrackedActiveStreamMessages"
-              :key="message.id"
-              :message="message"
-              streaming
-            />
 
             <MessageItem
               v-for="message in thinkingMessages"
@@ -103,7 +91,6 @@ import { useFactoryConversation } from '@/composables/factory/useFactoryConversa
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
-import ToolActivityCard from '@/components/chat/ToolActivityCard.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
@@ -139,13 +126,12 @@ const {
   isMessageStreaming,
   thinkingMessages,
   timelineItems,
-  untrackedActiveStreamMessages,
 } = useFactoryMessageProjection()
 
 function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
   if (!sendMessage(message, attachments)) return
   nextTick(() => {
-    scrollToBottom()
+    scrollToBottom('smooth')
   })
 }
 
@@ -153,37 +139,46 @@ function handleCancel() {
   cancelRequest()
 }
 
-function scrollToBottom() {
-  scrollbarRef.value?.scrollTo({ position: 'bottom', behavior: 'smooth' })
+function scrollToBottom(behavior: ScrollBehavior = 'auto') {
+  scrollbarRef.value?.scrollTo({ position: 'bottom', behavior })
+}
+
+function scrollContainer(): HTMLElement | null {
+  const scrollbar = scrollbarRef.value as any
+  return scrollbar?.scrollbarInstRef?.containerRef
+    || scrollbar?.containerRef
+    || scrollbar?.$el?.querySelector?.('.n-scrollbar-container')
+    || null
+}
+
+function isNearBottom(): boolean {
+  const container = scrollContainer()
+  if (!container) return true
+  return container.scrollHeight - container.scrollTop - container.clientHeight < 96
+}
+
+function followBottomIfNeeded() {
+  const shouldFollow = isNearBottom()
+  nextTick(() => {
+    if (shouldFollow) scrollToBottom()
+  })
 }
 
 // 监听消息变化，自动滚动
 watch(
   () => runtimeStore.transcript.length,
-  () => {
-    nextTick(() => {
-      scrollToBottom()
-    })
-  }
+  followBottomIfNeeded,
 )
 
 watch(
   () => runtimeStore.tools.map((tool) => `${tool.activityKey}:${tool.status}:${tool.timestamp}`).join('|'),
-  () => {
-    nextTick(() => {
-      scrollToBottom()
-    })
-  }
+  followBottomIfNeeded,
 )
 
 // 监听流式输出，自动滚动
 watch(
   () => activeStreamContentKey.value,
-  () => {
-    nextTick(() => {
-      scrollToBottom()
-    })
-  }
+  followBottomIfNeeded,
 )
 
 onMounted(() => {

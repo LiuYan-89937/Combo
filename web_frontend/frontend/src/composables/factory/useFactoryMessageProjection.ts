@@ -1,12 +1,12 @@
 import { computed } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
-import type { ToolActivity, TranscriptItem } from '@/types/protocol'
+import type { ChatMessagePart, ToolActivity, TranscriptItem } from '@/types/protocol'
 import { isToolActivityActive, isToolActivityPendingApproval } from '@/utils/toolActivityState'
+import { textPart } from '@/stores/runtime/messageParts'
 
 export type FactoryTimelineItem =
   | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem }
-  | { kind: 'tool'; id: string; timestamp: string; order: number; tool: ToolActivity }
 
 export function useFactoryMessageProjection() {
   const runtimeStore = useRuntimeStore()
@@ -18,28 +18,6 @@ export function useFactoryMessageProjection() {
     )
   })
   const hasActiveStreams = computed(() => activeStreams.value.length > 0)
-  const transcriptStreamIds = computed(() => {
-    return new Set(runtimeStore.transcript.map((message) => message.streamId).filter(Boolean))
-  })
-  const untrackedActiveStreamMessages = computed<TranscriptItem[]>(() => {
-    return activeStreams.value
-      .filter((stream) => !transcriptStreamIds.value.has(stream.streamId))
-      .filter(hasStreamDisplayContent)
-      .map((stream) => ({
-        id: stream.streamId,
-        role: 'assistant',
-        content: stream.content,
-        timestamp: new Date().toISOString(),
-        streamId: stream.streamId,
-        reasoning: stream.reasoningContent
-          ? {
-              content: stream.reasoningContent,
-              active: stream.reasoningActive,
-              completedAt: stream.reasoningCompletedAt,
-            }
-          : undefined,
-      }))
-  })
   const timelineItems = computed<FactoryTimelineItem[]>(() => {
     const items: FactoryTimelineItem[] = []
     runtimeStore.transcript.forEach((message, index) => {
@@ -51,29 +29,27 @@ export function useFactoryMessageProjection() {
         message,
       })
     })
-    runtimeStore.tools.forEach((tool, index) => {
-      items.push({
-        kind: 'tool',
-        id: tool.activityKey,
-        timestamp: tool.createdAt || tool.timestamp,
-        order: runtimeStore.transcript.length + index,
-        tool,
-      })
-    })
     return items.sort(compareTimelineItems)
   })
   const thinkingMessages = computed<TranscriptItem[]>(() => {
     if (!runtimeStore.hasActiveRun || runtimeStore.isAwaitingUserInputInterrupt) return []
     const activeTurn = runtimeStore.activeTurn
     if (!activeTurn?.userMessage) return []
-    if (activeTurn.assistantMessages.some((message) => message.content.trim().length > 0)) return []
-    if (activeStreams.value.some(hasStreamDisplayContent)) return []
+    if (activeTurn.assistantMessages.some(messageHasDisplayParts)) return []
     return [
       {
         id: `thinking-${activeTurn.id}`,
         role: 'assistant',
         content: '',
         timestamp: activeTurn.startedAt || new Date().toISOString(),
+        status: 'streaming',
+        parts: [
+          textPart(`thinking-${activeTurn.id}:status`, '', {
+            format: 'plain',
+            status: 'streaming',
+            timestamp: activeTurn.startedAt || new Date().toISOString(),
+          }),
+        ],
         metadata: {
           thinking: true,
           request_id: activeTurn.requestId,
@@ -95,7 +71,7 @@ export function useFactoryMessageProjection() {
   })
   const activeStreamContentKey = computed(() => {
     return [
-      activeStreams.value.map((stream) => `${stream.reasoningContent || ''}${stream.content}`).join(''),
+      runtimeStore.transcript.map(messagePartsKey).join('|'),
       toolActivityHint.value,
       thinkingMessages.value.length,
     ].join('')
@@ -114,7 +90,6 @@ export function useFactoryMessageProjection() {
     thinkingMessages,
     timelineItems,
     toolActivityHint,
-    untrackedActiveStreamMessages,
   }
 }
 
@@ -127,8 +102,22 @@ function compareTimelineItems(left: FactoryTimelineItem, right: FactoryTimelineI
   return left.order - right.order
 }
 
-function hasStreamDisplayContent(stream: { content: string; reasoningContent?: string }): boolean {
-  return stream.content.trim().length > 0 || String(stream.reasoningContent || '').trim().length > 0
+function messageHasDisplayParts(message: TranscriptItem): boolean {
+  return message.parts.some(partHasDisplayContent)
+}
+
+function messagePartsKey(message: TranscriptItem): string {
+  return message.parts.map((part) => {
+    if (part.type === 'text' || part.type === 'reasoning') {
+      return `${part.id}:${part.status || ''}:${part.text.length}`
+    }
+    return `${part.id}:${part.type}:${part.status || ''}`
+  }).join(',')
+}
+
+function partHasDisplayContent(part: ChatMessagePart): boolean {
+  if (part.type === 'text' || part.type === 'reasoning') return part.text.trim().length > 0
+  return ['tool_call', 'tool_result', 'attachment', 'artifact', 'error', 'status'].includes(part.type)
 }
 
 function isToolActivityRunning(tool: ToolActivity): boolean {

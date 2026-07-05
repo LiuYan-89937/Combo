@@ -37,6 +37,86 @@ export interface TranscriptReasoningView {
   completedAt: string | null
 }
 
+export type ChatMessageRole = 'user' | 'assistant' | 'system'
+export type ChatMessageStatus = 'streaming' | 'completed' | 'failed' | 'stopped'
+export type ChatMessagePartStatus =
+  | 'streaming'
+  | 'completed'
+  | 'failed'
+  | 'stopped'
+  | 'requested'
+  | 'awaiting_approval'
+  | 'running'
+
+export interface BaseChatMessagePart {
+  id: string
+  type: string
+  status?: ChatMessagePartStatus
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface TextMessagePart extends BaseChatMessagePart {
+  type: 'text'
+  format: 'markdown' | 'plain'
+  text: string
+}
+
+export interface ReasoningMessagePart extends BaseChatMessagePart {
+  type: 'reasoning'
+  text: string
+}
+
+export interface ToolCallMessagePart extends BaseChatMessagePart {
+  type: 'tool_call'
+  toolName: string
+  callId: string | null
+  arguments: unknown
+  approvalState?: ToolActivity['approvalState']
+}
+
+export interface ToolResultMessagePart extends BaseChatMessagePart {
+  type: 'tool_result'
+  toolName: string
+  callId: string | null
+  output: unknown
+  error?: unknown
+}
+
+export interface ArtifactMessagePart extends BaseChatMessagePart {
+  type: 'artifact'
+  name: string
+  path?: string | null
+  mimeType?: string | null
+  sizeBytes?: number | null
+}
+
+export interface AttachmentMessagePart extends BaseChatMessagePart {
+  type: 'attachment'
+  attachment: TranscriptAttachmentView
+}
+
+export interface ErrorMessagePart extends BaseChatMessagePart {
+  type: 'error'
+  message: string
+  details?: unknown
+}
+
+export interface StatusMessagePart extends BaseChatMessagePart {
+  type: 'status'
+  message: string
+}
+
+export type ChatMessagePart =
+  | TextMessagePart
+  | ReasoningMessagePart
+  | ToolCallMessagePart
+  | ToolResultMessagePart
+  | ArtifactMessagePart
+  | AttachmentMessagePart
+  | ErrorMessagePart
+  | StatusMessagePart
+
 // ========== 命令类型 ==========
 
 export interface FactoryFrontendCommand {
@@ -85,9 +165,13 @@ export interface RuntimeOptionsView {
 
 // ========== 对话相关 ==========
 
-export interface TranscriptItem {
+export interface ChatMessage {
   id: string
-  role: 'user' | 'assistant' | 'system'
+  role: ChatMessageRole
+  parts: ChatMessagePart[]
+  status?: ChatMessageStatus
+  // Derived fields for summaries, interruption payloads, and compact side-channel output.
+  // Rendering and persistence use parts as the source of truth.
   content: string
   timestamp: string
   streamId?: string
@@ -95,6 +179,8 @@ export interface TranscriptItem {
   reasoning?: TranscriptReasoningView
   metadata?: any
 }
+
+export type TranscriptItem = ChatMessage
 
 export interface ConversationTurn {
   id: string

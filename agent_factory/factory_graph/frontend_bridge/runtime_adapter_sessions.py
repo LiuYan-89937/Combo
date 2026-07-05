@@ -6,7 +6,7 @@ from typing import Any
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
-from agent_factory.runtime_attachments import has_attachment_payload, transcript_attachment_views
+from agent_factory.runtime_attachments import has_attachment_payload
 
 
 MESSAGE_MODES = {"chat", "create_agent", "evolve_agent"}
@@ -462,41 +462,10 @@ def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, ob
     for turn in turns:
         if not isinstance(turn, dict):
             continue
-        created_at = turn.get("created_at")
-        updated_at = turn.get("updated_at") or created_at
-        turn_index = turn.get("index")
-        request_id = turn.get("request_id")
-        status = turn.get("status")
-        user_input = str(turn.get("user_input") or "").strip()
-        if user_input:
-            attachments = transcript_attachment_views(turn.get("attachments"))
-            messages.append(
-                {
-                    "role": "user",
-                    "content": user_input,
-                    **({"attachments": attachments} if attachments else {}),
-                    "turn_index": turn_index,
-                    "request_id": request_id,
-                    "status": status,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                }
-            )
-        final_answer = str(turn.get("final_answer") or "").strip()
-        if final_answer:
-            reasoning_content = str(turn.get("reasoning_content") or "").strip()
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": final_answer,
-                    **({"reasoning_content": reasoning_content} if reasoning_content else {}),
-                    "turn_index": turn_index,
-                    "request_id": request_id,
-                    "status": status,
-                    "created_at": updated_at,
-                    "updated_at": updated_at,
-                }
-            )
+        turn_messages = turn.get("messages")
+        if not isinstance(turn_messages, list):
+            continue
+        messages.extend(dict(message) for message in turn_messages if isinstance(message, dict))
     return messages
 
 

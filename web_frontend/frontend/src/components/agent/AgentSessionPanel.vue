@@ -57,8 +57,8 @@
               </n-button>
             </div>
             <div class="session-meta">
-              <n-tag size="tiny" type="success">
-                {{ t('agentSessions.tag') }}
+              <n-tag size="tiny" :type="sessionTagType(session)">
+                {{ sessionTagLabel(session) }}
               </n-tag>
               <n-text depth="3" class="meta-text">
                 {{ formatTime(session.updated_at) }}
@@ -92,7 +92,7 @@ import { useRouter } from 'vue-router'
 import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText, useDialog } from 'naive-ui'
 import { ChatbubbleEllipses, Refresh, Search, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
-import { useAgentStore } from '@/stores/agent'
+import { useAgentStore, type AgentSessionView } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -149,6 +149,18 @@ function enterNewSession() {
 function enterExistingSession(sessionId: string) {
   enterSession(sessionId)
   commands.loadAgentPackageSession(props.packageId, sessionId)
+}
+
+function sessionTagLabel(session: AgentSessionView): string {
+  if (session.session_kind === 'collaboration_main') return t('agentSessions.collaborationMain')
+  if (session.session_kind === 'collaboration_worker') return t('agentSessions.collaborationWorker')
+  return t('agentSessions.tag')
+}
+
+function sessionTagType(session: AgentSessionView): 'default' | 'success' | 'warning' | 'error' | 'info' {
+  if (session.session_kind === 'collaboration_main') return 'info'
+  if (session.session_kind === 'collaboration_worker') return 'warning'
+  return 'success'
 }
 
 function confirmDeleteSession(session: { session_id: string; display_title: string | null; first_user_input: string | null }) {

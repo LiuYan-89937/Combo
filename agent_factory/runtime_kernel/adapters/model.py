@@ -151,31 +151,118 @@ def _bind_tools(model: Any, tools: list[BaseTool]) -> Any:
 
 
 def _tool_calls_from_response(response: Any) -> list[dict[str, Any]]:
-    calls = getattr(response, "tool_calls", None) or []
-    if not calls:
-        additional_kwargs = getattr(response, "additional_kwargs", None) or {}
-        if isinstance(additional_kwargs, dict):
-            calls = additional_kwargs.get("tool_calls") or []
+    calls = _response_tool_call_candidates(response)
     normalized: list[dict[str, Any]] = []
     for index, call in enumerate(calls):
-        if not isinstance(call, dict):
+        normalized_call = _normalize_tool_call_candidate(call, index=index)
+        if normalized_call is None:
             continue
-        function = call.get("function") if isinstance(call.get("function"), dict) else {}
-        name = str(call.get("name") or function.get("name") or "")
-        if not name:
+        existing_index = _matching_tool_call_index(normalized, normalized_call)
+        if existing_index is None:
+            normalized.append(normalized_call)
             continue
-        args = call.get("args")
-        if args is None:
-            args = function.get("arguments")
-        normalized.append(
+        normalized[existing_index] = _merge_tool_call(normalized[existing_index], normalized_call)
+    return normalized
+
+
+def _response_tool_call_candidates(response: Any) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for value in [
+        getattr(response, "tool_calls", None),
+        getattr(response, "invalid_tool_calls", None),
+        getattr(response, "tool_call_chunks", None),
+        _additional_kwarg_tool_calls(response),
+        _content_tool_calls(getattr(response, "content", None)),
+    ]:
+        if isinstance(value, list):
+            candidates.extend(item for item in value if isinstance(item, dict))
+    return candidates
+
+
+def _additional_kwarg_tool_calls(response: Any) -> list[dict[str, Any]]:
+    additional_kwargs = getattr(response, "additional_kwargs", None) or {}
+    if not isinstance(additional_kwargs, dict):
+        return []
+    calls: list[dict[str, Any]] = []
+    for key in ("tool_calls", "invalid_tool_calls", "tool_call_chunks"):
+        value = additional_kwargs.get(key)
+        if isinstance(value, list):
+            calls.extend(item for item in value if isinstance(item, dict))
+    return calls
+
+
+def _content_tool_calls(content: Any) -> list[dict[str, Any]]:
+    if not isinstance(content, list):
+        return []
+    calls: list[dict[str, Any]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        block_type = str(item.get("type") or "").strip()
+        if block_type != "tool_use":
+            continue
+        calls.append(
             {
-                "name": name,
-                "args": _tool_call_args(args),
-                "id": str(call.get("id") or f"call_{index}_{name}"),
+                "name": item.get("name"),
+                "args": item.get("input"),
+                "id": item.get("id"),
                 "type": "tool_call",
             }
         )
-    return normalized
+    return calls
+
+
+def _normalize_tool_call_candidate(call: dict[str, Any], *, index: int) -> dict[str, Any] | None:
+    function = call.get("function") if isinstance(call.get("function"), dict) else {}
+    name = str(call.get("name") or function.get("name") or "")
+    if not name:
+        return None
+    args = _first_present_tool_call_args(
+        call.get("args"),
+        function.get("arguments"),
+        call.get("arguments"),
+        call.get("input"),
+    )
+    return {
+        "name": name,
+        "args": _tool_call_args(args),
+        "id": str(call.get("id") or call.get("tool_call_id") or f"call_{index}_{name}"),
+        "type": "tool_call",
+    }
+
+
+def _first_present_tool_call_args(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
+def _matching_tool_call_index(calls: list[dict[str, Any]], call: dict[str, Any]) -> int | None:
+    call_id = str(call.get("id") or "")
+    if call_id:
+        for index, existing in enumerate(calls):
+            if str(existing.get("id") or "") == call_id:
+                return index
+    name = str(call.get("name") or "")
+    for index, existing in enumerate(calls):
+        if str(existing.get("name") or "") == name and not existing.get("args"):
+            return index
+    return None
+
+
+def _merge_tool_call(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    existing_args = existing.get("args") if isinstance(existing.get("args"), dict) else {}
+    incoming_args = incoming.get("args") if isinstance(incoming.get("args"), dict) else {}
+    return {
+        "name": str(existing.get("name") or incoming.get("name") or ""),
+        "args": incoming_args if incoming_args else existing_args,
+        "id": str(existing.get("id") or incoming.get("id") or ""),
+        "type": "tool_call",
+    }
 
 
 def _tool_call_args(value: Any) -> dict[str, Any]:

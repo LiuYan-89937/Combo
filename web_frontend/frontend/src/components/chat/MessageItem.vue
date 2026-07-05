@@ -14,7 +14,7 @@
         </n-text>
       </div>
 
-      <div ref="messageBodyRef" class="message-body">
+      <div class="message-body">
         <div
           v-if="thinking"
           class="thinking-content"
@@ -26,55 +26,14 @@
           <span class="thinking-dot"></span>
           <span class="thinking-dot"></span>
         </div>
-        <template v-else-if="message.role === 'assistant'">
-          <details
-            v-if="hasReasoning"
-            class="reasoning-panel"
-            :open="reasoningOpen"
-          >
-            <summary class="reasoning-summary">
-              <span
-                v-if="message.reasoning?.active"
-                class="reasoning-live-dot"
-                aria-hidden="true"
-              ></span>
-              <span>{{ reasoningLabel }}</span>
-            </summary>
-            <div
-              class="markdown-content reasoning-markdown"
-              v-html="renderedReasoning"
-            ></div>
-          </details>
-          <div
-            v-if="message.content.trim()"
-            class="markdown-content"
-            v-html="renderedContent"
-          ></div>
+        <template v-else>
+          <MessagePartRenderer
+            v-for="part in visibleParts"
+            :key="part.id"
+            :part="part"
+            :streaming="streaming"
+          />
         </template>
-        <div v-else class="plain-content">
-          {{ message.content }}
-        </div>
-
-        <div
-          v-if="messageAttachments.length > 0"
-          class="message-attachments"
-          :aria-label="t('attachments.messageAttachments')"
-        >
-          <div
-            v-for="(attachment, index) in messageAttachments"
-            :key="`${attachment.kind}-${attachment.name}-${index}`"
-            class="message-attachment-chip"
-            :title="attachment.name"
-          >
-            <n-icon size="15" class="message-attachment-icon">
-              <Document v-if="attachment.kind === 'file'" />
-              <Link v-else-if="attachment.kind === 'url'" />
-              <Text v-else />
-            </n-icon>
-            <span class="message-attachment-name">{{ attachment.name }}</span>
-            <span class="message-attachment-kind">{{ attachmentKindLabel(attachment) }}</span>
-          </div>
-        </div>
 
         <span
           v-if="streaming && !thinking"
@@ -87,13 +46,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import type { CSSProperties } from 'vue'
-import { NAvatar, NIcon, NText } from 'naive-ui'
-import { Document, Link, Text } from '@/components/icons'
+import { NAvatar, NText } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
-import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
-import type { TranscriptAttachmentView, TranscriptItem } from '@/types/protocol'
+import MessagePartRenderer from './MessagePartRenderer.vue'
+import type { TranscriptItem } from '@/types/protocol'
 
 const props = withDefaults(
   defineProps<{
@@ -108,8 +66,6 @@ const props = withDefaults(
 )
 
 const { locale, t } = useI18n()
-const messageBodyRef = ref<HTMLElement | null>(null)
-const { renderMarkdown } = useMarkdownRenderer(messageBodyRef)
 
 const roleLabel = computed(() => {
   if (props.message.role === 'user') return t('roles.user')
@@ -137,32 +93,7 @@ const avatarText = computed(() => {
   return 'A'
 })
 
-const renderedContent = computed(() => {
-  return renderMarkdown(props.message.content, { streaming: props.streaming, surface: 'chat_message' })
-})
-
-const hasReasoning = computed(() => Boolean(props.message.reasoning?.content?.trim()))
-const reasoningOpen = computed(() => hasReasoning.value)
-const reasoningLabel = computed(() => (
-  props.message.reasoning?.active
-    ? t('roles.assistantReasoningActive')
-    : t('roles.assistantReasoning')
-))
-const renderedReasoning = computed(() => {
-  return renderMarkdown(props.message.reasoning?.content || '', {
-    streaming: Boolean(props.message.reasoning?.active),
-    surface: 'reasoning',
-  })
-})
-
-const messageAttachments = computed(() => props.message.attachments || [])
-
-function attachmentKindLabel(attachment: TranscriptAttachmentView): string {
-  if (attachment.kind === 'url') return t('attachments.url')
-  if (attachment.kind === 'text') return t('attachments.text')
-  if (attachment.source_kind === 'workspace_file') return t('attachments.workspaceFile')
-  return t('attachments.localFile')
-}
+const visibleParts = computed(() => props.message.parts)
 
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp)
@@ -282,55 +213,6 @@ function formatTime(timestamp: string): string {
   line-height: var(--app-leading-relaxed);
 }
 
-.plain-content {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.message-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--app-space-sm);
-  margin-top: var(--app-space-md);
-}
-
-.message-attachment-chip {
-  max-width: min(360px, 100%);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--app-space-xs);
-  padding: 4px var(--app-space-sm);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-pill);
-  background: var(--app-surface-muted);
-  color: var(--app-text);
-  font-size: var(--app-font-sm);
-  line-height: 1.4;
-  transition: border-color var(--app-transition-fast), background-color var(--app-transition-fast);
-}
-
-.message-attachment-chip:hover {
-  border-color: var(--app-border-hover);
-  background: var(--app-surface-pressed);
-}
-
-.message-attachment-icon {
-  flex: 0 0 auto;
-}
-
-.message-attachment-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.message-attachment-kind {
-  flex: 0 0 auto;
-  color: var(--app-text-muted);
-  font-size: var(--app-font-xs);
-}
-
 .streaming-caret {
   display: inline-block;
   width: 2px;
@@ -375,61 +257,6 @@ function formatTime(timestamp: string): string {
 
 .thinking-dot:nth-child(3) {
   animation-delay: 0.28s;
-}
-
-.reasoning-panel {
-  margin-bottom: var(--app-space-md);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface-muted);
-  overflow: hidden;
-}
-
-.reasoning-summary {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  gap: var(--app-space-xs);
-  padding: 6px 10px;
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-sm);
-  cursor: pointer;
-  user-select: none;
-}
-
-.reasoning-summary::-webkit-details-marker {
-  display: none;
-}
-
-.reasoning-summary::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform var(--app-transition-fast);
-}
-
-.reasoning-panel[open] .reasoning-summary::before {
-  transform: rotate(45deg);
-}
-
-.reasoning-live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--app-text);
-  animation: app-pulse-soft 1.2s ease-in-out infinite;
-}
-
-.reasoning-markdown {
-  max-height: 320px;
-  padding: 0 12px 12px;
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-sm);
-  line-height: var(--app-leading-relaxed);
-  overflow: auto;
 }
 
 @keyframes thinking-pulse {

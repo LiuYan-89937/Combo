@@ -1,8 +1,4 @@
 import type { FactoryFrontendEvent, RuntimeViewState } from '@/types/protocol'
-import {
-  discardAssistantMessageStream,
-  upsertAssistantMessageFromStream,
-} from './conversationMutations'
 import { isBackgroundEvent } from './eventUtils'
 
 type ModelMutationState = Pick<
@@ -44,7 +40,7 @@ export function applyModelReasoningDelta(state: ModelMutationState, event: Facto
   if (!streamId || delta == null) return
   const visibleToUser = event.payload?.visible_to_user !== false
   if (!visibleToUser) {
-    discardAssistantMessageStream(state, streamId, event.timestamp)
+    markModelStreamDiscarded(state, streamId, event)
     return
   }
 
@@ -52,9 +48,6 @@ export function applyModelReasoningDelta(state: ModelMutationState, event: Facto
   stream.reasoningContent += String(delta)
   stream.reasoningActive = true
   stream.reasoningCompletedAt = null
-  if (stream.visibleToUser && stream.reasoningContent) {
-    upsertAssistantMessageFromStream(state, streamId, event.timestamp, event.request_id || stream.requestId || null)
-  }
 }
 
 export function applyModelReasoningCompleted(state: ModelMutationState, event: FactoryFrontendEvent) {
@@ -64,7 +57,7 @@ export function applyModelReasoningCompleted(state: ModelMutationState, event: F
   const content = event.payload?.content ?? event.payload?.reasoning_content
   if (!streamId) return
   if (event.payload?.discard || event.payload?.visible_to_user === false) {
-    discardAssistantMessageStream(state, streamId, event.timestamp)
+    markModelStreamDiscarded(state, streamId, event)
     return
   }
 
@@ -74,9 +67,6 @@ export function applyModelReasoningCompleted(state: ModelMutationState, event: F
   }
   stream.reasoningActive = false
   stream.reasoningCompletedAt = event.timestamp
-  if (stream.visibleToUser && stream.reasoningContent) {
-    upsertAssistantMessageFromStream(state, streamId, event.timestamp, event.request_id || stream.requestId || null)
-  }
 }
 
 export function applyModelStreamDelta(state: ModelMutationState, event: FactoryFrontendEvent) {
@@ -87,16 +77,12 @@ export function applyModelStreamDelta(state: ModelMutationState, event: FactoryF
   if (!streamId || delta == null) return
   const visibleToUser = event.payload?.visible_to_user !== false
   if (!visibleToUser) {
-    discardAssistantMessageStream(state, streamId, event.timestamp)
+    markModelStreamDiscarded(state, streamId, event)
     return
   }
 
   const target = ensureModelStream(state, streamId, event, visibleToUser)
   target.content += String(delta)
-  const stream = state.modelStreams[streamId]
-  if (stream.visibleToUser && (stream.content || stream.reasoningContent)) {
-    upsertAssistantMessageFromStream(state, streamId, event.timestamp, event.request_id || stream.requestId || null)
-  }
 }
 
 export function applyModelMessageCompleted(state: ModelMutationState, event: FactoryFrontendEvent) {
@@ -106,7 +92,7 @@ export function applyModelMessageCompleted(state: ModelMutationState, event: Fac
   const content = event.payload?.content
   if (!streamId) return
   if (event.payload?.discard || event.payload?.visible_to_user === false) {
-    discardAssistantMessageStream(state, streamId, event.timestamp)
+    markModelStreamDiscarded(state, streamId, event)
     return
   }
 
@@ -139,10 +125,6 @@ export function applyModelMessageCompleted(state: ModelMutationState, event: Fac
     state.modelStreams[streamId].completedAt = event.timestamp
   }
 
-  const stream = state.modelStreams[streamId]
-  if (stream.visibleToUser && (stream.content || stream.reasoningContent)) {
-    upsertAssistantMessageFromStream(state, streamId, event.timestamp, event.request_id || stream.requestId || null)
-  }
 }
 
 function isStoppingRequestEvent(state: ModelMutationState, event: FactoryFrontendEvent): boolean {
@@ -179,4 +161,19 @@ function ensureModelStream(
     state.modelStreams[streamId].reasoningCompletedAt = state.modelStreams[streamId].reasoningCompletedAt || null
   }
   return state.modelStreams[streamId]
+}
+
+function markModelStreamDiscarded(
+  state: ModelMutationState,
+  streamId: string,
+  event: FactoryFrontendEvent,
+) {
+  const stream = ensureModelStream(state, streamId, event, false)
+  stream.content = ''
+  stream.reasoningContent = ''
+  stream.reasoningActive = false
+  stream.reasoningCompletedAt = event.timestamp
+  stream.active = false
+  stream.completedAt = event.timestamp
+  stream.visibleToUser = false
 }

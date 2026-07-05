@@ -291,6 +291,27 @@ class AgentPackageRuntimeManager:
             )
         return status
 
+    def shutdown_session_runtime(
+        self,
+        package_id: str,
+        *,
+        session_id: str,
+    ) -> bool:
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id:
+            return False
+        package = self.load_package(package_id)
+        runtime_key = f"{package_id}:session:{clean_session_id}"
+        if _is_host_system_package(package):
+            if runtime_key not in self._system_handles:
+                return False
+            self._close_system(runtime_key)
+            return True
+        if runtime_key not in self._containers:
+            return False
+        self._close_container(runtime_key)
+        return True
+
     def scheduler_events(
         self,
         package_id: str,

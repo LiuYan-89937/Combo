@@ -5,13 +5,17 @@ import type {
   ToolActivity,
   TranscriptItem,
 } from '@/types/protocol'
+import {
+  toolCallPart,
+  toolResultPart,
+  upsertPart,
+} from './messageParts'
 import { toolPayloadArguments, toolPayloadValue } from './toolPayload'
 
 type ConversationMutationState = Pick<
   RuntimeViewState,
   | 'activeRequestId'
   | 'conversationTurns'
-  | 'modelStreams'
   | 'runStatus'
   | 'tools'
   | 'transcript'
@@ -43,93 +47,6 @@ export function ensureConversationTurn(
   }
   state.conversationTurns.push(turn)
   return turn
-}
-
-export function upsertAssistantMessageFromStream(
-  state: ConversationMutationState,
-  streamId: string,
-  timestamp: string,
-  requestId: string | null = null,
-) {
-  const stream = state.modelStreams[streamId]
-  const reasoningContent = stream?.reasoningContent || ''
-  if (!stream || (!stream.content.trim() && !reasoningContent.trim())) return
-
-  const existingIdx = state.transcript.findIndex((item) => item.streamId === streamId)
-  let item: TranscriptItem
-  if (existingIdx >= 0) {
-    item = state.transcript[existingIdx]
-    item.content = stream.content
-    item.timestamp = timestamp
-    item.reasoning = reasoningContent
-      ? {
-          content: reasoningContent,
-          active: stream.reasoningActive,
-          completedAt: stream.reasoningCompletedAt,
-        }
-      : undefined
-  } else {
-    item = {
-      id: streamId,
-      role: 'assistant',
-      content: stream.content,
-      timestamp,
-      streamId,
-      reasoning: reasoningContent
-        ? {
-            content: reasoningContent,
-            active: stream.reasoningActive,
-            completedAt: stream.reasoningCompletedAt,
-          }
-        : undefined,
-    }
-    state.transcript.push(item)
-  }
-
-  const turn = ensureConversationTurn(state, requestId || stream.requestId || state.activeRequestId, timestamp)
-  const existingMessage = turn.assistantMessages.find((message) => message.streamId === streamId)
-  if (existingMessage) {
-    existingMessage.content = item.content
-    existingMessage.timestamp = item.timestamp
-    existingMessage.reasoning = item.reasoning
-  } else {
-    turn.assistantMessages.push(item)
-  }
-}
-
-export function discardAssistantMessageStream(
-  state: ConversationMutationState,
-  streamId: string,
-  timestamp: string,
-) {
-  const stream = state.modelStreams[streamId]
-  if (stream) {
-    stream.content = ''
-    stream.reasoningContent = ''
-    stream.reasoningActive = false
-    stream.reasoningCompletedAt = timestamp
-    stream.active = false
-    stream.completedAt = timestamp
-    stream.visibleToUser = false
-  } else {
-    state.modelStreams[streamId] = {
-      streamId,
-      requestId: null,
-      nodeId: null,
-      content: '',
-      reasoningContent: '',
-      reasoningActive: false,
-      reasoningCompletedAt: timestamp,
-      active: false,
-      completedAt: timestamp,
-      visibleToUser: false,
-    }
-  }
-
-  state.transcript = state.transcript.filter((message) => message.streamId !== streamId)
-  state.conversationTurns.forEach((turn) => {
-    turn.assistantMessages = turn.assistantMessages.filter((message) => message.streamId !== streamId)
-  })
 }
 
 export function upsertToolActivityFromEvent(
@@ -174,7 +91,71 @@ export function upsertToolActivityFromEvent(
     state.tools.push(activity)
   }
   upsertTurnTool(state, activity)
+  upsertToolMessagePart(state, activity)
   return activity
+}
+
+export function upsertToolMessagePart(
+  state: ConversationMutationState,
+  activity: ToolActivity,
+) {
+  const messageId = `tool-${activity.activityKey}`
+  const existingIndex = state.transcript.findIndex((item) => item.id === messageId)
+  const resultPart = toolResultPart(activity)
+  const parts = [
+    toolCallPart(activity),
+    ...(resultPart ? [resultPart] : []),
+  ]
+  const status = activity.status === 'failed'
+    ? 'failed'
+    : ['completed', 'observed'].includes(activity.status)
+      ? 'completed'
+      : 'streaming'
+
+  if (existingIndex >= 0) {
+    const item = state.transcript[existingIndex]
+    let nextParts = item.parts
+    for (const part of parts) {
+      nextParts = upsertPart(nextParts, part)
+    }
+    item.parts = nextParts
+    item.timestamp = activity.timestamp
+    item.status = status
+    item.content = ''
+    syncTurnAssistantMessage(state, item, activity)
+    return
+  }
+
+  const item: TranscriptItem = {
+    id: messageId,
+    role: 'assistant',
+    content: '',
+    timestamp: activity.createdAt || activity.timestamp,
+    status,
+    parts,
+    metadata: {
+      tool_activity: true,
+      request_id: activity.requestId,
+      tool_call_id: activity.toolCallId,
+      tool_name: activity.toolName,
+    },
+  }
+  state.transcript.push(item)
+  syncTurnAssistantMessage(state, item, activity)
+}
+
+function syncTurnAssistantMessage(
+  state: ConversationMutationState,
+  message: TranscriptItem,
+  activity: ToolActivity,
+) {
+  const turn = ensureConversationTurn(state, activity.requestId || state.activeRequestId, activity.timestamp)
+  const existingIndex = turn.assistantMessages.findIndex((item) => item.id === message.id)
+  if (existingIndex >= 0) {
+    turn.assistantMessages[existingIndex] = message
+    return
+  }
+  turn.assistantMessages.push(message)
 }
 
 export function upsertTurnTool(

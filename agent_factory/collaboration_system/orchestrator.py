@@ -6,7 +6,7 @@ from hashlib import sha256
 import json
 import mimetypes
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 from typing import Any
 from uuid import uuid4
@@ -15,7 +15,6 @@ from agent_factory.collaboration_system.event_projection import CollaborationWor
 from agent_factory.collaboration_system.prompting import build_main_agent_collaboration_prompt
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.collaboration_system.store import SYSTEM_CHAT_PACKAGE_ID
-from agent_factory.document_processing import SUPPORTED_FILE_EXTENSIONS, parse_file
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import host_runtime_root
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
@@ -27,7 +26,8 @@ from agent_factory.factory_graph.frontend_bridge.runtime_events import (
 )
 
 
-WORKER_ARTIFACT_SKIP_DIRS = {"input_files", ".cache", "__pycache__"}
+COLLABORATION_SHARED_DIR = "collaboration_shared"
+WORKER_ARTIFACT_SKIP_DIRS = {"input_files", COLLABORATION_SHARED_DIR, ".cache", "__pycache__"}
 DEFAULT_MAX_COLLABORATION_ARTIFACT_BYTES = 200 * 1024 * 1024
 MAX_COLLABORATION_ARTIFACT_BYTES_ENV = "AGENTFACTORY_COLLABORATION_MAX_ARTIFACT_BYTES"
 MAX_DELEGATED_APPROVALS_PER_TASK = 20
@@ -131,7 +131,7 @@ class CollaborationOrchestrator:
             require_ready=True,
             session_kind="collaboration_main",
             collaboration_id=collaboration_id,
-            visible_in_agent_session_list=False,
+            visible_in_agent_session_list=True,
         )
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
         if main_session_id and main_session_id != str(session.get("main_agent_session_id") or ""):
@@ -250,26 +250,48 @@ class CollaborationOrchestrator:
             task_id=task_id,
         )
 
+        worker_session = self.runtime.ensure_session(
+            package_id,
+            session_id=task.get("assignee_session_id") or None,
+            first_user_input=str(task.get("task_text") or ""),
+            session_kind="collaboration_worker",
+            collaboration_id=collaboration_id,
+            collaboration_task_id=task_id,
+            visible_in_agent_session_list=True,
+        )
+        assignee_session_id = str(worker_session.get("session_id") or task.get("assignee_session_id") or "").strip()
+        if not assignee_session_id:
+            raise RuntimeError("collaboration worker session was not created")
+        self.store.update_task(
+            collaboration_id,
+            task_id,
+            {"assignee_session_id": assignee_session_id},
+        )
+        worker_workdir = self.runtime.session_workdir_for_package(package_id, assignee_session_id)
+        shared_materials = _materialize_authorized_artifacts(
+            shared_workspace=self.store.session_workdir(collaboration_id),
+            worker_workdir=worker_workdir,
+            artifacts=task.get("input_artifacts") or [],
+        )
         prompt = _worker_prompt(
             session=session,
             task=task,
-            shared_workspace=self.store.session_workdir(collaboration_id),
+            shared_materials=shared_materials,
         )
         run = self.runtime.stream(
             package_id,
             user_input=prompt,
-            session_id=task.get("assignee_session_id") or None,
+            session_id=assignee_session_id,
             request_id=run_request_id,
             require_ready=True,
             session_kind="collaboration_worker",
             collaboration_id=collaboration_id,
             collaboration_task_id=task_id,
-            visible_in_agent_session_list=False,
+            visible_in_agent_session_list=True,
         )
-        assignee_session_id = str((run.session or {}).get("session_id") or task.get("assignee_session_id") or "").strip()
+        assignee_session_id = str((run.session or {}).get("session_id") or assignee_session_id).strip()
         if not assignee_session_id:
             raise RuntimeError("collaboration worker run did not provide an agent session id")
-        worker_workdir = self.runtime.session_workdir_for_package(package_id, assignee_session_id)
         before_snapshot = _workspace_snapshot(worker_workdir)
         output = VisibleAssistantOutputAccumulator()
         event_recorder = CollaborationWorkerEventRecorder(
@@ -872,57 +894,117 @@ def _interrupt_summary(item: FactoryFrontendEvent) -> str:
     return str(item.message or payload.get("message") or "任务等待人工输入或审批。").strip()
 
 
-def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_workspace: Path) -> str:
-    artifacts = _read_authorized_artifacts(shared_workspace, task.get("input_artifacts") or [])
+def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_materials: dict[str, Any]) -> str:
+    materials = _shared_materials_prompt(shared_materials)
     return "\n\n".join(
         item
         for item in [
             "你正在一个多 Agent 协作会话中作为被分配任务的子 Agent 工作。",
-            "只完成当前任务，不要假设自己能看到其他子 Agent 的完整对话。需要使用共享材料时，只依据下面授权提供的内容。",
+            "只完成当前任务，不要假设自己能看到其他子 Agent 的完整对话。需要使用共享材料时，只读取下面列出的授权文件。",
             f"协作会话：{session.get('title') or session.get('collaboration_id')}",
             f"任务 ID：{task.get('task_id')}",
             f"任务要求：{task.get('task_text')}",
             f"验收标准：{task.get('delivery_standard')}",
             f"可见上下文：{task.get('visible_context')}",
-            artifacts,
+            materials,
             "交付要求：给出可由主 Agent 验收的完整结果。你在工作区中新建或修改的普通文件会被系统收集到协作共享工作区作为任务交付物。",
         ]
         if item
     )
 
 
-def _read_authorized_artifacts(shared_workspace: Path, paths: list[Any]) -> str:
-    sections: list[str] = []
-    for raw in paths:
+def _materialize_authorized_artifacts(
+    *,
+    shared_workspace: Path,
+    worker_workdir: Path,
+    artifacts: list[Any],
+) -> dict[str, Any]:
+    requested_paths = _authorized_artifact_paths(artifacts)
+    if not requested_paths:
+        return {"items": [], "manifest_path": ""}
+    materialized_root = worker_workdir / COLLABORATION_SHARED_DIR
+    if materialized_root.exists():
+        shutil.rmtree(materialized_root)
+    materialized_root.mkdir(parents=True, exist_ok=True)
+    items: list[dict[str, Any]] = []
+    for relative in requested_paths:
+        source = _safe_shared_path(shared_workspace, relative)
+        target_relative = _shared_material_runtime_path(relative)
+        target = worker_workdir / target_relative
+        item = {
+            "source_path": relative,
+            "path": target_relative.as_posix(),
+            "status": "missing",
+        }
+        if source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            stat = target.stat()
+            mime_type, _ = mimetypes.guess_type(target.name)
+            item.update(
+                {
+                    "status": "available",
+                    "kind": _artifact_kind(target),
+                    "mime_type": mime_type or "application/octet-stream",
+                    "size_bytes": stat.st_size,
+                    "sha256": _file_sha256(target),
+                }
+            )
+        items.append(item)
+    manifest = {
+        "type": "collaboration_shared_materials",
+        "access": "read_only",
+        "root": COLLABORATION_SHARED_DIR,
+        "items": items,
+    }
+    manifest_path = materialized_root / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {
+        "items": items,
+        "manifest_path": f"{COLLABORATION_SHARED_DIR}/manifest.json",
+    }
+
+
+def _authorized_artifact_paths(artifacts: list[Any]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for raw in artifacts:
         relative = str(raw.get("path") if isinstance(raw, dict) else raw or "").strip()
-        if not relative:
+        if not relative or relative in seen:
             continue
-        path = _safe_shared_path(shared_workspace, relative)
-        if not path.is_file():
-            sections.append(f"共享材料 {relative}: 文件不存在。")
-            continue
-        sections.append(f"共享材料 {relative}:\n{_shared_artifact_text(path, shared_workspace)}")
-    if not sections:
+        seen.add(relative)
+        paths.append(relative)
+    return paths
+
+
+def _shared_material_runtime_path(relative: str) -> Path:
+    path = PurePosixPath(str(relative).replace("\\", "/"))
+    parts = [part for part in path.parts if part not in {"", "."}]
+    if path.is_absolute() or not parts or any(part == ".." for part in parts):
+        raise ValueError(f"invalid collaboration shared material path: {relative}")
+    return Path(COLLABORATION_SHARED_DIR, "materials", *parts)
+
+
+def _shared_materials_prompt(shared_materials: dict[str, Any]) -> str:
+    items = shared_materials.get("items") if isinstance(shared_materials, dict) else []
+    if not isinstance(items, list) or not items:
         return ""
-    return "授权共享材料：\n\n" + "\n\n".join(sections)
-
-
-def _shared_artifact_text(path: Path, root: Path) -> str:
-    suffix = path.suffix.lower()
-    if suffix in SUPPORTED_FILE_EXTENSIONS:
-        try:
-            parsed = parse_file(path, root=root)
-            text = "\n\n".join(str(document.content or "").strip() for document in parsed.documents).strip()
-            if text:
-                return text[:20000]
-        except Exception:
-            pass
-    data = path.read_bytes()[:8192]
-    mime_type, _ = mimetypes.guess_type(path.name)
-    if b"\x00" in data or str(mime_type or "").startswith(("image/", "application/")):
-        stat = path.stat()
-        return f"二进制交付物，mime_type={mime_type or 'application/octet-stream'}, size_bytes={stat.st_size}。"
-    return data.decode("utf-8", errors="replace")[:20000]
+    lines = [
+        "授权共享材料已物化到当前工作区。",
+        f"清单文件：{shared_materials.get('manifest_path') or COLLABORATION_SHARED_DIR + '/manifest.json'}",
+        "使用规则：需要材料内容时，用 read 工具读取下列 path；不要假设未列出的共享材料可见。",
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        source_path = str(item.get("source_path") or "").strip()
+        status = str(item.get("status") or "").strip() or "unknown"
+        if not path:
+            continue
+        suffix = "（文件不存在）" if status != "available" else ""
+        lines.append(f"- path={path}; source={source_path}; status={status}{suffix}")
+    return "\n".join(lines)
 
 
 def _write_worker_delivery(shared_workspace: Path, *, task: dict[str, Any], content: str) -> dict[str, Any]:

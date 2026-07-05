@@ -84,8 +84,17 @@
 
       <div class="workspace-block">
         <div class="workspace-block-title">{{ t('collaboration.acceptanceFiles') }}</div>
+        <div v-if="acceptancePreviewLoading && !runtimeStore.workspaceFile" class="acceptance-workspace-loading">
+          <n-spin size="small" />
+          <span>{{ t('workspace.readingFile') }}</span>
+        </div>
+        <FilePreview
+          v-else-if="runtimeStore.workspaceFile"
+          :file="runtimeStore.workspaceFile"
+          @close="closeAcceptanceFilePreview"
+        />
         <WorkspaceExplorer
-          v-if="acceptanceWorkspaceContext"
+          v-else-if="acceptanceWorkspaceContext"
           class="acceptance-workspace-explorer"
           :workspace-context="acceptanceWorkspaceContext"
           @select-file="handleAcceptanceFileSelect"
@@ -298,12 +307,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NTag } from 'naive-ui'
+import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NSpin, NTag } from 'naive-ui'
 import { SYSTEM_CHAT_PACKAGE_ID, useCollaborationStore } from '@/stores/collaboration'
 import { useAgentStore } from '@/stores/agent'
+import { useRuntimeStore } from '@/stores/runtime'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { TrashOutline } from '@/components/icons'
+import FilePreview from '@/components/workspace/FilePreview.vue'
 import WorkspaceExplorer from '@/components/workspace/WorkspaceExplorer.vue'
 import type {
   CollaborationApprovalMode,
@@ -317,13 +328,15 @@ import type { WorkspaceEntry } from '@/types/protocol'
 
 const store = useCollaborationStore()
 const agentStore = useAgentStore()
+const runtimeStore = useRuntimeStore()
 const commands = useCommand()
 const router = useRouter()
 const { t } = useI18n()
 const finalSummary = ref('')
 const mainAgentDraft = ref(SYSTEM_CHAT_PACKAGE_ID)
-const approvalModeDraft = ref<CollaborationApprovalMode>('user_controlled')
+const approvalModeDraft = ref<CollaborationApprovalMode>('main_agent_delegated')
 const reviewDrafts = ref<Record<string, string>>({})
+const acceptancePreviewLoading = ref(false)
 let refreshTimer: number | null = null
 
 const mainAgentOptions = computed(() => (
@@ -339,6 +352,7 @@ const acceptanceWorkspaceContext = computed<WorkspaceRequestContext | null>(() =
     collaborationId,
   }
 })
+const acceptanceWorkspaceContextKey = computed(() => acceptanceWorkspaceContext.value?.collaborationId || '')
 const activityMessages = computed(() => store.messages.slice(-30))
 const canCompleteSession = computed(() => {
   if (!store.activeSession || store.activeSession.status === 'completed') return false
@@ -362,10 +376,17 @@ watch(
   () => store.activeSession,
   (session) => {
     mainAgentDraft.value = session?.main_agent_package_id || SYSTEM_CHAT_PACKAGE_ID
-    approvalModeDraft.value = session?.approval_mode || 'user_controlled'
+    approvalModeDraft.value = session?.approval_mode || 'main_agent_delegated'
     reviewDrafts.value = Object.fromEntries((session?.tasks || []).map((task) => [task.task_id, task.review_notes || '']))
   },
   { immediate: true },
+)
+
+watch(
+  () => acceptanceWorkspaceContextKey.value,
+  () => {
+    closeAcceptanceFilePreview()
+  },
 )
 
 async function createDefaultSession() {
@@ -461,11 +482,25 @@ async function completeSession() {
 }
 
 function handleAcceptanceFileSelect(entry: WorkspaceEntry) {
-  commands.readFile('workdir', entry.path, acceptanceWorkspaceContext.value, 1_000_000)
+  void previewAcceptanceFile(entry.path)
 }
 
 function openArtifact(path: string) {
-  commands.readFile('workdir', path, acceptanceWorkspaceContext.value, 1_000_000)
+  void previewAcceptanceFile(path)
+}
+
+async function previewAcceptanceFile(path: string) {
+  acceptancePreviewLoading.value = true
+  runtimeStore.workspaceFile = null
+  await commands.readFile('workdir', path, acceptanceWorkspaceContext.value, 1_000_000)
+  if (!runtimeStore.workspaceFile) {
+    acceptancePreviewLoading.value = false
+  }
+}
+
+function closeAcceptanceFilePreview() {
+  acceptancePreviewLoading.value = false
+  runtimeStore.workspaceFile = null
 }
 
 function canStartTask(task: CollaborationTaskView): boolean {
@@ -650,6 +685,16 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
 
 .acceptance-workspace-explorer {
   height: 320px;
+}
+
+.acceptance-workspace-loading {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--app-space-sm);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-sm);
 }
 
 .activity-list {

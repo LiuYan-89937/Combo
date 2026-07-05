@@ -47,71 +47,13 @@ export function factorySessionSnapshotView(
       activeTurn: restored.activeTurn,
     }
   }
-  const messages = Array.isArray(snapshot.messages)
-    ? snapshot.messages
-    : Array.isArray(snapshot.transcript)
-      ? snapshot.transcript
-      : []
-
-  const transcript: TranscriptItem[] = []
-  const turnsByIndex = new Map<string, ConversationTurn>()
-
-  messages.forEach((message: any, index: number) => {
-    const role = message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user'
-    const turnKey = String(message.turn_index ?? Math.floor(index / 2) + 1)
-    const item: TranscriptItem = {
-      id: `restored-${turnKey}-${role}-${index}`,
-      role,
-      content: String(message.content || ''),
-      timestamp: String(message.created_at || message.timestamp || session.updated_at || new Date().toISOString()),
-      attachments: role === 'user' ? transcriptAttachmentViews(message.attachments) : [],
-      reasoning: restoredReasoningView(message),
-      metadata: {
-        restored: true,
-        mode: restoredMode,
-        package_id: restoredPackageId,
-      },
-    }
-    if (!item.content.trim()) return
-    transcript.push(item)
-    if (!turnsByIndex.has(turnKey)) {
-      const status = normalizeTurnStatus(message.status, 'completed')
-      turnsByIndex.set(turnKey, {
-        id: `restored-turn-${turnKey}`,
-        requestId: stringOrNull(message.request_id),
-        status,
-        userMessage: null,
-        assistantMessages: [],
-        tools: [],
-        startedAt: item.timestamp,
-        completedAt: isActiveTurnStatus(status) ? null : item.timestamp,
-        errorMessage: null,
-        metadata: {
-          restored: true,
-          mode: restoredMode,
-          package_id: restoredPackageId,
-        },
-      })
-    }
-    const turn = turnsByIndex.get(turnKey)!
-    if (role === 'user' && !turn.userMessage) {
-      turn.userMessage = item
-    } else if (role === 'assistant') {
-      turn.assistantMessages.push(item)
-    }
-    if (!isActiveTurnStatus(turn.status)) {
-      turn.completedAt = item.timestamp
-    }
-  })
-  const conversationTurns = Array.from(turnsByIndex.values())
-
   return {
     restoredMode,
     scope,
-    hasMessages: messages.length > 0,
-    transcript,
-    conversationTurns,
-    activeTurn: activeTurnFrom(conversationTurns),
+    hasMessages: false,
+    transcript: [],
+    conversationTurns: [],
+    activeTurn: null,
   }
 }
 
@@ -121,12 +63,7 @@ export function agentPackageSessionSnapshotView(
 ): AgentPackageSessionSnapshotView {
   const sessionPackageId = packageId || session?.package_id || null
   const rawTurns = Array.isArray(session?.turns) ? session.turns : []
-  const restoredTurns = rawTurns.length > 0
-    ? rawTurns
-    : session?.first_user_input
-      ? [{ index: 1, created_at: session.created_at || session.updated_at, user_input: session.first_user_input }]
-      : []
-  const restored = conversationFromTurns(restoredTurns, {
+  const restored = conversationFromTurns(rawTurns, {
     keyPrefix: `agent-restored-${session.session_id}`,
     mode: 'agent_package',
     packageId: sessionPackageId,
@@ -160,62 +97,114 @@ function conversationFromTurns(rawTurns: any[], context: TurnRestoreContext) {
     const turnIndex = String(turn.index ?? index + 1)
     const createdAt = String(turn.created_at || context.fallbackTimestamp || new Date().toISOString())
     const updatedAt = String(turn.updated_at || createdAt)
-    const finalAnswer = String(turn.final_answer || '').trim()
-    const userInput = String(turn.user_input || '').trim()
+    const turnMessages = Array.isArray(turn.messages) ? turn.messages : []
     const toolActivities = Array.isArray(turn.tool_activities) ? turn.tool_activities : []
-    if (!userInput && !finalAnswer) return
-    const status = normalizeTurnStatus(turn.status, finalAnswer ? 'completed' : 'running')
-    const metadata = {
-      restored: true,
-      mode: context.mode,
-      package_id: context.packageId,
-      agent_session_id: context.agentSessionId,
+    if (turnMessages.length > 0) {
+      restoreTurnMessages({
+        transcript,
+        conversationTurns,
+        rawMessages: turnMessages,
+        turn,
+        turnIndex,
+        context,
+        createdAt,
+        updatedAt,
+        toolActivities,
+      })
+      return
     }
-    const conversationTurn: ConversationTurn = {
-      id: `${context.keyPrefix}-turn-${turnIndex}`,
-      requestId: stringOrNull(turn.request_id),
-      status,
-      userMessage: null,
-      assistantMessages: [],
-      tools: toolActivities,
-      startedAt: createdAt,
-      completedAt: isActiveTurnStatus(status) ? null : updatedAt,
-      errorMessage: null,
-      metadata,
-    }
-
-    if (userInput) {
-      const item: TranscriptItem = {
-        id: `${context.keyPrefix}-${turnIndex}-user`,
-        role: 'user',
-        content: userInput,
-        timestamp: createdAt,
-        attachments: transcriptAttachmentViews(turn.attachments),
-        metadata,
-      }
-      transcript.push(item)
-      conversationTurn.userMessage = item
-    }
-
-    if (finalAnswer) {
-      const item: TranscriptItem = {
-        id: `${context.keyPrefix}-${turnIndex}-assistant`,
-        role: 'assistant',
-        content: finalAnswer,
-        timestamp: updatedAt,
-        reasoning: restoredReasoningView(turn),
-        metadata,
-      }
-      transcript.push(item)
-      conversationTurn.assistantMessages.push(item)
-    }
-
-    conversationTurns.push(conversationTurn)
   })
   return {
     transcript,
     conversationTurns,
     activeTurn: activeTurnFrom(conversationTurns),
+  }
+}
+
+function restoreTurnMessages(options: {
+  transcript: TranscriptItem[]
+  conversationTurns: ConversationTurn[]
+  rawMessages: any[]
+  turn: any
+  turnIndex: string
+  context: TurnRestoreContext
+  createdAt: string
+  updatedAt: string
+  toolActivities: any[]
+}) {
+  const status = normalizeTurnStatus(options.turn.status, 'completed')
+  const metadata = {
+    restored: true,
+    mode: options.context.mode,
+    package_id: options.context.packageId,
+    agent_session_id: options.context.agentSessionId,
+  }
+  const conversationTurn: ConversationTurn = {
+    id: `${options.context.keyPrefix}-turn-${options.turnIndex}`,
+    requestId: stringOrNull(options.turn.request_id),
+    status,
+    userMessage: null,
+    assistantMessages: [],
+    tools: options.toolActivities,
+    startedAt: options.createdAt,
+    completedAt: isActiveTurnStatus(status) ? null : options.updatedAt,
+    errorMessage: null,
+    metadata,
+  }
+  for (const rawMessage of options.rawMessages) {
+    const item = transcriptItemFromPartMessage(rawMessage, {
+      fallbackId: `${options.context.keyPrefix}-${options.turnIndex}-${options.transcript.length}`,
+      fallbackTimestamp: rawMessage?.timestamp || options.updatedAt,
+      metadata,
+    })
+    if (!item) continue
+    options.transcript.push(item)
+    if (item.role === 'user' && !conversationTurn.userMessage) {
+      conversationTurn.userMessage = item
+    } else if (item.role === 'assistant') {
+      conversationTurn.assistantMessages.push(item)
+    }
+  }
+  options.conversationTurns.push(conversationTurn)
+}
+
+function transcriptItemFromPartMessage(
+  rawMessage: any,
+  options: {
+    fallbackId: string
+    fallbackTimestamp: string
+    metadata: Record<string, any>
+  },
+): TranscriptItem | null {
+  if (!rawMessage || typeof rawMessage !== 'object') return null
+  const role = rawMessage.role === 'assistant' ? 'assistant' : rawMessage.role === 'system' ? 'system' : 'user'
+  const parts = Array.isArray(rawMessage.parts) ? rawMessage.parts : []
+  if (parts.length === 0) return null
+  const timestamp = String(rawMessage.timestamp || options.fallbackTimestamp || new Date().toISOString())
+  const content = parts
+    .filter((part: any) => part?.type === 'text')
+    .map((part: any) => String(part.text || ''))
+    .join('')
+  const reasoning = parts.find((part: any) => part?.type === 'reasoning')
+  const attachments = parts
+    .filter((part: any) => part?.type === 'attachment' && part.attachment)
+    .map((part: any) => part.attachment)
+  return {
+    id: String(rawMessage.id || options.fallbackId),
+    role,
+    content,
+    timestamp,
+    status: rawMessage.status || 'completed',
+    parts,
+    attachments,
+    reasoning: reasoning?.text
+      ? {
+          content: String(reasoning.text),
+          active: reasoning.status === 'streaming',
+          completedAt: reasoning.status === 'streaming' ? null : reasoning.updatedAt || timestamp,
+        }
+      : undefined,
+    metadata: options.metadata,
   }
 }
 
@@ -244,32 +233,6 @@ function activeTurnFrom(turns: ConversationTurn[]): ConversationTurn | null {
 function stringOrNull(value: any): string | null {
   const text = String(value || '').trim()
   return text || null
-}
-
-function restoredReasoningView(value: any) {
-  const content = String(value?.reasoning_content || value?.reasoningContent || '').trim()
-  if (!content) return undefined
-  return {
-    content,
-    active: false,
-    completedAt: value?.updated_at || value?.created_at || value?.timestamp || null,
-  }
-}
-
-function transcriptAttachmentViews(value: any): TranscriptItem['attachments'] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item) => item && typeof item === 'object')
-    .map((item) => {
-      const kind: 'file' | 'text' | 'url' = item.kind === 'url' ? 'url' : item.kind === 'text' ? 'text' : 'file'
-      return {
-        kind,
-        name: String(item.name || item.display_name || item.attachment_id || '').trim(),
-        source_kind: item.source_kind ? String(item.source_kind) : undefined,
-        mime_type: item.mime_type ? String(item.mime_type) : undefined,
-      }
-    })
-    .filter((item) => item.name.length > 0)
 }
 
 function contextWindowFromSession(session: any): ContextWindowView | null {

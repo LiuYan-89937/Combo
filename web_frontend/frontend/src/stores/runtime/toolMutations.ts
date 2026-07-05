@@ -1,6 +1,7 @@
 import type { FactoryFrontendEvent, RuntimeViewState, ToolActivity } from '@/types/protocol'
 import {
   upsertToolActivityFromEvent,
+  upsertToolMessagePart,
   upsertTurnTool,
 } from './conversationMutations'
 import { isBackgroundEvent } from './eventUtils'
@@ -57,6 +58,7 @@ export function applyToolApprovalResolved(state: ToolMutationState, event: Facto
     if (matched.length > 0) {
       matched.forEach((tool) => resolveApprovalTool(tool, event, Boolean(approved)))
       matched.forEach((tool) => upsertTurnTool(state, tool))
+      matched.forEach((tool) => upsertToolMessagePart(state, tool))
       return
     }
   }
@@ -65,6 +67,7 @@ export function applyToolApprovalResolved(state: ToolMutationState, event: Facto
   if (pendingTools.length > 0) {
     pendingTools.forEach((tool) => resolveApprovalTool(tool, event, Boolean(approved)))
     pendingTools.forEach((tool) => upsertTurnTool(state, tool))
+    pendingTools.forEach((tool) => upsertToolMessagePart(state, tool))
     return
   }
 
@@ -73,6 +76,7 @@ export function applyToolApprovalResolved(state: ToolMutationState, event: Facto
     .forEach((tool) => {
       resolveApprovalTool(tool, event, Boolean(approved))
       upsertTurnTool(state, tool)
+      upsertToolMessagePart(state, tool)
     })
 }
 

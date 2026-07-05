@@ -13,7 +13,7 @@ from agent_factory.paths import factory_artifact_path, resolve_project_path
 
 
 SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
-DEFAULT_APPROVAL_MODE = "user_controlled"
+DEFAULT_APPROVAL_MODE = "main_agent_delegated"
 APPROVAL_MODES = {"user_controlled", "main_agent_delegated"}
 SESSION_STATUSES = {"draft", "running", "completed", "failed", "cancelled"}
 TERMINAL_SESSION_STATUSES = {"completed", "failed", "cancelled"}
@@ -35,6 +35,8 @@ TASK_STATUSES = {
 READY_TO_START_STATUSES = {"assigned", "queued", "revision_requested"}
 DEPENDENCY_SATISFIED_TASK_STATUSES = {"completed"}
 RECOVERABLE_RUNNING_TASK_STATUSES = {"accepted", "planning", "working"}
+ACTIVE_WORKER_TASK_STATUSES = {"accepted", "planning", "working"}
+MAIN_AGENT_ATTENTION_TASK_STATUSES = {"submitted", "blocked", "failed"}
 SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
@@ -68,6 +70,7 @@ class CollaborationStore:
         return [
             session for session in sessions
             if self.ready_tasks(str(session.get("collaboration_id") or ""))
+            or self.main_agent_attention_tasks(str(session.get("collaboration_id") or ""))
             or self.list_active_manufacturing_requests(str(session.get("collaboration_id") or ""))
         ]
 
@@ -818,6 +821,71 @@ class CollaborationStore:
 
     def ready_tasks(self, collaboration_id: str) -> list[dict[str, Any]]:
         session = self.get_session(collaboration_id)
+        return self._ready_tasks_from_session(session)
+
+    def active_worker_task_count(self, collaboration_id: str) -> int:
+        session = self.get_session(collaboration_id)
+        return sum(
+            1
+            for task in session.get("tasks") or []
+            if str(task.get("status") or "") in ACTIVE_WORKER_TASK_STATUSES
+        )
+
+    def main_agent_attention_tasks(self, collaboration_id: str) -> list[dict[str, Any]]:
+        session = self.get_session(collaboration_id)
+        return [
+            task for task in session.get("tasks") or []
+            if str(task.get("status") or "") in MAIN_AGENT_ATTENTION_TASK_STATUSES
+        ]
+
+    def claim_ready_tasks(self, collaboration_id: str, *, limit: int) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        session = self.get_session(collaboration_id)
+        selected = self._ready_tasks_from_session(session)[:limit]
+        if not selected:
+            return []
+        now = utc_now_text()
+        selected_ids = [str(task.get("task_id") or "") for task in selected if task.get("task_id")]
+        with self._connect() as conn:
+            for task_id in selected_ids:
+                conn.execute(
+                    """
+                    update collaboration_tasks
+                    set status = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
+                    where collaboration_id = ? and task_id = ? and status in (?, ?, ?)
+                    """,
+                    (
+                        "accepted",
+                        "任务已被协作调度器领取，准备启动 worker。",
+                        json_dumps({"runtime_status": "claimed"}),
+                        now,
+                        collaboration_id,
+                        task_id,
+                        *sorted(READY_TO_START_STATUSES),
+                    ),
+                )
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=next(
+                        (task.get("assignee_package_id") for task in selected if str(task.get("task_id") or "") == task_id),
+                        None,
+                    ),
+                    message_kind="progress",
+                    content="任务已被协作调度器领取，准备启动 worker。",
+                    task_id=task_id,
+                    event_ref=f"claim:{task_id}:{now}",
+                    created_at=now,
+                )
+            self._mark_session_running_conn(conn, collaboration_id, now)
+        refreshed = self.get_session(collaboration_id)
+        tasks = refreshed.get("tasks") if isinstance(refreshed.get("tasks"), list) else []
+        by_id = {str(task.get("task_id") or ""): task for task in tasks}
+        return [by_id[task_id] for task_id in selected_ids if task_id in by_id]
+
+    def _ready_tasks_from_session(self, session: dict[str, Any]) -> list[dict[str, Any]]:
         tasks = session.get("tasks") if isinstance(session.get("tasks"), list) else []
         by_id = {str(task.get("task_id")): task for task in tasks if task.get("task_id")}
         ready: list[dict[str, Any]] = []

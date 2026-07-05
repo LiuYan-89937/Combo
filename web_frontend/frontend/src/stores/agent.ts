@@ -114,6 +114,10 @@ export interface AgentPackageView {
 export interface AgentSessionView {
   session_id: string
   package_id: string
+  session_kind?: string | null
+  collaboration_id?: string | null
+  collaboration_task_id?: string | null
+  visible_in_agent_session_list?: boolean | null
   display_title: string | null
   first_user_input: string | null
   turn_count: number

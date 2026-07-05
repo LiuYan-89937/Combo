@@ -415,6 +415,7 @@ class RuntimeEventNormalizer:
             "model_message_completed",
         }:
             frontend_payload.setdefault("visible_to_user", self._model_message_visible_to_user(node_id))
+            frontend_payload = _with_model_message_part_payload(event_type, frontend_payload)
             self._record_model_stream_event(event_type, node_id=node_id, payload=frontend_payload)
         self.runtime_event(
             event_type,  # type: ignore[arg-type]
@@ -426,6 +427,16 @@ class RuntimeEventNormalizer:
             message=_optional_str(payload.get("message")),
             payload=frontend_payload,
         )
+        if event_type in {
+            "model_reasoning_delta",
+            "model_reasoning_completed",
+            "model_stream_delta",
+            "model_message_completed",
+        }:
+            stream_id = str(frontend_payload.get("stream_id") or "").strip()
+            stream = self.model_streams.get(stream_id)
+            if stream is not None:
+                self._emit_message_event_from_model_event(event_type, stream=stream, payload=frontend_payload)
 
     def _emit_runtime_render_event(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -635,6 +646,7 @@ class RuntimeEventNormalizer:
                 "model_reasoning_delta",
                 stream=stream,
                 payload={
+                    **_message_part_payload(stream.stream_id, "reasoning", status="streaming"),
                     "delta": reasoning_content,
                     "content_mode": "delta",
                 },
@@ -648,6 +660,7 @@ class RuntimeEventNormalizer:
                     "model_stream_delta",
                     stream=stream,
                     payload={
+                        **_message_part_payload(stream.stream_id, "text", status="streaming"),
                         "delta": content,
                         "content_mode": "delta",
                     },
@@ -657,6 +670,7 @@ class RuntimeEventNormalizer:
             "model_message_completed",
             stream=stream,
             payload={
+                **_message_part_payload(stream.stream_id, "text", status="completed"),
                 "content": content,
                 "content_mode": "snapshot",
                 "completion_reason": "message_stream_completed",
@@ -704,6 +718,7 @@ class RuntimeEventNormalizer:
             return
         stream_id = uuid.uuid4().hex
         payload = {
+            **_message_part_payload(stream_id, "text", status="completed"),
             "stream_id": stream_id,
             "content": text,
             "content_mode": "snapshot",
@@ -711,6 +726,20 @@ class RuntimeEventNormalizer:
             "completion_inferred": True,
             "visible_to_user": self._model_message_visible_to_user(node_id),
         }
+        if payload["visible_to_user"]:
+            self.runtime_event(
+                "message_started",
+                node_id=node_id,
+                stage_id=self.current_stage_id,
+                span_id=uuid.uuid4().hex,
+                parent_span_id=self._node_span(node_id, self.current_stage_id),
+                payload={
+                    "message_id": stream_id,
+                    "stream_id": stream_id,
+                    "role": "assistant",
+                    "status": "streaming",
+                },
+            )
         self._record_model_stream_event("model_message_completed", node_id=node_id, payload=payload)
         self.runtime_event(
             "model_message_completed",
@@ -718,6 +747,11 @@ class RuntimeEventNormalizer:
             stage_id=self.current_stage_id,
             span_id=uuid.uuid4().hex,
             parent_span_id=self._node_span(node_id, self.current_stage_id),
+            payload=payload,
+        )
+        self._emit_message_event_from_model_event(
+            "model_message_completed",
+            stream=self.model_streams[stream_id],
             payload=payload,
         )
 
@@ -774,6 +808,20 @@ class RuntimeEventNormalizer:
                 "visible_to_user": self._model_message_visible_to_user(node_id),
             },
         )
+        if self._model_message_visible_to_user(node_id):
+            self.runtime_event(
+                "message_started",
+                node_id=node_id,
+                stage_id=self.current_stage_id,
+                span_id=stream.span_id,
+                parent_span_id=stream.parent_span_id,
+                payload={
+                    "message_id": stream.stream_id,
+                    "stream_id": stream.stream_id,
+                    "role": "assistant",
+                    "status": "streaming",
+                },
+            )
         return stream
 
     def _emit_recorded_model_event(
@@ -797,6 +845,112 @@ class RuntimeEventNormalizer:
             parent_span_id=stream.parent_span_id,
             payload=event_payload,
         )
+        self._emit_message_event_from_model_event(event_type, stream=stream, payload=event_payload)
+
+    def _emit_message_event_from_model_event(
+        self,
+        event_type: str,
+        *,
+        stream: ModelStreamState,
+        payload: dict[str, Any],
+    ) -> None:
+        if payload.get("visible_to_user") is False:
+            return
+        if not self._model_message_visible_to_user(stream.node_id):
+            return
+        part_type = str(payload.get("part_type") or "")
+        part_id = str(payload.get("part_id") or "")
+        message_id = str(payload.get("message_id") or stream.stream_id)
+        if not part_type or not part_id or not message_id:
+            return
+        if event_type in {"model_reasoning_delta", "model_stream_delta"}:
+            self.runtime_event(
+                "message_part_delta",
+                node_id=stream.node_id,
+                stage_id=self.current_stage_id,
+                span_id=stream.span_id,
+                parent_span_id=stream.parent_span_id,
+                payload={
+                    "message_id": message_id,
+                    "stream_id": stream.stream_id,
+                    "part_id": part_id,
+                    "part_type": part_type,
+                    "part_status": "streaming",
+                    "format": "markdown",
+                    "delta": str(payload.get("delta") or ""),
+                },
+            )
+            return
+        if event_type == "model_reasoning_completed":
+            content = str(payload.get("content") or payload.get("reasoning_content") or "")
+            self.runtime_event(
+                "message_part_completed",
+                node_id=stream.node_id,
+                stage_id=self.current_stage_id,
+                span_id=stream.span_id,
+                parent_span_id=stream.parent_span_id,
+                payload={
+                    "message_id": message_id,
+                    "stream_id": stream.stream_id,
+                    "part_id": part_id,
+                    "part_type": "reasoning",
+                    "part_status": "completed",
+                    "content": content,
+                },
+            )
+            return
+        if event_type == "model_message_completed":
+            content = str(payload.get("content") or "")
+            reasoning_content = str(payload.get("reasoning_content") or stream.reasoning_content or "")
+            if not content and not reasoning_content.strip():
+                return
+            if reasoning_content.strip():
+                reasoning_part = _message_part_payload(stream.stream_id, "reasoning", status="completed")
+                self.runtime_event(
+                    "message_part_completed",
+                    node_id=stream.node_id,
+                    stage_id=self.current_stage_id,
+                    span_id=stream.span_id,
+                    parent_span_id=stream.parent_span_id,
+                    payload={
+                        "message_id": message_id,
+                        "stream_id": stream.stream_id,
+                        "part_id": reasoning_part["part_id"],
+                        "part_type": "reasoning",
+                        "part_status": "completed",
+                        "content": reasoning_content,
+                    },
+                )
+            if content:
+                self.runtime_event(
+                    "message_part_completed",
+                    node_id=stream.node_id,
+                    stage_id=self.current_stage_id,
+                    span_id=stream.span_id,
+                    parent_span_id=stream.parent_span_id,
+                    payload={
+                        "message_id": message_id,
+                        "stream_id": stream.stream_id,
+                        "part_id": part_id,
+                        "part_type": "text",
+                        "part_status": "completed",
+                        "format": "markdown",
+                        "content": content,
+                    },
+                )
+            self.runtime_event(
+                "message_completed",
+                node_id=stream.node_id,
+                stage_id=self.current_stage_id,
+                span_id=stream.span_id,
+                parent_span_id=stream.parent_span_id,
+                payload={
+                    "message_id": message_id,
+                    "stream_id": stream.stream_id,
+                    "status": "completed",
+                    "completion_reason": payload.get("completion_reason"),
+                },
+            )
 
     def _complete_model_stream(self, stream: ModelStreamState, *, reason: str) -> None:
         if stream.completed:
@@ -807,6 +961,7 @@ class RuntimeEventNormalizer:
         stream.completed = True
         if stream.reasoning_content.strip():
             reasoning_payload = {
+                **_message_part_payload(stream.stream_id, "reasoning", status="completed"),
                 "stream_id": stream.stream_id,
                 "content": stream.reasoning_content,
                 "content_mode": "snapshot",
@@ -827,7 +982,13 @@ class RuntimeEventNormalizer:
                 parent_span_id=stream.parent_span_id,
                 payload=reasoning_payload,
             )
+            self._emit_message_event_from_model_event(
+                "model_reasoning_completed",
+                stream=stream,
+                payload=reasoning_payload,
+            )
         message_payload = {
+            **_message_part_payload(stream.stream_id, "text", status="completed"),
             "stream_id": stream.stream_id,
             "content": stream.content,
             "content_mode": "snapshot",
@@ -843,6 +1004,11 @@ class RuntimeEventNormalizer:
             stage_id=self.current_stage_id,
             span_id=stream.span_id,
             parent_span_id=stream.parent_span_id,
+            payload=message_payload,
+        )
+        self._emit_message_event_from_model_event(
+            "model_message_completed",
+            stream=stream,
             payload=message_payload,
         )
 
@@ -1502,6 +1668,28 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+def _message_part_payload(stream_id: str, part_type: str, *, status: str) -> dict[str, Any]:
+    return {
+        "message_id": stream_id,
+        "part_id": f"{stream_id}:{part_type}",
+        "part_type": part_type,
+        "part_status": status,
+    }
+
+
+def _with_model_message_part_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    stream_id = str(payload.get("stream_id") or "").strip()
+    if not stream_id or payload.get("part_id") or payload.get("part_type"):
+        return payload
+    if event_type in {"model_reasoning_delta", "model_reasoning_completed"}:
+        status = "streaming" if event_type == "model_reasoning_delta" else "completed"
+        return {**_message_part_payload(stream_id, "reasoning", status=status), **payload}
+    if event_type in {"model_stream_delta", "model_message_completed"}:
+        status = "streaming" if event_type == "model_stream_delta" else "completed"
+        return {**_message_part_payload(stream_id, "text", status=status), **payload}
+    return payload
 
 
 def _is_tool_approval_resume_payload(payload: dict[str, Any]) -> bool:

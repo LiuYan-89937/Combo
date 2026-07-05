@@ -34,6 +34,7 @@ from agent_factory.runtime_attachments import (
     time_named_attachment_scope,
 )
 from agent_factory.runtime_kernel.persistence import delete_checkpoint_thread
+from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +178,15 @@ class CreateAgentRuntime:
             "final_answer": final_answer,
             "status": "completed" if values.get("done") else "running",
         }
+        turn["messages"] = build_chat_turn_messages(
+            index=turn["index"],
+            created_at=turn["created_at"],
+            updated_at=turn["updated_at"],
+            user_input=turn.get("user_input"),
+            attachments=turn.get("attachments"),
+            final_answer=turn.get("final_answer"),
+            status=turn.get("status"),
+        )
         return {
             "session_id": session_id,
             "graph_kind": graph_kind,

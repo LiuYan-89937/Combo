@@ -5,10 +5,7 @@ from typing import Any
 
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import (
-    visible_model_message_content,
-    visible_model_reasoning_content,
-)
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import visible_message_part_content
 
 
 @dataclass(slots=True)
@@ -31,7 +28,7 @@ class CollaborationWorkerEventRecorder:
             self._seen_progress_keys.add(progress_key)
         self.store.record_message(
             self.collaboration_id,
-            speaker_type="worker_agent" if item.event_type.startswith("model_") else "system",
+            speaker_type="worker_agent" if item.event_type.startswith("message_") else "system",
             speaker_package_id=self.package_id,
             message_kind=_message_kind(item),
             content=content,
@@ -52,13 +49,13 @@ def _message_for_event(item: FactoryFrontendEvent, *, max_output_chars: int) -> 
         return _tool_message(item)
     if event_type == "tool_approval_requested":
         return _tool_approval_message(item)
-    if event_type == "model_reasoning_completed":
-        reasoning = visible_model_reasoning_content(item)
+    if event_type == "message_part_completed" and payload.get("part_type") == "reasoning":
+        reasoning = visible_message_part_content(item)
         if not reasoning:
             return None
         return "思考摘要：\n" + _truncate(reasoning, max_output_chars)
-    if event_type == "model_message_completed":
-        content = visible_model_message_content(item)
+    if event_type == "message_part_completed" and payload.get("part_type") == "text":
+        content = visible_message_part_content(item)
         if not content:
             return None
         return "阶段输出：\n" + _truncate(content, max_output_chars)
@@ -111,7 +108,7 @@ def _message_kind(item: FactoryFrontendEvent) -> str:
         return "tool"
     if item.event_type == "tool_approval_requested":
         return "approval"
-    if item.event_type.startswith("model_"):
+    if item.event_type.startswith("message_"):
         return "worker_output"
     if item.event_type == "plan_updated":
         return "plan"
@@ -119,7 +116,7 @@ def _message_kind(item: FactoryFrontendEvent) -> str:
 
 
 def _progress_key(item: FactoryFrontendEvent, content: str) -> str | None:
-    if item.event_type not in {"node_progress", "model_message_completed", "model_reasoning_completed"}:
+    if item.event_type not in {"node_progress", "message_part_completed"}:
         return None
     return f"{item.event_type}:{item.node_id or ''}:{content}"
 

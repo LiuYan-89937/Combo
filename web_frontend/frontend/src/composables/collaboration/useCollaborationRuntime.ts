@@ -10,6 +10,7 @@ import {
   agentPackageConversationScope,
   conversationScopeForMode,
 } from '@/stores/runtime/scopes'
+import { messageReasoning, messageText } from '@/stores/runtime/messageParts'
 import type { RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
 
 export function useCollaborationRuntime() {
@@ -196,9 +197,10 @@ function activeVisibleAssistantOutput(requestId: string): Record<string, any> | 
   const turn = runtimeStore.conversationTurns.find((item) => item.requestId === requestId)
   const message = turn?.assistantMessages?.[turn.assistantMessages.length - 1]
   if (!message) return null
+  const reasoning = messageReasoning(message)
   return {
-    content: message.content || '',
-    reasoning_content: message.reasoning?.content || '',
+    content: messageText(message),
+    reasoning_content: reasoning?.content || '',
     stream_id: message.streamId || null,
   }
 }

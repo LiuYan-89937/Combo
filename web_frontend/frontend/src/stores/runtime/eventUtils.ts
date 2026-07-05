@@ -4,6 +4,7 @@ const REQUEST_SCOPED_PREFIXES = [
   'run_',
   'node_',
   'stage_',
+  'message_',
   'model_',
   'tool_',
   'plan_',

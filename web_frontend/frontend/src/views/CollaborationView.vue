@@ -22,22 +22,10 @@
 
             <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
               <MessageItem
-                v-if="item.kind === 'message'"
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
               />
-              <ToolActivityCard
-                v-else
-                :tool="item.tool"
-              />
             </template>
-
-            <MessageItem
-              v-for="message in untrackedActiveStreamMessages"
-              :key="message.id"
-              :message="message"
-              streaming
-            />
 
             <MessageItem
               v-for="message in thinkingMessages"
@@ -88,7 +76,6 @@ import { useCollaborationRuntime } from '@/composables/collaboration/useCollabor
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
-import ToolActivityCard from '@/components/chat/ToolActivityCard.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 
@@ -110,7 +97,6 @@ const {
   sendMainAgentMessage,
   thinkingMessages,
   timelineItems,
-  untrackedActiveStreamMessages,
 } = useCollaborationRuntime()
 
 onMounted(() => {
@@ -126,32 +112,53 @@ async function sendMessage(message: string, attachments: RuntimeAttachmentInput[
   if (store.activeSession?.status === 'draft') {
     await store.updateSession({ status: 'running' })
   }
-  scrollToBottom()
+  scrollToBottom('smooth')
 }
 
 function cancelRequest() {
   cancelMainAgentRequest()
 }
 
-function scrollToBottom() {
+function scrollToBottom(behavior: ScrollBehavior = 'auto') {
   nextTick(() => {
-    scrollbarRef.value?.scrollTo({ position: 'bottom', behavior: 'smooth' })
+    scrollbarRef.value?.scrollTo({ position: 'bottom', behavior })
+  })
+}
+
+function scrollContainer(): HTMLElement | null {
+  const scrollbar = scrollbarRef.value as any
+  return scrollbar?.scrollbarInstRef?.containerRef
+    || scrollbar?.containerRef
+    || scrollbar?.$el?.querySelector?.('.n-scrollbar-container')
+    || null
+}
+
+function isNearBottom(): boolean {
+  const container = scrollContainer()
+  if (!container) return true
+  return container.scrollHeight - container.scrollTop - container.clientHeight < 96
+}
+
+function followBottomIfNeeded() {
+  const shouldFollow = isNearBottom()
+  nextTick(() => {
+    if (shouldFollow) scrollToBottom()
   })
 }
 
 watch(
   () => runtimeStore.transcript.length,
-  scrollToBottom,
+  followBottomIfNeeded,
 )
 
 watch(
   () => runtimeStore.tools.map((tool) => `${tool.activityKey}:${tool.status}:${tool.timestamp}`).join('|'),
-  scrollToBottom,
+  followBottomIfNeeded,
 )
 
 watch(
   () => activeStreamContentKey.value,
-  scrollToBottom,
+  followBottomIfNeeded,
 )
 </script>
 

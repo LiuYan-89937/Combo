@@ -57,6 +57,12 @@ import {
   applyModelStreamDelta,
 } from './runtime/modelMutations'
 import {
+  applyMessageCompleted,
+  applyMessagePartCompleted,
+  applyMessagePartDelta,
+  applyMessageStarted,
+} from './runtime/messageMutations'
+import {
   agentPackageConversationScope,
   agentPackageScopeInfoFromEvent,
   conversationScopeForMode,
@@ -68,6 +74,13 @@ import {
   agentPackageSessionSnapshotView,
   factorySessionSnapshotView,
 } from './runtime/sessionSnapshots'
+import {
+  attachmentPart,
+  errorPart,
+  messageReasoning,
+  messageText,
+  textPart,
+} from './runtime/messageParts'
 import {
   applyExtensionsEvent,
   applyWorkspaceEvent,
@@ -182,9 +195,10 @@ export const useRuntimeStore = defineStore('runtime', {
       const turn = state.conversationTurns.find((item) => item.requestId === state.activeRequestId)
       const message = turn?.assistantMessages?.[turn.assistantMessages.length - 1]
       if (!message) return null
+      const reasoning = messageReasoning(message)
       return {
-        content: message.content || '',
-        reasoning_content: message.reasoning?.content || '',
+        content: messageText(message),
+        reasoning_content: reasoning?.content || '',
         stream_id: message.streamId || null,
       }
     },
@@ -360,6 +374,17 @@ export const useRuntimeStore = defineStore('runtime', {
       // Plan
       else if (type === 'plan_updated') {
         this._handlePlanUpdated(event)
+      }
+
+      // Message parts
+      else if (type === 'message_started') {
+        applyMessageStarted(this, event)
+      } else if (type === 'message_part_delta') {
+        applyMessagePartDelta(this, event)
+      } else if (type === 'message_part_completed') {
+        applyMessagePartCompleted(this, event)
+      } else if (type === 'message_completed') {
+        applyMessageCompleted(this, event)
       }
 
       // Model streams
@@ -621,6 +646,10 @@ export const useRuntimeStore = defineStore('runtime', {
         role: 'system',
         content: errorMsg,
         timestamp: event.timestamp,
+        status: 'failed',
+        parts: [
+          errorPart(`${event.event_id}:error`, errorMsg, event.payload || {}, event.timestamp),
+        ],
         metadata: {
           where: event.payload?.where,
           why: event.payload?.why,
@@ -672,6 +701,14 @@ export const useRuntimeStore = defineStore('runtime', {
           role: 'assistant',
           content: message,
           timestamp: event.timestamp,
+          status: 'completed',
+          parts: [
+            textPart(`${event.event_id}:text`, message, {
+              format: 'markdown',
+              status: 'completed',
+              timestamp: event.timestamp,
+            }),
+          ],
           metadata: {
             interrupt: true,
             interrupt_type: interruptType(event),
@@ -844,6 +881,10 @@ export const useRuntimeStore = defineStore('runtime', {
             role: 'system',
             content: errorMessage,
             timestamp: event.timestamp,
+            status: 'failed',
+            parts: [
+              errorPart(`${event.event_id}:error`, errorMessage, event.payload || {}, event.timestamp),
+            ],
             metadata: {
               where: event.payload?.where,
               why: event.payload?.why,
@@ -1255,11 +1296,21 @@ export const useRuntimeStore = defineStore('runtime', {
       attachments: TranscriptItem['attachments'] = [],
     ) {
       const timestamp = new Date().toISOString()
+      const messageId = `user-${Date.now()}`
       const item: TranscriptItem = {
-        id: `user-${Date.now()}`,
+        id: messageId,
         role: 'user',
         content,
         timestamp,
+        status: 'completed',
+        parts: [
+          textPart(`${messageId}:text`, content, {
+            format: 'plain',
+            status: 'completed',
+            timestamp,
+          }),
+          ...attachments.map((attachment, index) => attachmentPart(`${messageId}:attachment:${index}`, attachment, timestamp)),
+        ],
         attachments,
         metadata,
       }

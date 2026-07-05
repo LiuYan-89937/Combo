@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
-from agent_factory.runtime_attachments import transcript_attachment_views
 
 
 @dataclass(slots=True)
@@ -13,37 +12,22 @@ class VisibleAssistantOutputAccumulator:
     reasoning_content: str | None = None
 
     def accept(self, item: FactoryFrontendEvent) -> None:
-        if item.event_type == "model_reasoning_completed":
-            content = visible_model_reasoning_content(item)
+        if item.event_type == "message_part_completed" and item.payload.get("part_type") == "reasoning":
+            content = visible_message_part_content(item)
             if content:
                 self.reasoning_content = content
             return
-        if item.event_type != "model_message_completed":
+        if item.event_type != "message_part_completed" or item.payload.get("part_type") != "text":
             return
-        content = visible_model_message_content(item)
+        content = visible_message_part_content(item)
         if content:
             self.content = content
-            self.reasoning_content = visible_model_reasoning_content(item)
 
 
-def visible_model_message_content(item: FactoryFrontendEvent) -> str | None:
+def visible_message_part_content(item: FactoryFrontendEvent) -> str | None:
     if not isinstance(item.payload, dict):
         return None
-    if item.payload.get("visible_to_user") is False:
-        return None
-    content = str(item.payload.get("content") or "").strip()
-    return content or None
-
-
-def visible_model_reasoning_content(item: FactoryFrontendEvent) -> str | None:
-    if not isinstance(item.payload, dict):
-        return None
-    if item.payload.get("visible_to_user") is False:
-        return None
-    if item.event_type == "model_reasoning_completed":
-        content = str(item.payload.get("content") or item.payload.get("reasoning_content") or "").strip()
-        return content or None
-    content = str(item.payload.get("reasoning_content") or "").strip()
+    content = str(item.payload.get("content") or item.payload.get("text") or "").strip()
     return content or None
 
 
@@ -84,37 +68,9 @@ def _messages_from_session_turns(value: Any) -> list[dict[str, Any]]:
     for index, turn in enumerate(value, start=1):
         if not isinstance(turn, dict):
             continue
-        turn_index = turn.get("index") or index
-        user_input = str(turn.get("user_input") or "").strip()
-        if user_input:
-            attachments = transcript_attachment_views(turn.get("attachments"))
-            messages.append(
-                {
-                    "role": "user",
-                    "content": user_input,
-                    **({"attachments": attachments} if attachments else {}),
-                    "turn_index": turn_index,
-                    "request_id": turn.get("request_id"),
-                    "status": turn.get("status"),
-                    "created_at": turn.get("created_at"),
-                    "updated_at": turn.get("updated_at"),
-                }
-            )
-        final_answer = str(turn.get("final_answer") or "").strip()
-        if final_answer:
-            reasoning_content = str(turn.get("reasoning_content") or "").strip()
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": final_answer,
-                    **({"reasoning_content": reasoning_content} if reasoning_content else {}),
-                    "turn_index": turn_index,
-                    "request_id": turn.get("request_id"),
-                    "status": turn.get("status"),
-                    "created_at": turn.get("updated_at") or turn.get("created_at"),
-                    "updated_at": turn.get("updated_at"),
-                }
-            )
+        turn_messages = turn.get("messages")
+        if isinstance(turn_messages, list):
+            messages.extend(item for item in turn_messages if isinstance(item, dict))
     return messages
 
 

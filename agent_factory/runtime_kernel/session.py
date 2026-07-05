@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.runtime_attachments import normalized_runtime_attachments
+from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
 from agent_factory.trace_system import JSONLTraceStore
 
 
@@ -25,6 +26,7 @@ class AgentSessionTurn(BaseModel):
     reasoning_content: str | None = None
     final_answer: str | None = None
     tool_activities: list[dict[str, Any]] = Field(default_factory=list)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
     status: str | None = None
     trace_ref: dict[str, str] | None = None
 
@@ -217,6 +219,7 @@ class AgentSessionManager:
             turn.status = (status or "").strip() or None
         if trace_ref is not None:
             turn.trace_ref = trace_ref or None
+        turn.messages = _turn_messages(turn)
         turn.updated_at = now
         record.turn_count = len(record.turns)
         self.save(record)
@@ -257,6 +260,7 @@ class AgentSessionManager:
             turn.trace_ref = trace_ref or None
         if tool_activities is not None:
             turn.tool_activities = list(tool_activities)
+        turn.messages = _turn_messages(turn)
         turn.updated_at = _now()
         record.turn_count = len(record.turns)
         self.save(record)
@@ -290,6 +294,20 @@ def _normalize_session_kind(value: str | None) -> str:
     if kind not in allowed:
         raise ValueError(f"unsupported agent session kind: {kind}")
     return kind
+
+
+def _turn_messages(turn: AgentSessionTurn) -> list[dict[str, Any]]:
+    return build_chat_turn_messages(
+        index=turn.index,
+        created_at=turn.created_at,
+        updated_at=turn.updated_at,
+        user_input=turn.user_input,
+        attachments=turn.attachments,
+        reasoning_content=turn.reasoning_content,
+        final_answer=turn.final_answer,
+        tool_activities=turn.tool_activities,
+        status=turn.status,
+    )
 
 
 def _find_turn(turns: list[AgentSessionTurn], *, request_id: str | None) -> AgentSessionTurn | None:

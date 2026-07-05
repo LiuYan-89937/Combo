@@ -116,9 +116,11 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
   }
 }
 
-function cloneTranscriptItem<T extends { reasoning?: any }>(item: T): T {
+function cloneTranscriptItem<T extends { reasoning?: any; parts?: any[]; attachments?: any[] }>(item: T): T {
   return {
     ...item,
+    parts: Array.isArray(item.parts) ? item.parts.map((part) => ({ ...part })) : [],
+    attachments: Array.isArray(item.attachments) ? item.attachments.map((attachment) => ({ ...attachment })) : undefined,
     reasoning: item.reasoning ? { ...item.reasoning } : undefined,
   }
 }
