@@ -342,6 +342,13 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     setActiveSession(session)
   }
 
+  function applySessionSnapshot(session: CollaborationSessionView): void {
+    upsertSession(session)
+    if (activeSession.value?.collaboration_id === session.collaboration_id) {
+      activeSession.value = session
+    }
+  }
+
   function setActiveSession(session: CollaborationSessionView | null): void {
     activeSession.value = session
     if (session?.collaboration_id) {
@@ -387,6 +394,7 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     completeSession,
     deleteSession,
     addUserMessage,
+    applySessionSnapshot,
     createTask,
     updateTask,
     cancelTask,

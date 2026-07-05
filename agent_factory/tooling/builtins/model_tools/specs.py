@@ -22,7 +22,7 @@ def get_model_tool_specs(runtime_tools: Mapping[str, Any] | None) -> list[ToolSp
                 ),
                 entrypoint="agent_factory.tooling.builtins.model_tools.model_tool:run",
                 input_schema=_input_schema(capability),
-                output_schema=_output_schema(),
+                output_schema=_output_schema(capability),
                 resources={"model_tool": f"{MODEL_TOOL_RUNTIME_RESOURCE}.{tool_id}"},
                 risk_level="low",
                 concurrent=True,
@@ -127,7 +127,13 @@ def _input_schema(capability: str) -> dict[str, Any]:
     return {"type": "object", "additionalProperties": True}
 
 
-def _output_schema() -> dict[str, Any]:
+def _output_schema(capability: str) -> dict[str, Any]:
+    if capability in {"image_output", "image_edit"}:
+        return _image_generation_output_schema()
+    return _textual_output_schema()
+
+
+def _textual_output_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": True,
@@ -140,4 +146,22 @@ def _output_schema() -> dict[str, Any]:
             "metadata": {"type": "object", "additionalProperties": True},
         },
         "required": ["capability", "profile_id", "content", "artifacts", "metadata"],
+    }
+
+
+def _image_generation_output_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": True,
+        "properties": {
+            "capability": {"type": "string"},
+            "profile_id": {"type": "string"},
+            "assets": {
+                "type": "array",
+                "items": {"type": "object", "additionalProperties": True},
+                "minItems": 1,
+            },
+            "metadata": {"type": "object", "additionalProperties": True},
+        },
+        "required": ["capability", "profile_id", "assets", "metadata"],
     }

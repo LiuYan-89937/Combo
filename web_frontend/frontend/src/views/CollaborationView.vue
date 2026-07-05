@@ -160,6 +160,7 @@ watch(
   () => activeStreamContentKey.value,
   followBottomIfNeeded,
 )
+
 </script>
 
 <style scoped>

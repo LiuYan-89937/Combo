@@ -67,13 +67,27 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="write",
-        description="在 workspace 边界内创建或覆盖指定文件内容。",
+        description=(
+            "在 workspace 边界内创建或覆盖指定文件内容。"
+            "调用 write 时必须把要写入文件的完整正文放入 content 参数；"
+            "不要先在 assistant 消息里输出正文后只传 path，也不要假设 write 会自动读取上一段回复内容。"
+        ),
+        schema_error_guidance=(
+            "write 调用必须同时提供 path 和 content。content 必须是要写入目标文件的完整文本内容；"
+            "如果你刚刚在消息中生成了报告或文档，请重新调用 write，并把那份完整内容放进 content 字段。"
+        ),
         entrypoint="agent_factory.tooling.builtins.filesystem.write:run",
         input_schema={
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
-                "content": {"type": "string", "description": "完整文件内容。"},
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "要写入文件的完整正文内容。长报告、Markdown 文档、代码或配置都必须完整放在这里；"
+                        "工具不会自动使用 assistant 刚刚输出过的文本。"
+                    ),
+                },
                 "create_dirs": {"type": "boolean", "default": True, "description": "是否创建缺失父目录；默认创建。"},
                 "fallback_reason": {
                     "type": "string",

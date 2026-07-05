@@ -73,11 +73,6 @@ class CollaborationOrchestrator:
                 break
             batch_results = self._start_task_batch(collaboration_id, tasks)
             results.extend(batch_results)
-            if _needs_main_agent_continuation(batch_results):
-                self._run_main_agent_continuation(
-                    collaboration_id,
-                    user_message=_main_agent_continuation_message(batch_results),
-                )
             if remaining is not None:
                 remaining -= len(batch_results)
             if not _has_successful_submission(batch_results):
@@ -106,12 +101,21 @@ class CollaborationOrchestrator:
                 results.append(future.result())
         return results
 
-    def _run_main_agent_continuation(self, collaboration_id: str, *, user_message: str) -> None:
+    def continue_main_agent(self, collaboration_id: str, *, user_message: str, event_ref: str | None = None) -> None:
         session = self.store.get_session(collaboration_id)
         if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
             return
         package_id = str(session.get("main_agent_package_id") or SYSTEM_CHAT_PACKAGE_ID).strip() or SYSTEM_CHAT_PACKAGE_ID
         request_id = f"collab-main-{collaboration_id[:8]}-{uuid4().hex[:8]}"
+        self.store.record_message(
+            collaboration_id,
+            speaker_type="system",
+            speaker_package_id=package_id,
+            message_kind="main_agent_triggered",
+            content="主 Agent 已被协作事件触发，正在处理子任务提交/阻塞/失败状态。",
+            task_id=None,
+            event_ref=event_ref,
+        )
         prompt = build_main_agent_collaboration_prompt(
             user_message=user_message,
             session=session,
@@ -173,7 +177,7 @@ class CollaborationOrchestrator:
                 speaker_type="main_agent",
                 speaker_package_id=package_id,
                 message_kind="progress",
-                content=_short_summary(output.content or "主 Agent 已处理子任务状态更新。"),
+                content=_short_summary(output.content or "主 Agent 已处理协作事件。"),
                 task_id=None,
             )
             return
@@ -182,12 +186,9 @@ class CollaborationOrchestrator:
             speaker_type="system",
             speaker_package_id=package_id,
             message_kind="progress",
-            content=f"主 Agent 处理子任务状态更新失败：{message or status}",
+            content=f"主 Agent 处理协作事件失败：{message or status}",
             task_id=None,
         )
-
-    def continue_main_agent(self, collaboration_id: str, *, user_message: str) -> None:
-        self._run_main_agent_continuation(collaboration_id, user_message=user_message)
 
     def start_task(self, collaboration_id: str, task_id: str) -> CollaborationRunTaskResult:
         session = self.store.get_session(collaboration_id)
@@ -667,10 +668,6 @@ def _one_ready_task_per_assignee(tasks: list[dict[str, Any]]) -> list[dict[str, 
 
 def _has_successful_submission(results: list[CollaborationRunTaskResult]) -> bool:
     return any(result.status in {"submitted", "completed"} for result in results)
-
-
-def _needs_main_agent_continuation(results: list[CollaborationRunTaskResult]) -> bool:
-    return any(result.status in {"submitted", "blocked", "failed"} for result in results)
 
 
 def _main_agent_continuation_message(results: list[CollaborationRunTaskResult]) -> str:

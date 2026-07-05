@@ -110,6 +110,7 @@ class ToolExecutionGateway:
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 errors=input_errors,
+                user_instruction=self.spec.schema_error_guidance or None,
             )
         try:
             tool_resources = self._resolve_resources()

@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 from collections.abc import Callable
+from hashlib import sha256
 from typing import Any
 
 from agent_factory.create_agent.publish_tool import confirm_and_publish
@@ -38,8 +38,6 @@ class CollaborationService:
         self._lock = threading.Lock()
         self._dispatching_sessions: set[str] = set()
         self._manufacturing_requests: set[str] = set()
-        self._last_monitor_at: dict[str, float] = {}
-        self._last_attention_signature: dict[str, str] = {}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -226,7 +224,6 @@ class CollaborationService:
             try:
                 self.process_manufacturing_requests(collaboration_id)
                 self.dispatch_ready(collaboration_id)
-                self.monitor_session(collaboration_id)
             except Exception as exc:
                 self.logger.warning(
                     "Collaboration dispatch failed for %s: %s: %s",
@@ -270,49 +267,6 @@ class CollaborationService:
                 type(exc).__name__,
                 exc,
             )
-
-    def monitor_session(self, collaboration_id: str) -> None:
-        session = self.store.get_session(collaboration_id)
-        if str(session.get("approval_mode") or "") != "main_agent_delegated":
-            return
-        if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
-            return
-        active_tasks = [
-            task for task in session.get("tasks") or []
-            if str(task.get("status") or "") in {"accepted", "planning", "working", "blocked", "submitted"}
-        ]
-        if not active_tasks:
-            return
-        attention_required = any(
-            str(task.get("status") or "") in {"submitted", "blocked", "failed"}
-            for task in active_tasks
-        )
-        now = time.monotonic()
-        if attention_required:
-            signature = _attention_signature(active_tasks)
-            if signature and self._last_attention_signature.get(collaboration_id) == signature:
-                return
-            self._last_attention_signature[collaboration_id] = signature
-        else:
-            interval = _monitor_interval_seconds()
-            last = self._last_monitor_at.get(collaboration_id, 0.0)
-            if now - last < interval:
-                return
-        if not self._claim_session(collaboration_id):
-            return
-        self._last_monitor_at[collaboration_id] = now
-        try:
-            fresh = self.store.get_session(collaboration_id)
-            message = _monitor_message(fresh)
-            if not message:
-                return
-            orchestrator = CollaborationOrchestrator(
-                store=self.store,
-                runtime=self.runtime_factory(),
-            )
-            orchestrator.continue_main_agent(collaboration_id, user_message=message)
-        finally:
-            self._release_session(collaboration_id)
 
     def _claim_session(self, collaboration_id: str) -> bool:
         with self._lock:
@@ -379,21 +333,25 @@ class CollaborationService:
         *,
         fallback_message: str | None = None,
     ) -> None:
-        if not self._claim_session(collaboration_id):
+        if result is not None:
+            user_message = _main_agent_continuation_message_from_result(result)
+            task_id = str(getattr(result, "task_id", "") or "").strip()
+            status = str(getattr(result, "status", "") or "").strip()
+            self._trigger_main_agent_from_event(
+                collaboration_id,
+                user_message=user_message,
+                task_id=task_id or None,
+                event_ref=f"main-agent-trigger:{task_id}:{status}:{sha256(user_message.encode('utf-8')).hexdigest()[:16]}",
+            )
             self.dispatch_soon(collaboration_id)
             return
-        try:
-            if result is not None:
-                user_message = _main_agent_continuation_message_from_result(result)
-            else:
-                user_message = fallback_message or "协作子任务状态已更新，请检查当前任务状态并继续推进。"
-            orchestrator = CollaborationOrchestrator(
-                store=self.store,
-                runtime=self.runtime_factory(),
-            )
-            orchestrator.continue_main_agent(collaboration_id, user_message=user_message)
-        finally:
-            self._release_session(collaboration_id)
+        user_message = fallback_message or "协作子任务状态已更新，请检查当前任务状态并继续推进。"
+        self._trigger_main_agent_from_event(
+            collaboration_id,
+            user_message=user_message,
+            task_id=None,
+            event_ref=None,
+        )
         self.dispatch_soon(collaboration_id)
 
     def _release_completed_worker_runtime(self, collaboration_id: str, task_id: str) -> None:
@@ -539,14 +497,52 @@ class CollaborationService:
         )
 
     def _continue_after_manufacturing(self, collaboration_id: str, *, user_message: str) -> None:
+        self._trigger_main_agent_from_event(
+            collaboration_id,
+            user_message=user_message,
+            task_id=None,
+            event_ref=None,
+        )
+
+    def _trigger_main_agent_from_event(
+        self,
+        collaboration_id: str,
+        *,
+        user_message: str,
+        task_id: str | None,
+        event_ref: str | None,
+    ) -> None:
         if not self._claim_session(collaboration_id):
+            self.dispatch_soon(collaboration_id)
             return
         try:
+            self.store.record_message(
+                collaboration_id,
+                speaker_type="system",
+                speaker_package_id=None,
+                message_kind="collaboration_event",
+                content="协作事件已产生：子 Agent 已提交/阻塞/失败，系统将触发主 Agent 继续处理。",
+                task_id=task_id,
+                event_ref=event_ref,
+            )
+            runtime = self.runtime_factory()
+            runtime.emit_collaboration_session_updated(
+                collaboration_id=collaboration_id,
+                session=self.store.get_session(collaboration_id),
+            )
             orchestrator = CollaborationOrchestrator(
                 store=self.store,
-                runtime=self.runtime_factory(),
+                runtime=runtime,
             )
-            orchestrator.continue_main_agent(collaboration_id, user_message=user_message)
+            orchestrator.continue_main_agent(
+                collaboration_id,
+                user_message=user_message,
+                event_ref=f"{event_ref}:main-agent" if event_ref else None,
+            )
+            runtime.emit_collaboration_session_updated(
+                collaboration_id=collaboration_id,
+                session=self.store.get_session(collaboration_id),
+            )
         finally:
             self._release_session(collaboration_id)
 
@@ -605,18 +601,6 @@ def _active_runtime_request_targets(session: dict[str, Any]) -> list[str]:
     return result
 
 
-def _monitor_interval_seconds() -> float:
-    raw = str(os.getenv("AGENTFACTORY_COLLABORATION_MONITOR_INTERVAL_SECONDS") or "").strip()
-    if raw:
-        try:
-            value = float(raw)
-        except ValueError:
-            value = 0.0
-        if value >= 15:
-            return value
-    return 90.0
-
-
 def _max_parallel_worker_tasks() -> int:
     raw = str(os.getenv("AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS") or "").strip()
     if raw:
@@ -638,57 +622,6 @@ def _main_agent_continuation_message_from_result(result: Any) -> str:
         "协作子任务状态已更新，请根据当前任务状态验收交付、处理阻塞或失败，并推进后续任务。\n"
         f"- task_id={task_id}; status={status}; summary={summary}; artifact_refs={len(artifact_refs)}"
     )
-
-
-def _attention_signature(tasks: list[dict[str, Any]]) -> str:
-    parts = [
-        ":".join(
-            [
-                str(task.get("task_id") or ""),
-                str(task.get("status") or ""),
-                str(task.get("updated_at") or ""),
-            ]
-        )
-        for task in tasks
-        if str(task.get("status") or "") in {"submitted", "blocked", "failed"}
-    ]
-    return "|".join(sorted(parts))
-
-
-def _monitor_message(session: dict[str, Any]) -> str:
-    active_tasks = [
-        task for task in session.get("tasks") or []
-        if str(task.get("status") or "") in {"accepted", "planning", "working", "blocked", "submitted"}
-    ]
-    if not active_tasks:
-        return ""
-    messages = session.get("messages") if isinstance(session.get("messages"), list) else []
-    lines = [
-        "协作进展定时快照：请检查子任务是否仍在朝交付标准推进；如出现长时间调研、重复工具调用、阻塞或已提交结果，请主动校正、验收或调整后续任务。",
-    ]
-    for task in active_tasks:
-        task_id = str(task.get("task_id") or "").strip()
-        related = [
-            message for message in messages
-            if isinstance(message, dict) and str(message.get("task_id") or "") == task_id
-        ][-6:]
-        lines.append(
-            f"- task_id={task_id}; agent={task.get('assignee_package_id')}; "
-            f"status={task.get('status')}; summary={_compact_text(task.get('result_summary'), 160)}"
-        )
-        for message in related:
-            lines.append(
-                f"  - {message.get('speaker_type')}/{message.get('message_kind')}: "
-                f"{_compact_text(message.get('content'), 180)}"
-            )
-    return "\n".join(lines)
-
-
-def _compact_text(value: Any, limit: int) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 1)] + "…"
 
 
 def _approval_resume_payload(task: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

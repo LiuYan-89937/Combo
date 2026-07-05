@@ -36,7 +36,6 @@ READY_TO_START_STATUSES = {"assigned", "queued", "revision_requested"}
 DEPENDENCY_SATISFIED_TASK_STATUSES = {"completed"}
 RECOVERABLE_RUNNING_TASK_STATUSES = {"accepted", "planning", "working"}
 ACTIVE_WORKER_TASK_STATUSES = {"accepted", "planning", "working"}
-MAIN_AGENT_ATTENTION_TASK_STATUSES = {"submitted", "blocked", "failed"}
 SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
@@ -70,7 +69,6 @@ class CollaborationStore:
         return [
             session for session in sessions
             if self.ready_tasks(str(session.get("collaboration_id") or ""))
-            or self.main_agent_attention_tasks(str(session.get("collaboration_id") or ""))
             or self.list_active_manufacturing_requests(str(session.get("collaboration_id") or ""))
         ]
 
@@ -830,13 +828,6 @@ class CollaborationStore:
             for task in session.get("tasks") or []
             if str(task.get("status") or "") in ACTIVE_WORKER_TASK_STATUSES
         )
-
-    def main_agent_attention_tasks(self, collaboration_id: str) -> list[dict[str, Any]]:
-        session = self.get_session(collaboration_id)
-        return [
-            task for task in session.get("tasks") or []
-            if str(task.get("status") or "") in MAIN_AGENT_ATTENTION_TASK_STATUSES
-        ]
 
     def claim_ready_tasks(self, collaboration_id: str, *, limit: int) -> list[dict[str, Any]]:
         if limit <= 0:

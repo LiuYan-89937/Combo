@@ -7,6 +7,7 @@
 
 import type { FactoryFrontendEvent } from '@/types/protocol'
 import { useAgentStore } from './agent'
+import { useCollaborationStore } from './collaboration'
 import { useExtensionStore } from './extension'
 import { useKnowledgeStore } from './knowledge'
 import { useRuntimeStore } from './runtime'
@@ -17,6 +18,10 @@ import { SYSTEM_CHAT_PACKAGE_ID, normalizeResourcePackageId } from '@/utils/reso
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
+  if (event.event_type === 'debug_patch' && event.payload?.kind === 'collaboration_session_updated' && event.payload?.session) {
+    const collaborationStore = useCollaborationStore()
+    collaborationStore.applySessionSnapshot(event.payload.session as any)
+  }
   const hasRunAgentSession =
     (event.event_type === 'run_completed' || event.event_type === 'run_cancelled' || event.event_type === 'run_failed') &&
     Boolean(event.payload?.agent_session)

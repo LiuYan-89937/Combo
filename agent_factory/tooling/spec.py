@@ -100,6 +100,7 @@ class ToolSpec(BaseModel):
 
     id: str
     description: str
+    schema_error_guidance: str = ""
     entrypoint: str
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)

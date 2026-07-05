@@ -127,6 +127,24 @@ class AgentPackageRuntimeManager:
         for handle in self._system_handles.values():
             handle.set_emit(emit)
 
+    def emit_collaboration_session_updated(self, *, collaboration_id: str, session: dict[str, Any]) -> None:
+        if self._emit is None:
+            return
+        self._emit(
+            event(
+                "debug_patch",
+                request_id=None,
+                mode="agent_package",
+                graph_id="collaboration",
+                producer_type="collaboration_service",
+                payload={
+                    "kind": "collaboration_session_updated",
+                    "collaboration_id": collaboration_id,
+                    "session": session,
+                },
+            )
+        )
+
     def list_packages(self) -> list[dict[str, Any]]:
         packages = [
             self._package_summary(manifest_path)
