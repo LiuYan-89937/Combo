@@ -75,10 +75,6 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
             prompt = service.build_main_agent_prompt(
                 collaboration_id=collaboration_id,
                 user_message=str(payload.get("message") or ""),
-                worker_agents=[
-                    agent for agent in _collaboration_agents(runtime_bridge)
-                    if bool(agent.get("available_as_worker"))
-                ],
             )
             return {"prompt": prompt}
         except Exception as exc:

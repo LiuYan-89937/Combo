@@ -6,7 +6,7 @@ from agent_factory.runtime_kernel.plan_execute_tools import merge_tool_ids
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
-COLLABORATION_TOOL_ID = "collaboration"
+COLLABORATION_CONTEXT_TOOL_IDS = {"collaboration", "agent_list", "agent_search", "agent_manufacture"}
 
 
 def runtime_extra_allowed_tool_ids(state: RuntimeState) -> list[str]:
@@ -22,7 +22,7 @@ def runtime_extra_allowed_tool_ids(state: RuntimeState) -> list[str]:
     allowed: list[str] = []
     for item in ids:
         tool_id = str(item or "").strip()
-        if tool_id == COLLABORATION_TOOL_ID and _collaboration_context_enabled(user_config):
+        if tool_id in COLLABORATION_CONTEXT_TOOL_IDS and _collaboration_context_enabled(user_config):
             allowed.append(tool_id)
     return merge_tool_ids(allowed)
 

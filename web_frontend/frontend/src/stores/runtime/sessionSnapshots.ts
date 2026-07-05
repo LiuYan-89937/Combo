@@ -1,4 +1,4 @@
-import type { ConversationTurn, FactoryMode, RunStatus, TranscriptItem } from '@/types/protocol'
+import type { ContextWindowView, ConversationTurn, FactoryMode, RunStatus, RuntimePlanView, TranscriptItem } from '@/types/protocol'
 import { conversationScopeForMode } from './scopes'
 
 export interface FactorySessionSnapshotView {
@@ -15,6 +15,8 @@ export interface AgentPackageSessionSnapshotView {
   transcript: TranscriptItem[]
   conversationTurns: ConversationTurn[]
   activeTurn: ConversationTurn | null
+  contextWindow: ContextWindowView | null
+  currentPlan: RuntimePlanView | null
 }
 
 export function factorySessionSnapshotView(
@@ -137,6 +139,8 @@ export function agentPackageSessionSnapshotView(
     transcript: restored.transcript,
     conversationTurns: restored.conversationTurns,
     activeTurn: restored.activeTurn,
+    contextWindow: contextWindowFromSession(session),
+    currentPlan: planFromSession(session),
   }
 }
 
@@ -266,4 +270,43 @@ function transcriptAttachmentViews(value: any): TranscriptItem['attachments'] {
       }
     })
     .filter((item) => item.name.length > 0)
+}
+
+function contextWindowFromSession(session: any): ContextWindowView | null {
+  const payload = session?.context_window
+  if (!payload || typeof payload !== 'object') return null
+  return {
+    tokenCount: optionalNumber(payload.token_count),
+    contextWindowTokens: optionalNumber(payload.context_window_tokens),
+    compressionThresholdTokens: optionalNumber(payload.compression_threshold_tokens),
+    tokenCountMethod: optionalString(payload.token_count_method),
+    source: optionalString(payload.source),
+    modelRole: optionalString(payload.model_role),
+    nodeId: optionalString(payload.node_id),
+    updatedAt: String(payload.updated_at || session.updated_at || new Date().toISOString()),
+    payload,
+  }
+}
+
+function planFromSession(session: any): RuntimePlanView | null {
+  const payload = session?.current_plan
+  if (!payload || typeof payload !== 'object' || payload.version !== 'plan_state.v0') return null
+  return {
+    version: payload.version,
+    goal: String(payload.goal || ''),
+    status: String(payload.status || 'active'),
+    current_step_id: payload.current_step_id || null,
+    steps: Array.isArray(payload.steps) ? payload.steps : [],
+    source_node_id: payload.source_node_id || null,
+    updatedAt: payload.updated_at || session.updated_at || undefined,
+  }
+}
+
+function optionalNumber(value: any): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function optionalString(value: any): string | null {
+  const text = String(value || '').trim()
+  return text || null
 }

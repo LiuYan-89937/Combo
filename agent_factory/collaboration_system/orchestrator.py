@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+import json
 import mimetypes
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.collaboration_system.store import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.document_processing import SUPPORTED_FILE_EXTENSIONS, parse_file
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.factory_graph.frontend_bridge.agent_package_paths import host_runtime_root
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import VisibleAssistantOutputAccumulator
 from agent_factory.factory_graph.frontend_bridge.runtime_events import (
@@ -113,7 +115,6 @@ class CollaborationOrchestrator:
         prompt = build_main_agent_collaboration_prompt(
             user_message=user_message,
             session=session,
-            worker_agents=_collaboration_worker_agents(self.runtime),
         )
         run = self.runtime.stream(
             package_id,
@@ -123,9 +124,14 @@ class CollaborationOrchestrator:
             request_id=request_id,
             user_config={
                 "collaboration_id": collaboration_id,
-                "runtime_tool_access": {"extra_allowed_tool_ids": ["collaboration"]},
+                "runtime_tool_access": {
+                    "extra_allowed_tool_ids": ["collaboration", "agent_list", "agent_search", "agent_manufacture"],
+                },
             },
             require_ready=True,
+            session_kind="collaboration_main",
+            collaboration_id=collaboration_id,
+            visible_in_agent_session_list=False,
         )
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
         if main_session_id and main_session_id != str(session.get("main_agent_session_id") or ""):
@@ -159,6 +165,7 @@ class CollaborationOrchestrator:
                 reasoning_content=output.reasoning_content,
                 status=status,
                 tool_activities=tool_activities,
+                trace_ref=_latest_trace_ref(package_id),
             )
         if status == "completed":
             self.store.record_message(
@@ -178,6 +185,9 @@ class CollaborationOrchestrator:
             content=f"主 Agent 处理子任务状态更新失败：{message or status}",
             task_id=None,
         )
+
+    def continue_main_agent(self, collaboration_id: str, *, user_message: str) -> None:
+        self._run_main_agent_continuation(collaboration_id, user_message=user_message)
 
     def start_task(self, collaboration_id: str, task_id: str) -> CollaborationRunTaskResult:
         session = self.store.get_session(collaboration_id)
@@ -251,6 +261,10 @@ class CollaborationOrchestrator:
             session_id=task.get("assignee_session_id") or None,
             request_id=run_request_id,
             require_ready=True,
+            session_kind="collaboration_worker",
+            collaboration_id=collaboration_id,
+            collaboration_task_id=task_id,
+            visible_in_agent_session_list=False,
         )
         assignee_session_id = str((run.session or {}).get("session_id") or task.get("assignee_session_id") or "").strip()
         if not assignee_session_id:
@@ -606,6 +620,7 @@ class CollaborationOrchestrator:
             reasoning_content=output.reasoning_content,
             status=status,
             tool_activities=tool_activities,
+            trace_ref=_latest_trace_ref(package_id),
         )
 
 
@@ -646,20 +661,54 @@ def _main_agent_continuation_message(results: list[CollaborationRunTaskResult]) 
     return "\n".join(lines)
 
 
-def _collaboration_worker_agents(runtime: AgentPackageRuntimeManager) -> list[dict[str, Any]]:
-    agents: list[dict[str, Any]] = []
-    for package in runtime.list_packages():
-        package_id = str(package.get("package_id") or "").strip()
-        if not package_id or package_id == SYSTEM_CHAT_PACKAGE_ID:
+def _latest_trace_ref(package_id: str) -> dict[str, str] | None:
+    trace_root = host_runtime_root(package_id) / "trace"
+    runs_root = trace_root / "runs"
+    if not runs_root.is_dir():
+        return None
+    trace_dirs = [path for path in runs_root.iterdir() if path.is_dir() and _is_safe_path_id(path.name)]
+    if not trace_dirs:
+        return None
+    latest = max(trace_dirs, key=lambda path: path.stat().st_mtime)
+    manifest_path = latest / "manifest.json"
+    run_id = ""
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+        if isinstance(manifest, dict):
+            run_id = str(manifest.get("run_id") or "").strip()
+    if not run_id:
+        run_id = _latest_trace_run_id(latest / "trace.jsonl")
+    return {
+        "trace_id": latest.name,
+        "trace_root": str(trace_root),
+        **({"run_id": run_id} if run_id else {}),
+    }
+
+
+def _latest_trace_run_id(trace_path: Path) -> str:
+    try:
+        lines = trace_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if not line.strip():
             continue
-        agents.append(
-            {
-                "package_id": package_id,
-                "agent_name": package.get("agent_name") or package.get("name") or package_id,
-                "agent_description": package.get("agent_description") or "",
-            }
-        )
-    return agents
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            run_id = str(item.get("run_id") or "").strip()
+            if run_id:
+                return run_id
+    return ""
+
+
+def _is_safe_path_id(value: str) -> bool:
+    return bool(value) and all(char.isalnum() or char in {"-", "_"} for char in value)
 
 
 def _dependencies_satisfied(session: dict[str, Any], task: dict[str, Any]) -> bool:

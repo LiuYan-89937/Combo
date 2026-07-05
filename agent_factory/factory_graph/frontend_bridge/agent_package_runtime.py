@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
+from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.context_system.schema import (
     DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
@@ -346,7 +347,9 @@ class AgentPackageRuntimeManager:
     def delete_package(self, package_id: str) -> dict[str, Any]:
         self._close_package_containers(package_id)
         self._close_package_system_handles(package_id)
-        return self.repository.delete_user_package(package_id)
+        result = self.repository.delete_user_package(package_id)
+        result["agent_registry_refresh"] = _refresh_agent_registry_index(package_id)
+        return result
 
     def export_package_archive(self, package_id: str) -> Path:
         return self.repository.export_user_package_archive(package_id)
@@ -357,7 +360,8 @@ class AgentPackageRuntimeManager:
 
     def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
-        return self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
+        session = self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
+        return _hydrate_session_runtime_view(session)
 
     def session_exists(self, package_id: str, session_id: str) -> bool:
         package = self.load_package(package_id)
@@ -572,6 +576,10 @@ class AgentPackageRuntimeManager:
         *,
         session_id: str | None = None,
         first_user_input: str | None = None,
+        session_kind: str = "normal",
+        collaboration_id: str | None = None,
+        collaboration_task_id: str | None = None,
+        visible_in_agent_session_list: bool | None = None,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
         manager = self._session_manager_for_package(package_id, package)
@@ -583,6 +591,10 @@ class AgentPackageRuntimeManager:
         return manager.create(
             agent_id=package.assembly_spec.agent.id,
             first_user_input=first_user_input,
+            session_kind=session_kind,
+            collaboration_id=collaboration_id,
+            collaboration_task_id=collaboration_task_id,
+            visible_in_agent_session_list=visible_in_agent_session_list,
         ).model_dump(mode="json")
 
     def run(self, package_id: str, *, user_input: str, session_id: str | None = None) -> AgentPackageRunResult:
@@ -599,6 +611,10 @@ class AgentPackageRuntimeManager:
         user_config: dict[str, Any] | None = None,
         attachments: Any = None,
         require_ready: bool = False,
+        session_kind: str = "normal",
+        collaboration_id: str | None = None,
+        collaboration_task_id: str | None = None,
+        visible_in_agent_session_list: bool | None = None,
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         del require_ready
@@ -611,6 +627,18 @@ class AgentPackageRuntimeManager:
             session = session_manager.create(
                 agent_id=package.assembly_spec.agent.id,
                 first_user_input=session_user_input,
+                session_kind=session_kind,
+                collaboration_id=collaboration_id,
+                collaboration_task_id=collaboration_task_id,
+                visible_in_agent_session_list=visible_in_agent_session_list,
+            )
+        if session_id and (session_kind != "normal" or collaboration_id or collaboration_task_id or visible_in_agent_session_list is not None):
+            session = session_manager.update_metadata(
+                session.session_id,
+                session_kind=session_kind,
+                collaboration_id=collaboration_id,
+                collaboration_task_id=collaboration_task_id,
+                visible_in_agent_session_list=visible_in_agent_session_list,
             )
         workdir_root = self.session_workdir_for_package(package_id, session.session_id)
         attachment_result = self._prepare_runtime_attachments(
@@ -718,6 +746,7 @@ class AgentPackageRuntimeManager:
         reasoning_content: str | None = None,
         status: str,
         tool_activities: list[dict[str, Any]] | None = None,
+        trace_ref: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).finish_turn(
@@ -727,6 +756,7 @@ class AgentPackageRuntimeManager:
             reasoning_content=reasoning_content,
             status=status,
             tool_activities=tool_activities,
+            trace_ref=trace_ref,
         )
         return session.model_dump(mode="json")
 
@@ -1378,6 +1408,91 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         "compression_threshold_tokens_source": "package" if isinstance(custom_threshold, int) and custom_threshold > 0 else "env",
         "compression_threshold_tokens_custom": custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else None,
     }
+
+
+def _hydrate_session_runtime_view(session: dict[str, Any]) -> dict[str, Any]:
+    hydrated = dict(session)
+    trace_records = _session_trace_records(hydrated)
+    if not trace_records:
+        return hydrated
+    latest_context = _latest_trace_event_payload(trace_records, "context_window_updated")
+    if latest_context:
+        hydrated["context_window"] = latest_context
+    latest_plan = _latest_trace_event_payload(trace_records, "plan_updated")
+    if latest_plan:
+        hydrated["current_plan"] = latest_plan
+    return hydrated
+
+
+def _refresh_agent_registry_index(package_id: str) -> dict[str, Any]:
+    try:
+        return refresh_agent_registry_index(package_id)
+    except Exception as exc:
+        return {"status": "failed", "message": f"{type(exc).__name__}: {exc}"}
+
+
+def _session_trace_records(session: dict[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    runtime_refs = session.get("runtime_refs") if isinstance(session.get("runtime_refs"), dict) else {}
+    default_trace_root = _trace_root_from_ref(runtime_refs)
+    turns = session.get("turns") if isinstance(session.get("turns"), list) else []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        trace_ref = turn.get("trace_ref") if isinstance(turn.get("trace_ref"), dict) else {}
+        trace_id = str(trace_ref.get("trace_id") or "").strip()
+        if not trace_id or not _safe_path_id(trace_id):
+            continue
+        trace_root = _trace_root_from_ref(trace_ref) or default_trace_root
+        if trace_root is None:
+            continue
+        records.extend(_read_trace_jsonl(trace_root / "runs" / trace_id / "trace.jsonl"))
+    return records
+
+
+def _latest_trace_event_payload(records: list[dict[str, Any]], event_type: str) -> dict[str, Any] | None:
+    for record in reversed(records):
+        if record.get("event_type") != event_type:
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        return {
+            **payload,
+            "updated_at": record.get("created_at"),
+            "trace_id": record.get("trace_id"),
+            "run_id": record.get("run_id"),
+        }
+    return None
+
+
+def _read_trace_jsonl(path: Path) -> list[dict[str, Any]]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    records: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            records.append(item)
+    return records
+
+
+def _trace_root_from_ref(ref: dict[str, Any]) -> Path | None:
+    value = str(ref.get("trace_root") or ref.get("trace") or "").strip()
+    if not value:
+        return None
+    return Path(value).expanduser()
+
+
+def _safe_path_id(value: str) -> bool:
+    return bool(value) and all(char.isalnum() or char in {"-", "_"} for char in value)
 
 
 def _compression_threshold_from_env() -> int:

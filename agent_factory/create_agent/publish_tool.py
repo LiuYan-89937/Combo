@@ -8,6 +8,7 @@ from uuid import uuid4
 from typing import Any
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
+from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.create_agent.models import CreateAgentPublishDecision, PUBLISH_FILE
 from agent_factory.create_agent.package_paths import is_transient_package_path, normalize_package_relative
 from agent_factory.create_agent.stage_sync import sync_publish_stage
@@ -119,6 +120,7 @@ def publish_workspace(
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     workspace.write_publish_report(report)
     sync_publish_stage(workspace)
+    agent_registry_refresh = _refresh_agent_registry_index(package_id)
     return {
         "published": True,
         "package_id": package_id,
@@ -127,7 +129,15 @@ def publish_workspace(
         "published_at": published_at,
         "report_path": str(report_path),
         "publish_state_path": str(workspace.publish_path),
+        "agent_registry_refresh": agent_registry_refresh,
     }
+
+
+def _refresh_agent_registry_index(package_id: str) -> dict[str, Any]:
+    try:
+        return refresh_agent_registry_index(package_id)
+    except Exception as exc:
+        return {"status": "failed", "message": f"{type(exc).__name__}: {exc}"}
 
 
 def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:

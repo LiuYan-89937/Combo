@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from agent_factory.tooling.builtins.agent_list.specs import get_agent_list_tool_specs
+from agent_factory.tooling.builtins.agent_manufacture.specs import get_agent_manufacture_tool_specs
+from agent_factory.tooling.builtins.agent_search.specs import get_agent_search_tool_specs
 from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from agent_factory.tooling.builtins.collaboration.specs import get_collaboration_tool_specs
 from agent_factory.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
@@ -29,6 +32,9 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "tool_output",
     "resource_set",
     "collaboration",
+    "agent_list",
+    "agent_manufacture",
+    "agent_search",
 }
 
 ALWAYS_AVAILABLE_SYSTEM_TOOL_IDS = {"tool_output"}
@@ -43,6 +49,8 @@ READ_ONLY_SYSTEM_TOOL_IDS = {
     "skillhub",
     "tool_output",
     "resource_set",
+    "agent_list",
+    "agent_search",
 }
 
 
@@ -57,6 +65,9 @@ def get_builtin_tool_specs() -> list[ToolSpec]:
         *get_tool_output_tool_specs(),
         *get_resource_set_tool_specs(),
         *get_collaboration_tool_specs(),
+        *get_agent_list_tool_specs(),
+        *get_agent_manufacture_tool_specs(),
+        *get_agent_search_tool_specs(),
     ]
     return [tool for tool in catalog if tool.id in IMPLEMENTED_BUILTIN_TOOL_IDS]
 

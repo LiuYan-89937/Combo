@@ -13,7 +13,6 @@ def build_main_agent_collaboration_prompt(
     *,
     user_message: str,
     session: dict[str, Any],
-    worker_agents: list[dict[str, Any]],
 ) -> str:
     tasks = [
         {
@@ -32,20 +31,23 @@ def build_main_agent_collaboration_prompt(
     submitted_tasks = [task for task in tasks if task.get("status") == "submitted"]
     blocked_tasks = [task for task in tasks if task.get("status") == "blocked"]
     active_tasks = [task for task in tasks if task.get("status") in {"assigned", "queued", "accepted", "planning", "working", "revision_requested"}]
+    manufacturing_requests = [
+        {
+            "request_id": item.get("request_id"),
+            "status": item.get("status"),
+            "agent_name": item.get("agent_name"),
+            "purpose": item.get("purpose"),
+            "create_agent_session_id": item.get("create_agent_session_id"),
+            "result_payload": item.get("result_payload") or {},
+        }
+        for item in session.get("manufacturing_requests") or []
+    ]
     inspect_policy = {
         "mode": "state_driven",
         "working_inspect_cooldown_seconds": _working_inspect_cooldown_seconds(),
         "inspect_immediately_when": ["submitted_task", "blocked_task", "tool_result_conflict", "missing_required_state"],
         "avoid_inspect_when": ["prompt_snapshot_is_sufficient", "only_worker_tasks_are_still_working"],
     }
-    workers = [
-        {
-            "package_id": agent.get("package_id"),
-            "agent_name": agent.get("agent_name"),
-            "description": agent.get("agent_description") or "",
-        }
-        for agent in worker_agents
-    ]
     return "\n".join(
         [
             "【多 Agent 协作运行上下文】",
@@ -53,6 +55,11 @@ def build_main_agent_collaboration_prompt(
             "你可以决定哪些任务可并行，哪些任务必须等待前置任务完成。并行关系用空 depends_on 表示，串行关系用 depends_on 明确引用前置 task_id。",
             "子 Agent 之间默认互不可见。需要共享的信息必须写入协作共享工作区，或在创建后续任务时通过 input_artifacts 授权给指定子 Agent。",
             "你可以使用 collaboration 工具：inspect 查看会话，create_task 创建子任务，update_task 更新任务内容/验收状态，cancel_task 停止子任务，read_shared/write_shared 读写协作共享工作区，complete_session 写入最终交付并结束协作。",
+            "你可以使用 agent_search 工具按完整任务语义检索已经发布的可用子 Agent Card。不要把需求拆成能力标签，也不要假设你知道全部可用 Agent。",
+            "agent_list 是只读兜底工具：仅当 agent_search 召回不足、你需要核对已发布 Agent 全集时使用；它不做语义排序，也不制造 Agent。",
+            "创建任何子任务前，必须先调用 agent_search；create_task 的 assignee_package_id 只能来自 agent_search 返回 candidates 中的 package_id。",
+            "禁止编造 package_id。agent_search 没有返回可复用候选时，不要强行分配；你应调用 agent_manufacture，以人类委托方身份提交结构化制造需求，说明目标用途、任务边界、交付标准和现有 Agent 不足原因。",
+            "agent_search 只负责查询现有 Agent，不会制造 Agent；agent_manufacture 只负责委托制造，不返回可分配 package_id。协作主 Agent 代理制造通过验证后会自动发布，发布完成后必须重新 agent_search 确认可用，再用返回的 package_id 创建任务。",
             "inspect 是状态同步动作，不是每一步的前置动作。优先使用本消息注入的当前任务状态和每次工具返回的 session。",
             "当只有 worker 任务仍在 working/planning/accepted 时，不要连续 inspect；等待协作状态变化或超过 working_inspect_cooldown_seconds 后再看。",
             "当存在 submitted 任务时立即验收；当存在 blocked 任务时立即处理审批/阻塞；这两类状态不需要冷却。",
@@ -66,11 +73,11 @@ def build_main_agent_collaboration_prompt(
             f"协作会话: {session.get('title') or session.get('collaboration_id')} ({session.get('collaboration_id')})",
             f"审批模式: {session.get('approval_mode')}",
             f"状态同步策略: {json.dumps(inspect_policy, ensure_ascii=False)}",
-            f"可用子 Agent: {json.dumps(workers, ensure_ascii=False)}",
             f"当前任务状态: {json.dumps(tasks, ensure_ascii=False)}",
             f"待验收任务: {json.dumps(submitted_tasks, ensure_ascii=False)}",
             f"待处理阻塞任务: {json.dumps(blocked_tasks, ensure_ascii=False)}",
             f"运行中任务: {json.dumps(active_tasks, ensure_ascii=False)}",
+            f"制造请求状态: {json.dumps(manufacturing_requests, ensure_ascii=False)}",
             "",
             "【用户消息】",
             user_message,

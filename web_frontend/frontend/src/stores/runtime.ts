@@ -940,9 +940,9 @@ export const useRuntimeStore = defineStore('runtime', {
       if (this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
         return
       }
-      this.currentPlan = null
+      this.currentPlan = snapshot.currentPlan
       this.contextActivity = { status: 'idle' }
-      this.contextWindow = null
+      this.contextWindow = snapshot.contextWindow
       this.memoryActivity = { status: 'idle' }
       this.modelStreams = {}
       this.tools = []
@@ -1015,6 +1015,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _upsertAgentSession(session: any) {
       if (!session?.session_id) return
+      if (session.visible_in_agent_session_list === false) return
       const index = this.agentSessions.findIndex((item) => item.session_id === session.session_id)
       if (index >= 0) {
         this.agentSessions[index] = { ...this.agentSessions[index], ...session }

@@ -17,6 +17,8 @@ DEFAULT_APPROVAL_MODE = "user_controlled"
 APPROVAL_MODES = {"user_controlled", "main_agent_delegated"}
 SESSION_STATUSES = {"draft", "running", "completed", "failed", "cancelled"}
 TERMINAL_SESSION_STATUSES = {"completed", "failed", "cancelled"}
+MANUFACTURING_REQUEST_STATUSES = {"requested", "running", "ready_for_publish", "completed", "failed", "blocked"}
+MANUFACTURING_REQUEST_ACTIVE_STATUSES = {"requested", "running"}
 TASK_STATUSES = {
     "assigned",
     "queued",
@@ -63,7 +65,11 @@ class CollaborationStore:
             if session.get("approval_mode") == "main_agent_delegated"
             and session.get("status") not in {"completed", "failed", "cancelled"}
         ]
-        return [session for session in sessions if self.ready_tasks(str(session.get("collaboration_id") or ""))]
+        return [
+            session for session in sessions
+            if self.ready_tasks(str(session.get("collaboration_id") or ""))
+            or self.list_active_manufacturing_requests(str(session.get("collaboration_id") or ""))
+        ]
 
     def recover_interrupted_tasks(self) -> dict[str, Any]:
         now = utc_now_text()
@@ -190,6 +196,17 @@ class CollaborationStore:
                     select * from collaboration_tasks
                     where collaboration_id = ?
                     order by created_at asc, task_id asc
+                    """,
+                    (collaboration_id,),
+                ).fetchall()
+            ]
+            session["manufacturing_requests"] = [
+                self._manufacturing_request_view(item)
+                for item in conn.execute(
+                    """
+                    select * from collaboration_manufacturing_requests
+                    where collaboration_id = ?
+                    order by created_at asc, request_id asc
                     """,
                     (collaboration_id,),
                 ).fetchall()
@@ -389,6 +406,134 @@ class CollaborationStore:
             self._mark_session_running_conn(conn, collaboration_id, now)
         return self.get_session(collaboration_id)
 
+    def create_manufacturing_request(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.get_session(collaboration_id)
+        agent_name = str(payload.get("agent_name") or "").strip()
+        purpose = str(payload.get("purpose") or "").strip()
+        if not agent_name:
+            raise CollaborationStoreError("agent_name must not be empty")
+        if not purpose:
+            raise CollaborationStoreError("purpose must not be empty")
+        request_id = uuid4().hex
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into collaboration_manufacturing_requests (
+                  request_id, collaboration_id, create_agent_session_id, status,
+                  agent_name, purpose, request_payload_json, result_payload_json,
+                  created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    collaboration_id,
+                    None,
+                    "requested",
+                    agent_name,
+                    purpose,
+                    json_dumps(payload),
+                    json_dumps({}),
+                    now,
+                    now,
+                ),
+            )
+            self._insert_message_conn(
+                conn,
+                collaboration_id=collaboration_id,
+                speaker_type="main_agent",
+                speaker_package_id=None,
+                message_kind="manufacturing_requested",
+                content=f"已请求制造新 Agent：{agent_name}。用途：{purpose}",
+                task_id=None,
+                event_ref=f"manufacturing:{request_id}:requested",
+                created_at=now,
+            )
+            self._mark_session_running_conn(conn, collaboration_id, now)
+        return self.get_manufacturing_request(collaboration_id, request_id)
+
+    def get_manufacturing_request(self, collaboration_id: str, request_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select * from collaboration_manufacturing_requests
+                where collaboration_id = ? and request_id = ?
+                """,
+                (collaboration_id, request_id),
+            ).fetchone()
+            if row is None:
+                raise CollaborationStoreError(f"collaboration manufacturing request not found: {request_id}")
+            return self._manufacturing_request_view(row)
+
+    def list_active_manufacturing_requests(self, collaboration_id: str | None = None) -> list[dict[str, Any]]:
+        statuses = sorted(MANUFACTURING_REQUEST_ACTIVE_STATUSES)
+        placeholders = ", ".join("?" for _ in statuses)
+        params: list[Any] = [*statuses]
+        where = f"status in ({placeholders})"
+        if collaboration_id:
+            where += " and collaboration_id = ?"
+            params.append(collaboration_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select * from collaboration_manufacturing_requests
+                where {where}
+                order by created_at asc, request_id asc
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._manufacturing_request_view(row) for row in rows]
+
+    def update_manufacturing_request(
+        self,
+        collaboration_id: str,
+        request_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        current = self.get_manufacturing_request(collaboration_id, request_id)
+        status = str(payload.get("status") if "status" in payload else current["status"]).strip()
+        if status not in MANUFACTURING_REQUEST_STATUSES:
+            raise CollaborationStoreError(f"unsupported manufacturing request status: {status}")
+        result_payload = (
+            payload.get("result_payload")
+            if "result_payload" in payload
+            else current.get("result_payload") or {}
+        )
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update collaboration_manufacturing_requests
+                set create_agent_session_id = ?, status = ?, result_payload_json = ?, updated_at = ?
+                where collaboration_id = ? and request_id = ?
+                """,
+                (
+                    normalize_optional_text(payload.get("create_agent_session_id"))
+                    if "create_agent_session_id" in payload
+                    else current.get("create_agent_session_id"),
+                    status,
+                    json_dumps(result_payload),
+                    now,
+                    collaboration_id,
+                    request_id,
+                ),
+            )
+            message = str(payload.get("message") or "").strip()
+            if message:
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=None,
+                    message_kind=f"manufacturing_{status}",
+                    content=message,
+                    task_id=None,
+                    event_ref=f"manufacturing:{request_id}:{status}:{now}",
+                    created_at=now,
+                )
+            self._mark_session_running_conn(conn, collaboration_id, now)
+        return self.get_manufacturing_request(collaboration_id, request_id)
+
     def update_task(self, collaboration_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.get_session(collaboration_id)
         with self._connect() as conn:
@@ -463,6 +608,7 @@ class CollaborationStore:
     def delete_session(self, collaboration_id: str) -> dict[str, Any]:
         existing = self.get_session(collaboration_id)
         with self._connect() as conn:
+            conn.execute("delete from collaboration_manufacturing_requests where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_tasks where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_messages where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_sessions where collaboration_id = ?", (collaboration_id,))
@@ -531,6 +677,22 @@ class CollaborationStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                create table if not exists collaboration_manufacturing_requests (
+                  request_id text primary key,
+                  collaboration_id text not null,
+                  create_agent_session_id text,
+                  status text not null,
+                  agent_name text not null,
+                  purpose text not null,
+                  request_payload_json text not null,
+                  result_payload_json text not null,
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """
+            )
             self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
 
     @contextmanager
@@ -567,6 +729,12 @@ class CollaborationStore:
 
     def _message_view(self, row: sqlite3.Row) -> dict[str, Any]:
         return dict(row)
+
+    def _manufacturing_request_view(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["request_payload"] = json_loads(data.pop("request_payload_json"), {})
+        data["result_payload"] = json_loads(data.pop("result_payload_json"), {})
+        return data
 
     def _insert_message_conn(
         self,

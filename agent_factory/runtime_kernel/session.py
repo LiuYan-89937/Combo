@@ -35,6 +35,10 @@ class AgentSessionRecord(BaseModel):
     session_id: str
     agent_id: str
     thread_id: str
+    session_kind: str = "normal"
+    collaboration_id: str | None = None
+    collaboration_task_id: str | None = None
+    visible_in_agent_session_list: bool = True
     created_at: str
     updated_at: str
     first_user_input: str | None = None
@@ -60,12 +64,28 @@ class AgentSessionManager:
         self.config = config or AgentSessionConfig()
         self.config.root.mkdir(parents=True, exist_ok=True)
 
-    def create(self, *, agent_id: str, first_user_input: str | None = None) -> AgentSessionRecord:
+    def create(
+        self,
+        *,
+        agent_id: str,
+        first_user_input: str | None = None,
+        session_kind: str = "normal",
+        collaboration_id: str | None = None,
+        collaboration_task_id: str | None = None,
+        visible_in_agent_session_list: bool | None = None,
+    ) -> AgentSessionRecord:
         now = _now()
+        kind = _normalize_session_kind(session_kind)
         record = AgentSessionRecord(
             session_id=uuid4().hex,
             agent_id=agent_id,
             thread_id=f"agent-{agent_id}-{uuid4().hex}",
+            session_kind=kind,
+            collaboration_id=_optional_text(collaboration_id),
+            collaboration_task_id=_optional_text(collaboration_task_id),
+            visible_in_agent_session_list=(
+                kind == "normal" if visible_in_agent_session_list is None else bool(visible_in_agent_session_list)
+            ),
             created_at=now,
             updated_at=now,
             first_user_input=(first_user_input or "").strip() or None,
@@ -97,7 +117,12 @@ class AgentSessionManager:
             encoding="utf-8",
         )
 
-    def list_sessions(self, *, agent_id: str | None = None) -> list[AgentSessionRecord]:
+    def list_sessions(
+        self,
+        *,
+        agent_id: str | None = None,
+        include_internal: bool = False,
+    ) -> list[AgentSessionRecord]:
         records: list[AgentSessionRecord] = []
         for path in self.config.root.glob("*.json"):
             try:
@@ -106,8 +131,31 @@ class AgentSessionManager:
                 continue
             if agent_id is not None and record.agent_id != agent_id:
                 continue
+            if not include_internal and not record.visible_in_agent_session_list:
+                continue
             records.append(record)
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
+
+    def update_metadata(
+        self,
+        session_id: str,
+        *,
+        session_kind: str | None = None,
+        collaboration_id: str | None = None,
+        collaboration_task_id: str | None = None,
+        visible_in_agent_session_list: bool | None = None,
+    ) -> AgentSessionRecord:
+        record = self.load(session_id)
+        if session_kind is not None:
+            record.session_kind = _normalize_session_kind(session_kind)
+        if collaboration_id is not None:
+            record.collaboration_id = _optional_text(collaboration_id)
+        if collaboration_task_id is not None:
+            record.collaboration_task_id = _optional_text(collaboration_task_id)
+        if visible_in_agent_session_list is not None:
+            record.visible_in_agent_session_list = bool(visible_in_agent_session_list)
+        self.save(record)
+        return record
 
     def delete(self, session_id: str) -> AgentSessionDeletionResult:
         record = self.load(session_id)
@@ -229,6 +277,19 @@ def _display_title(value: str | None, *, limit: int = 42) -> str | None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _optional_text(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _normalize_session_kind(value: str | None) -> str:
+    kind = str(value or "").strip() or "normal"
+    allowed = {"normal", "collaboration_main", "collaboration_worker"}
+    if kind not in allowed:
+        raise ValueError(f"unsupported agent session kind: {kind}")
+    return kind
 
 
 def _find_turn(turns: list[AgentSessionTurn], *, request_id: str | None) -> AgentSessionTurn | None:
