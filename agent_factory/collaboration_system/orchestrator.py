@@ -328,6 +328,7 @@ class CollaborationOrchestrator:
             worker_workdir=worker_workdir,
             artifacts=task.get("input_artifacts") or [],
         )
+        shared_materials_snapshot = _share_files_snapshot(worker_workdir)
         missing_materials = _missing_shared_materials(shared_materials)
         if missing_materials:
             summary = "授权共享材料缺失，任务未启动：" + "、".join(missing_materials)
@@ -364,6 +365,7 @@ class CollaborationOrchestrator:
             task=task,
             shared_materials=shared_materials,
         )
+        before_snapshot = _workspace_snapshot(worker_workdir)
         run = self.runtime.stream(
             package_id,
             user_input=prompt,
@@ -378,7 +380,6 @@ class CollaborationOrchestrator:
         assignee_session_id = str((run.session or {}).get("session_id") or assignee_session_id).strip()
         if not assignee_session_id:
             raise RuntimeError("collaboration worker run did not provide an agent session id")
-        before_snapshot = _workspace_snapshot(worker_workdir)
         output = VisibleAssistantOutputAccumulator()
         event_recorder = CollaborationWorkerEventRecorder(
             store=self.store,
@@ -460,6 +461,7 @@ class CollaborationOrchestrator:
             output=output,
             worker_workdir=worker_workdir,
             before_snapshot=before_snapshot,
+            shared_materials_snapshot=shared_materials_snapshot,
         )
 
     def resume_task_approval(
@@ -575,11 +577,46 @@ class CollaborationOrchestrator:
         output: VisibleAssistantOutputAccumulator,
         worker_workdir: Path,
         before_snapshot: dict[str, tuple[int, int]],
+        shared_materials_snapshot: dict[str, tuple[int, int]],
     ) -> CollaborationRunTaskResult:
         task_id = str(task.get("task_id") or "")
         content = str(output.content or "").strip()
         if not content:
             content = "Worker completed but did not return visible content."
+        shared_material_changes = _share_files_changes(worker_workdir, shared_materials_snapshot)
+        if shared_material_changes:
+            summary = "worker 写入或修改了只读共享材料目录 share_files/，交付被拒绝：" + "、".join(shared_material_changes)
+            self.store.update_task(
+                collaboration_id,
+                task_id,
+                {
+                    "status": "failed",
+                    "assignee_session_id": assignee_session_id,
+                    "result_summary": summary,
+                    "result_payload": {
+                        "runtime_status": "share_files_mutated",
+                        "content": content,
+                        "mutated_paths": shared_material_changes,
+                    },
+                    "artifact_refs": [],
+                },
+            )
+            self.store.record_message(
+                collaboration_id,
+                speaker_type="system",
+                speaker_package_id=package_id,
+                message_kind="progress",
+                content=summary,
+                task_id=task_id,
+            )
+            return CollaborationRunTaskResult(
+                collaboration_id=collaboration_id,
+                task_id=task_id,
+                status="failed",
+                assignee_session_id=assignee_session_id,
+                result_summary=summary,
+                artifact_refs=[],
+            )
         shared_workspace = self.store.session_workdir(collaboration_id)
         delivery_artifact = _write_worker_delivery(
             shared_workspace,
@@ -1072,6 +1109,9 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
         for item in [
             "你正在一个多 Agent 协作会话中作为被分配任务的子 Agent 工作。",
             "只完成当前任务，不要假设自己能看到其他子 Agent 的完整对话。需要使用共享材料时，只读取下面列出的授权文件。",
+            f"{SHARE_FILES_DIR}/ 是只读上游材料目录，只能读取，不能创建、修改、删除其中的任何文件。",
+            "你的交付物必须写入当前工作区的普通路径，例如 result.md、logo.png、reports/summary.md；不要写入 share_files/。宿主会自动收集这些普通工作区文件作为任务交付物。",
+            "visible_context 是纯文本提示，不代表文件已存在；只有下面共享材料列表里的路径才是已授权文件。",
             f"协作会话：{session.get('title') or session.get('collaboration_id')}",
             f"任务 ID：{task.get('task_id')}",
             f"任务要求：{task.get('task_text')}",
@@ -1266,6 +1306,31 @@ def _workspace_snapshot(root: Path) -> dict[str, tuple[int, int]]:
         stat = path.stat()
         snapshot[path.relative_to(root).as_posix()] = (stat.st_size, stat.st_mtime_ns)
     return snapshot
+
+
+def _share_files_snapshot(worker_workdir: Path) -> dict[str, tuple[int, int]]:
+    root = worker_workdir / SHARE_FILES_DIR
+    if not root.exists():
+        return {}
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        snapshot[path.relative_to(worker_workdir).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def _share_files_changes(worker_workdir: Path, before: dict[str, tuple[int, int]]) -> list[str]:
+    after = _share_files_snapshot(worker_workdir)
+    changed: list[str] = []
+    for path, current in sorted(after.items()):
+        previous = before.get(path)
+        if previous != current:
+            changed.append(path)
+    for path in sorted(set(before) - set(after)):
+        changed.append(path)
+    return changed
 
 
 def _is_skipped_worker_artifact(root: Path, path: Path) -> bool:
