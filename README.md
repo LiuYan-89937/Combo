@@ -1,26 +1,55 @@
 # FastAgentFactory
 
-FastAgentFactory 是一个 Web-first 的 Agent 工厂系统。它把日常对话、Agent 制造、已发布 Agent 运行、Agent 进化、模型池、知识库、定时任务、MCP/Skill 扩展和运行工作区放在同一个可视化前端里管理。
+FastAgentFactory 是一个本地优先的 Agent 工厂系统，用来创建、运行、进化和协作调度可交付的 Agent。它把模型池、工具权限、知识库、MCP/Skill 扩展、工作区、会话、记忆、定时任务和运行 trace 收进同一个 Web 工作台里，让 Agent 从“能聊”走向“能生产、能交付、能复盘”。
 
-## 核心能力
+![闲聊工作台](readme-assets/images/chat.png)
 
-- **闲聊助手**：内置 `factory_chat` 系统包，支持普通对话、工具调用、附件解析、图片输入和图片生成工具。
-- **Agent 制造**：用自然语言描述目标，系统会分析任务、选择模式、装配工具/Skill/知识库/模型，并生成可发布的 AgentPackage。
-- **已发布 Agent 运行**：每个 AgentPackage 拥有独立会话、工作区、知识库、定时任务、MCP/Skill 配置和运行实例。
-- **Agent 进化**：选择一个已发布 AgentPackage，在独立进化上下文里进行改造、验证和重新发布。
-- **模型池**：集中管理子 Agent 可选模型，记录模型能力、价格、供应商、密钥凭证和用量统计。
-- **多模态与图片生成**：主模型可配置图片输入；图片生成模型可作为系统内置工具暴露给 Agent 使用。
-- **知识库与 RAG**：支持上传文档/文件夹，解析成文本后进行分块、索引、检索和挂载。
-- **定时任务**：按当前上下文分区管理。闲聊有闲聊任务表，子 Agent 有自己的任务表。
-- **跨会话记忆**：按 Agent/系统包写入和检索高置信度长期记忆，并在右侧状态栏展示。
-- **工作区预览**：右侧工作区可浏览运行文件、产物、附件和输出内容。
-- **权限控制**：工具调用支持粗粒度审批模式和细粒度工具风险配置。
+## 适合做什么
+
+- 用自然语言制造一个可发布的 AgentPackage。
+- 为不同 Agent 配置不同模型、工具、知识库和扩展能力。
+- 运行已发布 Agent，并保留独立会话、工作区和产物。
+- 对已有 Agent 做进化改造，再验证和发布新版本。
+- 用多 Agent 协作完成复杂任务，由主 Agent 拆分、调度、验收和汇总。
+- 统一管理多供应商模型、图片生成模型、token 用量和估算费用。
+- 在本地查看每次运行的文件、工具调用、trace、记忆和上下文状态。
+
+## 功能概览
+
+| 能力 | 说明 |
+| --- | --- |
+| 闲聊助手 | 内置 `factory_chat` 系统包，支持普通对话、工具调用、附件、图片输入和图片生成。 |
+| Agent 制造 | 根据目标自动分析任务、选择模式、装配模型/工具/Skill/知识库并生成 AgentPackage。 |
+| 已发布 Agent | 每个 AgentPackage 拥有独立会话、工作区、知识库、定时任务、MCP/Skill 和模型绑定。 |
+| Agent 进化 | 对已发布 Agent 做独立上下文改造、验证和重新发布。 |
+| 多 Agent 协作 | 主 Agent 检索可用子 Agent，创建任务、管理依赖、验收交付并推进后续步骤。 |
+| 模型池 | 管理文本模型、图片生成模型、供应商凭证、能力标签和用量统计。 |
+| 知识库与 RAG | 上传文件或文件夹，解析、分块、索引、检索并挂载到指定上下文。 |
+| 扩展系统 | 管理 MCP、Skill、SkillHUB 安装结果和工具权限策略。 |
+| 工作区 | 查看运行文件、附件、产物、共享材料和 Agent 输出。 |
+| 长期记忆 | 按 Agent 写入和查询跨会话记忆，支持置信度排序和删除。 |
+
+## 产品界面
+
+Agent 制造把需求分析、能力装配、工具调用和发布过程放在同一条对话链路里。
+
+![Agent 制造](readme-assets/images/agent-authoring.png)
+
+模型池用于集中维护模型配置、供应商、能力和用量。AgentPackage 只引用 `profile_id`，不会保存真实密钥。
+
+![模型池](readme-assets/images/model-pool.png)
+
+已发布 Agent 可以像普通应用一样进入会话、查看工作区、挂载知识库和管理扩展。
+
+![已发布 Agent](readme-assets/images/agent-marketplace.png)
+
+多 Agent 协作让主 Agent 根据任务检索子 Agent，按依赖关系分配工作，并在交付后继续验收和推进。
+
+![多 Agent 协作](readme-assets/images/collaboration.png)
 
 ## 快速开始
 
-### 1. 准备环境
-
-需要安装：
+### 环境要求
 
 - Python `>= 3.11`
 - Node.js `>= 18`
@@ -30,17 +59,15 @@ FastAgentFactory 是一个 Web-first 的 Agent 工厂系统。它把日常对话
 - 可用的文本模型服务
 - 可用的 embedding 模型服务
 
-### 2. 配置环境变量
+### 配置环境变量
 
-复制配置模板：
+复制模板：
 
 ```bash
 cp .env.example .env
 ```
 
-填写 `.env` 中的模型配置。`.env` 是本地私有文件，不要提交到 git。
-
-最小可运行配置包括：
+填写 `.env`。最小可运行配置包括：
 
 ```bash
 AGENTFACTORY_MODEL_PROVIDER=openai_compatible_chat
@@ -67,16 +94,13 @@ AGENTFACTORY_EMBEDDING_DIMS=
 
 说明：
 
-- 主模型用于闲聊、制造和进化的主对话链路。
-- 任务模型用于结构化分析、分类、抽取等辅助任务。
+- 主模型用于闲聊、制造、进化和普通 Agent 对话。
+- 任务模型用于结构化输出、分类、抽取、意图分析等辅助任务；未单独配置时会回退到主模型。
 - 压缩模型用于上下文压缩。
-- embedding 模型用于知识库、RAG、跨会话记忆和语义检索。
-- 任务模型和压缩模型可以与主模型使用不同供应商、base URL 和 API key。
-- 如果任务/压缩模型的 provider、base URL、API key 为空，会按代码默认从上一级模型继承；建议生产使用时显式填写模型名。
+- embedding 模型用于知识库、RAG、长期记忆和 Agent 检索。
+- `.env` 是本地私有配置，不要提交到 git。
 
-更多配置见 [.env.example](.env.example)。
-
-### 3. 启动项目
+### 启动
 
 在仓库根目录运行：
 
@@ -84,21 +108,155 @@ AGENTFACTORY_EMBEDDING_DIMS=
 ./start.sh
 ```
 
-启动脚本会完成这些检查和准备：
-
-- 检查 `.env` 是否存在，并提示缺失的关键模型配置。
-- 通过 `uv sync --extra web` 同步 Python 后端依赖。
-- 检查前端 `node_modules`，必要时执行 `npm ci` 或 `npm install`。
-- 检查 Docker daemon。
-- 检查子 Agent 运行时镜像 `agentfactory-runtime-python:3.12`。
-- 如果镜像不存在，会使用 [docker/agent-runtime/Dockerfile](docker/agent-runtime/Dockerfile) 自动构建。
-- 启动后端服务和 Vite 前端开发服务。
+启动脚本会检查 `.env`、Python 依赖、前端依赖、Docker daemon 和运行时镜像。镜像不存在时会自动构建 `agentfactory-runtime-python:3.12`。
 
 启动成功后访问：
 
 - 前端：[http://localhost:3000](http://localhost:3000)
 - 后端：[http://localhost:8000](http://localhost:8000)
 - 健康检查：[http://localhost:8000/health](http://localhost:8000/health)
+
+## 推荐工作流
+
+### 1. 配置模型池
+
+先在模型池中添加可供 Agent 使用的文本模型、图片模型和能力信息。模型池会记录供应商、模型名、上下文窗口、价格、能力和凭证来源。
+
+![模型配置](readme-assets/images/model-profile-form.png)
+
+模型用量会按模型、供应商和 Agent 记录，便于比较不同模型在实际任务中的消耗。
+
+![模型用量统计](readme-assets/images/model-usage.png)
+
+### 2. 制造 Agent
+
+进入「Agent 制造」，描述目标 Agent 的用途、边界和交付标准。系统会完成任务分析、模式选择、工具/Skill/模型装配、验证和发布准备。
+
+制造出的 AgentPackage 会保存：
+
+- Agent 身份和说明。
+- 运行模式和节点配置。
+- 模型 `profile_id`。
+- 工具、MCP、Skill 和知识库配置。
+- 工作区和运行契约。
+
+不会保存真实 API key。
+
+### 3. 运行 Agent
+
+进入「已发布 Agent」，选择 Agent 后初始化运行实例。每个 Agent 都有自己的会话、工作区、知识库、定时任务、记忆和扩展配置。
+
+你可以上传附件、粘贴图片、调用工具、生成文件，并在右侧工作区查看产物。
+
+### 4. 进化 Agent
+
+进入「Agent 进化」，选择目标 AgentPackage 并描述修改目标。进化过程使用独立会话和上下文，不会混入普通运行会话。
+
+![Agent 进化](readme-assets/images/agent-evolution.png)
+
+### 5. 组织多 Agent 协作
+
+进入「多 Agent 协作」，主 Agent 会根据任务检索合适的子 Agent，创建任务并声明依赖。子 Agent 默认彼此不可见，共享材料通过协作工作区传递。子 Agent 提交后，主 Agent 会收到协作事件并继续验收或推进后续任务。
+
+第一版重点支持：
+
+- 主 Agent 拆目标和定义交付标准。
+- 最多多个子 Agent 并行执行。
+- 任务依赖和后续自动推进。
+- 协作共享工作区。
+- 子 Agent 交付物汇总与主 Agent 验收。
+
+## 知识库、扩展与工具权限
+
+知识库按上下文隔离：闲聊属于 `factory_chat`，子 Agent 属于对应 AgentPackage，进化上下文属于目标包和进化会话。
+
+![知识库](readme-assets/images/knowledge-base.png)
+
+扩展系统支持 MCP、Skill 和 SkillHUB 安装结果。你可以为每个 Agent 单独启用扩展、配置工具权限、调整风险等级。
+
+![扩展管理](readme-assets/images/extensions.png)
+
+工具权限分为两层：
+
+- 粗粒度模式：严格审批、高风险以下自动放行、全部自动放行。
+- 细粒度配置：每个 Agent 可以单独调整工具风险等级和审批策略。
+
+建议默认使用中间档：低/中风险工具自动放行，高风险工具保留确认。
+
+## 多模态与图片生成
+
+对话支持图片输入、图片粘贴和图片生成工具。图片生成模型通过模型池添加，并作为系统内置模型工具暴露给 Agent 使用。
+
+![图片生成](readme-assets/images/image-generation.png)
+
+支持的图片能力取决于具体模型和供应商，常见能力包括：
+
+- 文生图。
+- 图生图。
+- 图片编辑。
+- 多图参考。
+- 批量生成。
+
+生成结果会保存为运行产物，可在对话和工作区中查看。
+
+## 支持的文本模型 Provider
+
+文本模型经过统一模型协议层适配。总体遵循 OpenAI 风格的消息、工具调用、结构化输出和多模态输入抽象；不同供应商的差异由 adapter 处理。
+
+| Provider | 配置值 | 协议形态 | 工具调用 | 结构化输出 | 思考模式 | 图片输入 |
+| --- | --- | --- | --- | --- | --- | --- |
+| OpenAI Chat Completions | `openai_chat` | Chat Completions | 支持 | 支持 | 按模型能力 | 按模型能力 |
+| OpenAI 兼容服务 | `openai_compatible_chat` | Chat Completions 兼容 | 按服务能力 | 支持 | 按服务能力 | 按模型能力 |
+| Anthropic Claude | `anthropic` | Messages API | 按模型能力 | 支持 | 支持 | 按模型能力 |
+| DeepSeek | `deepseek` | OpenAI 兼容 | 按模型能力 | 支持 | 支持 `reasoning_content` | 按模型能力 |
+| 千问 / 百炼 / DashScope | `qwen` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
+| 智谱 / Z.ai GLM | `zhipu` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
+| Kimi / Moonshot | `kimi` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
+| MiniMax | `minimax` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
+| 小米 MiMo | `mimo` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
+| 腾讯混元 | `hunyuan` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
+
+注意：
+
+- “按模型能力”表示协议层支持该方向，最终是否可用取决于具体模型。
+- DeepSeek 思考模式下，工具调用轮次需要按供应商要求回传 reasoning 内容。
+- 图片输入需要同时满足：前端上传了图片、主模型配置为多模态、模型本身支持图片输入。
+
+## 支持的图片生成 Provider
+
+| Provider | 配置值 | 文生图 | 图生图 | 图片编辑 | 多图参考 | 批量生成 |
+| --- | --- | --- | --- | --- | --- | --- |
+| OpenAI Images | `openai_image` | 支持 | 支持 | 支持 | 支持 | 支持 |
+| 千问 / 万相 | `qwen` | 支持 | 支持 | 支持 | 支持 | 支持 |
+| 豆包 Seedream / 火山方舟 | `volcengine_seedream` | 支持 | 支持 | 支持 | 支持 | 支持 |
+
+千问万相还支持这些别名：
+
+- `wanx`
+- `dashscope_wanx`
+- `aliyun_wanx`
+
+## 附件与工作区
+
+附件支持：
+
+- 本地文件上传。
+- 批量上传，单次消息最多 9 个附件。
+- 图片直接粘贴到输入框。
+- 文本片段。
+- URL。
+- 工作区文件。
+
+附件会进入统一导入链路，保存到当前 Agent/闲聊工作区，然后解析为文本、文件引用或图片输入。图片在多模态主模型可用时作为图片输入，否则仍可走文档解析或 OCR 类链路。
+
+运行数据默认写入：
+
+```text
+.agentfactory/
+.agent_runtime/
+```
+
+这些目录包含会话、checkpoint、trace、工作区文件、附件导入文件、知识库索引、定时任务数据库、模型池 SQLite 和子 Agent 运行产物。它们是本地运行状态，不应提交到 git。
 
 ## 常用命令
 
@@ -125,235 +283,7 @@ cd web_frontend/frontend
 npm run build
 ```
 
-## 推荐工作流
-
-### 闲聊
-
-1. 配好 `.env` 中的主模型和 embedding 模型。
-2. 运行 `./start.sh`。
-3. 进入「闲聊」。
-4. 测试普通对话、附件上传、工具调用、图片输入或图片生成。
-5. 在右侧状态栏查看上下文窗口、跨会话记忆、工具状态和运行信息。
-
-闲聊的资源作用域是系统包 `factory_chat`。它拥有自己的会话、工作区、知识库、定时任务和记忆。
-
-### 制造 Agent
-
-1. 打开「模型池」，添加可供子 Agent 使用的文本模型和图片生成模型。
-2. 进入「Agent 制造」。
-3. 用自然语言描述目标 Agent。
-4. 系统会分析任务，选择运行模式，装配工具、Skill、知识库和模型绑定。
-5. 通过验证后，按页面确认发布。
-6. 发布结果会出现在「已发布 Agent」。
-
-AgentPackage 会保存模型 `profile_id`、工具配置、Skill 配置、知识库配置和运行契约，不保存 API key。
-
-### 运行已发布 Agent
-
-1. 进入「已发布 Agent」。
-2. 点击初始化，启动并准备该 Agent 的运行实例。
-3. 初始化完成后进入 Agent 会话。
-4. 右侧工作区会切换到当前 Agent 的运行空间。
-5. 当前 Agent 的知识库、定时任务、MCP/Skill 和会话记录都与其他 Agent 隔离。
-
-### 进化 Agent
-
-1. 进入「Agent 进化」。
-2. 选择要进化的已发布 AgentPackage。
-3. 描述修改目标。
-4. 进化过程使用独立会话和上下文。
-5. 完成后可重新发布新版本。
-
-从「已发布 Agent」列表点击进化，也会进入同一个进化入口并自动选择目标包。
-
-## 模型配置
-
-### `.env` 模型
-
-`.env` 只负责工厂自身运行所需的基础模型：
-
-- 主模型：闲聊、制造、进化的主对话。
-- 任务模型：结构化输出、分类、抽取、意图分析等辅助任务。
-- 压缩模型：上下文压缩。
-- embedding 模型：知识库、RAG、记忆和语义检索。
-
-### 模型池
-
-模型池用于子 Agent。默认存储位置：
-
-```text
-.agentfactory/model_pool/factory.sqlite
-```
-
-模型池支持：
-
-- 供应商凭证管理。
-- 文本模型管理。
-- 图片生成模型管理。
-- 能力标注，例如工具调用、思考模式、图片输入、图片输出、语音能力。
-- 价格信息和用量统计。
-- 按模型、供应商、Agent 查看 token 消耗和估算费用。
-
-子 Agent 调用模型时通过 `profile_id` 从模型池解析真实凭证。凭证不会写入 AgentPackage。
-
-### 对话中切换模型
-
-聊天输入框旁可以切换主模型。切换只影响下一次发送的消息，不会改变已经在运行中的回复。
-
-模型用量按每次真实模型调用记录，包含：
-
-- `model_profile_id`
-- provider
-- model name
-- agent id
-- session id
-- request id
-- input/output/reasoning/cache tokens
-
-因此中途切换模型后，按「模型」统计会分开；按「Agent」统计会合并到同一个 Agent。
-
-## 支持的文本模型 Provider
-
-文本模型经过统一模型协议层适配。总体遵循 OpenAI 风格的消息、工具调用、结构化输出和多模态输入抽象；不同供应商的差异由 adapter 处理。
-
-| Provider | 配置值 | 协议形态 | 工具调用 | 结构化输出 | 思考模式 | 图片输入 |
-| --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Chat Completions | `openai_chat` | Chat Completions | 支持 | 支持 | 按模型能力 | 按模型能力 |
-| OpenAI 兼容服务 | `openai_compatible_chat` | Chat Completions 兼容 | 按服务能力 | 支持 | 按服务能力 | 按服务能力 |
-| Anthropic Claude | `anthropic` | Messages API | 按模型能力 | 支持 | 支持 | 按模型能力 |
-| DeepSeek | `deepseek` | OpenAI 兼容 | 按模型能力 | 支持 | 支持 `reasoning_content` | 按模型能力 |
-| 千问 / 百炼 / DashScope | `qwen` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 智谱 / Z.ai GLM | `zhipu` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| Kimi / Moonshot | `kimi` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| MiniMax | `minimax` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 小米 MiMo | `mimo` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 腾讯混元 | `hunyuan` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-
-注意：
-
-- 表中的“按模型能力”表示协议层支持该方向，但最终是否可用取决于你配置的具体模型。
-- DeepSeek 思考模式下，工具调用轮次需要按供应商要求回传 reasoning 内容。
-- 图片输入需要同时满足：前端上传了图片、主模型配置为多模态、模型本身支持图片输入。
-
-## 支持的图片生成 Provider
-
-图片生成模型通过模型池添加，并作为系统内置模型工具暴露给主模型调用。
-
-| Provider | 配置值 | 文生图 | 图生图 | 图片编辑 | 多图参考 | 批量生成 |
-| --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Images | `openai_image` | 支持 | 支持 | 支持 | 支持 | 支持 |
-| 千问 / 万相 | `qwen` | 支持 | 支持 | 支持 | 支持 | 支持 |
-| 豆包 Seedream / 火山方舟 | `volcengine_seedream` | 支持 | 支持 | 支持 | 支持 | 支持 |
-
-千问万相还支持这些别名：
-
-- `wanx`
-- `dashscope_wanx`
-- `aliyun_wanx`
-
-生成结果会保存为运行产物，可在对话和工作区中查看。
-
-## 附件
-
-对话附件支持：
-
-- 本地文件上传。
-- 批量附件上传，单次消息最多 9 个附件。
-- 图片直接粘贴到输入框。
-- 文本片段。
-- URL。
-- 工作区文件。
-
-附件会进入统一导入链路：
-
-1. 保存到当前 Agent/闲聊工作区。
-2. 解析为文本、文件引用或图片输入。
-3. 文本内容随用户消息发送给模型。
-4. 图片在多模态主模型可用时作为图片输入；否则仍可走文档解析/OCR 类链路。
-
-## 知识库与 RAG
-
-知识库按当前上下文分区：
-
-- 闲聊知识库属于 `factory_chat`。
-- 子 Agent 知识库属于对应 AgentPackage。
-- 进化上下文使用自己的目标包和进化会话上下文。
-
-支持能力：
-
-- 上传文件。
-- 上传文件夹。
-- 文档解析为文本。
-- RAG 分块参数配置。
-- 文档列表、检索、重建索引和删除。
-
-RAG 主要面向文本内容。图片可以通过解析/OCR 转成文本，但图片本身不直接参与向量索引。
-
-## 定时任务
-
-定时任务也按当前上下文分区：
-
-- 在闲聊里创建的是 `factory_chat` 的任务。
-- 在子 Agent 会话里创建的是该 Agent 的任务。
-
-任务支持：
-
-- cron 表达式。
-- 自然语言任务内容。
-- 启用/停用。
-- 手动立即运行。
-- 运行记录。
-- 完成通知。
-- 点击通知跳转回对应会话查看结果。
-
-Agent 也可以通过工具调用创建定时任务，和前端手动创建走同一套后端逻辑。
-
-## MCP、Skill 与 SkillHUB
-
-系统支持在 Web 端管理 MCP 和 Skill：
-
-- 新增、编辑、启用、停用、删除 MCP。
-- 测试 MCP 连接。
-- 新增、编辑、启用、停用、删除 Skill。
-- 通过 SkillHUB 搜索并安装 Skill。
-- 将 Skill 安装到当前 Agent 的扩展目录并启用。
-- 对系统内置工具和扩展工具配置审批策略。
-
-SkillHUB 可执行程序是全局安装依赖，子 Agent 使用方式与全局 MCP 实例类似，由运行时桥接。
-
-## 工具权限
-
-工具权限分为两层：
-
-- 粗粒度模式：严格审批、高风险以下自动放行、全部自动放行。
-- 细粒度配置：每个 Agent 可以单独调整工具风险等级和审批策略。
-
-建议默认使用中间档：高风险工具需要确认，低/中风险工具自动放行。涉及文件写入、命令执行、网络操作、删除操作时，应根据实际风险提高审批等级。
-
-## 工作区与运行数据
-
-FastAgentFactory 会在本地生成运行数据。默认目录：
-
-```text
-.agentfactory/
-.agent_runtime/
-```
-
-常见内容：
-
-- 会话记录。
-- checkpoint。
-- trace。
-- 工作区文件。
-- 附件导入文件。
-- 知识库索引。
-- 定时任务数据库。
-- 模型池 SQLite。
-- 子 Agent 运行产物。
-
-这些目录是本地运行状态，不应提交到 git。
-
-## Web API 概览
+## Web API
 
 后端服务默认运行在 `http://localhost:8000`。
 
@@ -367,8 +297,9 @@ FastAgentFactory 会在本地生成运行数据。默认目录：
 - `/api/scheduler`：定时任务、运行记录和立即运行。
 - `/api/extensions`：MCP、Skill、工具权限。
 - `/api/memory`：跨会话记忆查询和删除。
+- `/api/collaboration`：多 Agent 协作会话、任务、消息和共享工作区。
 
-前端通过 HTTP API 和 SSE 事件流与后端通信。适合普通请求的能力走 HTTP；运行事件、流式回复、工具审批和状态更新走事件流。
+前端通过 HTTP API 和 SSE 事件流与后端通信。普通请求走 HTTP；流式回复、工具审批、状态更新和运行事件走事件流。
 
 ## 开发说明
 
@@ -394,7 +325,7 @@ cd web_frontend/frontend
 npm run type-check
 ```
 
-如果只改文档，不需要运行前后端。
+如果只改文档，不需要启动前后端。
 
 ## 排障
 
@@ -441,14 +372,14 @@ cd web_frontend/frontend
 npm install
 ```
 
-### 子 Agent 初始化后仍无法对话
+### 子 Agent 初始化后无法对话
 
 检查：
 
 - AgentPackage 是否已初始化完成。
 - Docker daemon 是否正常。
 - 模型池中的模型凭证是否启用。
-- AgentPackage 的 `contracts/model.json` 是否引用了存在且启用的 `profile_id`。
+- AgentPackage 的模型配置是否引用了存在且启用的 `profile_id`。
 - 后端日志和该 Agent 的 trace。
 
 ### 思考模式报错
@@ -461,18 +392,13 @@ npm install
 - 确认 provider 配置正确。
 - 关闭思考模式后复现，判断是否为 provider 规则问题。
 
-## 安全与数据边界
+## 数据与安全边界
 
-- AgentPackage 中应保存模型 `profile_id` 和能力要求，不应保存真实密钥。
+- AgentPackage 保存模型 `profile_id` 和能力要求，不保存真实密钥。
+- `.env`、`.agentfactory/`、`.agent_runtime/` 是本地私有运行状态。
 - 删除会话会连带清理对应 trace/checkpoint 等运行记录。
 - 工具审批策略应按任务风险调整，不建议长期对未知工具全部自动放行。
 
 ## 当前定位
 
-FastAgentFactory 适合本地开发和个人/团队内部 Agent 生产实验。它强调：
-
-- Web-first 的使用体验。
-- 可复现的 AgentPackage 运行结构。
-- Agent、知识库、定时任务、工作区和记忆的上下文隔离。
-- 面向多供应商模型的协议适配。
-- 面向真实工作流的工具、文件、知识库和调度能力。
+FastAgentFactory 面向本地开发、个人工作流和团队内部 Agent 生产实验。它不是只展示单次对话的聊天壳，而是围绕“制造 Agent、运行 Agent、扩展 Agent、观察 Agent、协作 Agent”搭建的一套完整工作台。

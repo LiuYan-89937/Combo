@@ -138,7 +138,10 @@ def _configured_model_for_role(role: ModelRole) -> tuple[Any, ChatModelSettings]
     if role == "main":
         return get_main_model(), get_main_model_settings()
     if role == "task":
-        return get_task_model(), get_task_model_settings()
+        task_model = get_task_model()
+        if task_model is not None:
+            return task_model, get_task_model_settings()
+        return get_main_model(), get_main_model_settings()
     if role == "compression":
         return get_compression_model(), get_compression_model_settings()
     raise ValueError(f"unsupported model role: {role}")

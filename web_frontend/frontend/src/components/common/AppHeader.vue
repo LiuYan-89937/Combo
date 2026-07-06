@@ -29,7 +29,7 @@
       </n-tag>
     </div>
 
-    <div class="header-center">
+    <div class="header-center" :style="headerCenterStyle">
       <n-breadcrumb>
         <n-breadcrumb-item>{{ currentRouteName }}</n-breadcrumb-item>
         <n-breadcrumb-item v-if="runtimeStore.currentMode">
@@ -95,6 +95,11 @@ const { t } = useI18n()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
+
+const headerCenterStyle = computed(() => ({
+  left: `${uiStore.leftSidebarCollapsed ? 0 : uiStore.leftSidebarWidth}px`,
+  right: `${uiStore.rightSidebarCollapsed ? 0 : uiStore.rightSidebarWidth}px`,
+}))
 
 const currentRouteName = computed(() => {
   const isConversationRoute = route.name === 'Factory' || route.name === 'Manufacturing' || route.name === 'Evolution'
@@ -218,10 +223,18 @@ watchEffect(() => {
 }
 
 .header-center {
-  flex: 1;
+  position: absolute;
+  top: 0;
+  bottom: 0;
   display: flex;
+  align-items: center;
   justify-content: center;
   min-width: 0;
+  pointer-events: none;
+}
+
+.header-center :deep(.n-breadcrumb) {
+  pointer-events: auto;
 }
 
 .brand {

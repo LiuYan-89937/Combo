@@ -2,14 +2,14 @@
   <div class="collaboration-view">
     <div class="chat-container">
       <section class="conversation-panel">
+        <n-empty
+          v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
+          class="collaboration-empty"
+          :description="t('collaboration.noMessages')"
+          size="small"
+        />
         <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
           <div class="message-list">
-            <n-empty
-              v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
-              :description="t('collaboration.noMessages')"
-              size="small"
-            />
-
             <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
               <MessageItem
                 :message="item.message"
@@ -175,9 +175,14 @@ watch(
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .messages-scrollbar {
+  height: 100%;
+}
+
+.messages-scrollbar :deep(.n-scrollbar-content) {
   height: 100%;
 }
 
@@ -185,7 +190,19 @@ watch(
   display: flex;
   flex-direction: column;
   gap: var(--app-space-md);
+  min-height: 100%;
   padding: 0 0 var(--app-space-lg);
+}
+
+.collaboration-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
 }
 
 .composer {

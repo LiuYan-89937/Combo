@@ -396,10 +396,17 @@ class ModelOperationService:
         if self._models_by_role:
             item = self._models_by_role.get(requested_role)
             if item is None:
+                item = self._fallback_model_item_for_role(requested_role, state=state)
+            if item is None:
                 raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
             model, settings = item
             metadata = settings.metadata() if hasattr(settings, "metadata") else {}
-            return model, {"model_role": requested_role, "model": "injected", **metadata}
+            return model, {
+                "model": "injected",
+                "requested_model_role": requested_role,
+                **metadata,
+                **({"model_role_fallback": "main"} if requested_role == "task" and metadata.get("model_role") == "main" else {}),
+            }
         if self._model is not None:
             if role is not None and role != self.model_role:
                 model, settings = _configured_model_for_role(role)
@@ -414,6 +421,21 @@ class ModelOperationService:
         return model, {
             **settings.metadata(),
         }
+
+    def _fallback_model_item_for_role(self, role: ModelRole, *, state: Any | None = None) -> tuple[Any, Any] | None:
+        if role != "task":
+            return None
+        item = self._models_by_role.get("main")
+        if item is not None:
+            return item
+        if state is not None:
+            override = resolve_runtime_main_chat_model_from_state(state)
+            if override is not None:
+                return override.model, override.settings
+        model, settings = _configured_model_for_role("main")
+        if model is None:
+            return None
+        return model, settings
 
     def model_for_role(self, role: str | None = None) -> Any | None:
         requested_role = role if role in {"main", "task", "compression"} else self.model_role

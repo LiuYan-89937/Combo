@@ -769,6 +769,8 @@ class RuntimeAgentPackageCommandMixin:
         final_answer: str | None,
         status: str,
         reasoning_content: str | None = None,
+        tool_activities: list[dict[str, Any]] | None = None,
+        trace_ref: dict[str, str] | None = None,
     ) -> None:
         if self.session_record is None:
             return
@@ -779,6 +781,8 @@ class RuntimeAgentPackageCommandMixin:
             final_answer=final_answer,
             reasoning_content=reasoning_content,
             status=status,
+            tool_activities=tool_activities,
+            trace_ref=trace_ref,
         )
 
     def _remember_system_chat_agent_session_id(self, session_id: str) -> None:

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.paths import resolve_project_path
 from agent_factory.runtime_attachments import normalized_runtime_attachments
+from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
@@ -39,7 +40,10 @@ class FactorySessionTurn(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     reasoning_content: str | None = None
     final_answer: str | None = None
+    tool_activities: list[dict[str, Any]] = Field(default_factory=list)
+    messages: list[dict[str, Any]] = Field(default_factory=list)
     status: str | None = None
+    trace_ref: dict[str, str] | None = None
 
 
 class FactorySessionRecord(BaseModel):
@@ -122,7 +126,7 @@ class FactorySessionManager:
         path = self._path(session_id)
         if not path.exists():
             raise FileNotFoundError(f"Factory session not found: {session_id}")
-        return FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        return _normalized_record(FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
 
     def save(self, record: FactorySessionRecord) -> None:
         record.updated_at = _now()
@@ -152,7 +156,7 @@ class FactorySessionManager:
         records: list[FactorySessionRecord] = []
         for path in self.config.root.glob("*.json"):
             try:
-                records.append(FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
+                records.append(_normalized_record(FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8"))))
             except Exception:
                 continue
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
@@ -226,17 +230,17 @@ class FactorySessionManager:
         turn = _find_turn(turns, request_id=request_id)
         now = _now()
         if turn is None:
-            turns.append(
-                FactorySessionTurn(
-                    index=len(turns) + 1,
-                    created_at=now,
-                    updated_at=now,
-                    request_id=(request_id or "").strip() or None,
-                    user_input=user_input.strip() or None,
-                    attachments=normalized_runtime_attachments(attachments),
-                    status="running",
-                )
+            turn = FactorySessionTurn(
+                index=len(turns) + 1,
+                created_at=now,
+                updated_at=now,
+                request_id=(request_id or "").strip() or None,
+                user_input=user_input.strip() or None,
+                attachments=normalized_runtime_attachments(attachments),
+                status="running",
             )
+            turn.messages = _turn_messages(turn)
+            turns.append(turn)
         else:
             if not turn.user_input:
                 turn.user_input = user_input.strip() or None
@@ -244,6 +248,7 @@ class FactorySessionManager:
                 turn.attachments = normalized_runtime_attachments(attachments)
             turn.status = turn.status or "running"
             turn.updated_at = now
+            turn.messages = _turn_messages(turn)
         _sync_turn_count(record, mode)
         self.save(record)
         return record
@@ -257,6 +262,8 @@ class FactorySessionManager:
         final_answer: str | None,
         status: str,
         reasoning_content: str | None = None,
+        tool_activities: list[dict[str, Any]] | None = None,
+        trace_ref: dict[str, str] | None = None,
     ) -> FactorySessionRecord:
         record = self.load(session_id)
         turns = _turns_for_mode(record, mode)
@@ -267,6 +274,11 @@ class FactorySessionManager:
             turn.final_answer = (final_answer or "").strip() or None
             turn.reasoning_content = (reasoning_content or "").strip() or None
             turn.status = status.strip() or None
+            if tool_activities is not None:
+                turn.tool_activities = list(tool_activities)
+            if trace_ref is not None:
+                turn.trace_ref = trace_ref or None
+            turn.messages = _turn_messages(turn)
             turn.updated_at = _now()
         _sync_turn_count(record, mode)
         self.save(record)
@@ -287,22 +299,31 @@ class FactorySessionManager:
             attachments = normalized_runtime_attachments(raw_turn.get("attachments"))
             reasoning_content = str(raw_turn.get("reasoning_content") or "").strip() or None
             final_answer = str(raw_turn.get("final_answer") or "").strip() or None
+            tool_activities = raw_turn.get("tool_activities")
+            messages = raw_turn.get("messages")
+            trace_ref = raw_turn.get("trace_ref")
             if not user_input and not final_answer:
                 continue
             created_at = str(raw_turn.get("created_at") or _now())
             updated_at = str(raw_turn.get("updated_at") or created_at)
+            turn = FactorySessionTurn(
+                index=_safe_turn_index(raw_turn.get("index"), fallback=index),
+                created_at=created_at,
+                updated_at=updated_at,
+                request_id=str(raw_turn.get("request_id") or "").strip() or None,
+                user_input=user_input,
+                attachments=attachments,
+                reasoning_content=reasoning_content,
+                final_answer=final_answer,
+                tool_activities=[item for item in tool_activities if isinstance(item, dict)] if isinstance(tool_activities, list) else [],
+                messages=[item for item in messages if isinstance(item, dict)] if isinstance(messages, list) else [],
+                status=str(raw_turn.get("status") or "").strip() or None,
+                trace_ref=trace_ref if isinstance(trace_ref, dict) else None,
+            )
+            if not turn.messages:
+                turn.messages = _turn_messages(turn)
             turns.append(
-                FactorySessionTurn(
-                    index=_safe_turn_index(raw_turn.get("index"), fallback=index),
-                    created_at=created_at,
-                    updated_at=updated_at,
-                    request_id=str(raw_turn.get("request_id") or "").strip() or None,
-                    user_input=user_input,
-                    attachments=attachments,
-                    reasoning_content=reasoning_content,
-                    final_answer=final_answer,
-                    status=str(raw_turn.get("status") or "").strip() or None,
-                )
+                turn
             )
         _set_turns_for_mode(record, mode, turns)
         first_input = _first_turn_input(turns)
@@ -465,3 +486,25 @@ def _first_turn_input(turns: list[FactorySessionTurn]) -> str | None:
         if value:
             return value
     return None
+
+
+def _turn_messages(turn: FactorySessionTurn) -> list[dict[str, Any]]:
+    return build_chat_turn_messages(
+        index=turn.index,
+        created_at=turn.created_at,
+        updated_at=turn.updated_at,
+        user_input=turn.user_input,
+        attachments=turn.attachments,
+        reasoning_content=turn.reasoning_content,
+        final_answer=turn.final_answer,
+        tool_activities=turn.tool_activities,
+        status=turn.status,
+    )
+
+
+def _normalized_record(record: FactorySessionRecord) -> FactorySessionRecord:
+    for mode in ("chat", "create_agent", "evolve_agent"):
+        for turn in _turns_for_mode(record, mode):
+            if not turn.messages:
+                turn.messages = _turn_messages(turn)
+    return record
