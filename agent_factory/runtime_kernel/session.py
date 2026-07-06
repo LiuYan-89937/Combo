@@ -26,6 +26,7 @@ class AgentSessionTurn(BaseModel):
     reasoning_content: str | None = None
     final_answer: str | None = None
     tool_activities: list[dict[str, Any]] = Field(default_factory=list)
+    message_metadata: dict[str, Any] = Field(default_factory=dict)
     messages: list[dict[str, Any]] = Field(default_factory=list)
     status: str | None = None
     trace_ref: dict[str, str] | None = None
@@ -185,6 +186,7 @@ class AgentSessionManager:
         status: str | None = None,
         trace_ref: dict[str, str] | None = None,
         attachments: Any = None,
+        message_metadata: dict[str, Any] | None = None,
     ) -> AgentSessionRecord:
         record = self.load(session_id)
         if not record.first_user_input:
@@ -205,10 +207,13 @@ class AgentSessionManager:
                 request_id=normalized_request_id,
                 user_input=turn_input,
                 attachments=normalized_runtime_attachments(attachments),
+                message_metadata=message_metadata or {},
             )
             record.turns.append(turn)
         elif turn_input and not turn.user_input:
             turn.user_input = turn_input
+        if message_metadata is not None:
+            turn.message_metadata = dict(message_metadata)
         if not turn.attachments:
             turn.attachments = normalized_runtime_attachments(attachments)
         if reasoning_content is not None:
@@ -306,6 +311,7 @@ def _turn_messages(turn: AgentSessionTurn) -> list[dict[str, Any]]:
         reasoning_content=turn.reasoning_content,
         final_answer=turn.final_answer,
         tool_activities=turn.tool_activities,
+        message_metadata=turn.message_metadata,
         status=turn.status,
     )
 

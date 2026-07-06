@@ -19,6 +19,7 @@ SESSION_STATUSES = {"draft", "running", "completed", "failed", "cancelled"}
 TERMINAL_SESSION_STATUSES = {"completed", "failed", "cancelled"}
 MANUFACTURING_REQUEST_STATUSES = {"requested", "running", "ready_for_publish", "completed", "failed", "blocked"}
 MANUFACTURING_REQUEST_ACTIVE_STATUSES = {"requested", "running"}
+MAIN_AGENT_EVENT_STATUSES = {"pending", "processing", "completed", "failed"}
 TASK_STATUSES = {
     "assigned",
     "queued",
@@ -70,6 +71,7 @@ class CollaborationStore:
             session for session in sessions
             if self.ready_tasks(str(session.get("collaboration_id") or ""))
             or self.list_active_manufacturing_requests(str(session.get("collaboration_id") or ""))
+            or self.pending_main_agent_event_count(str(session.get("collaboration_id") or "")) > 0
         ]
 
     def recover_interrupted_tasks(self) -> dict[str, Any]:
@@ -125,6 +127,30 @@ class CollaborationStore:
                     }
                 )
         return {"recovered_count": len(recovered), "tasks": recovered}
+
+    def recover_interrupted_main_agent_events(self) -> dict[str, Any]:
+        now = utc_now_text()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select event_id, collaboration_id
+                from collaboration_main_agent_events
+                where status = ?
+                """,
+                ("processing",),
+            ).fetchall()
+            conn.execute(
+                """
+                update collaboration_main_agent_events
+                set status = ?, updated_at = ?
+                where status = ?
+                """,
+                ("pending", now, "processing"),
+            )
+        return {
+            "recovered_count": len(rows),
+            "events": [dict(row) for row in rows],
+        }
 
     def create_session(
         self,
@@ -367,14 +393,167 @@ class CollaborationStore:
             )
             self._touch_session_conn(conn, collaboration_id, now)
 
-    def create_task(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def enqueue_main_agent_event(
+        self,
+        collaboration_id: str,
+        *,
+        user_message: str,
+        message_metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
+        event_ref: str | None = None,
+    ) -> dict[str, Any]:
         self.get_session(collaboration_id)
+        clean_message = str(user_message or "").strip()
+        if not clean_message:
+            raise CollaborationStoreError("main agent event user_message must not be empty")
+        clean_ref = normalize_optional_text(event_ref)
+        now = utc_now_text()
+        with self._connect() as conn:
+            if clean_ref:
+                existing = conn.execute(
+                    """
+                    select * from collaboration_main_agent_events
+                    where collaboration_id = ? and event_ref = ?
+                    limit 1
+                    """,
+                    (collaboration_id, clean_ref),
+                ).fetchone()
+                if existing is not None:
+                    return self._main_agent_event_view(existing)
+            event_id = uuid4().hex
+            try:
+                conn.execute(
+                    """
+                    insert into collaboration_main_agent_events (
+                      event_id, collaboration_id, user_message, message_metadata_json,
+                      task_id, event_ref, status, attempts, last_error, created_at, updated_at
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        collaboration_id,
+                        clean_message,
+                        json_dumps(message_metadata or {}),
+                        normalize_optional_text(task_id),
+                        clean_ref,
+                        "pending",
+                        0,
+                        "",
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                if not clean_ref:
+                    raise
+                existing = conn.execute(
+                    """
+                    select * from collaboration_main_agent_events
+                    where collaboration_id = ? and event_ref = ?
+                    limit 1
+                    """,
+                    (collaboration_id, clean_ref),
+                ).fetchone()
+                if existing is not None:
+                    return self._main_agent_event_view(existing)
+                raise
+            self._insert_message_conn(
+                conn,
+                collaboration_id=collaboration_id,
+                speaker_type="system",
+                speaker_package_id=None,
+                message_kind="collaboration_event",
+                content="协作事件已产生：子 Agent 已提交/阻塞/失败，系统将触发主 Agent 继续处理。",
+                task_id=normalize_optional_text(task_id),
+                event_ref=clean_ref,
+                created_at=now,
+            )
+            self._mark_session_running_conn(conn, collaboration_id, now)
+            row = conn.execute(
+                "select * from collaboration_main_agent_events where event_id = ?",
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            raise CollaborationStoreError("failed to enqueue main agent event")
+        return self._main_agent_event_view(row)
+
+    def pending_main_agent_event_count(self, collaboration_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select count(*) as count
+                from collaboration_main_agent_events
+                where collaboration_id = ? and status = ?
+                """,
+                (collaboration_id, "pending"),
+            ).fetchone()
+        return int(row["count"] if row is not None else 0)
+
+    def claim_next_main_agent_event(self, collaboration_id: str) -> dict[str, Any] | None:
+        now = utc_now_text()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select * from collaboration_main_agent_events
+                where collaboration_id = ? and status = ?
+                order by created_at asc, event_id asc
+                limit 1
+                """,
+                (collaboration_id, "pending"),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                update collaboration_main_agent_events
+                set status = ?, attempts = attempts + 1, updated_at = ?
+                where event_id = ? and status = ?
+                """,
+                ("processing", now, row["event_id"], "pending"),
+            )
+            claimed = conn.execute(
+                "select * from collaboration_main_agent_events where event_id = ?",
+                (row["event_id"],),
+            ).fetchone()
+        return self._main_agent_event_view(claimed) if claimed is not None else None
+
+    def complete_main_agent_event(self, event_id: str) -> None:
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update collaboration_main_agent_events
+                set status = ?, updated_at = ?
+                where event_id = ?
+                """,
+                ("completed", now, event_id),
+            )
+
+    def fail_main_agent_event(self, event_id: str, error: str) -> None:
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update collaboration_main_agent_events
+                set status = ?, last_error = ?, updated_at = ?
+                where event_id = ?
+                """,
+                ("failed", str(error or "").strip(), now, event_id),
+            )
+
+    def create_task(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        session = self.get_session(collaboration_id)
         task_text = str(payload.get("task_text") or "").strip()
         if not task_text:
             raise CollaborationStoreError("task_text must not be empty")
         assignee = normalize_package_id(payload.get("assignee_package_id"))
         depends_on = normalize_dependency_ids(payload.get("depends_on"))
+        delivery_standard = validate_non_empty_object(payload.get("delivery_standard"), "delivery_standard")
         self._validate_task_dependencies(collaboration_id, task_id=None, depends_on=depends_on)
+        input_artifacts = merge_artifact_refs(
+            dependency_artifact_refs(session, depends_on),
+            normalize_artifact_refs(payload.get("input_artifacts")),
+        )
         now = utc_now_text()
         task_id = uuid4().hex
         with self._connect() as conn:
@@ -395,9 +574,9 @@ class CollaborationStore:
                     normalize_optional_text(payload.get("assignee_session_id")),
                     task_text,
                     json_dumps(depends_on),
-                    json_dumps(payload.get("delivery_standard") or {}),
+                    json_dumps(delivery_standard),
                     json_dumps(payload.get("visible_context") or {}),
-                    json_dumps(payload.get("input_artifacts") or []),
+                    json_dumps(input_artifacts),
                     "assigned",
                     "",
                     json_dumps({}),
@@ -550,7 +729,7 @@ class CollaborationStore:
         return self.get_manufacturing_request(collaboration_id, request_id)
 
     def update_task(self, collaboration_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        self.get_session(collaboration_id)
+        session = self.get_session(collaboration_id)
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -570,7 +749,24 @@ class CollaborationStore:
                 if "depends_on" in payload
                 else list(current["depends_on"])
             )
+            delivery_standard = (
+                validate_non_empty_object(payload.get("delivery_standard"), "delivery_standard")
+                if "delivery_standard" in payload
+                else current["delivery_standard"]
+            )
+            input_artifacts = (
+                normalize_artifact_refs(payload.get("input_artifacts"))
+                if "input_artifacts" in payload
+                else list(current["input_artifacts"])
+            )
             self._validate_task_dependencies(collaboration_id, task_id=task_id, depends_on=depends_on)
+            dependency_artifacts = dependency_artifact_refs(session, depends_on)
+            input_artifacts = merge_artifact_refs(dependency_artifacts, input_artifacts)
+            if status in READY_TO_START_STATUSES and not delivery_standard:
+                raise CollaborationStoreError("delivery_standard must not be empty for a startable task")
+            dependencies_ready = dependencies_satisfied(session, depends_on)
+            if status in READY_TO_START_STATUSES and depends_on and dependencies_ready and not input_artifacts:
+                raise CollaborationStoreError("dependent tasks require at least one dependency artifact")
             now = utc_now_text()
             conn.execute(
                 """
@@ -588,15 +784,11 @@ class CollaborationStore:
                     if "assignee_session_id" in payload
                     else current["assignee_session_id"],
                     json_dumps(depends_on),
-                    json_dumps(payload.get("delivery_standard"))
-                    if "delivery_standard" in payload
-                    else json_dumps(current["delivery_standard"]),
+                    json_dumps(delivery_standard),
                     json_dumps(payload.get("visible_context"))
                     if "visible_context" in payload
                     else json_dumps(current["visible_context"]),
-                    json_dumps(payload.get("input_artifacts"))
-                    if "input_artifacts" in payload
-                    else json_dumps(current["input_artifacts"]),
+                    json_dumps(input_artifacts),
                     str(payload.get("result_summary") if "result_summary" in payload else current["result_summary"]),
                     json_dumps(payload.get("result_payload") if "result_payload" in payload else current["result_payload"]),
                     json_dumps(payload.get("artifact_refs") if "artifact_refs" in payload else current["artifact_refs"]),
@@ -623,6 +815,7 @@ class CollaborationStore:
     def delete_session(self, collaboration_id: str) -> dict[str, Any]:
         existing = self.get_session(collaboration_id)
         with self._connect() as conn:
+            conn.execute("delete from collaboration_main_agent_events where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_manufacturing_requests where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_tasks where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_messages where collaboration_id = ?", (collaboration_id,))
@@ -775,6 +968,30 @@ class CollaborationStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                create table if not exists collaboration_main_agent_events (
+                  event_id text primary key,
+                  collaboration_id text not null,
+                  user_message text not null,
+                  message_metadata_json text not null,
+                  task_id text,
+                  event_ref text,
+                  status text not null,
+                  attempts integer not null default 0,
+                  last_error text not null default '',
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """
+            )
+            conn.execute(
+                """
+                create unique index if not exists idx_collaboration_main_agent_events_ref
+                on collaboration_main_agent_events(collaboration_id, event_ref)
+                where event_ref is not null
+                """
+            )
             self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
 
     def _ensure_collaboration_sessions_schema(self, conn: sqlite3.Connection) -> None:
@@ -894,6 +1111,11 @@ class CollaborationStore:
         data["result_payload"] = json_loads(data.pop("result_payload_json"), {})
         return data
 
+    def _main_agent_event_view(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["message_metadata"] = json_loads(data.pop("message_metadata_json", "{}"), {})
+        return data
+
     def _insert_message_conn(
         self,
         conn: sqlite3.Connection,
@@ -994,17 +1216,54 @@ class CollaborationStore:
         if not selected:
             return []
         now = utc_now_text()
-        selected_ids = [str(task.get("task_id") or "") for task in selected if task.get("task_id")]
+        selected_ids: list[str] = []
         with self._connect() as conn:
-            for task_id in selected_ids:
+            for task in selected:
+                task_id = str(task.get("task_id") or "")
+                if not task_id:
+                    continue
+                depends_on = normalize_dependency_ids(task.get("depends_on"))
+                input_artifacts = merge_artifact_refs(
+                    dependency_artifact_refs(session, depends_on),
+                    normalize_artifact_refs(task.get("input_artifacts")),
+                )
+                if depends_on and not input_artifacts:
+                    conn.execute(
+                        """
+                        update collaboration_tasks
+                        set status = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
+                        where collaboration_id = ? and task_id = ?
+                        """,
+                        (
+                            "failed",
+                            "依赖任务没有可传递的 artifact_refs，无法启动 worker。",
+                            json_dumps({"runtime_status": "missing_dependency_artifacts"}),
+                            now,
+                            collaboration_id,
+                            task_id,
+                        ),
+                    )
+                    self._insert_message_conn(
+                        conn,
+                        collaboration_id=collaboration_id,
+                        speaker_type="system",
+                        speaker_package_id=task.get("assignee_package_id"),
+                        message_kind="progress",
+                        content="依赖任务没有可传递的 artifact_refs，无法启动 worker。",
+                        task_id=task_id,
+                        event_ref=f"claim-missing-artifacts:{task_id}:{now}",
+                        created_at=now,
+                    )
+                    continue
                 conn.execute(
                     """
                     update collaboration_tasks
-                    set status = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
+                    set status = ?, input_artifacts_json = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
                     where collaboration_id = ? and task_id = ? and status in (?, ?, ?)
                     """,
                     (
                         "accepted",
+                        json_dumps(input_artifacts),
                         "任务已被协作调度器领取，准备启动 worker。",
                         json_dumps({"runtime_status": "claimed"}),
                         now,
@@ -1013,14 +1272,12 @@ class CollaborationStore:
                         *sorted(READY_TO_START_STATUSES),
                     ),
                 )
+                selected_ids.append(task_id)
                 self._insert_message_conn(
                     conn,
                     collaboration_id=collaboration_id,
                     speaker_type="system",
-                    speaker_package_id=next(
-                        (task.get("assignee_package_id") for task in selected if str(task.get("task_id") or "") == task_id),
-                        None,
-                    ),
+                    speaker_package_id=task.get("assignee_package_id"),
                     message_kind="progress",
                     content="任务已被协作调度器领取，准备启动 worker。",
                     task_id=task_id,
@@ -1101,6 +1358,78 @@ def normalize_dependency_ids(value: Any) -> list[str]:
         if item and item not in result:
             result.append(item)
     return result
+
+
+def normalize_artifact_refs(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    result: list[Any] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, dict):
+            key = json_dumps(item)
+            clean = item
+        else:
+            clean_text = str(item or "").strip()
+            if not clean_text:
+                continue
+            key = clean_text
+            clean = clean_text
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(clean)
+    return result
+
+
+def dependency_artifact_refs(session: dict[str, Any], depends_on: list[str]) -> list[Any]:
+    if not depends_on:
+        return []
+    tasks = session.get("tasks") if isinstance(session.get("tasks"), list) else []
+    by_id = {str(task.get("task_id") or ""): task for task in tasks if task.get("task_id")}
+    refs: list[Any] = []
+    for task_id in depends_on:
+        task = by_id.get(task_id)
+        if not isinstance(task, dict):
+            continue
+        refs.extend(normalize_artifact_refs(task.get("artifact_refs")))
+    return refs
+
+
+def dependencies_satisfied(session: dict[str, Any], depends_on: list[str]) -> bool:
+    if not depends_on:
+        return True
+    tasks = session.get("tasks") if isinstance(session.get("tasks"), list) else []
+    by_id = {str(task.get("task_id") or ""): task for task in tasks if task.get("task_id")}
+    return all(str(by_id.get(task_id, {}).get("status") or "") in DEPENDENCY_SATISFIED_TASK_STATUSES for task_id in depends_on)
+
+
+def merge_artifact_refs(*groups: list[Any]) -> list[Any]:
+    result: list[Any] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in normalize_artifact_refs(group):
+            key = _artifact_ref_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+    return result
+
+
+def _artifact_ref_key(item: Any) -> str:
+    if isinstance(item, dict):
+        path = str(item.get("path") or "").strip()
+        if path:
+            return path
+        return json_dumps(item)
+    return str(item or "").strip()
+
+
+def validate_non_empty_object(value: Any, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or not value:
+        raise CollaborationStoreError(f"{field_name} must be a non-empty object")
+    return value
 
 
 def validate_approval_mode(value: str) -> str:

@@ -27,8 +27,8 @@ from agent_factory.factory_graph.frontend_bridge.runtime_events import (
 from agent_factory.factory_graph.session import FactorySessionManager
 
 
-COLLABORATION_SHARED_DIR = "collaboration_shared"
-WORKER_ARTIFACT_SKIP_DIRS = {"input_files", COLLABORATION_SHARED_DIR, ".cache", "__pycache__"}
+SHARE_FILES_DIR = "share_files"
+WORKER_ARTIFACT_SKIP_DIRS = {"input_files", SHARE_FILES_DIR, ".cache", "__pycache__"}
 DEFAULT_MAX_COLLABORATION_ARTIFACT_BYTES = 200 * 1024 * 1024
 MAX_COLLABORATION_ARTIFACT_BYTES_ENV = "AGENTFACTORY_COLLABORATION_MAX_ARTIFACT_BYTES"
 MAX_DELEGATED_APPROVALS_PER_TASK = 20
@@ -102,7 +102,14 @@ class CollaborationOrchestrator:
                 results.append(future.result())
         return results
 
-    def continue_main_agent(self, collaboration_id: str, *, user_message: str, event_ref: str | None = None) -> None:
+    def continue_main_agent(
+        self,
+        collaboration_id: str,
+        *,
+        user_message: str,
+        message_metadata: dict[str, Any] | None = None,
+        event_ref: str | None = None,
+    ) -> None:
         session = self.store.get_session(collaboration_id)
         if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
             return
@@ -127,6 +134,7 @@ class CollaborationOrchestrator:
             package_id,
             user_input=prompt,
             display_user_input=user_message,
+            message_metadata=message_metadata,
             session_id=package_session_id,
             request_id=request_id,
             user_config={
@@ -143,6 +151,14 @@ class CollaborationOrchestrator:
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
         if main_session_id and main_session_id != str(session.get("main_agent_package_session_id") or ""):
             self.store.update_session(collaboration_id, {"main_agent_package_session_id": main_session_id})
+        if main_session_id and package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
+            initial_factory_record = _sync_factory_chat_session_from_agent_session(
+                factory_session_id=factory_session_id,
+                request_id=request_id,
+                user_input=user_message,
+                agent_session=run.session or {},
+            )
+            self.runtime.emit_factory_session_updated(session_record=initial_factory_record, mode="chat")
 
         output = VisibleAssistantOutputAccumulator()
         tool_activities: list[dict[str, Any]] = []
@@ -152,6 +168,13 @@ class CollaborationOrchestrator:
             if stream_mode != "frontend_event":
                 continue
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            self.runtime.emit_frontend_event(
+                _main_agent_frontend_event(
+                    item,
+                    package_id=package_id,
+                    factory_session_id=factory_session_id,
+                )
+            )
             output.accept(item)
             _upsert_tool_activity(tool_activities, item)
             if item.event_type in RUN_TERMINAL_EVENT_TYPES:
@@ -305,6 +328,37 @@ class CollaborationOrchestrator:
             worker_workdir=worker_workdir,
             artifacts=task.get("input_artifacts") or [],
         )
+        missing_materials = _missing_shared_materials(shared_materials)
+        if missing_materials:
+            summary = "授权共享材料缺失，任务未启动：" + "、".join(missing_materials)
+            self.store.update_task(
+                collaboration_id,
+                task_id,
+                {
+                    "status": "failed",
+                    "result_summary": summary,
+                    "result_payload": {
+                        "runtime_status": "missing_input_artifacts",
+                        "missing_input_artifacts": missing_materials,
+                    },
+                },
+            )
+            self.store.record_message(
+                collaboration_id,
+                speaker_type="system",
+                speaker_package_id=package_id,
+                message_kind="progress",
+                content=summary,
+                task_id=task_id,
+            )
+            return CollaborationRunTaskResult(
+                collaboration_id=collaboration_id,
+                task_id=task_id,
+                status="failed",
+                assignee_session_id=assignee_session_id,
+                result_summary=summary,
+                artifact_refs=[],
+            )
         prompt = _worker_prompt(
             session=session,
             task=task,
@@ -349,6 +403,14 @@ class CollaborationOrchestrator:
             status=outcome.status,
             tool_activities=outcome.tool_activities,
         )
+        cancelled_result = self._cancelled_worker_result(
+            collaboration_id=collaboration_id,
+            task_id=task_id,
+            package_id=package_id,
+            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+        )
+        if cancelled_result is not None:
+            return cancelled_result
         if outcome.status != "completed":
             summary = outcome.message or f"worker runtime finished with status {outcome.status}"
             task_status = "blocked" if outcome.status == "blocked" else "failed"
@@ -461,6 +523,14 @@ class CollaborationOrchestrator:
             status=outcome.status,
             tool_activities=outcome.tool_activities,
         )
+        cancelled_result = self._cancelled_worker_result(
+            collaboration_id=collaboration_id,
+            task_id=task_id,
+            package_id=package_id,
+            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+        )
+        if cancelled_result is not None:
+            return cancelled_result
         if outcome.status != "completed":
             summary = outcome.message or f"worker runtime finished with status {outcome.status}"
             task_status = "blocked" if outcome.status == "blocked" else "failed"
@@ -557,6 +627,35 @@ class CollaborationOrchestrator:
             assignee_session_id=assignee_session_id,
             result_summary=_short_summary(content),
             artifact_refs=artifact_refs,
+        )
+
+    def _cancelled_worker_result(
+        self,
+        *,
+        collaboration_id: str,
+        task_id: str,
+        package_id: str,
+        assignee_session_id: str | None,
+    ) -> CollaborationRunTaskResult | None:
+        current_task = _task_by_id(self.store.get_session(collaboration_id), task_id)
+        if str(current_task.get("status") or "") != "cancelled":
+            return None
+        summary = "worker 已结束，但任务已被取消；迟到结果已丢弃。"
+        self.store.record_message(
+            collaboration_id,
+            speaker_type="system",
+            speaker_package_id=package_id,
+            message_kind="progress",
+            content=summary,
+            task_id=task_id,
+        )
+        return CollaborationRunTaskResult(
+            collaboration_id=collaboration_id,
+            task_id=task_id,
+            status="cancelled",
+            assignee_session_id=assignee_session_id,
+            result_summary=summary,
+            artifact_refs=list(current_task.get("artifact_refs") or []),
         )
 
     def _consume_worker_run(
@@ -781,6 +880,26 @@ def _latest_trace_run_id(trace_path: Path) -> str:
     return ""
 
 
+def _main_agent_frontend_event(
+    item: FactoryFrontendEvent,
+    *,
+    package_id: str,
+    factory_session_id: str | None,
+) -> FactoryFrontendEvent:
+    payload = item.payload if isinstance(item.payload, dict) else {}
+    updates: dict[str, Any] = {
+        "payload": {
+            **payload,
+            "package_id": package_id,
+        }
+    }
+    if package_id == SYSTEM_CHAT_PACKAGE_ID:
+        updates["mode"] = "chat"
+        if factory_session_id:
+            updates["session_id"] = factory_session_id
+    return item.model_copy(update=updates)
+
+
 def _is_safe_path_id(value: str) -> bool:
     return bool(value) and all(char.isalnum() or char in {"-", "_"} for char in value)
 
@@ -973,15 +1092,15 @@ def _materialize_authorized_artifacts(
 ) -> dict[str, Any]:
     requested_paths = _authorized_artifact_paths(artifacts)
     if not requested_paths:
-        return {"items": [], "manifest_path": ""}
-    materialized_root = worker_workdir / COLLABORATION_SHARED_DIR
+        return {"items": []}
+    materialized_root = worker_workdir / SHARE_FILES_DIR
     if materialized_root.exists():
         shutil.rmtree(materialized_root)
     materialized_root.mkdir(parents=True, exist_ok=True)
     items: list[dict[str, Any]] = []
     for relative in requested_paths:
         source = _safe_shared_path(shared_workspace, relative)
-        target_relative = _shared_material_runtime_path(relative)
+        target_relative = _share_file_runtime_path(relative)
         target = worker_workdir / target_relative
         item = {
             "source_path": relative,
@@ -1003,18 +1122,7 @@ def _materialize_authorized_artifacts(
                 }
             )
         items.append(item)
-    manifest = {
-        "type": "collaboration_shared_materials",
-        "access": "read_only",
-        "root": COLLABORATION_SHARED_DIR,
-        "items": items,
-    }
-    manifest_path = materialized_root / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return {
-        "items": items,
-        "manifest_path": f"{COLLABORATION_SHARED_DIR}/manifest.json",
-    }
+    return {"items": items}
 
 
 def _authorized_artifact_paths(artifacts: list[Any]) -> list[str]:
@@ -1029,12 +1137,12 @@ def _authorized_artifact_paths(artifacts: list[Any]) -> list[str]:
     return paths
 
 
-def _shared_material_runtime_path(relative: str) -> Path:
+def _share_file_runtime_path(relative: str) -> Path:
     path = PurePosixPath(str(relative).replace("\\", "/"))
     parts = [part for part in path.parts if part not in {"", "."}]
     if path.is_absolute() or not parts or any(part == ".." for part in parts):
         raise ValueError(f"invalid collaboration shared material path: {relative}")
-    return Path(COLLABORATION_SHARED_DIR, "materials", *parts)
+    return Path(SHARE_FILES_DIR, *parts)
 
 
 def _shared_materials_prompt(shared_materials: dict[str, Any]) -> str:
@@ -1042,9 +1150,8 @@ def _shared_materials_prompt(shared_materials: dict[str, Any]) -> str:
     if not isinstance(items, list) or not items:
         return ""
     lines = [
-        "授权共享材料已物化到当前工作区。",
-        f"清单文件：{shared_materials.get('manifest_path') or COLLABORATION_SHARED_DIR + '/manifest.json'}",
-        "使用规则：需要材料内容时，用 read 工具读取下列 path；不要假设未列出的共享材料可见。",
+        f"共享材料已复制到当前工作区的 `{SHARE_FILES_DIR}/` 文件夹。",
+        f"`{SHARE_FILES_DIR}/` 是只读上游材料目录；需要前置产物时直接用 read 工具读取下列路径。",
     ]
     for item in items:
         if not isinstance(item, dict):
@@ -1055,8 +1162,19 @@ def _shared_materials_prompt(shared_materials: dict[str, Any]) -> str:
         if not path:
             continue
         suffix = "（文件不存在）" if status != "available" else ""
-        lines.append(f"- path={path}; source={source_path}; status={status}{suffix}")
+        lines.append(f"- path={path}; source={source_path}; role=上游协作材料; status={status}{suffix}")
     return "\n".join(lines)
+
+
+def _missing_shared_materials(shared_materials: dict[str, Any]) -> list[str]:
+    items = shared_materials.get("items") if isinstance(shared_materials, dict) else []
+    if not isinstance(items, list):
+        return []
+    return [
+        str(item.get("source_path") or item.get("path") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("status") or "") == "missing"
+    ]
 
 
 def _write_worker_delivery(shared_workspace: Path, *, task: dict[str, Any], content: str) -> dict[str, Any]:
@@ -1098,7 +1216,10 @@ def _copy_worker_artifacts(
             continue
         if stat.st_size > _max_collaboration_artifact_bytes():
             continue
-        target_relative = f"artifacts/{task_id}-{assignee}/{relative}"
+        target_relative = _next_available_artifact_relative(
+            shared_workspace,
+            Path("artifacts", assignee, *PurePosixPath(relative).parts).as_posix(),
+        )
         target = _safe_shared_path(shared_workspace, target_relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
@@ -1117,6 +1238,22 @@ def _copy_worker_artifacts(
             }
         )
     return result
+
+
+def _next_available_artifact_relative(shared_workspace: Path, relative: str) -> str:
+    target = _safe_shared_path(shared_workspace, relative)
+    if not target.exists():
+        return relative
+    path = PurePosixPath(relative)
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    index = 2
+    while True:
+        candidate = (parent / f"{stem}__{index}{suffix}").as_posix()
+        if not _safe_shared_path(shared_workspace, candidate).exists():
+            return candidate
+        index += 1
 
 
 def _workspace_snapshot(root: Path) -> dict[str, tuple[int, int]]:

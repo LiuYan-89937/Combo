@@ -129,6 +129,11 @@ class AgentPackageRuntimeManager:
         for handle in self._system_handles.values():
             handle.set_emit(emit)
 
+    def emit_frontend_event(self, item: FactoryFrontendEvent) -> None:
+        if self._emit is None:
+            return
+        self._emit(item)
+
     def emit_collaboration_session_updated(self, *, collaboration_id: str, session: dict[str, Any]) -> None:
         if self._emit is None:
             return
@@ -161,6 +166,7 @@ class AgentPackageRuntimeManager:
                 payload={
                     "session_id": payload.get("session_id"),
                     "session": payload,
+                    "force_restore": True,
                 },
             )
         )
@@ -680,6 +686,7 @@ class AgentPackageRuntimeManager:
         request_id: str | None = None,
         user_config: dict[str, Any] | None = None,
         attachments: Any = None,
+        message_metadata: dict[str, Any] | None = None,
         require_ready: bool = False,
         session_kind: str = "normal",
         collaboration_id: str | None = None,
@@ -724,6 +731,7 @@ class AgentPackageRuntimeManager:
             first_user_input=session_user_input,
             user_input=session_user_input,
             attachments=attachment_result.attachments,
+            message_metadata=message_metadata,
             status="running",
         )
         command = {

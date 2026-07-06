@@ -14,6 +14,7 @@ def build_chat_turn_messages(
     reasoning_content: str | None = None,
     final_answer: str | None = None,
     tool_activities: list[dict[str, Any]] | None = None,
+    message_metadata: dict[str, Any] | None = None,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
     turn_id = str(index)
@@ -26,6 +27,7 @@ def build_chat_turn_messages(
                 role="user",
                 timestamp=created_at,
                 status="completed",
+                metadata=message_metadata,
                 parts=[
                     _text_part(
                         part_id=f"turn-{turn_id}-user:text",
@@ -83,14 +85,25 @@ def build_chat_turn_messages(
     return messages
 
 
-def _chat_message(*, message_id: str, role: str, timestamp: str, status: str, parts: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def _chat_message(
+    *,
+    message_id: str,
+    role: str,
+    timestamp: str,
+    status: str,
+    parts: list[dict[str, Any]],
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
         "id": message_id,
         "role": role,
         "status": status,
         "timestamp": timestamp,
         "parts": parts,
     }
+    if metadata:
+        payload["metadata"] = metadata
+    return payload
 
 
 def _text_part(*, part_id: str, text: str, timestamp: str, fmt: str, status: str = "completed") -> dict[str, Any]:

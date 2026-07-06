@@ -46,6 +46,10 @@ class CollaborationService:
         recovered_count = int(recovery.get("recovered_count") or 0)
         if recovered_count:
             self.logger.info("Recovered %s interrupted collaboration task(s)", recovered_count)
+        event_recovery = self.store.recover_interrupted_main_agent_events()
+        recovered_event_count = int(event_recovery.get("recovered_count") or 0)
+        if recovered_event_count:
+            self.logger.info("Recovered %s interrupted collaboration main agent event(s)", recovered_event_count)
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -225,6 +229,7 @@ class CollaborationService:
                 continue
             try:
                 self.process_manufacturing_requests(collaboration_id)
+                self._drain_main_agent_events(collaboration_id)
                 self.dispatch_ready(collaboration_id)
             except Exception as exc:
                 self.logger.warning(
@@ -261,6 +266,7 @@ class CollaborationService:
 
     def _dispatch_soon_worker(self, collaboration_id: str) -> None:
         try:
+            self._drain_main_agent_events(collaboration_id)
             self.dispatch_ready(collaboration_id)
         except Exception as exc:
             self.logger.warning(
@@ -338,10 +344,15 @@ class CollaborationService:
         if result is not None:
             user_message = _main_agent_continuation_message_from_result(result)
             task_id = str(getattr(result, "task_id", "") or "").strip()
+            message_metadata = _main_agent_continuation_metadata_from_result(
+                result,
+                assignee_package_id=_assignee_package_id_for_task(self.store.get_session(collaboration_id), task_id),
+            )
             status = str(getattr(result, "status", "") or "").strip()
             self._trigger_main_agent_from_event(
                 collaboration_id,
                 user_message=user_message,
+                message_metadata=message_metadata,
                 task_id=task_id or None,
                 event_ref=f"main-agent-trigger:{task_id}:{status}:{sha256(user_message.encode('utf-8')).hexdigest()[:16]}",
             )
@@ -351,6 +362,7 @@ class CollaborationService:
         self._trigger_main_agent_from_event(
             collaboration_id,
             user_message=user_message,
+            message_metadata=None,
             task_id=None,
             event_ref=None,
         )
@@ -502,6 +514,7 @@ class CollaborationService:
         self._trigger_main_agent_from_event(
             collaboration_id,
             user_message=user_message,
+            message_metadata=None,
             task_id=None,
             event_ref=None,
         )
@@ -511,54 +524,75 @@ class CollaborationService:
         collaboration_id: str,
         *,
         user_message: str,
+        message_metadata: dict[str, Any] | None = None,
         task_id: str | None,
         event_ref: str | None,
     ) -> None:
+        self.store.enqueue_main_agent_event(
+            collaboration_id,
+            user_message=user_message,
+            message_metadata=message_metadata,
+            task_id=task_id,
+            event_ref=event_ref,
+        )
+        runtime = self.runtime_factory()
+        runtime.emit_collaboration_session_updated(
+            collaboration_id=collaboration_id,
+            session=self.store.get_session(collaboration_id),
+        )
+        self._drain_main_agent_events(collaboration_id)
+
+    def _drain_main_agent_events(self, collaboration_id: str) -> None:
         if not self._claim_session(collaboration_id):
-            self.dispatch_soon(collaboration_id)
             return
         try:
-            self.store.record_message(
-                collaboration_id,
-                speaker_type="system",
-                speaker_package_id=None,
-                message_kind="collaboration_event",
-                content="协作事件已产生：子 Agent 已提交/阻塞/失败，系统将触发主 Agent 继续处理。",
-                task_id=task_id,
-                event_ref=event_ref,
-            )
             runtime = self.runtime_factory()
-            runtime.emit_collaboration_session_updated(
-                collaboration_id=collaboration_id,
-                session=self.store.get_session(collaboration_id),
-            )
             orchestrator = CollaborationOrchestrator(
                 store=self.store,
                 runtime=runtime,
             )
-            try:
+            while True:
+                event = self.store.claim_next_main_agent_event(collaboration_id)
+                if event is None:
+                    break
+                event_id = str(event.get("event_id") or "")
+                task_id = str(event.get("task_id") or "").strip() or None
+                event_ref = str(event.get("event_ref") or "").strip() or None
+                user_message = str(event.get("user_message") or "")
+                message_metadata = event.get("message_metadata") if isinstance(event.get("message_metadata"), dict) else None
                 orchestrator.continue_main_agent(
                     collaboration_id,
                     user_message=user_message,
+                    message_metadata=message_metadata,
                     event_ref=f"{event_ref}:main-agent" if event_ref else None,
                 )
-            except Exception as exc:
-                self.logger.warning(
-                    "Collaboration main agent trigger failed for %s: %s: %s",
-                    collaboration_id,
-                    type(exc).__name__,
-                    exc,
+                self.store.complete_main_agent_event(event_id)
+                runtime.emit_collaboration_session_updated(
+                    collaboration_id=collaboration_id,
+                    session=self.store.get_session(collaboration_id),
                 )
-                self.store.record_message(
-                    collaboration_id,
-                    speaker_type="system",
-                    speaker_package_id=None,
-                    message_kind="progress",
-                    content=f"主 Agent 触发失败：{type(exc).__name__}: {exc}",
-                    task_id=task_id,
-                    event_ref=event_ref,
-                )
-            runtime.emit_collaboration_session_updated(
+        except Exception as exc:
+            event_id = str(locals().get("event_id") or "")
+            task_id = locals().get("task_id")
+            event_ref = locals().get("event_ref")
+            if event_id:
+                self.store.fail_main_agent_event(event_id, f"{type(exc).__name__}: {exc}")
+            self.logger.warning(
+                "Collaboration main agent trigger failed for %s: %s: %s",
+                collaboration_id,
+                type(exc).__name__,
+                exc,
+            )
+            self.store.record_message(
+                collaboration_id,
+                speaker_type="system",
+                speaker_package_id=None,
+                message_kind="progress",
+                content=f"主 Agent 触发失败：{type(exc).__name__}: {exc}",
+                task_id=task_id if isinstance(task_id, str) else None,
+                event_ref=event_ref if isinstance(event_ref, str) else None,
+            )
+            self.runtime_factory().emit_collaboration_session_updated(
                 collaboration_id=collaboration_id,
                 session=self.store.get_session(collaboration_id),
             )
@@ -648,6 +682,34 @@ def _main_agent_continuation_message_from_result(result: Any) -> str:
         f"- artifact_refs={len(artifact_refs)}\n"
         "请像处理用户补充消息一样继续：先验收该交付；如果验收通过，按你此前在本会话中声明的协作计划继续创建或推进后续任务。"
     )
+
+
+def _main_agent_continuation_metadata_from_result(result: Any, *, assignee_package_id: str | None = None) -> dict[str, Any]:
+    task_id = str(getattr(result, "task_id", "") or "")
+    status = str(getattr(result, "status", "") or "")
+    summary = str(getattr(result, "result_summary", "") or "")
+    assignee_session_id = str(getattr(result, "assignee_session_id", "") or "")
+    artifact_refs = getattr(result, "artifact_refs", []) or []
+    return {
+        "collaboration_report": {
+            "kind": "worker_report",
+            "task_id": task_id,
+            "status": status,
+            "assignee_package_id": assignee_package_id or "",
+            "assignee_session_id": assignee_session_id,
+            "summary": summary,
+            "artifact_count": len(artifact_refs),
+        }
+    }
+
+
+def _assignee_package_id_for_task(session: dict[str, Any], task_id: str) -> str | None:
+    for task in session.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("task_id") or "") == task_id:
+            return str(task.get("assignee_package_id") or "").strip() or None
+    return None
 
 
 def _approval_resume_payload(task: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

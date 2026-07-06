@@ -13,6 +13,7 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
             description=(
                 "多 Agent 协作工具。仅在用户消息提供 collaboration_id 的协作会话中使用。"
                 "主 Agent 用它创建/更新/停止子任务、查看任务状态、读写协作共享工作区。"
+                "create_task/update_task 声明 depends_on 后，系统会自动把前置任务 artifact_refs 授权给子 Agent，不需要手抄 input_artifacts。"
                 "inspect 是状态同步动作；只有运行中任务且没有 submitted/blocked/failed 时，inspect 会返回轻量 deferred，主 Agent 应等待状态变化而不是连续查看。"
                 "验收 worker 交付物时先 read_shared 读取 artifact_refs，再 update_task 为 completed 或 revision_requested。"
                 "所有任务验收完成并形成最终答复后，用 complete_session 写入最终交付并结束协作会话。"
@@ -89,7 +90,7 @@ def _collaboration_input_schema() -> dict:
                     "visible_context": flexible_object,
                     "input_artifacts": artifact_array,
                 },
-                required=["assignee_package_id", "task_text"],
+                required=["assignee_package_id", "task_text", "delivery_standard"],
             ),
             _action_schema(
                 "update_task",

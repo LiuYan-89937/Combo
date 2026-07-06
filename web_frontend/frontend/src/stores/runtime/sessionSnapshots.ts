@@ -204,7 +204,10 @@ function transcriptItemFromPartMessage(
           completedAt: reasoning.status === 'streaming' ? null : reasoning.updatedAt || timestamp,
         }
       : undefined,
-    metadata: options.metadata,
+    metadata: {
+      ...options.metadata,
+      ...(rawMessage.metadata && typeof rawMessage.metadata === 'object' ? rawMessage.metadata : {}),
+    },
   }
 }
 

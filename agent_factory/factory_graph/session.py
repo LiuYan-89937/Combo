@@ -41,6 +41,7 @@ class FactorySessionTurn(BaseModel):
     reasoning_content: str | None = None
     final_answer: str | None = None
     tool_activities: list[dict[str, Any]] = Field(default_factory=list)
+    message_metadata: dict[str, Any] = Field(default_factory=dict)
     messages: list[dict[str, Any]] = Field(default_factory=list)
     status: str | None = None
     trace_ref: dict[str, str] | None = None
@@ -300,6 +301,7 @@ class FactorySessionManager:
             reasoning_content = str(raw_turn.get("reasoning_content") or "").strip() or None
             final_answer = str(raw_turn.get("final_answer") or "").strip() or None
             tool_activities = raw_turn.get("tool_activities")
+            message_metadata = raw_turn.get("message_metadata")
             messages = raw_turn.get("messages")
             trace_ref = raw_turn.get("trace_ref")
             if not user_input and not final_answer:
@@ -316,6 +318,7 @@ class FactorySessionManager:
                 reasoning_content=reasoning_content,
                 final_answer=final_answer,
                 tool_activities=[item for item in tool_activities if isinstance(item, dict)] if isinstance(tool_activities, list) else [],
+                message_metadata=message_metadata if isinstance(message_metadata, dict) else _message_metadata_from_messages(messages),
                 messages=[item for item in messages if isinstance(item, dict)] if isinstance(messages, list) else [],
                 status=str(raw_turn.get("status") or "").strip() or None,
                 trace_ref=trace_ref if isinstance(trace_ref, dict) else None,
@@ -498,6 +501,7 @@ def _turn_messages(turn: FactorySessionTurn) -> list[dict[str, Any]]:
         reasoning_content=turn.reasoning_content,
         final_answer=turn.final_answer,
         tool_activities=turn.tool_activities,
+        message_metadata=turn.message_metadata,
         status=turn.status,
     )
 
@@ -508,3 +512,15 @@ def _normalized_record(record: FactorySessionRecord) -> FactorySessionRecord:
             if not turn.messages:
                 turn.messages = _turn_messages(turn)
     return record
+
+
+def _message_metadata_from_messages(messages: Any) -> dict[str, Any]:
+    if not isinstance(messages, list):
+        return {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict):
+            return metadata
+    return {}

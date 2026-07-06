@@ -953,7 +953,7 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!snapshot.scope) return
 
       this._switchConversationScope(snapshot.scope)
-      if (this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
+      if (!payload?.force_restore && this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
         return
       }
       if (!snapshot.hasMessages) return
