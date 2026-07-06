@@ -24,6 +24,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     RUN_TERMINAL_EVENT_TYPES,
     runtime_stream_status,
 )
+from agent_factory.factory_graph.session import FactorySessionManager
 
 
 COLLABORATION_SHARED_DIR = "collaboration_shared"
@@ -106,6 +107,8 @@ class CollaborationOrchestrator:
         if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
             return
         package_id = str(session.get("main_agent_package_id") or SYSTEM_CHAT_PACKAGE_ID).strip() or SYSTEM_CHAT_PACKAGE_ID
+        factory_session_id = str(session.get("main_factory_session_id") or "").strip()
+        package_session_id = self._main_agent_package_session_id(session, package_id=package_id)
         request_id = f"collab-main-{collaboration_id[:8]}-{uuid4().hex[:8]}"
         self.store.record_message(
             collaboration_id,
@@ -124,7 +127,7 @@ class CollaborationOrchestrator:
             package_id,
             user_input=prompt,
             display_user_input=user_message,
-            session_id=str(session.get("main_agent_session_id") or "").strip() or None,
+            session_id=package_session_id,
             request_id=request_id,
             user_config={
                 "collaboration_id": collaboration_id,
@@ -138,8 +141,8 @@ class CollaborationOrchestrator:
             visible_in_agent_session_list=True,
         )
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
-        if main_session_id and main_session_id != str(session.get("main_agent_session_id") or ""):
-            self.store.update_session(collaboration_id, {"main_agent_session_id": main_session_id})
+        if main_session_id and main_session_id != str(session.get("main_agent_package_session_id") or ""):
+            self.store.update_session(collaboration_id, {"main_agent_package_session_id": main_session_id})
 
         output = VisibleAssistantOutputAccumulator()
         tool_activities: list[dict[str, Any]] = []
@@ -171,6 +174,14 @@ class CollaborationOrchestrator:
                 tool_activities=tool_activities,
                 trace_ref=_latest_trace_ref(package_id),
             )
+            if package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
+                factory_record = _sync_factory_chat_session_from_agent_session(
+                    factory_session_id=factory_session_id,
+                    request_id=request_id,
+                    user_input=user_message,
+                    agent_session=self.runtime.load_session(package_id, main_session_id),
+                )
+                self.runtime.emit_factory_session_updated(session_record=factory_record, mode="chat")
         if status == "completed":
             self.store.record_message(
                 collaboration_id,
@@ -189,6 +200,26 @@ class CollaborationOrchestrator:
             content=f"主 Agent 处理协作事件失败：{message or status}",
             task_id=None,
         )
+
+    def _main_agent_package_session_id(self, session: dict[str, Any], *, package_id: str) -> str | None:
+        if package_id != SYSTEM_CHAT_PACKAGE_ID:
+            return str(session.get("main_agent_package_session_id") or "").strip() or None
+        factory_session_id = str(session.get("main_factory_session_id") or "").strip()
+        if factory_session_id:
+            try:
+                record = FactorySessionManager.from_env().load(factory_session_id)
+                linked_session_id = str(record.chat_agent_package_session_id or "").strip()
+                if linked_session_id:
+                    stored_session_id = str(session.get("main_agent_package_session_id") or "").strip()
+                    if linked_session_id != stored_session_id:
+                        self.store.update_session(
+                            str(session.get("collaboration_id") or ""),
+                            {"main_agent_package_session_id": linked_session_id},
+                        )
+                    return linked_session_id
+            except Exception:
+                pass
+        return str(session.get("main_agent_package_session_id") or "").strip() or None
 
     def start_task(self, collaboration_id: str, task_id: str) -> CollaborationRunTaskResult:
         session = self.store.get_session(collaboration_id)
@@ -671,13 +702,37 @@ def _has_successful_submission(results: list[CollaborationRunTaskResult]) -> boo
 
 
 def _main_agent_continuation_message(results: list[CollaborationRunTaskResult]) -> str:
-    lines = ["协作子任务状态已更新，请根据当前任务状态验收交付、处理阻塞或失败，并推进后续任务。"]
+    lines = ["子 Agent 汇报：协作子任务状态已更新。"]
     for result in results:
         lines.append(
             f"- task_id={result.task_id}; status={result.status}; summary={result.result_summary}; "
             f"artifact_refs={len(result.artifact_refs)}"
         )
+    lines.append("请先验收提交结果；验收通过后，按你此前在本会话中声明的协作计划继续创建或推进后续任务。")
     return "\n".join(lines)
+
+
+def _sync_factory_chat_session_from_agent_session(
+    *,
+    factory_session_id: str,
+    request_id: str,
+    user_input: str,
+    agent_session: dict[str, Any],
+) -> Any:
+    manager = FactorySessionManager.from_env()
+    record = manager.remember_first_user_input(factory_session_id, user_input)
+    agent_session_id = str(agent_session.get("session_id") or "").strip()
+    if agent_session_id and record.chat_agent_package_session_id != agent_session_id:
+        record.chat_agent_package_session_id = agent_session_id
+        manager.save(record)
+    turns = agent_session.get("turns")
+    if isinstance(turns, list):
+        return manager.replace_turns_from_agent_session(
+            factory_session_id,
+            "chat",
+            [turn for turn in turns if isinstance(turn, dict)],
+        )
+    return manager.start_turn(factory_session_id, "chat", request_id=request_id, user_input=user_input)
 
 
 def _latest_trace_ref(package_id: str) -> dict[str, str] | None:

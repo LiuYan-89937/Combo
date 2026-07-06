@@ -2,9 +2,9 @@
   <div class="collaboration-sidebar-content">
     <section class="collaboration-section">
       <div class="section-heading">
-        <div>
+        <div class="section-title-line">
           <div class="section-title">{{ t('collaboration.title') }}</div>
-          <div class="section-desc">{{ t('collaboration.beta') }}</div>
+          <n-tag size="small" :bordered="false" type="info">{{ t('collaboration.betaTag') }}</n-tag>
         </div>
         <n-button size="small" type="primary" :loading="store.saving" @click="createDefaultSession">
           {{ t('collaboration.new') }}
@@ -411,13 +411,13 @@ function refreshActiveSession() {
 
 async function deleteSession(session: CollaborationSessionView) {
   const linked = await store.deleteSession(session.collaboration_id)
-  const linkedSessionId = String(linked?.main_agent_session_id || '').trim()
-  if (!linkedSessionId) return
   const packageId = String(linked?.main_agent_package_id || '').trim()
   if (!packageId || packageId === SYSTEM_CHAT_PACKAGE_ID) {
-    commands.deleteSession(linkedSessionId, 'chat')
+    const factorySessionId = String(linked?.main_factory_session_id || '').trim()
+    if (factorySessionId) commands.deleteSession(factorySessionId, 'chat')
   } else {
-    commands.deleteAgentPackageSession(packageId, linkedSessionId)
+    const packageSessionId = String(linked?.main_agent_package_session_id || '').trim()
+    if (packageSessionId) commands.deleteAgentPackageSession(packageId, packageSessionId)
   }
 }
 
@@ -425,7 +425,8 @@ async function updateMainAgent(value: string) {
   if (!store.activeSession) return
   await store.updateSession({
     main_agent_package_id: value || SYSTEM_CHAT_PACKAGE_ID,
-    main_agent_session_id: null,
+    main_agent_package_session_id: null,
+    main_factory_session_id: null,
   })
 }
 
@@ -613,6 +614,13 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
 .section-title {
   color: var(--app-text-strong);
   font-weight: 700;
+}
+
+.section-title-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-xs);
 }
 
 .section-desc,

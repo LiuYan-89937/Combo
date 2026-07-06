@@ -628,6 +628,7 @@ const zhCN = {
 
   'collaboration.title': '多 Agent 协作',
   'collaboration.beta': 'Beta · 单主 Agent 编排',
+  'collaboration.betaTag': 'Beta',
   'collaboration.new': '新建',
   'collaboration.empty': '暂无协作会话',
   'collaboration.noActiveTitle': '多 Agent 协作',
@@ -1306,6 +1307,7 @@ const enUS: Record<MessageKey, string> = {
 
   'collaboration.title': 'Multi-Agent Collaboration',
   'collaboration.beta': 'Beta · single main-agent orchestration',
+  'collaboration.betaTag': 'Beta',
   'collaboration.new': 'New',
   'collaboration.empty': 'No collaboration sessions',
   'collaboration.noActiveTitle': 'Multi-Agent Collaboration',

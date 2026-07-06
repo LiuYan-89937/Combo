@@ -1,16 +1,6 @@
 <template>
   <div class="collaboration-view">
     <div class="chat-container">
-      <header class="collaboration-header">
-        <div class="title-block">
-          <n-tag size="small" :bordered="false" type="info">Beta</n-tag>
-          <div>
-            <h1>{{ store.activeSession?.title || t('collaboration.noActiveTitle') }}</h1>
-            <p>{{ t('collaboration.subtitle') }}</p>
-          </div>
-        </div>
-      </header>
-
       <section class="conversation-panel">
         <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
           <div class="message-list">
@@ -66,7 +56,6 @@ import { nextTick, onMounted, ref, watch } from 'vue'
 import {
   NEmpty,
   NScrollbar,
-  NTag,
 } from 'naive-ui'
 import { useCollaborationStore } from '@/stores/collaboration'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -180,37 +169,6 @@ watch(
   max-width: var(--app-chat-max-width);
   margin: 0 auto;
   width: 100%;
-}
-
-.collaboration-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--app-space-md);
-  margin-bottom: var(--app-space-md);
-  padding: var(--app-space-md) var(--app-space-lg);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-lg);
-  background: var(--app-surface-muted);
-}
-
-.title-block {
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--app-space-md);
-}
-
-.title-block h1 {
-  margin: 0;
-  color: var(--app-text-strong);
-  font-size: var(--app-font-xl);
-}
-
-.title-block p {
-  margin: var(--app-space-xxs) 0 0;
-  color: var(--app-text-muted);
-  font-size: var(--app-font-sm);
 }
 
 .conversation-panel {

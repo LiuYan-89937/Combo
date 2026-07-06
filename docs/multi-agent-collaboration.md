@@ -322,7 +322,8 @@ collaboration_sessions
 - collaboration_id
 - title
 - main_agent_package_id
-- main_agent_session_id
+- main_agent_package_session_id
+- main_factory_session_id
 - approval_mode
 - status
 - created_at
@@ -332,7 +333,8 @@ collaboration_sessions
 说明：
 
 - `main_agent_package_id`：主 Agent 包。
-- `main_agent_session_id`：主 Agent 自己的会话。
+- `main_agent_package_session_id`：主 Agent 包运行会话，用于后端恢复模型上下文。
+- `main_factory_session_id`：Factory 外层会话，用于前端恢复产品层聊天入口。
 - `approval_mode`：审批模式。
 - `status`：`running`、`completed`、`failed`、`cancelled`。
 

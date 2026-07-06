@@ -179,9 +179,10 @@ class CollaborationService:
                 runtime=self.runtime_factory(),
             )
             result = orchestrator.start_task(collaboration_id, task_id)
-            return {"result": result, "session": self.store.get_session(collaboration_id)}
         finally:
             self._release_session(collaboration_id)
+        self._continue_after_worker_result(collaboration_id, result)
+        return {"result": result, "session": self.store.get_session(collaboration_id)}
 
     def resolve_task_approval(self, collaboration_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self._claim_session(collaboration_id):
@@ -211,9 +212,10 @@ class CollaborationService:
                 task_id,
                 resume_payload=resume_payload,
             )
-            return {"result": result, "session": self.store.get_session(collaboration_id)}
         finally:
             self._release_session(collaboration_id)
+        self._continue_after_worker_result(collaboration_id, result)
+        return {"result": result, "session": self.store.get_session(collaboration_id)}
 
     def dispatch_delegated_sessions(self) -> None:
         self.cancel_requested_tasks()
@@ -534,11 +536,28 @@ class CollaborationService:
                 store=self.store,
                 runtime=runtime,
             )
-            orchestrator.continue_main_agent(
-                collaboration_id,
-                user_message=user_message,
-                event_ref=f"{event_ref}:main-agent" if event_ref else None,
-            )
+            try:
+                orchestrator.continue_main_agent(
+                    collaboration_id,
+                    user_message=user_message,
+                    event_ref=f"{event_ref}:main-agent" if event_ref else None,
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "Collaboration main agent trigger failed for %s: %s: %s",
+                    collaboration_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                self.store.record_message(
+                    collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=None,
+                    message_kind="progress",
+                    content=f"主 Agent 触发失败：{type(exc).__name__}: {exc}",
+                    task_id=task_id,
+                    event_ref=event_ref,
+                )
             runtime.emit_collaboration_session_updated(
                 collaboration_id=collaboration_id,
                 session=self.store.get_session(collaboration_id),
@@ -617,10 +636,17 @@ def _main_agent_continuation_message_from_result(result: Any) -> str:
     task_id = str(getattr(result, "task_id", "") or "")
     status = str(getattr(result, "status", "") or "")
     summary = str(getattr(result, "result_summary", "") or "")
+    assignee_session_id = str(getattr(result, "assignee_session_id", "") or "")
     artifact_refs = getattr(result, "artifact_refs", []) or []
+    submit_label = "已提交" if status == "submitted" else status or "已更新"
     return (
-        "协作子任务状态已更新，请根据当前任务状态验收交付、处理阻塞或失败，并推进后续任务。\n"
-        f"- task_id={task_id}; status={status}; summary={summary}; artifact_refs={len(artifact_refs)}"
+        f"子 Agent 汇报：任务 {task_id} {submit_label}。\n"
+        f"- task_id={task_id}\n"
+        f"- status={status}\n"
+        f"- assignee_session_id={assignee_session_id}\n"
+        f"- summary={summary}\n"
+        f"- artifact_refs={len(artifact_refs)}\n"
+        "请像处理用户补充消息一样继续：先验收该交付；如果验收通过，按你此前在本会话中声明的协作计划继续创建或推进后续任务。"
     )
 
 

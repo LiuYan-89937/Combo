@@ -13,6 +13,7 @@ from uuid import uuid4
 from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
+from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.context_system.schema import (
     DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
@@ -33,6 +34,7 @@ from agent_factory.runtime_attachments import (
     time_named_attachment_scope,
 )
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     AgentRuntimeLaunchError,
     DEFAULT_RUNTIME_IMAGE,
@@ -141,6 +143,24 @@ class AgentPackageRuntimeManager:
                     "kind": "collaboration_session_updated",
                     "collaboration_id": collaboration_id,
                     "session": session,
+                },
+            )
+        )
+
+    def emit_factory_session_updated(self, *, session_record: Any, mode: str = "chat") -> None:
+        if self._emit is None:
+            return
+        payload = session_payload(session_record, snapshot_mode=mode)
+        self._emit(
+            event(
+                "session_switched",
+                request_id=None,
+                session_id=str(payload.get("session_id") or ""),
+                mode=mode,
+                producer_type="collaboration_service",
+                payload={
+                    "session_id": payload.get("session_id"),
+                    "session": payload,
                 },
             )
         )
@@ -417,6 +437,10 @@ class AgentPackageRuntimeManager:
         manager = self._session_manager_for_package(package_id, package)
         result = manager.delete_if_exists(session_id)
         if result is None:
+            collaboration_unlink = CollaborationStore().unlink_runtime_session(
+                package_id=package_id,
+                session_id=session_id,
+            )
             return {
                 "package_id": package_id,
                 "session_id": session_id,
@@ -424,6 +448,7 @@ class AgentPackageRuntimeManager:
                 "missing": True,
                 "deleted_trace_count": 0,
                 "deleted_checkpoint_count": 0,
+                "collaboration_unlink": collaboration_unlink,
                 "cancelled_active_request_count": cancelled_active_request_count,
                 "sessions": self._list_sessions_for_loaded_package(package),
             }
@@ -433,6 +458,10 @@ class AgentPackageRuntimeManager:
             thread_id=result.record.thread_id,
         )
         deleted_workdir = _delete_session_workdir(package_id, result.record.session_id)
+        collaboration_unlink = CollaborationStore().unlink_runtime_session(
+            package_id=package_id,
+            session_id=result.record.session_id,
+        )
         return {
             "package_id": package_id,
             "session_id": result.record.session_id,
@@ -440,6 +469,7 @@ class AgentPackageRuntimeManager:
             "deleted_trace_count": result.deleted_trace_count,
             "deleted_checkpoint_count": deleted_checkpoint_count,
             "deleted_workdir": deleted_workdir,
+            "collaboration_unlink": collaboration_unlink,
             "cancelled_active_request_count": cancelled_active_request_count,
             "sessions": self._list_sessions_for_loaded_package(package),
         }

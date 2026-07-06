@@ -222,10 +222,15 @@ class CollaborationStore:
             if "main_agent_package_id" in payload
             else existing["main_agent_package_id"]
         )
-        main_agent_session_id = (
-            normalize_optional_text(payload.get("main_agent_session_id"))
-            if "main_agent_session_id" in payload
-            else existing["main_agent_session_id"]
+        main_agent_package_session_id = (
+            normalize_optional_text(payload.get("main_agent_package_session_id"))
+            if "main_agent_package_session_id" in payload
+            else existing["main_agent_package_session_id"]
+        )
+        main_factory_session_id = (
+            normalize_optional_text(payload.get("main_factory_session_id"))
+            if "main_factory_session_id" in payload
+            else existing["main_factory_session_id"]
         )
         approval_mode = (
             validate_approval_mode(str(payload.get("approval_mode")))
@@ -240,11 +245,20 @@ class CollaborationStore:
             conn.execute(
                 """
                 update collaboration_sessions
-                set title = ?, main_agent_package_id = ?, main_agent_session_id = ?,
-                    approval_mode = ?, status = ?, updated_at = ?
+                set title = ?, main_agent_package_id = ?, main_agent_package_session_id = ?,
+                    main_factory_session_id = ?, approval_mode = ?, status = ?, updated_at = ?
                 where collaboration_id = ?
                 """,
-                (title, main_agent_package_id, main_agent_session_id, approval_mode, status, now, collaboration_id),
+                (
+                    title,
+                    main_agent_package_id,
+                    main_agent_package_session_id,
+                    main_factory_session_id,
+                    approval_mode,
+                    status,
+                    now,
+                    collaboration_id,
+                ),
             )
             if approval_mode != existing["approval_mode"]:
                 self._insert_message_conn(
@@ -620,26 +634,93 @@ class CollaborationStore:
             "collaboration_id": collaboration_id,
             "deleted": True,
             "main_agent_package_id": existing["main_agent_package_id"],
-            "main_agent_session_id": existing.get("main_agent_session_id"),
+            "main_agent_package_session_id": existing.get("main_agent_package_session_id"),
+            "main_factory_session_id": existing.get("main_factory_session_id"),
             "sessions": self.list_sessions(),
+        }
+
+    def unlink_runtime_session(self, *, package_id: str, session_id: str) -> dict[str, Any]:
+        clean_package_id = normalize_package_id(package_id)
+        clean_session_id = normalize_optional_text(session_id)
+        if not clean_session_id:
+            raise CollaborationStoreError("session_id must not be empty")
+        now = utc_now_text()
+        with self._connect() as conn:
+            main_rows = conn.execute(
+                """
+                select collaboration_id
+                from collaboration_sessions
+                where main_agent_package_id = ? and main_agent_package_session_id = ?
+                """,
+                (clean_package_id, clean_session_id),
+            ).fetchall()
+            task_rows = conn.execute(
+                """
+                select collaboration_id, task_id
+                from collaboration_tasks
+                where assignee_package_id = ? and assignee_session_id = ?
+                """,
+                (clean_package_id, clean_session_id),
+            ).fetchall()
+            for row in main_rows:
+                collaboration_id = str(row["collaboration_id"])
+                conn.execute(
+                    """
+                    update collaboration_sessions
+                    set main_agent_package_session_id = null, updated_at = ?
+                    where collaboration_id = ?
+                    """,
+                    (now, collaboration_id),
+                )
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=clean_package_id,
+                    message_kind="progress",
+                    content=f"主 Agent 运行会话已删除，协作会话已解除绑定：{clean_session_id}",
+                    task_id=None,
+                    event_ref=f"runtime-session-unlinked:main:{clean_package_id}:{clean_session_id}:{now}",
+                    created_at=now,
+                )
+            for row in task_rows:
+                collaboration_id = str(row["collaboration_id"])
+                task_id = str(row["task_id"])
+                conn.execute(
+                    """
+                    update collaboration_tasks
+                    set assignee_session_id = null, updated_at = ?
+                    where collaboration_id = ? and task_id = ?
+                    """,
+                    (now, collaboration_id, task_id),
+                )
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=clean_package_id,
+                    message_kind="progress",
+                    content=f"子 Agent 运行会话已删除，任务已解除会话绑定：{clean_session_id}",
+                    task_id=task_id,
+                    event_ref=f"runtime-session-unlinked:task:{clean_package_id}:{clean_session_id}:{task_id}:{now}",
+                    created_at=now,
+                )
+        return {
+            "package_id": clean_package_id,
+            "session_id": clean_session_id,
+            "main_agent_reference_count": len(main_rows),
+            "worker_task_reference_count": len(task_rows),
+            "collaboration_ids": sorted(
+                {
+                    *[str(row["collaboration_id"]) for row in main_rows],
+                    *[str(row["collaboration_id"]) for row in task_rows],
+                }
+            ),
         }
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                create table if not exists collaboration_sessions (
-                  collaboration_id text primary key,
-                  title text not null,
-                  main_agent_package_id text not null,
-                  main_agent_session_id text,
-                  approval_mode text not null,
-                  status text not null,
-                  created_at text not null,
-                  updated_at text not null
-                )
-                """
-            )
+            self._ensure_collaboration_sessions_schema(conn)
             conn.execute(
                 """
                 create table if not exists collaboration_messages (
@@ -695,6 +776,82 @@ class CollaborationStore:
                 """
             )
             self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
+
+    def _ensure_collaboration_sessions_schema(self, conn: sqlite3.Connection) -> None:
+        target_columns = [
+            "collaboration_id",
+            "title",
+            "main_agent_package_id",
+            "main_agent_package_session_id",
+            "main_factory_session_id",
+            "approval_mode",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        rows = conn.execute("pragma table_info(collaboration_sessions)").fetchall()
+        if not rows:
+            conn.execute(
+                """
+                create table collaboration_sessions (
+                  collaboration_id text primary key,
+                  title text not null,
+                  main_agent_package_id text not null,
+                  main_agent_package_session_id text,
+                  main_factory_session_id text,
+                  approval_mode text not null,
+                  status text not null,
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """
+            )
+            return
+        existing_columns = [str(row["name"]) for row in rows]
+        if existing_columns == target_columns:
+            return
+        conn.execute("alter table collaboration_sessions rename to collaboration_sessions_legacy")
+        conn.execute(
+            """
+            create table collaboration_sessions (
+              collaboration_id text primary key,
+              title text not null,
+              main_agent_package_id text not null,
+              main_agent_package_session_id text,
+              main_factory_session_id text,
+              approval_mode text not null,
+              status text not null,
+              created_at text not null,
+              updated_at text not null
+            )
+            """
+        )
+        legacy = set(existing_columns)
+        package_session_expr = (
+            "main_agent_package_session_id"
+            if "main_agent_package_session_id" in legacy
+            else "null"
+        )
+        factory_session_expr = (
+            "main_factory_session_id"
+            if "main_factory_session_id" in legacy
+            else "null"
+        )
+        conn.execute(
+            f"""
+            insert into collaboration_sessions (
+              collaboration_id, title, main_agent_package_id,
+              main_agent_package_session_id, main_factory_session_id,
+              approval_mode, status, created_at, updated_at
+            )
+            select
+              collaboration_id, title, main_agent_package_id,
+              {package_session_expr}, {factory_session_expr},
+              approval_mode, status, created_at, updated_at
+            from collaboration_sessions_legacy
+            """
+        )
+        conn.execute("drop table collaboration_sessions_legacy")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

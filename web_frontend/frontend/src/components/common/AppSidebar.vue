@@ -81,6 +81,13 @@ const { activeKey, handleMenuSelect, menuOptions } = useSidebarNavigation()
   color: inherit;
 }
 
+.app-sidebar :deep(.sidebar-menu-label-with-tag) {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-space-xs);
+}
+
 .app-sidebar :deep(.n-menu-item-content:not(.n-menu-item-content--selected):hover) {
   background-color: var(--app-surface-muted);
 }
