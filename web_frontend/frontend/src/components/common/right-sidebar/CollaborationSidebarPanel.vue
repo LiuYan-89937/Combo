@@ -1,5 +1,5 @@
 <template>
-  <div class="collaboration-sidebar-content">
+  <div ref="markdownRootRef" class="collaboration-sidebar-content">
     <section class="collaboration-section">
       <div class="section-heading">
         <div class="section-title-line">
@@ -104,11 +104,19 @@
     </section>
 
     <section class="collaboration-section">
-      <div class="section-title">{{ t('collaboration.activity') }}</div>
-      <n-empty v-if="activityMessages.length === 0" :description="t('collaboration.noMessages')" size="small" />
+      <div class="section-heading">
+        <div class="section-title">{{ t('collaboration.activity') }}</div>
+        <n-select
+          v-model:value="activityAgentFilter"
+          size="small"
+          class="activity-filter"
+          :options="activityAgentOptions"
+        />
+      </div>
+      <n-empty v-if="filteredActivityMessages.length === 0" :description="t('collaboration.noMessages')" size="small" />
       <div v-else class="activity-list">
         <article
-          v-for="message in activityMessages"
+          v-for="message in filteredActivityMessages"
           :key="message.message_id"
           class="activity-item"
           :class="message.message_kind"
@@ -117,7 +125,7 @@
             <strong>{{ messageSpeaker(message) }}</strong>
             <n-tag size="tiny" :bordered="false">{{ message.message_kind }}</n-tag>
           </div>
-          <p>{{ message.content }}</p>
+          <div class="markdown-content sidebar-markdown activity-markdown" v-html="renderSidebarMarkdown(message.content)"></div>
         </article>
       </div>
     </section>
@@ -133,17 +141,31 @@
       <div v-else class="task-list">
         <article v-for="task in store.tasks" :key="task.task_id" class="task-card">
           <div class="task-head">
-            <div>
+            <div class="task-title-block">
               <strong>{{ agentName(task.assignee_package_id) }}</strong>
               <div v-if="task.status === 'submitted'" class="task-review-hint">{{ t('collaboration.pendingReview') }}</div>
             </div>
-            <n-tag size="small" :type="taskStatusType(task.status)" :bordered="false">{{ task.status }}</n-tag>
+            <div class="task-head-actions">
+              <n-tag size="small" :type="taskStatusType(task.status)" :bordered="false">{{ task.status }}</n-tag>
+              <n-button size="tiny" quaternary circle @click="toggleTaskExpanded(task.task_id)">
+                <template #icon>
+                  <n-icon>
+                    <ChevronDownOutline v-if="isTaskExpanded(task.task_id)" />
+                    <ChevronForwardOutline v-else />
+                  </n-icon>
+                </template>
+              </n-button>
+            </div>
           </div>
-          <p>{{ task.task_text }}</p>
+          <div class="markdown-content sidebar-markdown task-summary" v-html="renderSidebarMarkdown(taskSummary(task))"></div>
           <div v-if="task.depends_on?.length" class="task-meta">
             {{ t('collaboration.dependsOn') }} {{ task.depends_on.join(', ') }}
           </div>
-          <div v-if="task.result_summary" class="task-result">{{ task.result_summary }}</div>
+          <div
+            v-if="task.result_summary"
+            class="markdown-content sidebar-markdown task-result"
+            v-html="renderSidebarMarkdown(task.result_summary)"
+          ></div>
           <div v-if="pendingApprovalRequests(task).length" class="task-approval-box">
             <div class="task-approval-title">{{ t('collaboration.pendingToolApproval') }}</div>
             <div
@@ -170,7 +192,12 @@
               </n-button>
             </div>
           </div>
-          <div v-if="task.artifact_refs?.length" class="artifact-list">
+          <div v-if="task.artifact_refs?.length" class="task-meta">
+            {{ t('collaboration.reportArtifacts', { count: task.artifact_refs.length }) }}
+          </div>
+          <template v-if="isTaskExpanded(task.task_id)">
+            <div class="markdown-content sidebar-markdown task-full-text" v-html="renderSidebarMarkdown(task.task_text)"></div>
+            <div v-if="task.artifact_refs?.length" class="artifact-list">
             <button
               v-for="artifact in task.artifact_refs"
               :key="artifact.path"
@@ -180,14 +207,15 @@
             >
               {{ artifact.path }}
             </button>
-          </div>
-          <n-input
-            v-model:value="reviewDrafts[task.task_id]"
-            type="textarea"
-            size="small"
-            :autosize="{ minRows: 2, maxRows: 4 }"
-            :placeholder="t('collaboration.reviewPlaceholder')"
-          />
+            </div>
+            <n-input
+              v-model:value="reviewDrafts[task.task_id]"
+              type="textarea"
+              size="small"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              :placeholder="t('collaboration.reviewPlaceholder')"
+            />
+          </template>
           <div class="task-actions">
             <n-button
               size="tiny"
@@ -313,7 +341,8 @@ import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
-import { TrashOutline } from '@/components/icons'
+import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import { ChevronDownOutline, ChevronForwardOutline, TrashOutline } from '@/components/icons'
 import FilePreview from '@/components/workspace/FilePreview.vue'
 import WorkspaceExplorer from '@/components/workspace/WorkspaceExplorer.vue'
 import type {
@@ -337,6 +366,10 @@ const mainAgentDraft = ref(SYSTEM_CHAT_PACKAGE_ID)
 const approvalModeDraft = ref<CollaborationApprovalMode>('main_agent_delegated')
 const reviewDrafts = ref<Record<string, string>>({})
 const acceptancePreviewLoading = ref(false)
+const activityAgentFilter = ref('__all__')
+const expandedTaskIds = ref<Record<string, boolean>>({})
+const markdownRootRef = ref<HTMLElement | null>(null)
+const { renderMarkdown } = useMarkdownRenderer(markdownRootRef)
 let refreshTimer: number | null = null
 
 const mainAgentOptions = computed(() => (
@@ -354,6 +387,29 @@ const acceptanceWorkspaceContext = computed<WorkspaceRequestContext | null>(() =
 })
 const acceptanceWorkspaceContextKey = computed(() => acceptanceWorkspaceContext.value?.collaborationId || '')
 const activityMessages = computed(() => store.messages.slice(-30))
+const activityAgentOptions = computed(() => {
+  const options = new Map<string, string>()
+  options.set('__all__', t('collaboration.activityAllAgents'))
+  const mainAgentFilter = mainAgentActivityFilterValue()
+  options.set(mainAgentFilter, agentName(store.activeSession?.main_agent_package_id || SYSTEM_CHAT_PACKAGE_ID))
+  for (const task of store.tasks) {
+    const packageId = String(task.assignee_package_id || '').trim()
+    if (packageId) options.set(packageId, agentName(packageId))
+  }
+  for (const message of store.messages) {
+    const value = messageActivityFilterValue(message)
+    if (value === '__system__') {
+      options.set(value, t('collaboration.systemEvents'))
+    } else if (value) {
+      options.set(value, agentName(value))
+    }
+  }
+  return Array.from(options.entries()).map(([value, label]) => ({ value, label }))
+})
+const filteredActivityMessages = computed(() => {
+  if (activityAgentFilter.value === '__all__') return activityMessages.value
+  return activityMessages.value.filter((message) => messageActivityFilterValue(message) === activityAgentFilter.value)
+})
 const canCompleteSession = computed(() => {
   if (!store.activeSession || store.activeSession.status === 'completed') return false
   if (!finalSummary.value.trim()) return false
@@ -378,6 +434,14 @@ watch(
     mainAgentDraft.value = session?.main_agent_package_id || SYSTEM_CHAT_PACKAGE_ID
     approvalModeDraft.value = session?.approval_mode || 'main_agent_delegated'
     reviewDrafts.value = Object.fromEntries((session?.tasks || []).map((task) => [task.task_id, task.review_notes || '']))
+    const nextExpanded: Record<string, boolean> = {}
+    for (const task of session?.tasks || []) {
+      nextExpanded[task.task_id] = expandedTaskIds.value[task.task_id] === true || pendingApprovalRequests(task).length > 0
+    }
+    expandedTaskIds.value = nextExpanded
+    if (!activityAgentOptions.value.some((option) => option.value === activityAgentFilter.value)) {
+      activityAgentFilter.value = '__all__'
+    }
   },
   { immediate: true },
 )
@@ -488,6 +552,40 @@ function handleAcceptanceFileSelect(entry: WorkspaceEntry) {
 
 function openArtifact(path: string) {
   void previewAcceptanceFile(path)
+}
+
+function isTaskExpanded(taskId: string): boolean {
+  return expandedTaskIds.value[taskId] === true
+}
+
+function toggleTaskExpanded(taskId: string) {
+  expandedTaskIds.value = {
+    ...expandedTaskIds.value,
+    [taskId]: !isTaskExpanded(taskId),
+  }
+}
+
+function taskSummary(task: CollaborationTaskView): string {
+  const result = String(task.result_summary || '').trim()
+  if (result) return result
+  const text = String(task.task_text || '').replace(/\s+/g, ' ').trim()
+  if (!text) return t('collaboration.taskNoSummary')
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text
+}
+
+function renderSidebarMarkdown(content: string | null | undefined): string {
+  return renderMarkdown(String(content || ''), { surface: 'collaboration_sidebar' })
+}
+
+function mainAgentActivityFilterValue(): string {
+  return String(store.activeSession?.main_agent_package_id || SYSTEM_CHAT_PACKAGE_ID).trim() || SYSTEM_CHAT_PACKAGE_ID
+}
+
+function messageActivityFilterValue(message: CollaborationMessageView): string {
+  const packageId = String(message.speaker_package_id || '').trim()
+  if (packageId) return packageId
+  if (message.speaker_type === 'main_agent') return mainAgentActivityFilterValue()
+  return '__system__'
 }
 
 async function previewAcceptanceFile(path: string) {
@@ -707,9 +805,18 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
 
 .activity-list {
   margin-top: var(--app-space-md);
+  max-height: 360px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
   display: flex;
   flex-direction: column;
   gap: var(--app-space-sm);
+}
+
+.activity-filter {
+  width: 144px;
+  flex: 0 0 auto;
 }
 
 .activity-item {
@@ -728,10 +835,8 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
   font-size: var(--app-font-xs);
 }
 
-.activity-item p {
+.activity-markdown {
   margin: var(--app-space-xs) 0 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   color: var(--app-text);
   font-size: var(--app-font-sm);
   line-height: 1.55;
@@ -756,6 +861,82 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
   line-height: var(--app-leading-normal);
 }
 
+.sidebar-markdown {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: var(--app-font-sm);
+  line-height: 1.55;
+}
+
+.sidebar-markdown :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.sidebar-markdown :deep(> :last-child) {
+  margin-bottom: 0;
+}
+
+.sidebar-markdown :deep(h1),
+.sidebar-markdown :deep(h2),
+.sidebar-markdown :deep(h3),
+.sidebar-markdown :deep(h4) {
+  margin: var(--app-space-sm) 0 var(--app-space-xs);
+  font-size: var(--app-font-sm);
+  line-height: 1.35;
+}
+
+.sidebar-markdown :deep(p),
+.sidebar-markdown :deep(ul),
+.sidebar-markdown :deep(ol),
+.sidebar-markdown :deep(blockquote),
+.sidebar-markdown :deep(pre),
+.sidebar-markdown :deep(table) {
+  margin: var(--app-space-xs) 0;
+}
+
+.sidebar-markdown :deep(table) {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: var(--app-font-xs);
+}
+
+.sidebar-markdown :deep(th),
+.sidebar-markdown :deep(td) {
+  white-space: normal;
+}
+
+.sidebar-markdown :deep(pre) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.task-title-block {
+  min-width: 0;
+}
+
+.task-title-block strong {
+  overflow-wrap: anywhere;
+}
+
+.task-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-xs);
+  flex: 0 0 auto;
+}
+
+.task-summary {
+  margin-top: var(--app-space-sm);
+  color: var(--app-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .task-review-hint {
   margin-top: var(--app-space-xxs);
   color: var(--app-text-muted);
@@ -765,7 +946,10 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
 .task-result {
   margin: var(--app-space-sm) 0;
   color: var(--app-text-secondary);
-  font-size: var(--app-font-sm);
+}
+
+.task-full-text {
+  margin: var(--app-space-sm) 0;
 }
 
 .task-approval-box {
