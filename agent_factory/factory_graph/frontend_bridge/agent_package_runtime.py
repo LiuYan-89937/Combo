@@ -41,6 +41,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     DEFAULT_RUNTIME_IMAGE,
     DockerAgentRuntimeLauncher,
 )
+from agent_factory.factory_graph.frontend_bridge.container_pool import get_global_container_pool
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
     AgentPackageRepository,
 )
@@ -122,6 +123,13 @@ class AgentPackageRuntimeManager:
         self._mcp_gateways = HostMCPGatewayManager()
         self._skillhub_gateways = HostSkillHubGatewayManager()
         self._emit = emit
+
+        # 容器池支持（可通过环境变量禁用）
+        self._use_container_pool = _env_int("AGENTFACTORY_USE_CONTAINER_POOL", 1) == 1
+        if self._use_container_pool:
+            self._container_pool = get_global_container_pool()
+        else:
+            self._container_pool = None
 
     def set_emit(self, emit: Emit | None) -> None:
         self._emit = emit
@@ -1110,8 +1118,38 @@ class AgentPackageRuntimeManager:
         runtime_key: str,
         workdir_root: Path | None = None,
     ) -> "AgentRuntimeContainerHandle":
-        existing = self._containers.get(runtime_key)
         fingerprint = _runtime_fingerprint(package_id, package)
+
+        # 如果启用容器池，优先从池中获取
+        if self._use_container_pool and self._container_pool is not None:
+            # 检查当前 runtime_key 是否已有活跃容器
+            existing = self._containers.get(runtime_key)
+            if (
+                existing is not None
+                and existing.is_running
+                and existing.package_fingerprint == fingerprint
+            ):
+                return existing
+
+            # 从池中获取或创建容器
+            def create_container_for_pool():
+                return self._create_container_handle(package_id, package, fingerprint, workdir_root)
+
+            try:
+                handle = self._container_pool.acquire(
+                    package_id=package_id,
+                    package_fingerprint=fingerprint,
+                    create_fn=create_container_for_pool,
+                )
+                # 将容器关联到当前 runtime_key
+                self._containers[runtime_key] = handle
+                return handle
+            except Exception:
+                # 池获取失败，回退到传统方式
+                pass
+
+        # 传统方式：每个 session 独立容器
+        existing = self._containers.get(runtime_key)
         if (
             existing is not None
             and existing.is_running
@@ -1119,14 +1157,26 @@ class AgentPackageRuntimeManager:
             and not existing.is_idle(self.idle_timeout_seconds)
         ):
             return existing
+
         self._close_container(runtime_key)
+        handle = self._create_container_handle(package_id, package, fingerprint, workdir_root)
+        self._containers[runtime_key] = handle
+        return handle
+
+    def _create_container_handle(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+        fingerprint: str,
+        workdir_root: Path | None,
+    ) -> "AgentRuntimeContainerHandle":
+        """创建新的容器 handle（提取为独立方法供池使用）"""
         runtime_root = _host_runtime_root(package_id)
         artifacts_root = runtime_root / "artifacts" / uuid4().hex
         workdir_root = workdir_root or _host_scratch_workdir(package_id)
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
-        fingerprint = _runtime_fingerprint(package_id, package)
         mcp_gateway = self._mcp_gateways.ensure_gateway(
             _load_extension_bundle(extension_root, package=package).mcp_servers
         )
@@ -1158,7 +1208,6 @@ class AgentPackageRuntimeManager:
             "extension_root": str(plan.extension_root),
             "preflight": plan.preflight,
         }
-        self._containers[runtime_key] = handle
         return handle
 
     def _system_handle(
@@ -1247,7 +1296,11 @@ class AgentPackageRuntimeManager:
         package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
         self._instance_status_overrides.pop(package_id, None)
         if handle is not None:
-            handle.close()
+            # 如果启用容器池，释放回池而不是直接关闭
+            if self._use_container_pool and self._container_pool is not None:
+                self._container_pool.release(handle)
+            else:
+                handle.close()
 
     def _close_system(self, runtime_key: str) -> None:
         handle = self._system_handles.pop(runtime_key, None)
