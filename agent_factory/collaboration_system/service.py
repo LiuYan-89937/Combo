@@ -545,6 +545,9 @@ class CollaborationService:
     def _drain_main_agent_events(self, collaboration_id: str) -> None:
         if not self._claim_session(collaboration_id):
             return
+        event_id: str | None = None
+        task_id: str | None = None
+        event_ref: str | None = None
         try:
             runtime = self.runtime_factory()
             orchestrator = CollaborationOrchestrator(
@@ -572,9 +575,6 @@ class CollaborationService:
                     session=self.store.get_session(collaboration_id),
                 )
         except Exception as exc:
-            event_id = str(locals().get("event_id") or "")
-            task_id = locals().get("task_id")
-            event_ref = locals().get("event_ref")
             if event_id:
                 self.store.fail_main_agent_event(event_id, f"{type(exc).__name__}: {exc}")
             self.logger.warning(

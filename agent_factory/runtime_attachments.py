@@ -12,6 +12,7 @@ import shutil
 from typing import Any
 
 from agent_factory.document_processing import parse_file, parse_url
+from agent_factory.file_utils import file_sha256
 
 
 ATTACHMENT_INPUT_DIR = "input_files"
@@ -961,12 +962,8 @@ def _attachment_id_for(*, runtime_path: str, digest: str) -> str:
     return f"att_{sha256(source.encode('utf-8')).hexdigest()[:16]}"
 
 
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+# 为保持向后兼容，保留 _file_sha256 作为别名
+_file_sha256 = file_sha256
 
 
 def _replace_ranges(message: str, replacements: list[tuple[int, int, str]]) -> str:

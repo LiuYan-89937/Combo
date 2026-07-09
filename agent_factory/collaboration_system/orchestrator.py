@@ -18,6 +18,7 @@ from agent_factory.collaboration_system.store import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import host_runtime_root
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
+from agent_factory.file_utils import file_sha256
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import VisibleAssistantOutputAccumulator
 from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     INTERRUPT_TERMINAL_EVENT_TYPES,
@@ -404,60 +405,13 @@ class CollaborationOrchestrator:
             status=outcome.status,
             tool_activities=outcome.tool_activities,
         )
-        cancelled_result = self._cancelled_worker_result(
+        return self._finalize_worker_outcome(
+            outcome=outcome,
             collaboration_id=collaboration_id,
             task_id=task_id,
-            package_id=package_id,
-            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
-        )
-        if cancelled_result is not None:
-            return cancelled_result
-        if outcome.status != "completed":
-            summary = outcome.message or f"worker runtime finished with status {outcome.status}"
-            task_status = "blocked" if outcome.status == "blocked" else "failed"
-            self.store.update_task(
-                collaboration_id,
-                task_id,
-                {
-                    "status": task_status,
-                    "assignee_session_id": outcome.assignee_session_id or assignee_session_id,
-                    "result_summary": summary,
-                    "result_payload": {
-                        "runtime_status": outcome.status,
-                        **({"pending_interrupt": outcome.interrupt_payload} if outcome.interrupt_payload else {}),
-                    },
-                },
-            )
-            self.store.record_message(
-                collaboration_id,
-                speaker_type="system",
-                speaker_package_id=package_id,
-                message_kind="progress",
-                content=summary,
-                task_id=task_id,
-            )
-            self.store.record_message(
-                collaboration_id,
-                speaker_type="system",
-                speaker_package_id=package_id,
-                message_kind="progress",
-                content=f"任务{task_status}，已通知主 Agent 处理该状态。",
-                task_id=task_id,
-            )
-            return CollaborationRunTaskResult(
-                collaboration_id=collaboration_id,
-                task_id=task_id,
-                status=task_status,
-                assignee_session_id=outcome.assignee_session_id or assignee_session_id,
-                result_summary=summary,
-                artifact_refs=[],
-            )
-
-        return self._submit_worker_result(
-            collaboration_id=collaboration_id,
             task=task,
             package_id=package_id,
-            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+            assignee_session_id=assignee_session_id,
             output=output,
             worker_workdir=worker_workdir,
             before_snapshot=before_snapshot,
@@ -525,46 +479,17 @@ class CollaborationOrchestrator:
             status=outcome.status,
             tool_activities=outcome.tool_activities,
         )
-        cancelled_result = self._cancelled_worker_result(
+        return self._finalize_worker_outcome(
+            outcome=outcome,
             collaboration_id=collaboration_id,
             task_id=task_id,
-            package_id=package_id,
-            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
-        )
-        if cancelled_result is not None:
-            return cancelled_result
-        if outcome.status != "completed":
-            summary = outcome.message or f"worker runtime finished with status {outcome.status}"
-            task_status = "blocked" if outcome.status == "blocked" else "failed"
-            self.store.update_task(
-                collaboration_id,
-                task_id,
-                {
-                    "status": task_status,
-                    "assignee_session_id": outcome.assignee_session_id or assignee_session_id,
-                    "result_summary": summary,
-                    "result_payload": {
-                        "runtime_status": outcome.status,
-                        **({"pending_interrupt": outcome.interrupt_payload} if outcome.interrupt_payload else {}),
-                    },
-                },
-            )
-            return CollaborationRunTaskResult(
-                collaboration_id=collaboration_id,
-                task_id=task_id,
-                status=task_status,
-                assignee_session_id=outcome.assignee_session_id or assignee_session_id,
-                result_summary=summary,
-                artifact_refs=[],
-            )
-        return self._submit_worker_result(
-            collaboration_id=collaboration_id,
             task=task,
             package_id=package_id,
-            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+            assignee_session_id=assignee_session_id,
             output=output,
             worker_workdir=worker_workdir,
             before_snapshot=before_snapshot,
+            shared_materials_snapshot=None,
         )
 
     def _submit_worker_result(
@@ -664,6 +589,85 @@ class CollaborationOrchestrator:
             assignee_session_id=assignee_session_id,
             result_summary=_short_summary(content),
             artifact_refs=artifact_refs,
+        )
+
+    def _finalize_worker_outcome(
+        self,
+        *,
+        outcome: WorkerRunOutcome,
+        collaboration_id: str,
+        task_id: str,
+        task: dict[str, Any],
+        package_id: str,
+        assignee_session_id: str,
+        output: VisibleAssistantOutputAccumulator,
+        worker_workdir: Path,
+        before_snapshot: dict[str, str],
+        shared_materials_snapshot: dict[str, str] | None = None,
+    ) -> CollaborationRunTaskResult:
+        """统一处理 worker 运行结果的收尾逻辑：检查取消、处理非完成状态、提交结果"""
+        # 检查任务是否已被取消
+        cancelled_result = self._cancelled_worker_result(
+            collaboration_id=collaboration_id,
+            task_id=task_id,
+            package_id=package_id,
+            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+        )
+        if cancelled_result is not None:
+            return cancelled_result
+
+        # 处理非完成状态（blocked 或 failed）
+        if outcome.status != "completed":
+            summary = outcome.message or f"worker runtime finished with status {outcome.status}"
+            task_status = "blocked" if outcome.status == "blocked" else "failed"
+            self.store.update_task(
+                collaboration_id,
+                task_id,
+                {
+                    "status": task_status,
+                    "assignee_session_id": outcome.assignee_session_id or assignee_session_id,
+                    "result_summary": summary,
+                    "result_payload": {
+                        "runtime_status": outcome.status,
+                        **({"pending_interrupt": outcome.interrupt_payload} if outcome.interrupt_payload else {}),
+                    },
+                },
+            )
+            self.store.record_message(
+                collaboration_id,
+                speaker_type="system",
+                speaker_package_id=package_id,
+                message_kind="progress",
+                content=summary,
+                task_id=task_id,
+            )
+            self.store.record_message(
+                collaboration_id,
+                speaker_type="system",
+                speaker_package_id=package_id,
+                message_kind="progress",
+                content=f"任务{task_status}，已通知主 Agent 处理该状态。",
+                task_id=task_id,
+            )
+            return CollaborationRunTaskResult(
+                collaboration_id=collaboration_id,
+                task_id=task_id,
+                status=task_status,
+                assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+                result_summary=summary,
+                artifact_refs=[],
+            )
+
+        # 正常完成，提交结果
+        return self._submit_worker_result(
+            collaboration_id=collaboration_id,
+            task=task,
+            package_id=package_id,
+            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+            output=output,
+            worker_workdir=worker_workdir,
+            before_snapshot=before_snapshot,
+            shared_materials_snapshot=shared_materials_snapshot,
         )
 
     def _cancelled_worker_result(
@@ -1352,12 +1356,8 @@ def _artifact_kind(path: Path) -> str:
     return "binary"
 
 
-def _file_sha256(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+# 为保持向后兼容，保留 _file_sha256 作为别名
+_file_sha256 = file_sha256
 
 
 def _max_collaboration_artifact_bytes() -> int:

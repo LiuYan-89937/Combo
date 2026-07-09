@@ -278,124 +278,118 @@ class RuntimeEventNormalizer:
             return True
         return False
 
-    def _emit_memory_event(self, payload: Any) -> None:
+    def _emit_subsystem_event(
+        self,
+        payload: Any,
+        allowed_event_types: set[str],
+        include_node_id: bool = False,
+        auto_severity: bool = True,
+    ) -> None:
+        """通用的子系统事件发射器，统一处理 memory/context/scheduler/knowledge 等事件"""
         if not isinstance(payload, dict):
             return
         event_type = str(payload.get("event_type") or "")
-        if event_type not in {
-            "memory_write_queued",
-            "memory_write_queued_failed",
-            "memory_segment_prepared",
-            "memory_extraction_completed",
-            "memory_write_completed",
-            "memory_write_failed",
-            "memory_retrieval_completed",
-            "memory_injection_completed",
-        }:
+        if event_type not in allowed_event_types:
             return
-        self.runtime_event(
-            event_type,  # type: ignore[arg-type]
-            stage_id=self.current_stage_id,
-            span_id=uuid.uuid4().hex,
-            parent_span_id=self.run_span_id,
-            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+
+        kwargs: dict[str, Any] = {
+            "stage_id": self.current_stage_id,
+            "span_id": uuid.uuid4().hex,
+            "parent_span_id": self.run_span_id,
+            "payload": {key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        }
+
+        if include_node_id:
+            kwargs["node_id"] = _optional_str(payload.get("node_id"))
+
+        if auto_severity and event_type.endswith("failed"):
+            kwargs["severity"] = "error"
+
+        self.runtime_event(event_type, **kwargs)  # type: ignore[arg-type]
+
+    def _emit_memory_event(self, payload: Any) -> None:
+        self._emit_subsystem_event(
+            payload,
+            allowed_event_types={
+                "memory_write_queued",
+                "memory_write_queued_failed",
+                "memory_segment_prepared",
+                "memory_extraction_completed",
+                "memory_write_completed",
+                "memory_write_failed",
+                "memory_retrieval_completed",
+                "memory_injection_completed",
+            },
         )
 
     def _emit_context_event(self, payload: Any) -> None:
-        if not isinstance(payload, dict):
-            return
-        event_type = str(payload.get("event_type") or "")
-        if event_type not in {
-            "context_prepare_started",
-            "context_prepare_completed",
-            "context_prepare_failed",
-            "context_compression_started",
-            "context_compression_completed",
-            "context_compression_failed",
-            "context_compression_skipped",
-            "context_window_updated",
-            "context_retrieval_completed",
-            "context_assembly_completed",
-            "context_injection_completed",
-        }:
-            return
-        self.runtime_event(
-            event_type,  # type: ignore[arg-type]
-            stage_id=self.current_stage_id,
-            node_id=_optional_str(payload.get("node_id")),
-            span_id=uuid.uuid4().hex,
-            parent_span_id=self.run_span_id,
-            severity="error" if event_type.endswith("failed") else None,
-            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        self._emit_subsystem_event(
+            payload,
+            allowed_event_types={
+                "context_prepare_started",
+                "context_prepare_completed",
+                "context_prepare_failed",
+                "context_compression_started",
+                "context_compression_completed",
+                "context_compression_failed",
+                "context_compression_skipped",
+                "context_window_updated",
+                "context_retrieval_completed",
+                "context_assembly_completed",
+                "context_injection_completed",
+            },
+            include_node_id=True,
         )
 
     def _emit_scheduler_event(self, payload: Any) -> None:
-        if not isinstance(payload, dict):
-            return
-        event_type = str(payload.get("event_type") or "")
-        if event_type not in {
-            "scheduler_job_created",
-            "scheduler_job_updated",
-            "scheduler_job_deleted",
-            "scheduler_job_auto_paused",
-            "scheduler_jobs_listed",
-            "scheduler_options_listed",
-            "scheduler_job_described",
-            "scheduler_runs_listed",
-            "scheduler_run_scheduled",
-            "scheduler_run_started",
-            "scheduler_run_completed",
-            "scheduler_run_failed",
-            "scheduler_run_skipped",
-            "scheduler_run_cancelled",
-            "scheduler_feedback_completed",
-            "scheduler_feedback_failed",
-            "scheduler_seed_detected",
-            "scheduler_seed_applied",
-            "scheduler_seed_unchanged",
-            "scheduler_seed_failed",
-        }:
-            return
-        self.runtime_event(
-            event_type,  # type: ignore[arg-type]
-            stage_id=self.current_stage_id,
-            span_id=uuid.uuid4().hex,
-            parent_span_id=self.run_span_id,
-            severity="error" if event_type.endswith("failed") else None,
-            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        self._emit_subsystem_event(
+            payload,
+            allowed_event_types={
+                "scheduler_job_created",
+                "scheduler_job_updated",
+                "scheduler_job_deleted",
+                "scheduler_job_auto_paused",
+                "scheduler_jobs_listed",
+                "scheduler_options_listed",
+                "scheduler_job_described",
+                "scheduler_runs_listed",
+                "scheduler_run_scheduled",
+                "scheduler_run_started",
+                "scheduler_run_completed",
+                "scheduler_run_failed",
+                "scheduler_run_skipped",
+                "scheduler_run_cancelled",
+                "scheduler_feedback_completed",
+                "scheduler_feedback_failed",
+                "scheduler_seed_detected",
+                "scheduler_seed_applied",
+                "scheduler_seed_unchanged",
+                "scheduler_seed_failed",
+            },
         )
 
     def _emit_knowledge_event(self, payload: Any) -> None:
-        if not isinstance(payload, dict):
-            return
-        event_type = str(payload.get("event_type") or "")
-        if event_type not in {
-            "knowledge_source_prepare_started",
-            "knowledge_source_preview_available",
-            "knowledge_source_approval_requested",
-            "knowledge_source_registered",
-            "knowledge_ingestion_queued",
-            "knowledge_ingestion_started",
-            "knowledge_ingestion_progress",
-            "knowledge_ingestion_completed",
-            "knowledge_ingestion_failed",
-            "knowledge_ingestion_cancelled",
-            "knowledge_source_ready",
-            "knowledge_source_removed",
-            "knowledge_source_reindex_requested",
-            "knowledge_sources_listed",
-            "knowledge_documents_listed",
-            "knowledge_search_completed",
-            "knowledge_document_read",
-        }:
-            return
-        self.runtime_event(
-            event_type,  # type: ignore[arg-type]
-            stage_id=self.current_stage_id,
-            span_id=uuid.uuid4().hex,
-            parent_span_id=self.run_span_id,
-            severity="error" if event_type.endswith("failed") else None,
-            payload={key: value for key, value in json_safe(payload).items() if key != "event_type"},
+        self._emit_subsystem_event(
+            payload,
+            allowed_event_types={
+                "knowledge_source_prepare_started",
+                "knowledge_source_preview_available",
+                "knowledge_source_approval_requested",
+                "knowledge_source_registered",
+                "knowledge_ingestion_queued",
+                "knowledge_ingestion_started",
+                "knowledge_ingestion_progress",
+                "knowledge_ingestion_completed",
+                "knowledge_ingestion_failed",
+                "knowledge_ingestion_cancelled",
+                "knowledge_source_ready",
+                "knowledge_source_removed",
+                "knowledge_source_reindex_requested",
+                "knowledge_sources_listed",
+                "knowledge_documents_listed",
+                "knowledge_search_completed",
+                "knowledge_document_read",
+            },
         )
 
     def _emit_node_event(self, payload: Any) -> None:

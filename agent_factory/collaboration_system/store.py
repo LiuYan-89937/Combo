@@ -1467,8 +1467,6 @@ def utc_now_text() -> str:
 def _task_message_kind(status: str) -> str:
     if status in {"submitted", "completed", "revision_requested"}:
         return "review"
-    if status in {"failed", "blocked", "cancelled"}:
-        return "progress"
     return "progress"
 
 
