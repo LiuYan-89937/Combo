@@ -18,9 +18,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.collaboration_system import CollaborationService
+from agent_factory.agent_group_system import AgentGroupService
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.tooling.skillhub import ensure_global_skillhub_cli
 from web_frontend.backend.routes.agent_packages import create_agent_package_router
+from web_frontend.backend.routes.agent_group import create_agent_group_router
 from web_frontend.backend.routes.collaboration import create_collaboration_router
 from web_frontend.backend.routes.create_agent import create_create_agent_router
 from web_frontend.backend.routes.extensions import create_extensions_router
@@ -42,6 +44,9 @@ collaboration_service = CollaborationService(
     runtime_factory=lambda: _agent_package_runtime(runtime_bridge),
     logger=logger,
 )
+agent_group_service = AgentGroupService(
+    logger=logger,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,6 +59,7 @@ app.add_middleware(
 app.include_router(create_runtime_router(runtime_bridge, logger))
 app.include_router(create_agent_package_router(runtime_bridge, logger))
 app.include_router(create_collaboration_router(runtime_bridge, collaboration_service))
+app.include_router(create_agent_group_router(runtime_bridge, agent_group_service))
 app.include_router(create_create_agent_router())
 app.include_router(create_workspace_router(runtime_bridge))
 app.include_router(create_knowledge_router(runtime_bridge))
