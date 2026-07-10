@@ -8,6 +8,7 @@ import { EventStreamClient, type ConnectionStatus } from '@/api/events'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import { syncDomainStoresFromRuntime } from '@/stores/runtimeSync'
+import { useAgentGroupStore } from '@/stores/agentGroup'
 import { useUiStore } from '@/stores/ui'
 import type { FactoryFrontendEvent } from '@/types/protocol'
 
@@ -16,6 +17,10 @@ const status = ref<ConnectionStatus>('disconnected')
 let initialized = false
 
 export function applyRuntimeEvent(event: FactoryFrontendEvent): void {
+  if (event.payload?.group_id && event.payload?.group_run_id) {
+    useAgentGroupStore().applyRuntimeEvent(event)
+    return
+  }
   const runtimeStore = useRuntimeStore()
   runtimeStore.handleEvent(event)
   syncDomainStoresFromRuntime(event)

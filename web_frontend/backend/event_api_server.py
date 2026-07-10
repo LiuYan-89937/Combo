@@ -46,7 +46,28 @@ collaboration_service = CollaborationService(
 )
 agent_group_service = AgentGroupService(
     logger=logger,
+    runtime_factory=lambda: _agent_package_runtime(runtime_bridge),
 )
+
+
+def _observe_agent_group_runtime_event(event_payload: dict) -> None:
+    """Persist group runtime events, then dispatch the next member turn when a lane frees."""
+    agent_group_service.observe_runtime_event(event_payload)
+    payload = event_payload.get("payload") if isinstance(event_payload.get("payload"), dict) else {}
+    group_id = str(payload.get("group_id") or "").strip()
+    if not group_id or event_payload.get("event_type") not in {"run_completed", "run_failed", "run_cancelled"}:
+        return
+    asyncio.create_task(_dispatch_queued_agent_group_runs(group_id))
+
+
+async def _dispatch_queued_agent_group_runs(group_id: str) -> None:
+    try:
+        runtime = _agent_package_runtime(runtime_bridge)
+        commands = agent_group_service.prepare_queued_run_commands(group_id, runtime)
+        for command in commands:
+            await runtime_bridge.send_frontend_command(command)
+    except Exception:
+        logger.exception("Failed to dispatch queued agent-group runs for %s", group_id)
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,12 +110,18 @@ async def _ensure_skillhub_cli() -> None:
 async def startup_event():
     await _ensure_skillhub_cli()
     await runtime_bridge.start()
+    recovered_group_commits = agent_group_service.recover_workspace_transactions()
+    if recovered_group_commits:
+        logger.info("Recovered %s pending agent-group workspace commits", len(recovered_group_commits))
+    runtime_bridge.add_event_observer(_observe_agent_group_runtime_event)
     collaboration_service.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     collaboration_service.stop()
+    agent_group_service.shutdown()
+    runtime_bridge.remove_event_observer(_observe_agent_group_runtime_event)
     await runtime_bridge.stop()
 
 

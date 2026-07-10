@@ -362,3 +362,12 @@ def get_global_container_pool() -> ContainerPool:
                 )
                 logger.info("Initialized global container pool: %s", _global_pool.stats())
     return _global_pool
+
+
+def shutdown_global_container_pool() -> None:
+    """Close and discard the process-local pool during backend shutdown."""
+    global _global_pool
+    with _global_pool_lock:
+        if _global_pool is not None:
+            _global_pool.close_all()
+            _global_pool = None

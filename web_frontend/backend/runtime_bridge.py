@@ -27,6 +27,7 @@ ALWAYS_LONG_RUNNING_COMMANDS = {
     "send_agent_package_message",
     "run_agent_package",
     "run_agent_evolution",
+    "run_agent_group_member",
 }
 
 LONG_RUNNING_ACTIONS = {
@@ -40,6 +41,7 @@ COMMAND_MODE_HINTS = {
     "send_agent_package_message": "agent_package",
     "run_agent_package": "agent_package",
     "run_agent_evolution": "evolve_agent",
+    "run_agent_group_member": "agent_group",
 }
 
 ACTIVE_REQUEST_METADATA_EVENTS = {
@@ -68,6 +70,7 @@ class RuntimeBridge:
         self.adapter: FactoryRuntimeAdapter | None = None
         self.event_history: deque[dict[str, Any]] = deque(maxlen=500)
         self.subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self.event_observers: set[Callable[[dict[str, Any]], None]] = set()
         self._background_threads: dict[str, threading.Thread] = {}
         self._active_requests: dict[str, dict[str, Any]] = {}
         self._background_lock = threading.Lock()
@@ -161,6 +164,12 @@ class RuntimeBridge:
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self.subscribers.discard(queue)
 
+    def add_event_observer(self, observer: Callable[[dict[str, Any]], None]) -> None:
+        self.event_observers.add(observer)
+
+    def remove_event_observer(self, observer: Callable[[dict[str, Any]], None]) -> None:
+        self.event_observers.discard(observer)
+
     def _start_background(self, command: FactoryFrontendCommand) -> None:
         request_id = command.request_id or f"{command.type}-{id(command)}"
         with self._background_lock:
@@ -219,6 +228,11 @@ class RuntimeBridge:
         except Exception:
             logger.exception("Failed to record model usage event")
         self.event_history.append(event_payload)
+        for observer in tuple(self.event_observers):
+            try:
+                observer(event_payload)
+            except Exception:
+                logger.exception("Runtime event observer failed")
         stale_subscribers: list[asyncio.Queue[dict[str, Any]]] = []
         for queue in list(self.subscribers):
             try:

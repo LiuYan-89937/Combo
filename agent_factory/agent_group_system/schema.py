@@ -109,6 +109,7 @@ class AgentGroupMemberRun(BaseModel):
     status: MemberRunStatus
     base_context_version: int
     base_workspace_revision: int
+    request_id: str | None = None
     response_message_id: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -140,20 +141,6 @@ class AgentGroupWorkspaceRevision(BaseModel):
     created_at: datetime
 
 
-class AgentGroupWorkspaceChange(BaseModel):
-    """工作区变更（staging） (§11)"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    change_id: str
-    group_id: str
-    group_run_id: str
-    file_path: str
-    change_type: str  # 'add' | 'modify' | 'delete'
-    content_sha256: str | None = None
-    created_at: datetime
-
-
 class AgentGroupWorkspaceCommit(BaseModel):
     """工作区提交事务 (§11.3)"""
 
@@ -164,7 +151,7 @@ class AgentGroupWorkspaceCommit(BaseModel):
     group_run_id: str
     source_revision: int
     target_revision: int | None = None  # 成功后回填
-    status: str  # 'pending' | 'committed' | 'conflict' | 'aborted'
+    status: str  # 'prepared' | 'files_committed' | 'context_committed' | 'completed' | 'conflict' | 'aborted'
     conflict_files_json: str | None = None  # JSON: [{path, type}]
     created_at: datetime
     updated_at: datetime

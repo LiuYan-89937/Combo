@@ -80,11 +80,9 @@
       <div class="section-header">
         <h3>共享工作区</h3>
       </div>
-      <div class="workspace-info">
-        <p>版本: {{ store.activeGroup.current_workspace_revision }}</p>
-        <!-- TODO: 文件列表（复用 WorkspaceExplorer） -->
-        <n-button size="small" @click="openWorkspace">浏览文件</n-button>
-      </div>
+      <div class="workspace-info">版本: {{ store.activeGroup.current_workspace_revision }}</div>
+      <FilePreview v-if="runtimeStore.workspaceFile" :file="runtimeStore.workspaceFile" @close="closePreview" />
+      <WorkspaceExplorer v-else :workspace-context="workspaceContext" @select-file="previewFile" />
     </section>
 
     <!-- 创建群聊对话框 -->
@@ -154,8 +152,20 @@ import {
 } from 'naive-ui'
 import { TrashOutline, CloseOutline } from '@vicons/ionicons5'
 import { useAgentGroupStore } from '@/stores/agentGroup'
+import WorkspaceExplorer from '@/components/workspace/WorkspaceExplorer.vue'
+import FilePreview from '@/components/workspace/FilePreview.vue'
+import { useResourceContext } from '@/composables/useResourceContext'
+import { useCommand } from '@/composables/useCommand'
+import { useRuntimeStore } from '@/stores/runtime'
+import { useWorkspaceStore } from '@/stores/workspace'
+import type { WorkspaceEntry } from '@/types/protocol'
 
 const store = useAgentGroupStore()
+const resourceContext = useResourceContext()
+const commands = useCommand()
+const runtimeStore = useRuntimeStore()
+const workspaceStore = useWorkspaceStore()
+const workspaceContext = computed(() => resourceContext.workspaceContext.value)
 
 // State
 const showCreateDialog = ref(false)
@@ -229,10 +239,15 @@ const handleRemoveMember = async (packageId: string) => {
   }
 }
 
-const openWorkspace = () => {
-  // TODO: 打开工作区浏览器
-  console.log('Open workspace')
+async function previewFile(entry: WorkspaceEntry) {
+  runtimeStore.workspaceFile = null
+  await commands.readFile(workspaceStore.currentScope, entry.path, workspaceContext.value, 1_000_000)
 }
+
+function closePreview() {
+  runtimeStore.workspaceFile = null
+}
+
 </script>
 
 <style scoped>

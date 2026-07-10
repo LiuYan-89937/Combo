@@ -8,7 +8,6 @@ Agent 群聊系统 - 用户主导的多 Agent 交互模式
 """
 
 from agent_factory.agent_group_system.context_compactor import GroupContextCompactor
-from agent_factory.agent_group_system.orchestrator import AgentGroupOrchestrator
 from agent_factory.agent_group_system.service import AgentGroupService
 from agent_factory.agent_group_system.store import AgentGroupStore
 from agent_factory.agent_group_system.workspace_transaction import WorkspaceTransactionManager
@@ -16,7 +15,6 @@ from agent_factory.agent_group_system.workspace_transaction import WorkspaceTran
 __all__ = [
     "AgentGroupService",
     "AgentGroupStore",
-    "AgentGroupOrchestrator",
     "GroupContextCompactor",
     "WorkspaceTransactionManager",
 ]

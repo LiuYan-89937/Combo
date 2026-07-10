@@ -35,6 +35,9 @@ class PendingAgentPackageRun:
     normalizer: RuntimeEventNormalizer
     interrupt_id: str | None = None
     interrupt_event_id: str | None = None
+    group_id: str | None = None
+    group_run_id: str | None = None
+    workdir_root: Any | None = None
 
 
 @dataclass(slots=True)

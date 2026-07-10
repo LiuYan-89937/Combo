@@ -37,8 +37,7 @@ MESSAGE_KINDS = {
     "progress",
 }
 CONTEXT_VERSION_KINDS = {"snapshot", "delta"}
-WORKSPACE_CHANGE_TYPES = {"add", "modify", "delete"}
-WORKSPACE_COMMIT_STATUSES = {"pending", "committed", "conflict", "aborted"}
+WORKSPACE_COMMIT_STATUSES = {"prepared", "files_committed", "context_committed", "completed", "conflict", "aborted"}
 
 
 # ===== 异常 =====
@@ -81,6 +80,7 @@ class AgentGroupStore:
     def _ensure_schema(self) -> None:
         """确保所有表结构存在"""
         with self._connect() as conn:
+            conn.execute("drop table if exists agent_group_workspace_changes")
             # 1. 群聊会话表
             conn.execute("""
                 create table if not exists agent_group_sessions (
@@ -99,6 +99,7 @@ class AgentGroupStore:
                     group_id text not null,
                     package_id text not null,
                     package_session_id text not null,
+                    consumed_context_version integer not null default 0,
                     joined_at text not null,
                     primary key (group_id, package_id),
                     foreign key (group_id) references agent_group_sessions(group_id)
@@ -115,6 +116,7 @@ class AgentGroupStore:
                     speaker_package_id text,
                     message_kind text not null,
                     content text not null,
+                    context_version integer,
                     group_run_id text,
                     event_ref text,
                     created_at text not null,
@@ -140,6 +142,7 @@ class AgentGroupStore:
                     status text not null,
                     base_context_version integer not null,
                     base_workspace_revision integer not null,
+                    request_id text,
                     response_message_id text,
                     created_at text not null,
                     updated_at text not null,
@@ -180,24 +183,7 @@ class AgentGroupStore:
                 )
             """)
 
-            # 7. 工作区变更表（staging）
-            conn.execute("""
-                create table if not exists agent_group_workspace_changes (
-                    change_id text primary key,
-                    group_id text not null,
-                    group_run_id text not null,
-                    file_path text not null,
-                    change_type text not null,
-                    content_sha256 text,
-                    created_at text not null,
-                    foreign key (group_id) references agent_group_sessions(group_id)
-                        on delete cascade,
-                    foreign key (group_run_id) references agent_group_member_runs(group_run_id)
-                        on delete cascade
-                )
-            """)
-
-            # 8. 工作区提交事务表
+            # 7. 工作区提交事务表
             conn.execute("""
                 create table if not exists agent_group_workspace_commits (
                     commit_id text primary key,
@@ -216,26 +202,30 @@ class AgentGroupStore:
                 )
             """)
 
-            # 9. 成员会话索引（session_id 唯一）
+            # 8. 成员会话索引（session_id 唯一）
             conn.execute("""
                 create unique index if not exists idx_agent_group_members_session
                 on agent_group_members(package_session_id)
             """)
+            _ensure_column(conn, "agent_group_members", "consumed_context_version", "integer not null default 0")
+            _ensure_column(conn, "agent_group_messages", "context_version", "integer")
+            _ensure_column(conn, "agent_group_member_runs", "request_id", "text")
 
 
     # ===== 群聊会话 CRUD =====
 
     def list_groups(self) -> list[dict[str, Any]]:
-        """列出所有群聊（不含详情）"""
+        """List group snapshots; frontend state never fabricates absent members or runs."""
         with self._connect() as conn:
             rows = conn.execute("""
                 select group_id, title, status, created_at, updated_at, archived_at
                 from agent_group_sessions
                 order by updated_at desc
             """).fetchall()
-            return [self._session_view(row) for row in rows]
+            group_ids = [str(row["group_id"]) for row in rows]
+        return [self.get_group(group_id) for group_id in group_ids]
 
-    def create_group(self, title: str, member_package_ids: list[str]) -> dict[str, Any]:
+    def create_group(self, title: str) -> dict[str, Any]:
         """创建新群聊"""
         if not title.strip():
             raise AgentGroupStoreError("title must not be empty")
@@ -250,14 +240,6 @@ class AgentGroupStore:
                 values (?, ?, ?, ?, ?, ?)
             """, (group_id, title.strip(), "draft", now, now, None))
 
-            # 插入成员（为每个成员生成独立 session_id）
-            for package_id in member_package_ids:
-                package_session_id = uuid4().hex
-                conn.execute("""
-                    insert into agent_group_members (group_id, package_id, package_session_id, joined_at)
-                    values (?, ?, ?, ?)
-                """, (group_id, package_id, package_session_id, now))
-
             # 初始化上下文版本 0（空快照）
             conn.execute("""
                 insert into agent_group_context_versions
@@ -271,6 +253,8 @@ class AgentGroupStore:
                 (group_id, revision, parent_revision, file_manifest_json, created_at)
                 values (?, ?, ?, ?, ?)
             """, (group_id, 0, None, json_dumps({}), now))
+
+        self.group_workspace_revision_root(group_id, 0).mkdir(parents=True, exist_ok=True)
 
         return self.get_group(group_id)
 
@@ -291,7 +275,7 @@ class AgentGroupStore:
 
             # 成员
             member_rows = conn.execute("""
-                select group_id, package_id, package_session_id, joined_at
+                select group_id, package_id, package_session_id, consumed_context_version, joined_at
                 from agent_group_members
                 where group_id = ?
                 order by joined_at
@@ -312,7 +296,7 @@ class AgentGroupStore:
             # 运行记录（最近 50 条）
             run_rows = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
-                       status, base_context_version, base_workspace_revision, response_message_id,
+                       status, base_context_version, base_workspace_revision, request_id, response_message_id,
                        created_at, updated_at
                 from agent_group_member_runs
                 where group_id = ?
@@ -375,14 +359,14 @@ class AgentGroupStore:
 
     def delete_group(self, group_id: str) -> dict[str, Any]:
         """删除群聊（级联删除所有关联数据）"""
-        result = {"deleted": False, "group_id": group_id, "member_session_ids": []}
+        result = {"deleted": False, "group_id": group_id, "member_sessions": []}
 
         with self._connect() as conn:
             # 收集成员 session_id 列表（供调用方清理 runtime sessions）
             member_rows = conn.execute("""
-                select package_session_id from agent_group_members where group_id = ?
+                select package_id, package_session_id from agent_group_members where group_id = ?
             """, (group_id,)).fetchall()
-            result["member_session_ids"] = [r["package_session_id"] for r in member_rows]
+            result["member_sessions"] = [dict(r) for r in member_rows]
 
             # 删除群聊（外键级联删除其他表）
             cursor = conn.execute("delete from agent_group_sessions where group_id = ?", (group_id,))
@@ -392,17 +376,19 @@ class AgentGroupStore:
 
     # ===== 成员管理 =====
 
-    def add_member(self, group_id: str, package_id: str) -> dict[str, Any]:
+    def add_member(self, group_id: str, package_id: str, package_session_id: str) -> dict[str, Any]:
         """添加成员到群聊"""
         now = utc_now_text()
-        package_session_id = uuid4().hex
+        package_session_id = str(package_session_id or "").strip()
+        if not package_session_id:
+            raise AgentGroupStoreError("package_session_id must be a real runtime session id")
 
         with self._connect() as conn:
             try:
                 conn.execute("""
-                    insert into agent_group_members (group_id, package_id, package_session_id, joined_at)
-                    values (?, ?, ?, ?)
-                """, (group_id, package_id, package_session_id, now))
+                    insert into agent_group_members (group_id, package_id, package_session_id, consumed_context_version, joined_at)
+                    values (?, ?, ?, ?, ?)
+                """, (group_id, package_id, package_session_id, 0, now))
 
                 conn.execute("""
                     update agent_group_sessions set updated_at = ? where group_id = ?
@@ -413,6 +399,18 @@ class AgentGroupStore:
                 raise AgentGroupStoreError(f"failed to add member: {e}")
 
         return self.get_group(group_id)
+
+    def get_message(self, message_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select message_id, group_id, speaker_type, speaker_package_id, message_kind,
+                       content, group_run_id, event_ref, created_at
+                from agent_group_messages where message_id = ?
+                """,
+                (message_id,),
+            ).fetchone()
+        return self._message_view(row) if row is not None else None
 
     def remove_member(self, group_id: str, package_id: str) -> dict[str, Any]:
         """移除成员（返回其 session_id 供清理）"""
@@ -474,6 +472,19 @@ class AgentGroupStore:
             """, (message_id, group_id, "user", None, "user_message", content.strip(),
                   None, f"user:{client_message_id}", now))
 
+            context_version = self._append_context_delta_conn(
+                conn,
+                group_id=group_id,
+                source_message_id=message_id,
+                speaker="user",
+                content=content.strip(),
+                created_at=now,
+            )
+            conn.execute(
+                "update agent_group_messages set context_version = ? where message_id = ?",
+                (context_version, message_id),
+            )
+
             # 为每个目标 Agent 创建 run 记录（状态 queued）
             current_context_version = self._current_context_version(conn, group_id)
             current_workspace_revision = self._current_workspace_revision(conn, group_id)
@@ -495,11 +506,11 @@ class AgentGroupStore:
                 conn.execute("""
                     insert into agent_group_member_runs
                     (group_run_id, group_id, message_id, speaker_package_id, package_session_id,
-                     status, base_context_version, base_workspace_revision, response_message_id,
+                     status, base_context_version, base_workspace_revision, request_id, response_message_id,
                      created_at, updated_at)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (group_run_id, group_id, message_id, package_id, package_session_id,
-                      "queued", current_context_version, current_workspace_revision, None, now, now))
+                      "queued", current_context_version, current_workspace_revision, None, None, now, now))
 
             # 更新群聊时间戳
             conn.execute("""
@@ -516,7 +527,7 @@ class AgentGroupStore:
         message_kind: str,
         content: str,
         event_ref: str | None = None,
-    ) -> None:
+    ) -> str | None:
         """记录 Agent 消息（工具调用、进度、响应等，幂等）"""
         if message_kind not in MESSAGE_KINDS:
             raise AgentGroupStoreError(f"invalid message_kind: {message_kind}")
@@ -532,7 +543,7 @@ class AgentGroupStore:
                 """, (group_id, event_ref)).fetchone()
 
                 if existing:
-                    return  # 已存在，跳过
+                    return str(existing["message_id"])
 
             # 查找 run 的 speaker
             run_row = conn.execute("""
@@ -540,7 +551,7 @@ class AgentGroupStore:
             """, (group_run_id,)).fetchone()
 
             if run_row is None:
-                return  # run 不存在，静默跳过（可能被删除）
+                return None
 
             speaker_package_id = run_row["speaker_package_id"]
             message_id = uuid4().hex
@@ -552,6 +563,20 @@ class AgentGroupStore:
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (message_id, group_id, "agent", speaker_package_id, message_kind, content,
                   group_run_id, event_ref, now))
+            if message_kind == "agent_response" and content.strip():
+                context_version = self._append_context_delta_conn(
+                    conn,
+                    group_id=group_id,
+                    source_message_id=message_id,
+                    speaker=speaker_package_id,
+                    content=content.strip(),
+                    created_at=now,
+                )
+                conn.execute(
+                    "update agent_group_messages set context_version = ? where message_id = ?",
+                    (context_version, message_id),
+                )
+            return message_id
 
     # ===== Member Run 管理 =====
 
@@ -560,7 +585,7 @@ class AgentGroupStore:
         with self._connect() as conn:
             row = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
-                       status, base_context_version, base_workspace_revision, response_message_id,
+                       status, base_context_version, base_workspace_revision, request_id, response_message_id,
                        created_at, updated_at
                 from agent_group_member_runs
                 where group_run_id = ?
@@ -588,6 +613,10 @@ class AgentGroupStore:
             updates.append("response_message_id = ?")
             params.append(payload["response_message_id"])
 
+        if "request_id" in payload:
+            updates.append("request_id = ?")
+            params.append(payload["request_id"])
+
         if not updates:
             return
 
@@ -607,7 +636,7 @@ class AgentGroupStore:
         with self._connect() as conn:
             rows = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
-                       status, base_context_version, base_workspace_revision, response_message_id,
+                       status, base_context_version, base_workspace_revision, request_id, response_message_id,
                        created_at, updated_at
                 from agent_group_member_runs
                 where group_id = ? and status = 'queued'
@@ -619,6 +648,14 @@ class AgentGroupStore:
     def cancel_run(self, group_run_id: str) -> None:
         """取消运行"""
         self.update_run(group_run_id, {"status": "cancelled"})
+
+    def requeue_run(self, group_run_id: str) -> None:
+        run = self.get_run(group_run_id)
+        if run is None:
+            raise AgentGroupStoreError("group run not found")
+        if str(run.get("status") or "") not in {"failed", "cancelled"}:
+            raise AgentGroupStoreError("only failed or cancelled group runs can be retried")
+        self.update_run(group_run_id, {"status": "queued", "request_id": None})
 
 
     # ===== 上下文版本管理 =====
@@ -636,6 +673,45 @@ class AgentGroupStore:
                 return None
 
             return self._context_version_view(row)
+
+    def context_versions_after(self, group_id: str, version: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select group_id, version, kind, from_version, content, token_count, created_at
+                from agent_group_context_versions
+                where group_id = ? and version > ?
+                order by version asc
+                """,
+                (group_id, version),
+            ).fetchall()
+        return [self._context_version_view(row) for row in rows]
+
+    def member_consumed_context_version(self, group_id: str, package_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select consumed_context_version from agent_group_members
+                where group_id = ? and package_id = ?
+                """,
+                (group_id, package_id),
+            ).fetchone()
+        if row is None:
+            raise AgentGroupStoreError(f"member not found: {package_id}")
+        return int(row["consumed_context_version"] or 0)
+
+    def mark_member_context_consumed(self, group_id: str, package_id: str, version: int) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                update agent_group_members
+                set consumed_context_version = max(consumed_context_version, ?)
+                where group_id = ? and package_id = ?
+                """,
+                (version, group_id, package_id),
+            )
+            if cursor.rowcount != 1:
+                raise AgentGroupStoreError(f"member not found: {package_id}")
 
     def add_context_version(
         self, group_id: str, kind: str, content: str, token_count: int, from_version: int | None = None
@@ -664,6 +740,35 @@ class AgentGroupStore:
             select max(version) as max_version from agent_group_context_versions where group_id = ?
         """, (group_id,)).fetchone()
         return row["max_version"] if row and row["max_version"] is not None else 0
+
+    def _append_context_delta_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        group_id: str,
+        source_message_id: str,
+        speaker: str,
+        content: str,
+        created_at: str,
+    ) -> int:
+        current_version = self._current_context_version(conn, group_id)
+        version = current_version + 1
+        delta = json_dumps(
+            {
+                "source_message_id": source_message_id,
+                "speaker": speaker,
+                "content": content,
+            }
+        )
+        conn.execute(
+            """
+            insert into agent_group_context_versions
+            (group_id, version, kind, from_version, content, token_count, created_at)
+            values (?, ?, 'delta', ?, ?, ?, ?)
+            """,
+            (group_id, version, current_version, delta, len(content), created_at),
+        )
+        return version
 
     # ===== 工作区版本管理 =====
 
@@ -706,44 +811,6 @@ class AgentGroupStore:
         """, (group_id,)).fetchone()
         return row["max_revision"] if row and row["max_revision"] is not None else 0
 
-    # ===== 工作区变更（staging）管理 =====
-
-    def record_workspace_change(
-        self, group_id: str, group_run_id: str, file_path: str, change_type: str, content_sha256: str | None
-    ) -> None:
-        """记录工作区变更到 staging"""
-        if change_type not in WORKSPACE_CHANGE_TYPES:
-            raise AgentGroupStoreError(f"invalid change_type: {change_type}")
-
-        now = utc_now_text()
-        change_id = uuid4().hex
-
-        with self._connect() as conn:
-            conn.execute("""
-                insert into agent_group_workspace_changes
-                (change_id, group_id, group_run_id, file_path, change_type, content_sha256, created_at)
-                values (?, ?, ?, ?, ?, ?, ?)
-            """, (change_id, group_id, group_run_id, file_path, change_type, content_sha256, now))
-
-    def get_run_workspace_changes(self, group_run_id: str) -> list[dict[str, Any]]:
-        """获取某个 run 的所有工作区变更"""
-        with self._connect() as conn:
-            rows = conn.execute("""
-                select change_id, group_id, group_run_id, file_path, change_type, content_sha256, created_at
-                from agent_group_workspace_changes
-                where group_run_id = ?
-                order by created_at
-            """, (group_run_id,)).fetchall()
-
-            return [self._workspace_change_view(r) for r in rows]
-
-    def clear_run_workspace_changes(self, group_run_id: str) -> None:
-        """清除某个 run 的 staging 变更"""
-        with self._connect() as conn:
-            conn.execute("""
-                delete from agent_group_workspace_changes where group_run_id = ?
-            """, (group_run_id,))
-
     # ===== 工作区提交事务管理 =====
 
     def create_workspace_commit(
@@ -759,7 +826,7 @@ class AgentGroupStore:
                 (commit_id, group_id, group_run_id, source_revision, target_revision, status,
                  conflict_files_json, created_at, updated_at)
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (commit_id, group_id, group_run_id, source_revision, None, "pending", None, now, now))
+            """, (commit_id, group_id, group_run_id, source_revision, None, "prepared", None, now, now))
 
         return commit_id
 
@@ -813,6 +880,20 @@ class AgentGroupStore:
 
             return self._workspace_commit_view(row)
 
+    def list_pending_workspace_commits(self) -> list[dict[str, Any]]:
+        """Return unresolved commit journals for deterministic startup recovery."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select commit_id, group_id, group_run_id, source_revision, target_revision, status,
+                       conflict_files_json, created_at, updated_at
+                from agent_group_workspace_commits
+                where status in ('prepared', 'files_committed', 'context_committed')
+                order by created_at asc
+                """
+            ).fetchall()
+        return [self._workspace_commit_view(row) for row in rows]
+
 
     # ===== 辅助方法（路径、视图转换） =====
 
@@ -823,6 +904,10 @@ class AgentGroupStore:
     def group_staging_root(self, group_id: str, group_run_id: str) -> Path:
         """群聊 run staging 目录"""
         return factory_artifact_path("agent_group", group_id, "staging", group_run_id)
+
+    def group_workspace_revision_root(self, group_id: str, revision: int) -> Path:
+        """Immutable filesystem snapshot for one committed workspace revision."""
+        return self.group_workspace_root(group_id) / "revisions" / str(revision)
 
     # ===== 视图转换（Row -> dict） =====
 
@@ -852,10 +937,6 @@ class AgentGroupStore:
         data["file_manifest"] = json_loads(data.pop("file_manifest_json", "{}"), {})
         return data
 
-    def _workspace_change_view(self, row: sqlite3.Row) -> dict[str, Any]:
-        """工作区变更视图"""
-        return dict(row)
-
     def _workspace_commit_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """工作区提交视图"""
         data = dict(row)
@@ -872,6 +953,12 @@ def resolve_agent_group_store_path(value: str | Path | None = None) -> Path:
     if value:
         return resolve_project_path(value)
     return factory_artifact_path("agent_group", "store.sqlite")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {str(row["name"]) for row in conn.execute(f"pragma table_info({table})")}
+    if column not in columns:
+        conn.execute(f"alter table {table} add column {column} {definition}")
 
 
 def utc_now_text() -> str:

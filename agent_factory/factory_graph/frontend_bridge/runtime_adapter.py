@@ -40,6 +40,7 @@ class FactoryRuntimeAdapter(
     session_record: Any | None = None
     mode: FactoryMode | None = None
     pending_agent_package_run: PendingAgentPackageRun | None = None
+    pending_agent_group_runs: dict[str, PendingAgentPackageRun] = field(default_factory=dict)
     pending_create_agent_run: PendingCreateAgentRun | None = None
     pending_evolution_run: PendingEvolutionRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
@@ -112,6 +113,7 @@ _COMMAND_HANDLERS: dict[str, str] = {
     "delete_agent_package_session": "delete_agent_package_session",
     "send_agent_package_message": "send_agent_package_message",
     "run_agent_package": "run_agent_package",
+    "run_agent_group_member": "run_agent_group_member",
     "run_agent_evolution": "run_agent_evolution",
     "resume_interrupt": "resume_interrupt",
     "cancel_runtime_request": "cancel_runtime_request",

@@ -41,7 +41,10 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     DEFAULT_RUNTIME_IMAGE,
     DockerAgentRuntimeLauncher,
 )
-from agent_factory.factory_graph.frontend_bridge.container_pool import get_global_container_pool
+from agent_factory.factory_graph.frontend_bridge.container_pool import (
+    get_global_container_pool,
+    shutdown_global_container_pool,
+)
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
     AgentPackageRepository,
 )
@@ -664,6 +667,7 @@ class AgentPackageRuntimeManager:
         session_kind: str = "normal",
         collaboration_id: str | None = None,
         collaboration_task_id: str | None = None,
+        agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
@@ -679,6 +683,7 @@ class AgentPackageRuntimeManager:
             session_kind=session_kind,
             collaboration_id=collaboration_id,
             collaboration_task_id=collaboration_task_id,
+            agent_group_id=agent_group_id,
             visible_in_agent_session_list=visible_in_agent_session_list,
         ).model_dump(mode="json")
 
@@ -700,7 +705,9 @@ class AgentPackageRuntimeManager:
         session_kind: str = "normal",
         collaboration_id: str | None = None,
         collaboration_task_id: str | None = None,
+        agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
+        workdir_root: Path | None = None,
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         del require_ready
@@ -716,21 +723,29 @@ class AgentPackageRuntimeManager:
                 session_kind=session_kind,
                 collaboration_id=collaboration_id,
                 collaboration_task_id=collaboration_task_id,
+                agent_group_id=agent_group_id,
                 visible_in_agent_session_list=visible_in_agent_session_list,
             )
-        if session_id and (session_kind != "normal" or collaboration_id or collaboration_task_id or visible_in_agent_session_list is not None):
+        if session_id and (
+            session_kind != "normal"
+            or collaboration_id
+            or collaboration_task_id
+            or agent_group_id
+            or visible_in_agent_session_list is not None
+        ):
             session = session_manager.update_metadata(
                 session.session_id,
                 session_kind=session_kind,
                 collaboration_id=collaboration_id,
                 collaboration_task_id=collaboration_task_id,
+                agent_group_id=agent_group_id,
                 visible_in_agent_session_list=visible_in_agent_session_list,
             )
-        workdir_root = self.session_workdir_for_package(package_id, session.session_id)
+        resolved_workdir_root = workdir_root or self.session_workdir_for_package(package_id, session.session_id)
         attachment_result = self._prepare_runtime_attachments(
             package_id=package_id,
             package=package,
-            workdir_root=workdir_root,
+            workdir_root=resolved_workdir_root,
             user_input=user_input,
             attachments=attachments,
         )
@@ -758,12 +773,12 @@ class AgentPackageRuntimeManager:
             return AgentPackageStreamRun(
                 package=package,
                 session=session.model_dump(mode="json"),
-                events=self._system_events(package_id, package=package, command=command, workdir_root=workdir_root),
+                events=self._system_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
             )
         return AgentPackageStreamRun(
             package=package,
             session=session.model_dump(mode="json"),
-            events=self._container_events(package_id, package=package, command=command, workdir_root=workdir_root),
+            events=self._container_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
         )
 
     def _prepare_runtime_attachments(
@@ -797,10 +812,11 @@ class AgentPackageRuntimeManager:
         session_id: str,
         resume_payload: dict[str, Any] | None = None,
         request_id: str | None = None,
+        workdir_root: Path | None = None,
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
-        workdir_root = self.session_workdir_for_package(package_id, session.session_id)
+        resolved_workdir_root = workdir_root or self.session_workdir_for_package(package_id, session.session_id)
         command = {
             "type": "resume_interrupt",
             "request_id": request_id or uuid4().hex,
@@ -815,12 +831,12 @@ class AgentPackageRuntimeManager:
             return AgentPackageStreamRun(
                 package=package,
                 session=session.model_dump(mode="json"),
-                events=self._system_events(package_id, package=package, command=command, workdir_root=workdir_root),
+                events=self._system_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
             )
         return AgentPackageStreamRun(
             package=package,
             session=session.model_dump(mode="json"),
-            events=self._container_events(package_id, package=package, command=command, workdir_root=workdir_root),
+            events=self._container_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
         )
 
     def finish_session_turn(
@@ -912,6 +928,8 @@ class AgentPackageRuntimeManager:
             self._close_system(runtime_key)
         self._mcp_gateways.close_all()
         self._skillhub_gateways.close_all()
+        if self._use_container_pool:
+            shutdown_global_container_pool()
 
     def cancel_active_requests(
         self,
@@ -1121,7 +1139,7 @@ class AgentPackageRuntimeManager:
         fingerprint = _runtime_fingerprint(package_id, package)
 
         # 如果启用容器池，优先从池中获取
-        if self._use_container_pool and self._container_pool is not None:
+        if self._use_container_pool and self._container_pool is not None and workdir_root is None:
             # 检查当前 runtime_key 是否已有活跃容器
             existing = self._containers.get(runtime_key)
             if (
@@ -1130,6 +1148,9 @@ class AgentPackageRuntimeManager:
                 and existing.package_fingerprint == fingerprint
             ):
                 return existing
+
+            if existing is not None:
+                self._close_container(runtime_key)
 
             # 从池中获取或创建容器
             def create_container_for_pool():

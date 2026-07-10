@@ -5,7 +5,7 @@
 
 // ========== 基础类型 ==========
 
-export type FactoryMode = 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package'
+export type FactoryMode = 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package' | 'agent_group'
 
 export type RunStatus = 'idle' | 'running' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
 

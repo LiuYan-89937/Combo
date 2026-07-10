@@ -1,4 +1,6 @@
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { useAgentGroupStore } from '@/stores/agentGroup'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useI18n } from '@/composables/useI18n'
@@ -7,7 +9,9 @@ import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceType
 
 export function useResourceContext() {
   const agentStore = useAgentStore()
+  const agentGroupStore = useAgentGroupStore()
   const runtimeStore = useRuntimeStore()
+  const route = useRoute()
   const { t } = useI18n()
 
   const packageId = computed(() => {
@@ -33,6 +37,9 @@ export function useResourceContext() {
     String(activeFactorySession.value?.chat_agent_package_session_id || runtimeStore.activeAgentSessionId || '').trim() || null
   ))
   const workspaceContext = computed<WorkspaceRequestContext>(() => {
+    if (route.name === 'AgentGroup' && agentGroupStore.activeGroup?.group_id) {
+      return { resourceMode: 'agent_group', groupId: agentGroupStore.activeGroup.group_id }
+    }
     if (runtimeStore.currentMode === 'create_agent') {
       return {
         resourceMode: 'create_agent',
@@ -68,6 +75,7 @@ export function useResourceContext() {
     workspaceContext.value.factorySessionId || '',
     workspaceContext.value.createAgentSessionId || '',
     workspaceContext.value.collaborationId || '',
+    workspaceContext.value.groupId || '',
   ].join(':'))
   const workspaceDefaultScope = computed<WorkspaceScope>(() => (
     workspaceContext.value.resourceMode === 'create_agent' || workspaceContext.value.resourceMode === 'evolve_agent'
@@ -77,6 +85,7 @@ export function useResourceContext() {
   const packageIdForApi = computed(() => packageId.value || SYSTEM_CHAT_PACKAGE_ID)
   const isAgentContext = computed(() => Boolean(packageId.value))
   const label = computed(() => {
+    if (workspaceContext.value.resourceMode === 'agent_group') return agentGroupStore.activeGroup?.title || 'Agent Group'
     if (runtimeStore.currentMode === 'create_agent') return t('resource.manufacturing')
     if (!packageId.value) return t('resource.chat')
     const pkg = packageInfo.value

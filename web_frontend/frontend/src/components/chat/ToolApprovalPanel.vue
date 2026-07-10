@@ -113,12 +113,18 @@ import { useRuntimeStore } from '@/stores/runtime'
 
 type ApprovalRequest = Record<string, any>
 
+const props = defineProps<{
+  requests?: ApprovalRequest[]
+}>()
+const emit = defineEmits<{
+  resolve: [payload: Record<string, unknown>]
+}>()
 const runtimeStore = useRuntimeStore()
 const commands = useCommand()
 const { t } = useI18n()
 const revisionGuidance = ref('')
 
-const requests = computed<ApprovalRequest[]>(() => runtimeStore.currentApprovalRequests)
+const requests = computed<ApprovalRequest[]>(() => props.requests || runtimeStore.currentApprovalRequests)
 
 function requestKey(request: ApprovalRequest, index: number): string {
   return String(request.tool_call_id || request.tool_name || request.name || index)
@@ -176,20 +182,37 @@ function formatArguments(request: ApprovalRequest): string {
 }
 
 function handleApprove() {
+  if (props.requests) {
+    emit('resolve', { action: 'approve', approved: true })
+    return
+  }
   commands.approveToolCall()
 }
 
 function handleDeny() {
+  if (props.requests) {
+    emit('resolve', { action: 'deny', approved: false })
+    return
+  }
   commands.denyToolCall()
 }
 
 function handleTrust() {
+  if (props.requests) {
+    emit('resolve', { action: 'trust_tool', approved: true, trust_scope: 'tool' })
+    return
+  }
   commands.trustTool()
 }
 
 function handleRevise() {
   const guidance = revisionGuidance.value.trim()
   if (!guidance) return
+  if (props.requests) {
+    emit('resolve', { action: 'revise', revision_guidance: guidance })
+    revisionGuidance.value = ''
+    return
+  }
   commands.reviseWithGuidance(guidance)
   revisionGuidance.value = ''
 }

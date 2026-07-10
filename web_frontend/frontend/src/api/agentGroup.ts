@@ -44,6 +44,7 @@ export interface AgentGroupMemberRunView {
   base_context_version: number
   base_workspace_revision: number
   response_message_id?: string
+  request_id?: string
   created_at: string
   updated_at: string
 }
@@ -145,16 +146,25 @@ export const agentGroupApi = {
   },
 
   // Run 管理
-  async startRun(groupId: string, runId: string): Promise<{ success: boolean; message?: string }> {
-    return requestJson(`/api/agent-group/groups/${groupId}/runs/${runId}/start`, {
-      method: 'POST',
-    })
-  },
-
   async cancelRun(groupId: string, runId: string): Promise<{ group: AgentGroupSessionView }> {
     return requestJson(`/api/agent-group/groups/${groupId}/runs/${runId}/cancel`, {
       method: 'POST',
     })
+  },
+
+  async resumeRun(
+    groupId: string,
+    runId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ group: AgentGroupSessionView }> {
+    return requestJson(`/api/agent-group/groups/${groupId}/runs/${runId}/resume`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async retryRun(groupId: string, runId: string): Promise<{ group: AgentGroupSessionView }> {
+    return requestJson(`/api/agent-group/groups/${groupId}/runs/${runId}/retry`, { method: 'POST' })
   },
 
   // Agent 列表

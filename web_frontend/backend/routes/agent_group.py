@@ -7,17 +7,18 @@ Agent 群聊系统 - HTTP API 路由
 - POST /api/agent-group/groups/{id}/members - 添加成员
 - DELETE /api/agent-group/groups/{id}/members/{package_id} - 移除成员
 - POST /api/agent-group/groups/{id}/messages - 发送消息
-- POST /api/agent-group/groups/{id}/runs/{run_id}/start - 启动 run
 - POST /api/agent-group/groups/{id}/runs/{run_id}/cancel - 取消 run
 - GET /api/agent-group/agents - 可用 Agent 列表
 """
 
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
 from agent_factory.agent_group_system import AgentGroupService
-from agent_factory.factory_graph.frontend_bridge.runtime_bridge import RuntimeBridge
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
+from web_frontend.backend.runtime_bridge import RuntimeBridge
 
 
 def create_agent_group_router(
@@ -47,7 +48,8 @@ def create_agent_group_router(
             if not title:
                 raise HTTPException(status_code=400, detail="title is required")
 
-            group = service.create_group(title, member_package_ids)
+            runtime = _agent_package_runtime(runtime_bridge)
+            group = service.create_group(title, member_package_ids, runtime)
             return {"group": group}
         except Exception as e:
             raise _http_error(e)
@@ -74,17 +76,15 @@ def create_agent_group_router(
     async def delete_group(group_id: str) -> dict[str, Any]:
         """删除群聊"""
         try:
-            result = service.delete_group(group_id)
-
-            # 清理 runtime sessions
+            group = service.get_group(group_id)
             runtime_manager = runtime_bridge.agent_package_runtime
-            for session_id in result.get("member_session_ids", []):
-                try:
-                    # TODO: 调用 runtime_manager 清理 session
-                    pass
-                except Exception:
-                    pass
-
+            for member in group.get("members", []):
+                package_id = str(member.get("package_id") or "").strip()
+                session_id = str(member.get("package_session_id") or "").strip()
+                if package_id and session_id:
+                    runtime_manager.shutdown_session_runtime(package_id, session_id=session_id)
+                    runtime_manager.delete_session(package_id, session_id)
+            result = service.delete_group(group_id)
             return {"success": result["deleted"], "group_id": group_id}
         except Exception as e:
             raise _http_error(e)
@@ -99,7 +99,8 @@ def create_agent_group_router(
             if not package_id:
                 raise HTTPException(status_code=400, detail="package_id is required")
 
-            group = service.add_member(group_id, package_id)
+            runtime = _agent_package_runtime(runtime_bridge)
+            group = service.add_member(group_id, package_id, runtime)
             return {"group": group}
         except Exception as e:
             raise _http_error(e)
@@ -108,14 +109,16 @@ def create_agent_group_router(
     async def remove_member(group_id: str, package_id: str) -> dict[str, Any]:
         """移除成员"""
         try:
+            group = service.get_group(group_id)
+            member = next((item for item in group.get("members", []) if item.get("package_id") == package_id), None)
+            if member is None:
+                raise HTTPException(status_code=404, detail=f"member not found: {package_id}")
+            session_id = str(member.get("package_session_id") or "").strip()
+            if session_id:
+                runtime_manager = _agent_package_runtime(runtime_bridge)
+                runtime_manager.shutdown_session_runtime(package_id, session_id=session_id)
+                runtime_manager.delete_session(package_id, session_id)
             result = service.remove_member(group_id, package_id)
-
-            # 清理 runtime session
-            removed_session_id = result.get("removed_session_id")
-            if removed_session_id:
-                # TODO: 清理 runtime session
-                pass
-
             return {"group": result}
         except Exception as e:
             raise _http_error(e)
@@ -134,36 +137,74 @@ def create_agent_group_router(
                 raise HTTPException(status_code=400, detail="content is required")
             if not client_message_id:
                 raise HTTPException(status_code=400, detail="client_message_id is required")
-            if not target_package_ids:
-                raise HTTPException(status_code=400, detail="target_package_ids is required")
-
             group = service.send_user_message(group_id, content, client_message_id, target_package_ids)
+            runtime = _agent_package_runtime(runtime_bridge)
+            commands = service.prepare_queued_run_commands(group_id, runtime)
+            for command in commands:
+                await runtime_bridge.send_frontend_command(command)
 
-            # TODO（阶段7）：触发 orchestrator 执行 runs
-            # 当前返回群聊状态，runs 处于 queued
-
-            return {"group": group}
+            return {"group": service.get_group(group_id)}
         except Exception as e:
             raise _http_error(e)
 
     # ===== Run 管理 =====
 
-    @router.post("/groups/{group_id}/runs/{run_id}/start")
-    async def start_run(group_id: str, run_id: str) -> dict[str, Any]:
-        """启动 run（手动触发，测试用）"""
+    @router.post("/groups/{group_id}/runs/{run_id}/cancel")
+    async def cancel_run(group_id: str, run_id: str) -> dict[str, Any]:
+        """Request cancellation; terminal runtime events remain the state transition source."""
         try:
-            # TODO（阶段7）：调用 orchestrator.start_run(run_id)
-            return {"success": False, "message": "Manual run start not implemented yet"}
+            run = service.get_run(run_id)
+            if run is None or str(run.get("group_id") or "") != group_id:
+                raise HTTPException(status_code=404, detail="group run not found")
+            request_id = str(run.get("request_id") or "").strip()
+            if request_id:
+                await runtime_bridge.send_frontend_command(
+                    FactoryFrontendCommand(
+                        type="cancel_runtime_request",
+                        mode="agent_group",
+                        payload={"target_request_id": request_id, "reason": "user_cancelled"},
+                    )
+                )
+            else:
+                service.cancel_run(run_id)
+            group = service.get_group(group_id)
+            return {"group": group}
         except Exception as e:
             raise _http_error(e)
 
-    @router.post("/groups/{group_id}/runs/{run_id}/cancel")
-    async def cancel_run(group_id: str, run_id: str) -> dict[str, Any]:
-        """取消 run"""
+    @router.post("/groups/{group_id}/runs/{run_id}/resume")
+    async def resume_run(group_id: str, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            service.cancel_run(run_id)
-            group = service.get_group(group_id)
-            return {"group": group}
+            run = service.get_run(run_id)
+            if run is None or str(run.get("group_id") or "") != group_id:
+                raise HTTPException(status_code=404, detail="group run not found")
+            if str(run.get("status") or "") != "awaiting_approval":
+                raise HTTPException(status_code=409, detail="group run is not awaiting approval")
+            request_id = uuid4().hex
+            service.update_run(run_id, {"request_id": request_id})
+            await runtime_bridge.send_frontend_command(
+                FactoryFrontendCommand(
+                    type="resume_interrupt",
+                    request_id=request_id,
+                    mode="agent_group",
+                    payload={**payload, "group_run_id": run_id, "mode": "agent_group"},
+                )
+            )
+            return {"group": service.get_group(group_id)}
+        except Exception as e:
+            raise _http_error(e)
+
+    @router.post("/groups/{group_id}/runs/{run_id}/retry")
+    async def retry_run(group_id: str, run_id: str) -> dict[str, Any]:
+        try:
+            run = service.get_run(run_id)
+            if run is None or str(run.get("group_id") or "") != group_id:
+                raise HTTPException(status_code=404, detail="group run not found")
+            service.retry_run(run_id)
+            runtime = _agent_package_runtime(runtime_bridge)
+            for command in service.prepare_queued_run_commands(group_id, runtime):
+                await runtime_bridge.send_frontend_command(command)
+            return {"group": service.get_group(group_id)}
         except Exception as e:
             raise _http_error(e)
 
@@ -206,3 +247,11 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=409, detail=detail)
     else:
         return HTTPException(status_code=500, detail=detail)
+
+
+def _agent_package_runtime(runtime_bridge: RuntimeBridge):
+    adapter = runtime_bridge.adapter
+    runtime = getattr(adapter, "agent_package_runtime", None) if adapter is not None else None
+    if runtime is None:
+        raise RuntimeError("runtime service not started")
+    return runtime

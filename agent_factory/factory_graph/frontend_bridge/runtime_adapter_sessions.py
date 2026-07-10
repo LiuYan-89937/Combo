@@ -194,6 +194,14 @@ class RuntimeSessionCommandMixin:
 
     def resume_interrupt(self, command: FactoryFrontendCommand) -> None:
         target = _interrupt_resume_target(command.payload)
+        group_run_id = str(command.payload.get("group_run_id") or "").strip()
+        if group_run_id:
+            pending_group_run = self.pending_agent_group_runs.pop(group_run_id, None)
+            if pending_group_run is None:
+                self._emit_error(command, "no matching agent-group interrupt to resume")
+                return
+            self.resume_agent_group_interrupt(command, pending_group_run)
+            return
         if self.pending_create_agent_run is not None and _pending_create_agent_matches(self.pending_create_agent_run, target):
             self._resume_create_agent_interrupt(command)
             return
@@ -661,7 +669,7 @@ def _pending_evolution_matches(pending: object, target: _InterruptResumeTarget) 
 
 
 def _pending_agent_package_matches(pending: object, target: _InterruptResumeTarget) -> bool:
-    if target.mode and target.mode not in {"agent_package", "chat"}:
+    if target.mode and target.mode not in {"agent_package", "chat", "agent_group"}:
         return False
     if target.package_id and target.package_id != _normalized_optional(getattr(pending, "package_id", None)):
         return False

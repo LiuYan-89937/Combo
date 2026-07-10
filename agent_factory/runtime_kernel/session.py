@@ -41,6 +41,7 @@ class AgentSessionRecord(BaseModel):
     session_kind: str = "normal"
     collaboration_id: str | None = None
     collaboration_task_id: str | None = None
+    agent_group_id: str | None = None
     visible_in_agent_session_list: bool = True
     created_at: str
     updated_at: str
@@ -75,6 +76,7 @@ class AgentSessionManager:
         session_kind: str = "normal",
         collaboration_id: str | None = None,
         collaboration_task_id: str | None = None,
+        agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
     ) -> AgentSessionRecord:
         now = _now()
@@ -86,6 +88,7 @@ class AgentSessionManager:
             session_kind=kind,
             collaboration_id=_optional_text(collaboration_id),
             collaboration_task_id=_optional_text(collaboration_task_id),
+            agent_group_id=_optional_text(agent_group_id),
             visible_in_agent_session_list=(
                 kind == "normal" if visible_in_agent_session_list is None else bool(visible_in_agent_session_list)
             ),
@@ -146,6 +149,7 @@ class AgentSessionManager:
         session_kind: str | None = None,
         collaboration_id: str | None = None,
         collaboration_task_id: str | None = None,
+        agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
     ) -> AgentSessionRecord:
         record = self.load(session_id)
@@ -155,6 +159,8 @@ class AgentSessionManager:
             record.collaboration_id = _optional_text(collaboration_id)
         if collaboration_task_id is not None:
             record.collaboration_task_id = _optional_text(collaboration_task_id)
+        if agent_group_id is not None:
+            record.agent_group_id = _optional_text(agent_group_id)
         if visible_in_agent_session_list is not None:
             record.visible_in_agent_session_list = bool(visible_in_agent_session_list)
         self.save(record)
@@ -295,7 +301,7 @@ def _optional_text(value: str | None) -> str | None:
 
 def _normalize_session_kind(value: str | None) -> str:
     kind = str(value or "").strip() or "normal"
-    allowed = {"normal", "collaboration_main", "collaboration_worker"}
+    allowed = {"normal", "collaboration_main", "collaboration_worker", "agent_group_member"}
     if kind not in allowed:
         raise ValueError(f"unsupported agent session kind: {kind}")
     return kind

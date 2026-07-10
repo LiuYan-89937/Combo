@@ -86,6 +86,8 @@ const { locale, t } = useI18n()
 
 const roleLabel = computed(() => {
   if (collaborationReport.value) return collaborationReportTitle.value
+  const displayName = String(props.message.metadata?.display_name || '').trim()
+  if (displayName) return displayName
   if (props.message.role === 'user') return t('roles.user')
   if (props.message.role === 'system') return t('roles.system')
   return t('roles.assistant')
@@ -114,6 +116,8 @@ const avatarStyle = computed<CSSProperties>(() => {
 
 const avatarText = computed(() => {
   if (collaborationReport.value) return 'A'
+  const avatarLabel = String(props.message.metadata?.avatar_label || '').trim()
+  if (avatarLabel) return avatarLabel.slice(0, 2)
   if (props.message.role === 'user') return 'U'
   if (props.message.role === 'system') return 'S'
   return 'A'

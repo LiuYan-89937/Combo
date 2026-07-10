@@ -4,7 +4,8 @@
     "chat",
     "create_agent",
     "evolve_agent",
-    "agent_package"
+    "agent_package",
+    "agent_group"
   ],
   "command_types": [
     "start_session",
@@ -29,6 +30,7 @@
     "delete_agent_package_session",
     "send_agent_package_message",
     "run_agent_package",
+    "run_agent_group_member",
     "run_agent_evolution",
     "resume_interrupt",
     "cancel_runtime_request",

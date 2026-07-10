@@ -6,6 +6,7 @@ from typing import Any
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.collaboration_system import CollaborationStore
+from agent_factory.agent_group_system.store import AgentGroupStore
 from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import (
     list_workspace_entries_from_roots,
     read_workspace_file_from_roots,
@@ -15,7 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 
 
-WORKSPACE_RESOURCE_MODES = {"package", "create_agent", "evolve_agent", "collaboration"}
+WORKSPACE_RESOURCE_MODES = {"package", "create_agent", "evolve_agent", "collaboration", "agent_group"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +105,8 @@ class FrontendWorkspaceService:
             return self._evolution_target(payload, session_record=session_record)
         if resource_mode == "collaboration":
             return self._collaboration_target(payload)
+        if resource_mode == "agent_group":
+            return self._agent_group_target(payload)
         return self._package_target(payload)
 
     def _package_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
@@ -209,6 +212,26 @@ class FrontendWorkspaceService:
             resource_mode="collaboration",
             context=context,
             roots=_factory_workspace_roots(workdir),
+        )
+
+    def _agent_group_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
+        group_id = str(payload.get("group_id") or "").strip()
+        context = {"resource_mode": "agent_group", **({"group_id": group_id} if group_id else {})}
+        if not group_id:
+            return FrontendWorkspaceTarget(
+                resource_mode="agent_group",
+                context=context,
+                roots={},
+                unavailable_reason="select an agent group before opening its shared workspace",
+            )
+        store = AgentGroupStore()
+        store.get_group(group_id)
+        root = store.group_workspace_root(group_id) / "committed"
+        root.mkdir(parents=True, exist_ok=True)
+        return FrontendWorkspaceTarget(
+            resource_mode="agent_group",
+            context=context,
+            roots=_factory_workspace_roots(root),
         )
 
     def _session_record(self, payload: dict[str, Any], *, session_record: Any | None) -> Any | None:
