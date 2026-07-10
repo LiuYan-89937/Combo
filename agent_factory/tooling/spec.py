@@ -24,6 +24,7 @@ ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
 ToolLLMRiskMode = Literal["disabled", "on_uncertain", "always"]
 ToolPermissionScope = Literal["system", "package", "extension", "model"]
 ToolOutputCompressionMode = Literal["structured_json", "deterministic"]
+ToolOutputProjectionMode = Literal["compress", "passthrough"]
 
 ToolEventType = Literal[
     "tool_call_proposed",
@@ -111,6 +112,7 @@ class ToolSpec(BaseModel):
     permission_scope: ToolPermissionScope = "package"
     permission_tags: list[str] = Field(default_factory=list)
     output_compression: ToolOutputCompressionConfig = Field(default_factory=ToolOutputCompressionConfig)
+    output_projection: ToolOutputProjectionMode = "compress"
 
     @field_validator("id")
     @classmethod

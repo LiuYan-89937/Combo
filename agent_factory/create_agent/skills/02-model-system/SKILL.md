@@ -48,6 +48,7 @@ Guides model and dependency contract changes for produced agents.
 - Do not invent provider credentials, account ids, API keys, endpoints, or local paths.
 - Declare dependencies and sandbox resources only for capabilities that are actually implemented in package files.
 - Every non-stdlib, non-package-local, non-`agent_factory` Python import used by package tools must be represented in `contracts/dependencies.json` `config.python_requirements`.
+- When dependencies require sandbox initialization, `config.install_timeout_seconds` must be a task-appropriate positive estimate. It is authored by the manufacturing model, not taken from a global runtime default.
 - If an external resource is required but not confirmed, ask the user before writing concrete config.
 
 ## Boundaries

@@ -43,7 +43,8 @@
         "payload": {
           "allowed_tool_ids": [
             "knowledge",
-            "scheduler"
+            "scheduler",
+            "skillhub"
           ],
           "approval_policy": "standard"
         }

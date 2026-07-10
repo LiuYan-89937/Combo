@@ -14,7 +14,6 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
 from agent_factory.runtime_attachments import (
     AttachmentImportError,
     attachment_import_error_payload,
-    redact_attachment_markers,
 )
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.scheduler_system import (
@@ -143,7 +142,6 @@ class RuntimeSchedulerCommandMixin:
         if target_scope != "chat":
             return {"status": "failed", "error": f"unsupported scheduler graph target_scope: {target_scope}"}
         package_id = SYSTEM_CHAT_PACKAGE_ID
-        redacted_message = redact_attachment_markers(message)
         thread_policy = str(payload.get("thread_policy") or "new_thread_per_run")
         agent_session_id = str(payload.get("fixed_thread_id") or "").strip() if thread_policy == "fixed_thread" else None
         factory_session = self.session_manager.create(mode="chat")

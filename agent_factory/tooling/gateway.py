@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_factory.tooling.execution_context import current_tool_approval_override, current_tool_call, current_tool_event_sink
 from agent_factory.tooling.output_store import (
     ToolOutputPolicy,
+    ToolOutputProjection,
     ToolOutputStore,
     default_tool_output_policy,
     project_tool_output,
@@ -195,15 +196,19 @@ class ToolExecutionGateway:
         resource_set_store = self.global_resources.get(RESOURCE_SET_STORE_KEY)
         if isinstance(resource_set_store, ResourceSetStore):
             auto_record_path(resource_set_store, self.spec.id, arguments)
-        projection = project_tool_output(
-            output=output,
-            tool_id=self.spec.id,
-            tool_call_id=tool_call_id,
-            arguments=arguments,
-            store=self.output_store,
-            policy=self.output_policy,
-            compression_model=get_compression_model(),
-            compression_config=self.spec.output_compression,
+        projection = (
+            ToolOutputProjection(output=output)
+            if self.spec.output_projection == "passthrough"
+            else project_tool_output(
+                output=output,
+                tool_id=self.spec.id,
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                store=self.output_store,
+                policy=self.output_policy,
+                compression_model=get_compression_model(),
+                compression_config=self.spec.output_compression,
+            )
         )
         return self._observation(
             "completed",

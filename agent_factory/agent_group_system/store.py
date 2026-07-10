@@ -117,6 +117,7 @@ class AgentGroupStore:
                     message_kind text not null,
                     content text not null,
                     context_version integer,
+                    reply_to_message_id text,
                     group_run_id text,
                     event_ref text,
                     created_at text not null,
@@ -209,6 +210,7 @@ class AgentGroupStore:
             """)
             _ensure_column(conn, "agent_group_members", "consumed_context_version", "integer not null default 0")
             _ensure_column(conn, "agent_group_messages", "context_version", "integer")
+            _ensure_column(conn, "agent_group_messages", "reply_to_message_id", "text")
             _ensure_column(conn, "agent_group_member_runs", "request_id", "text")
 
 
@@ -285,7 +287,7 @@ class AgentGroupStore:
             # 消息（最近 200 条）
             message_rows = conn.execute("""
                 select message_id, group_id, speaker_type, speaker_package_id, message_kind,
-                       content, group_run_id, event_ref, created_at
+                       content, reply_to_message_id, group_run_id, event_ref, created_at
                 from agent_group_messages
                 where group_id = ?
                 order by created_at desc
@@ -405,12 +407,41 @@ class AgentGroupStore:
             row = conn.execute(
                 """
                 select message_id, group_id, speaker_type, speaker_package_id, message_kind,
-                       content, group_run_id, event_ref, created_at
+                       content, reply_to_message_id, group_run_id, event_ref, created_at
                 from agent_group_messages where message_id = ?
                 """,
                 (message_id,),
             ).fetchone()
         return self._message_view(row) if row is not None else None
+
+    def latest_target_package_ids(self, group_id: str) -> list[str]:
+        """Return the recipients from the latest public user turn that actually addressed members."""
+        with self._connect() as conn:
+            source = conn.execute(
+                """
+                select m.message_id
+                from agent_group_messages m
+                where m.group_id = ? and m.speaker_type = 'user'
+                  and exists (
+                    select 1 from agent_group_member_runs r where r.message_id = m.message_id
+                  )
+                order by m.created_at desc
+                limit 1
+                """,
+                (group_id,),
+            ).fetchone()
+            if source is None:
+                return []
+            rows = conn.execute(
+                """
+                select speaker_package_id
+                from agent_group_member_runs
+                where message_id = ?
+                order by created_at asc
+                """,
+                (source["message_id"],),
+            ).fetchall()
+        return [str(row["speaker_package_id"]) for row in rows if str(row["speaker_package_id"] or "").strip()]
 
     def remove_member(self, group_id: str, package_id: str) -> dict[str, Any]:
         """移除成员（返回其 session_id 供清理）"""
@@ -443,7 +474,12 @@ class AgentGroupStore:
     # ===== 消息管理 =====
 
     def add_user_message(
-        self, group_id: str, content: str, client_message_id: str, target_package_ids: list[str]
+        self,
+        group_id: str,
+        content: str,
+        client_message_id: str,
+        target_package_ids: list[str],
+        reply_to_message_id: str | None = None,
     ) -> dict[str, Any]:
         """添加用户消息（幂等，基于 client_message_id）"""
         if not content.strip():
@@ -467,10 +503,10 @@ class AgentGroupStore:
             conn.execute("""
                 insert into agent_group_messages
                 (message_id, group_id, speaker_type, speaker_package_id, message_kind, content,
-                 group_run_id, event_ref, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reply_to_message_id, group_run_id, event_ref, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (message_id, group_id, "user", None, "user_message", content.strip(),
-                  None, f"user:{client_message_id}", now))
+                  reply_to_message_id, None, f"user:{client_message_id}", now))
 
             context_version = self._append_context_delta_conn(
                 conn,

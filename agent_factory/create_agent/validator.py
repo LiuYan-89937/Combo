@@ -1336,7 +1336,7 @@ def _package_tool_probe_report(
                 tool_id=tool_id,
                 summary=f"package tool {tool_id} has not been probed",
                 actual="missing probe evidence",
-                repair_hint="Use create_agent_probe_tool(action='inspect'), then create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., tool_goal=...) with realistic package tool arguments and human-readable probe context.",
+                repair_hint="Use create_agent_probe_tool(action='inspect'), then create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., tool_goal=..., timeout_seconds=<task-appropriate-positive-seconds>) with realistic package tool arguments and human-readable probe context.",
             ))
             continue
         current_tool_digest = package_tool_digest(root, tool_id, fingerprint=current_fingerprint)
@@ -1373,7 +1373,7 @@ def _package_tool_probe_report(
                 ),
                 repair_hint=(
                     "Run create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', "
-                    "arguments=..., prompt=..., tool_goal=...) with realistic successful-path inputs. "
+                    "arguments=..., prompt=..., tool_goal=..., timeout_seconds=<task-appropriate-positive-seconds>) with realistic successful-path inputs. "
                     "If no successful input is available, ask the user for the missing resource instead of publishing."
                 ),
                 details=record.model_dump(mode="json"),
@@ -1519,6 +1519,22 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
         return []
     imports_by_tool = _package_tool_external_imports(root=root, tool_ids=set(package_tools))
     issues: list[PackageValidationIssue] = []
+    if (
+        (contract.config.python_requirements or contract.config.system_packages)
+        and contract.config.install_mode == "sandbox_init"
+        and contract.config.install_timeout_seconds is None
+    ):
+        issues.append(_contract_issue(
+            where="dependencies.install_timeout_seconds",
+            summary="dependency installation timeout is not declared",
+            message="contracts/dependencies.json declares installable dependencies without config.install_timeout_seconds.",
+            path="contracts/dependencies.json",
+            expected="A task-appropriate positive install_timeout_seconds for sandbox dependency initialization.",
+            actual="install_timeout_seconds is missing",
+            repair_hint="Use create_agent_authoring(action='configure_dependencies') and estimate a timeout from dependency size, platform, and network conditions.",
+            target_files=["contracts/dependencies.json"],
+            recommended_skill="10-package-tool-system",
+        ))
     for tool_id, imports in sorted(imports_by_tool.items()):
         external_imports = sorted(imports)
         if not external_imports or contract.config.python_requirements:
@@ -1565,6 +1581,7 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
                     },
                     "tool_source": "<current corrected tool.py source>",
                     "python_requirements": ["<installable-distribution-name>"],
+                    "install_timeout_seconds": "<task-appropriate-positive-seconds>",
                     "expose_to_nodes": ["answer"],
                 },
             },

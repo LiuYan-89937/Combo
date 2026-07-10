@@ -34,6 +34,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     done: bool
     final_answer: str
     publish_ready: dict[str, Any]
+    interrupt_answer: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -164,7 +165,12 @@ class CreateAgentWorkflow:
                 summary="Validation skipped while waiting for user input.",
             )
             return {
-                "messages": [HumanMessage(content=_resume_text(answer))],
+                "messages": [_resume_message(answer, question=action.message, interrupt_type="create_agent_question")],
+                "interrupt_answer": _interrupt_answer_context(
+                    answer,
+                    question=action.message,
+                    interrupt_type="create_agent_question",
+                ),
                 "validation": previous_report.to_digest().model_dump(mode="json"),
                 "done": False,
             }
@@ -203,7 +209,12 @@ class CreateAgentWorkflow:
                 summary="Validation skipped while waiting for user input.",
             )
             return {
-                "messages": [HumanMessage(content=_resume_text(answer))],
+                "messages": [_resume_message(answer, question=action.message, interrupt_type="agent_evolution_question")],
+                "interrupt_answer": _interrupt_answer_context(
+                    answer,
+                    question=action.message,
+                    interrupt_type="agent_evolution_question",
+                ),
                 "validation": previous_report.to_digest().model_dump(mode="json"),
                 "done": False,
             }
@@ -369,6 +380,33 @@ def _resume_text(value: Any) -> str:
                 return item.strip()
         return str(value)
     return str(value or "").strip()
+
+
+def _resume_message(value: Any, *, question: str, interrupt_type: str) -> HumanMessage:
+    """Keep an interrupt answer typed without changing the model-visible text."""
+    payload = value if isinstance(value, dict) else {}
+    return HumanMessage(
+        content=_resume_text(value),
+        additional_kwargs={
+            "message_source": "user",
+            "message_kind": "interrupt_answer",
+            "interrupt_type": interrupt_type,
+            "interrupt_id": str(payload.get("interrupt_id") or "").strip(),
+            "interrupt_question": str(question or "").strip(),
+        },
+    )
+
+
+def _interrupt_answer_context(value: Any, *, question: str, interrupt_type: str) -> dict[str, Any]:
+    payload = value if isinstance(value, dict) else {}
+    return {
+        "message_source": "user",
+        "message_kind": "interrupt_answer",
+        "interrupt_type": interrupt_type,
+        "interrupt_id": str(payload.get("interrupt_id") or "").strip(),
+        "question": str(question or "").strip(),
+        "input_text": _resume_text(value),
+    }
 
 
 def _evolution_final_answer(message: str) -> str:

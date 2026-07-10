@@ -4,6 +4,7 @@ from pathlib import Path
 
 from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_contracts import LoadedAgentPackage
+from agent_factory.tooling.factory_extensions import default_system_agent_extension_root
 
 
 def host_runtime_root(package_id: str) -> Path:
@@ -50,6 +51,8 @@ def host_session_root(*, package_id: str, package: LoadedAgentPackage, configure
 
 
 def extension_root_for_package(package_id: str, package: LoadedAgentPackage) -> Path:
+    if package_id == "factory_chat" and is_system_package(package):
+        return default_system_agent_extension_root("factory_chat")
     if is_system_package(package):
         return package.package_root.parent / "extensions"
     return host_runtime_root(package_id) / "extensions"

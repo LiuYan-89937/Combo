@@ -19,6 +19,7 @@ def get_tool_output_tool_specs() -> list[ToolSpec]:
             resources={TOOL_OUTPUT_STORE_RESOURCE: TOOL_OUTPUT_STORE_RESOURCE},
             risk_level="low",
             concurrent=True,
+            output_projection="passthrough",
         )
     ]
 

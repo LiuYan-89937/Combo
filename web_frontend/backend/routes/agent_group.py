@@ -76,14 +76,6 @@ def create_agent_group_router(
     async def delete_group(group_id: str) -> dict[str, Any]:
         """删除群聊"""
         try:
-            group = service.get_group(group_id)
-            runtime_manager = runtime_bridge.agent_package_runtime
-            for member in group.get("members", []):
-                package_id = str(member.get("package_id") or "").strip()
-                session_id = str(member.get("package_session_id") or "").strip()
-                if package_id and session_id:
-                    runtime_manager.shutdown_session_runtime(package_id, session_id=session_id)
-                    runtime_manager.delete_session(package_id, session_id)
             result = service.delete_group(group_id)
             return {"success": result["deleted"], "group_id": group_id}
         except Exception as e:
@@ -109,15 +101,6 @@ def create_agent_group_router(
     async def remove_member(group_id: str, package_id: str) -> dict[str, Any]:
         """移除成员"""
         try:
-            group = service.get_group(group_id)
-            member = next((item for item in group.get("members", []) if item.get("package_id") == package_id), None)
-            if member is None:
-                raise HTTPException(status_code=404, detail=f"member not found: {package_id}")
-            session_id = str(member.get("package_session_id") or "").strip()
-            if session_id:
-                runtime_manager = _agent_package_runtime(runtime_bridge)
-                runtime_manager.shutdown_session_runtime(package_id, session_id=session_id)
-                runtime_manager.delete_session(package_id, session_id)
             result = service.remove_member(group_id, package_id)
             return {"group": result}
         except Exception as e:
@@ -132,12 +115,19 @@ def create_agent_group_router(
             content = payload.get("content", "").strip()
             client_message_id = payload.get("client_message_id", "").strip()
             target_package_ids = payload.get("target_package_ids", [])
+            reply_to_message_id = str(payload.get("reply_to_message_id") or "").strip() or None
 
             if not content:
                 raise HTTPException(status_code=400, detail="content is required")
             if not client_message_id:
                 raise HTTPException(status_code=400, detail="client_message_id is required")
-            group = service.send_user_message(group_id, content, client_message_id, target_package_ids)
+            group = service.send_user_message(
+                group_id,
+                content,
+                client_message_id,
+                target_package_ids,
+                reply_to_message_id=reply_to_message_id,
+            )
             runtime = _agent_package_runtime(runtime_bridge)
             commands = service.prepare_queued_run_commands(group_id, runtime)
             for command in commands:
@@ -212,19 +202,19 @@ def create_agent_group_router(
 
     @router.get("/agents")
     async def list_agents() -> dict[str, Any]:
-        """列出可用 Agent"""
+        """List the same published packages exposed by the normal Agent surface."""
         try:
-            # 复用 agent_packages.py 的逻辑
-            packages = runtime_bridge.agent_package_runtime.package_registry.list_packages()
-
+            runtime = _agent_package_runtime(runtime_bridge)
+            packages = runtime.list_packages()
             agents = [
                 {
-                    "package_id": pkg.package_id,
-                    "agent_name": pkg.metadata.get("name", pkg.package_id),
-                    "agent_description": pkg.metadata.get("description"),
-                    "status": "ready" if pkg.ready else "not_ready",
+                    "package_id": str(pkg.get("package_id") or ""),
+                    "agent_name": str(pkg.get("agent_name") or pkg.get("name") or pkg.get("package_id") or ""),
+                    "agent_description": pkg.get("agent_description") or pkg.get("description"),
+                    "status": str(pkg.get("status") or "available"),
                 }
                 for pkg in packages
+                if str(pkg.get("package_id") or "").strip()
             ]
 
             return {"agents": agents}

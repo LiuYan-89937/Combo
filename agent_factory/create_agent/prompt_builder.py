@@ -130,6 +130,8 @@ def _invariant_system_prompt_text() -> str:
         (
             "需要用户补充资源或决策时，必须调用 create_agent_control(action=ask_user, message=...)；"
             "不要直接写 .factory/action.json，不要输出表单。"
+            "中断恢复后的消息是用户对上一条问题的真实回答；先理解回答语言和内容，再决定是否需要用同一种语言重新询问。"
+            "如果回答没有明确给出所需决策，必须继续询问，禁止替用户选择方案、补写确认或把自己的上一条文字当作用户回答。"
             "提问前必须先对照 Runtime Capability Inventory：未出现在 confirmed runtime tools、"
             "package-authorable runtime capabilities、inherited extension candidates 或 verified package tools 中的能力，不能承诺已支持，"
             "也不能直接向用户索要该能力的账号、token 或配置。"
@@ -159,7 +161,7 @@ def _invariant_system_prompt_text() -> str:
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=业务 ToolSpec 字段, tool_source=完整源码, "
-            "python_requirements=[...], expose_to_nodes=[...])；"
+            "python_requirements=[...], install_timeout_seconds=<estimated positive seconds>, expose_to_nodes=[...])；"
             "tool_spec 只允许包含 id、description、input_schema、output_schema、resources、risk_level、concurrent、output_compression；"
             "不要传 entrypoint、risk_evaluator、permission_scope 或 permission_tags，这些系统字段由 create_agent_authoring 统一生成。"
             "生成的 package tool 固定写入 tools/<tool_id>/tool.py，系统会生成 entrypoint=python:tools/<tool_id>/tool.py:run；"
@@ -168,6 +170,8 @@ def _invariant_system_prompt_text() -> str:
             "不要把 output_schema、resources、risk_level、concurrent 或 output_compression 放进 input_schema。"
             "如果工具输出包含长列表、搜索候选、外部资源 id/slug/path、日志、报告或其他压缩后仍需保真的机器字段，给 tool_spec.output_compression.actions 写 action 级结构化 schema 和个性化 prompt；"
             "单链路工具把个性压缩当作唯一 action 配置；多 action 工具使用 output_compression.action_argument 和 actions 分别配置每个 action。没有 action 配置时直接走系统默认压缩。"
+            "声明 Python 或系统包依赖时，必须填写 install_timeout_seconds；根据依赖体积、平台和网络状况估算，不要假定固定时长。"
+            "调用 create_agent_probe_tool(action='call') 时，必须填写 timeout_seconds，且应覆盖依赖初始化与目标工具实际执行的总时长。"
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程、模板资源或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
@@ -266,7 +270,23 @@ def _dynamic_system_context_text(
 ) -> str:
     task_analysis = _task_analysis_context(state)
     attachments = format_attachments_for_model(state.get("runtime_attachments"))
-    return "\n\n".join(item for item in [task_analysis, attachments] if item)
+    interrupt_answer = _interrupt_answer_context(state.get("interrupt_answer"))
+    return "\n\n".join(item for item in [task_analysis, interrupt_answer, attachments] if item)
+
+
+def _interrupt_answer_context(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    question = str(value.get("question") or "").strip()
+    input_text = str(value.get("input_text") or "").strip()
+    if not input_text:
+        return ""
+    return (
+        "Interrupt answer context (authoritative user input):\n"
+        f"question: {question}\n"
+        f"user_answer: {input_text}\n"
+        "Treat this as user input only. Do not infer an unspecified choice or claim the user selected an option."
+    )
 
 
 def _task_analysis_context(state: Mapping[str, Any]) -> str:

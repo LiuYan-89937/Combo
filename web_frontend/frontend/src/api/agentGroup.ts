@@ -29,6 +29,7 @@ export interface AgentGroupMessageView {
   speaker_package_id?: string
   message_kind: MessageKind
   content: string
+  reply_to_message_id?: string
   group_run_id?: string
   event_ref?: string
   created_at: string
@@ -137,6 +138,7 @@ export const agentGroupApi = {
       content: string
       client_message_id: string
       target_package_ids: string[]
+      reply_to_message_id?: string
     }
   ): Promise<{ group: AgentGroupSessionView }> {
     return requestJson(`/api/agent-group/groups/${groupId}/messages`, {

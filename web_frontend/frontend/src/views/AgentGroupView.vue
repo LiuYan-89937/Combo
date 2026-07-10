@@ -13,6 +13,8 @@
             :key="message.id"
             :message="message"
             :streaming="message.status === 'streaming'"
+            quoteable
+            @quote="quoteMessage"
           />
         </div>
       </n-scrollbar>
@@ -52,17 +54,16 @@
       </section>
 
       <footer v-if="store.activeGroup" class="composer">
-        <div class="mention-control">
-          <n-button size="small" quaternary @click="showMentionPicker = !showMentionPicker">@</n-button>
-        </div>
-        <div v-if="selectedMentions.length" class="selected-mentions">
-          <n-tag v-for="packageId in selectedMentions" :key="packageId" closable @close="removeMention(packageId)">
-            @{{ agentName(packageId) }}
-          </n-tag>
+        <div v-if="quotedMessage" class="quote-preview">
+          <div class="quote-preview-copy">
+            <strong>引用 {{ messageSpeaker(quotedMessage) }}</strong>
+            <span>{{ compactText(quotedMessage.content) }}</span>
+          </div>
+          <n-button quaternary circle size="tiny" title="取消引用" @click="quotedMessage = null">×</n-button>
         </div>
         <div v-if="showMentionPicker" class="mention-picker">
           <n-button
-            v-for="member in store.members"
+            v-for="member in filteredMentionMembers"
             :key="member.package_id"
             size="small"
             quaternary
@@ -78,6 +79,7 @@
           :is-running="false"
           @send="sendMessage"
           @cancel="cancelActiveRuns"
+          @input="handleComposerInput"
         />
       </footer>
     </section>
@@ -86,21 +88,27 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { NButton, NEmpty, NScrollbar, NTag } from 'naive-ui'
+import { NButton, NEmpty, NScrollbar } from 'naive-ui'
 import { useAgentGroupStore } from '@/stores/agentGroup'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import type { FactoryFrontendEvent, RuntimeAttachmentInput } from '@/types/protocol'
+import type { FactoryFrontendEvent, RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 
 const store = useAgentGroupStore()
 const inputRef = ref()
 const scrollbarRef = ref()
 const selectedMentions = ref<string[]>([])
 const showMentionPicker = ref(false)
+const mentionQuery = ref('')
+const quotedMessage = ref<TranscriptItem | null>(null)
 
 const activeRunKey = computed(() => store.activeRuns.map(run => `${run.group_run_id}:${run.status}`).join('|'))
 const retryableRuns = computed(() => store.runs.filter(run => ['failed', 'cancelled'].includes(run.status)))
+const filteredMentionMembers = computed(() => {
+  const query = mentionQuery.value.toLocaleLowerCase()
+  return store.members.filter(member => !query || agentName(member.package_id).toLocaleLowerCase().includes(query))
+})
 
 onMounted(async () => {
   await store.bootstrap()
@@ -120,23 +128,49 @@ function agentName(packageId: string): string {
 
 function selectMention(packageId: string) {
   if (!selectedMentions.value.includes(packageId)) selectedMentions.value.push(packageId)
+  inputRef.value?.replaceTrailingAtMention(agentName(packageId))
   showMentionPicker.value = false
+  mentionQuery.value = ''
 }
 
-function removeMention(packageId: string) {
-  selectedMentions.value = selectedMentions.value.filter(value => value !== packageId)
+function handleComposerInput(value: string) {
+  const match = value.match(/@([^\s@]*)$/)
+  showMentionPicker.value = Boolean(match)
+  mentionQuery.value = match?.[1] || ''
+  selectedMentions.value = selectedMentions.value.filter(packageId => value.includes(`@${agentName(packageId)}`))
 }
 
 async function sendMessage(content: string, _attachments: RuntimeAttachmentInput[]) {
   const message = content.trim()
   if (!message || !store.activeGroup) return
   if (!selectedMentions.value.length) {
-    await store.sendMessage(message, [])
+    await store.sendMessage(message, [], quotedMessage.value ? String(quotedMessage.value.metadata?.group_message_id || '') : undefined)
+    quotedMessage.value = null
     return
   }
-  await store.sendMessage(message, selectedMentions.value)
+  await store.sendMessage(
+    message,
+    selectedMentions.value,
+    quotedMessage.value ? String(quotedMessage.value.metadata?.group_message_id || '') : undefined,
+  )
   selectedMentions.value = []
+  quotedMessage.value = null
   nextTick(() => scrollbarRef.value?.scrollTo({ position: 'bottom', behavior: 'smooth' }))
+}
+
+function quoteMessage(message: TranscriptItem) {
+  if (!String(message.metadata?.group_message_id || '').trim()) return
+  quotedMessage.value = message
+  nextTick(() => inputRef.value?.focus())
+}
+
+function messageSpeaker(message: TranscriptItem): string {
+  return String(message.metadata?.display_name || (message.role === 'user' ? '你' : 'Assistant'))
+}
+
+function compactText(value: string): string {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text
 }
 
 async function resolveApproval(event: FactoryFrontendEvent, payload: Record<string, unknown>) {
@@ -158,7 +192,10 @@ watch(() => activeRunKey.value, () => undefined)
 .messages-list { width: min(100%, 920px); margin: 0 auto; padding: var(--app-space-lg); }
 .group-empty { min-height: 320px; display: grid; place-items: center; }
 .composer { border-top: 1px solid var(--app-border); padding: var(--app-space-md); background: var(--app-surface); }
-.mention-control, .selected-mentions, .mention-picker { width: min(100%, 920px); margin: 0 auto var(--app-space-sm); display: flex; gap: var(--app-space-xs); flex-wrap: wrap; }
+.quote-preview { width: min(100%, 920px); margin: 0 auto var(--app-space-sm); padding: var(--app-space-sm) var(--app-space-md); border-left: 2px solid var(--app-text); background: var(--app-surface-muted); display: flex; align-items: center; gap: var(--app-space-sm); }
+.quote-preview-copy { min-width: 0; display: grid; gap: 2px; flex: 1; font-size: 12px; }
+.quote-preview-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--app-text-muted); }
+.mention-picker { width: min(100%, 920px); margin: 0 auto var(--app-space-sm); display: flex; gap: var(--app-space-xs); flex-wrap: wrap; }
 .approval-section { border-top: 1px solid var(--app-border); padding: var(--app-space-sm) var(--app-space-md); max-height: 38vh; overflow: auto; }
 .group-approval + .group-approval { margin-top: var(--app-space-sm); }
 .active-runs { display: flex; gap: var(--app-space-xs); flex-wrap: wrap; padding: var(--app-space-sm) var(--app-space-md); border-top: 1px solid var(--app-border); }

@@ -44,6 +44,11 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
       icon: renderIcon(People),
     },
     {
+      label: t('route.agentGroup'),
+      key: '/agent-group',
+      icon: renderIcon(People),
+    },
+    {
       type: 'divider',
       key: 'd1',
     },

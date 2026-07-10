@@ -433,6 +433,7 @@ class DependenciesContractConfig(BaseModel):
     system_packages: list[str] = Field(default_factory=list)
     system_binaries: list[str] = Field(default_factory=list)
     install_mode: Literal["none", "sandbox_init"] = "sandbox_init"
+    install_timeout_seconds: int | None = Field(default=None, ge=1)
 
 
 class DependenciesContract(BaseModel):

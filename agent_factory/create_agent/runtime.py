@@ -637,6 +637,10 @@ class _ModelTraceAccumulator:
         if message is None:
             return
         message_type = message.__class__.__name__
+        if message_type == "HumanMessage":
+            self.flush()
+            self._recorder("user_message", _user_message_trace_record(message, source))
+            return
         if message_type == "ToolMessage":
             self.flush()
             self._recorder("tool_message", _tool_message_trace_record(message, source))
@@ -713,6 +717,28 @@ def _tool_message_trace_record(message: Any, source: dict[str, Any]) -> dict[str
         "status": status,
         "content_length": len(content) if isinstance(content, str) else len(str(content)),
         "content_omitted": True,
+    }
+
+
+def _user_message_trace_record(message: Any, source: dict[str, Any]) -> dict[str, Any]:
+    content = getattr(message, "content", "")
+    additional_kwargs = getattr(message, "additional_kwargs", {})
+    return {
+        "event_type": "user_message",
+        "message_type": message.__class__.__name__,
+        "source": source,
+        "message_source": "user",
+        "message_kind": str(additional_kwargs.get("message_kind") or "user_message")
+        if isinstance(additional_kwargs, dict)
+        else "user_message",
+        "interrupt_id": str(additional_kwargs.get("interrupt_id") or "")
+        if isinstance(additional_kwargs, dict)
+        else "",
+        "interrupt_question": str(additional_kwargs.get("interrupt_question") or "")
+        if isinstance(additional_kwargs, dict)
+        else "",
+        "content": content if isinstance(content, str) else _json_safe(content),
+        "content_length": len(content) if isinstance(content, str) else 0,
     }
 
 

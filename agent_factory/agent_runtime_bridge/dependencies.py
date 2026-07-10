@@ -132,14 +132,15 @@ def ensure_dependencies(
         )
     missing_python = list(check["python_missing"])
     missing_system_packages = list(check["system_packages_missing"])
+    command_timeout_seconds = config.install_timeout_seconds
     if missing_system_packages:
-        update = _run("system_update", _apt_command(cache_paths, "update"), timeout_seconds=120)
+        update = _run("system_update", _apt_command(cache_paths, "update"), timeout_seconds=command_timeout_seconds)
         report["installs"].append({"kind": "system_update", **update})
         if update["exit_code"] == 0:
             install = _run(
                 "system_install",
                 _apt_command(cache_paths, "install", "-y", *missing_system_packages),
-                timeout_seconds=300,
+                timeout_seconds=command_timeout_seconds,
             )
             report["installs"].append({"kind": "system_install", **install})
             if install["exit_code"] != 0:
@@ -147,7 +148,11 @@ def ensure_dependencies(
         else:
             report["errors"].append({"where": "dependency.system_packages", "message": "apt-get update failed"})
     if missing_python:
-        install = _run("python_install", _pip_install_command(cache_paths, missing_python), timeout_seconds=300)
+        install = _run(
+            "python_install",
+            _pip_install_command(cache_paths, missing_python),
+            timeout_seconds=command_timeout_seconds,
+        )
         report["installs"].append({"kind": "python_install", **install})
         _ensure_python_cache_on_path(cache_paths)
         importlib.invalidate_caches()
@@ -336,7 +341,7 @@ def _missing_system_packages(packages: list[str]) -> list[str]:
     return missing
 
 
-def _run(phase: str, command: list[str], *, timeout_seconds: int) -> dict[str, Any]:
+def _run(phase: str, command: list[str], *, timeout_seconds: int | None) -> dict[str, Any]:
     started_at = time.monotonic()
     try:
         completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds, check=False)

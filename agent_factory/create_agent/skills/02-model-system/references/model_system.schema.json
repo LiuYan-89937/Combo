@@ -99,6 +99,19 @@
               ],
               "title": "Install Mode",
               "type": "string"
+            },
+            "install_timeout_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Install Timeout Seconds"
             }
           },
           "title": "DependenciesContractConfig",

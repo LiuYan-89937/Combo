@@ -298,7 +298,7 @@ class DockerAgentRuntimeLauncher:
         mode = str(policy.get("mode") or "")
         if mode == "none":
             return "none"
-        return "bridge"
+        return "host"
 
     def _environment(self, sandbox: dict[str, Any]) -> dict[str, str]:
         result: dict[str, str] = {}

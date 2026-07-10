@@ -114,6 +114,11 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "system_packages": {"type": "array", "items": {"type": "string"}},
                 "system_binaries": {"type": "array", "items": {"type": "string"}},
                 "install_mode": {"type": "string", "enum": ["none", "sandbox_init"]},
+                "install_timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Estimated dependency initialization deadline in seconds, required when declaring installable dependencies.",
+                },
                 "expose_to_nodes": {"type": "array", "items": {"type": "string"}},
                 "seed": {"type": "object", "additionalProperties": True},
                 "resources": {"type": "object", "additionalProperties": True},
@@ -264,6 +269,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                             {"required": ["system_packages"]},
                             {"required": ["system_binaries"]},
                             {"required": ["install_mode"]},
+                            {"required": ["install_timeout_seconds"]},
                         ]
                     },
                 },
@@ -597,6 +603,7 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
         system_packages=system_packages,
         system_binaries=system_binaries,
         install_mode=str(arguments.get("install_mode") or "").strip(),
+        install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
     dependency_config.setdefault("install_mode", "sandbox_init")
     dependencies_payload = DependenciesContract.model_validate(dependencies).model_dump(mode="json")
@@ -714,6 +721,7 @@ def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str
         system_packages=_string_list(arguments.get("system_packages")),
         system_binaries=_string_list(arguments.get("system_binaries")),
         install_mode=str(arguments.get("install_mode") or "").strip(),
+        install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
     dependencies_payload = DependenciesContract.model_validate(dependencies).model_dump(mode="json")
     _write_json(dependencies_path, dependencies_payload)
@@ -770,6 +778,7 @@ def _merge_dependency_config(
     system_packages: list[str],
     system_binaries: list[str],
     install_mode: str,
+    install_timeout_seconds: Any,
 ) -> None:
     requirements = _dependency_list(config, "python_requirements")
     for requirement in python_requirements:
@@ -782,6 +791,15 @@ def _merge_dependency_config(
         _append_unique(binaries, binary)
     if install_mode:
         config["install_mode"] = install_mode
+    effective_install_mode = str(config.get("install_mode") or "sandbox_init")
+    requires_install = bool(requirements or packages) and effective_install_mode == "sandbox_init"
+    if install_timeout_seconds is not None:
+        config["install_timeout_seconds"] = _positive_int(install_timeout_seconds, "install_timeout_seconds")
+    if requires_install and config.get("install_timeout_seconds") is None:
+        raise ValueError(
+            "install_timeout_seconds is required when declaring Python or system package dependencies; "
+            "estimate a task-appropriate positive number of seconds."
+        )
 
 
 def _dependency_list(config: dict[str, Any], key: str) -> list[Any]:
@@ -1172,6 +1190,18 @@ def _required_dict(arguments: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{key} must be an object")
     return value
+
+
+def _positive_int(value: Any, key: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be a positive integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{key} must be a positive integer")
+    return parsed
 
 
 def _read_json(path: Path) -> dict[str, Any]:

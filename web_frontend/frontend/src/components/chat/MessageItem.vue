@@ -12,6 +12,17 @@
         <n-text depth="3" style="font-size: 12px">
           {{ formatTime(message.timestamp) }}
         </n-text>
+        <n-button
+          v-if="quoteable"
+          class="quote-button"
+          quaternary
+          circle
+          size="tiny"
+          title="引用"
+          @click="$emit('quote', message)"
+        >
+          <template #icon><n-icon><ReturnUpBackOutline /></n-icon></template>
+        </n-button>
       </div>
 
       <div class="message-body">
@@ -65,7 +76,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { CSSProperties } from 'vue'
-import { NAvatar, NText } from 'naive-ui'
+import { NAvatar, NButton, NIcon, NText } from 'naive-ui'
+import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
 import type { TranscriptItem } from '@/types/protocol'
@@ -75,12 +87,18 @@ const props = withDefaults(
     message: TranscriptItem
     streaming?: boolean
     thinking?: boolean
+    quoteable?: boolean
   }>(),
   {
     streaming: false,
     thinking: false,
+    quoteable: false,
   }
 )
+
+defineEmits<{
+  quote: [message: TranscriptItem]
+}>()
 
 const { locale, t } = useI18n()
 
@@ -264,6 +282,10 @@ function compactSummary(value: unknown): string {
   justify-content: space-between;
   gap: var(--app-space-sm);
   margin-bottom: var(--app-space-sm);
+}
+
+.quote-button {
+  margin-left: auto;
 }
 
 .message-body {

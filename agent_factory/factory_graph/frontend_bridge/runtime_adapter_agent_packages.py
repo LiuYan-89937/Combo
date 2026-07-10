@@ -30,7 +30,6 @@ from agent_factory.runtime_attachments import (
     AttachmentImportError,
     attachment_import_error_payload,
     has_attachment_payload,
-    redact_attachment_markers,
     transcript_attachment_views,
 )
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
@@ -385,7 +384,6 @@ class RuntimeAgentPackageCommandMixin:
             self._emit_error(command, "cannot evolve an agent while an interrupt is pending")
             return
         self._ensure_evolution_package_session(command, package_id)
-        redacted_message = redact_attachment_markers(message)
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=command.request_id,
@@ -396,7 +394,7 @@ class RuntimeAgentPackageCommandMixin:
         )
         try:
             self._commit_evolution_request(
-                redacted_message,
+                message,
                 package_id=package_id,
                 request_id=command.request_id,
                 attachments=transcript_attachment_views(command.payload.get("attachments")),
@@ -809,8 +807,7 @@ class RuntimeAgentPackageCommandMixin:
         )
 
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
-        redacted_message = redact_attachment_markers(message)
-        display_user_input = str(command.payload.get("display_user_input") or "").strip() or redacted_message
+        display_user_input = str(command.payload.get("display_user_input") or "").strip() or message
         agent_session_id = self._planned_system_chat_agent_session_id()
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
@@ -850,7 +847,6 @@ class RuntimeAgentPackageCommandMixin:
             self._finish_system_chat_turn(request_id=command.request_id, final_answer=None, status="failed")
 
     def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
-        redacted_message = redact_attachment_markers(message)
         agent_session_id = self._planned_host_create_agent_session_id()
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
@@ -862,7 +858,7 @@ class RuntimeAgentPackageCommandMixin:
         )
         try:
             self._commit_host_create_agent_request(
-                redacted_message,
+                message,
                 session_id=agent_session_id,
                 request_id=command.request_id,
                 attachments=transcript_attachment_views(command.payload.get("attachments")),

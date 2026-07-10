@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 import mimetypes
@@ -16,7 +16,6 @@ from agent_factory.file_utils import file_sha256
 
 
 ATTACHMENT_INPUT_DIR = "input_files"
-ATTACHMENT_MARKER = "@"
 ATTACHMENT_MAX_FILES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILES"
 ATTACHMENT_MAX_FILE_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILE_BYTES"
 ATTACHMENT_MAX_TOTAL_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_TOTAL_BYTES"
@@ -53,13 +52,6 @@ class AttachmentImportPolicy:
             max_total_bytes=_optional_positive_int_env(ATTACHMENT_MAX_TOTAL_BYTES_ENV),
             max_model_chars=_optional_positive_int_env(ATTACHMENT_MAX_MODEL_CHARS_ENV) or DEFAULT_ATTACHMENT_MAX_MODEL_CHARS,
         )
-
-
-@dataclass(frozen=True, slots=True)
-class AttachmentMarker:
-    start: int
-    end: int
-    path: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,54 +128,6 @@ class AttachmentImportResult:
     attachments: list[dict[str, Any]]
 
 
-def import_marked_attachments(
-    message: str,
-    *,
-    storage_root: Path,
-    runtime_path_root: str,
-    base_dir: Path | None = None,
-    scope: str = "run",
-    policy: AttachmentImportPolicy | None = None,
-) -> AttachmentImportResult:
-    markers = parse_attachment_markers(message)
-    if not markers:
-        return AttachmentImportResult(message=message, attachments=[])
-    resolved_policy = policy or AttachmentImportPolicy.from_env()
-    prepared_sources = [
-        _prepare_local_attachment_source(marker.path, base_dir=base_dir)
-        for marker in markers
-    ]
-    _enforce_import_policy(prepared_sources, policy=resolved_policy)
-    imported: list[_ImportedLocalAttachment] = []
-    replacements: list[tuple[int, int, str]] = []
-    try:
-        for marker, prepared in zip(markers, prepared_sources):
-            imported_item = _copy_prepared_local_attachment(
-                prepared,
-                storage_root=storage_root,
-                runtime_path_root=runtime_path_root,
-                scope=scope,
-                policy=resolved_policy,
-            )
-            imported.append(imported_item)
-            ref = imported_item.ref
-            replacements.append(
-                (
-                    marker.start,
-                    marker.end,
-                    f"[uploaded attachment: {ref.display_name}, attachment_id={ref.attachment_id}]",
-                )
-            )
-    except Exception:
-        for imported_item in imported:
-            shutil.rmtree(imported_item.target_dir, ignore_errors=True)
-        raise
-    return AttachmentImportResult(
-        message=_replace_ranges(message, replacements),
-        attachments=[imported_item.ref.model_payload() for imported_item in imported],
-    )
-
-
 def import_runtime_attachments(
     message: str,
     attachments: Any,
@@ -195,25 +139,17 @@ def import_runtime_attachments(
     policy: AttachmentImportPolicy | None = None,
 ) -> AttachmentImportResult:
     resolved_policy = policy or AttachmentImportPolicy.from_env()
-    marked = import_marked_attachments(
-        message,
-        storage_root=storage_root,
-        runtime_path_root=runtime_path_root,
-        base_dir=base_dir,
-        scope=scope,
-        policy=resolved_policy,
-    )
     payload_attachments = import_payload_attachments(
         attachments,
         storage_root=storage_root,
         runtime_path_root=runtime_path_root,
         base_dir=base_dir,
         scope=scope,
-        policy=_remaining_attachment_policy(resolved_policy, len(marked.attachments)),
+        policy=resolved_policy,
     )
     return AttachmentImportResult(
-        message=marked.message,
-        attachments=[*marked.attachments, *payload_attachments],
+        message=message,
+        attachments=payload_attachments,
     )
 
 
@@ -265,38 +201,6 @@ def import_payload_attachments(
             shutil.rmtree(imported_item.target_dir, ignore_errors=True)
         raise
     return [item.ref.model_payload() for item in imported]
-
-
-def _remaining_attachment_policy(
-    policy: AttachmentImportPolicy,
-    imported_count: int,
-) -> AttachmentImportPolicy:
-    if policy.max_files is None:
-        return policy
-    return replace(policy, max_files=max(0, policy.max_files - imported_count))
-
-
-def parse_attachment_markers(message: str) -> list[AttachmentMarker]:
-    """Parse explicit @path@ attachment markers from a user message.
-
-    The marker is a reserved upload action. Non-empty marker contents are
-    always treated as file paths and validated during import instead of being
-    inferred from natural-language shape.
-    """
-    markers: list[AttachmentMarker] = []
-    index = 0
-    while index < len(message):
-        start = message.find(ATTACHMENT_MARKER, index)
-        if start < 0:
-            break
-        end = message.find(ATTACHMENT_MARKER, start + 1)
-        if end < 0:
-            break
-        raw = message[start + 1 : end].strip()
-        if raw:
-            markers.append(AttachmentMarker(start=start, end=end + 1, path=raw))
-        index = end + 1
-    return markers
 
 
 def import_local_attachment(
@@ -351,7 +255,7 @@ def _copy_prepared_local_attachment(
     target = _unique_storage_path(storage_root, safe_name)
     try:
         shutil.copy2(prepared.source, target)
-        digest = _file_sha256(target)
+        digest = file_sha256(target)
         size_bytes = target.stat().st_size
     except Exception as exc:
         shutil.rmtree(storage_root, ignore_errors=True)
@@ -505,7 +409,7 @@ def _write_runtime_attachment(
     target = _unique_storage_path(storage_root, safe_name)
     try:
         target.write_bytes(data)
-        digest = _file_sha256(target)
+        digest = file_sha256(target)
         size_bytes = target.stat().st_size
     except Exception as exc:
         shutil.rmtree(storage_root, ignore_errors=True)
@@ -712,21 +616,6 @@ def _image_data_url(*, path: Path, mime_type: str) -> str:
     return f"data:{mime_type};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
-def redact_attachment_markers(message: str) -> str:
-    markers = parse_attachment_markers(message)
-    if not markers:
-        return message
-    replacements = [
-        (
-            marker.start,
-            marker.end,
-            f"[uploaded attachment: {_display_name_from_raw_path(marker.path)}]",
-        )
-        for marker in markers
-    ]
-    return _replace_ranges(message, replacements)
-
-
 def time_named_attachment_scope(now: datetime | None = None) -> str:
     value = now or datetime.now(UTC)
     if value.tzinfo is None:
@@ -930,11 +819,6 @@ def _unique_storage_path(storage_root: Path, filename: str) -> Path:
         index += 1
 
 
-def _display_name_from_raw_path(value: str) -> str:
-    normalized = value.replace("\\", "/").rstrip("/")
-    return _safe_filename(normalized.rsplit("/", 1)[-1])
-
-
 def _optional_positive_int_env(name: str) -> int | None:
     value = os.getenv(name)
     if value is None or not value.strip():
@@ -960,20 +844,3 @@ def _runtime_attachment_path(*, runtime_path_root: str, filename: str) -> str:
 def _attachment_id_for(*, runtime_path: str, digest: str) -> str:
     source = runtime_path + "\0" + digest
     return f"att_{sha256(source.encode('utf-8')).hexdigest()[:16]}"
-
-
-# 为保持向后兼容，保留 _file_sha256 作为别名
-_file_sha256 = file_sha256
-
-
-def _replace_ranges(message: str, replacements: list[tuple[int, int, str]]) -> str:
-    if not replacements:
-        return message
-    result: list[str] = []
-    cursor = 0
-    for start, end, value in sorted(replacements, key=lambda item: item[0]):
-        result.append(message[cursor:start])
-        result.append(value)
-        cursor = end
-    result.append(message[cursor:])
-    return "".join(result)

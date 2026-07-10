@@ -300,6 +300,7 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
                         "tool_spec": tool_spec,
                         "tool_source": source,
                         "python_requirements": [],
+                        "install_timeout_seconds": "<task-appropriate-positive-seconds when dependencies are declared>",
                         "expose_to_nodes": ["answer"],
                     },
                     "writes": [
@@ -320,11 +321,12 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
                         "prompt": "Please run the package action for this sample user request and tell me whether it succeeded.",
                         "tool_goal": "Return a useful final answer after the package action runs and records its state.",
                         "arguments": {"query": "sample request"},
+                        "timeout_seconds": "<task-appropriate-positive-seconds>",
                     },
                 },
                 "rules": [
                     "Do not manually update agent_package.json, assembly_spec.json, contracts/tools.json, or contracts/dependencies.json for package tool registration during normal production.",
-                    "Declare external Python dependencies in python_requirements when the source imports third-party packages.",
+                    "Declare external Python dependencies in python_requirements when the source imports third-party packages, and estimate install_timeout_seconds for sandbox initialization.",
                     "Remove stale package tools through create_agent_authoring(action=\"remove_package_tool\", tool_id=...).",
                     "Use resources passed to the tool entrypoint for runtime paths instead of assuming os.getcwd(); generated files should normally use artifacts_root.",
                 ],

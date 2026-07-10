@@ -29,8 +29,6 @@ PROBE_MODEL_TIMEOUT_SECONDS_ENV = "AGENTFACTORY_CREATE_AGENT_PROBE_MODEL_TIMEOUT
 DEFAULT_PROBE_MODEL_TIMEOUT_SECONDS = 60.0
 PROBE_EVALUATION_TIMEOUT_SECONDS_ENV = "AGENTFACTORY_CREATE_AGENT_PROBE_EVALUATION_TIMEOUT_SECONDS"
 DEFAULT_PROBE_EVALUATION_TIMEOUT_SECONDS = 8.0
-PROBE_DOCKER_TIMEOUT_SECONDS_ENV = "AGENTFACTORY_CREATE_AGENT_PROBE_DOCKER_TIMEOUT_SECONDS"
-DEFAULT_PROBE_DOCKER_TIMEOUT_SECONDS = 360.0
 
 
 class PackageToolProbeEvaluation(BaseModel):
@@ -79,7 +77,18 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
                     "default": "auto",
                     "description": "Declare whether this probe is intended to exercise a successful business path or an error path. Use auto if unsure.",
                 },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Total Docker probe deadline in seconds. Estimate from dependency size, network conditions, and expected tool execution time.",
+                },
             },
+            "allOf": [
+                {
+                    "if": {"properties": {"action": {"const": "call"}}},
+                    "then": {"required": ["tool_id", "arguments", "timeout_seconds"]},
+                }
+            ],
             "required": ["action"],
             "additionalProperties": False,
         },
@@ -116,6 +125,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             tool_goal=str(arguments.get("tool_goal") or "").strip(),
             arguments=arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else None,
             requested_probe_kind=str(arguments.get("probe_kind") or "auto").strip(),
+            timeout_seconds=_required_positive_int(arguments, "timeout_seconds") if action == "call" else None,
         )
     raise ValueError(f"unsupported probe action: {action}")
 
@@ -182,6 +192,7 @@ def _call(
     tool_goal: str,
     arguments: dict[str, Any] | None,
     requested_probe_kind: str,
+    timeout_seconds: int,
 ) -> dict[str, Any]:
     if not tool_id:
         raise ValueError("tool_id is required for probe call")
@@ -202,6 +213,7 @@ def _call(
         tool_goal=tool_goal,
         arguments=arguments,
         requested_probe_kind=requested_probe_kind,
+        timeout_seconds=timeout_seconds,
     )
     after = package_fingerprint(workspace.root)
     record = _record_from_direct_probe(
@@ -300,6 +312,7 @@ def _run_direct_probe(
     tool_goal: str,
     arguments: dict[str, Any] | None,
     requested_probe_kind: str,
+    timeout_seconds: int,
 ) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -324,7 +337,12 @@ def _run_direct_probe(
             "errors": errors,
         }
     try:
-        docker_result = _run_docker_probe(workspace=workspace, spec=spec, arguments=resolved_arguments)
+        docker_result = _run_docker_probe(
+            workspace=workspace,
+            spec=spec,
+            arguments=resolved_arguments,
+            timeout_seconds=timeout_seconds,
+        )
     except Exception as exc:
         return {
             "prompt": prompt,
@@ -381,7 +399,13 @@ def _run_direct_probe(
     }
 
 
-def _run_docker_probe(*, workspace: CreateAgentWorkspace, spec: ToolSpec, arguments: dict[str, Any]) -> dict[str, Any]:
+def _run_docker_probe(
+    *,
+    workspace: CreateAgentWorkspace,
+    spec: ToolSpec,
+    arguments: dict[str, Any],
+    timeout_seconds: int,
+) -> dict[str, Any]:
     package = AgentPackageLoader().load_path(workspace.package_manifest_path())
     runtime_root = _probe_runtime_root(workspace)
     artifacts_root = runtime_root / "artifacts"
@@ -420,7 +444,7 @@ def _run_docker_probe(*, workspace: CreateAgentWorkspace, spec: ToolSpec, argume
             input=request,
             capture_output=True,
             text=True,
-            timeout=_docker_probe_timeout_seconds(),
+            timeout=timeout_seconds,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
@@ -428,7 +452,7 @@ def _run_docker_probe(*, workspace: CreateAgentWorkspace, spec: ToolSpec, argume
             "status": "failed",
             "phase": "docker_timeout",
             "observation": {},
-            "errors": [f"docker probe timed out after {_docker_probe_timeout_seconds():g}s"],
+            "errors": [f"docker probe timed out after {timeout_seconds:g}s"],
             "captured_stdout": exc.stdout or "",
             "captured_stderr": exc.stderr or "",
             "dependency_report": {},
@@ -875,10 +899,6 @@ def _probe_evaluation_timeout_seconds() -> float:
     return _positive_float_env(PROBE_EVALUATION_TIMEOUT_SECONDS_ENV, DEFAULT_PROBE_EVALUATION_TIMEOUT_SECONDS)
 
 
-def _docker_probe_timeout_seconds() -> float:
-    return _positive_float_env(PROBE_DOCKER_TIMEOUT_SECONDS_ENV, DEFAULT_PROBE_DOCKER_TIMEOUT_SECONDS)
-
-
 def _positive_float_env(name: str, default: float) -> float:
     value = os.getenv(name)
     if value:
@@ -894,6 +914,19 @@ def _positive_float_env(name: str, default: float) -> float:
 def _schema_required_keys(schema: dict[str, Any]) -> set[str]:
     required = schema.get("required") if isinstance(schema, dict) else []
     return {str(item) for item in required or [] if str(item)}
+
+
+def _required_positive_int(arguments: dict[str, Any], key: str) -> int:
+    value = arguments.get(key)
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be a positive integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{key} must be a positive integer")
+    return parsed
 
 
 def _tool_summary(spec: ToolSpec) -> dict[str, Any]:

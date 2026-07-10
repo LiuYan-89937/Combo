@@ -253,7 +253,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     }
   }
 
-  const sendMessage = async (content: string, targetPackageIds: string[]) => {
+  const sendMessage = async (content: string, targetPackageIds: string[], replyToMessageId?: string) => {
     if (!activeGroup.value) return
     saving.value = true
     error.value = null
@@ -263,6 +263,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
         content,
         client_message_id: clientMessageId,
         target_package_ids: targetPackageIds,
+        ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
       })
       replaceActive(group)
     } catch (e) {
@@ -499,6 +500,7 @@ function messageToTranscript(message: AgentGroupMessageView, agentName?: string)
     metadata: {
       group_message_id: message.message_id,
       group_run_id: message.group_run_id,
+      reply_to_message_id: message.reply_to_message_id,
       package_id: message.speaker_package_id,
       display_name: displayName,
       avatar_label: displayName?.slice(0, 2),

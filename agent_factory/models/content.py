@@ -35,9 +35,7 @@ def strip_internal_snapshot_blocks(value: str) -> str:
     if not value:
         return ""
     text = _INTERNAL_SESSION_SNAPSHOT_BLOCK_RE.sub("", value)
-    text = _INTERNAL_SESSION_SNAPSHOT_OPEN_RE.sub("", text)
-    lines = [line.rstrip() for line in text.splitlines()]
-    return "\n".join(line for line in lines if line.strip()).strip()
+    return _INTERNAL_SESSION_SNAPSHOT_OPEN_RE.sub("", text)
 
 
 def _content_part_text(item: Any) -> str:

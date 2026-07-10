@@ -33,6 +33,7 @@
         :disabled="disabled"
         :rows="rows"
         :autosize="{ minRows: rows, maxRows: maxRows }"
+        @update:value="handleTextUpdate"
         @keydown="handleKeyDown"
         @paste="handlePaste"
       />
@@ -179,6 +180,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   send: [message: string, attachments: RuntimeAttachmentInput[]]
   cancel: []
+  input: [value: string]
   'update:selectedModelProfileId': [value: string]
 }>()
 
@@ -200,6 +202,11 @@ function handleKeyDown(e: KeyboardEvent) {
   if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
   e.preventDefault()
   handleSend()
+}
+
+function handleTextUpdate(value: string) {
+  inputText.value = value
+  emit('input', value)
 }
 
 async function handlePaste(e: ClipboardEvent) {
@@ -296,6 +303,12 @@ function focus() {
   })
 }
 
+function replaceTrailingAtMention(name: string) {
+  inputText.value = inputText.value.replace(/@[^\s@]*$/, `@${name} `)
+  emit('input', inputText.value)
+  focus()
+}
+
 watch(
   () => props.attachmentsEnabled,
   (enabled) => {
@@ -309,6 +322,7 @@ watch(
 // 暴露方法
 defineExpose({
   focus,
+  replaceTrailingAtMention,
 })
 </script>
 
