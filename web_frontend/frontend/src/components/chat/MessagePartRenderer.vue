@@ -87,6 +87,8 @@ import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol
 const props = defineProps<{
   part: ChatMessagePart
   streaming?: boolean
+  highlightMentions?: boolean
+  mentionNames?: string[]
 }>()
 
 const { t } = useI18n()
@@ -96,7 +98,7 @@ const { renderMarkdown } = useMarkdownRenderer(rootRef)
 const isStreaming = computed(() => props.streaming || props.part.status === 'streaming')
 const renderedText = computed(() => (
   props.part.type === 'text'
-    ? renderMarkdown(props.part.text, { streaming: isStreaming.value, surface: 'chat_message' })
+    ? renderMarkdown(markdownWithMentions(props.part.text), { streaming: isStreaming.value, surface: 'chat_message' })
     : ''
 ))
 const renderedReasoning = computed(() => (
@@ -150,6 +152,22 @@ function attachmentKindLabel(attachment: TranscriptAttachmentView): string {
 function valueString(value: unknown): string {
   if (value == null || value === '') return ''
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2) || String(value)
+}
+
+function markdownWithMentions(content: string): string {
+  if (!props.highlightMentions) return content
+  const names = (props.mentionNames || [])
+    .map(name => String(name).trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length)
+  if (!names.length) return content
+  const alternatives = names.map(escapeRegExp).join('|')
+  const mentionPattern = new RegExp(`@(${alternatives})(?=$|[\\s，。！？、,.!?;:])`, 'gu')
+  return content.replace(mentionPattern, (_match, name: string) => `[@${name}](#agent-mention)`)
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 </script>
@@ -228,6 +246,12 @@ details[open] > summary .summary-chevron {
 .plain-content {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.message-part :deep(a[href="#agent-mention"]) {
+  color: var(--app-info);
+  font-weight: 600;
+  text-decoration: none;
 }
 
 .message-attachment-chip {

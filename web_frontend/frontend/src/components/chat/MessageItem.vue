@@ -60,6 +60,8 @@
             :key="part.id"
             :part="part"
             :streaming="streaming"
+            :highlight-mentions="isGroupUserMessage"
+            :mention-names="mentionNames"
           />
         </template>
 
@@ -120,6 +122,9 @@ const avatarStyle = computed<CSSProperties>(() => {
     }
   }
   if (props.message.role === 'assistant') {
+    if (Boolean(props.message.metadata?.agent_group_speaker)) {
+      return groupAgentAvatarStyle(props.message.metadata)
+    }
     return {
       background: 'var(--app-surface)',
       color: 'var(--app-text)',
@@ -142,6 +147,13 @@ const avatarText = computed(() => {
 })
 
 const visibleParts = computed(() => props.message.parts)
+const isGroupUserMessage = computed(() => (
+  props.message.role === 'user' && Boolean(props.message.metadata?.agent_group_message)
+))
+const mentionNames = computed(() => {
+  const value = props.message.metadata?.mention_names
+  return Array.isArray(value) ? value.map(item => String(item)).filter(Boolean) : []
+})
 const collaborationReport = computed(() => {
   const report = props.message.metadata?.collaboration_report
   return report && typeof report === 'object' ? report as Record<string, any> : null
@@ -203,6 +215,23 @@ function compactSummary(value: unknown): string {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
   if (text.length <= 220) return text
   return `${text.slice(0, 220)}...`
+}
+
+function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties {
+  const seed = String(metadata.package_id || metadata.display_name || 'agent')
+  const hues = [8, 28, 48, 84, 142, 174, 202, 226, 278, 326]
+  const hue = hues[stableColorIndex(seed, hues.length)]
+  return {
+    background: `hsl(${hue} 58% 42%)`,
+    color: '#ffffff',
+    border: '1px solid transparent',
+  }
+}
+
+function stableColorIndex(value: string, size: number): number {
+  let hash = 0
+  for (const character of value) hash = (hash * 31 + character.codePointAt(0)!) >>> 0
+  return hash % size
 }
 
 </script>

@@ -53,6 +53,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     const persisted = messages.value.map(message => messageToTranscript(
       message,
       message.speaker_package_id ? agentById(message.speaker_package_id)?.agent_name : undefined,
+      agents.value.map(agent => agent.agent_name).filter((name): name is string => Boolean(name)),
     ))
     const activeRunIds = new Set(activeRuns.value.map(run => run.group_run_id))
     const live = Object.values(liveMessages.value)
@@ -487,7 +488,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
   }
 })
 
-function messageToTranscript(message: AgentGroupMessageView, agentName?: string): TranscriptItem {
+function messageToTranscript(message: AgentGroupMessageView, agentName?: string, mentionNames: string[] = []): TranscriptItem {
   const role = message.speaker_type === 'user' ? 'user' : message.speaker_type === 'system' ? 'system' : 'assistant'
   const displayName = message.speaker_type === 'agent' ? agentName || message.speaker_package_id || 'Assistant' : undefined
   return {
@@ -505,6 +506,8 @@ function messageToTranscript(message: AgentGroupMessageView, agentName?: string)
       display_name: displayName,
       avatar_label: displayName?.slice(0, 2),
       agent_group_speaker: message.speaker_type === 'agent',
+      agent_group_message: true,
+      mention_names: mentionNames,
     },
   }
 }

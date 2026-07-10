@@ -54,6 +54,19 @@
       </section>
 
       <footer v-if="store.activeGroup" class="composer">
+        <div v-if="selectedMentions.length" class="mention-targets" aria-label="已选择的 Agent">
+          <n-tag
+            v-for="packageId in selectedMentions"
+            :key="packageId"
+            class="mention-target"
+            type="info"
+            size="small"
+            closable
+            @close="removeMention(packageId)"
+          >
+            @{{ agentName(packageId) }}
+          </n-tag>
+        </div>
         <div v-if="quotedMessage" class="quote-preview">
           <div class="quote-preview-copy">
             <strong>引用 {{ messageSpeaker(quotedMessage) }}</strong>
@@ -88,7 +101,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { NButton, NEmpty, NScrollbar } from 'naive-ui'
+import { NButton, NEmpty, NScrollbar, NTag } from 'naive-ui'
 import { useAgentGroupStore } from '@/stores/agentGroup'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
@@ -107,7 +120,10 @@ const activeRunKey = computed(() => store.activeRuns.map(run => `${run.group_run
 const retryableRuns = computed(() => store.runs.filter(run => ['failed', 'cancelled'].includes(run.status)))
 const filteredMentionMembers = computed(() => {
   const query = mentionQuery.value.toLocaleLowerCase()
-  return store.members.filter(member => !query || agentName(member.package_id).toLocaleLowerCase().includes(query))
+  return store.members.filter(member => (
+    !selectedMentions.value.includes(member.package_id)
+    && (!query || agentName(member.package_id).toLocaleLowerCase().includes(query))
+  ))
 })
 
 onMounted(async () => {
@@ -128,28 +144,28 @@ function agentName(packageId: string): string {
 
 function selectMention(packageId: string) {
   if (!selectedMentions.value.includes(packageId)) selectedMentions.value.push(packageId)
-  inputRef.value?.replaceTrailingAtMention(agentName(packageId))
+  inputRef.value?.clearTrailingAtMention()
   showMentionPicker.value = false
   mentionQuery.value = ''
+}
+
+function removeMention(packageId: string) {
+  selectedMentions.value = selectedMentions.value.filter(item => item !== packageId)
 }
 
 function handleComposerInput(value: string) {
   const match = value.match(/@([^\s@]*)$/)
   showMentionPicker.value = Boolean(match)
   mentionQuery.value = match?.[1] || ''
-  selectedMentions.value = selectedMentions.value.filter(packageId => value.includes(`@${agentName(packageId)}`))
 }
 
 async function sendMessage(content: string, _attachments: RuntimeAttachmentInput[]) {
   const message = content.trim()
   if (!message || !store.activeGroup) return
-  if (!selectedMentions.value.length) {
-    await store.sendMessage(message, [], quotedMessage.value ? String(quotedMessage.value.metadata?.group_message_id || '') : undefined)
-    quotedMessage.value = null
-    return
-  }
+  const mentionPrefix = selectedMentions.value.map(packageId => `@${agentName(packageId)}`).join(' ')
+  const visibleMessage = mentionPrefix ? `${mentionPrefix} ${message}` : message
   await store.sendMessage(
-    message,
+    visibleMessage,
     selectedMentions.value,
     quotedMessage.value ? String(quotedMessage.value.metadata?.group_message_id || '') : undefined,
   )
@@ -192,6 +208,9 @@ watch(() => activeRunKey.value, () => undefined)
 .messages-list { width: min(100%, 920px); margin: 0 auto; padding: var(--app-space-lg); }
 .group-empty { min-height: 320px; display: grid; place-items: center; }
 .composer { border-top: 1px solid var(--app-border); padding: var(--app-space-md); background: var(--app-surface); }
+.mention-targets { width: min(100%, 920px); margin: 0 auto var(--app-space-sm); display: flex; flex-wrap: wrap; gap: var(--app-space-xs); }
+.mention-target :deep(.n-tag) { color: var(--app-info); border-color: color-mix(in srgb, var(--app-info) 42%, var(--app-border)); background: color-mix(in srgb, var(--app-info) 11%, var(--app-surface)); }
+.mention-target :deep(.n-tag__close) { color: var(--app-info); }
 .quote-preview { width: min(100%, 920px); margin: 0 auto var(--app-space-sm); padding: var(--app-space-sm) var(--app-space-md); border-left: 2px solid var(--app-text); background: var(--app-surface-muted); display: flex; align-items: center; gap: var(--app-space-sm); }
 .quote-preview-copy { min-width: 0; display: grid; gap: 2px; flex: 1; font-size: 12px; }
 .quote-preview-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--app-text-muted); }

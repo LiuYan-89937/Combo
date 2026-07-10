@@ -303,8 +303,8 @@ function focus() {
   })
 }
 
-function replaceTrailingAtMention(name: string) {
-  inputText.value = inputText.value.replace(/@[^\s@]*$/, `@${name} `)
+function clearTrailingAtMention() {
+  inputText.value = inputText.value.replace(/@[^\s@]*$/, '')
   emit('input', inputText.value)
   focus()
 }
@@ -322,7 +322,7 @@ watch(
 // 暴露方法
 defineExpose({
   focus,
-  replaceTrailingAtMention,
+  clearTrailingAtMention,
 })
 </script>
 
