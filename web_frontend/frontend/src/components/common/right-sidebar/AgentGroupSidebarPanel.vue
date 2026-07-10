@@ -1,0 +1,330 @@
+<template>
+  <div class="agent-group-sidebar">
+    <!-- 群聊列表 -->
+    <section class="sidebar-section">
+      <div class="section-header">
+        <h3>群聊列表</h3>
+        <n-button size="small" @click="showCreateDialog = true">新建</n-button>
+      </div>
+      <n-list v-if="store.groups.length > 0" bordered clickable>
+        <n-list-item
+          v-for="group in store.groups"
+          :key="group.group_id"
+          :class="{ active: store.activeGroup?.group_id === group.group_id }"
+          @click="store.loadGroup(group.group_id)"
+        >
+          <div class="group-item">
+            <div class="group-title">{{ group.title }}</div>
+            <div class="group-meta">
+              <n-tag size="tiny" :type="statusTagType(group.status)">
+                {{ group.status }}
+              </n-tag>
+              <span class="member-count">{{ group.members.length }} 成员</span>
+            </div>
+          </div>
+          <template #suffix>
+            <n-popconfirm
+              @positive-click="handleDeleteGroup(group.group_id)"
+              @click.stop
+            >
+              <template #trigger>
+                <n-button size="tiny" quaternary circle @click.stop>
+                  <template #icon>
+                    <n-icon><TrashOutline /></n-icon>
+                  </template>
+                </n-button>
+              </template>
+              确定删除群聊？
+            </n-popconfirm>
+          </template>
+        </n-list-item>
+      </n-list>
+      <n-empty v-else description="暂无群聊" size="small" />
+    </section>
+
+    <!-- 参与者状态 -->
+    <section v-if="store.activeGroup" class="sidebar-section">
+      <div class="section-header">
+        <h3>参与者</h3>
+        <n-button size="small" @click="showAddMemberDialog = true">添加</n-button>
+      </div>
+      <n-list bordered>
+        <n-list-item v-for="participant in store.participants" :key="participant.package_id">
+          <div class="participant-item">
+            <div class="participant-name">{{ participant.agent_name }}</div>
+            <div class="participant-stats">
+              <n-tag v-if="participant.active_run_count > 0" type="info" size="tiny">
+                运行中: {{ participant.active_run_count }}
+              </n-tag>
+              <span class="run-count">{{ participant.run_count }} 次运行</span>
+            </div>
+          </div>
+          <template #suffix>
+            <n-button
+              size="tiny"
+              quaternary
+              circle
+              @click="handleRemoveMember(participant.package_id)"
+            >
+              <template #icon>
+                <n-icon><CloseOutline /></n-icon>
+              </template>
+            </n-button>
+          </template>
+        </n-list-item>
+      </n-list>
+    </section>
+
+    <!-- 工作区文件 -->
+    <section v-if="store.activeGroup" class="sidebar-section">
+      <div class="section-header">
+        <h3>共享工作区</h3>
+      </div>
+      <div class="workspace-info">
+        <p>版本: {{ store.activeGroup.current_workspace_revision }}</p>
+        <!-- TODO: 文件列表（复用 WorkspaceExplorer） -->
+        <n-button size="small" @click="openWorkspace">浏览文件</n-button>
+      </div>
+    </section>
+
+    <!-- 创建群聊对话框 -->
+    <n-modal v-model:show="showCreateDialog" preset="card" title="创建群聊" style="width: 500px">
+      <n-form ref="createFormRef" :model="createForm">
+        <n-form-item label="群聊名称" path="title" required>
+          <n-input v-model:value="createForm.title" placeholder="输入群聊名称" />
+        </n-form-item>
+        <n-form-item label="选择成员" required>
+          <n-select
+            v-model:value="createForm.member_package_ids"
+            :options="agentOptions"
+            multiple
+            filterable
+            placeholder="选择 Agent"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 12px">
+          <n-button @click="showCreateDialog = false">取消</n-button>
+          <n-button type="primary" :loading="store.saving" @click="handleCreate">创建</n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- 添加成员对话框 -->
+    <n-modal v-model:show="showAddMemberDialog" preset="card" title="添加成员" style="width: 400px">
+      <n-select
+        v-model:value="selectedPackageId"
+        :options="availableAgentOptions"
+        filterable
+        placeholder="选择 Agent"
+      />
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 12px">
+          <n-button @click="showAddMemberDialog = false">取消</n-button>
+          <n-button
+            type="primary"
+            :loading="store.saving"
+            :disabled="!selectedPackageId"
+            @click="handleAddMember"
+          >
+            添加
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import {
+  NButton,
+  NEmpty,
+  NForm,
+  NFormItem,
+  NIcon,
+  NInput,
+  NList,
+  NListItem,
+  NModal,
+  NPopconfirm,
+  NSelect,
+  NTag,
+} from 'naive-ui'
+import { TrashOutline, CloseOutline } from '@vicons/ionicons5'
+import { useAgentGroupStore } from '@/stores/agentGroup'
+
+const store = useAgentGroupStore()
+
+// State
+const showCreateDialog = ref(false)
+const showAddMemberDialog = ref(false)
+const createFormRef = ref()
+const createForm = ref({
+  title: '',
+  member_package_ids: [] as string[],
+})
+const selectedPackageId = ref<string>()
+
+// Computed
+const agentOptions = computed(() => {
+  return store.agents.map(a => ({
+    label: a.agent_name,
+    value: a.package_id,
+  }))
+})
+
+const availableAgentOptions = computed(() => {
+  if (!store.activeGroup) return agentOptions.value
+  const memberIds = new Set(store.members.map(m => m.package_id))
+  return agentOptions.value.filter(opt => !memberIds.has(opt.value))
+})
+
+const statusTagType = (status: string) => {
+  if (status === 'active') return 'success'
+  if (status === 'archived') return 'default'
+  return 'info'
+}
+
+// Methods
+const handleCreate = async () => {
+  if (!createForm.value.title.trim()) return
+  if (createForm.value.member_package_ids.length === 0) return
+
+  try {
+    await store.createGroup(createForm.value)
+    showCreateDialog.value = false
+    createForm.value = { title: '', member_package_ids: [] }
+  } catch (e) {
+    console.error('Failed to create group:', e)
+  }
+}
+
+const handleDeleteGroup = async (groupId: string) => {
+  try {
+    await store.deleteGroup(groupId)
+  } catch (e) {
+    console.error('Failed to delete group:', e)
+  }
+}
+
+const handleAddMember = async () => {
+  if (!selectedPackageId.value) return
+
+  try {
+    await store.addMember(selectedPackageId.value)
+    showAddMemberDialog.value = false
+    selectedPackageId.value = undefined
+  } catch (e) {
+    console.error('Failed to add member:', e)
+  }
+}
+
+const handleRemoveMember = async (packageId: string) => {
+  try {
+    await store.removeMember(packageId)
+  } catch (e) {
+    console.error('Failed to remove member:', e)
+  }
+}
+
+const openWorkspace = () => {
+  // TODO: 打开工作区浏览器
+  console.log('Open workspace')
+}
+</script>
+
+<style scoped>
+.agent-group-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.section-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--n-text-color);
+}
+
+.group-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.group-title {
+  font-weight: 500;
+}
+
+.group-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--n-text-color-disabled);
+}
+
+.member-count {
+  font-size: 12px;
+}
+
+.n-list-item.active {
+  background: var(--n-color-primary-hover);
+}
+
+.participant-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.participant-name {
+  font-weight: 500;
+}
+
+.participant-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.run-count {
+  color: var(--n-text-color-disabled);
+}
+
+.workspace-info {
+  padding: 12px;
+  background: var(--n-color-modal);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-info p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--n-text-color-disabled);
+}
+</style>

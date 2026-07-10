@@ -24,6 +24,8 @@
 
     <CollaborationSidebarPanel v-if="isCollaborationRoute" class="right-panel-body" />
 
+    <AgentGroupSidebarPanel v-else-if="isAgentGroupRoute" class="right-panel-body" />
+
     <n-tabs v-else v-model:value="uiStore.activeRightSidebarTab" type="line" animated class="right-tabs">
       <n-tab-pane name="workspace" :tab="t('right.workspace')">
         <WorkspaceSidebarPanel />
@@ -47,6 +49,7 @@ import { NButton, NIcon, NTabPane, NTabs } from 'naive-ui'
 import { ChevronForward } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { RIGHT_SIDEBAR_WIDTH, useUiStore } from '@/stores/ui'
+import AgentGroupSidebarPanel from './right-sidebar/AgentGroupSidebarPanel.vue'
 import CollaborationSidebarPanel from './right-sidebar/CollaborationSidebarPanel.vue'
 import SessionsSidebarPanel from './right-sidebar/SessionsSidebarPanel.vue'
 import StatusSidebarPanel from './right-sidebar/StatusSidebarPanel.vue'
@@ -69,6 +72,7 @@ const displayedRightSidebarWidth = computed(() => {
   return Math.min(uiStore.rightSidebarWidth, availableRightSidebarWidth())
 })
 const isCollaborationRoute = computed(() => route.name === 'Collaboration')
+const isAgentGroupRoute = computed(() => route.name === 'AgentGroup')
 
 watch(
   () => uiStore.activeRightSidebarTab,
