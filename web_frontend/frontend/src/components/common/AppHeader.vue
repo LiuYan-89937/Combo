@@ -32,9 +32,6 @@
     <div class="header-center" :style="headerCenterStyle">
       <n-breadcrumb>
         <n-breadcrumb-item>{{ currentRouteName }}</n-breadcrumb-item>
-        <n-breadcrumb-item v-if="runtimeStore.currentMode">
-          {{ modeLabel }}
-        </n-breadcrumb-item>
       </n-breadcrumb>
     </div>
 
@@ -88,13 +85,11 @@ import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
-import { useAgentStore } from '@/stores/agent'
 
 const route = useRoute()
 const { t } = useI18n()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
-const agentStore = useAgentStore()
 
 const headerCenterStyle = computed(() => ({
   left: `${uiStore.leftSidebarCollapsed ? 0 : uiStore.leftSidebarWidth}px`,
@@ -108,24 +103,6 @@ const currentRouteName = computed(() => {
   if (isConversationRoute && runtimeStore.currentMode === 'create_agent') return t('route.manufacturing')
   if (isConversationRoute && runtimeStore.currentMode === 'agent_package') return t('mode.agentPackageRoute')
   return t(routeTitleKey(route.name))
-})
-
-const modeLabel = computed(() => {
-  const mode = runtimeStore.currentMode
-  if (!mode) return ''
-  if (mode === 'evolve_agent' && agentStore.selectedPackage) {
-    return agentStore.selectedPackage.agent_name || agentStore.selectedPackage.name || t('common.unnamedAgent')
-  }
-  if (mode === 'agent_package' && agentStore.activeChatPackage) {
-    return agentStore.activeChatPackage.agent_name || agentStore.activeChatPackage.name || t('common.unnamedAgent')
-  }
-  const labels = {
-    chat: t('mode.chat'),
-    create_agent: t('mode.createAgent'),
-    evolve_agent: t('mode.evolveAgent'),
-    agent_package: t('mode.agentPackage'),
-  }
-  return labels[mode as keyof typeof labels] || mode
 })
 
 const connectionStatusText = computed(() => {
