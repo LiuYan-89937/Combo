@@ -59,6 +59,7 @@ class SystemPackageRuntimeHandle:
         package: LoadedAgentPackage,
         package_fingerprint: str,
         runtime_root: Path,
+        instance_extension_root: Path,
         idle_timeout_seconds: int,
         request_policy: RuntimeRequestPolicy,
         producer_type: str,
@@ -83,6 +84,7 @@ class SystemPackageRuntimeHandle:
         self.core = PackageRuntimeCore(
             package=package,
             runtime_root=runtime_root,
+            instance_extension_root=instance_extension_root,
             emit_background=self._emit_background_event,
             graph_id=f"{package_id}_runtime",
             producer_type=producer_type,

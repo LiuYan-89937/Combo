@@ -65,6 +65,7 @@ class PackageRuntimeCore:
         *,
         package: LoadedAgentPackage,
         runtime_root: str | Path | None = None,
+        instance_extension_root: str | Path | None = None,
         emit_background: Emit | None = None,
         graph_id: str = "agent_package_runtime",
         producer_type: str = "agent_runtime",
@@ -72,6 +73,11 @@ class PackageRuntimeCore:
     ) -> None:
         self.package = package
         self.runtime_root = Path(runtime_root).expanduser().resolve() if runtime_root is not None else None
+        self.instance_extension_root = (
+            Path(instance_extension_root).expanduser().resolve()
+            if instance_extension_root is not None
+            else None
+        )
         self.graph_id = graph_id
         self.producer_type = producer_type
         self.emit_background = emit_background
@@ -226,6 +232,7 @@ class PackageRuntimeCore:
                 self.package,
                 base_services=facade.instance.services,
                 runtime_root=self.runtime_root,
+                instance_extension_root=self.instance_extension_root,
             )
             runtime_build.services.runtime_resources.update(self.runtime_resources_override)
             compiled = AgentAssemblyCompiler(facade=facade).compile(
@@ -719,12 +726,14 @@ def host_runtime_package_view(
         "/workdir": workdir_root,
     }
 
-    def translate(value: Any) -> Any:
+    def translate(value: Any, path: tuple[str, ...] = ()) -> Any:
         if isinstance(value, dict):
-            return {key: translate(item) for key, item in value.items()}
+            return {key: translate(item, (*path, key)) for key, item in value.items()}
         if isinstance(value, list):
-            return [translate(item) for item in value]
+            return [translate(item, path) for item in value]
         if not isinstance(value, str):
+            return value
+        if path == ("tools", "config", "instance_extension_root"):
             return value
         for prefix, target_root in replacements.items():
             if value == prefix:

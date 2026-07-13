@@ -113,7 +113,7 @@ class ToolsContractBuilder:
         tool_runtime_resources.setdefault("workspace_root", str(context.package_root))
         mcp_clients = {}
         system_tool_ids: set[str] = set()
-        instance_extension_root = resolve_package_runtime_path(
+        instance_extension_root = context.instance_extension_root or resolve_package_runtime_path(
             context,
             config.instance_extension_root,
             field_path="tools.config.instance_extension_root",

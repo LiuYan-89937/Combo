@@ -3,6 +3,7 @@ import { NIcon, NTag } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
 import {
   Build,
+  Chatbubbles,
   ChatbubbleEllipses,
   ExtensionPuzzle,
   GitCompare,
@@ -46,7 +47,7 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
     {
       label: t('route.agentGroup'),
       key: '/agent-group',
-      icon: renderIcon(People),
+      icon: renderIcon(Chatbubbles),
     },
     {
       type: 'divider',

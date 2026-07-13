@@ -21,6 +21,7 @@ from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYST
 class RuntimeBuildContext:
     package_root: Path
     runtime_root: Path | None
+    instance_extension_root: Path | None
     package: LoadedAgentPackage
     resources: dict[str, object]
     tool_runtime_resources: dict[str, object]
@@ -30,12 +31,18 @@ def runtime_build_context(
     package: LoadedAgentPackage,
     *,
     runtime_root: str | Path | None = None,
+    instance_extension_root: str | Path | None = None,
     resources: dict[str, object] | None = None,
     tool_runtime_resources: dict[str, object] | None = None,
 ) -> RuntimeBuildContext:
     return RuntimeBuildContext(
         package_root=package.package_root,
         runtime_root=Path(runtime_root).expanduser().resolve() if runtime_root is not None else None,
+        instance_extension_root=(
+            Path(instance_extension_root).expanduser().resolve()
+            if instance_extension_root is not None
+            else None
+        ),
         package=package,
         resources={} if resources is None else dict(resources),
         tool_runtime_resources=dict(tool_runtime_resources or {}),
@@ -52,11 +59,16 @@ class RuntimeBuildPlanner:
         *,
         base_services: RuntimeServices,
         runtime_root: str | Path | None = None,
+        instance_extension_root: str | Path | None = None,
     ) -> RuntimeBuildResult:
         missing = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - set(package.contracts))
         if missing:
             raise ValueError("agent package missing required runtime contracts: " + ", ".join(missing))
-        context = runtime_build_context(package, runtime_root=runtime_root)
+        context = runtime_build_context(
+            package,
+            runtime_root=runtime_root,
+            instance_extension_root=instance_extension_root,
+        )
         contracts = sorted(
             [self.registry.parse(payload) for payload in package.contracts.values()],
             key=_contract_build_priority,
@@ -70,6 +82,7 @@ class RuntimeBuildPlanner:
             contract_context = runtime_build_context(
                 context.package,
                 runtime_root=context.runtime_root,
+                instance_extension_root=context.instance_extension_root,
                 resources=build_resources,
                 tool_runtime_resources=build_tool_runtime_resources,
             )
