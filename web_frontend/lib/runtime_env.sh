@@ -216,6 +216,7 @@ PY
 web_build_runtime_image() {
     local source_digest="$1"
     local build_args=()
+    local build_network="${AGENTFACTORY_DOCKER_BUILD_NETWORK:-host}"
     if [[ -n "${AGENTFACTORY_PYTHON_BASE_IMAGE:-}" ]]; then
         build_args+=(--build-arg "PYTHON_BASE_IMAGE=${AGENTFACTORY_PYTHON_BASE_IMAGE}")
     fi
@@ -225,21 +226,18 @@ web_build_runtime_image() {
     if [[ -n "${AGENTFACTORY_DEBIAN_SECURITY_MIRROR:-}" ]]; then
         build_args+=(--build-arg "DEBIAN_SECURITY_MIRROR=${AGENTFACTORY_DEBIAN_SECURITY_MIRROR}")
     fi
+    if [[ -n "${AGENTFACTORY_PYPI_INDEX_URL:-}" ]]; then
+        build_args+=(--build-arg "PYPI_INDEX_URL=${AGENTFACTORY_PYPI_INDEX_URL}")
+    fi
 
     (
         cd "${PROJECT_ROOT}"
-        if (( ${#build_args[@]} > 0 )); then
-            docker build \
-                -t "${RUNTIME_IMAGE}" \
-                --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}" \
-                "${build_args[@]}" \
-                -f "${RUNTIME_DOCKERFILE}" .
-        else
-            docker build \
-                -t "${RUNTIME_IMAGE}" \
-                --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}" \
-                -f "${RUNTIME_DOCKERFILE}" .
-        fi
+        docker build \
+            --network "${build_network}" \
+            -t "${RUNTIME_IMAGE}" \
+            --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}" \
+            "${build_args[@]}" \
+            -f "${RUNTIME_DOCKERFILE}" .
     )
 }
 

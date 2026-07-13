@@ -10,6 +10,6 @@
       "grep",
       "sed"
     ],
-    "install_mode": "sandbox_init"
+    "install_mode": "image_build"
   }
 }
