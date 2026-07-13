@@ -125,6 +125,35 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"package": summary}
 
+    @router.get("/{package_id}/resources")
+    async def get_agent_package_resources(package_id: str):
+        try:
+            return AgentPackageRuntimeManager().resource_status(package_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.put("/{package_id}/resources/{resource_id}")
+    async def put_agent_package_resource(package_id: str, resource_id: str, payload: dict[str, Any]):
+        if "value" not in payload:
+            raise HTTPException(status_code=400, detail="resource value is required")
+        try:
+            return AgentPackageRuntimeManager().put_resource(package_id, resource_id, payload["value"])
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.delete("/{package_id}/resources/{resource_id}")
+    async def delete_agent_package_resource(package_id: str, resource_id: str):
+        try:
+            return AgentPackageRuntimeManager().delete_resource(package_id, resource_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @router.get("/{package_id}/sessions")
     async def list_agent_package_sessions(package_id: str):
         event = await send_and_wait(

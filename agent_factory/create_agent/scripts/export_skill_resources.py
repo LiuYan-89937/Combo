@@ -89,7 +89,6 @@ def main() -> None:
             title="Resources contract and resource facts",
             files={
                 "contracts/resources.json": (type(default_resources_contract()), scaffold["contracts/resources.json"]),
-                "resources.json": (dict, scaffold["resources.json"]),
                 ".factory/resources.json": (
                     dict,
                     {"version": "resource_facts.v0", "facts": []},

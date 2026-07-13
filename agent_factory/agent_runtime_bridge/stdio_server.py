@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 import errno
 import json
 import sys
@@ -8,7 +8,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from agent_factory.agent_runtime_bridge.dependencies import ensure_dependencies
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import (
     RuntimeEventNormalizer,
@@ -48,7 +47,6 @@ from agent_factory.runtime_attachments import has_attachment_payload, merge_atta
 
 PACKAGE_ROOT = Path("/package")
 PACKAGE_MANIFEST = PACKAGE_ROOT / "agent_package.json"
-RESOURCES_PATH = Path("/resources/resources.json")
 ARTIFACTS_ROOT = Path("/artifacts")
 RUNTIME_ROOT = Path("/runtime")
 
@@ -246,24 +244,12 @@ class BridgeRuntimeState:
                 node_kind="system",
                 payload={"package_root": str(PACKAGE_ROOT)},
             )
-            dependency_report = ensure_dependencies(PACKAGE_ROOT, ARTIFACTS_ROOT, runtime_root=RUNTIME_ROOT)
-            if dependency_report.get("status") == "failed":
-                normalizer.runtime_event(
-                    "node_failed",
-                    node_id="sandbox_init",
-                    node_label="Sandbox Init",
-                    node_kind="system",
-                    severity="error",
-                    payload=dependency_report,
-                )
-                normalizer.emit_run_failed(RuntimeError("sandbox dependency initialization failed"))
-                return False
             normalizer.runtime_event(
                 "node_completed",
                 node_id="sandbox_init",
                 node_label="Sandbox Init",
                 node_kind="system",
-                payload=dependency_report,
+                payload={"status": "complete", "source": "environment_lock"},
             )
             self.sandbox_initialized = True
             return True
@@ -885,11 +871,7 @@ def _run_harness_tool_tests(compiled: Any, plan: dict[str, Any], result: dict[st
 
 
 def _load_package() -> LoadedAgentPackage:
-    package = AgentPackageLoader().load_path(PACKAGE_MANIFEST)
-    if RESOURCES_PATH.is_file():
-        resources = json.loads(RESOURCES_PATH.read_text(encoding="utf-8"))
-        package = replace(package, resources=resources)
-    return package
+    return AgentPackageLoader().load_path(PACKAGE_MANIFEST)
 
 
 def _handle_stream_item(normalizer: RuntimeEventNormalizer, stream_mode: str, chunk: Any) -> bool:

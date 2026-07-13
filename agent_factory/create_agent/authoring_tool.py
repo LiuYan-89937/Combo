@@ -112,8 +112,12 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "tool_source": {"type": "string"},
                 "python_requirements": {"type": "array", "items": {"type": "string"}},
                 "system_packages": {"type": "array", "items": {"type": "string"}},
+                "npm_requirements": {"type": "array", "items": {"type": "string"}},
                 "system_binaries": {"type": "array", "items": {"type": "string"}},
-                "install_mode": {"type": "string", "enum": ["none", "sandbox_init"]},
+                "platform_architectures": {"type": "array", "items": {"type": "string", "enum": ["amd64", "arm64"]}},
+                "base_image": {"type": "string"},
+                "verification_commands": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                "install_mode": {"type": "string", "enum": ["none", "image_build"]},
                 "install_timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
@@ -267,7 +271,11 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                         "anyOf": [
                             {"required": ["python_requirements"]},
                             {"required": ["system_packages"]},
+                            {"required": ["npm_requirements"]},
                             {"required": ["system_binaries"]},
+                            {"required": ["platform_architectures"]},
+                            {"required": ["base_image"]},
+                            {"required": ["verification_commands"]},
                             {"required": ["install_mode"]},
                             {"required": ["install_timeout_seconds"]},
                         ]
@@ -570,6 +578,7 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     source_tree = validate_package_tool_source(source)
     python_requirements = _string_list(arguments.get("python_requirements"))
     system_packages = _string_list(arguments.get("system_packages"))
+    npm_requirements = _string_list(arguments.get("npm_requirements"))
     system_binaries = _string_list(arguments.get("system_binaries"))
     third_party_imports = _third_party_import_roots(source_tree)
     if third_party_imports and not python_requirements:
@@ -601,11 +610,15 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
         dependency_config,
         python_requirements=python_requirements,
         system_packages=system_packages,
+        npm_requirements=npm_requirements,
         system_binaries=system_binaries,
+        platform_architectures=_string_list(arguments.get("platform_architectures")),
+        base_image=str(arguments.get("base_image") or "").strip(),
+        verification_commands=_string_matrix(arguments.get("verification_commands")),
         install_mode=str(arguments.get("install_mode") or "").strip(),
         install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
-    dependency_config.setdefault("install_mode", "sandbox_init")
+    dependency_config.setdefault("install_mode", "image_build")
     dependencies_payload = DependenciesContract.model_validate(dependencies).model_dump(mode="json")
 
     assembly = _read_json(assembly_path)
@@ -719,7 +732,11 @@ def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str
         dependency_config,
         python_requirements=_string_list(arguments.get("python_requirements")),
         system_packages=_string_list(arguments.get("system_packages")),
+        npm_requirements=_string_list(arguments.get("npm_requirements")),
         system_binaries=_string_list(arguments.get("system_binaries")),
+        platform_architectures=_string_list(arguments.get("platform_architectures")),
+        base_image=str(arguments.get("base_image") or "").strip(),
+        verification_commands=_string_matrix(arguments.get("verification_commands")),
         install_mode=str(arguments.get("install_mode") or "").strip(),
         install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
@@ -776,7 +793,11 @@ def _merge_dependency_config(
     *,
     python_requirements: list[str],
     system_packages: list[str],
+    npm_requirements: list[str],
     system_binaries: list[str],
+    platform_architectures: list[str],
+    base_image: str,
+    verification_commands: list[list[str]],
     install_mode: str,
     install_timeout_seconds: Any,
 ) -> None:
@@ -786,13 +807,22 @@ def _merge_dependency_config(
     packages = _dependency_list(config, "system_packages")
     for package in system_packages:
         _append_unique(packages, package)
+    npm_packages = _dependency_list(config, "npm_requirements")
+    for requirement in npm_requirements:
+        _append_unique(npm_packages, requirement)
     binaries = _dependency_list(config, "system_binaries")
     for binary in system_binaries:
         _append_unique(binaries, binary)
+    if platform_architectures:
+        config["platform_architectures"] = platform_architectures
+    if base_image:
+        config["base_image"] = base_image
+    if verification_commands:
+        config["verification_commands"] = verification_commands
     if install_mode:
         config["install_mode"] = install_mode
-    effective_install_mode = str(config.get("install_mode") or "sandbox_init")
-    requires_install = bool(requirements or packages) and effective_install_mode == "sandbox_init"
+    effective_install_mode = str(config.get("install_mode") or "image_build")
+    requires_install = bool(requirements or packages or npm_packages) and effective_install_mode == "image_build"
     if install_timeout_seconds is not None:
         config["install_timeout_seconds"] = _positive_int(install_timeout_seconds, "install_timeout_seconds")
     if requires_install and config.get("install_timeout_seconds") is None:
@@ -808,6 +838,12 @@ def _dependency_list(config: dict[str, Any], key: str) -> list[Any]:
         value = []
         config[key] = value
     return value
+
+
+def _string_matrix(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    return [row for row in (_string_list(item) for item in value) if row]
 
 
 def _remove_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -888,20 +924,17 @@ def _upsert_resources(workspace: CreateAgentWorkspace, arguments: dict[str, Any]
         ResourceDescriptor.model_validate(item).model_dump(mode="json")
         for item in (arguments.get("resource_descriptors") if isinstance(arguments.get("resource_descriptors"), list) else [])
     ]
-    resources_path = workspace.root / "resources.json"
     contract_path = workspace.root / "contracts" / "resources.json"
-    resources = _read_json(resources_path)
-    resources.update(values)
     contract = _read_json(contract_path)
     config = contract.setdefault("config", {})
-    config["resources_path"] = "resources.json"
     descriptor_list = config.setdefault("resource_descriptors", [])
     for descriptor in descriptors:
         _upsert_by_key(descriptor_list, descriptor, key="resource_id")
     contract_payload = ResourcesContract.model_validate(contract).model_dump(mode="json")
-    _write_json(resources_path, resources)
+    if values:
+        raise ValueError("runtime resource values must be configured after publication, not written into the package")
     _write_json(contract_path, contract_payload)
-    return _result("upsert_resources", ["resources.json", "contracts/resources.json"], "Upserted package runtime resources.")
+    return _result("upsert_resources", ["contracts/resources.json"], "Upserted package resource descriptors.")
 
 
 def _upsert_knowledge_file(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:

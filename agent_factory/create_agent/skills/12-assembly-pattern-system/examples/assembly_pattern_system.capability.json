@@ -9,8 +9,6 @@
         "answer": "Answer the user using the package knowledge, runtime context, and approved tools. Ask a concise follow-up only when required information is missing."
       },
       "allowed_tool_ids": [
-        "knowledge",
-        "scheduler",
         "package_action"
       ]
     },

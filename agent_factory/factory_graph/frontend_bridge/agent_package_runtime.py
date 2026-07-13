@@ -28,6 +28,9 @@ from agent_factory.skillhub_gateway import HostSkillHubGatewayManager
 from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.paths import project_root
+from agent_factory.resource_system import ResourceStore, migrate_package_resources
+from agent_factory.environment_system import EnvironmentResolver
+from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
     AttachmentImportResult,
@@ -126,6 +129,9 @@ class AgentPackageRuntimeManager:
         self._mcp_gateways = HostMCPGatewayManager()
         self._skillhub_gateways = HostSkillHubGatewayManager()
         self._emit = emit
+        self.resource_store = ResourceStore()
+        self._resource_migration = self._migrate_package_resources()
+        self._environment_migration = self._migrate_package_environments()
 
         # 容器池支持（可通过环境变量禁用）
         self._use_container_pool = _env_int("AGENTFACTORY_USE_CONTAINER_POOL", 1) == 1
@@ -189,6 +195,52 @@ class AgentPackageRuntimeManager:
             for manifest_path in self.repository.manifest_paths()
         ]
         return sorted(packages, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+
+    def resource_status(self, package_id: str) -> dict[str, Any]:
+        package = self.load_package(package_id)
+        contract = ResourcesContract.model_validate(package.contracts.get("resources") or {})
+        return {
+            "package_id": package_id,
+            "key_available": self.resource_store.key_available,
+            "resources": self.resource_store.status(package_id, contract.config.resource_descriptors),
+            "migration": self._resource_migration.get(package_id, {"status": "complete", "migrated": False}),
+        }
+
+    def put_resource(self, package_id: str, resource_id: str, value: Any) -> dict[str, Any]:
+        package = self.load_package(package_id)
+        contract = ResourcesContract.model_validate(package.contracts.get("resources") or {})
+        descriptors = {item.resource_id: item for item in contract.config.resource_descriptors}
+        descriptor = descriptors.get(resource_id)
+        if descriptor is None:
+            raise ValueError(f"resource is not declared by package: {resource_id}")
+        return self.resource_store.put(package_id, descriptor, value)
+
+    def delete_resource(self, package_id: str, resource_id: str) -> dict[str, Any]:
+        return {"package_id": package_id, "resource_id": resource_id, "deleted": self.resource_store.delete(package_id, resource_id)}
+
+    def _migrate_package_resources(self) -> dict[str, dict[str, Any]]:
+        results: dict[str, dict[str, Any]] = {}
+        for manifest_path in self.repository.manifest_paths():
+            try:
+                results[manifest_path.parent.name] = migrate_package_resources(manifest_path.parent, store=self.resource_store)
+            except Exception as exc:
+                results[manifest_path.parent.name] = {"status": "pending", "reason": f"{type(exc).__name__}: {exc}"}
+        return results
+
+    def _migrate_package_environments(self) -> dict[str, dict[str, Any]]:
+        results: dict[str, dict[str, Any]] = {}
+        resolver = EnvironmentResolver()
+        for manifest_path in self.repository.manifest_paths():
+            package_id = manifest_path.parent.name
+            if self._resource_migration.get(package_id, {}).get("status") != "complete":
+                results[package_id] = {"status": "pending", "reason": "resource migration is pending"}
+                continue
+            try:
+                lock = resolver.ensure(manifest_path.parent)
+                results[package_id] = {"status": "complete", "image": lock.get("image")}
+            except Exception as exc:
+                results[package_id] = {"status": "pending", "reason": f"{type(exc).__name__}: {exc}"}
+        return results
 
     def load_package(self, package_id: str) -> LoadedAgentPackage:
         return self.repository.load(package_id)
@@ -426,6 +478,7 @@ class AgentPackageRuntimeManager:
         self._close_package_containers(package_id)
         self._close_package_system_handles(package_id)
         result = self.repository.delete_user_package(package_id)
+        result["deleted_resource_count"] = self.resource_store.delete_package(package_id)
         result["agent_registry_refresh"] = _refresh_agent_registry_index(package_id)
         return result
 
@@ -884,6 +937,8 @@ class AgentPackageRuntimeManager:
                 "session_count": len(sessions),
                 "model_contract": _model_contract_summary(package),
                 "context_contract": _context_contract_summary(manifest_path.parent),
+                "resources": self.resource_status(package_id),
+                "environment": {**_environment_summary(manifest_path.parent), "migration": self._environment_migration.get(package_id)},
                 "extensions": _extensions_summary(package_id, package=package),
                 **detail,
             }
@@ -1399,7 +1454,8 @@ def _package_fingerprint(package: LoadedAgentPackage) -> str:
     if _is_host_system_package(package):
         digest.update(b"host-system-package")
     else:
-        digest.update(_runtime_image_identity().encode("utf-8"))
+        lock = EnvironmentResolver().read_lock(package.package_root)
+        digest.update(str(lock.get("image_digest") or lock.get("image") or "").encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -1411,6 +1467,20 @@ def _runtime_fingerprint(package_id: str, package: LoadedAgentPackage) -> str:
     digest.update(str(extension_root.resolve()).encode("utf-8"))
     _hash_tree(digest, extension_root)
     return digest.hexdigest()
+
+
+def _environment_summary(package_root: Path) -> dict[str, Any]:
+    try:
+        lock = EnvironmentResolver().read_lock(package_root)
+        return {
+            "status": lock.get("status"),
+            "image": lock.get("image"),
+            "image_digest": lock.get("image_digest"),
+            "platform": lock.get("platform"),
+            "verified_at": lock.get("verified_at"),
+        }
+    except Exception as exc:
+        return {"status": "missing", "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _hash_tree(digest: "hashlib._Hash", root: Path) -> None:

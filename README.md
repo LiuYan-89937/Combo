@@ -89,6 +89,7 @@ AGENTFACTORY_EMBEDDING_PROVIDER=openai_compatible
 AGENTFACTORY_EMBEDDING_BASE_URL=
 AGENTFACTORY_EMBEDDING_API_KEY=
 AGENTFACTORY_EMBEDDING_MODEL=
+AGENTFACTORY_RESOURCE_MASTER_KEY=
 AGENTFACTORY_EMBEDDING_DIMS=
 ```
 
@@ -98,6 +99,7 @@ AGENTFACTORY_EMBEDDING_DIMS=
 - 任务模型用于结构化输出、分类、抽取、意图分析等辅助任务；未单独配置时会回退到主模型。
 - 压缩模型用于上下文压缩。
 - embedding 模型用于知识库、RAG、长期记忆和 Agent 检索。
+- `AGENTFACTORY_RESOURCE_MASTER_KEY` 用于加密 Agent 的运行时资源配置；请使用稳定的长随机值，丢失后无法解密已保存的资源。
 - `.env` 是本地私有配置，不要提交到 git。
 
 ### 启动
@@ -108,7 +110,7 @@ AGENTFACTORY_EMBEDDING_DIMS=
 ./start.sh
 ```
 
-启动脚本会检查 `.env`、Python 依赖、前端依赖、Docker daemon 和运行时镜像。镜像不存在时会自动构建 `agentfactory-runtime-python:3.12`。
+启动脚本会检查 `.env`、Python 依赖、前端依赖、Docker daemon 和运行时镜像。镜像不存在时会自动构建 `agentfactory-runtime-python:3.12`。Agent 的额外本地依赖会在制造/probe 阶段构建为锁定的派生镜像，运行时不会临时安装依赖。
 
 启动成功后访问：
 

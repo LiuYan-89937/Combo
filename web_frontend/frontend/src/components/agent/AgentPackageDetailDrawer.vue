@@ -192,6 +192,46 @@
 
         <section class="detail-section">
           <div class="section-header">
+            <div class="section-label">运行时资源</div>
+            <n-tag size="small" :type="resourceStatusType">{{ resourceStatusLabel }}</n-tag>
+          </div>
+          <n-empty v-if="resourceItems.length === 0" description="此 Agent 未声明运行时资源" size="small" />
+          <div v-else class="detail-list">
+            <div v-for="resource in resourceItems" :key="resource.resource_id" class="detail-list-item resource-item">
+              <div class="item-main">
+                <div class="item-title">{{ resource.resource_id }}</div>
+                <div v-if="resource.description" class="item-description">{{ resource.description }}</div>
+                <div class="item-meta">{{ resource.required ? '必填' : '可选' }} · {{ resource.used_by.join(', ') || '运行时' }}</div>
+                <n-input
+                  v-model:value="resourceDrafts[resource.resource_id]"
+                  size="small"
+                  class="resource-input"
+                  :type="resource.secret_fields.length ? 'password' : 'textarea'"
+                  :show-password-on="resource.secret_fields.length ? 'click' : undefined"
+                  :placeholder="resourceInputHint(resource)"
+                />
+              </div>
+              <div class="resource-actions">
+                <n-tag size="small" :type="resource.configured ? 'success' : resource.required ? 'warning' : 'default'">
+                  {{ resource.configured ? '已配置' : '待配置' }}
+                </n-tag>
+                <n-button size="tiny" type="primary" :disabled="!resourceStoreReady" @click="saveResource(resource)">保存</n-button>
+                <n-button v-if="resource.configured" size="tiny" quaternary @click="removeResource(resource.resource_id)">移除</n-button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-header">
+            <div class="section-label">运行环境</div>
+            <n-tag size="small" :type="agentPackage.environment?.status === 'ready' ? 'success' : 'warning'">{{ agentPackage.environment?.status || 'missing' }}</n-tag>
+          </div>
+          <div class="item-meta">{{ environmentMeta }}</div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-header">
             <div class="section-label">MCP</div>
             <n-tag size="small" :bordered="false">{{ mcpServers.length }}</n-tag>
           </div>
@@ -314,10 +354,12 @@ import {
   NDrawerContent,
   NEmpty,
   NInputNumber,
+  NInput,
   NRadioButton,
   NRadioGroup,
   NTag,
 } from 'naive-ui'
+import { agentPackagesApi, type AgentPackageResourceDescriptorView } from '@/api/agentPackages'
 import { useI18n } from '@/composables/useI18n'
 import type {
   AgentPackageExtensionView,
@@ -365,6 +407,17 @@ const packageTools = computed<AgentPackageToolView[]>(() => props.agentPackage?.
 const mcpServers = computed<AgentPackageExtensionView[]>(() => props.agentPackage?.mcp_servers || [])
 const skills = computed<AgentPackageExtensionView[]>(() => props.agentPackage?.skills || [])
 const knowledgeSources = computed<AgentPackageKnowledgeSourceView[]>(() => props.agentPackage?.knowledge_sources || [])
+const resourceItems = ref<AgentPackageResourceDescriptorView[]>([])
+const resourceStoreReady = ref(false)
+const resourceDrafts = ref<Record<string, string>>({})
+const resourceStatusType = computed(() => resourceItems.value.every(item => !item.required || item.configured) ? 'success' : 'warning')
+const resourceStatusLabel = computed(() => resourceStoreReady.value ? '运行时配置' : '需要主密钥')
+const environmentMeta = computed(() => {
+  const environment = props.agentPackage?.environment
+  if (!environment) return '尚未生成环境锁定信息'
+  const platform = environment.platform?.architecture || ''
+  return [environment.image, platform, environment.verified_at].filter(Boolean).join(' · ') || environment.error || '尚未生成环境锁定信息'
+})
 const modelBindings = computed(() => {
   const bindings = props.agentPackage?.model_contract?.bindings || {}
   return Object.entries(bindings).map(([role, binding]) => ({ role, ...binding }))
@@ -403,6 +456,43 @@ watch(
   },
   { immediate: true },
 )
+
+watch(
+  () => [props.show, props.agentPackage?.package_id] as const,
+  async ([show, packageId]) => {
+    if (!show || !packageId) return
+    const payload = await agentPackagesApi.resources(packageId)
+    resourceItems.value = payload.resources
+    resourceStoreReady.value = payload.key_available
+    resourceDrafts.value = Object.fromEntries(payload.resources.map(item => [item.resource_id, '']))
+  },
+  { immediate: true },
+)
+
+function resourceInputHint(resource: AgentPackageResourceDescriptorView): string {
+  if (resource.secret_fields.length) return `填写 ${resource.secret_fields.join(', ')} 后保存`
+  return '填写 JSON 值或普通文本后保存'
+}
+
+async function saveResource(resource: AgentPackageResourceDescriptorView) {
+  const packageId = props.agentPackage?.package_id
+  if (!packageId) return
+  const raw = resourceDrafts.value[resource.resource_id] || ''
+  let value: unknown = raw
+  try { value = JSON.parse(raw) } catch { /* String values are valid resource input. */ }
+  await agentPackagesApi.putResource(packageId, resource.resource_id, value)
+  const payload = await agentPackagesApi.resources(packageId)
+  resourceItems.value = payload.resources
+  resourceDrafts.value[resource.resource_id] = ''
+}
+
+async function removeResource(resourceId: string) {
+  const packageId = props.agentPackage?.package_id
+  if (!packageId) return
+  await agentPackagesApi.deleteResource(packageId, resourceId)
+  const payload = await agentPackagesApi.resources(packageId)
+  resourceItems.value = payload.resources
+}
 
 function contextConfigSavePayload(): { context_window_tokens: number | null; compression_threshold_tokens: number | null } {
   return {
@@ -457,6 +547,10 @@ function packageStatusLabel(status: string | null | undefined): string {
   padding-bottom: var(--app-space-lg);
   border-bottom: 1px solid var(--app-divider);
 }
+
+.resource-item { align-items: flex-start; }
+.resource-input { margin-top: var(--app-space-sm); }
+.resource-actions { display: grid; justify-items: end; gap: var(--app-space-xs); }
 
 .detail-section:last-child {
   border-bottom: 0;

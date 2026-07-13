@@ -63,10 +63,10 @@
       "tool_id": "package_action",
       "prompt": "Please run the package action for this sample user request and tell me whether it succeeded.",
       "tool_goal": "Return a useful final answer after the package action runs and records its state.",
-    "arguments": {
-      "query": "sample request"
-    },
-    "timeout_seconds": "<task-appropriate-positive-seconds>"
+      "arguments": {
+        "query": "sample request"
+      },
+      "timeout_seconds": "<task-appropriate-positive-seconds>"
     }
   },
   "rules": [

@@ -12,6 +12,9 @@ from typing import Any
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.model_pool import MODEL_POOL_STORE_PATH_ENV, ModelPoolStore, resolve_model_pool_store_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
+from agent_factory.environment_system import EnvironmentResolver
+from agent_factory.resource_system import ResourceStore
+from agent_factory.resource_system.store import RESOURCE_MASTER_KEY_ENV, RESOURCE_STORE_PATH_ENV, RESOURCE_STORE_READ_ONLY_ENV
 from agent_factory.runtime_contracts import LoadedAgentPackage
 
 
@@ -29,6 +32,7 @@ IMAGE_INSPECT_COMMAND_LABEL = "docker image inspect"
 MODEL_ENV_ALLOWLIST: tuple[str, ...] = ()
 CONTAINER_MODEL_POOL_STORE_PATH = "/model_pool/factory.sqlite"
 CONTAINER_COLLABORATION_ROOT = "/collaboration"
+CONTAINER_RESOURCE_STORE_PATH = "/resource_store/runtime.sqlite"
 
 SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ALLOWED_CONTAINER_ROOTS = (
@@ -77,16 +81,10 @@ class DockerAgentRuntimeLauncher:
     ) -> DockerAgentRuntimePlan:
         docker = self._docker_executable()
         sandbox: dict[str, Any] = {}
-        image = str(sandbox.get("image") or DEFAULT_RUNTIME_IMAGE)
+        environment_lock = EnvironmentResolver().read_lock(package.package_root)
+        image = str(environment_lock["image"])
         self._assert_daemon_available(docker)
         resolved_image = self._resolve_image_reference(docker, image)
-        resources_path = package.package_root / package.manifest.resources_path
-        if not resources_path.is_file():
-            raise AgentRuntimeLaunchError(
-                where="sandbox.mount.resources",
-                why="resources_missing",
-                message=f"AgentPackage resources file is missing: {resources_path}",
-            )
         network = self._network_mode(sandbox)
         extension_root = extension_root or runtime_root / "extensions"
         extension_root = self._prepare_runtime_extension_root(
@@ -98,11 +96,16 @@ class DockerAgentRuntimeLauncher:
         service_env = self._service_environment(sandbox)
         model_pool_path = resolve_model_pool_store_path()
         ModelPoolStore(model_pool_path)
+        resource_store = ResourceStore()
         collaboration_root = factory_artifact_path("collaboration")
         collaboration_root.mkdir(parents=True, exist_ok=True)
         env = {**self._environment(sandbox), **service_env}
         env[MODEL_POOL_STORE_PATH_ENV] = CONTAINER_MODEL_POOL_STORE_PATH
         env["AGENTFACTORY_COLLABORATION_ROOT"] = CONTAINER_COLLABORATION_ROOT
+        env[RESOURCE_STORE_PATH_ENV] = CONTAINER_RESOURCE_STORE_PATH
+        env[RESOURCE_STORE_READ_ONLY_ENV] = "1"
+        if resource_store.key_available:
+            env[RESOURCE_MASTER_KEY_ENV] = os.environ[RESOURCE_MASTER_KEY_ENV]
         if mcp_gateway_url:
             env["AGENTFACTORY_MCP_GATEWAY_URL"] = mcp_gateway_url
         if skillhub_gateway_url:
@@ -116,9 +119,6 @@ class DockerAgentRuntimeLauncher:
             network,
             "-v",
             f"{package.package_root.resolve()}:/package:ro",
-            "-v",
-            f"{resources_path.resolve()}:/resources/resources.json:ro",
-            "-v",
             f"{artifacts_root.resolve()}:/artifacts:rw",
             "-v",
             f"{workdir_root.resolve()}:/workdir:rw",
@@ -128,6 +128,8 @@ class DockerAgentRuntimeLauncher:
             f"{model_pool_path.parent.resolve()}:/model_pool:ro",
             "-v",
             f"{collaboration_root.resolve()}:{CONTAINER_COLLABORATION_ROOT}:rw",
+            "-v",
+            f"{resource_store.path.parent.resolve()}:/resource_store:ro",
         ]
         contract_mounts = [*(sandbox.get("mounts") or []), *(sandbox.get("volumes") or [])]
         for mount in contract_mounts:
@@ -149,6 +151,7 @@ class DockerAgentRuntimeLauncher:
                 "status": "ok",
                 "docker": docker,
                 "image": image,
+                "environment_lock": environment_lock,
                 "resolved_image": resolved_image,
                 "image_check": IMAGE_INSPECT_COMMAND_LABEL,
                 "network": network,

@@ -9,7 +9,7 @@ from langgraph.errors import GraphInterrupt
 from agent_factory.artifact_system import ArtifactStore, ReportStore
 from agent_factory.context_system.runtime import ContextSystemRuntime
 from agent_factory.context_system.sources import default_context_sources
-from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeContextSource, KnowledgeIngestionWorker, KnowledgeRuntime
+from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeIngestionWorker, KnowledgeRuntime
 from agent_factory.knowledge_system.store_index import build_knowledge_store_index
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
@@ -260,9 +260,6 @@ class ContextContractBuilder:
 
     def build(self, contract: ContextContract, context: RuntimeBuildContext) -> RuntimeContribution:
         sources = default_context_sources()
-        knowledge_source = context.tool_runtime_resources.get("knowledge_context_source")
-        if knowledge_source is not None:
-            sources["knowledge"] = knowledge_source
         resources: dict[str, Any] = {}
         if contract.config.context_window_tokens is not None:
             resources["context_window_tokens"] = contract.config.context_window_tokens
@@ -359,12 +356,10 @@ class KnowledgeContractBuilder:
             catalog=catalog,
             store=store_handle.store,
         )
-        context_source = KnowledgeContextSource(runtime)
         return RuntimeContribution(
             services={"knowledge_runtime": runtime},
             tool_runtime_resources={
                 "knowledge_runtime": runtime,
-                "knowledge_context_source": context_source,
             },
             background_workers=[KnowledgeIngestionWorker(runtime)],
         )
@@ -523,7 +518,15 @@ class ResourcesContractBuilder:
     contract_version = "resources_contract.v0"
 
     def build(self, contract: ResourcesContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        return RuntimeContribution(resources=context.resources)
+        from agent_factory.resource_system import PackageResourceResolver, RESOURCE_RESOLVER_KEY, ResourceStore
+
+        descriptors = {item.resource_id: item for item in contract.config.resource_descriptors}
+        resolver = PackageResourceResolver(
+            package_id=context.package.package_root.name,
+            descriptors=descriptors,
+            store=ResourceStore(),
+        )
+        return RuntimeContribution(tool_runtime_resources={RESOURCE_RESOLVER_KEY: resolver})
 
 
 class SchedulerContractBuilder:

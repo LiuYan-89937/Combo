@@ -14,6 +14,9 @@ from agent_factory.create_agent.package_paths import is_transient_package_path, 
 from agent_factory.create_agent.stage_sync import sync_publish_stage
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.environment_system import EnvironmentResolver
+from agent_factory.resource_system import ResourceStore
+from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
@@ -75,6 +78,7 @@ def publish_workspace(
     _assert_publish_ready(workspace)
     package = AgentPackageLoader().load_path(workspace.package_manifest_path())
     package_id = _package_id(package)
+    resource_contract = ResourcesContract.model_validate(package.contracts.get("resources") or {})
     target = _safe_child(registry_root, package_id)
     staging_root = _safe_child(registry_root, ".publish_staging")
     staging = staging_root / f"{package_id}-{uuid4().hex}"
@@ -82,6 +86,7 @@ def publish_workspace(
     if staging.exists():
         shutil.rmtree(staging)
     _copy_publishable_package(workspace.root, staging)
+    EnvironmentResolver().ensure(staging)
     _assert_runtime_ready(staging)
     _prune_transient_paths(staging)
 
@@ -91,6 +96,7 @@ def publish_workspace(
         if target.exists():
             target.replace(backup)
         staging.replace(target)
+        ResourceStore().transfer(workspace.root.name, package_id, resource_contract.config.resource_descriptors)
     except Exception:
         if target.exists():
             shutil.rmtree(target)
@@ -222,9 +228,9 @@ def _read_manifest_payload(root: Path) -> dict[str, Any]:
 
 
 def _publishable_paths(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
-    files = {"agent_package.json"}
+    files = {"agent_package.json", "environment.lock.json"}
     dirs: set[str] = set()
-    for key in ("assembly_spec_path", "resources_path"):
+    for key in ("assembly_spec_path",):
         _add_manifest_file(files, manifest.get(key))
     contracts = manifest.get("contracts")
     if isinstance(contracts, dict):

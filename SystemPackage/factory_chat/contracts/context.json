@@ -13,25 +13,14 @@
       },
       "retrieval": {
         "enabled": true,
-        "source_ids": [
-          "cross_session_memory",
-          "resources",
-          "scheduler"
-        ],
+        "source_ids": ["cross_session_memory"],
         "max_candidates": 24,
         "min_score": 0.0
       },
       "assembly": {
         "max_items_total": 8,
         "max_tokens_total": 1200,
-        "per_source_limits": {
-          "cross_session_memory": 4,
-          "resources": 4,
-          "scheduler": 3,
-          "artifacts": 3,
-          "knowledge": 6,
-          "trace": 3
-        }
+        "per_source_limits": {"cross_session_memory": 4}
       }
     },
     "node_policies": {}

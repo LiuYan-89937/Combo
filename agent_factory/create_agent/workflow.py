@@ -155,6 +155,7 @@ class CreateAgentWorkflow:
                     "message": action.message or "请补充制造这个 AgentPackage 所需的信息。",
                     "workspace_path": str(workspace.root),
                     "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
+                    "resource_requests": [item.model_dump(mode="json") for item in action.resource_requests],
                 }
             )
             workspace.write_action(CreateAgentAction())

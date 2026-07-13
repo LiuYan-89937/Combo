@@ -39,6 +39,20 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
                     "default": [],
                     "description": "Optional resource facts already established by the conversation.",
                 },
+                "resource_requests": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "resource_id": {"type": "string"},
+                            "description": {"type": "string"},
+                            "secret": {"type": "boolean"},
+                        },
+                        "required": ["resource_id"],
+                        "additionalProperties": False,
+                    },
+                    "default": [],
+                },
             },
             "required": ["action"],
             "oneOf": [
@@ -88,6 +102,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "action": requested_action,
             "message": str(arguments.get("message") or "").strip(),
             "resource_facts": arguments.get("resource_facts") or [],
+            "resource_requests": arguments.get("resource_requests") or [],
         }
     )
     if action.action == "ask_user" and not action.message.strip():
@@ -124,7 +139,8 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
             {
                 "action": action,
                 "message": message,
-                "resource_facts": arguments.get("resource_facts") or [],
+            "resource_facts": arguments.get("resource_facts") or [],
+            "resource_requests": arguments.get("resource_requests") or [],
             }
         )
     except Exception as exc:

@@ -55,7 +55,6 @@ class AgentPackageManifest(BaseModel):
     agent: AgentPackageAgentSpec
     runtime: dict[str, Any] = Field(default_factory=dict)
     assembly_spec_path: str
-    resources_path: str
     contracts: dict[str, str] = Field(default_factory=dict)
     tools: list[str] = Field(default_factory=list)
 
@@ -72,7 +71,6 @@ class AgentPackageManifest(BaseModel):
             )
         for key in (
             "assembly_spec_path",
-            "resources_path",
         ):
             _validate_package_relative_path(str(getattr(self, key)), field_name=key)
         for key, value in self.contracts.items():
@@ -408,13 +406,7 @@ class ResourceDescriptor(BaseModel):
 class ResourcesContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resources_path: str = "resources.json"
     resource_descriptors: list[ResourceDescriptor] = Field(default_factory=list)
-
-    @field_validator("resources_path")
-    @classmethod
-    def _path_is_relative(cls, value: str) -> str:
-        return _validate_package_relative_path(value, field_name="resources_path")
 
 
 class ResourcesContract(BaseModel):
@@ -431,8 +423,12 @@ class DependenciesContractConfig(BaseModel):
 
     python_requirements: list[str] = Field(default_factory=list)
     system_packages: list[str] = Field(default_factory=list)
+    npm_requirements: list[str] = Field(default_factory=list)
     system_binaries: list[str] = Field(default_factory=list)
-    install_mode: Literal["none", "sandbox_init"] = "sandbox_init"
+    platform_architectures: list[Literal["amd64", "arm64"]] = Field(default_factory=list)
+    base_image: str = "agentfactory-runtime-python:3.12"
+    verification_commands: list[list[str]] = Field(default_factory=list)
+    install_mode: Literal["none", "image_build"] = "image_build"
     install_timeout_seconds: int | None = Field(default=None, ge=1)
 
 

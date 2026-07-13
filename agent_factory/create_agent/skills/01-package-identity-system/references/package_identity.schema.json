@@ -68,10 +68,6 @@
       "title": "Assembly Spec Path",
       "type": "string"
     },
-    "resources_path": {
-      "title": "Resources Path",
-      "type": "string"
-    },
     "contracts": {
       "additionalProperties": {
         "type": "string"
@@ -90,8 +86,7 @@
   "required": [
     "factory_run_id",
     "agent",
-    "assembly_spec_path",
-    "resources_path"
+    "assembly_spec_path"
   ],
   "title": "Agent package manifest",
   "type": "object"

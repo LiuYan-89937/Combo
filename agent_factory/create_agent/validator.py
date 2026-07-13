@@ -881,8 +881,8 @@ def _json_schema_repair_hint(relative_path: str) -> str:
         return "Use create_agent_authoring(action='set_identity') or create_agent_authoring(action='configure_pattern_assembly') for manifest-owned fields; reset malformed scaffold contract files with create_agent_authoring(action='reset_contract', contract_key=...)."
     if relative_path == "assembly_spec.json":
         return "Regenerate built-in pattern assembly through create_agent_authoring(action='configure_pattern_assembly') so prompt, model_operation, tool_access, and activation stay coherent."
-    if relative_path == "resources.json" or relative_path == "contracts/resources.json":
-        return "Regenerate runtime resources through create_agent_authoring(action='upsert_resources') instead of hand-editing resource contract shape."
+    if relative_path == "contracts/resources.json":
+        return "Regenerate runtime resource descriptors through create_agent_authoring(action='upsert_resources') instead of hand-editing resource contract shape."
     if relative_path == "contracts/scheduler_seed.json":
         return "Regenerate scheduler seeds through create_agent_authoring(action='upsert_scheduler_seed') instead of hand-editing scheduler seed contract shape."
     if relative_path == "contracts/state.json":
@@ -1520,8 +1520,8 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
     imports_by_tool = _package_tool_external_imports(root=root, tool_ids=set(package_tools))
     issues: list[PackageValidationIssue] = []
     if (
-        (contract.config.python_requirements or contract.config.system_packages)
-        and contract.config.install_mode == "sandbox_init"
+        (contract.config.python_requirements or contract.config.system_packages or contract.config.npm_requirements)
+        and contract.config.install_mode == "image_build"
         and contract.config.install_timeout_seconds is None
     ):
         issues.append(_contract_issue(
@@ -1563,7 +1563,7 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
                     "python_requirements": ["<installable-distribution-name>"],
                     "system_packages": [],
                     "system_binaries": [],
-                    "install_mode": "sandbox_init",
+                    "install_mode": "image_build",
                 },
             },
             repair_template={

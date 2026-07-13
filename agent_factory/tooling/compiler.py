@@ -20,6 +20,7 @@ from agent_factory.tooling.gateway import (
     ToolExecutionGateway,
     default_tool_max_revisions,
 )
+from agent_factory.resource_system import RESOURCE_RESOLVER_KEY
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore, default_tool_output_policy
 from agent_factory.tooling.package_tool_spec import is_package_tool_entrypoint
 from agent_factory.tooling.risk import ToolRiskEvaluator
@@ -82,6 +83,7 @@ class ToolCompiler:
             output_schema=output_schema,
             entrypoint=entrypoint,
             global_resources=self.resources,
+            resource_resolver=self.resources.get(RESOURCE_RESOLVER_KEY),
             hard_risk_evaluator=hard_risk_evaluator,
             llm_risk_prompt=llm_risk_prompt,
             approval_handler=self.approval_handler,

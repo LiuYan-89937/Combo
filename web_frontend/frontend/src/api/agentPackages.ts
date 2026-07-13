@@ -8,6 +8,25 @@ interface AgentPackageContextConfigResponse {
   package: any
 }
 
+export interface AgentPackageResourceDescriptorView {
+  resource_id: string
+  description: string
+  required: boolean
+  configured: boolean
+  secret_fields: string[]
+  used_by: string[]
+  sandbox_access_expectation: string
+  value_schema: Record<string, unknown>
+  key_available: boolean
+}
+
+export interface AgentPackageResourcesResponse {
+  package_id: string
+  key_available: boolean
+  resources: AgentPackageResourceDescriptorView[]
+  migration: { status: string; migrated?: boolean; reason?: string }
+}
+
 export const agentPackagesApi = {
   list: () => requestEvent('/api/agent-packages'),
   select: (packageId: string, purpose?: 'run' | 'evolution') =>
@@ -37,6 +56,17 @@ export const agentPackagesApi = {
         body: JSON.stringify(payload),
       }
     ),
+  resources: (packageId: string) =>
+    requestJson<AgentPackageResourcesResponse>(`/api/agent-packages/${encodeURIComponent(packageId)}/resources`),
+  putResource: (packageId: string, resourceId: string, value: unknown) =>
+    requestJson(`/api/agent-packages/${encodeURIComponent(packageId)}/resources/${encodeURIComponent(resourceId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    }),
+  deleteResource: (packageId: string, resourceId: string) =>
+    requestJson(`/api/agent-packages/${encodeURIComponent(packageId)}/resources/${encodeURIComponent(resourceId)}`, {
+      method: 'DELETE',
+    }),
   sessions: (packageId: string) => requestEvent(`/api/agent-packages/${encodeURIComponent(packageId)}/sessions`),
   session: (packageId: string, sessionId: string) =>
     requestEvent(

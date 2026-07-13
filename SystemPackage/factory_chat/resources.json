@@ -1,8 +1,0 @@
-{
-  "version": "factory_resources.v0",
-  "resources": {
-    "system_package_id": "factory_chat",
-    "system_package_role": "chat_mode",
-    "runtime_surface": "web_chat"
-  }
-}

@@ -5,65 +5,315 @@
   "additionalProperties": false,
   "properties": {
     "contracts/model.json": {
-      "type": "object",
-      "title": "contracts/model.json",
+      "$defs": {
+        "ModelBindingRuntimeOverrides": {
+          "additionalProperties": false,
+          "properties": {
+            "temperature": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Temperature"
+            },
+            "timeout_seconds": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Timeout Seconds"
+            },
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Output Tokens"
+            },
+            "max_input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Input Tokens"
+            },
+            "multimodal": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Multimodal"
+            },
+            "reasoning": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelReasoningSettings"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "structured_output_method": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "function_calling",
+                    "json_mode",
+                    "json_schema"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Structured Output Method"
+            }
+          },
+          "title": "ModelBindingRuntimeOverrides",
+          "type": "object"
+        },
+        "ModelContractConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "bindings": {
+              "additionalProperties": {
+                "$ref": "#/$defs/ModelProfileBinding"
+              },
+              "propertyNames": {
+                "enum": [
+                  "main",
+                  "task",
+                  "compression"
+                ]
+              },
+              "title": "Bindings",
+              "type": "object"
+            },
+            "tool_bindings": {
+              "additionalProperties": {
+                "$ref": "#/$defs/ModelToolBinding"
+              },
+              "title": "Tool Bindings",
+              "type": "object"
+            }
+          },
+          "title": "ModelContractConfig",
+          "type": "object"
+        },
+        "ModelProfileBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "profile_id": {
+              "title": "Profile Id",
+              "type": "string"
+            },
+            "selection_source": {
+              "default": "auto",
+              "enum": [
+                "auto",
+                "manual"
+              ],
+              "title": "Selection Source",
+              "type": "string"
+            },
+            "reason": {
+              "default": "",
+              "title": "Reason",
+              "type": "string"
+            },
+            "required_capabilities": {
+              "additionalProperties": true,
+              "title": "Required Capabilities",
+              "type": "object"
+            },
+            "overrides": {
+              "$ref": "#/$defs/ModelBindingRuntimeOverrides"
+            }
+          },
+          "required": [
+            "profile_id"
+          ],
+          "title": "ModelProfileBinding",
+          "type": "object"
+        },
+        "ModelReasoningSettings": {
+          "properties": {
+            "enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Enabled"
+            },
+            "effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effort"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            },
+            "budget_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Budget Tokens"
+            },
+            "send_history": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Send History"
+            }
+          },
+          "title": "ModelReasoningSettings",
+          "type": "object"
+        },
+        "ModelToolBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "profile_id": {
+              "title": "Profile Id",
+              "type": "string"
+            },
+            "capability": {
+              "enum": [
+                "image_input",
+                "image_output",
+                "image_edit",
+                "audio_input",
+                "audio_output"
+              ],
+              "title": "Capability",
+              "type": "string"
+            },
+            "selection_source": {
+              "default": "auto",
+              "enum": [
+                "auto",
+                "manual"
+              ],
+              "title": "Selection Source",
+              "type": "string"
+            },
+            "reason": {
+              "default": "",
+              "title": "Reason",
+              "type": "string"
+            },
+            "required_capabilities": {
+              "additionalProperties": true,
+              "title": "Required Capabilities",
+              "type": "object"
+            },
+            "overrides": {
+              "$ref": "#/$defs/ModelBindingRuntimeOverrides"
+            },
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            }
+          },
+          "required": [
+            "profile_id",
+            "capability"
+          ],
+          "title": "ModelToolBinding",
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "type": {
           "const": "model",
           "default": "model",
+          "title": "Type",
           "type": "string"
         },
         "version": {
           "const": "model_contract.v1",
           "default": "model_contract.v1",
+          "title": "Version",
           "type": "string"
         },
         "enabled": {
           "default": true,
+          "title": "Enabled",
           "type": "boolean"
         },
         "config": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "bindings": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "main": {
-                  "$ref": "#/$defs/ModelProfileBinding"
-                },
-                "task": {
-                  "$ref": "#/$defs/ModelProfileBinding"
-                },
-                "compression": {
-                  "$ref": "#/$defs/ModelProfileBinding"
-                }
-              },
-              "required": [
-                "main"
-              ]
-            },
-            "tool_bindings": {
-              "type": "object",
-              "additionalProperties": {
-                "$ref": "#/$defs/ModelToolBinding"
-              },
-              "default": {}
-            }
-          },
-          "required": [
-            "bindings"
-          ]
+          "$ref": "#/$defs/ModelContractConfig"
         }
       },
-      "required": [
-        "type",
-        "version",
-        "enabled",
-        "config"
-      ]
+      "title": "contracts/model.json",
+      "type": "object"
     },
     "contracts/dependencies.json": {
       "$defs": {
@@ -84,6 +334,13 @@
               "title": "System Packages",
               "type": "array"
             },
+            "npm_requirements": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Npm Requirements",
+              "type": "array"
+            },
             "system_binaries": {
               "items": {
                 "type": "string"
@@ -91,11 +348,37 @@
               "title": "System Binaries",
               "type": "array"
             },
+            "platform_architectures": {
+              "items": {
+                "enum": [
+                  "amd64",
+                  "arm64"
+                ],
+                "type": "string"
+              },
+              "title": "Platform Architectures",
+              "type": "array"
+            },
+            "base_image": {
+              "default": "agentfactory-runtime-python:3.12",
+              "title": "Base Image",
+              "type": "string"
+            },
+            "verification_commands": {
+              "items": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Verification Commands",
+              "type": "array"
+            },
             "install_mode": {
-              "default": "sandbox_init",
+              "default": "image_build",
               "enum": [
                 "none",
-                "sandbox_init"
+                "image_build"
               ],
               "title": "Install Mode",
               "type": "string"
@@ -138,7 +421,7 @@
           "type": "boolean"
         },
         "config": {
-          "$ref": "#/properties/contracts~1dependencies.json/$defs/DependenciesContractConfig"
+          "$ref": "#/$defs/DependenciesContractConfig"
         }
       },
       "title": "contracts/dependencies.json",
@@ -148,188 +431,5 @@
   "required": [
     "contracts/model.json",
     "contracts/dependencies.json"
-  ],
-  "$defs": {
-    "ModelProfileBinding": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "profile_id": {
-          "type": "string"
-        },
-        "selection_source": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "manual"
-          ],
-          "default": "auto"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "required_capabilities": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "overrides": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "temperature": {
-              "type": "number",
-              "minimum": 0
-            },
-            "timeout_seconds": {
-              "type": "number",
-              "exclusiveMinimum": 0
-            },
-            "max_output_tokens": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "max_input_tokens": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "multimodal": {
-              "type": "boolean"
-            },
-            "structured_output_method": {
-              "type": "string",
-              "enum": [
-                "function_calling",
-                "json_mode",
-                "json_schema"
-              ]
-            },
-            "reasoning": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "enabled": {
-                  "type": "boolean"
-                },
-                "effort": {
-                  "type": "string"
-                },
-                "summary": {
-                  "type": "string"
-                },
-                "budget_tokens": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "send_history": {
-                  "type": "boolean"
-                }
-              }
-            }
-          }
-        }
-      },
-      "required": [
-        "profile_id"
-      ]
-    },
-    "ModelToolBinding": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "profile_id": {
-          "type": "string"
-        },
-        "capability": {
-          "type": "string",
-          "enum": [
-            "image_input",
-            "image_output",
-            "image_edit",
-            "audio_input",
-            "audio_output"
-          ]
-        },
-        "selection_source": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "manual"
-          ],
-          "default": "auto"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "required_capabilities": {
-          "type": "object",
-          "additionalProperties": true
-        },
-        "description": {
-          "type": "string"
-        },
-        "overrides": {
-          "$ref": "#/$defs/ModelBindingOverrides"
-        }
-      },
-      "required": [
-        "profile_id",
-        "capability"
-      ]
-    },
-    "ModelBindingOverrides": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "temperature": {
-          "type": "number",
-          "minimum": 0
-        },
-        "timeout_seconds": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "max_output_tokens": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "max_input_tokens": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "multimodal": {
-          "type": "boolean"
-        },
-        "structured_output_method": {
-          "type": "string",
-          "enum": [
-            "function_calling",
-            "json_mode",
-            "json_schema"
-          ]
-        },
-        "reasoning": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "effort": {
-              "type": "string"
-            },
-            "summary": {
-              "type": "string"
-            },
-            "budget_tokens": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "send_history": {
-              "type": "boolean"
-            }
-          }
-        }
-      }
-    }
-  }
+  ]
 }

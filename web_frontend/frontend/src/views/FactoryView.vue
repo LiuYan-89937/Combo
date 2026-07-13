@@ -59,6 +59,13 @@
         v-if="runtimeStore.isPublishConfirmationPending"
         class="approval-section"
       />
+      <ResourceRequestPanel
+        v-if="resourceRequests.length && runtimeStore.activeFactorySessionId"
+        :session-id="runtimeStore.activeFactorySessionId"
+        :requests="resourceRequests"
+        @configured="handleResourceConfigured"
+        @skip="handleResourceSkipped"
+      />
 
       <!-- 输入区 -->
       <div class="input-section">
@@ -81,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { computed, ref, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
 import { ChatbubbleEllipses } from '@/components/icons'
@@ -93,6 +100,7 @@ import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
+import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 
 const runtimeStore = useRuntimeStore()
@@ -128,6 +136,11 @@ const {
   timelineItems,
 } = useFactoryMessageProjection()
 
+const resourceRequests = computed(() => {
+  const values = runtimeStore.pendingInterrupt?.payload?.resource_requests
+  return Array.isArray(values) ? values.filter((item): item is { resource_id: string; description?: string; secret?: boolean } => Boolean(item && typeof item.resource_id === 'string')) : []
+})
+
 function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
   if (!sendMessage(message, attachments)) return
   nextTick(() => {
@@ -137,6 +150,14 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
 
 function handleCancel() {
   cancelRequest()
+}
+
+function handleResourceConfigured(resourceId: string) {
+  handleSend(`运行时资源 ${resourceId} 已安全配置。`, [])
+}
+
+function handleResourceSkipped() {
+  handleSend('该运行时资源暂不配置，请继续完成可实现部分；发布后可在包详情中填写。', [])
 }
 
 function scrollToBottom(behavior: ScrollBehavior = 'auto') {

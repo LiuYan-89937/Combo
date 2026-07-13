@@ -43,7 +43,6 @@ def materialize_empty_agent_package(
             agent=manifest_agent,
             runtime={"pattern_id": selected_pattern_id},
             assembly_spec_path="assembly_spec.json",
-            resources_path="resources.json",
             contracts=contracts,
             tools=[],
         ).model_dump(mode="json", exclude_none=True),
@@ -55,7 +54,6 @@ def materialize_empty_agent_package(
             runtime={"pattern_id": selected_pattern_id},
         ).model_dump(mode="json", exclude_none=True),
     )
-    _write_json(package_root / "resources.json", {})
     for contract_key in sorted(contracts):
         _write_json(package_root / contracts[contract_key], default_contract_payload(contract_key))
 

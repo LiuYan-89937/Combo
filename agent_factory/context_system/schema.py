@@ -6,22 +6,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-ContextSourceId = Literal[
-    "cross_session_memory",
-    "resources",
-    "artifacts",
-    "scheduler",
-    "knowledge",
-    "trace",
-]
-ContextCandidateKind = Literal[
-    "memory",
-    "resource",
-    "artifact",
-    "scheduler",
-    "knowledge",
-    "trace",
-]
+ContextSourceId = Literal["cross_session_memory"]
+ContextCandidateKind = Literal["memory"]
 ContextEventStatus = Literal["started", "completed", "failed", "skipped"]
 MODEL_COMPRESSION_TRIGGER_TOKENS_ENV = "AGENTFACTORY_MODEL_COMPRESSION_TRIGGER_TOKENS"
 DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD = 200000
@@ -51,11 +37,7 @@ class RetrievalPolicy(BaseModel):
 
     enabled: bool = True
     source_ids: list[ContextSourceId] = Field(
-        default_factory=lambda: [
-            "cross_session_memory",
-            "resources",
-            "scheduler",
-        ]
+        default_factory=lambda: ["cross_session_memory"]
     )
     max_candidates: int = Field(default=24, ge=1, le=128)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -80,11 +62,6 @@ class AssemblyPolicy(BaseModel):
     per_source_limits: dict[str, int] = Field(
         default_factory=lambda: {
             "cross_session_memory": 4,
-            "resources": 4,
-            "scheduler": 3,
-            "artifacts": 3,
-            "knowledge": 6,
-            "trace": 3,
         }
     )
 

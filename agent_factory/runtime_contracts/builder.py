@@ -37,7 +37,7 @@ def runtime_build_context(
         package_root=package.package_root,
         runtime_root=Path(runtime_root).expanduser().resolve() if runtime_root is not None else None,
         package=package,
-        resources=_resource_values(package.resources) if resources is None else dict(resources),
+        resources={} if resources is None else dict(resources),
         tool_runtime_resources=dict(tool_runtime_resources or {}),
     )
 
@@ -84,13 +84,6 @@ class RuntimeBuildPlanner:
                 build_tool_runtime_resources[key] = value
             contributions.append(contribution)
         return RuntimeContributionMerger(base_services=base_services).merge(contributions)
-
-
-def _resource_values(payload: dict[str, object]) -> dict[str, object]:
-    resources = payload.get("resources", payload)
-    if not isinstance(resources, dict):
-        raise ValueError("resources contract payload must contain a resources object")
-    return dict(resources)
 
 
 def _default_runtime_infrastructure_contracts() -> list[BaseModel]:

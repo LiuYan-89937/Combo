@@ -79,6 +79,7 @@ class ToolExecutionGateway:
     output_schema: CompiledJsonSchema
     entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
     global_resources: Mapping[str, Any]
+    resource_resolver: Any | None = None
     hard_risk_evaluator: ToolRiskEvaluator | None = None
     llm_risk_prompt: str | None = None
     approval_handler: ToolApprovalHandler | None = None
@@ -116,6 +117,18 @@ class ToolExecutionGateway:
         try:
             tool_resources = self._resolve_resources()
         except Exception as exc:
+            message = str(exc).strip("'")
+            if message.startswith("resource_required:"):
+                resource_id = message.partition(":")[2].strip()
+                return self._observation(
+                    "resource_required",
+                    f"Required runtime resource is not configured: {resource_id}",
+                    tool_call_id=tool_call_id,
+                    arguments=arguments,
+                    retryable=False,
+                    errors=[message],
+                    evidence={"resource_id": resource_id},
+                )
             return self._observation(
                 "execution_failed",
                 f"Tool resource resolution failed: {type(exc).__name__}: {exc}",
@@ -343,7 +356,10 @@ class ToolExecutionGateway:
         for local_name, selector in self.spec.resources.items():
             try:
                 resources[local_name] = self._resolve_resource_selector(selector)
-            except KeyError:
+            except KeyError as exc:
+                detail = str(exc).strip("'")
+                if detail.startswith("resource_required:"):
+                    raise KeyError(detail) from exc
                 missing.append(selector)
                 continue
         if missing:
@@ -351,6 +367,14 @@ class ToolExecutionGateway:
         return resources
 
     def _resolve_resource_selector(self, selector: str) -> Any:
+        if self.resource_resolver is not None and self.resource_resolver.owns(selector):
+            try:
+                return self.resource_resolver.resolve_selector(selector)
+            except Exception as exc:
+                message = str(exc)
+                if message.startswith("resource_required:") or "not declared by package" in message:
+                    raise KeyError(message) from exc
+                raise
         current: Any = self.global_resources
         for part in selector.split("."):
             if not isinstance(current, Mapping) or part not in current:

@@ -13,4 +13,9 @@ export const createAgentApi = {
         body: JSON.stringify({ confirmation }),
       },
     ),
+  putResource: (sessionId: string, resourceId: string, value: unknown) =>
+    requestJson(`/api/create-agent/sessions/${encodeURIComponent(sessionId)}/resources/${encodeURIComponent(resourceId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    }),
 }

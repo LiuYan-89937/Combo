@@ -8,7 +8,6 @@ import sys
 import time
 from typing import Any
 
-from agent_factory.agent_runtime_bridge.dependencies import ensure_dependencies
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.gateway import ToolApprovalDecision
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
@@ -51,20 +50,7 @@ def _run_probe(request: dict[str, Any]) -> dict[str, Any]:
     arguments = request.get("arguments") if isinstance(request.get("arguments"), dict) else {}
     if not tool_id:
         raise ValueError("tool_id is required")
-    dependency_report = ensure_dependencies(PACKAGE_ROOT, ARTIFACTS_ROOT, runtime_root=RUNTIME_ROOT)
-    if dependency_report.get("status") == "failed":
-        return {
-            "status": "failed",
-            "phase": "sandbox_init",
-            "tool_id": tool_id,
-            "arguments": arguments,
-            "dependency_report": dependency_report,
-            "observation": {},
-            "captured_stdout": "",
-            "captured_stderr": "",
-            "duration_ms": _duration_ms(started_at),
-            "errors": ["sandbox dependency initialization failed"],
-        }
+    dependency_report = {"status": "complete", "source": "environment_lock"}
     discovery = PackageToolProvider().discover(ToolProviderContext(package_root=PACKAGE_ROOT))
     specs = {spec.id: spec for spec in discovery.tool_specs}
     spec = specs.get(tool_id)

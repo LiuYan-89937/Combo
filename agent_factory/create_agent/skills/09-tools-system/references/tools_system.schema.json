@@ -1,5 +1,40 @@
 {
   "$defs": {
+    "ToolApprovalOverrideConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "risk_level": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Risk Level"
+        },
+        "approval": {
+          "default": "inherit",
+          "enum": [
+            "inherit",
+            "allow",
+            "ask",
+            "deny"
+          ],
+          "title": "Approval",
+          "type": "string"
+        }
+      },
+      "title": "ToolApprovalOverrideConfig",
+      "type": "object"
+    },
     "ToolApprovalPolicyConfig": {
       "additionalProperties": false,
       "properties": {
@@ -59,41 +94,6 @@
         }
       },
       "title": "ToolApprovalPolicyConfig",
-      "type": "object"
-    },
-    "ToolApprovalOverrideConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "risk_level": {
-          "anyOf": [
-            {
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Risk Level"
-        },
-        "approval": {
-          "default": "inherit",
-          "enum": [
-            "inherit",
-            "allow",
-            "ask",
-            "deny"
-          ],
-          "title": "Approval",
-          "type": "string"
-        }
-      },
-      "title": "ToolApprovalOverrideConfig",
       "type": "object"
     },
     "ToolsContractConfig": {

@@ -55,6 +55,7 @@ web_check_env_configuration() {
         "AGENTFACTORY_EMBEDDING_BASE_URL"
         "AGENTFACTORY_EMBEDDING_API_KEY"
         "AGENTFACTORY_EMBEDDING_MODEL"
+        "AGENTFACTORY_RESOURCE_MASTER_KEY"
     )
 
     for name in "${required_vars[@]}"; do

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from agent_factory.create_agent.models import PackageToolProbeRecord
 from agent_factory.create_agent.stage_sync import sync_probe_stage
+from agent_factory.environment_system import EnvironmentResolutionError, EnvironmentResolver
 from agent_factory.create_agent.validation_state import package_digest, package_fingerprint, package_tool_digest
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import AgentRuntimeLaunchError, DockerAgentRuntimeLauncher
@@ -406,7 +407,20 @@ def _run_docker_probe(
     arguments: dict[str, Any],
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    package = AgentPackageLoader().load_path(workspace.package_manifest_path())
+    try:
+        EnvironmentResolver().ensure(workspace.root)
+        package = AgentPackageLoader().load_path(workspace.package_manifest_path())
+    except EnvironmentResolutionError as exc:
+        return {
+            "status": "failed",
+            "phase": "environment_resolution",
+            "observation": {},
+            "errors": [str(exc)],
+            "infrastructure_error": {"status": exc.status, "message": str(exc)},
+            "captured_stdout": "",
+            "captured_stderr": "",
+            "dependency_report": {"status": exc.status},
+        }
     runtime_root = _probe_runtime_root(workspace)
     artifacts_root = runtime_root / "artifacts"
     workdir_root = runtime_root / "workdir"

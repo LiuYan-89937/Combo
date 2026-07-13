@@ -60,11 +60,6 @@
         "ResourcesContractConfig": {
           "additionalProperties": false,
           "properties": {
-            "resources_path": {
-              "default": "resources.json",
-              "title": "Resources Path",
-              "type": "string"
-            },
             "resource_descriptors": {
               "items": {
                 "$ref": "#/$defs/ResourceDescriptor"
@@ -103,11 +98,6 @@
       "title": "contracts/resources.json",
       "type": "object"
     },
-    "resources.json": {
-      "type": "object",
-      "title": "resources.json",
-      "additionalProperties": true
-    },
     ".factory/resources.json": {
       "type": "object",
       "title": ".factory/resources.json",
@@ -116,7 +106,6 @@
   },
   "required": [
     "contracts/resources.json",
-    "resources.json",
     ".factory/resources.json"
   ]
 }

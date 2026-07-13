@@ -35,12 +35,21 @@ class ResourceFact(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+class ResourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    description: str = ""
+    secret: bool = False
+
+
 class CreateAgentAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["continue", "ask_user", "finalize"] = "continue"
     message: str = ""
     resource_facts: list[ResourceFact] = Field(default_factory=list)
+    resource_requests: list[ResourceRequest] = Field(default_factory=list)
 
 
 class CreateAgentIntentDecision(BaseModel):
@@ -467,7 +476,7 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
             "requirement_focus",
             1,
             "Requirement focus",
-            [RESOURCES_FILE, "agent_package.json", "assembly_spec.json", "resources.json"],
+            [RESOURCES_FILE, "agent_package.json", "assembly_spec.json", "contracts/resources.json"],
             [],
             "workspace_hygiene",
             "Clarify user intent, package identity, missing resources, secrets, schedules, and manufacturable capability boundaries.",
@@ -478,7 +487,7 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
             "Capability implementation",
             [
                 "agent_package.json",
-                "resources.json",
+                "contracts/resources.json",
                 "tools/",
                 "extensions/",
                 "extensions/enabled_skills.json",

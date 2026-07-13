@@ -222,7 +222,6 @@ class CreateAgentToolEnvironmentBuilder:
             filesystem_resource["managed_write_paths"] = {
                 "agent_package.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "assembly_spec.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "resources.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/tools.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/dependencies.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/resources.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},

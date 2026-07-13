@@ -15,7 +15,6 @@ class LoadedAgentPackage:
     manifest_path: Path
     manifest: AgentPackageManifest
     assembly_spec: Any
-    resources: dict[str, Any]
     contracts: dict[str, dict[str, Any]]
 
 
@@ -28,7 +27,6 @@ class AgentPackageLoader:
         assembly_spec = _agent_assembly_spec_model().model_validate_json(
             _read_package_file(package_root, manifest.assembly_spec_path)
         )
-        resources = _json_object(_read_package_file(package_root, manifest.resources_path), "resources")
         contracts = {
             key: _json_object(_read_package_file(package_root, value), f"contracts.{key}")
             for key, value in manifest.contracts.items()
@@ -38,7 +36,6 @@ class AgentPackageLoader:
             manifest_path=manifest_path,
             manifest=manifest,
             assembly_spec=assembly_spec,
-            resources=resources,
             contracts=contracts,
         )
 

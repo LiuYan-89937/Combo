@@ -25,7 +25,6 @@ Guides confirmed resource facts and runtime resource descriptors for produced ag
 
 ## Focus Files
 - `contracts/resources.json`
-- `resources.json`
 - `.factory/resources.json`
 
 ## Manufacturing Protocol
@@ -36,14 +35,14 @@ Guides confirmed resource facts and runtime resource descriptors for produced ag
 5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- Do not compare scaffolded resources.json with examples; empty resources are valid until a real resource is needed.
+- `contracts/resources.json` is the only published package resource surface; it declares resource descriptors and never stores user values.
 - Use .factory/resources.json only as confirmed manufacturing facts; do not expose it as a produced-agent runtime tool.
-- Write produced-agent runtime resources and descriptors with create_agent_authoring(action="upsert_resources") instead of generic filesystem write.
+- Write produced-agent resource descriptors with create_agent_authoring(action="upsert_resources", resources={}, resource_descriptors=[...]) instead of generic filesystem write.
 - Before asking, check capability inventory and existing confirmed facts.
 - Ask only for resources required by an implemented or confirmed capability, never for unsupported capability guesses.
 
 ## Boundaries
-- Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.
+- Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, user data, or runtime resource values. Runtime values are collected after publication through the package resource form.
 - Do not expose create-agent manufacturing tools, .factory files, traces, caches, or validation state as produced-agent runtime capability.
 - Do not infer package schemas from project source code during manufacturing; use validator evidence and this skill's examples/resources.
 - If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.

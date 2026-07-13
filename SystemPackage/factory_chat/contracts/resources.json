@@ -2,7 +2,5 @@
   "type": "resources",
   "version": "resources_contract.v0",
   "enabled": true,
-  "config": {
-    "resources_path": "resources.json"
-  }
+  "config": {}
 }

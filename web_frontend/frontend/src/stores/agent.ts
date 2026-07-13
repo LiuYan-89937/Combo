@@ -101,6 +101,8 @@ export interface AgentPackageView {
   sandbox?: Record<string, any>
   model_contract?: AgentPackageModelContractView
   context_contract?: AgentPackageContextContractView
+  resources?: { key_available: boolean; resources: Array<{ resource_id: string; configured: boolean }>; migration?: { status: string } }
+  environment?: { status?: string; image?: string; image_digest?: string; platform?: Record<string, string>; verified_at?: string; error?: string }
   extensions?: Record<string, any>
   tools?: AgentPackageToolView[]
   mcp_servers?: AgentPackageExtensionView[]
