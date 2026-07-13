@@ -34,12 +34,14 @@ RUN $APT_GET update \
         sed \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md /opt/agentfactory/
+COPY pyproject.toml uv.lock README.md /opt/agentfactory/
 RUN mkdir -p /opt/agentfactory/agent_factory \
     && touch /opt/agentfactory/agent_factory/__init__.py
 
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -e /opt/agentfactory
+RUN python -m pip install --upgrade pip uv \
+    && uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file /tmp/requirements.txt \
+    && uv pip install --system --require-hashes --requirements /tmp/requirements.txt \
+    && python -m pip install --no-deps -e /opt/agentfactory
 
 COPY agent_factory /opt/agentfactory/agent_factory
 
