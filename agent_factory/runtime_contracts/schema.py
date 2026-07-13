@@ -428,7 +428,6 @@ class DependenciesContractConfig(BaseModel):
     platform_architectures: list[Literal["amd64", "arm64"]] = Field(default_factory=list)
     base_image: str = "agentfactory-runtime-python:3.12"
     verification_commands: list[list[str]] = Field(default_factory=list)
-    install_mode: Literal["none", "image_build"] = "image_build"
     install_timeout_seconds: int | None = Field(default=None, ge=1)
 
 
@@ -436,7 +435,7 @@ class DependenciesContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["dependencies"] = "dependencies"
-    version: Literal["dependencies_contract.v0"] = "dependencies_contract.v0"
+    version: Literal["dependencies_contract.v1"] = "dependencies_contract.v1"
     enabled: bool = True
     config: DependenciesContractConfig = Field(default_factory=DependenciesContractConfig)
 

@@ -12,7 +12,8 @@ from typing import Any
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.model_pool import MODEL_POOL_STORE_PATH_ENV, ModelPoolStore, resolve_model_pool_store_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
-from agent_factory.environment_system import EnvironmentResolver
+from agent_factory.environment_system import EnvironmentResolver, dependency_pool_path
+from agent_factory.environment_system.runtime import CONTAINER_DEPENDENCY_POOL_ROOT, runtime_environment
 from agent_factory.resource_system import ResourceStore
 from agent_factory.resource_system.store import RESOURCE_MASTER_KEY_ENV, RESOURCE_STORE_PATH_ENV, RESOURCE_STORE_READ_ONLY_ENV
 from agent_factory.runtime_contracts import LoadedAgentPackage
@@ -36,6 +37,7 @@ CONTAINER_RESOURCE_STORE_PATH = "/resource_store/runtime.sqlite"
 
 SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ALLOWED_CONTAINER_ROOTS = (
+    PurePosixPath(CONTAINER_DEPENDENCY_POOL_ROOT),
     PurePosixPath("/resources"),
     PurePosixPath("/package"),
     PurePosixPath("/artifacts"),
@@ -99,7 +101,12 @@ class DockerAgentRuntimeLauncher:
         resource_store = ResourceStore()
         collaboration_root = factory_artifact_path("collaboration")
         collaboration_root.mkdir(parents=True, exist_ok=True)
-        env = {**self._environment(sandbox), **service_env}
+        dependency_pool = dependency_pool_path()
+        dependency_pool.mkdir(parents=True, exist_ok=True)
+        env = runtime_environment(
+            environment_lock,
+            inherited={**self._environment(sandbox), **service_env},
+        )
         env[MODEL_POOL_STORE_PATH_ENV] = CONTAINER_MODEL_POOL_STORE_PATH
         env["AGENTFACTORY_COLLABORATION_ROOT"] = CONTAINER_COLLABORATION_ROOT
         env[RESOURCE_STORE_PATH_ENV] = CONTAINER_RESOURCE_STORE_PATH
@@ -130,6 +137,8 @@ class DockerAgentRuntimeLauncher:
             f"{collaboration_root.resolve()}:{CONTAINER_COLLABORATION_ROOT}:rw",
             "-v",
             f"{resource_store.path.parent.resolve()}:/resource_store:ro",
+            "-v",
+            f"{dependency_pool}:{CONTAINER_DEPENDENCY_POOL_ROOT}:ro",
         ]
         contract_mounts = [*(sandbox.get("mounts") or []), *(sandbox.get("volumes") or [])]
         for mount in contract_mounts:
@@ -145,7 +154,7 @@ class DockerAgentRuntimeLauncher:
             resolved_image=resolved_image,
             network=network,
             extension_root=extension_root,
-            mount_count=7 + len(contract_mounts),
+            mount_count=8 + len(contract_mounts),
             service_env=service_env,
             preflight={
                 "status": "ok",
@@ -156,7 +165,8 @@ class DockerAgentRuntimeLauncher:
                 "image_check": IMAGE_INSPECT_COMMAND_LABEL,
                 "network": network,
                 "extension_root": str(extension_root),
-                "mount_count": 7 + len(contract_mounts),
+                "mount_count": 8 + len(contract_mounts),
+                "dependency_pool": str(dependency_pool),
                 "service_env_keys": sorted(service_env),
                 "mcp_gateway_url": mcp_gateway_url,
                 "skillhub_gateway_url": skillhub_gateway_url,

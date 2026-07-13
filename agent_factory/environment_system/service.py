@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.agent_runtime_bridge.dependencies import load_dependencies_contract
-from agent_factory.paths import factory_artifact_path
+
+from .pool import DependencyPool, DependencyPoolError, DependencyPoolResolution
+
+
+ENVIRONMENT_LOCK_VERSION = "environment_lock.v2"
 
 
 class EnvironmentResolutionError(RuntimeError):
@@ -19,15 +23,45 @@ class EnvironmentResolutionError(RuntimeError):
 
 
 class EnvironmentResolver:
+    """Resolves AgentPackage dependency declarations into shared-pool references."""
+
+    def __init__(self, pool: DependencyPool | None = None) -> None:
+        self.pool = pool or DependencyPool()
+
     def ensure(self, package_root: str | Path) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()
         contract = load_dependencies_contract(root)
         config = contract.config
-        if not contract.enabled or config.install_mode == "none":
-            return self._write_lock(root, self._base_lock(config.base_image, status="ready"))
+        base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
+        if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
+            request = _dependency_request(
+                enabled=contract.enabled,
+                base_image=base_image,
+                base_digest="",
+                architecture="",
+                config=config,
+            )
+            request_fingerprint = _fingerprint(request)
+            existing = self._read_lock_payload(root)
+            if self._is_reusable_lock(existing, request_fingerprint):
+                return existing
+            return self._write_lock(
+                root,
+                {
+                    "version": ENVIRONMENT_LOCK_VERSION,
+                    "status": "ready",
+                    "request_fingerprint": request_fingerprint,
+                    "image": base_image,
+                    "image_digest": "",
+                    "platform": {"os": "linux", "architecture": ""},
+                    "requirements": request,
+                    "pool": DependencyPoolResolution([], [], None).to_lock_payload(),
+                    "verified_at": _now(),
+                },
+            )
         docker = shutil.which("docker")
         if not docker:
-            raise EnvironmentResolutionError("docker_unavailable", "Docker CLI is required to resolve package environment")
+            raise EnvironmentResolutionError("docker_unavailable", "Docker CLI is required to resolve package dependencies")
         architecture = _docker_architecture(docker)
         allowed = set(config.platform_architectures)
         if allowed and architecture not in allowed:
@@ -37,86 +71,80 @@ class EnvironmentResolver:
             )
         base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
         base_digest = _image_identity(docker, base_image)
-        payload = {
-            "base_image": base_image,
-            "base_digest": base_digest,
-            "architecture": architecture,
-            "system_packages": sorted(set(config.system_packages)),
-            "python_requirements": sorted(set(config.python_requirements)),
-            "npm_requirements": sorted(set(config.npm_requirements)),
-            "system_binaries": sorted(set(config.system_binaries)),
-            "verification_commands": config.verification_commands,
-        }
-        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-        image = f"agentfactory-env:{fingerprint[:24]}"
-        existing = _inspect_image(docker, image)
-        if not existing:
-            self._build(docker, image=image, payload=payload, timeout_seconds=config.install_timeout_seconds)
-        self._verify(docker, image=image, binaries=payload["system_binaries"], commands=payload["verification_commands"])
-        return self._write_lock(
-            root,
-            {
-                "version": "environment_lock.v1",
-                "status": "ready",
-                "fingerprint": fingerprint,
-                "image": image,
-                "image_digest": _image_identity(docker, image),
-                "platform": {"os": "linux", "architecture": architecture},
-                "requirements": payload,
-                "verified_at": _now(),
-            },
+        request = _dependency_request(
+            enabled=contract.enabled,
+            base_image=base_image,
+            base_digest=base_digest,
+            architecture=architecture,
+            config=config,
         )
-
-    def read_lock(self, package_root: str | Path) -> dict[str, Any]:
-        path = environment_lock_path(package_root)
-        if not path.is_file():
-            raise EnvironmentResolutionError("environment_lock_missing", f"package environment lock is missing: {path}")
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict) or value.get("status") != "ready" or not value.get("image"):
-            raise EnvironmentResolutionError("environment_lock_invalid", f"package environment lock is not ready: {path}")
-        return value
-
-    def _build(self, docker: str, *, image: str, payload: dict[str, Any], timeout_seconds: int | None) -> None:
-        build_root = factory_artifact_path("environment_images", "builds", image.replace(":", "-"))
-        build_root.mkdir(parents=True, exist_ok=True)
-        dockerfile = build_root / "Dockerfile"
-        dockerfile.write_text(_dockerfile(payload), encoding="utf-8")
+        request_fingerprint = _fingerprint(request)
+        existing = self._read_lock_payload(root)
+        if self._is_reusable_lock(existing, request_fingerprint):
+            return existing
         try:
-            completed = subprocess.run(
-                [docker, "build", "--network", "host", "-t", image, "-f", str(dockerfile), str(build_root)],
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
+            resolution = self.pool.resolve(
+                docker=docker,
+                base_image=base_image,
+                architecture=architecture,
+                python_requirements=request["python_requirements"],
+                system_packages=request["system_packages"],
+                npm_requirements=request["npm_requirements"],
+                timeout_seconds=config.install_timeout_seconds,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise EnvironmentResolutionError("build_failed", f"environment image build timed out after {timeout_seconds}s") from exc
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "Docker build failed").strip()
-            raise EnvironmentResolutionError("build_failed", detail[-4000:])
-
-    def _verify(self, docker: str, *, image: str, binaries: list[str], commands: list[list[str]]) -> None:
-        checks = [["command", "-v", binary] for binary in binaries if binary]
-        checks.extend(command for command in commands if command)
-        for command in checks:
-            if any(item in {"sh", "bash", "-c"} for item in command):
-                raise EnvironmentResolutionError("unsupported", "verification commands must be direct executable arguments")
-            completed = subprocess.run([docker, "run", "--rm", image, *command], capture_output=True, text=True, timeout=30, check=False)
-            if completed.returncode != 0:
-                detail = (completed.stderr or completed.stdout or "verification failed").strip()
-                raise EnvironmentResolutionError("build_failed", f"environment verification failed: {' '.join(command)}: {detail[-1000:]}")
-
-    def _base_lock(self, image: str, *, status: str) -> dict[str, Any]:
-        return {
-            "version": "environment_lock.v1",
-            "status": status,
-            "fingerprint": "base",
-            "image": image,
-            "image_digest": "",
-            "platform": {"os": "linux", "architecture": ""},
-            "requirements": {},
+        except DependencyPoolError as exc:
+            raise EnvironmentResolutionError(exc.status, str(exc)) from exc
+        payload = {
+            "version": ENVIRONMENT_LOCK_VERSION,
+            "status": "ready",
+            "request_fingerprint": request_fingerprint,
+            "image": base_image,
+            "image_digest": base_digest,
+            "platform": {"os": "linux", "architecture": architecture},
+            "requirements": request,
+            "pool": resolution.to_lock_payload(),
             "verified_at": _now(),
         }
+        return self._write_lock(root, payload)
+
+    def read_lock(self, package_root: str | Path) -> dict[str, Any]:
+        root = Path(package_root).expanduser().resolve()
+        value = self._read_lock_payload(root)
+        if not self._is_ready_lock(value):
+            raise EnvironmentResolutionError(
+                "environment_lock_invalid",
+                f"package environment lock is missing or incompatible: {environment_lock_path(root)}",
+            )
+        return value
+
+    def _is_reusable_lock(self, value: dict[str, Any] | None, request_fingerprint: str) -> bool:
+        return bool(
+            self._is_ready_lock(value)
+            and value.get("request_fingerprint") == request_fingerprint
+            and self.pool.references_available(value.get("pool"))
+        )
+
+    def _is_ready_lock(self, value: dict[str, Any] | None) -> bool:
+        return bool(
+            isinstance(value, dict)
+            and value.get("version") == ENVIRONMENT_LOCK_VERSION
+            and value.get("status") == "ready"
+            and isinstance(value.get("image"), str)
+            and value["image"]
+            and isinstance(value.get("pool"), dict)
+            and value["pool"].get("version") == "dependency_pool.v1"
+            and self.pool.references_available(value["pool"])
+        )
+
+    def _read_lock_payload(self, package_root: Path) -> dict[str, Any] | None:
+        path = environment_lock_path(package_root)
+        if not path.is_file():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
 
     def _write_lock(self, package_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         path = environment_lock_path(package_root)
@@ -130,37 +158,66 @@ def environment_lock_path(package_root: str | Path) -> Path:
     return Path(package_root).expanduser().resolve() / "environment.lock.json"
 
 
+def _dependency_request(
+    *,
+    enabled: bool,
+    base_image: str,
+    base_digest: str,
+    architecture: str,
+    config: Any,
+) -> dict[str, Any]:
+    return {
+        "enabled": bool(enabled),
+        "base_image": base_image,
+        "base_digest": base_digest,
+        "architecture": architecture,
+        "python_requirements": _normalized_values(config.python_requirements) if enabled else [],
+        "system_packages": _normalized_values(config.system_packages) if enabled else [],
+        "npm_requirements": _normalized_values(config.npm_requirements) if enabled else [],
+        "system_binaries": _normalized_values(config.system_binaries) if enabled else [],
+        "verification_commands": config.verification_commands if enabled else [],
+        "install_timeout_seconds": config.install_timeout_seconds,
+    }
+
+
+def _normalized_values(values: list[str]) -> list[str]:
+    return sorted({value.strip() for value in values if value and value.strip()})
+
+
+def _has_materializable_dependencies(*, enabled: bool, config: Any) -> bool:
+    return bool(enabled and (config.python_requirements or config.system_packages or config.npm_requirements))
+
+
+def _fingerprint(value: dict[str, Any]) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _docker_architecture(docker: str) -> str:
-    completed = subprocess.run([docker, "version", "--format", "{{.Server.Arch}}"], capture_output=True, text=True, timeout=10, check=False)
+    completed = subprocess.run(
+        [docker, "version", "--format", "{{.Server.Arch}}"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
     if completed.returncode != 0:
         raise EnvironmentResolutionError("docker_unavailable", (completed.stderr or "Docker daemon is unavailable").strip())
     value = completed.stdout.strip().lower()
     return {"aarch64": "arm64", "x86_64": "amd64"}.get(value, value)
 
 
-def _inspect_image(docker: str, image: str) -> bool:
-    return subprocess.run([docker, "image", "inspect", image], capture_output=True, text=True, timeout=10, check=False).returncode == 0
-
-
 def _image_identity(docker: str, image: str) -> str:
-    completed = subprocess.run([docker, "image", "inspect", image, "--format", "{{.Id}}"], capture_output=True, text=True, timeout=10, check=False)
+    completed = subprocess.run(
+        [docker, "image", "inspect", image, "--format", "{{.Id}}"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
     if completed.returncode != 0:
         raise EnvironmentResolutionError("runtime_image_missing", (completed.stderr or f"image is unavailable: {image}").strip())
     return completed.stdout.strip()
-
-
-def _dockerfile(payload: dict[str, Any]) -> str:
-    lines = [f"FROM {payload['base_image']}"]
-    packages = payload["system_packages"]
-    if packages:
-        lines.append("RUN apt-get update && apt-get install -y --no-install-recommends " + " ".join(packages) + " && rm -rf /var/lib/apt/lists/*")
-    requirements = payload["python_requirements"]
-    if requirements:
-        lines.append("RUN python -m pip install --no-cache-dir " + " ".join(requirements))
-    npm_requirements = payload["npm_requirements"]
-    if npm_requirements:
-        lines.append("RUN npm install --global " + " ".join(npm_requirements))
-    return "\n".join(lines) + "\n"
 
 
 def _now() -> str:

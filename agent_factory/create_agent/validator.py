@@ -1521,15 +1521,14 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
     issues: list[PackageValidationIssue] = []
     if (
         (contract.config.python_requirements or contract.config.system_packages or contract.config.npm_requirements)
-        and contract.config.install_mode == "image_build"
         and contract.config.install_timeout_seconds is None
     ):
         issues.append(_contract_issue(
             where="dependencies.install_timeout_seconds",
             summary="dependency installation timeout is not declared",
-            message="contracts/dependencies.json declares installable dependencies without config.install_timeout_seconds.",
+            message="contracts/dependencies.json declares installable dependencies without config.install_timeout_seconds for dependency-pool resolution.",
             path="contracts/dependencies.json",
-            expected="A task-appropriate positive install_timeout_seconds for sandbox dependency initialization.",
+            expected="A task-appropriate positive install_timeout_seconds for dependency-pool resolution.",
             actual="install_timeout_seconds is missing",
             repair_hint="Use create_agent_authoring(action='configure_dependencies') and estimate a timeout from dependency size, platform, and network conditions.",
             target_files=["contracts/dependencies.json"],
@@ -1557,13 +1556,12 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
             recommended_skill="10-package-tool-system",
             expected_shape={
                 "type": "dependencies",
-                "version": "dependencies_contract.v0",
+                "version": "dependencies_contract.v1",
                 "enabled": True,
                 "config": {
                     "python_requirements": ["<installable-distribution-name>"],
                     "system_packages": [],
                     "system_binaries": [],
-                    "install_mode": "image_build",
                 },
             },
             repair_template={

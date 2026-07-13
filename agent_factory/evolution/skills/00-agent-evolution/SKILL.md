@@ -26,7 +26,7 @@ Guide changes to an already published AgentPackage. Evolution is not manufacturi
 
 ## Target Surface Rules
 - Package tool source, ToolSpec, manifest index, tool contract, dependencies, and assembly exposure are one coherent surface. Use `create_agent_authoring(action="upsert_package_tool")` with the complete tool source, complete ToolSpec, Python requirements, optional system packages/binaries, and exposure nodes.
-- If the only needed change is dependency metadata, use `create_agent_authoring(action="configure_dependencies")` with `python_requirements`, `system_packages`, `system_binaries`, or `install_mode`.
+- If the only needed change is dependency metadata, use `create_agent_authoring(action="configure_dependencies")` with `python_requirements`, `system_packages`, `npm_requirements`, `system_binaries`, or `verification_commands`.
 - Do not manually edit managed files such as `agent_package.json`, `assembly_spec.json`, `contracts/*.json`, `tools/*/manifest.json`, package `resources.json`, `knowledge/`, or `state/`.
 - If a required managed-surface field is not supported by the current authoring actions, stop and report the authoring gap. Do not try `edit` or `write` against managed contracts.
 - For `plan_and_execute`, planner only maintains `runtime_plan`; executor performs plan steps; final_answer may use delivery tools for final artifacts but must not expose `runtime_plan`.

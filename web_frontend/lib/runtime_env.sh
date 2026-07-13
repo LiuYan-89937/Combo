@@ -230,14 +230,20 @@ web_build_runtime_image() {
         build_args+=(--build-arg "PYPI_INDEX_URL=${AGENTFACTORY_PYPI_INDEX_URL}")
     fi
 
+    local docker_build=(
+        docker build
+        --network "${build_network}"
+        -t "${RUNTIME_IMAGE}"
+        --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}"
+    )
+    if (( ${#build_args[@]} > 0 )); then
+        docker_build+=("${build_args[@]}")
+    fi
+    docker_build+=(-f "${RUNTIME_DOCKERFILE}" .)
+
     (
         cd "${PROJECT_ROOT}"
-        docker build \
-            --network "${build_network}" \
-            -t "${RUNTIME_IMAGE}" \
-            --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}" \
-            "${build_args[@]}" \
-            -f "${RUNTIME_DOCKERFILE}" .
+        "${docker_build[@]}"
     )
 }
 

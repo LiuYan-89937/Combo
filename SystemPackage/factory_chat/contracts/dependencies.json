@@ -1,6 +1,6 @@
 {
   "type": "dependencies",
-  "version": "dependencies_contract.v0",
+  "version": "dependencies_contract.v1",
   "enabled": true,
   "config": {
     "python_requirements": [],
@@ -9,7 +9,6 @@
       "bash",
       "grep",
       "sed"
-    ],
-    "install_mode": "image_build"
+    ]
   }
 }

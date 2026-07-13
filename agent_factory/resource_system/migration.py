@@ -16,7 +16,6 @@ def migrate_package_resources(package_root: Path, *, store: ResourceStore) -> di
     manifest = _read_object(manifest_path)
     legacy_declared = "resources_path" in manifest
     if not legacy_declared and not legacy_path.exists():
-        _migrate_dependency_mode(package_root)
         return {"status": "complete", "migrated": False}
     contract_path = package_root / "contracts" / "resources.json"
     if not contract_path.is_file():
@@ -42,20 +41,7 @@ def migrate_package_resources(package_root: Path, *, store: ResourceStore) -> di
     manifest.pop("resources_path", None)
     _write_object(manifest_path, manifest)
     legacy_path.unlink(missing_ok=True)
-    _migrate_dependency_mode(package_root)
     return {"status": "complete", "migrated": legacy_declared or bool(values)}
-
-
-def _migrate_dependency_mode(package_root: Path) -> None:
-    path = package_root / "contracts" / "dependencies.json"
-    if not path.is_file():
-        return
-    payload = _read_object(path)
-    config = payload.get("config")
-    if not isinstance(config, dict) or config.get("install_mode") != "sandbox_init":
-        return
-    config["install_mode"] = "image_build"
-    _write_object(path, payload)
 
 
 def _read_object(path: Path) -> dict[str, Any]:

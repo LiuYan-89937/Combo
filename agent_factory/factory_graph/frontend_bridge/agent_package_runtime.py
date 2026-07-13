@@ -1472,11 +1472,17 @@ def _runtime_fingerprint(package_id: str, package: LoadedAgentPackage) -> str:
 def _environment_summary(package_root: Path) -> dict[str, Any]:
     try:
         lock = EnvironmentResolver().read_lock(package_root)
+        pool = lock.get("pool") if isinstance(lock.get("pool"), dict) else {}
         return {
             "status": lock.get("status"),
             "image": lock.get("image"),
             "image_digest": lock.get("image_digest"),
             "platform": lock.get("platform"),
+            "dependency_pool": {
+                "python_entry_count": len(pool.get("python_entries") or []),
+                "system_entry_count": len(pool.get("system_entries") or []),
+                "has_npm_profile": bool(pool.get("npm_profile")),
+            },
             "verified_at": lock.get("verified_at"),
         }
     except Exception as exc:

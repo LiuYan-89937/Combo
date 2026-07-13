@@ -37,6 +37,8 @@ RUN $APT_GET update \
         findutils \
         gawk \
         grep \
+        nodejs \
+        npm \
         procps \
         sed \
     && rm -rf /var/lib/apt/lists/*

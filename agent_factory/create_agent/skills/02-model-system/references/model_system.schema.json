@@ -374,15 +374,6 @@
               "title": "Verification Commands",
               "type": "array"
             },
-            "install_mode": {
-              "default": "image_build",
-              "enum": [
-                "none",
-                "image_build"
-              ],
-              "title": "Install Mode",
-              "type": "string"
-            },
             "install_timeout_seconds": {
               "anyOf": [
                 {
@@ -410,8 +401,8 @@
           "type": "string"
         },
         "version": {
-          "const": "dependencies_contract.v0",
-          "default": "dependencies_contract.v0",
+          "const": "dependencies_contract.v1",
+          "default": "dependencies_contract.v1",
           "title": "Version",
           "type": "string"
         },

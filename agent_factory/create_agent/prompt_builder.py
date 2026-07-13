@@ -207,7 +207,7 @@ def _invariant_system_prompt_text() -> str:
             "当你新增或修改 package tool 后，必须使用 create_agent_probe_tool(action='inspect') 查看可探测工具，"
             "再用 create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', arguments=..., prompt=..., tool_goal=...) 进行真实工具探测。"
             "arguments 是目标 package tool 的真实调用输入；prompt 和 tool_goal 只用于用户可见测试说明和结果摘要。"
-            "系统会在制造/probe 阶段构建并锁定依赖镜像，运行时只使用 environment.lock.json 指向的已验证镜像。"
+            "系统会在制造/probe 阶段解析并锁定共享依赖池条目；运行时始终使用基础镜像，并只读加载 environment.lock.json 引用的依赖缓存。"
             "工具行为证据来自真实 arguments、Docker runtime dependency report、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"
             "如果 probe 返回 docker_preflight、runtime_image_missing、docker_cli_missing 或 docker_daemon_unavailable，这是制造环境问题，"
             "不要通过反复改 package 文件尝试修复；应向用户说明需要可用 Docker runtime 后再继续 probe。"

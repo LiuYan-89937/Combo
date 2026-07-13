@@ -138,7 +138,7 @@ def default_runtime_contract_registry(
     )
     registry.register(
         contract_type="dependencies",
-        version="dependencies_contract.v0",
+        version="dependencies_contract.v1",
         model=DependenciesContract,
         builder=DependenciesContractBuilder(),
     )

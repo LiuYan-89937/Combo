@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
+from agent_factory.environment_system.runtime import RuntimeDependencyError, activate_runtime_dependencies
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import (
     RuntimeEventNormalizer,
     VisibleAssistantMessage,
@@ -244,12 +245,24 @@ class BridgeRuntimeState:
                 node_kind="system",
                 payload={"package_root": str(PACKAGE_ROOT)},
             )
+            try:
+                dependency_status = activate_runtime_dependencies()
+            except RuntimeDependencyError as exc:
+                normalizer.runtime_event(
+                    "node_completed",
+                    node_id="sandbox_init",
+                    node_label="Sandbox Init",
+                    node_kind="system",
+                    severity="error",
+                    payload={"status": "failed", "source": "dependency_pool", "message": str(exc)},
+                )
+                return False
             normalizer.runtime_event(
                 "node_completed",
                 node_id="sandbox_init",
                 node_label="Sandbox Init",
                 node_kind="system",
-                payload={"status": "complete", "source": "environment_lock"},
+                payload={"status": "complete", **dependency_status},
             )
             self.sandbox_initialized = True
             return True

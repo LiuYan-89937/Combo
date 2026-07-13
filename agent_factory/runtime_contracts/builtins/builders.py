@@ -571,7 +571,7 @@ class SchedulerSeedContractBuilder:
 
 class DependenciesContractBuilder:
     contract_type = "dependencies"
-    contract_version = "dependencies_contract.v0"
+    contract_version = "dependencies_contract.v1"
 
     def build(self, contract: DependenciesContract, context: RuntimeBuildContext) -> RuntimeContribution:
         del contract, context

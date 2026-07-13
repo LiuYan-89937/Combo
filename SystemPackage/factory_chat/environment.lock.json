@@ -1,0 +1,34 @@
+{
+  "version": "environment_lock.v2",
+  "status": "ready",
+  "request_fingerprint": "e70fe121fa7541c82411115adc32ad8c04b6fc2631a0dfd4df54ee8dcf2915f0",
+  "image": "agentfactory-runtime-python:3.12",
+  "image_digest": "",
+  "platform": {
+    "os": "linux",
+    "architecture": ""
+  },
+  "requirements": {
+    "enabled": true,
+    "base_image": "agentfactory-runtime-python:3.12",
+    "base_digest": "",
+    "architecture": "",
+    "python_requirements": [],
+    "system_packages": [],
+    "npm_requirements": [],
+    "system_binaries": [
+      "bash",
+      "grep",
+      "sed"
+    ],
+    "verification_commands": [],
+    "install_timeout_seconds": null
+  },
+  "pool": {
+    "version": "dependency_pool.v1",
+    "python_entries": [],
+    "system_entries": [],
+    "npm_profile": null
+  },
+  "verified_at": "2026-07-13T03:12:19.016977+00:00"
+}

@@ -117,11 +117,10 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "platform_architectures": {"type": "array", "items": {"type": "string", "enum": ["amd64", "arm64"]}},
                 "base_image": {"type": "string"},
                 "verification_commands": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-                "install_mode": {"type": "string", "enum": ["none", "image_build"]},
                 "install_timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Estimated dependency initialization deadline in seconds, required when declaring installable dependencies.",
+                    "description": "Estimated dependency-pool resolution deadline in seconds, required when declaring installable dependencies.",
                 },
                 "expose_to_nodes": {"type": "array", "items": {"type": "string"}},
                 "seed": {"type": "object", "additionalProperties": True},
@@ -276,7 +275,6 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                             {"required": ["platform_architectures"]},
                             {"required": ["base_image"]},
                             {"required": ["verification_commands"]},
-                            {"required": ["install_mode"]},
                             {"required": ["install_timeout_seconds"]},
                         ]
                     },
@@ -615,10 +613,8 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
         platform_architectures=_string_list(arguments.get("platform_architectures")),
         base_image=str(arguments.get("base_image") or "").strip(),
         verification_commands=_string_matrix(arguments.get("verification_commands")),
-        install_mode=str(arguments.get("install_mode") or "").strip(),
         install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
-    dependency_config.setdefault("install_mode", "image_build")
     dependencies_payload = DependenciesContract.model_validate(dependencies).model_dump(mode="json")
 
     assembly = _read_json(assembly_path)
@@ -737,7 +733,6 @@ def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str
         platform_architectures=_string_list(arguments.get("platform_architectures")),
         base_image=str(arguments.get("base_image") or "").strip(),
         verification_commands=_string_matrix(arguments.get("verification_commands")),
-        install_mode=str(arguments.get("install_mode") or "").strip(),
         install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
     dependencies_payload = DependenciesContract.model_validate(dependencies).model_dump(mode="json")
@@ -798,7 +793,6 @@ def _merge_dependency_config(
     platform_architectures: list[str],
     base_image: str,
     verification_commands: list[list[str]],
-    install_mode: str,
     install_timeout_seconds: Any,
 ) -> None:
     requirements = _dependency_list(config, "python_requirements")
@@ -819,15 +813,11 @@ def _merge_dependency_config(
         config["base_image"] = base_image
     if verification_commands:
         config["verification_commands"] = verification_commands
-    if install_mode:
-        config["install_mode"] = install_mode
-    effective_install_mode = str(config.get("install_mode") or "image_build")
-    requires_install = bool(requirements or packages or npm_packages) and effective_install_mode == "image_build"
     if install_timeout_seconds is not None:
         config["install_timeout_seconds"] = _positive_int(install_timeout_seconds, "install_timeout_seconds")
-    if requires_install and config.get("install_timeout_seconds") is None:
+    if (requirements or packages or npm_packages) and config.get("install_timeout_seconds") is None:
         raise ValueError(
-            "install_timeout_seconds is required when declaring Python or system package dependencies; "
+            "install_timeout_seconds is required when declaring Python, system, or npm dependencies; "
             "estimate a task-appropriate positive number of seconds."
         )
 
