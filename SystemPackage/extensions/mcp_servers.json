@@ -8,7 +8,7 @@
       "args": [
         "dist/index.js"
       ],
-      "cwd": "/Users/liuyan/Desktop/WebSearchApi",
+      "cwd": "../../.agentfactory/mcp/web_search",
       "env": {
         "SEARXNG_URL": "http://127.0.0.1:8888",
         "SEARXNG_AUTO_START": "true",
@@ -19,7 +19,7 @@
       },
       "source": {
         "type": "local",
-        "path": "/Users/liuyan/Desktop/WebSearchApi",
+        "path": "../../.agentfactory/mcp/web_search",
         "url": "https://github.com/LiuYan-89937/WebSearchApi",
         "package": "bigopen-llm-search"
       },

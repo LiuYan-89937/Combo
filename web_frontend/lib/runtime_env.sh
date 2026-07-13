@@ -9,7 +9,8 @@ PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
 RUNTIME_IMAGE="${AGENTFACTORY_RUNTIME_IMAGE:-agentfactory-runtime-python:3.12}"
 RUNTIME_DOCKERFILE="${AGENTFACTORY_RUNTIME_DOCKERFILE:-${PROJECT_ROOT}/docker/agent-runtime/Dockerfile}"
 RUNTIME_SOURCE_DIGEST_LABEL="org.fastagentfactory.runtime.source_digest"
-BACKEND_HEALTH_URL="${AGENTFACTORY_WEB_BACKEND_HEALTH_URL:-http://localhost:8000/health}"
+WEB_SEARCH_MCP_DIR="${AGENTFACTORY_WEB_SEARCH_MCP_DIR:-${PROJECT_ROOT}/.agentfactory/mcp/web_search}"
+WEB_SEARCH_MCP_REPOSITORY="${AGENTFACTORY_WEB_SEARCH_MCP_REPOSITORY:-https://github.com/LiuYan-89937/WebSearchApi.git}"
 
 web_fail() {
     echo "ERROR: $*" >&2
@@ -130,6 +131,57 @@ web_sync_frontend_dependencies() {
     )
 }
 
+web_ensure_builtin_web_search_mcp() {
+    if [[ "${AGENTFACTORY_SKIP_WEB_SEARCH_MCP_SETUP:-0}" == "1" ]]; then
+        echo "Skipping built-in web search MCP setup because AGENTFACTORY_SKIP_WEB_SEARCH_MCP_SETUP=1"
+        return
+    fi
+
+    web_require_command "git" "Install Git first."
+    web_require_command "node" "Install Node.js first."
+    web_require_command "npm" "Install npm first."
+
+    local previous_revision=""
+    local current_revision=""
+    local needs_build=0
+    if [[ -d "${WEB_SEARCH_MCP_DIR}/.git" ]]; then
+        echo "Updating built-in web search MCP..."
+        previous_revision="$(git -C "${WEB_SEARCH_MCP_DIR}" rev-parse HEAD)"
+        git -C "${WEB_SEARCH_MCP_DIR}" fetch --quiet origin
+        git -C "${WEB_SEARCH_MCP_DIR}" pull --ff-only --quiet
+    elif [[ -e "${WEB_SEARCH_MCP_DIR}" ]]; then
+        web_fail "web search MCP directory exists but is not a Git checkout: ${WEB_SEARCH_MCP_DIR}"
+    else
+        echo "Cloning built-in web search MCP..."
+        mkdir -p "$(dirname "${WEB_SEARCH_MCP_DIR}")"
+        git clone --quiet "${WEB_SEARCH_MCP_REPOSITORY}" "${WEB_SEARCH_MCP_DIR}"
+    fi
+
+    current_revision="$(git -C "${WEB_SEARCH_MCP_DIR}" rev-parse HEAD)"
+    if [[ ! -d "${WEB_SEARCH_MCP_DIR}/node_modules" || "${previous_revision}" != "${current_revision}" ]]; then
+        echo "Installing built-in web search MCP dependencies..."
+        (
+            cd "${WEB_SEARCH_MCP_DIR}"
+            if [[ -f "package-lock.json" ]]; then
+                npm ci
+            else
+                npm install
+            fi
+        )
+        needs_build=1
+    fi
+
+    if [[ ! -f "${WEB_SEARCH_MCP_DIR}/dist/index.js" || "${previous_revision}" != "${current_revision}" ]]; then
+        needs_build=1
+    fi
+    if (( needs_build == 1 )); then
+        echo "Building built-in web search MCP..."
+        (cd "${WEB_SEARCH_MCP_DIR}" && npm run build)
+    else
+        echo "Built-in web search MCP is ready"
+    fi
+}
+
 web_ensure_runtime_image() {
     if [[ "${AGENTFACTORY_SKIP_DOCKER_IMAGE_CHECK:-0}" == "1" ]]; then
         echo "Skipping Docker runtime image check because AGENTFACTORY_SKIP_DOCKER_IMAGE_CHECK=1"
@@ -245,26 +297,6 @@ web_build_runtime_image() {
         cd "${PROJECT_ROOT}"
         "${docker_build[@]}"
     )
-}
-
-web_wait_for_backend() {
-    local backend_pid="$1"
-    local attempts="${2:-30}"
-    local delay_seconds="${3:-1}"
-
-    web_require_command "curl" "Install curl first."
-
-    for ((attempt = 1; attempt <= attempts; attempt++)); do
-        if curl -fsS "${BACKEND_HEALTH_URL}" >/dev/null 2>&1; then
-            return 0
-        fi
-        if ! kill -0 "${backend_pid}" >/dev/null 2>&1; then
-            wait "${backend_pid}" 2>/dev/null || true
-            return 1
-        fi
-        sleep "${delay_seconds}"
-    done
-    return 1
 }
 
 web_print_port_status() {

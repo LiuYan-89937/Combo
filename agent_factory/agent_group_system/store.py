@@ -80,7 +80,6 @@ class AgentGroupStore:
     def _ensure_schema(self) -> None:
         """确保所有表结构存在"""
         with self._connect() as conn:
-            conn.execute("drop table if exists agent_group_workspace_changes")
             # 1. 群聊会话表
             conn.execute("""
                 create table if not exists agent_group_sessions (

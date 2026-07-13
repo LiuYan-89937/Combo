@@ -18,6 +18,7 @@ web_check_env_configuration
 echo ""
 web_sync_python_dependencies
 web_sync_frontend_dependencies
+web_ensure_builtin_web_search_mcp
 web_ensure_runtime_image
 
 BACKEND_PID=""
@@ -39,14 +40,6 @@ echo ""
 echo "Starting backend web runtime service on port 8000..."
 "${PYTHON_BIN}" web_frontend/backend/event_api_server.py &
 BACKEND_PID=$!
-
-echo "Waiting for backend to be ready..."
-if ! web_wait_for_backend "${BACKEND_PID}" 45 1; then
-    echo "Backend failed to start"
-    exit 1
-fi
-
-echo "Backend runtime service ready: http://localhost:8000"
 echo ""
 echo "Starting frontend development server on port 3000..."
 echo ""
