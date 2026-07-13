@@ -34,7 +34,9 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import 
 from agent_factory.factory_graph.session import build_factory_checkpointer_handle
 from agent_factory.model_pool.runtime_override import (
     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
+    RUNTIME_REASONING_INTENSITY_KEY,
     main_model_profile_id_from_user_config,
+    runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR, import_runtime_attachments, time_named_attachment_scope
@@ -66,6 +68,7 @@ class _EvolutionRunContext:
     before_fingerprint: dict[str, str]
     runtime_attachments: list[dict[str, Any]]
     runtime_main_model_profile_id: str | None = None
+    runtime_reasoning_intensity: int | None = None
 
 
 class AgentEvolutionRuntime:
@@ -249,6 +252,7 @@ class AgentEvolutionRuntime:
                 before_fingerprint={},
                 runtime_attachments=[],
                 runtime_main_model_profile_id=main_model_profile_id_from_user_config(user_config),
+                runtime_reasoning_intensity=runtime_reasoning_intensity_from_user_config(user_config),
             )
         resolved_thread_id = context.graph_thread_id
         normalizer.emit_run_started({"package_id": package_id, "trace_id": context.trace_id})
@@ -447,6 +451,7 @@ class AgentEvolutionRuntime:
                     "workspace_path": str(package_path),
                     "runtime_attachments": context.runtime_attachments,
                     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY: context.runtime_main_model_profile_id or "",
+                    RUNTIME_REASONING_INTENSITY_KEY: context.runtime_reasoning_intensity,
                     "graph_kind": "evolution",
                     "evolution_context": {
                         "package_id": package_id,

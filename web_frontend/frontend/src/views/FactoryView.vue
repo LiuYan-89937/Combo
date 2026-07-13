@@ -78,7 +78,10 @@
           model-selector-enabled
           :model-options="runtimeMainModelOptions"
           :selected-model-profile-id="selectedMainModelProfileId"
+          reasoning-control-enabled
+          :reasoning-intensity="reasoningIntensity"
           @update:selected-model-profile-id="setSelectedMainModelProfileId"
+          @update:reasoning-intensity="setReasoningIntensity"
           @send="handleSend"
           @cancel="handleCancel"
         />
@@ -117,8 +120,10 @@ const {
   inputDisabled,
   loadRuntimeMainModelProfiles,
   runtimeMainModelOptions,
+  reasoningIntensity,
   selectedMainModelProfileId,
   setSelectedMainModelProfileId,
+  setReasoningIntensity,
   emptyDescription,
   emptyHint,
   applyRouteMode,

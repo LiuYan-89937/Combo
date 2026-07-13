@@ -31,6 +31,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     graph_kind: str
     evolution_context: dict[str, Any]
     runtime_main_model_profile_id: str
+    runtime_reasoning_intensity: int | None
     done: bool
     final_answer: str
     publish_ready: dict[str, Any]

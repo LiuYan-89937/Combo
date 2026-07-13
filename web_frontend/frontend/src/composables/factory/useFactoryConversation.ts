@@ -8,8 +8,10 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
+import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
 
 const MAIN_MODEL_PROFILE_STORAGE_KEY = 'fastagentfactory.runtimeMainModelProfileId'
+const REASONING_INTENSITY_STORAGE_KEY = 'fastagentfactory.runtimeReasoningIntensity'
 
 export function useFactoryConversation() {
   const route = useRoute()
@@ -21,6 +23,7 @@ export function useFactoryConversation() {
   const { t } = useI18n()
   const chatModelProfiles = ref<ModelPoolProfile[]>([])
   const selectedMainModelProfileId = ref(localStorage.getItem(MAIN_MODEL_PROFILE_STORAGE_KEY) || '')
+  const reasoningIntensity = ref<number | null>(loadReasoningIntensity())
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
   const isManufacturingRoute = computed(() => route.name === 'Manufacturing')
@@ -125,7 +128,22 @@ export function useFactoryConversation() {
 
   function runtimeModelOptions() {
     const profileId = selectedMainModelProfileId.value.trim()
-    return profileId ? { mainModelProfileId: profileId } : undefined
+    if (!profileId && reasoningIntensity.value === null) return undefined
+    return {
+      ...(profileId ? { mainModelProfileId: profileId } : {}),
+      ...(reasoningIntensity.value !== null ? { reasoningIntensity: reasoningIntensity.value } : {}),
+    }
+  }
+
+  function setReasoningIntensity(value: number | null) {
+    if (value === null) {
+      reasoningIntensity.value = null
+      localStorage.removeItem(REASONING_INTENSITY_STORAGE_KEY)
+      return
+    }
+    const normalized = Math.max(0, Math.min(REASONING_INTENSITY_MAX, Math.round(value)))
+    reasoningIntensity.value = normalized
+    localStorage.setItem(REASONING_INTENSITY_STORAGE_KEY, String(normalized))
   }
 
   function sendMessage(message: string, attachments: RuntimeAttachmentInput[]): boolean {
@@ -235,10 +253,19 @@ export function useFactoryConversation() {
     handleEvolutionPackageSelect,
     loadRuntimeMainModelProfiles,
     runtimeMainModelOptions,
+    reasoningIntensity,
     selectedMainModelProfileId,
     sendMessage,
     setSelectedMainModelProfileId,
+    setReasoningIntensity,
   }
+}
+
+function loadReasoningIntensity(): number | null {
+  const stored = localStorage.getItem(REASONING_INTENSITY_STORAGE_KEY)
+  if (stored === null) return null
+  const value = Number(stored)
+  return Number.isInteger(value) && value >= 0 && value <= REASONING_INTENSITY_MAX ? value : null
 }
 
 function attachmentViews(attachments: RuntimeAttachmentInput[]): TranscriptAttachmentView[] {

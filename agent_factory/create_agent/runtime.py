@@ -24,7 +24,9 @@ from agent_factory.factory_graph.session import build_factory_checkpointer_handl
 from agent_factory.context_system.token_counter import context_window_payload
 from agent_factory.model_pool.runtime_override import (
     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
+    RUNTIME_REASONING_INTENSITY_KEY,
     main_model_profile_id_from_user_config,
+    runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.runtime_attachments import (
@@ -127,6 +129,7 @@ class CreateAgentRuntime:
         )
         user_input = attachment_result.message
         runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
+        runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
         intent = classify_create_agent_intent(
             user_input=user_input,
             workspace=workspace,
@@ -152,6 +155,7 @@ class CreateAgentRuntime:
                 graph_kind=graph_kind,
                 attachments=attachment_result.attachments,
                 runtime_main_model_profile_id=runtime_main_model_profile_id,
+                runtime_reasoning_intensity=runtime_reasoning_intensity,
                 intent={
                     **intent.model_dump(mode="json"),
                     **({"task_analysis": task_analysis.model_dump(mode="json")} if task_analysis is not None else {}),
@@ -231,6 +235,7 @@ class CreateAgentRuntime:
                 graph_kind=graph_kind,
                 attachments=[],
                 runtime_main_model_profile_id=None,
+                runtime_reasoning_intensity=None,
                 intent=None,
             ),
         )
@@ -246,6 +251,7 @@ class CreateAgentRuntime:
         graph_kind: str,
         attachments: list[dict[str, Any]],
         runtime_main_model_profile_id: str | None,
+        runtime_reasoning_intensity: int | None,
         intent: dict[str, Any] | None,
     ) -> Iterator[tuple[str, Any]]:
         request_id = request_id or uuid4().hex
@@ -399,6 +405,7 @@ class CreateAgentRuntime:
                     "workspace_path": str(workspace.root),
                     "runtime_attachments": attachments,
                     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY: runtime_main_model_profile_id or "",
+                    RUNTIME_REASONING_INTENSITY_KEY: runtime_reasoning_intensity,
                     "iteration": 0,
                     "done": False,
                     "messages": [HumanMessage(content=user_input)],

@@ -66,6 +66,40 @@
           @update:value="handleModelSelect"
         />
 
+        <n-popover v-if="reasoningControlEnabled" trigger="click" placement="top-start">
+          <template #trigger>
+            <n-button
+              text
+              class="reasoning-button"
+              :disabled="disabled"
+              :aria-label="t('chat.reasoningLabel')"
+            >
+              <template #icon>
+                <n-icon><BulbOutline /></n-icon>
+              </template>
+              <span>{{ t('chat.reasoningLabel') }}</span>
+              <n-text depth="3" class="reasoning-value">{{ reasoningLabel }}</n-text>
+            </n-button>
+          </template>
+          <div class="reasoning-popover">
+            <div class="reasoning-popover-header">
+              <span>{{ t('chat.reasoningIntensity') }}</span>
+              <n-button text size="tiny" @click="emit('update:reasoningIntensity', null)">
+                {{ t('chat.reasoningDefault') }}
+              </n-button>
+            </div>
+            <n-slider
+              :value="reasoningSliderValue"
+              :min="REASONING_SLIDER_DEFAULT"
+              :max="REASONING_SLIDER_MAX"
+              :step="1"
+              :marks="reasoningMarks"
+              :disabled="disabled"
+              @update:value="handleReasoningSliderChange"
+            />
+          </div>
+        </n-popover>
+
         <n-button
           v-if="!attachmentsEnabled"
           text
@@ -142,11 +176,12 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { NInput, NButton, NIcon, NText, NPopover, NSelect, useMessage } from 'naive-ui'
-import { AttachOutline, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
+import { NInput, NButton, NIcon, NText, NPopover, NSelect, NSlider, useMessage } from 'naive-ui'
+import { AttachOutline, BulbOutline, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
 import AttachmentPickerModal from './AttachmentPickerModal.vue'
 import { useI18n } from '@/composables/useI18n'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
+import { REASONING_SLIDER_DEFAULT, REASONING_SLIDER_MAX } from '@/utils/reasoning'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 
 const { t } = useI18n()
@@ -163,6 +198,8 @@ const props = withDefaults(
     modelSelectorEnabled?: boolean
     modelOptions?: Array<{ label: string; value: string; disabled?: boolean }>
     selectedModelProfileId?: string | null
+    reasoningControlEnabled?: boolean
+    reasoningIntensity?: number | null
   }>(),
   {
     placeholder: '',
@@ -174,6 +211,8 @@ const props = withDefaults(
     modelSelectorEnabled: false,
     modelOptions: () => [],
     selectedModelProfileId: '',
+    reasoningControlEnabled: false,
+    reasoningIntensity: null,
   }
 )
 
@@ -182,6 +221,7 @@ const emit = defineEmits<{
   cancel: []
   input: [value: string]
   'update:selectedModelProfileId': [value: string]
+  'update:reasoningIntensity': [value: number | null]
 }>()
 
 const inputRef = ref()
@@ -189,6 +229,17 @@ const inputText = ref('')
 const attachments = ref<RuntimeAttachmentInput[]>([])
 const showAttachmentPicker = ref(false)
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
+const reasoningSliderValue = computed(() => props.reasoningIntensity === null ? REASONING_SLIDER_DEFAULT : props.reasoningIntensity + 1)
+const reasoningLabels = computed(() => [
+  t('chat.reasoningDefault'),
+  t('chat.reasoningOff'),
+  t('chat.reasoningLow'),
+  t('chat.reasoningMedium'),
+  t('chat.reasoningHigh'),
+  t('chat.reasoningMaximum'),
+])
+const reasoningLabel = computed(() => reasoningLabels.value[reasoningSliderValue.value] || reasoningLabels.value[0])
+const reasoningMarks = computed(() => Object.fromEntries(reasoningLabels.value.map((label, index) => [index, label])))
 const maxAttachments = MAX_RUNTIME_ATTACHMENTS
 const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length))
 
@@ -243,6 +294,11 @@ function handleCancel() {
 
 function handleModelSelect(value: string) {
   emit('update:selectedModelProfileId', value || '')
+}
+
+function handleReasoningSliderChange(value: number | [number, number]) {
+  const sliderValue = Array.isArray(value) ? value[0] : value
+  emit('update:reasoningIntensity', sliderValue === REASONING_SLIDER_DEFAULT ? null : sliderValue - 1)
 }
 
 function handleAttach(attachment: RuntimeAttachmentInput | RuntimeAttachmentInput[]) {
@@ -424,6 +480,30 @@ defineExpose({
 
 .model-selector {
   width: 180px;
+}
+
+.reasoning-button {
+  gap: var(--app-space-xs);
+  white-space: nowrap;
+}
+
+.reasoning-value {
+  font-size: var(--app-font-sm);
+}
+
+.reasoning-popover {
+  width: 280px;
+  padding: var(--app-space-xs) var(--app-space-sm) var(--app-space-md);
+}
+
+.reasoning-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-lg);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
 }
 
 .character-count {

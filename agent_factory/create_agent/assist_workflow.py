@@ -23,6 +23,7 @@ class CreateAgentAssistState(TypedDict, total=False):
     workspace_path: str
     runtime_attachments: list[dict[str, Any]]
     runtime_main_model_profile_id: str
+    runtime_reasoning_intensity: int | None
     done: bool
     final_answer: str
     tool_rounds: int

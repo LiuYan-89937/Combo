@@ -20,7 +20,10 @@ from agent_factory.runtime_kernel.adapters.model import (
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.models.reasoning import reasoning_content_from_message
-from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
+from agent_factory.model_pool.runtime_override import (
+    resolve_runtime_main_chat_model_from_state,
+    resolve_runtime_reasoning_model,
+)
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
     count_messages_tokens,
@@ -388,8 +391,9 @@ class ModelOperationService:
         if requested_role == "main" and state is not None:
             override = resolve_runtime_main_chat_model_from_state(state)
             if override is not None:
-                return override.model, {
-                    **override.settings.metadata(),
+                model, settings = resolve_runtime_reasoning_model(override.model, override.settings, state)
+                return model, {
+                    **settings.metadata(),
                     "runtime_model_override": True,
                     "runtime_model_override_role": requested_role,
                 }
@@ -400,27 +404,55 @@ class ModelOperationService:
             if item is None:
                 raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
             model, settings = item
-            metadata = settings.metadata() if hasattr(settings, "metadata") else {}
-            return model, {
-                "model": "injected",
-                "requested_model_role": requested_role,
-                **metadata,
-                **({"model_role_fallback": "main"} if requested_role == "task" and metadata.get("model_role") == "main" else {}),
-            }
+            return self._apply_runtime_reasoning(
+                model,
+                settings,
+                state,
+                {
+                    "model": "injected",
+                    "requested_model_role": requested_role,
+                },
+                model_role_fallback=(requested_role == "task" and settings.metadata().get("model_role") == "main"),
+            )
         if self._model is not None:
             if role is not None and role != self.model_role:
                 model, settings = _configured_model_for_role(role)
                 if model is None:
                     raise RuntimeError(f"{role} model is not configured for AgentPackage runtime")
-                return model, {**settings.metadata()}
-            metadata = self._settings.metadata() if hasattr(self._settings, "metadata") else {}
-            return self._model, {"model_role": self.model_role, "model": "injected", **metadata}
+                return self._apply_runtime_reasoning(model, settings, state, {})
+            return self._apply_runtime_reasoning(
+                self._model,
+                self._settings,
+                state,
+                {"model_role": self.model_role, "model": "injected"},
+            )
         model, settings = _configured_model_for_role(requested_role)
         if model is None:
             raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
-        return model, {
-            **settings.metadata(),
+        return self._apply_runtime_reasoning(model, settings, state, {})
+
+    @staticmethod
+    def _apply_runtime_reasoning(
+        model: Any,
+        settings: Any,
+        state: Any | None,
+        metadata: dict[str, Any],
+        *,
+        model_role_fallback: bool = False,
+    ) -> tuple[Any, dict[str, Any]]:
+        if state is not None:
+            if settings is None:
+                _, settings = _configured_model_for_role(self.model_role)
+            if settings is None:
+                raise RuntimeError(f"{self.model_role} model settings are not configured")
+            model, settings = resolve_runtime_reasoning_model(model, settings, state)
+        result = {
+            **metadata,
+            **(settings.metadata() if hasattr(settings, "metadata") else {}),
         }
+        if model_role_fallback:
+            result["model_role_fallback"] = "main"
+        return model, result
 
     def _fallback_model_item_for_role(self, role: ModelRole, *, state: Any | None = None) -> tuple[Any, Any] | None:
         if role != "task":

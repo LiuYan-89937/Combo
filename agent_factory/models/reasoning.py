@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 
@@ -10,6 +11,7 @@ REASONING_CONTENT_BLOCK_TYPES = frozenset(
         "thinking",
     }
 )
+RUNTIME_REASONING_INTENSITY_MAX = 4
 
 
 def is_reasoning_content_block(value: Any) -> bool:
@@ -92,6 +94,65 @@ def coerce_reasoning_content(value: Any) -> str | None:
         parts = [coerce_reasoning_content(item) for item in value]
         return "\n".join(part for part in parts if part)
     return str(value)
+
+
+def apply_reasoning_intensity(settings: Any, intensity: int) -> Any:
+    level = max(0, min(RUNTIME_REASONING_INTENSITY_MAX, int(intensity)))
+    current = getattr(settings, "reasoning", None)
+    if current is None:
+        from agent_factory.models.protocol import ModelReasoningSettings
+
+        current = ModelReasoningSettings()
+    if level == 0:
+        return replace(
+            settings,
+            reasoning=replace(current, enabled=False, effort=None, budget_tokens=None),
+        )
+
+    profile = getattr(settings, "profile", None)
+    capabilities = getattr(profile, "capabilities", None)
+    if capabilities is None or not capabilities.supports_reasoning():
+        raise ValueError("the selected model does not support reasoning")
+
+    efforts = tuple(getattr(capabilities, "reasoning_efforts", ()) or ())
+    effort = _effort_for_intensity(efforts, level)
+    budget_tokens = _budget_for_intensity(settings, efforts, current, level)
+    return replace(
+        settings,
+        reasoning=replace(
+            current,
+            enabled=True,
+            effort=effort,
+            budget_tokens=budget_tokens,
+        ),
+    )
+
+
+def _effort_for_intensity(efforts: tuple[str, ...], level: int) -> str | None:
+    if not efforts or "budget_tokens" in efforts:
+        return None
+    ordered = [
+        item
+        for item in ("low", "medium", "high", "xhigh", "max", "adaptive")
+        if item in efforts
+    ]
+    candidates = ordered or list(efforts)
+    index = min(len(candidates) - 1, ((level * len(candidates)) - 1) // RUNTIME_REASONING_INTENSITY_MAX)
+    return candidates[index]
+
+
+def _budget_for_intensity(
+    settings: Any,
+    efforts: tuple[str, ...],
+    current: Any,
+    level: int,
+) -> int | None:
+    if "budget_tokens" not in efforts:
+        return None
+    ceiling = getattr(current, "budget_tokens", None) or getattr(settings, "max_output_tokens", None)
+    if not isinstance(ceiling, int) or ceiling <= 0:
+        return None
+    return max(1, (ceiling * level) // RUNTIME_REASONING_INTENSITY_MAX)
 
 
 def _mapping_value(value: Any, key: str) -> Any:

@@ -80,6 +80,7 @@ export interface SendMessageOptions {
 
 export interface RuntimeMainModelOptions {
   mainModelProfileId?: string | null
+  reasoningIntensity?: number | null
   userConfig?: Record<string, unknown> | null
 }
 
@@ -171,13 +172,14 @@ export function runAgentEvolutionCommand(
 
 function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: RuntimeMainModelOptions): Record<string, unknown> {
   const profileId = String(runtimeOptions?.mainModelProfileId || '').trim()
+  const reasoningIntensity = runtimeOptions?.reasoningIntensity
   const payloadUserConfig = payload.user_config && typeof payload.user_config === 'object'
     ? payload.user_config as Record<string, unknown>
     : null
   const extraUserConfig = runtimeOptions?.userConfig && typeof runtimeOptions.userConfig === 'object'
     ? runtimeOptions.userConfig
     : null
-  if (!profileId && !extraUserConfig && !payloadUserConfig) return payload
+  if (!profileId && reasoningIntensity == null && !extraUserConfig && !payloadUserConfig) return payload
   return {
     ...payload,
     user_config: {
@@ -192,6 +194,9 @@ function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: Runti
               main: profileId,
             },
           }
+        : {}),
+      ...(typeof reasoningIntensity === 'number'
+        ? { reasoning_intensity: reasoningIntensity }
         : {}),
     },
   }
