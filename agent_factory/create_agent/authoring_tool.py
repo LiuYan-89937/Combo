@@ -135,12 +135,13 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "contract_key": {"type": "string", "enum": sorted(RESETTABLE_CONTRACT_KEYS)},
                 "bindings": {
                     "type": "object",
-                    "description": "Model pool profile bindings keyed by runtime role. Only profile ids and selection metadata are allowed.",
+                    "description": "Model bindings keyed by runtime role. Use source=model_pool with profile_id or source=env without a profile_id.",
                     "properties": {
                         role: {
                             "type": "object",
                             "properties": {
                                 "profile_id": {"type": "string"},
+                                "source": {"type": "string", "enum": ["model_pool", "env"]},
                                 "selection_source": {"type": "string", "enum": ["auto", "manual"]},
                                 "reason": {"type": "string"},
                                 "required_capabilities": {"type": "object", "additionalProperties": True},
@@ -171,7 +172,6 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                                     "additionalProperties": False,
                                 },
                             },
-                            "required": ["profile_id"],
                             "additionalProperties": False,
                         }
                         for role in ["main", "task", "compression"]
@@ -185,6 +185,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                         "type": "object",
                         "properties": {
                             "profile_id": {"type": "string"},
+                            "source": {"type": "string", "enum": ["model_pool", "env"]},
                             "capability": {
                                 "type": "string",
                                 "enum": ["image_input", "image_output", "image_edit", "audio_input", "audio_output"],
@@ -220,7 +221,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                                 "additionalProperties": False,
                             },
                         },
-                        "required": ["profile_id", "capability"],
+                        "required": ["capability"],
                         "additionalProperties": False,
                     },
                 },

@@ -36,6 +36,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "tool_id": str(runtime_tool.get("tool_id") or ""),
             "model": str(runtime_tool.get("model_name") or ""),
             "provider": str(runtime_tool.get("provider") or ""),
+            "model_source": str(runtime_tool.get("model_source") or ""),
         },
     }
     summary = content[:240] if content else f"{capability} model tool completed."
@@ -74,6 +75,7 @@ def _run_image_generation_tool(arguments: dict[str, Any], runtime_tool: dict[str
             "tool_id": str(runtime_tool.get("tool_id") or ""),
             "model": str(runtime_tool.get("model_name") or ""),
             "provider": str(runtime_tool.get("provider") or ""),
+            "model_source": str(runtime_tool.get("model_source") or ""),
         },
     }
     summary = f"Generated {len(assets)} image asset{'s' if len(assets) != 1 else ''}."

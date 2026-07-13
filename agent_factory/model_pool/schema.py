@@ -18,6 +18,7 @@ from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutp
 
 ModelPoolProfileKind = Literal["chat", "image_generation"]
 ModelBindingRole = Literal["main", "task", "compression"]
+ModelBindingSource = Literal["model_pool", "env"]
 ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input", "audio_output"]
 ModelSelectionSource = Literal["auto", "manual"]
@@ -454,7 +455,8 @@ class ModelBindingRuntimeOverrides(BaseModel):
 class ModelProfileBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    profile_id: str
+    profile_id: str | None = None
+    source: ModelBindingSource = "model_pool"
     selection_source: ModelSelectionSource = "auto"
     reason: str = ""
     required_capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -462,14 +464,23 @@ class ModelProfileBinding(BaseModel):
 
     @field_validator("profile_id")
     @classmethod
-    def _profile_id(cls, value: str) -> str:
-        return validate_pool_id(value, field_name="profile_id")
+    def _profile_id(cls, value: str | None) -> str | None:
+        return validate_pool_id(value, field_name="profile_id") if value is not None else None
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "ModelProfileBinding":
+        if self.source == "model_pool" and not self.profile_id:
+            raise ValueError("profile_id is required for model_pool bindings")
+        if self.source == "env" and self.profile_id:
+            raise ValueError("profile_id must be omitted for env bindings")
+        return self
 
 
 class ModelToolBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    profile_id: str
+    profile_id: str | None = None
+    source: ModelBindingSource = "model_pool"
     capability: ModelToolCapability
     selection_source: ModelSelectionSource = "auto"
     reason: str = ""
@@ -479,8 +490,16 @@ class ModelToolBinding(BaseModel):
 
     @field_validator("profile_id")
     @classmethod
-    def _profile_id(cls, value: str) -> str:
-        return validate_pool_id(value, field_name="profile_id")
+    def _profile_id(cls, value: str | None) -> str | None:
+        return validate_pool_id(value, field_name="profile_id") if value is not None else None
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "ModelToolBinding":
+        if self.source == "model_pool" and not self.profile_id:
+            raise ValueError("profile_id is required for model_pool bindings")
+        if self.source == "env" and self.profile_id:
+            raise ValueError("profile_id must be omitted for env bindings")
+        return self
 
     @field_validator("description")
     @classmethod

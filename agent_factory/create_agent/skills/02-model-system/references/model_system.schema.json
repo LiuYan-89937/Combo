@@ -140,6 +140,15 @@
               "title": "Profile Id",
               "type": "string"
             },
+            "source": {
+              "default": "model_pool",
+              "enum": [
+                "model_pool",
+                "env"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
             "selection_source": {
               "default": "auto",
               "enum": [
@@ -163,9 +172,6 @@
               "$ref": "#/$defs/ModelBindingRuntimeOverrides"
             }
           },
-          "required": [
-            "profile_id"
-          ],
           "title": "ModelProfileBinding",
           "type": "object"
         },
@@ -242,6 +248,15 @@
               "title": "Profile Id",
               "type": "string"
             },
+            "source": {
+              "default": "model_pool",
+              "enum": [
+                "model_pool",
+                "env"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
             "capability": {
               "enum": [
                 "image_input",
@@ -282,7 +297,6 @@
             }
           },
           "required": [
-            "profile_id",
             "capability"
           ],
           "title": "ModelToolBinding",

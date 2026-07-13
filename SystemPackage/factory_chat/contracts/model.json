@@ -5,9 +5,8 @@
   "config": {
     "bindings": {
       "main": {
-        "profile_id": "deepseek-v4-pro",
-        "selection_source": "manual",
-        "reason": "System chat default main model.",
+        "source": "env",
+        "reason": "Use the host environment main chat model by default.",
         "required_capabilities": {
           "input_modalities": [
             "text"
@@ -26,10 +25,9 @@
     },
     "tool_bindings": {
       "generate_image": {
-        "profile_id": "wan2.7-image",
+        "source": "env",
         "capability": "image_output",
-        "selection_source": "manual",
-        "reason": "Enable Wanx text-to-image generation for system chat.",
+        "reason": "Use the host environment image model when configured.",
         "required_capabilities": {
           "output_modalities": [
             "image"

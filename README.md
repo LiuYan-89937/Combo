@@ -85,6 +85,13 @@ AGENTFACTORY_COMPRESSION_MODEL_BASE_URL=
 AGENTFACTORY_COMPRESSION_MODEL_API_KEY=
 AGENTFACTORY_COMPRESSION_MODEL=
 
+# Optional image model used by the built-in factory_chat package.
+AGENTFACTORY_IMAGE_MODEL_PROVIDER=
+AGENTFACTORY_IMAGE_MODEL_BASE_URL=
+AGENTFACTORY_IMAGE_MODEL_API_KEY=
+AGENTFACTORY_IMAGE_MODEL=
+AGENTFACTORY_IMAGE_MODEL_TIMEOUT_SECONDS=
+
 AGENTFACTORY_EMBEDDING_PROVIDER=openai_compatible
 AGENTFACTORY_EMBEDDING_BASE_URL=
 AGENTFACTORY_EMBEDDING_API_KEY=
@@ -98,6 +105,7 @@ AGENTFACTORY_EMBEDDING_DIMS=
 - 主模型用于闲聊、制造、进化和普通 Agent 对话。
 - 任务模型用于结构化输出、分类、抽取、意图分析等辅助任务；未单独配置时会回退到主模型。
 - 压缩模型用于上下文压缩。
+- `factory_chat` 的对话模型默认读取主模型 env 配置；生图模型读取独立的 image model env 配置。未配置生图模型时，不影响普通对话。
 - embedding 模型用于知识库、RAG、长期记忆和 Agent 检索。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 用于加密 Agent 的运行时资源配置；请使用稳定的长随机值，丢失后无法解密已保存的资源。
 - `.env` 是本地私有配置，不要提交到 git。

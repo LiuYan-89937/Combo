@@ -6,7 +6,9 @@ from agent_factory.model_pool.config import (
 from agent_factory.model_pool.resolver import (
     ResolvedChatModelProfile,
     ResolvedImageGenerationProfile,
+    resolve_chat_model_binding,
     resolve_chat_model_profile,
+    resolve_image_generation_binding,
     resolve_image_generation_model_profile,
 )
 from agent_factory.model_pool.schema import (
@@ -17,6 +19,7 @@ from agent_factory.model_pool.schema import (
     ModelPoolPricing,
     ModelPoolProfile,
     ModelPoolProfilePublic,
+    ModelBindingSource,
     ModelSelectionRecommendation,
     ModelSelectionRequest,
     ModelSelectionRequirement,
@@ -39,6 +42,7 @@ __all__ = [
     "ModelPoolPricing",
     "ModelPoolProfile",
     "ModelPoolProfilePublic",
+    "ModelBindingSource",
     "ModelPoolSelector",
     "ModelPoolStore",
     "ModelSelectionRecommendation",
@@ -54,6 +58,8 @@ __all__ = [
     "default_model_pool_store_path",
     "list_model_pool_provider_profiles",
     "resolve_chat_model_profile",
+    "resolve_chat_model_binding",
+    "resolve_image_generation_binding",
     "resolve_image_generation_model_profile",
     "resolve_model_pool_store_path",
     "record_model_usage_frontend_event",

@@ -54,14 +54,16 @@ export interface AgentPackageInstanceView {
 export interface AgentPackageModelContractView {
   version: string
   bindings: Record<string, {
-    profile_id: string
+    profile_id?: string
+    source?: 'model_pool' | 'env' | string
     selection_source?: string
     reason?: string
     required_capabilities?: Record<string, any>
     overrides?: Record<string, any>
   }>
   tool_bindings?: Record<string, {
-    profile_id: string
+    profile_id?: string
+    source?: 'model_pool' | 'env' | string
     capability?: string
     selection_source?: string
     reason?: string

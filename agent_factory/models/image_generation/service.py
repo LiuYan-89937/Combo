@@ -40,6 +40,7 @@ class ImageGenerationService:
                     "provider": self.settings.provider,
                     "model": self.settings.model,
                     "profile_id": self.settings.profile_id,
+                    "model_source": self.settings.source,
                     "prompt": request.prompt,
                     "operation": request.operation,
                     "input_attachment_ids": [

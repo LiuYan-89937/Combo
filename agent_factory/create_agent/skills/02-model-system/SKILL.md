@@ -38,8 +38,8 @@ Guides model and dependency contract changes for produced agents.
 8. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
-- `contracts/model.json` uses `model_contract.v1`. New user AgentPackages must bind models from the local model pool.
-- Store only `profile_id`, `selection_source`, `reason`, `required_capabilities`, and safe per-package overrides in `contracts/model.json`.
+- `contracts/model.json` uses `model_contract.v1`. New user AgentPackages should bind models from the local model pool; use `source: "env"` only when the package is explicitly designed to consume the host environment defaults.
+- For `source: "model_pool"`, store `profile_id`, `selection_source`, `reason`, `required_capabilities`, and safe per-package overrides. For `source: "env"`, omit `profile_id` and let the runtime resolve the role from env configuration.
 - Put auxiliary model tools in `config.tool_bindings` in the same `contracts/model.json`. They are system model tools exposed by runtime, not package tool source files.
 - In the authoring call, `tool_bindings` is a top-level argument beside `bindings`; never nest it inside `bindings`.
 - For `plan_and_execute`, auxiliary model tools are available to the executor through system tool exposure; the planner should not call business or model tools directly.

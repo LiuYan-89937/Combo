@@ -1566,6 +1566,7 @@ def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
             continue
         public_bindings[str(role)] = {
             "profile_id": str(binding.get("profile_id") or ""),
+            "source": str(binding.get("source") or "model_pool"),
             "selection_source": str(binding.get("selection_source") or ""),
             "reason": str(binding.get("reason") or ""),
             "required_capabilities": binding.get("required_capabilities") if isinstance(binding.get("required_capabilities"), dict) else {},
@@ -1577,6 +1578,7 @@ def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
             continue
         public_tool_bindings[str(tool_id)] = {
             "profile_id": str(binding.get("profile_id") or ""),
+            "source": str(binding.get("source") or "model_pool"),
             "capability": str(binding.get("capability") or ""),
             "selection_source": str(binding.get("selection_source") or ""),
             "reason": str(binding.get("reason") or ""),
