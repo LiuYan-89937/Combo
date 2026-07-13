@@ -5,6 +5,16 @@
   "config": {
     "builtin_tools_enabled": true,
     "builtin_tool_ids": [
+      "read",
+      "write",
+      "edit",
+      "multi_edit",
+      "glob",
+      "grep",
+      "ls",
+      "bash",
+      "bash_status",
+      "bash_stop",
       "knowledge",
       "scheduler",
       "skillhub"
