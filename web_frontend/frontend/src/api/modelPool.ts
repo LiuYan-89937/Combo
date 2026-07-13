@@ -147,6 +147,11 @@ export const modelPoolApi = {
     requestJson<{ deleted: boolean }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
       method: 'DELETE',
     }),
+  pingProfile: (profileId: string) =>
+    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview: string }>(
+      `/api/model-pool/profiles/${encodeURIComponent(profileId)}/ping`,
+      { method: 'POST' },
+    ),
   usage: (params: { groupBy?: ModelUsageGroupBy; days?: number } = {}) =>
     requestJson<ModelUsageSummary>(
       withQuery('/api/model-pool/usage', {

@@ -53,6 +53,17 @@
                 <template #action>
                   <n-space>
                     <n-switch :value="profile.enabled" @update:value="(value) => setProfileEnabled(profile, value)" />
+                    <n-button
+                      v-if="profile.kind === 'chat'"
+                      size="small"
+                      :loading="testingProfileId === profile.profile_id"
+                      @click="pingProfile(profile)"
+                    >
+                      <template #icon>
+                        <n-icon><Pulse /></n-icon>
+                      </template>
+                      {{ t('modelPool.testConnection') }}
+                    </n-button>
                     <n-button size="small" @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
                     <n-button size="small" tertiary type="error" @click="confirmDeleteProfile(profile)">
                       {{ t('common.delete') }}
@@ -328,7 +339,7 @@ import {
   useMessage,
   type DataTableColumns,
 } from 'naive-ui'
-import { Add, Refresh } from '@/components/icons'
+import { Add, Pulse, Refresh } from '@/components/icons'
 import {
   modelPoolApi,
   type ModelPoolCredential,
@@ -348,6 +359,7 @@ const dialog = useDialog()
 
 const loading = ref(false)
 const saving = ref(false)
+const testingProfileId = ref<string | null>(null)
 const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
@@ -674,6 +686,18 @@ async function setProfileEnabled(item: ModelPoolProfile, enabled: boolean): Prom
     await refresh()
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+  }
+}
+
+async function pingProfile(profile: ModelPoolProfile): Promise<void> {
+  testingProfileId.value = profile.profile_id
+  try {
+    const result = await modelPoolApi.pingProfile(profile.profile_id)
+    message.success(t('modelPool.connectionSucceeded', { latency: result.latency_ms }))
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+  } finally {
+    testingProfileId.value = null
   }
 }
 

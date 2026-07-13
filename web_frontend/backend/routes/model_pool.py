@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from langchain_core.messages import HumanMessage
 
 from agent_factory.model_pool import (
     ModelPoolCredential,
@@ -15,6 +18,8 @@ from agent_factory.model_pool import (
     ModelSelectionRequest,
     list_model_pool_provider_profiles,
 )
+from agent_factory.model_pool.resolver import resolve_chat_model_profile
+from agent_factory.model_pool.schema import ModelProfileBinding
 from agent_factory.model_pool.store import ModelPoolStoreError
 
 
@@ -100,6 +105,18 @@ def create_model_pool_router() -> APIRouter:
     async def delete_profile(profile_id: str):
         return {"deleted": ModelPoolStore().delete_profile(profile_id)}
 
+    @router.post("/profiles/{profile_id}/ping")
+    async def ping_profile(profile_id: str):
+        store = ModelPoolStore()
+        try:
+            profile = store.require_profile(profile_id)
+            if profile.kind != "chat":
+                raise ValueError("connection testing currently supports chat model profiles only")
+            result = await asyncio.to_thread(_ping_chat_profile, profile_id, store)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=_probe_error_detail(exc)) from exc
+        return result
+
     @router.post("/profiles/delete")
     async def delete_profiles(payload: dict[str, Any]):
         ids = [str(item).strip() for item in payload.get("profile_ids", []) if str(item).strip()]
@@ -147,6 +164,38 @@ def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> 
 def _http_error(exc: Exception) -> HTTPException:
     status = 404 if isinstance(exc, ModelPoolStoreError) and str(exc).startswith("unknown ") else 400
     return HTTPException(status_code=status, detail=f"{type(exc).__name__}: {exc}")
+
+
+def _ping_chat_profile(profile_id: str, store: ModelPoolStore) -> dict[str, Any]:
+    resolved = resolve_chat_model_profile(
+        ModelProfileBinding(profile_id=profile_id, selection_source="manual", reason="model pool connection test"),
+        role="connection_test",
+        store=store,
+    )
+    started_at = perf_counter()
+    response = resolved.model.invoke([HumanMessage(content="HelloWorld")])
+    latency_ms = round((perf_counter() - started_at) * 1000)
+    content = _response_text(response)
+    return {
+        "status": "ok",
+        "profile_id": profile_id,
+        "latency_ms": latency_ms,
+        "response_preview": content[:500],
+    }
+
+
+def _response_text(response: Any) -> str:
+    content = getattr(response, "content", response)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(item.get("text") or "") if isinstance(item, dict) else str(item) for item in content)
+    return str(content)
+
+
+def _probe_error_detail(exc: Exception) -> str:
+    message = f"{type(exc).__name__}: {exc}"
+    return re.sub(r"(?i)(api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", message)
 
 
 def _slug(value: str) -> str:
