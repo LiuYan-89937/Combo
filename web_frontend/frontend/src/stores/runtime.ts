@@ -10,6 +10,7 @@ import type {
   FactoryMode,
   RuntimeViewState,
   ActiveRequestView,
+  ChatMessagePart,
   ConversationScopeState,
   ConversationTurn,
   ModelStream,
@@ -249,6 +250,13 @@ export const useRuntimeStore = defineStore('runtime', {
       }
 
       // 3. Request-scoped 事件过滤
+      if (
+        event.request_id
+        && isRequestScopedEvent(event.event_type)
+        && this.activeRequests[event.request_id]?.payload?.stop_requested_at
+      ) {
+        return
+      }
       const isRequestScoped = isRequestScopedEvent(event.event_type)
       const requestScope = isRequestScoped ? this._resolveRequestScopeForEvent(event) : null
       if (requestScope && requestScope !== this.activeConversationScope) {
@@ -1237,6 +1245,7 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!turn?.requestId) return
       if (turn.status !== 'running' && turn.status !== 'interrupted') return
       const existing = this.activeRequests[turn.requestId]
+      if (turn.status === 'running' && existing?.status !== 'running') return
       this.activeRequestId = turn.requestId
       this.runStatus = turn.status
       this.currentRunId = existing?.runId || null
@@ -1348,8 +1357,8 @@ export const useRuntimeStore = defineStore('runtime', {
       const timestamp = new Date().toISOString()
       const request = this.activeRequests[targetRequestId]
       if (request) {
-        request.status = 'running'
-        request.completedAt = null
+        request.status = 'stopped'
+        request.completedAt = timestamp
         request.payload = {
           ...(request.payload || {}),
           stop_requested_at: timestamp,
@@ -1367,10 +1376,23 @@ export const useRuntimeStore = defineStore('runtime', {
         ...(turn.metadata || {}),
         stop_requested_at: timestamp,
       }
-      turn.status = 'running'
-      turn.completedAt = null
-      this.activeRequestId = targetRequestId
-      this.runStatus = 'running'
+      turn.status = 'stopped'
+      turn.completedAt = timestamp
+      turn.errorMessage = null
+      turn.assistantMessages.forEach((message) => {
+        message.status = 'stopped'
+        message.parts = message.parts.map((part) => (
+          part.status === 'streaming'
+            ? { ...part, status: 'completed', updatedAt: timestamp } as ChatMessagePart
+            : part
+        ))
+      })
+      if (this.activeRequestId === targetRequestId) {
+        this.activeRequestId = null
+      }
+      this.runStatus = 'stopped'
+      this.pendingInterrupt = null
+      this._saveActiveConversationScope()
     },
 
     clearCreateAgentPublishReady() {

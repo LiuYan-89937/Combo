@@ -39,13 +39,23 @@ export function useRuntimeCommands() {
     runtimeOptions?: commands.RuntimeMainModelOptions,
     displayUserInput?: string | null,
   ) => {
-    const command = commands.sendMessageCommand({ message, mode, attachments, runtimeOptions, displayUserInput })
+    const command = commands.sendMessageCommand({
+      message,
+      sessionId: runtimeStore.activeFactorySessionId,
+      mode,
+      attachments,
+      runtimeOptions,
+      displayUserInput,
+    })
     transport.sendRuntimeCommand(command)
     return command
   }
 
   function sendInterruptDecision(payload: commands.ResumeInterruptOptions) {
-    const command = commands.resumeInterruptCommand(withPendingInterruptContext(runtimeStore, payload))
+    const command = commands.resumeInterruptCommand(
+      withPendingInterruptContext(runtimeStore, payload),
+      runtimeStore.activeAgentSessionId || runtimeStore.activeFactorySessionId,
+    )
     transport.sendRuntimeCommand(command)
     return command
   }
@@ -81,14 +91,12 @@ export function useRuntimeCommands() {
   }
 
   const answerInterrupt = (message: string) => {
-    const command = commands.resumeInterruptCommand(withPendingInterruptContext(runtimeStore, {
+    return sendInterruptDecision({
       action: 'answer',
       input_text: message,
       answer: message,
       message,
-    }))
-    transport.sendRuntimeCommand(command)
-    return command
+    })
   }
 
   const cancelRequest = (
@@ -96,7 +104,24 @@ export function useRuntimeCommands() {
     targetRequestId: string | null = null,
     visibleOutput: Record<string, any> | null = null,
   ) => {
-    transport.sendRuntimeCommand(commands.cancelRuntimeRequestCommand(reason, targetRequestId, visibleOutput))
+    const activeRequest = targetRequestId ? runtimeStore.activeRequests[targetRequestId] : null
+    const mode = activeRequest?.mode || runtimeStore.currentMode
+    const sessionId = String(
+      activeRequest?.payload?.session_id
+      || (mode === 'agent_package' ? runtimeStore.activeAgentSessionId : runtimeStore.activeFactorySessionId)
+      || '',
+    ).trim() || null
+    const packageId = String(activeRequest?.payload?.package_id || '').trim() || null
+    const command = commands.cancelRuntimeRequestCommand({
+      reason,
+      targetRequestId,
+      sessionId,
+      mode,
+      packageId,
+      visibleOutput,
+    })
+    transport.sendRuntimeCommand(command)
+    return command
   }
 
   return {

@@ -112,6 +112,7 @@ class RuntimeBridge:
         if self.adapter is None:
             raise RuntimeError("Runtime service not started")
 
+        command = self._resolve_cancel_command(command)
         if _is_long_running_command(command):
             self._start_background(command)
             return
@@ -173,18 +174,41 @@ class RuntimeBridge:
     def _start_background(self, command: FactoryFrontendCommand) -> None:
         request_id = command.request_id or f"{command.type}-{id(command)}"
         with self._background_lock:
-            self._active_requests[request_id] = _active_request_from_command(command, request_id)
+            session_id = _command_session_id(command)
+            predecessors = [
+                thread
+                for active_request_id, thread in self._background_threads.items()
+                if active_request_id != request_id
+                and session_id
+                and _active_request_session_id(self._active_requests.get(active_request_id)) == session_id
+                and not bool(self._active_requests.get(active_request_id, {}).get("background"))
+            ]
+            request = _active_request_from_command(command, request_id)
+            request["payload"]["dispatch_state"] = "queued" if predecessors else "running"
+            self._active_requests[request_id] = request
             thread = threading.Thread(
                 target=self._run_background_command,
-                args=(command, request_id),
+                args=(command, request_id, predecessors),
                 name=f"factory-runtime-command-{request_id}",
                 daemon=True,
             )
             self._background_threads[request_id] = thread
             thread.start()
 
-    def _run_background_command(self, command: FactoryFrontendCommand, request_id: str) -> None:
+    def _run_background_command(
+        self,
+        command: FactoryFrontendCommand,
+        request_id: str,
+        predecessors: list[threading.Thread],
+    ) -> None:
         try:
+            for predecessor in predecessors:
+                predecessor.join()
+            with self._background_lock:
+                active_request = self._active_requests.get(request_id)
+                if active_request is None or active_request.get("payload", {}).get("cancel_requested_at"):
+                    return
+                active_request["payload"]["dispatch_state"] = "running"
             self._handle_command(command)
         except Exception as exc:
             logger.exception("Runtime command failed in background: %s", command.type)
@@ -199,6 +223,37 @@ class RuntimeBridge:
             with self._background_lock:
                 self._background_threads.pop(request_id, None)
                 self._active_requests.pop(request_id, None)
+
+    def _resolve_cancel_command(self, command: FactoryFrontendCommand) -> FactoryFrontendCommand:
+        if command.type != "cancel_runtime_request":
+            return command
+        payload = dict(command.payload or {})
+        requested_target = str(payload.get("target_request_id") or "").strip()
+        session_id = _command_session_id(command)
+        resolved_target = ""
+        with self._background_lock:
+            if requested_target and requested_target in self._active_requests:
+                resolved_target = requested_target
+            else:
+                candidates = [
+                    request
+                    for request in self._active_requests.values()
+                    if not bool(request.get("background"))
+                    and session_id
+                    and _active_request_session_id(request) == session_id
+                ]
+                if candidates:
+                    active_request = max(candidates, key=lambda item: str(item.get("startedAt") or ""))
+                    resolved_target = str(active_request.get("requestId") or "").strip()
+            if resolved_target and resolved_target in self._active_requests:
+                active_payload = self._active_requests[resolved_target].setdefault("payload", {})
+                active_payload["cancel_requested_at"] = datetime.now(UTC).isoformat()
+        if not resolved_target:
+            return command
+        if requested_target and requested_target != resolved_target:
+            payload["requested_target_request_id"] = requested_target
+        payload["target_request_id"] = resolved_target
+        return command.model_copy(update={"payload": payload})
 
     def _handle_command(self, command: FactoryFrontendCommand) -> None:
         adapter = self.adapter
@@ -260,7 +315,11 @@ class RuntimeBridge:
 
     def _active_request_payloads(self) -> list[dict[str, Any]]:
         with self._background_lock:
-            return [dict(item) for item in self._active_requests.values()]
+            return [
+                dict(item)
+                for item in self._active_requests.values()
+                if not item.get("payload", {}).get("cancel_requested_at")
+            ]
 
     def _observe_runtime_event(self, event_payload: dict[str, Any]) -> None:
         request_id = str(event_payload.get("request_id") or "").strip()
@@ -312,6 +371,17 @@ def _active_request_from_command(command: FactoryFrontendCommand, request_id: st
         "completedAt": None,
         "payload": payload,
     }
+
+
+def _command_session_id(command: FactoryFrontendCommand) -> str:
+    return str(command.session_id or command.payload.get("session_id") or "").strip()
+
+
+def _active_request_session_id(request: dict[str, Any] | None) -> str:
+    if not request:
+        return ""
+    payload = request.get("payload") if isinstance(request.get("payload"), dict) else {}
+    return str(request.get("sessionId") or payload.get("session_id") or "").strip()
 
 
 def _active_request_from_event(event_payload: dict[str, Any], request_id: str) -> dict[str, Any]:

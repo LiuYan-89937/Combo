@@ -642,12 +642,17 @@ class RuntimeAgentPackageCommandMixin:
         if self.pending_create_agent_run is not None:
             cancelled += 1
             self.pending_create_agent_run = None
+        session_turn_stopped = self._finish_cancelled_session_turn(
+            command,
+            target_request_id=target_request_id,
+            visible_output=visible_output,
+        )
         self.emit(
             event(
                 "debug_patch",
                 request_id=command.request_id,
-                session_id=self._session_id(),
-                mode=self.mode,
+                session_id=command.session_id or self._session_id(),
+                mode=command.mode or self.mode,
                 graph_id="factory_runtime",
                 producer_type="factory_runtime",
                 payload={
@@ -655,9 +660,72 @@ class RuntimeAgentPackageCommandMixin:
                     "reason": reason,
                     "target_request_id": target_request_id,
                     "cancelled_requests": cancelled,
+                    "session_turn_stopped": session_turn_stopped,
                 },
             )
         )
+
+    def _finish_cancelled_session_turn(
+        self,
+        command: FactoryFrontendCommand,
+        *,
+        target_request_id: str | None,
+        visible_output: dict[str, Any] | None,
+    ) -> bool:
+        if not target_request_id:
+            return False
+        session_id = str(command.session_id or self._session_id() or "").strip()
+        mode = command.mode or self.mode
+        final_answer = str((visible_output or {}).get("content") or "").strip() or None
+        reasoning_content = str((visible_output or {}).get("reasoning_content") or "").strip() or None
+        if mode == "agent_package":
+            package_id = str(command.payload.get("package_id") or "").strip()
+            if not package_id or not session_id or self.agent_package_runtime is None:
+                return False
+            session = self.agent_package_runtime.load_session(package_id, session_id)
+            if not _session_payload_has_request(session, target_request_id):
+                return False
+            self.agent_package_runtime.finish_session_turn(
+                package_id,
+                session_id=session_id,
+                request_id=target_request_id,
+                final_answer=final_answer,
+                reasoning_content=reasoning_content,
+                status="stopped",
+            )
+            return True
+        if mode not in {"chat", "create_agent", "evolve_agent"} or not session_id:
+            return False
+        current_record = self.session_manager.load(session_id)
+        if not _factory_record_has_request(current_record, mode, target_request_id):
+            return False
+        record = self.session_manager.finish_turn(
+            session_id,
+            mode,
+            request_id=target_request_id,
+            final_answer=final_answer,
+            reasoning_content=reasoning_content,
+            status="stopped",
+        )
+        if self.session_record is not None and self.session_record.session_id == session_id:
+            self.session_record = record
+        if mode != "chat" or self.agent_package_runtime is None:
+            return True
+        agent_session_id = str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
+        if not agent_session_id:
+            return True
+        agent_session = self.agent_package_runtime.load_session(SYSTEM_CHAT_PACKAGE_ID, agent_session_id)
+        if not _session_payload_has_request(agent_session, target_request_id):
+            return True
+        self.agent_package_runtime.finish_session_turn(
+            SYSTEM_CHAT_PACKAGE_ID,
+            session_id=agent_session_id,
+            request_id=target_request_id,
+            final_answer=final_answer,
+            reasoning_content=reasoning_content,
+            status="stopped",
+        )
+        return True
 
     def _consume_agent_package_stream(
         self,
@@ -1083,6 +1151,24 @@ class RuntimeAgentPackageCommandMixin:
             reasoning_content=reasoning_content,
             status=status,
         )
+
+
+def _factory_record_has_request(record: Any, mode: str, request_id: str) -> bool:
+    turns_by_mode = {
+        "chat": getattr(record, "chat_turns", ()),
+        "create_agent": getattr(record, "create_agent_turns", ()),
+        "evolve_agent": getattr(record, "evolve_agent_turns", ()),
+    }
+    return any(str(getattr(turn, "request_id", "") or "").strip() == request_id for turn in turns_by_mode.get(mode, ()))
+
+
+def _session_payload_has_request(session: dict[str, Any], request_id: str) -> bool:
+    turns = session.get("turns") if isinstance(session.get("turns"), list) else []
+    return any(
+        str(turn.get("request_id") or "").strip() == request_id
+        for turn in turns
+        if isinstance(turn, dict)
+    )
 
 
 def _frontend_scoped_agent_event(

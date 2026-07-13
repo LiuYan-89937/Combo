@@ -1,6 +1,7 @@
 import * as commands from '@/api/commands'
 import { agentPackagesApi } from '@/api/agentPackages'
 import { useAgentStore, type AgentPackageView } from '@/stores/agent'
+import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
@@ -8,6 +9,7 @@ import { useCommandTransport } from './transport'
 
 export function useAgentPackageCommands() {
   const agentStore = useAgentStore()
+  const runtimeStore = useRuntimeStore()
   const uiStore = useUiStore()
   const transport = useCommandTransport()
   const { t } = useI18n()
@@ -135,7 +137,13 @@ export function useAgentPackageCommands() {
     attachments?: RuntimeAttachmentInput[],
     runtimeOptions?: commands.RuntimeMainModelOptions,
   ) => {
-    const command = commands.runAgentEvolutionCommand(packageId, message, attachments, runtimeOptions)
+    const command = commands.runAgentEvolutionCommand(
+      packageId,
+      message,
+      attachments,
+      runtimeOptions,
+      runtimeStore.activeFactorySessionId,
+    )
     transport.sendRuntimeCommand(command)
     return command
   }

@@ -72,6 +72,7 @@ export function setModeCommand(mode: FactoryMode): FactoryFrontendCommand {
 
 export interface SendMessageOptions {
   message: string
+  sessionId?: string | null
   mode?: FactoryMode
   attachments?: RuntimeAttachmentInput[]
   runtimeOptions?: RuntimeMainModelOptions
@@ -88,6 +89,7 @@ export function sendMessageCommand(options: SendMessageOptions): FactoryFrontend
   const requestId = generateRequestId()
   return createCommand('send_message', {
     request_id: requestId,
+    session_id: options.sessionId,
     mode: options.mode,
     message: options.message,
     payload: runtimePayload(
@@ -113,6 +115,7 @@ export function runAgentPackageCommand(
   const requestId = generateRequestId()
   return createCommand('run_agent_package', {
     request_id: requestId,
+    session_id: sessionId,
     payload: runtimePayload(
       {
         package_id: packageId,
@@ -137,6 +140,7 @@ export function sendAgentPackageMessageCommand(
   const requestId = generateRequestId()
   return createCommand('send_agent_package_message', {
     request_id: requestId,
+    session_id: sessionId,
     payload: runtimePayload(
       {
         package_id: packageId,
@@ -154,11 +158,13 @@ export function runAgentEvolutionCommand(
   packageId: string,
   message: string,
   attachments?: RuntimeAttachmentInput[],
-  runtimeOptions?: RuntimeMainModelOptions
+  runtimeOptions?: RuntimeMainModelOptions,
+  sessionId?: string | null,
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_evolution', {
     request_id: requestId,
+    session_id: sessionId,
     payload: runtimePayload(
       {
         package_id: packageId,
@@ -215,24 +221,38 @@ export interface ResumeInterruptOptions {
   [key: string]: any
 }
 
-export function resumeInterruptCommand(options: ResumeInterruptOptions): FactoryFrontendCommand {
+export function resumeInterruptCommand(
+  options: ResumeInterruptOptions,
+  sessionId?: string | null,
+): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('resume_interrupt', {
     request_id: requestId,
+    session_id: sessionId,
     payload: options,
   })
 }
 
-export function cancelRuntimeRequestCommand(
-  reason = 'user_cancelled',
-  targetRequestId: string | null = null,
-  visibleOutput: Record<string, any> | null = null,
-): FactoryFrontendCommand {
+export interface CancelRuntimeRequestOptions {
+  reason?: string
+  targetRequestId?: string | null
+  sessionId?: string | null
+  mode?: FactoryMode | null
+  packageId?: string | null
+  visibleOutput?: Record<string, any> | null
+}
+
+export function cancelRuntimeRequestCommand(options: CancelRuntimeRequestOptions = {}): FactoryFrontendCommand {
+  const requestId = generateRequestId()
   return createCommand('cancel_runtime_request', {
+    request_id: requestId,
+    session_id: options.sessionId,
+    mode: options.mode,
     payload: {
-      reason,
-      ...(targetRequestId ? { target_request_id: targetRequestId } : {}),
-      ...(visibleOutput ? { visible_output: visibleOutput } : {}),
+      reason: options.reason || 'user_cancelled',
+      ...(options.targetRequestId ? { target_request_id: options.targetRequestId } : {}),
+      ...(options.packageId ? { package_id: options.packageId } : {}),
+      ...(options.visibleOutput ? { visible_output: options.visibleOutput } : {}),
     },
   })
 }
