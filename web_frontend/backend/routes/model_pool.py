@@ -18,6 +18,7 @@ from agent_factory.model_pool import (
     ModelPoolProfile,
     ModelPoolSelector,
     ModelPoolStore,
+    ModelStorage,
     ModelUsageStore,
     ModelSelectionRequest,
     list_local_inference_engines,
@@ -40,6 +41,15 @@ def create_model_pool_router() -> APIRouter:
     @router.get("/defaults")
     async def default_profiles():
         return {"defaults": ModelPoolStore().default_profile_ids()}
+
+    @router.get("/storage")
+    async def model_storage():
+        storage = ModelStorage()
+        return {
+            "root_path": str(storage.root),
+            "modelscope_cache_path": str(storage.modelscope_cache),
+            "directories": [item.payload() for item in storage.list_model_directories()],
+        }
 
     @router.put("/defaults/{role}")
     async def set_default_profile(role: str, payload: dict[str, Any]):
@@ -167,6 +177,11 @@ def create_model_pool_router() -> APIRouter:
 
 def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> LocalModelArtifact:
     data = dict(payload)
+    storage = ModelStorage()
+    data["local_path"] = str(storage.require_model_directory(str(data.get("local_path") or "")))
+    tokenizer_path = str(data.get("tokenizer_path") or "").strip()
+    if tokenizer_path:
+        data["tokenizer_path"] = str(storage.resolve_directory(tokenizer_path))
     if not str(data.get("artifact_id") or "").strip():
         data["artifact_id"] = _unique_id(
             _slug(str(data.get("display_name") or Path(str(data.get("local_path") or "model")).name)),

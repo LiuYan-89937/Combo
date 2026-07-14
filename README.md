@@ -179,7 +179,13 @@ AGENTFACTORY_RESOURCE_MASTER_KEY=
 | 对话模型 | `vllm_rocm` | 对话、工具调用、结构化输出和推理 |
 | Embedding | `transformers_rocm` | 知识库、记忆和 Agent 检索 |
 
-模型文件先在“本地模型”页面注册，再建立推理 Profile。Profile 保存 dtype、量化方式、Tensor Parallel、上下文长度和显存策略。模型加载进程会检查 ROCm PyTorch 环境与本地模型目录。
+模型文件统一保存在 `AGENTFACTORY_MODEL_ROOT` 指定的根目录。系统递归识别其中包含 `config.json` 的完整模型目录，“本地模型”页面只允许选择扫描结果，不接受根目录之外的任意路径。下载 ModelScope 模型时使用统一入口：
+
+```bash
+python -m agent_factory.model_pool.download <namespace/model-name>
+```
+
+下载结果固定进入模型根目录下的 `modelscope/`，随后刷新“本地模型”页面即可注册。注册完成后再建立推理 Profile；Profile 保存 dtype、量化方式、Tensor Parallel、上下文长度和显存策略。模型加载进程会检查 ROCm PyTorch 环境与本地模型目录。
 
 RadeonCloud 上可使用 [docker-compose.rocm.yml](deploy/docker-compose.rocm.yml) 启动对话与 Embedding 服务。部署参数见 [rocm.env.example](deploy/rocm.env.example)。
 

@@ -29,6 +29,21 @@ export interface LocalModelArtifact {
   updated_at: string
 }
 
+export interface LocalModelDirectory {
+  relative_path: string
+  absolute_path: string
+  display_name: string
+  model_type: string
+  architectures: string[]
+  tokenizer_available: boolean
+}
+
+export interface LocalModelStorage {
+  root_path: string
+  modelscope_cache_path: string
+  directories: LocalModelDirectory[]
+}
+
 export interface LocalModelProfile {
   profile_id: string
   display_name: string
@@ -120,6 +135,7 @@ export interface ModelUsageSummary {
 export const modelPoolApi = {
   engines: () => requestJson<{ engines: LocalEngine[] }>('/api/model-pool/engines'),
   rocmRuntime: () => requestJson<RocmRuntimeInfo>('/api/model-pool/runtime/rocm'),
+  storage: () => requestJson<LocalModelStorage>('/api/model-pool/storage'),
   defaults: () => requestJson<{ defaults: LocalModelDefaults }>('/api/model-pool/defaults'),
   setDefault: (role: LocalModelDefaultRole, profileId: string) =>
     requestJson<{ role: LocalModelDefaultRole; profile_id: string | null }>(

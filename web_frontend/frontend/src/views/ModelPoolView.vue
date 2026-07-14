@@ -162,6 +162,10 @@
             <div>
               <n-text strong class="section-title">{{ t('localModel.artifacts') }}</n-text>
               <div class="section-description">{{ t('localModel.artifactHint') }}</div>
+              <div class="storage-root">
+                <span>{{ t('localModel.storageRoot') }}</span>
+                <code>{{ modelStorage?.root_path || '—' }}</code>
+              </div>
             </div>
             <n-button type="primary" @click="openArtifact()">
               <template #icon><n-icon><Add /></n-icon></template>
@@ -223,10 +227,17 @@
       <n-form label-placement="top">
         <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="artifactForm.display_name" /></n-form-item>
         <n-form-item :label="t('localModel.kind')"><n-select v-model:value="artifactForm.kind" :options="kindOptions" /></n-form-item>
-        <n-form-item :label="t('localModel.localPath')"><n-input v-model:value="artifactForm.local_path" /></n-form-item>
-        <n-form-item :label="t('localModel.tokenizerPath')"><n-input v-model:value="artifactForm.tokenizer_path" clearable /></n-form-item>
-        <n-form-item :label="t('localModel.revision')"><n-input v-model:value="artifactForm.revision" clearable /></n-form-item>
-        <n-form-item :label="t('localModel.checksum')"><n-input v-model:value="artifactForm.checksum" clearable /></n-form-item>
+        <n-form-item :label="t('localModel.detectedDirectory')">
+          <n-select
+            v-model:value="artifactForm.local_path"
+            :options="modelDirectoryOptions"
+            :placeholder="t('localModel.detectedDirectoryPlaceholder')"
+            filterable
+          />
+        </n-form-item>
+        <div class="storage-hint">
+          {{ t('localModel.modelscopeCache') }}：<code>{{ modelStorage?.modelscope_cache_path || '—' }}</code>
+        </div>
         <n-checkbox v-model:checked="artifactForm.enabled">{{ t('common.enabled') }}</n-checkbox>
       </n-form>
       <template #action>
@@ -294,6 +305,7 @@ import {
   type LocalModelArtifact,
   type LocalModelDefaultRole,
   type LocalModelDefaults,
+  type LocalModelStorage,
   type LocalModelKind,
   type LocalModelProfile,
   type RocmRuntimeInfo,
@@ -315,6 +327,7 @@ const defaults = ref<LocalModelDefaults>({
   embedding: null,
 })
 const rocm = ref<RocmRuntimeInfo | null>(null)
+const modelStorage = ref<LocalModelStorage | null>(null)
 const artifactModalOpen = ref(false)
 const profileModalOpen = ref(false)
 const artifactEditing = ref<LocalModelArtifact | null>(null)
@@ -341,20 +354,33 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
   label: `${item.display_name} · ${item.kind}`,
   value: item.artifact_id,
 })))
+const modelDirectoryOptions = computed(() => {
+  const options = (modelStorage.value?.directories || []).map((item) => ({
+    label: `${item.display_name} · ${item.relative_path}`,
+    value: item.absolute_path,
+  }))
+  const currentPath = artifactForm.local_path
+  if (currentPath && !options.some((item) => item.value === currentPath)) {
+    options.unshift({ label: currentPath, value: currentPath })
+  }
+  return options
+})
 
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [artifactData, profileData, runtimeData, defaultData] = await Promise.all([
+    const [artifactData, profileData, runtimeData, defaultData, storageData] = await Promise.all([
       modelPoolApi.artifacts(),
       modelPoolApi.profiles(),
       modelPoolApi.rocmRuntime(),
       modelPoolApi.defaults(),
+      modelPoolApi.storage(),
     ])
     artifacts.value = artifactData.artifacts
     profiles.value = profileData.profiles
     rocm.value = runtimeData
     defaults.value = defaultData.defaults
+    modelStorage.value = storageData
   } catch (error) {
     message.error(errorText(error))
   } finally {
@@ -692,6 +718,10 @@ onMounted(refresh)
 .checksum-line code { display: block; overflow: hidden; color: var(--app-text); font-size: var(--app-font-sm); text-overflow: ellipsis; white-space: nowrap; }
 .checksum-line { display: flex; align-items: center; justify-content: space-between; gap: var(--app-space-md); margin-top: var(--app-space-sm); }
 .checksum-line code { min-width: 0; }
+.storage-root { display: flex; flex-wrap: wrap; gap: var(--app-space-xs); margin-top: var(--app-space-xs); color: var(--app-text-muted); font-size: var(--app-font-sm); }
+.storage-root code,
+.storage-hint code { color: var(--app-text); }
+.storage-hint { margin-bottom: var(--app-space-md); color: var(--app-text-secondary); font-size: var(--app-font-sm); }
 
 .empty-panel {
   min-height: 300px;
