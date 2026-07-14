@@ -505,14 +505,6 @@ class RuntimeAgentPackageCommandMixin:
     def _resume_agent_package_interrupt(self, command: FactoryFrontendCommand) -> None:
         pending = self.pending_agent_package_run
         self.pending_agent_package_run = None
-        if target_request_id:
-            self.pending_agent_group_runs = {
-                run_id: pending
-                for run_id, pending in self.pending_agent_group_runs.items()
-                if pending.normalizer.request_id != target_request_id
-            }
-        else:
-            self.pending_agent_group_runs.clear()
         if pending is None:
             self._emit_error(command, "no pending agent package interrupt to resume")
             return
