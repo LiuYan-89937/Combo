@@ -12,12 +12,27 @@ class ModelStorageError(ValueError):
     pass
 
 
+_TRANSFORMERS_WEIGHT_FILES = frozenset(
+    {
+        "model.safetensors",
+        "model.safetensors.index.json",
+        "pytorch_model.bin",
+        "pytorch_model.bin.index.json",
+    }
+)
+_TRANSFORMERS_WEIGHT_PATTERNS = (
+    "model-*.safetensors",
+    "pytorch_model-*.bin",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ModelDirectoryInfo:
     relative_path: str
     absolute_path: str
     display_name: str
     model_type: str
+    dtype: str
     architectures: tuple[str, ...]
     tokenizer_available: bool
 
@@ -42,15 +57,17 @@ class ModelStorage:
         models: list[ModelDirectoryInfo] = []
         for config_path in self.root.rglob("config.json"):
             directory = config_path.parent.resolve()
-            if not self._contains(directory):
+            if not self._contains(directory) or not self._has_supported_weights(directory):
                 continue
             models.append(self._describe(directory, config_path=config_path))
         return sorted(models, key=lambda item: item.relative_path.casefold())
 
     def require_model_directory(self, value: str | Path) -> Path:
         directory = self.resolve_directory(value)
-        if not (directory / "config.json").is_file():
-            raise ModelStorageError("model directory must contain config.json")
+        if not self._is_supported_model_directory(directory):
+            raise ModelStorageError(
+                "model directory must contain config.json and supported Transformers weights"
+            )
         return directory
 
     def resolve_directory(self, value: str | Path) -> Path:
@@ -69,10 +86,18 @@ class ModelStorage:
     def _contains(self, path: Path) -> bool:
         return path == self.root or self.root in path.parents
 
+    def _is_supported_model_directory(self, directory: Path) -> bool:
+        return (directory / "config.json").is_file() and self._has_supported_weights(directory)
+
+    def _has_supported_weights(self, directory: Path) -> bool:
+        if any((directory / filename).is_file() for filename in _TRANSFORMERS_WEIGHT_FILES):
+            return True
+        return any(any(directory.glob(pattern)) for pattern in _TRANSFORMERS_WEIGHT_PATTERNS)
+
     def _describe(self, directory: Path, *, config_path: Path) -> ModelDirectoryInfo:
         config = _read_config(config_path)
         relative_path = directory.relative_to(self.root).as_posix()
-        display_name = _text(config.get("_name_or_path")) or directory.name
+        display_name = self._modelscope_model_id(directory) or _model_name(config, directory)
         architectures = tuple(
             text for item in _items(config.get("architectures")) if (text := _text(item))
         )
@@ -85,9 +110,22 @@ class ModelStorage:
             absolute_path=str(directory),
             display_name=display_name,
             model_type=_text(config.get("model_type")),
+            dtype=_text(config.get("torch_dtype")),
             architectures=architectures,
             tokenizer_available=tokenizer_available,
         )
+
+    def _modelscope_model_id(self, directory: Path) -> str:
+        try:
+            parts = directory.relative_to(self.modelscope_cache.resolve()).parts
+        except ValueError:
+            return ""
+        if len(parts) < 4 or parts[0] != "models" or parts[2] != "snapshots":
+            return ""
+        namespace, separator, model_name = parts[1].partition("--")
+        if not separator or not namespace or not model_name:
+            return ""
+        return f"{namespace}/{model_name}"
 
 
 def _read_config(path: Path) -> dict[str, Any]:
@@ -100,6 +138,13 @@ def _read_config(path: Path) -> dict[str, Any]:
 
 def _items(value: object) -> list[object]:
     return value if isinstance(value, list) else []
+
+
+def _model_name(config: dict[str, Any], directory: Path) -> str:
+    configured_name = _text(config.get("_name_or_path"))
+    if configured_name and not Path(configured_name).expanduser().is_absolute():
+        return configured_name
+    return directory.name
 
 
 def _text(value: object) -> str:

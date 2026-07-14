@@ -235,6 +235,17 @@
             filterable
           />
         </n-form-item>
+        <div v-if="selectedModelDirectory" class="model-directory-summary">
+          <div class="model-directory-heading">
+            <strong>{{ selectedModelDirectory.display_name }}</strong>
+            <span v-if="selectedModelDirectory.model_type">{{ selectedModelDirectory.model_type }}</span>
+            <span v-if="selectedModelDirectory.dtype">{{ selectedModelDirectory.dtype }}</span>
+            <span v-for="architecture in selectedModelDirectory.architectures" :key="architecture">
+              {{ architecture }}
+            </span>
+          </div>
+          <code :title="selectedModelDirectory.relative_path">{{ selectedModelDirectory.relative_path }}</code>
+        </div>
         <div class="storage-hint">
           {{ t('localModel.modelscopeCache') }}：<code>{{ modelStorage?.modelscope_cache_path || '—' }}</code>
         </div>
@@ -356,7 +367,7 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
 })))
 const modelDirectoryOptions = computed(() => {
   const options = (modelStorage.value?.directories || []).map((item) => ({
-    label: `${item.display_name} · ${item.relative_path}`,
+    label: [item.display_name, item.model_type, item.dtype].filter(Boolean).join(' · '),
     value: item.absolute_path,
   }))
   const currentPath = artifactForm.local_path
@@ -365,6 +376,9 @@ const modelDirectoryOptions = computed(() => {
   }
   return options
 })
+const selectedModelDirectory = computed(() => (
+  modelStorage.value?.directories.find((item) => item.absolute_path === artifactForm.local_path) || null
+))
 
 async function refresh(): Promise<void> {
   loading.value = true
@@ -722,6 +736,31 @@ onMounted(refresh)
 .storage-root code,
 .storage-hint code { color: var(--app-text); }
 .storage-hint { margin-bottom: var(--app-space-md); color: var(--app-text-secondary); font-size: var(--app-font-sm); }
+.model-directory-summary {
+  display: grid;
+  gap: var(--app-space-xs);
+  margin: calc(var(--app-space-sm) * -1) 0 var(--app-space-md);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+.model-directory-heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--app-space-xs); }
+.model-directory-heading strong { margin-right: var(--app-space-xs); color: var(--app-text-strong); }
+.model-directory-heading span {
+  padding: 2px var(--app-space-xs);
+  border-radius: var(--app-radius-pill);
+  background: var(--app-surface);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-xs);
+}
+.model-directory-summary code {
+  overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .empty-panel {
   min-height: 300px;

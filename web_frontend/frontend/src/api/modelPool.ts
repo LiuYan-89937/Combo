@@ -34,6 +34,7 @@ export interface LocalModelDirectory {
   absolute_path: string
   display_name: string
   model_type: string
+  dtype: string
   architectures: string[]
   tokenizer_available: boolean
 }
