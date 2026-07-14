@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent_factory.local_inference.launcher import VllmLaunchConfig, build_vllm_command
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
+from agent_factory.local_inference.tool_calling import resolve_vllm_tool_call_parser
 from agent_factory.model_pool.store import ModelPoolStore
 
 
@@ -30,9 +31,10 @@ def main() -> None:
     if not artifact.enabled:
         raise ValueError(f"local chat artifact is disabled: {artifact.artifact_id}")
 
+    model_path = artifact.resolved_path()
     command = build_vllm_command(
         VllmLaunchConfig(
-            model_path=artifact.resolved_path(),
+            model_path=model_path,
             tokenizer_path=(
                 None
                 if not artifact.tokenizer_path
@@ -47,6 +49,10 @@ def main() -> None:
             quantization=profile.inference.quantization,
             gpu_memory_utilization=profile.inference.gpu_memory_utilization,
             trust_remote_code=profile.inference.trust_remote_code,
+            tool_call_parser=resolve_vllm_tool_call_parser(
+                model_path,
+                tool_calling_enabled=profile.capabilities.tool_calling,
+            ),
         )
     )
     os.execvp(command[0], command)

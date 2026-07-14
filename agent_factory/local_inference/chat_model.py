@@ -84,7 +84,7 @@ class LocalVllmChatModel(BaseChatModel):
 
         with httpx.Client(timeout=self.endpoint.timeout_seconds) as client:
             response = client.post(self.endpoint.endpoint("/chat/completions"), json=payload)
-            response.raise_for_status()
+            _raise_for_vllm_error(response)
             body = response.json()
         message = _response_message(body)
         generation_info = {
@@ -188,3 +188,28 @@ def _tool_arguments(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"value": value}
     return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _raise_for_vllm_error(response: httpx.Response) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = _vllm_error_detail(response)
+        if detail:
+            raise RuntimeError(
+                f"local vLLM chat completion failed with HTTP {response.status_code}: {detail}"
+            ) from exc
+        raise
+
+
+def _vllm_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return response.text.strip()
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("detail") or "").strip()
+    return str(payload.get("detail") or payload.get("message") or "").strip()

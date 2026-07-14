@@ -18,6 +18,7 @@ class VllmLaunchConfig:
     quantization: str | None = None
     gpu_memory_utilization: float | None = None
     trust_remote_code: bool = False
+    tool_call_parser: str | None = None
 
     def validate(self) -> None:
         if not self.model_path.is_dir():
@@ -34,6 +35,8 @@ class VllmLaunchConfig:
             raise ValueError("max_model_len must be positive")
         if self.gpu_memory_utilization is not None and not 0 < self.gpu_memory_utilization <= 1:
             raise ValueError("gpu_memory_utilization must be in (0, 1]")
+        if self.tool_call_parser is not None and not self.tool_call_parser.strip():
+            raise ValueError("tool_call_parser must not be blank")
 
 
 def build_vllm_command(config: VllmLaunchConfig) -> list[str]:
@@ -65,4 +68,8 @@ def build_vllm_command(config: VllmLaunchConfig) -> list[str]:
         command.extend(["--gpu-memory-utilization", str(config.gpu_memory_utilization)])
     if config.trust_remote_code:
         command.append("--trust-remote-code")
+    if config.tool_call_parser is not None:
+        command.extend(
+            ["--enable-auto-tool-choice", "--tool-call-parser", config.tool_call_parser]
+        )
     return command
