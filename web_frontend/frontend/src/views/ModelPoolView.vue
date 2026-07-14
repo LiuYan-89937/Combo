@@ -19,12 +19,32 @@
         <div class="overview-icon"><n-icon><HardwareChipOutline /></n-icon></div>
         <div class="overview-copy">
           <div class="overview-label">{{ t('localModel.rocmRuntime') }}</div>
-          <div v-if="rocm?.available" class="overview-value">ROCm {{ rocm.hip_version }}</div>
+          <div v-if="rocm?.available" class="overview-value">
+            ROCm {{ rocm.rocm_version || '—' }}
+          </div>
           <div v-else class="overview-value">{{ t('localModel.rocmUnchecked') }}</div>
           <div v-if="rocm?.available" class="overview-detail">
-            PyTorch {{ rocm.torch_version }} · {{ t('localModel.deviceCount', { count: rocm.device_count }) }}
+            PyTorch {{ rocm.torch_version }} · HIP {{ rocm.hip_version }} ·
+            {{ t('localModel.deviceCount', { count: rocm.device_count }) }}
           </div>
           <div v-else class="overview-detail">{{ rocm?.error || t('localModel.rocmUnchecked') }}</div>
+          <div v-if="rocm?.available && rocm.devices.length" class="runtime-device-list">
+            <div v-for="device in rocm.devices" :key="device.index" class="runtime-device">
+              <div class="runtime-device-heading">
+                <strong>{{ device.name }}</strong>
+                <span>{{ device.pci_bus || `GPU ${device.index}` }}</span>
+              </div>
+              <div class="runtime-metrics">
+                <span>{{ t('localModel.gpuUsage') }} {{ formatPercent(device.gpu_utilization_percent) }}</span>
+                <span>{{ t('localModel.vramUsage') }} {{ formatMemoryUsage(device) }}</span>
+                <span>{{ t('localModel.gpuTemperature') }} {{ formatTemperature(device.temperature_hotspot_celsius) }}</span>
+                <span>{{ t('localModel.gpuPower') }} {{ formatPower(device.power_watts) }}</span>
+                <span v-if="device.architecture">{{ device.architecture }}</span>
+                <span v-if="device.compute_units">{{ device.compute_units }} CU</span>
+                <span v-if="device.vram_type">{{ device.vram_type }}</span>
+              </div>
+            </div>
+          </div>
         </div>
         <span class="status-dot" aria-hidden="true" />
       </article>
@@ -516,6 +536,33 @@ function formatRatio(value?: number | null): string {
   return typeof value === 'number' ? `${Math.round(value * 100)}%` : '—'
 }
 
+function formatPercent(value?: number | null): string {
+  return typeof value === 'number' ? `${Math.round(value)}%` : '—'
+}
+
+function formatBytes(value?: number | null): string {
+  if (typeof value !== 'number' || value < 0) return '—'
+  return `${(value / 1024 ** 3).toFixed(1)} GiB`
+}
+
+function formatMemoryUsage(device: RocmRuntimeInfo['devices'][number]): string {
+  const used = formatBytes(device.used_memory_bytes)
+  const total = formatBytes(device.total_memory_bytes)
+  if (used === '—') return total
+  const ratio = device.total_memory_bytes > 0 && typeof device.used_memory_bytes === 'number'
+    ? ` (${Math.round(device.used_memory_bytes / device.total_memory_bytes * 100)}%)`
+    : ''
+  return `${used} / ${total}${ratio}`
+}
+
+function formatTemperature(value?: number | null): string {
+  return typeof value === 'number' ? `${Math.round(value)} °C` : '—'
+}
+
+function formatPower(value?: number | null): string {
+  return typeof value === 'number' ? `${Math.round(value)} W` : '—'
+}
+
 function formatTokens(value?: number | null): string {
   if (!value) return '—'
   return value >= 1000 ? `${Math.round(value / 1024)}K` : String(value)
@@ -589,6 +636,11 @@ onMounted(refresh)
 .checksum-line span { color: var(--app-text-muted); font-size: var(--app-font-sm); }
 .overview-value { margin-top: 2px; color: var(--app-text-strong); font-size: var(--app-font-lg); font-weight: 650; }
 .overview-detail { margin-top: 2px; overflow: hidden; color: var(--app-text-secondary); font-size: var(--app-font-sm); text-overflow: ellipsis; white-space: nowrap; }
+.runtime-device-list { display: grid; gap: var(--app-space-sm); margin-top: var(--app-space-md); }
+.runtime-device { padding: var(--app-space-sm); border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: var(--app-surface-muted); }
+.runtime-device-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--app-space-md); color: var(--app-text-strong); }
+.runtime-device-heading span { color: var(--app-text-secondary); font-size: var(--app-font-xs); }
+.runtime-metrics { display: flex; flex-wrap: wrap; gap: var(--app-space-xs) var(--app-space-md); margin-top: var(--app-space-xs); color: var(--app-text-secondary); font-size: var(--app-font-xs); }
 .status-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--app-warning); box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-warning) 14%, transparent); }
 .runtime-card.is-ready .status-dot { background: var(--app-success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-success) 14%, transparent); }
 .runtime-card.is-ready .overview-icon { color: var(--app-success); background: color-mix(in srgb, var(--app-success) 10%, var(--app-surface)); }

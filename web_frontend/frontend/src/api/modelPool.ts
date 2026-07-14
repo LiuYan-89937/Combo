@@ -71,9 +71,29 @@ export interface RocmRuntimeInfo {
   available: boolean
   torch_version: string
   hip_version: string
+  rocm_version: string
   device_count: number
-  devices: Array<{ index: number; name: string; total_memory_bytes: number }>
+  devices: RocmDeviceInfo[]
+  telemetry_source: string
   error: string
+}
+
+export interface RocmDeviceInfo {
+  index: number
+  name: string
+  total_memory_bytes: number
+  used_memory_bytes?: number | null
+  gpu_utilization_percent?: number | null
+  memory_activity_percent?: number | null
+  temperature_edge_celsius?: number | null
+  temperature_hotspot_celsius?: number | null
+  temperature_memory_celsius?: number | null
+  power_watts?: number | null
+  architecture: string
+  pci_bus: string
+  pci_device_id: string
+  vram_type: string
+  compute_units?: number | null
 }
 
 export interface ModelUsageTotals {
