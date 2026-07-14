@@ -54,7 +54,10 @@ function handleContextMenu(event: MouseEvent) {
   sourceLabel.value = String(source?.getAttribute('data-reference-label') || document.title || 'Application selection')
   const candidateTipKey = String(tipSource?.getAttribute('data-tip-source-key') || '')
   tipSourceKey.value = tipStore.hasSource(candidateTipKey) ? candidateTipKey : ''
-  const offsets = tipSource && selection ? selectionOffsets(tipSource, selection.getRangeAt(0)) : null
+  const selectionContainer = tipSource?.querySelector('.message-body') || tipSource
+  const offsets = selectionContainer && selection
+    ? selectionOffsets(selectionContainer, selection.getRangeAt(0))
+    : null
   selectionStart.value = offsets?.start
   selectionEnd.value = offsets?.end
   position.x = event.clientX

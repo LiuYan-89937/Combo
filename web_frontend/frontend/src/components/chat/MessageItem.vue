@@ -30,7 +30,7 @@
         </n-button>
       </div>
 
-      <div class="message-body">
+      <div ref="messageBodyRef" class="message-body">
         <div
           v-if="collaborationReport"
           class="collaboration-report-card"
@@ -79,15 +79,16 @@
     </div>
 
     <button
-      v-if="messageTips.length"
+      v-for="marker in tipMarkers"
+      :key="marker.tipId"
       class="tip-marker"
-      :class="{ 'tip-marker-answering': hasAnsweringTip }"
+      :class="{ 'tip-marker-answering': marker.answering }"
+      :style="{ left: `${marker.x}px`, top: `${marker.y}px` }"
       type="button"
       title="Tiping"
-      @click="openLatestTip"
+      @click="openTip(marker.tipId, $event)"
     >
-      <TipingIcon :size="28" scroll-motion />
-      <b v-if="messageTips.length > 1">{{ messageTips.length }}</b>
+      <TipingIcon :size="20" scroll-motion />
     </button>
   </div>
 </template>
@@ -102,6 +103,7 @@ import MessagePartRenderer from './MessagePartRenderer.vue'
 import type { TranscriptItem } from '@/types/protocol'
 import { useTipStore, type TipMessageContext } from '@/stores/tips'
 import TipingIcon from './TipingIcon.vue'
+import { useTipMarkerLayout } from '@/composables/chat/useTipMarkerLayout'
 
 type TipContextConfig = Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'>
 
@@ -128,8 +130,9 @@ defineEmits<{
 const { locale, t } = useI18n()
 const tipStore = useTipStore()
 const registeredSourceKey = ref('')
+const messageBodyRef = ref<HTMLElement | null>(null)
 const messageTips = computed(() => registeredSourceKey.value ? tipStore.tipsForSource(registeredSourceKey.value) : [])
-const hasAnsweringTip = computed(() => messageTips.value.some(tip => tip.status === 'answering'))
+const { tipMarkers } = useTipMarkerLayout(messageBodyRef, messageTips)
 
 watch(
   () => props.tipContext,
@@ -151,8 +154,8 @@ onBeforeUnmount(() => {
   if (registeredSourceKey.value) tipStore.unregisterSource(registeredSourceKey.value)
 })
 
-function openLatestTip(event: MouseEvent) {
-  const tip = messageTips.value[0]
+function openTip(tipId: string, event: MouseEvent) {
+  const tip = messageTips.value.find(item => item.tip_id === tipId)
   if (!tip) return
   const marker = event.currentTarget as HTMLElement
   const bounds = marker.getBoundingClientRect()
@@ -161,6 +164,7 @@ function openLatestTip(event: MouseEvent) {
     y: bounds.top + bounds.height / 2,
   })
 }
+
 
 const roleLabel = computed(() => {
   if (collaborationReport.value) return collaborationReportTitle.value
@@ -307,14 +311,12 @@ function stableColorIndex(value: string, size: number): number {
 
 .tip-marker {
   position: absolute;
-  top: 50%;
-  right: -6px;
-  transform: translate(50%, -50%);
+  transform: translate(-50%, -100%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
   border-radius: var(--app-radius-sm);
@@ -324,41 +326,46 @@ function stableColorIndex(value: string, size: number): number {
   cursor: pointer;
   font: inherit;
   z-index: 2;
+  isolation: isolate;
   transition: border-color var(--app-transition-base), background-color var(--app-transition-base), transform var(--app-transition-spring);
-  animation: tip-marker-pop .34s var(--app-transition-spring) both;
+  animation: tip-marker-arrive .76s var(--app-transition-spring) both;
+}
+
+.tip-marker::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  border: 1px solid color-mix(in srgb, var(--app-text) 72%, transparent);
+  border-radius: 50%;
+  animation: tip-marker-ripple 1.25s ease-out .12s 2 both;
 }
 
 .tip-marker:hover {
   background: transparent;
-  transform: translate(50%, -50%) scale(1.06);
-}
-
-.tip-marker b {
-  position: absolute;
-  top: -5px;
-  right: -6px;
-  min-width: 14px;
-  height: 14px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--app-text);
-  color: var(--app-text-inverse);
-  font-size: 9px;
+  transform: translate(-50%, -100%) scale(1.06);
 }
 
 .tip-marker-answering {
-  animation: tip-marker-breathe 1.55s ease-in-out infinite;
+  animation: tip-marker-arrive .76s var(--app-transition-spring) both,
+             tip-marker-breathe 1.55s ease-in-out .76s infinite;
 }
 
-@keyframes tip-marker-pop {
-  from { opacity: 0; transform: translate(50%, -50%) scale(.72); }
-  to { opacity: 1; transform: translate(50%, -50%) scale(1); }
+@keyframes tip-marker-arrive {
+  0% { opacity: 0; transform: translate(-50%, -82%) scale(.2) rotate(-16deg); }
+  46% { opacity: 1; transform: translate(-50%, -108%) scale(1.24) rotate(7deg); }
+  72% { transform: translate(-50%, -96%) scale(.9) rotate(-3deg); }
+  100% { opacity: 1; transform: translate(-50%, -100%) scale(1) rotate(0); }
+}
+
+@keyframes tip-marker-ripple {
+  0% { opacity: .72; transform: scale(.42); }
+  72%, 100% { opacity: 0; transform: scale(1.8); }
 }
 
 @keyframes tip-marker-breathe {
-  0%, 100% { opacity: .68; transform: translate(50%, -50%) scale(.96); }
-  50% { opacity: 1; transform: translate(50%, -50%) scale(1.04); }
+  0%, 100% { opacity: .68; transform: translate(-50%, -100%) scale(.96); }
+  50% { opacity: 1; transform: translate(-50%, -100%) scale(1.04); }
 }
 
 .message-item.role-assistant {
@@ -436,6 +443,22 @@ function stableColorIndex(value: string, size: number): number {
   position: relative;
   font-size: var(--app-font-lg);
   line-height: var(--app-leading-relaxed);
+}
+
+.message-body :deep(.tip-layout-anchor) {
+  display: inline-block;
+  width: 0;
+  height: calc(1lh + var(--app-space-xl));
+  vertical-align: baseline;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip-marker,
+  .tip-marker::after,
+  .tip-marker-answering {
+    animation: none;
+  }
 }
 
 .collaboration-report-card {

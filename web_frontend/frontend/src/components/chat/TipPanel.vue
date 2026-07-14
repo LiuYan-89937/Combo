@@ -165,9 +165,9 @@ function animatePanelFromOrigin() {
   panel.style.transformOrigin = `${originX}px ${originY}px`
   const animation = panel.animate(
     [
-      { opacity: 0, transform: 'scale(0.06)', borderRadius: '28px' },
-      { opacity: 0.72, transform: 'scale(0.92)', borderRadius: '14px', offset: 0.68 },
-      { opacity: 1, transform: 'scale(1)', borderRadius: '0' },
+      { opacity: 0, transform: 'scale(0.06)', borderRadius: '32px' },
+      { opacity: 0.72, transform: 'scale(0.92)', borderRadius: '24px', offset: 0.68 },
+      { opacity: 1, transform: 'scale(1)', borderRadius: '22px' },
     ],
     {
       duration: 560,
@@ -183,25 +183,27 @@ function animatePanelFromOrigin() {
 </script>
 
 <style scoped>
-.tip-panel { width: clamp(300px, 28vw, 420px); min-width: 300px; height: 100%; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid color-mix(in srgb, var(--app-border) 72%, transparent); background: var(--app-surface); }
-.tip-panel-header { display: flex; justify-content: space-between; align-items: center; min-height: 52px; padding: var(--app-space-sm) var(--app-space-md); }
+.tip-panel { align-self: stretch; width: clamp(300px, 26vw, 390px); min-width: 300px; min-height: 0; margin: 12px 12px 12px 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid color-mix(in srgb, var(--app-border) 64%, transparent); border-radius: 22px; background: color-mix(in srgb, var(--app-surface) 94%, transparent); box-shadow: 0 14px 38px color-mix(in srgb, var(--app-text) 9%, transparent), 0 2px 8px color-mix(in srgb, var(--app-text) 5%, transparent); backdrop-filter: blur(18px); }
+.tip-panel-header { display: flex; justify-content: space-between; align-items: center; min-height: 48px; padding: 7px 10px 7px var(--app-space-md); }
 .tip-panel-header > div { display: flex; align-items: center; gap: var(--app-space-xs); }
-.tip-panel-header strong { font-size: 13px; font-weight: 650; letter-spacing: .01em; }
-.tip-panel-body { flex: 1; min-height: 0; overflow: auto; padding: var(--app-space-xs) var(--app-space-lg) var(--app-space-lg); }
+.tip-panel-header strong { font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+.tip-panel-header :deep(.n-button) { background: color-mix(in srgb, var(--app-surface-muted) 72%, transparent); }
+.tip-panel-body { flex: 1; min-height: 0; overflow: auto; padding: var(--app-space-xs) var(--app-space-lg) var(--app-space-md); }
 .tip-panel-empty { flex: 1; display: grid; place-items: center; padding: var(--app-space-xl); color: var(--app-text-muted); text-align: center; }
-.tip-source { margin: 0 0 var(--app-space-lg); padding: 2px 0 2px var(--app-space-md); border-left: 2px solid color-mix(in srgb, var(--app-info) 42%, var(--app-border)); color: var(--app-text-muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
-.tip-thread { display: grid; gap: var(--app-space-lg); }
+.tip-source { margin: 0 0 var(--app-space-lg); padding: var(--app-space-sm) var(--app-space-md); border: 0; border-radius: 14px; background: color-mix(in srgb, var(--app-surface-muted) 62%, transparent); color: var(--app-text-muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.tip-thread { display: grid; gap: var(--app-space-md); }
 .tip-message { min-width: 0; }
 .tip-message > div { line-height: 1.65; }
 .tip-message-user { justify-self: end; max-width: 88%; }
-.tip-message-user > div { padding: 7px 11px; border-radius: 14px 14px 4px 14px; background: var(--app-surface-muted); color: var(--app-text-secondary); font-size: 13px; }
+.tip-message-user > div { padding: 7px 11px; border-radius: 15px 15px 6px 15px; background: color-mix(in srgb, var(--app-surface-muted) 76%, transparent); color: var(--app-text-secondary); font-size: 13px; }
 .tip-message-assistant > div { padding: 0; background: transparent; color: var(--app-text); }
 .tip-answering { display: flex; gap: 5px; padding: var(--app-space-sm); }
 .tip-answering i { width: 6px; height: 6px; border-radius: 50%; background: var(--app-info); animation: tip-dot 1s ease-in-out infinite; }
 .tip-answering i:nth-child(2) { animation-delay: .15s; }
 .tip-answering i:nth-child(3) { animation-delay: .3s; }
-.tip-composer { padding: var(--app-space-sm) var(--app-space-md) var(--app-space-md); border-top: 1px solid color-mix(in srgb, var(--app-border) 68%, transparent); }
+.tip-composer { padding: var(--app-space-sm) var(--app-space-md) var(--app-space-md); border-top: 0; }
+.tip-composer :deep(.n-input) { border-radius: 16px; background: color-mix(in srgb, var(--app-surface-muted) 58%, transparent); }
 .tip-composer-actions { display: flex; justify-content: flex-end; gap: var(--app-space-sm); margin-top: var(--app-space-sm); }
 @keyframes tip-dot { 0%, 100% { opacity: .35; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
-@media (max-width: 900px) { .tip-panel { position: absolute; inset: 0 0 0 auto; z-index: 30; width: min(92vw, 460px); box-shadow: var(--app-shadow-lg); } }
+@media (max-width: 900px) { .tip-panel { position: absolute; inset: 10px 10px 10px auto; z-index: 30; width: min(88vw, 390px); margin: 0; box-shadow: 0 18px 48px color-mix(in srgb, var(--app-text) 14%, transparent); } }
 </style>
