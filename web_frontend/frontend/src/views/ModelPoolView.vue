@@ -158,6 +158,14 @@
                   v-if="profileRuntime(profile)?.phase === 'ready'"
                   size="small"
                   secondary
+                  @click="restartProfile(profile)"
+                >
+                  {{ t('localModel.restart') }}
+                </n-button>
+                <n-button
+                  v-if="profileRuntime(profile)?.phase === 'ready'"
+                  size="small"
+                  secondary
                   @click="unloadProfile(profile)"
                 >
                   {{ t('localModel.unload') }}
@@ -635,6 +643,14 @@ async function unloadProfile(profile: LocalModelProfile): Promise<void> {
     const result = await modelPoolApi.unloadProfile(profile.profile_id)
     upsertRuntime(result.runtime)
     await refreshRuntimeState()
+  } catch (error) { message.error(errorText(error)) }
+}
+
+async function restartProfile(profile: LocalModelProfile): Promise<void> {
+  try {
+    const result = await modelPoolApi.restartProfile(profile.profile_id)
+    upsertRuntime(result.runtime)
+    if (result.runtime.phase === 'failed') message.error(result.runtime.error)
   } catch (error) { message.error(errorText(error)) }
 }
 

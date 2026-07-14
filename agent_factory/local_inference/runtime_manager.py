@@ -111,39 +111,17 @@ class LocalInferenceRuntimeManager:
         async with slot.lock:
             if slot.profile_id == profile.profile_id and slot.phase in {"starting", "loading", "ready"}:
                 return slot.payload()
-            await self._stop_locked(slot, clear_active=False)
-            slot.profile_id = profile.profile_id
-            slot.phase = "starting"
-            slot.stage = "validating_runtime"
-            slot.progress_percent = 0
-            slot.error = ""
-            slot.started_at = utc_now_text()
-            slot.updated_at = slot.started_at
-            slot.logs.clear()
-            try:
-                await asyncio.to_thread(inspect_rocm_runtime, require_available=True)
-                endpoint = self._endpoint(profile.kind)
-                command = self._command(profile, endpoint)
-                environment = dict(os.environ)
-                environment["PYTHONUNBUFFERED"] = "1"
-                slot.process = await asyncio.create_subprocess_exec(
-                    *command,
-                    cwd=self._project_root,
-                    env=environment,
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    start_new_session=True,
-                )
-                store.set_active_profile_id(profile.kind, profile.profile_id)
-                self._update(slot, phase="loading", stage="process_started", progress_percent=5)
-                slot.output_task = asyncio.create_task(self._watch_output(slot))
-                slot.readiness_task = asyncio.create_task(
-                    self._wait_until_ready(slot, profile, endpoint)
-                )
-            except Exception as exc:
-                self._fail(slot, exc)
-            return slot.payload()
+            return await self._start_locked(slot, profile)
+
+    async def restart(self, profile_id: str) -> dict[str, Any]:
+        store = ModelPoolStore()
+        profile = store.require_profile(profile_id)
+        artifact = store.require_artifact(profile.artifact_id)
+        if not profile.enabled or not artifact.enabled:
+            raise ValueError("profile and model artifact must be enabled before restarting")
+        slot = self._slots[profile.kind]
+        async with slot.lock:
+            return await self._start_locked(slot, profile)
 
     async def unload(self, profile_id: str) -> dict[str, Any]:
         state = self.state_for_profile(profile_id)
@@ -243,6 +221,43 @@ class LocalInferenceRuntimeManager:
         slot.started_at = ""
         slot.updated_at = utc_now_text()
         slot.logs.clear()
+
+    async def _start_locked(
+        self,
+        slot: _RuntimeSlot,
+        profile: ModelPoolProfile,
+    ) -> dict[str, Any]:
+        await self._stop_locked(slot, clear_active=False)
+        slot.profile_id = profile.profile_id
+        slot.phase = "starting"
+        slot.stage = "validating_runtime"
+        slot.progress_percent = 0
+        slot.error = ""
+        slot.started_at = utc_now_text()
+        slot.updated_at = slot.started_at
+        slot.logs.clear()
+        try:
+            await asyncio.to_thread(inspect_rocm_runtime, require_available=True)
+            endpoint = self._endpoint(profile.kind)
+            command = self._command(profile, endpoint)
+            environment = dict(os.environ)
+            environment["PYTHONUNBUFFERED"] = "1"
+            slot.process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=self._project_root,
+                env=environment,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            ModelPoolStore().set_active_profile_id(profile.kind, profile.profile_id)
+            self._update(slot, phase="loading", stage="process_started", progress_percent=5)
+            slot.output_task = asyncio.create_task(self._watch_output(slot))
+            slot.readiness_task = asyncio.create_task(self._wait_until_ready(slot, profile, endpoint))
+        except Exception as exc:
+            self._fail(slot, exc)
+        return slot.payload()
 
     async def _terminate(self, slot: _RuntimeSlot) -> None:
         process = slot.process

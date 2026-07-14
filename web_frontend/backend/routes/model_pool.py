@@ -168,6 +168,13 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
         except Exception as exc:
             raise _http_error(exc) from exc
 
+    @router.post("/profiles/{profile_id}/restart")
+    async def restart_profile(profile_id: str):
+        try:
+            return {"runtime": await runtime_manager.restart(profile_id)}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     @router.get("/usage")
     async def usage_summary(group_by: str = "model", days: int = 14):
         value = group_by.strip().lower()

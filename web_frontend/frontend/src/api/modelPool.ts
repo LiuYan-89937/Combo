@@ -216,6 +216,10 @@ export const modelPoolApi = {
     requestJson<{ runtime: LocalModelRuntime }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}/unload`, {
       method: 'POST',
     }),
+  restartProfile: (profileId: string) =>
+    requestJson<{ runtime: LocalModelRuntime }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}/restart`, {
+      method: 'POST',
+    }),
   usage: (params: { groupBy?: ModelUsageGroupBy; days?: number } = {}) =>
     requestJson<ModelUsageSummary>(
       withQuery('/api/model-pool/usage', { group_by: params.groupBy, days: params.days }),
