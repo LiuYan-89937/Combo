@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_factory.model_pool.schema import (
-    ModelPoolCredential,
+    LocalModelArtifact,
     ModelPoolProfile,
     ModelSelectionRecommendation,
     ModelSelectionRequirement,
@@ -18,7 +18,7 @@ from agent_factory.model_pool.store import ModelPoolStore
 @dataclass(frozen=True, slots=True)
 class _Candidate:
     profile: ModelPoolProfile
-    credential: ModelPoolCredential
+    artifact: LocalModelArtifact
     score: float
     reason: str
     warnings: list[str]
@@ -37,14 +37,7 @@ class ModelPoolSelector:
         for requirement in request.requirements:
             candidates = self._rank_candidates(requirement, enabled_profiles)
             if not candidates:
-                unmatched.append(
-                    {
-                        "role": requirement.role,
-                        "purpose": requirement.purpose,
-                        "required_capabilities": _requirement_payload(requirement),
-                        "reason": "No enabled model profile matches the required capabilities.",
-                    }
-                )
+                unmatched.append(_unmatched_requirement(requirement))
                 continue
             selected = candidates[0]
             recommendations.append(
@@ -52,7 +45,7 @@ class ModelPoolSelector:
                     role=requirement.role,
                     profile_id=selected.profile.profile_id,
                     display_name=selected.profile.display_name,
-                    provider=selected.profile.provider,
+                    engine=selected.profile.engine,
                     model_name=selected.profile.model_name,
                     score=round(selected.score, 6),
                     reason=selected.reason,
@@ -70,7 +63,7 @@ class ModelPoolSelector:
                         "capability": requirement.capability,
                         "purpose": requirement.purpose,
                         "required_capabilities": _requirement_payload(model_requirement),
-                        "reason": "No enabled model profile matches the required auxiliary model tool capability.",
+                        "reason": "No enabled local model profile matches the required capability.",
                     }
                 )
                 continue
@@ -81,7 +74,7 @@ class ModelPoolSelector:
                     capability=requirement.capability,
                     profile_id=selected.profile.profile_id,
                     display_name=selected.profile.display_name,
-                    provider=selected.profile.provider,
+                    engine=selected.profile.engine,
                     model_name=selected.profile.model_name,
                     score=round(selected.score, 6),
                     reason=selected.reason,
@@ -106,20 +99,22 @@ class ModelPoolSelector:
         candidates: list[_Candidate] = []
         excluded = set(requirement.excluded_profile_ids)
         for profile in profiles:
-            if profile.profile_id in excluded:
+            if profile.profile_id in excluded or (requirement.kind and profile.kind != requirement.kind):
                 continue
-            if requirement.kind and profile.kind != requirement.kind:
+            artifact = self.store.get_artifact(profile.artifact_id)
+            if artifact is None or not artifact.enabled:
                 continue
-            credential = self.store.get_credential(profile.credential_id)
-            if credential is None or not credential.enabled or not credential.api_key:
+            if _missing_capabilities(requirement, profile):
                 continue
-            missing = _missing_capabilities(requirement, profile)
-            if missing:
-                continue
-            score = _score_profile(requirement, profile)
-            reason = _selection_reason(requirement, profile)
-            warnings = _candidate_warnings(requirement, profile)
-            candidates.append(_Candidate(profile=profile, credential=credential, score=score, reason=reason, warnings=warnings))
+            candidates.append(
+                _Candidate(
+                    profile=profile,
+                    artifact=artifact,
+                    score=_score_profile(requirement, profile),
+                    reason=_selection_reason(requirement, profile),
+                    warnings=_candidate_warnings(requirement, profile),
+                )
+            )
         return sorted(candidates, key=lambda item: (-item.score, item.profile.profile_id))
 
 
@@ -128,22 +123,12 @@ def _missing_capabilities(requirement: ModelSelectionRequirement, profile: Model
     missing: list[str] = []
     inputs = set(capabilities.input_modalities)
     outputs = set(capabilities.output_modalities)
-    for item in requirement.input_modalities:
-        if item not in inputs:
-            missing.append(f"input:{item}")
-    for item in requirement.output_modalities:
-        if item not in outputs:
-            missing.append(f"output:{item}")
+    missing.extend(f"input:{item}" for item in requirement.input_modalities if item not in inputs)
+    missing.extend(f"output:{item}" for item in requirement.output_modalities if item not in outputs)
     if requirement.tool_calling is True and not capabilities.tool_calling:
         missing.append("tool_calling")
     if requirement.reasoning_required is True and not capabilities.reasoning_supported:
         missing.append("reasoning")
-    if requirement.kind == "image_generation":
-        if "text" in requirement.input_modalities and "image" in requirement.output_modalities and not capabilities.text_to_image:
-            missing.append("text_to_image")
-        if "image" in requirement.input_modalities and "image" in requirement.output_modalities:
-            if not (capabilities.image_edit or capabilities.image_to_image):
-                missing.append("image_edit")
     if requirement.structured_output_methods:
         supported = set(capabilities.structured_output_methods)
         if not any(method in supported for method in requirement.structured_output_methods):
@@ -166,39 +151,17 @@ def _score_profile(requirement: ModelSelectionRequirement, profile: ModelPoolPro
         score += 0.04 * ratio
     if requirement.optimize_for == "context" and profile.limits.max_input_tokens:
         score += min(profile.limits.max_input_tokens / 1_000_000, 1.0) * 0.2
-    if requirement.optimize_for == "cost":
-        score += _cost_score(profile)
     if requirement.optimize_for == "quality":
         score += 0.04 * len(profile.capabilities.structured_output_methods)
         if profile.capabilities.strict_tool_schema:
             score += 0.05
-        if requirement.kind == "image_generation":
-            score += 0.04 * sum(
-                1
-                for supported in (
-                    profile.capabilities.text_to_image,
-                    profile.capabilities.image_to_image,
-                    profile.capabilities.image_edit,
-                    profile.capabilities.multi_image_reference,
-                )
-                if supported
-            )
     if requirement.optimize_for == "latency" and profile.limits.timeout_seconds:
         score += max(0.0, 0.12 - min(profile.limits.timeout_seconds, 120.0) / 1000.0)
     return score
 
 
-def _cost_score(profile: ModelPoolProfile) -> float:
-    input_price = profile.pricing.input_per_1m_tokens
-    output_price = profile.pricing.output_per_1m_tokens
-    if input_price is None and output_price is None:
-        return 0.0
-    total = float(input_price or 0.0) + float(output_price or 0.0)
-    return max(0.0, 0.2 - min(total, 20.0) / 100.0)
-
-
 def _selection_reason(requirement: ModelSelectionRequirement, profile: ModelPoolProfile) -> str:
-    parts = [f"Selected {profile.display_name} for {requirement.role}."]
+    parts = [f"Selected local profile {profile.display_name} for {requirement.role}."]
     if requirement.purpose:
         parts.append(requirement.purpose)
     if requirement.input_modalities:
@@ -214,9 +177,18 @@ def _candidate_warnings(requirement: ModelSelectionRequirement, profile: ModelPo
     warnings: list[str] = []
     if requirement.structured_output_methods and not profile.capabilities.strict_tool_schema:
         warnings.append("Profile does not advertise strict tool schema support.")
-    if profile.pricing.input_per_1m_tokens is None or profile.pricing.output_per_1m_tokens is None:
-        warnings.append("Pricing is incomplete, so cost ranking is approximate.")
+    if not profile.inference.quantization:
+        warnings.append("Profile does not use a quantized model configuration.")
     return warnings
+
+
+def _unmatched_requirement(requirement: ModelSelectionRequirement) -> dict[str, Any]:
+    return {
+        "role": requirement.role,
+        "purpose": requirement.purpose,
+        "required_capabilities": _requirement_payload(requirement),
+        "reason": "No enabled local model profile matches the required capabilities.",
+    }
 
 
 def _requirement_payload(requirement: ModelSelectionRequirement) -> dict[str, Any]:

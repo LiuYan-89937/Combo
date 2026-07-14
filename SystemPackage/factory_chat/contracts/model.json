@@ -5,8 +5,8 @@
   "config": {
     "bindings": {
       "main": {
-        "source": "env",
-        "reason": "Use the host environment main chat model by default.",
+        "source": "local_default",
+        "reason": "Use the configured default local ROCm chat profile.",
         "required_capabilities": {
           "input_modalities": [
             "text"
@@ -23,20 +23,6 @@
         "overrides": {}
       }
     },
-    "tool_bindings": {
-      "generate_image": {
-        "source": "env",
-        "capability": "image_output",
-        "reason": "Use the host environment image model when configured.",
-        "required_capabilities": {
-          "output_modalities": [
-            "image"
-          ],
-          "text_to_image": true
-        },
-        "overrides": {},
-        "description": "Use Wanx to generate images from a text prompt."
-      }
-    }
+    "tool_bindings": {}
   }
 }

@@ -1,78 +1,129 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
+from pathlib import Path
 import re
-from time import perf_counter
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException
-from langchain_core.messages import HumanMessage
 
+from agent_factory.local_inference import (
+    inspect_rocm_runtime,
+    load_local_embedding_endpoint,
+    load_local_inference_endpoint,
+)
 from agent_factory.model_pool import (
-    ModelPoolCredential,
+    LocalModelArtifact,
     ModelPoolProfile,
     ModelPoolSelector,
     ModelPoolStore,
     ModelUsageStore,
     ModelSelectionRequest,
-    list_model_pool_provider_profiles,
+    list_local_inference_engines,
 )
-from agent_factory.model_pool.resolver import resolve_chat_model_profile
-from agent_factory.model_pool.schema import ModelProfileBinding
 from agent_factory.model_pool.store import ModelPoolStoreError
 
 
 def create_model_pool_router() -> APIRouter:
     router = APIRouter(prefix="/api/model-pool")
 
-    @router.get("/providers")
-    async def list_providers():
-        return {"providers": list_model_pool_provider_profiles()}
+    @router.get("/engines")
+    async def list_engines():
+        return {"engines": list_local_inference_engines()}
 
-    @router.get("/credentials")
-    async def list_credentials():
-        store = ModelPoolStore()
-        return {"credentials": [item.to_public().model_dump(mode="json") for item in store.list_credentials()]}
+    @router.get("/runtime/rocm")
+    async def rocm_runtime():
+        return inspect_rocm_runtime(require_available=False).payload()
 
-    @router.post("/credentials")
-    async def upsert_credential(payload: dict[str, Any]):
+    @router.get("/artifacts")
+    async def list_artifacts():
+        return {"artifacts": [item.model_dump(mode="json") for item in ModelPoolStore().list_artifacts()]}
+
+    @router.post("/artifacts")
+    async def upsert_artifact(payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
-            credential = store.upsert_credential(_credential_from_payload(payload, store=store))
+            artifact = store.upsert_artifact(_artifact_from_payload(payload, store=store))
         except Exception as exc:
             raise _http_error(exc) from exc
-        return {"credential": credential.to_public().model_dump(mode="json")}
+        return {"artifact": artifact.model_dump(mode="json")}
 
-    @router.patch("/credentials/{credential_id}")
-    async def patch_credential(credential_id: str, payload: dict[str, Any]):
-        store = ModelPoolStore()
+    @router.patch("/artifacts/{artifact_id}")
+    async def patch_artifact(artifact_id: str, payload: dict[str, Any]):
         try:
-            credential = store.patch_credential(credential_id, payload)
+            artifact = ModelPoolStore().patch_artifact(artifact_id, payload)
         except Exception as exc:
             raise _http_error(exc) from exc
-        return {"credential": credential.to_public().model_dump(mode="json")}
+        return {"artifact": artifact.model_dump(mode="json")}
 
-    @router.delete("/credentials/{credential_id}")
-    async def delete_credential(credential_id: str):
-        store = ModelPoolStore()
+    @router.delete("/artifacts/{artifact_id}")
+    async def delete_artifact(artifact_id: str):
         try:
-            return {"deleted": store.delete_credential(credential_id)}
+            return {"deleted": ModelPoolStore().delete_artifact(artifact_id)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.get("/profiles")
     async def list_profiles(kind: str | None = None):
-        store = ModelPoolStore()
-        credentials = {item.credential_id: item for item in store.list_credentials()}
         profile_kind = (kind or "").strip().lower() or None
-        if profile_kind not in {None, "chat", "image_generation"}:
-            raise HTTPException(status_code=400, detail="unsupported model profile kind")
-        profiles = [
-            profile.to_public(credentials.get(profile.credential_id)).model_dump(mode="json")
-            for profile in store.list_profiles(kind=profile_kind)
-        ]
-        return {"profiles": profiles}
+        if profile_kind not in {None, "chat", "embedding"}:
+            raise HTTPException(status_code=400, detail="unsupported local model profile kind")
+        store = ModelPoolStore()
+        artifacts = {item.artifact_id: item for item in store.list_artifacts()}
+        return {
+            "profiles": [
+                profile.to_public(artifacts.get(profile.artifact_id)).model_dump(mode="json")
+                for profile in store.list_profiles(kind=profile_kind)
+            ]
+        }
+
+    @router.post("/profiles")
+    async def upsert_profile(payload: dict[str, Any]):
+        store = ModelPoolStore()
+        try:
+            profile = store.upsert_profile(_profile_from_payload(payload, store=store))
+            artifact = store.get_artifact(profile.artifact_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"profile": profile.to_public(artifact).model_dump(mode="json")}
+
+    @router.patch("/profiles/{profile_id}")
+    async def patch_profile(profile_id: str, payload: dict[str, Any]):
+        store = ModelPoolStore()
+        try:
+            profile = store.patch_profile(profile_id, payload)
+            artifact = store.get_artifact(profile.artifact_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"profile": profile.to_public(artifact).model_dump(mode="json")}
+
+    @router.delete("/profiles/{profile_id}")
+    async def delete_profile(profile_id: str):
+        return {"deleted": ModelPoolStore().delete_profile(profile_id)}
+
+    @router.post("/profiles/{profile_id}/check")
+    async def check_profile(profile_id: str):
+        store = ModelPoolStore()
+        try:
+            profile = store.require_profile(profile_id)
+            artifact = store.require_artifact(profile.artifact_id)
+            path = artifact.resolved_path()
+            result: dict[str, Any] = {
+                "status": "ready" if path.is_dir() else "missing",
+                "profile_id": profile.profile_id,
+                "artifact_id": artifact.artifact_id,
+                "local_path": str(path),
+                "path_exists": path.is_dir(),
+                "engine": profile.engine,
+            }
+            if profile.kind == "chat" and path.is_dir():
+                result["runtime"] = await _chat_runtime_status(profile.served_model_name)
+            elif profile.kind == "embedding" and path.is_dir():
+                result["runtime"] = await _embedding_runtime_status(profile.profile_id)
+            return result
+        except Exception as exc:
+            raise _http_error(exc) from exc
 
     @router.get("/usage")
     async def usage_summary(group_by: str = "model", days: int = 14):
@@ -81,53 +132,10 @@ def create_model_pool_router() -> APIRouter:
             raise HTTPException(status_code=400, detail="unsupported usage group_by")
         return ModelUsageStore().summary(group_by=value, days=days)
 
-    @router.post("/profiles")
-    async def upsert_profile(payload: dict[str, Any]):
-        store = ModelPoolStore()
-        try:
-            profile = store.upsert_profile(_profile_from_payload(payload, store=store))
-            credential = store.get_credential(profile.credential_id)
-        except Exception as exc:
-            raise _http_error(exc) from exc
-        return {"profile": profile.to_public(credential).model_dump(mode="json")}
-
-    @router.patch("/profiles/{profile_id}")
-    async def patch_profile(profile_id: str, payload: dict[str, Any]):
-        store = ModelPoolStore()
-        try:
-            profile = store.patch_profile(profile_id, payload)
-            credential = store.get_credential(profile.credential_id)
-        except Exception as exc:
-            raise _http_error(exc) from exc
-        return {"profile": profile.to_public(credential).model_dump(mode="json")}
-
-    @router.delete("/profiles/{profile_id}")
-    async def delete_profile(profile_id: str):
-        return {"deleted": ModelPoolStore().delete_profile(profile_id)}
-
-    @router.post("/profiles/{profile_id}/ping")
-    async def ping_profile(profile_id: str):
-        store = ModelPoolStore()
-        try:
-            profile = store.require_profile(profile_id)
-            if profile.kind != "chat":
-                raise ValueError("connection testing currently supports chat model profiles only")
-            result = await asyncio.to_thread(_ping_chat_profile, profile_id, store)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=_probe_error_detail(exc)) from exc
-        return result
-
-    @router.post("/profiles/delete")
-    async def delete_profiles(payload: dict[str, Any]):
-        ids = [str(item).strip() for item in payload.get("profile_ids", []) if str(item).strip()]
-        store = ModelPoolStore()
-        return {"deleted": {profile_id: store.delete_profile(profile_id) for profile_id in ids}}
-
     @router.post("/select")
     async def select_models(payload: dict[str, Any]):
         try:
-            request = ModelSelectionRequest.model_validate(payload)
-            result = ModelPoolSelector().select(request)
+            result = ModelPoolSelector().select(ModelSelectionRequest.model_validate(payload))
         except Exception as exc:
             raise _http_error(exc) from exc
         return result.model_dump(mode="json")
@@ -135,67 +143,59 @@ def create_model_pool_router() -> APIRouter:
     return router
 
 
-def _credential_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> ModelPoolCredential:
+def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> LocalModelArtifact:
     data = dict(payload)
-    if not str(data.get("credential_id") or "").strip():
-        data["credential_id"] = _unique_id(
-            _slug(str(data.get("display_name") or data.get("provider") or "credential")),
-            existing={item.credential_id for item in store.list_credentials()},
-            salt=str(data.get("base_url") or data.get("provider") or ""),
+    if not str(data.get("artifact_id") or "").strip():
+        data["artifact_id"] = _unique_id(
+            _slug(str(data.get("display_name") or Path(str(data.get("local_path") or "model")).name)),
+            existing={item.artifact_id for item in store.list_artifacts()},
+            salt=str(data.get("local_path") or ""),
         )
-    return ModelPoolCredential.model_validate(data)
+    return LocalModelArtifact.model_validate(data)
 
 
 def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> ModelPoolProfile:
     data = dict(payload)
-    requested_kind = str(data.get("kind") or "chat").strip().lower()
-    if requested_kind not in {"chat", "image_generation"}:
-        raise ValueError("unsupported model profile kind")
-    data["kind"] = requested_kind
     if not str(data.get("profile_id") or "").strip():
         data["profile_id"] = _unique_id(
-            _slug(str(data.get("display_name") or data.get("model_name") or "model")),
+            _slug(str(data.get("display_name") or data.get("served_model_name") or "local_model")),
             existing={item.profile_id for item in store.list_profiles()},
-            salt=str(data.get("provider") or "") + ":" + str(data.get("model_name") or ""),
+            salt=str(data.get("artifact_id") or "") + ":" + str(data.get("engine") or ""),
         )
     return ModelPoolProfile.model_validate(data)
+
+
+async def _chat_runtime_status(model_name: str) -> dict[str, Any]:
+    endpoint = load_local_inference_endpoint()
+    async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
+        response = await client.get(endpoint.endpoint("/models"))
+        response.raise_for_status()
+        body = response.json()
+    models = body.get("data") if isinstance(body, dict) else None
+    names = [str(item.get("id") or "") for item in models or [] if isinstance(item, dict)]
+    return {
+        "status": "ready" if model_name in names else "model_not_served",
+        "served_models": names,
+    }
+
+
+async def _embedding_runtime_status(profile_id: str) -> dict[str, Any]:
+    endpoint = load_local_embedding_endpoint()
+    async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
+        response = await client.get(endpoint.endpoint("/health"))
+        response.raise_for_status()
+        body = response.json()
+    loaded_profile_id = str(body.get("profile_id") or "") if isinstance(body, dict) else ""
+    return {
+        "status": "ready" if loaded_profile_id == profile_id else "profile_not_loaded",
+        "loaded_profile_id": loaded_profile_id,
+        "dimensions": body.get("dimensions") if isinstance(body, dict) else None,
+    }
 
 
 def _http_error(exc: Exception) -> HTTPException:
     status = 404 if isinstance(exc, ModelPoolStoreError) and str(exc).startswith("unknown ") else 400
     return HTTPException(status_code=status, detail=f"{type(exc).__name__}: {exc}")
-
-
-def _ping_chat_profile(profile_id: str, store: ModelPoolStore) -> dict[str, Any]:
-    resolved = resolve_chat_model_profile(
-        ModelProfileBinding(profile_id=profile_id, selection_source="manual", reason="model pool connection test"),
-        role="connection_test",
-        store=store,
-    )
-    started_at = perf_counter()
-    response = resolved.model.invoke([HumanMessage(content="HelloWorld")])
-    latency_ms = round((perf_counter() - started_at) * 1000)
-    content = _response_text(response)
-    return {
-        "status": "ok",
-        "profile_id": profile_id,
-        "latency_ms": latency_ms,
-        "response_preview": content[:500],
-    }
-
-
-def _response_text(response: Any) -> str:
-    content = getattr(response, "content", response)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(str(item.get("text") or "") if isinstance(item, dict) else str(item) for item in content)
-    return str(content)
-
-
-def _probe_error_detail(exc: Exception) -> str:
-    message = f"{type(exc).__name__}: {exc}"
-    return re.sub(r"(?i)(api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", message)
 
 
 def _slug(value: str) -> str:
@@ -207,9 +207,8 @@ def _slug(value: str) -> str:
 
 
 def _unique_id(base: str, *, existing: set[str], salt: str) -> str:
-    candidate = base
-    if candidate not in existing:
-        return candidate
+    if base not in existing:
+        return base
     digest = hashlib.sha1(f"{base}:{salt}".encode("utf-8")).hexdigest()[:8]
     candidate = f"{base}_{digest}"
     index = 2

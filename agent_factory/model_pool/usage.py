@@ -157,12 +157,12 @@ def usage_record_from_frontend_event(
         return None
 
     profile_id = _text(payload.get("model_profile_id") or payload.get("profile_id"))
-    provider = _text(payload.get("provider") or payload.get("model_provider"))
+    provider = _text(payload.get("engine") or payload.get("provider") or payload.get("model_provider"))
     model_name = _text(payload.get("model") or payload.get("model_name"))
     profile = _resolve_profile(profile_id=profile_id, provider=provider, model_name=model_name, store_path=store_path)
     if profile is not None:
         profile_id = profile_id or profile.profile_id
-        provider = provider or profile.provider
+        provider = provider or profile.engine
         model_name = model_name or profile.model_name
     package_id = _text(payload.get("package_id"))
     mode = _text(event_payload.get("mode")) or "unknown"
@@ -218,7 +218,7 @@ def _resolve_profile(
                 return profile
         if provider and model_name:
             for profile in store.list_profiles():
-                if profile.provider == provider and profile.model_name == model_name:
+                if profile.engine == provider and profile.model_name == model_name:
                     return profile
     except Exception:
         return None
@@ -233,27 +233,8 @@ def _estimated_cost(
     reasoning_tokens: int | None,
     cache_hit_tokens: int | None,
 ) -> float | None:
-    if profile is None:
-        return None
-    pricing = profile.pricing
-    cost = 0.0
-    available = False
-    cached = int(cache_hit_tokens or 0)
-    total_input = int(input_tokens or 0)
-    if pricing.cache_hit_per_1m_tokens is not None and cached:
-        cost += cached * float(pricing.cache_hit_per_1m_tokens) / 1_000_000
-        total_input = max(total_input - cached, 0)
-        available = True
-    if pricing.input_per_1m_tokens is not None and total_input:
-        cost += total_input * float(pricing.input_per_1m_tokens) / 1_000_000
-        available = True
-    if pricing.output_per_1m_tokens is not None and output_tokens:
-        cost += int(output_tokens) * float(pricing.output_per_1m_tokens) / 1_000_000
-        available = True
-    if pricing.reasoning_per_1m_tokens is not None and reasoning_tokens:
-        cost += int(reasoning_tokens) * float(pricing.reasoning_per_1m_tokens) / 1_000_000
-        available = True
-    return round(cost, 8) if available else None
+    del profile, input_tokens, output_tokens, reasoning_tokens, cache_hit_tokens
+    return None
 
 
 def _group_records(records: list[dict[str, Any]], *, group_by: ModelUsageGroupBy) -> list[dict[str, Any]]:

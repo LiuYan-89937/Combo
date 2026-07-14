@@ -11,19 +11,19 @@ FastAgentFactory 是一个本地优先的 Agent 工厂系统，用来创建、�
 - 运行已发布 Agent，并保留独立会话、工作区和产物。
 - 对已有 Agent 做进化改造，再验证和发布新版本。
 - 用多 Agent 协作完成复杂任务，由主 Agent 拆分、调度、验收和汇总。
-- 统一管理多供应商模型、图片生成模型、token 用量和估算费用。
+- 统一管理本地模型文件、ROCm 推理配置、Token 用量和运行状态。
 - 在本地查看每次运行的文件、工具调用、trace、记忆和上下文状态。
 
 ## 功能概览
 
 | 能力 | 说明 |
 | --- | --- |
-| 闲聊助手 | 内置 `factory_chat` 系统包，支持普通对话、工具调用、附件、图片输入和图片生成。 |
+| 闲聊助手 | 内置 `factory_chat` 系统包，支持普通对话、工具调用、附件和本地多模态输入。 |
 | Agent 制造 | 根据目标自动分析任务、选择模式、装配模型/工具/Skill/知识库并生成 AgentPackage。 |
 | 已发布 Agent | 每个 AgentPackage 拥有独立会话、工作区、知识库、定时任务、MCP/Skill 和模型绑定。 |
 | Agent 进化 | 对已发布 Agent 做独立上下文改造、验证和重新发布。 |
 | 多 Agent 协作 | 主 Agent 检索可用子 Agent，创建任务、管理依赖、验收交付并推进后续步骤。 |
-| 模型池 | 管理文本模型、图片生成模型、供应商凭证、能力标签和用量统计。 |
+| 本地模型 | 管理模型文件、推理 Profile、能力标签和用量统计。 |
 | 知识库与 RAG | 上传文件或文件夹，解析、分块、索引、检索并挂载到指定上下文。 |
 | 扩展系统 | 管理 MCP、Skill、SkillHUB 安装结果和工具权限策略。 |
 | 工作区 | 查看运行文件、附件、产物、共享材料和 Agent 输出。 |
@@ -35,7 +35,7 @@ Agent 制造把需求分析、能力装配、工具调用和发布过程放在�
 
 ![Agent 制造](readme-assets/images/agent-authoring.png)
 
-模型池用于集中维护模型配置、供应商、能力和用量。AgentPackage 只引用 `profile_id`，不会保存真实密钥。
+本地模型注册中心用于维护模型文件、ROCm 推理配置、能力和用量。AgentPackage 只引用 `profile_id`。
 
 ![模型池](readme-assets/images/model-pool.png)
 
@@ -55,9 +55,10 @@ Agent 制造把需求分析、能力装配、工具调用和发布过程放在�
 - Node.js `>= 18`
 - npm
 - uv
-- Docker Desktop 或可用 Docker daemon
-- 可用的文本模型服务
-- 可用的 embedding 模型服务
+- AMD Radeon GPU
+- ROCm 软件栈和 ROCm 版 PyTorch
+- Docker Engine 或兼容的容器运行时
+- 已下载到本机的对话模型和 Embedding 模型
 
 ### 配置环境变量
 
@@ -70,34 +71,13 @@ cp .env.example .env
 填写 `.env`。最小可运行配置包括：
 
 ```bash
-AGENTFACTORY_MODEL_PROVIDER=openai_compatible_chat
-AGENTFACTORY_MODEL_BASE_URL=
-AGENTFACTORY_MODEL_API_KEY=
-AGENTFACTORY_MAIN_MODEL=
-
-AGENTFACTORY_TASK_MODEL_PROVIDER=
-AGENTFACTORY_TASK_MODEL_BASE_URL=
-AGENTFACTORY_TASK_MODEL_API_KEY=
-AGENTFACTORY_TASK_MODEL=
-
-AGENTFACTORY_COMPRESSION_MODEL_PROVIDER=
-AGENTFACTORY_COMPRESSION_MODEL_BASE_URL=
-AGENTFACTORY_COMPRESSION_MODEL_API_KEY=
-AGENTFACTORY_COMPRESSION_MODEL=
-
-# Optional image model used by the built-in factory_chat package.
-AGENTFACTORY_IMAGE_MODEL_PROVIDER=
-AGENTFACTORY_IMAGE_MODEL_BASE_URL=
-AGENTFACTORY_IMAGE_MODEL_API_KEY=
-AGENTFACTORY_IMAGE_MODEL=
-AGENTFACTORY_IMAGE_MODEL_TIMEOUT_SECONDS=
-
-AGENTFACTORY_EMBEDDING_PROVIDER=openai_compatible
-AGENTFACTORY_EMBEDDING_BASE_URL=
-AGENTFACTORY_EMBEDDING_API_KEY=
-AGENTFACTORY_EMBEDDING_MODEL=
+AGENTFACTORY_MAIN_MODEL_PROFILE_ID=
+AGENTFACTORY_TASK_MODEL_PROFILE_ID=
+AGENTFACTORY_COMPRESSION_MODEL_PROFILE_ID=
+AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID=
+AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT=
+AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT=
 AGENTFACTORY_RESOURCE_MASTER_KEY=
-AGENTFACTORY_EMBEDDING_DIMS=
 ```
 
 说明：
@@ -105,8 +85,9 @@ AGENTFACTORY_EMBEDDING_DIMS=
 - 主模型用于闲聊、制造、进化和普通 Agent 对话。
 - 任务模型用于结构化输出、分类、抽取、意图分析等辅助任务；未单独配置时会回退到主模型。
 - 压缩模型用于上下文压缩。
-- `factory_chat` 的对话模型默认读取主模型 env 配置；生图模型读取独立的 image model env 配置。未配置生图模型时，不影响普通对话。
-- embedding 模型用于知识库、RAG、长期记忆和 Agent 检索。
+- `factory_chat` 读取已注册的默认本地模型 Profile。
+- Embedding 模型由独立的本地 ROCm 服务加载，用于知识库、RAG、长期记忆和 Agent 检索。
+- 模型端点支持回环、私有地址以及明确列入允许列表的内部服务主机。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 用于加密 Agent 的运行时资源配置；请使用稳定的长随机值，丢失后无法解密已保存的资源。
 - `.env` 是本地私有配置，不要提交到 git。
 
@@ -130,11 +111,11 @@ AGENTFACTORY_EMBEDDING_DIMS=
 
 ### 1. 配置模型池
 
-先在模型池中添加可供 Agent 使用的文本模型、图片模型和能力信息。模型池会记录供应商、模型名、上下文窗口、价格、能力和凭证来源。
+先注册已下载的本地模型目录，再创建可供 Agent 使用的 Chat 或 Embedding 推理 Profile。
 
 ![模型配置](readme-assets/images/model-profile-form.png)
 
-模型用量会按模型、供应商和 Agent 记录，便于比较不同模型在实际任务中的消耗。
+模型用量会按模型、推理引擎和 Agent 记录，便于比较本地模型在实际任务中的消耗。
 
 ![模型用量统计](readme-assets/images/model-usage.png)
 
@@ -150,7 +131,7 @@ AGENTFACTORY_EMBEDDING_DIMS=
 - 工具、MCP、Skill 和知识库配置。
 - 工作区和运行契约。
 
-不会保存真实 API key。
+不会写入模型目录、内部端点或运行时环境值。
 
 ### 3. 运行 Agent
 
@@ -193,58 +174,18 @@ AGENTFACTORY_EMBEDDING_DIMS=
 
 建议默认使用中间档：低/中风险工具自动放行，高风险工具保留确认。
 
-## 多模态与图片生成
+## 本地模型运行时
 
-对话支持图片输入、图片粘贴和图片生成工具。图片生成模型通过模型池添加，并作为系统内置模型工具暴露给 Agent 使用。
+本地模型运行时包含两种推理引擎：
 
-![图片生成](readme-assets/images/image-generation.png)
+| 模型类型 | 引擎 | 用途 |
+| --- | --- | --- |
+| 对话模型 | `vllm_rocm` | 对话、工具调用、结构化输出和推理 |
+| Embedding | `transformers_rocm` | 知识库、记忆和 Agent 检索 |
 
-支持的图片能力取决于具体模型和供应商，常见能力包括：
+模型文件先在“本地模型”页面注册，再建立推理 Profile。Profile 保存 dtype、量化方式、Tensor Parallel、上下文长度和显存策略。模型加载进程会检查 ROCm PyTorch 环境与本地模型目录。
 
-- 文生图。
-- 图生图。
-- 图片编辑。
-- 多图参考。
-- 批量生成。
-
-生成结果会保存为运行产物，可在对话和工作区中查看。
-
-## 支持的文本模型 Provider
-
-文本模型经过统一模型协议层适配。总体遵循 OpenAI 风格的消息、工具调用、结构化输出和多模态输入抽象；不同供应商的差异由 adapter 处理。
-
-| Provider | 配置值 | 协议形态 | 工具调用 | 结构化输出 | 思考模式 | 图片输入 |
-| --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Chat Completions | `openai_chat` | Chat Completions | 支持 | 支持 | 按模型能力 | 按模型能力 |
-| OpenAI 兼容服务 | `openai_compatible_chat` | Chat Completions 兼容 | 按服务能力 | 支持 | 按服务能力 | 按模型能力 |
-| Anthropic Claude | `anthropic` | Messages API | 按模型能力 | 支持 | 支持 | 按模型能力 |
-| DeepSeek | `deepseek` | OpenAI 兼容 | 按模型能力 | 支持 | 支持 `reasoning_content` | 按模型能力 |
-| 千问 / 百炼 / DashScope | `qwen` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 智谱 / Z.ai GLM | `zhipu` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| Kimi / Moonshot | `kimi` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| MiniMax | `minimax` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 小米 MiMo | `mimo` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 腾讯混元 | `hunyuan` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-
-注意：
-
-- “按模型能力”表示协议层支持该方向，最终是否可用取决于具体模型。
-- DeepSeek 思考模式下，工具调用轮次需要按供应商要求回传 reasoning 内容。
-- 图片输入需要同时满足：前端上传了图片、主模型配置为多模态、模型本身支持图片输入。
-
-## 支持的图片生成 Provider
-
-| Provider | 配置值 | 文生图 | 图生图 | 图片编辑 | 多图参考 | 批量生成 |
-| --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Images | `openai_image` | 支持 | 支持 | 支持 | 支持 | 支持 |
-| 千问 / 万相 | `qwen` | 支持 | 支持 | 支持 | 支持 | 支持 |
-| 豆包 Seedream / 火山方舟 | `volcengine_seedream` | 支持 | 支持 | 支持 | 支持 | 支持 |
-
-千问万相还支持这些别名：
-
-- `wanx`
-- `dashscope_wanx`
-- `aliyun_wanx`
+RadeonCloud 上可使用 [docker-compose.rocm.yml](deploy/docker-compose.rocm.yml) 启动对话与 Embedding 服务。部署参数见 [rocm.env.example](deploy/rocm.env.example)。
 
 ## 附件与工作区
 
@@ -301,7 +242,7 @@ npm run build
 
 - `/api/runtime`：运行时事件、命令和状态。
 - `/api/agent-packages`：已发布 Agent 包、实例和会话。
-- `/api/model-pool`：模型池、凭证、模型配置和用量统计。
+- `/api/model-pool`：本地模型文件、推理配置、ROCm 状态和用量统计。
 - `/api/workspace`：工作区根目录、文件列表、文件读取和原始文件预览。
 - `/api/knowledge`：知识源、文档、检索和索引。
 - `/api/scheduler`：定时任务、运行记录和立即运行。
@@ -388,23 +329,23 @@ npm install
 
 - AgentPackage 是否已初始化完成。
 - Docker daemon 是否正常。
-- 模型池中的模型凭证是否启用。
+- 本地模型文件和推理 Profile 是否启用。
 - AgentPackage 的模型配置是否引用了存在且启用的 `profile_id`。
 - 后端日志和该 Agent 的 trace。
 
 ### 思考模式报错
 
-思考模式依赖供应商规则。尤其是 DeepSeek 工具调用链路需要在后续请求中回传必要 reasoning 内容。
+思考模式依赖所选本地模型的 chat template 和工具调用能力。
 
 处理方式：
 
 - 确认模型确实支持 reasoning/thinking。
-- 确认 provider 配置正确。
-- 关闭思考模式后复现，判断是否为 provider 规则问题。
+- 确认本地模型 Profile 的 reasoning 能力声明正确。
+- 检查 vLLM 日志和模型 chat template。
 
 ## 数据与安全边界
 
-- AgentPackage 保存模型 `profile_id` 和能力要求，不保存真实密钥。
+- AgentPackage 只保存本地模型 `profile_id` 和能力要求。
 - `.env`、`.agentfactory/`、`.agent_runtime/` 是本地私有运行状态。
 - 删除会话会连带清理对应 trace/checkpoint 等运行记录。
 - 工具审批策略应按任务风险调整，不建议长期对未知工具全部自动放行。

@@ -5,26 +5,27 @@ from functools import lru_cache
 import os
 
 from langchain_core.embeddings import Embeddings
-from langchain_openai import OpenAIEmbeddings
+
+from agent_factory.local_inference.config import load_local_embedding_endpoint
+from agent_factory.local_inference.embedding import LocalEmbeddingModel
 
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingModelSettings:
-    provider: str
+    profile_id: str | None
     model: str | None
-    api_key: str | None
-    base_url: str | None
     dims: int | None
+    engine: str = "transformers_rocm"
+    normalize_embeddings: bool = True
     timeout_seconds: float | None = None
 
     @property
     def available(self) -> bool:
-        return (
-            self.provider == "openai_compatible"
-            and bool(self.model)
-            and bool(self.api_key)
-            and bool(self.base_url)
-            and bool(self.dims)
+        return bool(
+            self.profile_id
+            and self.model
+            and self.dims
+            and self.engine == "transformers_rocm"
         )
 
 
@@ -45,45 +46,33 @@ def _get_embedding_model() -> Embeddings | None:
     settings = _embedding_settings()
     if not settings.available:
         return None
-    kwargs = {
-        "model": settings.model,
-        "api_key": settings.api_key,
-        "base_url": settings.base_url,
-        "dimensions": settings.dims,
-        "tiktoken_enabled": False,
-        "check_embedding_ctx_length": False,
-    }
-    if settings.timeout_seconds is not None:
-        kwargs["timeout"] = settings.timeout_seconds
-    return OpenAIEmbeddings(**kwargs)
-
-
-def _embedding_settings() -> EmbeddingModelSettings:
-    return EmbeddingModelSettings(
-        provider=(os.getenv("AGENTFACTORY_EMBEDDING_PROVIDER", "openai_compatible").strip().lower() or "openai_compatible"),
-        model=os.getenv("AGENTFACTORY_EMBEDDING_MODEL"),
-        api_key=os.getenv("AGENTFACTORY_EMBEDDING_API_KEY"),
-        base_url=os.getenv("AGENTFACTORY_EMBEDDING_BASE_URL"),
-        dims=_env_int("AGENTFACTORY_EMBEDDING_DIMS"),
-        timeout_seconds=_env_float("AGENTFACTORY_EMBEDDING_TIMEOUT_SECONDS"),
+    endpoint = load_local_embedding_endpoint(timeout_seconds=settings.timeout_seconds)
+    return LocalEmbeddingModel(
+        profile_id=str(settings.profile_id),
+        endpoint=endpoint,
+        dimensions=int(settings.dims),
     )
 
 
-def _env_float(name: str) -> float | None:
-    value = os.getenv(name)
-    if not value:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
+def _embedding_settings() -> EmbeddingModelSettings:
+    profile_id = str(os.getenv("AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID") or "").strip()
+    if not profile_id:
+        return EmbeddingModelSettings(profile_id=None, model=None, dims=None)
+    from agent_factory.model_pool.store import ModelPoolStore
 
-
-def _env_int(name: str) -> int | None:
-    value = os.getenv(name)
-    if not value:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
+    profile = ModelPoolStore().require_profile(profile_id)
+    if profile.kind != "embedding":
+        raise ValueError(f"local model profile {profile_id} is not an embedding profile")
+    if not profile.enabled:
+        raise ValueError(f"local embedding profile is disabled: {profile_id}")
+    artifact = ModelPoolStore().require_artifact(profile.artifact_id)
+    if not artifact.enabled:
+        raise ValueError(f"local embedding artifact is disabled: {artifact.artifact_id}")
+    return EmbeddingModelSettings(
+        profile_id=profile.profile_id,
+        model=profile.served_model_name,
+        dims=profile.embedding_dimensions,
+        engine=profile.engine,
+        normalize_embeddings=profile.normalize_embeddings,
+        timeout_seconds=profile.limits.timeout_seconds,
+    )

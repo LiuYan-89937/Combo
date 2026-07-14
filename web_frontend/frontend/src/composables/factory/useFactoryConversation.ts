@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { modelPoolApi, type ModelPoolProfile } from '@/api/modelPool'
+import { modelPoolApi, type LocalModelProfile } from '@/api/modelPool'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
@@ -21,7 +21,7 @@ export function useFactoryConversation() {
   const workspaceStore = useWorkspaceStore()
   const commands = useCommand()
   const { t } = useI18n()
-  const chatModelProfiles = ref<ModelPoolProfile[]>([])
+  const chatModelProfiles = ref<LocalModelProfile[]>([])
   const selectedMainModelProfileId = ref(localStorage.getItem(MAIN_MODEL_PROFILE_STORAGE_KEY) || '')
   const reasoningIntensity = ref<number | null>(loadReasoningIntensity())
 
@@ -51,7 +51,7 @@ export function useFactoryConversation() {
   const runtimeMainModelOptions = computed(() => [
     { label: t('chat.defaultMainModel'), value: '' },
     ...chatModelProfiles.value.map((profile) => ({
-      label: profile.display_name || profile.model_name || profile.profile_id,
+      label: profile.display_name || profile.served_model_name || profile.profile_id,
       value: profile.profile_id,
     })),
   ])
@@ -99,7 +99,7 @@ export function useFactoryConversation() {
     try {
       const response = await modelPoolApi.profiles()
       chatModelProfiles.value = response.profiles.filter((profile) => (
-        profile.kind === 'chat' && profile.enabled && profile.credential?.enabled !== false
+        profile.kind === 'chat' && profile.enabled && profile.artifact?.enabled !== false
       ))
       if (
         selectedMainModelProfileId.value

@@ -135,13 +135,13 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "contract_key": {"type": "string", "enum": sorted(RESETTABLE_CONTRACT_KEYS)},
                 "bindings": {
                     "type": "object",
-                    "description": "Model bindings keyed by runtime role. Use source=model_pool with profile_id or source=env without a profile_id.",
+                    "description": "Local model bindings keyed by runtime role. Use source=local_registry with profile_id.",
                     "properties": {
                         role: {
                             "type": "object",
                             "properties": {
                                 "profile_id": {"type": "string"},
-                                "source": {"type": "string", "enum": ["model_pool", "env"]},
+                                "source": {"type": "string", "enum": ["local_registry"]},
                                 "selection_source": {"type": "string", "enum": ["auto", "manual"]},
                                 "reason": {"type": "string"},
                                 "required_capabilities": {"type": "object", "additionalProperties": True},
@@ -185,10 +185,10 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                         "type": "object",
                         "properties": {
                             "profile_id": {"type": "string"},
-                            "source": {"type": "string", "enum": ["model_pool", "env"]},
+                            "source": {"type": "string", "enum": ["local_registry"]},
                             "capability": {
                                 "type": "string",
-                                "enum": ["image_input", "image_output", "image_edit", "audio_input", "audio_output"],
+                                "enum": ["image_input", "audio_input"],
                             },
                             "selection_source": {"type": "string", "enum": ["auto", "manual"]},
                             "reason": {"type": "string"},

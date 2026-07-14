@@ -55,7 +55,7 @@ export interface AgentPackageModelContractView {
   version: string
   bindings: Record<string, {
     profile_id?: string
-    source?: 'model_pool' | 'env' | string
+    source?: 'local_registry' | 'local_default' | string
     selection_source?: string
     reason?: string
     required_capabilities?: Record<string, any>
@@ -63,7 +63,7 @@ export interface AgentPackageModelContractView {
   }>
   tool_bindings?: Record<string, {
     profile_id?: string
-    source?: 'model_pool' | 'env' | string
+    source?: 'local_registry' | 'local_default' | string
     capability?: string
     selection_source?: string
     reason?: string

@@ -48,14 +48,10 @@ web_check_env_configuration() {
     fi
 
     local required_vars=(
-        "AGENTFACTORY_MODEL_BASE_URL"
-        "AGENTFACTORY_MODEL_API_KEY"
-        "AGENTFACTORY_MAIN_MODEL"
-        "AGENTFACTORY_TASK_MODEL"
-        "AGENTFACTORY_COMPRESSION_MODEL"
-        "AGENTFACTORY_EMBEDDING_BASE_URL"
-        "AGENTFACTORY_EMBEDDING_API_KEY"
-        "AGENTFACTORY_EMBEDDING_MODEL"
+        "AGENTFACTORY_MAIN_MODEL_PROFILE_ID"
+        "AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID"
+        "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT"
+        "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT"
         "AGENTFACTORY_RESOURCE_MASTER_KEY"
     )
 
@@ -132,8 +128,8 @@ web_sync_frontend_dependencies() {
 }
 
 web_ensure_builtin_web_search_mcp() {
-    if [[ "${AGENTFACTORY_SKIP_WEB_SEARCH_MCP_SETUP:-0}" == "1" ]]; then
-        echo "Skipping built-in web search MCP setup because AGENTFACTORY_SKIP_WEB_SEARCH_MCP_SETUP=1"
+    if [[ "${AGENTFACTORY_SKIP_WEB_SEARCH_MCP_SETUP:-1}" == "1" ]]; then
+        echo "Skipping built-in web search MCP setup in local-only mode"
         return
     fi
 

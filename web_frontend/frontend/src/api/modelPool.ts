@@ -1,44 +1,38 @@
 import { requestJson, withQuery } from './http'
 
+export type LocalModelKind = 'chat' | 'embedding'
+export type LocalInferenceEngine = 'vllm_rocm' | 'transformers_rocm'
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
 
-export interface ModelProviderProfile {
-  provider_id: string
+export interface LocalEngine {
+  engine: LocalInferenceEngine
   display_name: string
-  kind: 'chat' | 'image_generation'
-  adapter_id: string
+  kind: LocalModelKind
   transport: string
-  default_base_url?: string
-  content_parts?: Record<string, string>
-  tools?: Record<string, string>
-  structured_output_methods?: string[]
-  default_structured_output_method?: string
-  reasoning?: Record<string, unknown>
-  cache_usage?: string
-  capabilities?: Record<string, unknown>
-  notes: string[]
 }
 
-export interface ModelPoolCredential {
-  credential_id: string
+export interface LocalModelArtifact {
+  artifact_id: string
   display_name: string
-  provider: string
-  base_url: string
-  api_key_masked: string
-  api_key_fingerprint: string
-  has_api_key: boolean
+  kind: LocalModelKind
+  local_path: string
+  tokenizer_path?: string | null
+  model_format: string
+  revision: string
+  checksum: string
+  license: string
   enabled: boolean
   created_at: string
   updated_at: string
 }
 
-export interface ModelPoolProfile {
+export interface LocalModelProfile {
   profile_id: string
   display_name: string
-  kind: 'chat' | 'image_generation'
-  provider: string
-  credential_id: string
-  model_name: string
+  kind: LocalModelKind
+  artifact_id: string
+  engine: LocalInferenceEngine
+  served_model_name: string
   enabled: boolean
   capabilities: {
     input_modalities: string[]
@@ -51,29 +45,32 @@ export interface ModelPoolProfile {
     reasoning_efforts: string[]
     reasoning_content: boolean
     cache_usage: boolean
-    text_to_image?: boolean
-    image_to_image?: boolean
-    image_edit?: boolean
-    multi_image_reference?: boolean
-    batch_generation?: boolean
-    async_job?: boolean
   }
   limits: {
     max_input_tokens?: number | null
     max_output_tokens?: number | null
     timeout_seconds?: number | null
   }
-  pricing: {
-    currency: string
-    input_per_1m_tokens?: number | null
-    output_per_1m_tokens?: number | null
-    cache_hit_per_1m_tokens?: number | null
-    image_input_unit_price?: number | null
-    image_output_unit_price?: number | null
-    image_edit_unit_price?: number | null
+  inference: {
+    dtype: string
+    quantization?: string | null
+    tensor_parallel_size: number
+    gpu_memory_utilization?: number | null
+    trust_remote_code: boolean
   }
+  embedding_dimensions?: number | null
+  normalize_embeddings: boolean
   notes: string
-  credential?: ModelPoolCredential | null
+  artifact?: LocalModelArtifact | null
+}
+
+export interface RocmRuntimeInfo {
+  available: boolean
+  torch_version: string
+  hip_version: string
+  device_count: number
+  devices: Array<{ index: number; name: string; total_memory_bytes: number }>
+  error: string
 }
 
 export interface ModelUsageTotals {
@@ -88,58 +85,41 @@ export interface ModelUsageTotals {
   estimated_cost: number | null
 }
 
-export interface ModelUsageGroup {
-  key: string
-  label: string
-  provider: string
-  provider_display_name: string
-  model_name: string
-  model_profile_id: string
-  agent_id: string
-  agent_label: string
-  totals: ModelUsageTotals
-}
-
-export interface ModelUsageSeries {
-  key: string
-  label: string
-  points: Array<{ bucket: string } & ModelUsageTotals>
-}
-
 export interface ModelUsageSummary {
   group_by: ModelUsageGroupBy
   since: string
   until: string
   totals: ModelUsageTotals
-  groups: ModelUsageGroup[]
-  series: ModelUsageSeries[]
+  groups: Array<Record<string, unknown>>
+  series: Array<Record<string, unknown>>
 }
 
 export const modelPoolApi = {
-  providers: () => requestJson<{ providers: ModelProviderProfile[] }>('/api/model-pool/providers'),
-  credentials: () => requestJson<{ credentials: ModelPoolCredential[] }>('/api/model-pool/credentials'),
-  saveCredential: (payload: Record<string, unknown>) =>
-    requestJson<{ credential: ModelPoolCredential }>('/api/model-pool/credentials', {
+  engines: () => requestJson<{ engines: LocalEngine[] }>('/api/model-pool/engines'),
+  rocmRuntime: () => requestJson<RocmRuntimeInfo>('/api/model-pool/runtime/rocm'),
+  artifacts: () => requestJson<{ artifacts: LocalModelArtifact[] }>('/api/model-pool/artifacts'),
+  saveArtifact: (payload: Record<string, unknown>) =>
+    requestJson<{ artifact: LocalModelArtifact }>('/api/model-pool/artifacts', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  patchCredential: (credentialId: string, payload: Record<string, unknown>) =>
-    requestJson<{ credential: ModelPoolCredential }>(`/api/model-pool/credentials/${encodeURIComponent(credentialId)}`, {
+  patchArtifact: (artifactId: string, payload: Record<string, unknown>) =>
+    requestJson<{ artifact: LocalModelArtifact }>(`/api/model-pool/artifacts/${encodeURIComponent(artifactId)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
-  deleteCredential: (credentialId: string) =>
-    requestJson<{ deleted: boolean }>(`/api/model-pool/credentials/${encodeURIComponent(credentialId)}`, {
+  deleteArtifact: (artifactId: string) =>
+    requestJson<{ deleted: boolean }>(`/api/model-pool/artifacts/${encodeURIComponent(artifactId)}`, {
       method: 'DELETE',
     }),
-  profiles: () => requestJson<{ profiles: ModelPoolProfile[] }>('/api/model-pool/profiles'),
+  profiles: () => requestJson<{ profiles: LocalModelProfile[] }>('/api/model-pool/profiles'),
   saveProfile: (payload: Record<string, unknown>) =>
-    requestJson<{ profile: ModelPoolProfile }>('/api/model-pool/profiles', {
+    requestJson<{ profile: LocalModelProfile }>('/api/model-pool/profiles', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
   patchProfile: (profileId: string, payload: Record<string, unknown>) =>
-    requestJson<{ profile: ModelPoolProfile }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
+    requestJson<{ profile: LocalModelProfile }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
@@ -147,16 +127,12 @@ export const modelPoolApi = {
     requestJson<{ deleted: boolean }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
       method: 'DELETE',
     }),
-  pingProfile: (profileId: string) =>
-    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview: string }>(
-      `/api/model-pool/profiles/${encodeURIComponent(profileId)}/ping`,
-      { method: 'POST' },
-    ),
+  checkProfile: (profileId: string) =>
+    requestJson<Record<string, unknown>>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}/check`, {
+      method: 'POST',
+    }),
   usage: (params: { groupBy?: ModelUsageGroupBy; days?: number } = {}) =>
     requestJson<ModelUsageSummary>(
-      withQuery('/api/model-pool/usage', {
-        group_by: params.groupBy,
-        days: params.days,
-      }),
+      withQuery('/api/model-pool/usage', { group_by: params.groupBy, days: params.days }),
     ),
 }

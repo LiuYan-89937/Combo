@@ -1,917 +1,362 @@
 <template>
-  <div class="model-pool-view">
+  <div class="local-model-view">
     <div class="context-bar">
       <div class="context-title">
-        <n-text strong>{{ t('modelPool.title') }}</n-text>
-        <n-text depth="3" class="context-subtitle">{{ t('modelPool.subtitle') }}</n-text>
+        <n-text strong>{{ t('localModel.title') }}</n-text>
+        <n-text depth="3" class="context-subtitle">{{ t('localModel.subtitle') }}</n-text>
       </div>
-      <n-button @click="refresh" :loading="loading">
-        <template #icon>
-          <n-icon><Refresh /></n-icon>
-        </template>
-        {{ t('common.refresh') }}
-      </n-button>
+      <n-button :loading="loading" @click="refresh">{{ t('common.refresh') }}</n-button>
     </div>
 
+    <n-alert :type="rocm?.available ? 'success' : 'warning'" :title="t('localModel.rocmRuntime')">
+      <template v-if="rocm?.available">
+        ROCm {{ rocm.hip_version }} · PyTorch {{ rocm.torch_version }} ·
+        {{ t('localModel.deviceCount', { count: rocm.device_count }) }}
+        <div v-for="device in rocm.devices" :key="device.index">
+          GPU {{ device.index }} · {{ device.name }} · {{ formatBytes(device.total_memory_bytes) }}
+        </div>
+      </template>
+      <template v-else>{{ rocm?.error || t('localModel.rocmUnchecked') }}</template>
+    </n-alert>
+
     <n-tabs type="line" animated>
-      <n-tab-pane name="profiles" :tab="t('modelPool.profiles')">
+      <n-tab-pane name="profiles" :tab="t('localModel.profiles')">
         <div class="tab-content">
           <div class="content-header">
-            <n-text>{{ t('modelPool.profileHint') }}</n-text>
-            <n-button type="primary" @click="openProfile()">
-              <template #icon>
-                <n-icon><Add /></n-icon>
-              </template>
-              {{ t('modelPool.addProfile') }}
+            <n-text>{{ t('localModel.profileHint') }}</n-text>
+            <n-button type="primary" :disabled="!artifacts.length" @click="openProfile()">
+              {{ t('localModel.addProfile') }}
             </n-button>
           </div>
-
-          <n-list v-if="profiles.length" bordered class="model-list">
+          <n-list v-if="profiles.length" bordered>
             <n-list-item v-for="profile in profiles" :key="profile.profile_id">
               <n-thing>
                 <template #header>
                   <n-space align="center">
                     <n-text strong>{{ profile.display_name }}</n-text>
-                    <n-tag size="small" :bordered="false">{{ profile.model_name }}</n-tag>
-                    <n-tag size="small" :bordered="false">{{ profile.kind === 'image_generation' ? t('modelPool.imageGenerationModel') : t('modelPool.chatModel') }}</n-tag>
+                    <n-tag size="small">{{ profile.kind }}</n-tag>
+                    <n-tag size="small">{{ profile.engine }}</n-tag>
                     <n-tag size="small" :type="profile.enabled ? 'success' : 'default'">
                       {{ profile.enabled ? t('common.enabled') : t('common.disabled') }}
                     </n-tag>
                   </n-space>
                 </template>
                 <template #description>
-                  <div class="item-meta">
-                    {{ providerLabel(profile.provider) }}
-                    <span v-if="profile.limits.max_input_tokens"> · {{ formatTokens(profile.limits.max_input_tokens) }}</span>
-                  </div>
-                  <div class="capabilities">
-                    <n-tag v-for="item in capabilityTags(profile)" :key="item" size="small" :bordered="false">
-                      {{ item }}
-                    </n-tag>
+                  <div>{{ profile.served_model_name }} · {{ profile.artifact?.local_path }}</div>
+                  <div>
+                    {{ profile.inference.dtype }} · TP {{ profile.inference.tensor_parallel_size }}
+                    <span v-if="profile.inference.quantization"> · {{ profile.inference.quantization }}</span>
                   </div>
                 </template>
                 <template #action>
                   <n-space>
-                    <n-switch :value="profile.enabled" @update:value="(value) => setProfileEnabled(profile, value)" />
-                    <n-button
-                      v-if="profile.kind === 'chat'"
-                      size="small"
-                      :loading="testingProfileId === profile.profile_id"
-                      @click="pingProfile(profile)"
-                    >
-                      <template #icon>
-                        <n-icon><Pulse /></n-icon>
-                      </template>
-                      {{ t('modelPool.testConnection') }}
+                    <n-button size="small" :loading="checkingProfileId === profile.profile_id" @click="checkProfile(profile)">
+                      {{ t('localModel.checkLoad') }}
                     </n-button>
                     <n-button size="small" @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
-                    <n-button size="small" tertiary type="error" @click="confirmDeleteProfile(profile)">
-                      {{ t('common.delete') }}
-                    </n-button>
+                    <n-button size="small" type="error" tertiary @click="removeProfile(profile)">{{ t('common.delete') }}</n-button>
                   </n-space>
                 </template>
               </n-thing>
             </n-list-item>
           </n-list>
-
-          <n-empty v-else class="manager-empty" :description="t('modelPool.noProfiles')">
-            <template #extra>
-              <n-button type="primary" @click="openProfile()">{{ t('modelPool.addProfile') }}</n-button>
-            </template>
-          </n-empty>
+          <n-empty v-else :description="t('localModel.noProfiles')" />
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="credentials" :tab="t('modelPool.credentials')">
+      <n-tab-pane name="artifacts" :tab="t('localModel.artifacts')">
         <div class="tab-content">
           <div class="content-header">
-            <n-text>{{ t('modelPool.credentialHint') }}</n-text>
-            <n-button type="primary" @click="openCredential()">
-              <template #icon>
-                <n-icon><Add /></n-icon>
-              </template>
-              {{ t('modelPool.addCredential') }}
-            </n-button>
+            <n-text>{{ t('localModel.artifactHint') }}</n-text>
+            <n-button type="primary" @click="openArtifact()">{{ t('localModel.addArtifact') }}</n-button>
           </div>
-
-          <n-list v-if="credentials.length" bordered class="model-list">
-            <n-list-item v-for="credential in credentials" :key="credential.credential_id">
+          <n-list v-if="artifacts.length" bordered>
+            <n-list-item v-for="artifact in artifacts" :key="artifact.artifact_id">
               <n-thing>
                 <template #header>
                   <n-space align="center">
-                    <n-text strong>{{ credential.display_name }}</n-text>
-                    <n-tag size="small">{{ providerLabel(credential.provider) }}</n-tag>
-                    <n-tag size="small" :type="credential.enabled ? 'success' : 'default'">
-                      {{ credential.enabled ? t('common.enabled') : t('common.disabled') }}
+                    <n-text strong>{{ artifact.display_name }}</n-text>
+                    <n-tag size="small">{{ artifact.kind }}</n-tag>
+                    <n-tag size="small" :type="artifact.enabled ? 'success' : 'default'">
+                      {{ artifact.enabled ? t('common.enabled') : t('common.disabled') }}
                     </n-tag>
                   </n-space>
                 </template>
                 <template #description>
-                  <div class="item-meta">{{ credential.base_url }}</div>
-                  <div class="item-meta">
-                    {{ credential.api_key_masked || t('modelPool.noApiKey') }}
-                    <span v-if="credential.api_key_fingerprint"> · {{ credential.api_key_fingerprint }}</span>
+                  <div>{{ artifact.local_path }}</div>
+                  <div v-if="artifact.revision || artifact.checksum">
+                    {{ artifact.revision }} <span v-if="artifact.checksum">· {{ artifact.checksum }}</span>
                   </div>
                 </template>
                 <template #action>
                   <n-space>
-                    <n-switch :value="credential.enabled" @update:value="(value) => setCredentialEnabled(credential, value)" />
-                    <n-button size="small" @click="openCredential(credential)">{{ t('common.edit') }}</n-button>
-                    <n-button size="small" tertiary type="error" @click="confirmDeleteCredential(credential)">
-                      {{ t('common.delete') }}
-                    </n-button>
+                    <n-button size="small" @click="openArtifact(artifact)">{{ t('common.edit') }}</n-button>
+                    <n-button size="small" type="error" tertiary @click="removeArtifact(artifact)">{{ t('common.delete') }}</n-button>
                   </n-space>
                 </template>
               </n-thing>
             </n-list-item>
           </n-list>
-
-          <n-empty v-else class="manager-empty" :description="t('modelPool.noCredentials')">
-            <template #extra>
-              <n-button type="primary" @click="openCredential()">{{ t('modelPool.addCredential') }}</n-button>
-            </template>
-          </n-empty>
-        </div>
-      </n-tab-pane>
-
-      <n-tab-pane name="usage" :tab="t('modelPool.usage')">
-        <div class="tab-content">
-          <div class="content-header">
-            <n-space align="center" wrap>
-              <n-radio-group v-model:value="usageGroupBy" class="soft-segmented-control" @update:value="loadUsage">
-                <n-radio-button value="model">{{ t('modelPool.usageByModel') }}</n-radio-button>
-                <n-radio-button value="provider">{{ t('modelPool.usageByProvider') }}</n-radio-button>
-                <n-radio-button value="agent">{{ t('modelPool.usageByAgent') }}</n-radio-button>
-              </n-radio-group>
-              <n-radio-group v-model:value="usageChartType" class="soft-segmented-control">
-                <n-radio-button value="line">{{ t('modelPool.usageLineChart') }}</n-radio-button>
-                <n-radio-button value="bar">{{ t('modelPool.usageBarChart') }}</n-radio-button>
-              </n-radio-group>
-              <n-select
-                v-model:value="usageDays"
-                class="usage-range-select"
-                :options="usageDayOptions"
-                @update:value="loadUsage"
-              />
-            </n-space>
-            <n-button @click="loadUsage" :loading="usageLoading">
-              <template #icon>
-                <n-icon><Refresh /></n-icon>
-              </template>
-              {{ t('common.refresh') }}
-            </n-button>
-          </div>
-
-          <div class="usage-overview">
-            <div class="usage-metric">
-              <span>{{ t('modelPool.usageCalls') }}</span>
-              <strong>{{ formatNumber(usageSummary?.totals.call_count || 0) }}</strong>
-            </div>
-            <div class="usage-metric">
-              <span>{{ t('modelPool.usageTotalTokens') }}</span>
-              <strong>{{ formatTokens(usageSummary?.totals.total_tokens || 0) }}</strong>
-            </div>
-            <div class="usage-metric">
-              <span>{{ t('modelPool.usageCacheHit') }}</span>
-              <strong>{{ formatPercent(usageSummary?.totals.cache_hit_ratio) }}</strong>
-            </div>
-            <div class="usage-metric">
-              <span>{{ t('modelPool.usageCost') }}</span>
-              <strong>{{ formatCost(usageSummary?.totals.estimated_cost) }}</strong>
-            </div>
-          </div>
-
-          <div class="usage-chart-panel">
-            <v-chart v-if="usageSummary?.series.length" class="usage-chart" :option="usageChartOptions" autoresize />
-            <n-empty v-else class="manager-empty" :description="t('modelPool.noUsage')" />
-          </div>
-
-          <n-data-table
-            :columns="usageColumns"
-            :data="usageSummary?.groups || []"
-            :loading="usageLoading"
-            :row-key="(row) => row.key"
-            size="small"
-          />
+          <n-empty v-else :description="t('localModel.noArtifacts')" />
         </div>
       </n-tab-pane>
     </n-tabs>
 
-    <n-modal
-      v-model:show="credentialModalOpen"
-      preset="dialog"
-      :title="credentialEditing ? t('modelPool.editCredential') : t('modelPool.addCredential')"
-    >
+    <n-modal v-model:show="artifactModalOpen" preset="dialog" :title="t('localModel.artifactEditor')">
       <n-form label-placement="top">
-        <n-form-item :label="t('modelPool.displayName')">
-          <n-input v-model:value="credentialForm.display_name" :placeholder="t('modelPool.credentialNamePlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.provider')">
-          <n-select v-model:value="credentialForm.provider" :options="providerOptions" :placeholder="t('modelPool.providerPlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.baseUrl')">
-          <n-input v-model:value="credentialForm.base_url" :placeholder="t('modelPool.baseUrlPlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="credentialEditing ? t('modelPool.replaceApiKey') : t('modelPool.apiKey')">
-          <n-input v-model:value="credentialForm.api_key" type="password" show-password-on="mousedown" :placeholder="t('modelPool.apiKeyPlaceholder')" />
-        </n-form-item>
+        <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="artifactForm.display_name" /></n-form-item>
+        <n-form-item :label="t('localModel.kind')"><n-select v-model:value="artifactForm.kind" :options="kindOptions" /></n-form-item>
+        <n-form-item :label="t('localModel.localPath')"><n-input v-model:value="artifactForm.local_path" /></n-form-item>
+        <n-form-item :label="t('localModel.tokenizerPath')"><n-input v-model:value="artifactForm.tokenizer_path" clearable /></n-form-item>
+        <n-form-item :label="t('localModel.revision')"><n-input v-model:value="artifactForm.revision" clearable /></n-form-item>
+        <n-form-item :label="t('localModel.checksum')"><n-input v-model:value="artifactForm.checksum" clearable /></n-form-item>
+        <n-checkbox v-model:checked="artifactForm.enabled">{{ t('common.enabled') }}</n-checkbox>
       </n-form>
       <template #action>
-        <n-space justify="end">
-          <n-button @click="credentialModalOpen = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="saving" @click="saveCredential">{{ t('common.save') }}</n-button>
-        </n-space>
+        <n-button @click="artifactModalOpen = false">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :loading="saving" @click="saveArtifact">{{ t('common.save') }}</n-button>
       </template>
     </n-modal>
 
-    <n-modal
-      v-model:show="profileModalOpen"
-      preset="dialog"
-      :title="profileEditing ? t('modelPool.editProfile') : t('modelPool.addProfile')"
-      style="width: min(720px, 92vw)"
-    >
+    <n-modal v-model:show="profileModalOpen" preset="dialog" :title="t('localModel.profileEditor')" style="width: min(760px, 92vw)">
       <n-form label-placement="top">
-        <n-form-item :label="t('modelPool.displayName')">
-          <n-input v-model:value="profileForm.display_name" :placeholder="t('modelPool.profileNamePlaceholder')" />
+        <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="profileForm.display_name" /></n-form-item>
+        <n-form-item :label="t('localModel.artifact')">
+          <n-select v-model:value="profileForm.artifact_id" :options="artifactOptions" @update:value="syncProfileKind" />
         </n-form-item>
-        <n-form-item :label="t('modelPool.modelType')">
-          <n-select v-model:value="profileForm.kind" :options="modelKindOptions" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.credential')">
-          <n-select v-model:value="profileForm.credential_id" :options="credentialOptions" :placeholder="t('modelPool.credentialPlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.modelName')">
-          <n-input v-model:value="profileForm.model_name" :placeholder="t('modelPool.modelNamePlaceholder')" />
-        </n-form-item>
-        <n-form-item v-if="profileForm.kind === 'chat'" :label="t('modelPool.capabilities')">
-          <n-space vertical>
-            <n-checkbox v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_input">{{ t('modelPool.imageInput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_output">{{ t('modelPool.imageOutput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.audio_input">{{ t('modelPool.audioInput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.audio_output">{{ t('modelPool.audioOutput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
-          </n-space>
-        </n-form-item>
-        <n-form-item v-else :label="t('modelPool.imageCapabilities')">
-          <n-space vertical>
-            <n-checkbox v-model:checked="profileForm.text_to_image">{{ t('modelPool.textToImage') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_to_image">{{ t('modelPool.imageToImage') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_edit">{{ t('modelPool.imageEdit') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.multi_image_reference">{{ t('modelPool.multiImageReference') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.batch_generation">{{ t('modelPool.batchGeneration') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.async_job">{{ t('modelPool.asyncJob') }}</n-checkbox>
-          </n-space>
-        </n-form-item>
-        <div v-if="profileForm.kind === 'chat'" class="form-grid">
+        <n-form-item :label="t('localModel.servedModelName')"><n-input v-model:value="profileForm.served_model_name" /></n-form-item>
+        <div class="form-grid">
+          <n-form-item :label="t('localModel.dtype')"><n-input v-model:value="profileForm.dtype" /></n-form-item>
+          <n-form-item :label="t('localModel.quantization')"><n-input v-model:value="profileForm.quantization" clearable /></n-form-item>
+          <n-form-item :label="t('localModel.tensorParallel')">
+            <n-input-number v-model:value="profileForm.tensor_parallel_size" :min="1" />
+          </n-form-item>
+          <n-form-item :label="t('localModel.gpuMemoryUtilization')">
+            <n-input-number v-model:value="profileForm.gpu_memory_utilization" :min="0.01" :max="1" :step="0.05" clearable />
+          </n-form-item>
           <n-form-item :label="t('modelPool.maxInput')">
             <n-input-number v-model:value="profileForm.max_input_tokens" :min="1" clearable />
           </n-form-item>
           <n-form-item :label="t('modelPool.maxOutput')">
             <n-input-number v-model:value="profileForm.max_output_tokens" :min="1" clearable />
           </n-form-item>
-          <n-form-item :label="t('modelPool.inputPrice')">
-            <n-input-number v-model:value="profileForm.input_per_1m_tokens" :min="0" clearable />
-          </n-form-item>
-          <n-form-item :label="t('modelPool.outputPrice')">
-            <n-input-number v-model:value="profileForm.output_per_1m_tokens" :min="0" clearable />
+          <n-form-item v-if="profileForm.kind === 'embedding'" :label="t('localModel.embeddingDimensions')">
+            <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" />
           </n-form-item>
         </div>
-        <div v-else class="form-grid">
-          <n-form-item :label="t('modelPool.defaultImageCount')">
-            <n-input-number v-model:value="profileForm.max_output_tokens" :min="1" :max="4" clearable />
-          </n-form-item>
-          <n-form-item :label="t('modelPool.timeoutSeconds')">
-            <n-input-number v-model:value="profileForm.timeout_seconds" :min="1" clearable />
-          </n-form-item>
-          <n-form-item :label="t('modelPool.imageOutputPrice')">
-            <n-input-number v-model:value="profileForm.image_output_unit_price" :min="0" clearable />
-          </n-form-item>
-          <n-form-item :label="t('modelPool.imageEditPrice')">
-            <n-input-number v-model:value="profileForm.image_edit_unit_price" :min="0" clearable />
-          </n-form-item>
-        </div>
-        <n-form-item :label="t('common.description')">
-          <n-input v-model:value="profileForm.notes" type="textarea" :placeholder="t('modelPool.notesPlaceholder')" />
-        </n-form-item>
+        <n-space vertical>
+          <n-checkbox v-model:checked="profileForm.enabled">{{ t('common.enabled') }}</n-checkbox>
+          <n-checkbox v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.normalize_embeddings">{{ t('localModel.normalizeEmbeddings') }}</n-checkbox>
+        </n-space>
       </n-form>
       <template #action>
-        <n-space justify="end">
-          <n-button @click="profileModalOpen = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="saving" @click="saveProfile">{{ t('common.save') }}</n-button>
-        </n-space>
+        <n-button @click="profileModalOpen = false">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :loading="saving" @click="saveProfile">{{ t('common.save') }}</n-button>
       </template>
     </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { use } from 'echarts/core'
-import { BarChart, LineChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
-import VChart from 'vue-echarts'
-import {
-  NButton,
-  NCheckbox,
-  NDataTable,
-  NEmpty,
-  NForm,
-  NFormItem,
-  NIcon,
-  NInput,
-  NInputNumber,
-  NList,
-  NListItem,
-  NModal,
-  NRadioButton,
-  NRadioGroup,
-  NSelect,
-  NSpace,
-  NSwitch,
-  NTabPane,
-  NTabs,
-  NTag,
-  NText,
-  NThing,
-  useDialog,
-  useMessage,
-  type DataTableColumns,
-} from 'naive-ui'
-import { Add, Pulse, Refresh } from '@/components/icons'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useDialog, useMessage } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 import {
   modelPoolApi,
-  type ModelPoolCredential,
-  type ModelPoolProfile,
-  type ModelProviderProfile,
-  type ModelUsageGroup,
-  type ModelUsageGroupBy,
-  type ModelUsageSummary,
+  type LocalModelArtifact,
+  type LocalModelKind,
+  type LocalModelProfile,
+  type RocmRuntimeInfo,
 } from '@/api/modelPool'
-import { useI18n } from '@/composables/useI18n'
-
-use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
 const { t } = useI18n()
-const message = useMessage()
 const dialog = useDialog()
-
+const message = useMessage()
 const loading = ref(false)
 const saving = ref(false)
-const testingProfileId = ref<string | null>(null)
-const providers = ref<ModelProviderProfile[]>([])
-const credentials = ref<ModelPoolCredential[]>([])
-const profiles = ref<ModelPoolProfile[]>([])
-const usageLoading = ref(false)
-const usageGroupBy = ref<ModelUsageGroupBy>('model')
-const usageChartType = ref<'line' | 'bar'>('line')
-const usageDays = ref(14)
-const usageSummary = ref<ModelUsageSummary | null>(null)
-const credentialModalOpen = ref(false)
+const checkingProfileId = ref('')
+const artifacts = ref<LocalModelArtifact[]>([])
+const profiles = ref<LocalModelProfile[]>([])
+const rocm = ref<RocmRuntimeInfo | null>(null)
+const artifactModalOpen = ref(false)
 const profileModalOpen = ref(false)
-const credentialEditing = ref<ModelPoolCredential | null>(null)
-const profileEditing = ref<ModelPoolProfile | null>(null)
+const artifactEditing = ref<LocalModelArtifact | null>(null)
+const profileEditing = ref<LocalModelProfile | null>(null)
 
-const credentialForm = reactive({
-  display_name: '',
-  provider: '',
-  base_url: '',
-  api_key: '',
+const artifactForm = reactive({
+  display_name: '', kind: 'chat' as LocalModelKind, local_path: '', tokenizer_path: '',
+  revision: '', checksum: '', enabled: true,
 })
-
 const profileForm = reactive({
-  kind: 'chat' as 'chat' | 'image_generation',
-  display_name: '',
-  credential_id: '',
-  model_name: '',
-  tool_calling: true,
-  reasoning_supported: false,
-  image_input: false,
-  image_output: false,
-  audio_input: false,
-  audio_output: false,
-  text_to_image: true,
-  image_to_image: false,
-  image_edit: false,
-  multi_image_reference: false,
-  batch_generation: true,
-  async_job: false,
-  max_input_tokens: null as number | null,
-  max_output_tokens: null as number | null,
-  timeout_seconds: null as number | null,
-  input_per_1m_tokens: null as number | null,
-  output_per_1m_tokens: null as number | null,
-  image_output_unit_price: null as number | null,
-  image_edit_unit_price: null as number | null,
-  notes: '',
+  display_name: '', artifact_id: '', kind: 'chat' as LocalModelKind,
+  served_model_name: '', dtype: '', quantization: '', tensor_parallel_size: 1,
+  gpu_memory_utilization: null as number | null, max_input_tokens: null as number | null,
+  max_output_tokens: null as number | null, embedding_dimensions: null as number | null,
+  trust_remote_code: false, tool_calling: true, reasoning_supported: false,
+  normalize_embeddings: true, enabled: true,
 })
 
-const modelKindOptions = computed(() => [
-  { label: t('modelPool.chatModel'), value: 'chat' },
-  { label: t('modelPool.imageGenerationModel'), value: 'image_generation' },
+const kindOptions = computed(() => [
+  { label: t('localModel.chat'), value: 'chat' },
+  { label: t('localModel.embedding'), value: 'embedding' },
 ])
-const providerOptions = computed(() =>
-  uniqueProviders().map((item) => ({ label: item.display_name, value: item.provider_id })),
-)
-const credentialOptions = computed(() =>
-  credentials.value
-    .filter((item) => providerSupportsKind(item.provider, profileForm.kind))
-    .map((item) => ({ label: `${item.display_name} · ${providerLabel(item.provider)}`, value: item.credential_id })),
-)
-const usageDayOptions = computed(() => [
-  { label: t('modelPool.usageLast7Days'), value: 7 },
-  { label: t('modelPool.usageLast14Days'), value: 14 },
-  { label: t('modelPool.usageLast30Days'), value: 30 },
-  { label: t('modelPool.usageLast90Days'), value: 90 },
-])
-const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
-  { title: t('modelPool.usageName'), key: 'label', minWidth: 180, ellipsis: { tooltip: true } },
-  { title: t('modelPool.usageCalls'), key: 'call_count', width: 96, render: (row) => formatNumber(row.totals.call_count) },
-  { title: t('modelPool.usageInput'), key: 'input_tokens', width: 120, render: (row) => formatTokens(row.totals.input_tokens) },
-  { title: t('modelPool.usageOutput'), key: 'output_tokens', width: 120, render: (row) => formatTokens(row.totals.output_tokens) },
-  { title: t('modelPool.usageTotalTokens'), key: 'total_tokens', width: 120, render: (row) => formatTokens(row.totals.total_tokens) },
-  { title: t('modelPool.usageReasoning'), key: 'reasoning_tokens', width: 120, render: (row) => formatTokens(row.totals.reasoning_tokens) },
-  { title: t('modelPool.usageCacheHit'), key: 'cache_hit_ratio', width: 110, render: (row) => formatPercent(row.totals.cache_hit_ratio) },
-  { title: t('modelPool.usageCost'), key: 'estimated_cost', width: 110, render: (row) => formatCost(row.totals.estimated_cost) },
-])
-const usageChartOptions = computed(() => {
-  const summary = usageSummary.value
-  const chartType = usageChartType.value
-  const buckets = Array.from(
-    new Set((summary?.series || []).flatMap((item) => item.points.map((point) => point.bucket))),
-  ).sort()
-  return {
-    tooltip: {
-      trigger: 'axis',
-      valueFormatter: (value: number) => formatTokens(value),
-    },
-    legend: {
-      top: 0,
-      type: 'scroll',
-    },
-    grid: {
-      left: 18,
-      right: 42,
-      top: 48,
-      bottom: 32,
-      containLabel: true,
-    },
-    xAxis: {
-      type: 'category',
-      boundaryGap: chartType === 'bar',
-      data: buckets,
-      axisLabel: {
-        hideOverlap: true,
-        margin: 12,
-      },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        formatter: (value: number) => formatTokens(value),
-      },
-      splitLine: {
-        lineStyle: {
-          color: 'rgba(0, 0, 0, 0.08)',
-        },
-      },
-    },
-    series: (summary?.series || []).map((item) => {
-      const pointsByBucket = new Map(item.points.map((point) => [point.bucket, point]))
-      return {
-        name: item.label,
-        type: chartType,
-        smooth: chartType === 'line',
-        symbol: chartType === 'line' ? 'circle' : undefined,
-        symbolSize: chartType === 'line' ? 6 : undefined,
-        barMaxWidth: chartType === 'bar' ? 28 : undefined,
-        barCategoryGap: chartType === 'bar' ? '32%' : undefined,
-        data: buckets.map((bucket) => pointsByBucket.get(bucket)?.total_tokens || 0),
-      }
-    }),
-  }
-})
-
-onMounted(refresh)
-
-watch(
-  () => profileForm.kind,
-  (kind) => {
-    if (!profileModalOpen.value) return
-    const selected = credentials.value.find((item) => item.credential_id === profileForm.credential_id)
-    if (selected && providerSupportsKind(selected.provider, kind)) return
-    profileForm.credential_id = firstCredentialForKind(kind)?.credential_id || ''
-  },
-)
+const artifactOptions = computed(() => artifacts.value.map((item) => ({
+  label: `${item.display_name} · ${item.kind}`,
+  value: item.artifact_id,
+})))
 
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [providerData, credentialData, profileData, usageData] = await Promise.all([
-      modelPoolApi.providers(),
-      modelPoolApi.credentials(),
-      modelPoolApi.profiles(),
-      modelPoolApi.usage({ groupBy: usageGroupBy.value, days: usageDays.value }),
+    const [artifactData, profileData, runtimeData] = await Promise.all([
+      modelPoolApi.artifacts(), modelPoolApi.profiles(), modelPoolApi.rocmRuntime(),
     ])
-    providers.value = providerData.providers
-    credentials.value = credentialData.credentials
+    artifacts.value = artifactData.artifacts
     profiles.value = profileData.profiles
-    usageSummary.value = usageData
+    rocm.value = runtimeData
   } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+    message.error(errorText(error))
   } finally {
     loading.value = false
   }
 }
 
-async function loadUsage(): Promise<void> {
-  usageLoading.value = true
-  try {
-    usageSummary.value = await modelPoolApi.usage({ groupBy: usageGroupBy.value, days: usageDays.value })
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
-  } finally {
-    usageLoading.value = false
-  }
+function openArtifact(item?: LocalModelArtifact): void {
+  artifactEditing.value = item || null
+  artifactForm.display_name = item?.display_name || ''
+  artifactForm.kind = item?.kind || 'chat'
+  artifactForm.local_path = item?.local_path || ''
+  artifactForm.tokenizer_path = item?.tokenizer_path || ''
+  artifactForm.revision = item?.revision || ''
+  artifactForm.checksum = item?.checksum || ''
+  artifactForm.enabled = item?.enabled ?? true
+  artifactModalOpen.value = true
 }
 
-function openCredential(item?: ModelPoolCredential): void {
-  credentialEditing.value = item || null
-  credentialForm.display_name = item?.display_name || ''
-  credentialForm.provider = item?.provider || providers.value[0]?.provider_id || ''
-  credentialForm.base_url = item?.base_url || ''
-  credentialForm.api_key = ''
-  credentialModalOpen.value = true
-}
-
-async function saveCredential(): Promise<void> {
+async function saveArtifact(): Promise<void> {
   saving.value = true
   try {
-    const payload: Record<string, unknown> = {
-      display_name: credentialForm.display_name,
-      provider: credentialForm.provider,
-      base_url: credentialForm.base_url,
-      enabled: credentialEditing.value?.enabled ?? true,
-    }
-    if (credentialForm.api_key.trim()) payload.api_key = credentialForm.api_key.trim()
-    if (credentialEditing.value) {
-      await modelPoolApi.patchCredential(credentialEditing.value.credential_id, payload)
-    } else {
-      await modelPoolApi.saveCredential(payload)
-    }
-    credentialModalOpen.value = false
+    const payload = { ...artifactForm, artifact_id: artifactEditing.value?.artifact_id }
+    if (artifactEditing.value) await modelPoolApi.patchArtifact(artifactEditing.value.artifact_id, payload)
+    else await modelPoolApi.saveArtifact(payload)
+    artifactModalOpen.value = false
     await refresh()
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
-  } finally {
-    saving.value = false
-  }
+  } catch (error) { message.error(errorText(error)) } finally { saving.value = false }
 }
 
-function openProfile(item?: ModelPoolProfile): void {
+function openProfile(item?: LocalModelProfile): void {
+  const artifact = item?.artifact || artifacts.value[0]
   profileEditing.value = item || null
-  profileForm.kind = item?.kind || 'chat'
   profileForm.display_name = item?.display_name || ''
-  profileForm.credential_id = item?.credential_id || firstCredentialForKind(profileForm.kind)?.credential_id || ''
-  profileForm.model_name = item?.model_name || ''
-  profileForm.tool_calling = item?.capabilities.tool_calling ?? true
-  profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
-  profileForm.image_input = item?.capabilities.input_modalities.includes('image') ?? false
-  profileForm.image_output = item?.capabilities.output_modalities.includes('image') ?? false
-  profileForm.audio_input = item?.capabilities.input_modalities.includes('audio') ?? false
-  profileForm.audio_output = item?.capabilities.output_modalities.includes('audio') ?? false
-  profileForm.text_to_image = item?.capabilities.text_to_image ?? true
-  profileForm.image_to_image = item?.capabilities.image_to_image ?? false
-  profileForm.image_edit = item?.capabilities.image_edit ?? false
-  profileForm.multi_image_reference = item?.capabilities.multi_image_reference ?? false
-  profileForm.batch_generation = item?.capabilities.batch_generation ?? true
-  profileForm.async_job = item?.capabilities.async_job ?? false
+  profileForm.artifact_id = item?.artifact_id || artifact?.artifact_id || ''
+  profileForm.kind = item?.kind || artifact?.kind || 'chat'
+  profileForm.served_model_name = item?.served_model_name || ''
+  profileForm.dtype = item?.inference.dtype || ''
+  profileForm.quantization = item?.inference.quantization || ''
+  profileForm.tensor_parallel_size = item?.inference.tensor_parallel_size || 1
+  profileForm.gpu_memory_utilization = item?.inference.gpu_memory_utilization ?? null
   profileForm.max_input_tokens = item?.limits.max_input_tokens ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
-  profileForm.timeout_seconds = item?.limits.timeout_seconds ?? null
-  profileForm.input_per_1m_tokens = item?.pricing.input_per_1m_tokens ?? null
-  profileForm.output_per_1m_tokens = item?.pricing.output_per_1m_tokens ?? null
-  profileForm.image_output_unit_price = item?.pricing.image_output_unit_price ?? null
-  profileForm.image_edit_unit_price = item?.pricing.image_edit_unit_price ?? null
-  profileForm.notes = item?.notes || ''
+  profileForm.embedding_dimensions = item?.embedding_dimensions ?? null
+  profileForm.trust_remote_code = item?.inference.trust_remote_code ?? false
+  profileForm.tool_calling = item?.capabilities.tool_calling ?? true
+  profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
+  profileForm.normalize_embeddings = item?.normalize_embeddings ?? true
+  profileForm.enabled = item?.enabled ?? true
   profileModalOpen.value = true
 }
 
+function syncProfileKind(artifactId: string): void {
+  const artifact = artifacts.value.find((item) => item.artifact_id === artifactId)
+  if (artifact) profileForm.kind = artifact.kind
+}
+
 async function saveProfile(): Promise<void> {
-  const credential = credentials.value.find((item) => item.credential_id === profileForm.credential_id)
-  if (!credential) {
-    message.error(t('modelPool.selectCredentialFirst'))
-    return
-  }
-  if (!providerSupportsKind(credential.provider, profileForm.kind)) {
-    message.error(t('modelPool.credentialKindMismatch'))
-    return
-  }
   saving.value = true
   try {
-    const isImageModel = profileForm.kind === 'image_generation'
-    const inputModalities = ['text']
-    const outputModalities = isImageModel ? ['image'] : ['text']
-    if (!isImageModel && profileForm.image_input) inputModalities.push('image')
-    if (!isImageModel && profileForm.image_output) outputModalities.push('image')
-    if (!isImageModel && profileForm.audio_input) inputModalities.push('audio')
-    if (!isImageModel && profileForm.audio_output) outputModalities.push('audio')
-    if (isImageModel && (profileForm.image_to_image || profileForm.image_edit)) inputModalities.push('image')
+    const isChat = profileForm.kind === 'chat'
     const payload = {
+      profile_id: profileEditing.value?.profile_id,
       display_name: profileForm.display_name,
       kind: profileForm.kind,
-      provider: credential.provider,
-      credential_id: profileForm.credential_id,
-      model_name: profileForm.model_name,
-      enabled: profileEditing.value?.enabled ?? true,
+      artifact_id: profileForm.artifact_id,
+      engine: isChat ? 'vllm_rocm' : 'transformers_rocm',
+      served_model_name: profileForm.served_model_name,
+      enabled: profileForm.enabled,
       capabilities: {
-        input_modalities: inputModalities,
-        output_modalities: outputModalities,
-        tool_calling: !isImageModel && profileForm.tool_calling,
-        streaming_tool_calls: false,
-        strict_tool_schema: false,
-        structured_output_methods: isImageModel ? [] : ['json_mode', 'function_calling'],
-        reasoning_supported: !isImageModel && profileForm.reasoning_supported,
-        reasoning_efforts: [],
-        reasoning_content: !isImageModel && profileForm.reasoning_supported,
+        input_modalities: ['text'], output_modalities: ['text'],
+        tool_calling: isChat && profileForm.tool_calling,
+        streaming_tool_calls: false, strict_tool_schema: false,
+        structured_output_methods: isChat ? ['function_calling', 'json_mode'] : [],
+        reasoning_supported: isChat && profileForm.reasoning_supported,
+        reasoning_efforts: [], reasoning_content: isChat && profileForm.reasoning_supported,
         cache_usage: false,
-        text_to_image: isImageModel && profileForm.text_to_image,
-        image_to_image: isImageModel && profileForm.image_to_image,
-        image_edit: isImageModel && profileForm.image_edit,
-        multi_image_reference: isImageModel && profileForm.multi_image_reference,
-        batch_generation: isImageModel && profileForm.batch_generation,
-        async_job: isImageModel && profileForm.async_job,
       },
       limits: {
-        max_input_tokens: isImageModel ? null : profileForm.max_input_tokens,
+        max_input_tokens: profileForm.max_input_tokens,
         max_output_tokens: profileForm.max_output_tokens,
-        timeout_seconds: profileForm.timeout_seconds,
+        timeout_seconds: null,
       },
-      pricing: {
-        currency: 'CNY',
-        input_per_1m_tokens: isImageModel ? null : profileForm.input_per_1m_tokens,
-        output_per_1m_tokens: isImageModel ? null : profileForm.output_per_1m_tokens,
-        image_output_unit_price: isImageModel ? profileForm.image_output_unit_price : null,
-        image_edit_unit_price: isImageModel ? profileForm.image_edit_unit_price : null,
+      inference: {
+        dtype: profileForm.dtype,
+        quantization: profileForm.quantization || null,
+        tensor_parallel_size: profileForm.tensor_parallel_size,
+        gpu_memory_utilization: profileForm.gpu_memory_utilization,
+        trust_remote_code: profileForm.trust_remote_code,
       },
-      notes: profileForm.notes,
+      embedding_dimensions: isChat ? null : profileForm.embedding_dimensions,
+      normalize_embeddings: profileForm.normalize_embeddings,
+      notes: '',
     }
-    if (profileEditing.value) {
-      await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
-    } else {
-      await modelPoolApi.saveProfile(payload)
-    }
+    if (profileEditing.value) await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
+    else await modelPoolApi.saveProfile(payload)
     profileModalOpen.value = false
     await refresh()
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
-  } finally {
-    saving.value = false
-  }
+  } catch (error) { message.error(errorText(error)) } finally { saving.value = false }
 }
 
-async function setCredentialEnabled(item: ModelPoolCredential, enabled: boolean): Promise<void> {
+async function checkProfile(profile: LocalModelProfile): Promise<void> {
+  checkingProfileId.value = profile.profile_id
   try {
-    await modelPoolApi.patchCredential(item.credential_id, { enabled })
-    await refresh()
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
-  }
+    const result = await modelPoolApi.checkProfile(profile.profile_id)
+    message.success(`${t('localModel.checkComplete')} · ${String(result.status || '')}`)
+  } catch (error) { message.error(errorText(error)) } finally { checkingProfileId.value = '' }
 }
 
-async function setProfileEnabled(item: ModelPoolProfile, enabled: boolean): Promise<void> {
-  try {
-    await modelPoolApi.patchProfile(item.profile_id, { enabled })
-    await refresh()
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
-  }
-}
-
-async function pingProfile(profile: ModelPoolProfile): Promise<void> {
-  testingProfileId.value = profile.profile_id
-  try {
-    const result = await modelPoolApi.pingProfile(profile.profile_id)
-    message.success(t('modelPool.connectionSucceeded', { latency: result.latency_ms }))
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
-  } finally {
-    testingProfileId.value = null
-  }
-}
-
-function confirmDeleteCredential(item: ModelPoolCredential): void {
+function removeArtifact(item: LocalModelArtifact): void {
   dialog.warning({
-    title: t('modelPool.deleteCredential'),
-    content: item.display_name,
-    positiveText: t('common.delete'),
-    negativeText: t('common.cancel'),
-    onPositiveClick: async () => {
-      await modelPoolApi.deleteCredential(item.credential_id)
-      await refresh()
-    },
+    title: t('common.delete'), content: item.display_name,
+    positiveText: t('common.delete'), negativeText: t('common.cancel'),
+    onPositiveClick: async () => { await modelPoolApi.deleteArtifact(item.artifact_id); await refresh() },
   })
 }
 
-function confirmDeleteProfile(item: ModelPoolProfile): void {
+function removeProfile(item: LocalModelProfile): void {
   dialog.warning({
-    title: t('modelPool.deleteProfile'),
-    content: item.display_name,
-    positiveText: t('common.delete'),
-    negativeText: t('common.cancel'),
-    onPositiveClick: async () => {
-      await modelPoolApi.deleteProfile(item.profile_id)
-      await refresh()
-    },
+    title: t('common.delete'), content: item.display_name,
+    positiveText: t('common.delete'), negativeText: t('common.cancel'),
+    onPositiveClick: async () => { await modelPoolApi.deleteProfile(item.profile_id); await refresh() },
   })
 }
 
-function providerLabel(providerId: string): string {
-  return providers.value.find((item) => item.provider_id === providerId)?.display_name || providerId
+function formatBytes(value: number): string {
+  return `${(value / 1024 / 1024 / 1024).toFixed(1)} GiB`
 }
 
-function providerSupportsKind(providerId: string, kind: 'chat' | 'image_generation'): boolean {
-  return providers.value.some((item) => item.provider_id === providerId && item.kind === kind)
-}
+function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 
-function firstCredentialForKind(kind: 'chat' | 'image_generation'): ModelPoolCredential | undefined {
-  return credentials.value.find((item) => providerSupportsKind(item.provider, kind))
-}
-
-function uniqueProviders(): ModelProviderProfile[] {
-  const seen = new Set<string>()
-  const result: ModelProviderProfile[] = []
-  for (const provider of providers.value) {
-    if (seen.has(provider.provider_id)) continue
-    seen.add(provider.provider_id)
-    result.push(provider)
-  }
-  return result
-}
-
-function capabilityTags(profile: ModelPoolProfile): string[] {
-  const tags: string[] = []
-  if (profile.kind === 'image_generation') {
-    if (profile.capabilities.text_to_image) tags.push(t('modelPool.textToImage'))
-    if (profile.capabilities.image_to_image) tags.push(t('modelPool.imageToImage'))
-    if (profile.capabilities.image_edit) tags.push(t('modelPool.imageEdit'))
-    if (profile.capabilities.multi_image_reference) tags.push(t('modelPool.multiImageReference'))
-    if (profile.capabilities.async_job) tags.push(t('modelPool.asyncJob'))
-    return tags
-  }
-  if (profile.capabilities.tool_calling) tags.push(t('modelPool.toolsTag'))
-  if (profile.capabilities.input_modalities.includes('image')) tags.push(t('modelPool.imageInput'))
-  if (profile.capabilities.output_modalities.includes('image')) tags.push(t('modelPool.imageOutput'))
-  if (profile.capabilities.input_modalities.includes('audio')) tags.push(t('modelPool.audioInput'))
-  if (profile.capabilities.output_modalities.includes('audio')) tags.push(t('modelPool.audioOutput'))
-  if (profile.capabilities.reasoning_supported) tags.push(t('modelPool.reasoning'))
-  return tags
-}
-
-function formatTokens(value: number | null | undefined): string {
-  const numeric = Number(value || 0)
-  if (numeric >= 1000000) return `${Math.round(numeric / 100000) / 10}M`
-  if (numeric >= 1000) return `${Math.round(numeric / 1000)}K`
-  return String(numeric)
-}
-
-function formatNumber(value: number | null | undefined): string {
-  return new Intl.NumberFormat('zh-CN').format(Number(value || 0))
-}
-
-function formatPercent(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '-'
-  return `${Math.round(Number(value) * 1000) / 10}%`
-}
-
-function formatCost(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '-'
-  return `¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(Number(value || 0))}`
-}
+onMounted(refresh)
 </script>
 
 <style scoped>
-.model-pool-view {
-  height: 100%;
-  padding: 18px 20px;
-  overflow: auto;
-  background: var(--app-surface);
-}
-
-.context-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.context-title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.context-subtitle,
-.item-meta {
-  font-size: 12px;
-}
-
-.tab-content {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.content-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.model-list {
-  background: var(--app-panel);
-}
-
-.usage-range-select {
-  width: 132px;
-}
-
-.usage-overview {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.usage-metric {
-  display: flex;
-  min-height: 72px;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--app-border);
-  border-radius: 8px;
-  background: var(--app-panel);
-}
-
-.usage-metric span {
-  color: var(--app-text-muted);
-  font-size: 12px;
-}
-
-.usage-metric strong {
-  color: var(--app-text);
-  font-size: 22px;
-  font-weight: 650;
-  line-height: 1.1;
-}
-
-.usage-chart-panel {
-  min-height: 320px;
-  padding: 12px;
-  border: 1px solid var(--app-border);
-  border-radius: 8px;
-  background: var(--app-panel);
-}
-
-.usage-chart {
-  width: 100%;
-  height: 320px;
-}
-
-.capabilities {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.manager-empty {
-  padding: 48px 0;
-}
-
-@media (max-width: 720px) {
-  .context-bar,
-  .content-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .usage-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
+.local-model-view { display: flex; flex-direction: column; gap: 16px; }
+.context-bar, .content-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.context-title { display: flex; flex-direction: column; gap: 4px; }
+.context-subtitle { font-size: 13px; }
+.tab-content { display: flex; flex-direction: column; gap: 16px; padding-top: 8px; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+@media (max-width: 720px) { .form-grid { grid-template-columns: 1fr; } }
 </style>
