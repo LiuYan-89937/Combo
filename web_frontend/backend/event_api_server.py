@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from agent_factory.env import load_agentfactory_dotenv
+from agent_factory.local_inference import LocalInferenceRuntimeManager
 from agent_factory.collaboration_system import CollaborationService
 from agent_factory.agent_group_system import AgentGroupService
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
@@ -49,6 +50,7 @@ agent_group_service = AgentGroupService(
     logger=logger,
     runtime_factory=lambda: _agent_package_runtime(runtime_bridge),
 )
+local_inference_runtime_manager = LocalInferenceRuntimeManager()
 
 
 def _observe_agent_group_runtime_event(event_payload: dict) -> None:
@@ -88,7 +90,7 @@ app.include_router(create_knowledge_router(runtime_bridge))
 app.include_router(create_memory_router(runtime_bridge))
 app.include_router(create_extensions_router(runtime_bridge))
 app.include_router(create_scheduler_router(runtime_bridge))
-app.include_router(create_model_pool_router())
+app.include_router(create_model_pool_router(local_inference_runtime_manager))
 app.include_router(create_tip_router())
 
 
@@ -117,10 +119,12 @@ async def startup_event():
         logger.info("Recovered %s pending agent-group workspace commits", len(recovered_group_commits))
     runtime_bridge.add_event_observer(_observe_agent_group_runtime_event)
     collaboration_service.start()
+    await local_inference_runtime_manager.restore()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    await local_inference_runtime_manager.shutdown()
     collaboration_service.stop()
     agent_group_service.shutdown()
     runtime_bridge.remove_event_observer(_observe_agent_group_runtime_event)

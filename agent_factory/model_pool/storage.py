@@ -33,6 +33,7 @@ class ModelDirectoryInfo:
     display_name: str
     model_type: str
     dtype: str
+    embedding_dimensions: int | None
     architectures: tuple[str, ...]
     tokenizer_available: bool
 
@@ -111,6 +112,7 @@ class ModelStorage:
             display_name=display_name,
             model_type=_text(config.get("model_type")),
             dtype=_text(config.get("torch_dtype")),
+            embedding_dimensions=_positive_integer(config.get("hidden_size")),
             architectures=architectures,
             tokenizer_available=tokenizer_available,
         )
@@ -149,3 +151,11 @@ def _model_name(config: dict[str, Any], directory: Path) -> str:
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _positive_integer(value: object) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None

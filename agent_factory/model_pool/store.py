@@ -171,6 +171,16 @@ class ModelPoolStore:
         candidate = ModelPoolProfile.model_validate({**existing.model_dump(mode="json"), **dict(payload)})
         return self.upsert_profile(candidate)
 
+    def disable_other_profiles(self, kind: str, active_profile_id: str) -> list[str]:
+        normalized_kind = self._validate_profile_kind(kind)
+        disabled: list[str] = []
+        for profile in self.list_profiles(kind=normalized_kind, enabled=True):
+            if profile.profile_id == active_profile_id:
+                continue
+            self.upsert_profile(profile.model_copy(update={"enabled": False}, deep=True))
+            disabled.append(profile.profile_id)
+        return disabled
+
     def get_profile(self, profile_id: str) -> ModelPoolProfile | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -214,8 +224,49 @@ class ModelPoolStore:
     def delete_profile(self, profile_id: str) -> bool:
         with self._connect() as conn:
             conn.execute("delete from local_model_default_profiles where profile_id = ?", (profile_id,))
+            conn.execute("delete from local_model_active_profiles where profile_id = ?", (profile_id,))
             cursor = conn.execute("delete from local_model_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
+
+    def active_profile_id(self, kind: str) -> str | None:
+        normalized_kind = self._validate_profile_kind(kind)
+        with self._connect() as conn:
+            row = conn.execute(
+                "select profile_id from local_model_active_profiles where kind = ?",
+                (normalized_kind,),
+            ).fetchone()
+        return str(row["profile_id"]) if row else None
+
+    def set_active_profile_id(self, kind: str, profile_id: str | None) -> str | None:
+        normalized_kind = self._validate_profile_kind(kind)
+        normalized_profile_id = str(profile_id or "").strip()
+        with self._connect() as conn:
+            if not normalized_profile_id:
+                conn.execute("delete from local_model_active_profiles where kind = ?", (normalized_kind,))
+                return None
+            profile = self.require_profile(normalized_profile_id)
+            if profile.kind != normalized_kind or not profile.enabled:
+                raise ModelPoolStoreError(
+                    f"active {normalized_kind} runtime requires an enabled matching profile"
+                )
+            conn.execute(
+                """
+                insert into local_model_active_profiles (kind, profile_id, updated_at)
+                values (?, ?, ?)
+                on conflict(kind) do update set
+                  profile_id=excluded.profile_id,
+                  updated_at=excluded.updated_at
+                """,
+                (normalized_kind, profile.profile_id, utc_now_text()),
+            )
+        return normalized_profile_id
+
+    @staticmethod
+    def _validate_profile_kind(kind: str) -> str:
+        normalized = str(kind or "").strip().lower()
+        if normalized not in {"chat", "embedding"}:
+            raise ModelPoolStoreError(f"unsupported local model profile kind: {kind}")
+        return normalized
 
     def default_profile_ids(self) -> dict[ModelPoolDefaultRole, str | None]:
         return {role: self.resolve_default_profile_id(role) for role in _DEFAULT_PROFILE_ROLES}
@@ -351,5 +402,13 @@ class ModelPoolStore:
                 );
                 create index if not exists idx_local_model_default_profiles_profile
                   on local_model_default_profiles(profile_id);
+
+                create table if not exists local_model_active_profiles (
+                  kind text primary key,
+                  profile_id text not null,
+                  updated_at text not null
+                );
+                create index if not exists idx_local_model_active_profiles_profile
+                  on local_model_active_profiles(profile_id);
                 """
             )

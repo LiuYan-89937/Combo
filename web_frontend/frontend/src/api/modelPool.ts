@@ -12,6 +12,16 @@ export interface LocalEngine {
   display_name: string
   kind: LocalModelKind
   transport: string
+  parameters: {
+    dtype: { default: string; options: string[] }
+    quantization: { default: string | null; options: string[] }
+    gpu_memory_percent: {
+      default: number
+      min: number
+      max: number
+      step: number
+    } | null
+  }
 }
 
 export interface LocalModelArtifact {
@@ -35,6 +45,7 @@ export interface LocalModelDirectory {
   display_name: string
   model_type: string
   dtype: string
+  embedding_dimensions?: number | null
   architectures: string[]
   tokenizer_available: boolean
 }
@@ -81,6 +92,26 @@ export interface LocalModelProfile {
   normalize_embeddings: boolean
   notes: string
   artifact?: LocalModelArtifact | null
+}
+
+export type LocalModelRuntimePhase = 'idle' | 'starting' | 'loading' | 'ready' | 'stopping' | 'failed'
+
+export interface LocalModelRuntime {
+  kind: LocalModelKind
+  profile_id: string
+  phase: LocalModelRuntimePhase
+  stage: string
+  progress_percent?: number | null
+  pid?: number | null
+  error: string
+  started_at: string
+  updated_at: string
+  logs: string[]
+}
+
+export interface LocalModelRuntimeSummary {
+  runtimes: LocalModelRuntime[]
+  rocm: RocmRuntimeInfo
 }
 
 export interface RocmRuntimeInfo {
@@ -135,6 +166,7 @@ export interface ModelUsageSummary {
 
 export const modelPoolApi = {
   engines: () => requestJson<{ engines: LocalEngine[] }>('/api/model-pool/engines'),
+  runtimes: () => requestJson<LocalModelRuntimeSummary>('/api/model-pool/runtimes'),
   rocmRuntime: () => requestJson<RocmRuntimeInfo>('/api/model-pool/runtime/rocm'),
   storage: () => requestJson<LocalModelStorage>('/api/model-pool/storage'),
   defaults: () => requestJson<{ defaults: LocalModelDefaults }>('/api/model-pool/defaults'),
@@ -163,12 +195,12 @@ export const modelPoolApi = {
     }),
   profiles: () => requestJson<{ profiles: LocalModelProfile[] }>('/api/model-pool/profiles'),
   saveProfile: (payload: Record<string, unknown>) =>
-    requestJson<{ profile: LocalModelProfile }>('/api/model-pool/profiles', {
+    requestJson<{ profile: LocalModelProfile; runtime: LocalModelRuntime }>('/api/model-pool/profiles', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
   patchProfile: (profileId: string, payload: Record<string, unknown>) =>
-    requestJson<{ profile: LocalModelProfile }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
+    requestJson<{ profile: LocalModelProfile; runtime: LocalModelRuntime }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
@@ -176,8 +208,12 @@ export const modelPoolApi = {
     requestJson<{ deleted: boolean }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}`, {
       method: 'DELETE',
     }),
-  checkProfile: (profileId: string) =>
-    requestJson<Record<string, unknown>>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}/check`, {
+  loadProfile: (profileId: string) =>
+    requestJson<{ runtime: LocalModelRuntime }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}/load`, {
+      method: 'POST',
+    }),
+  unloadProfile: (profileId: string) =>
+    requestJson<{ runtime: LocalModelRuntime }>(`/api/model-pool/profiles/${encodeURIComponent(profileId)}/unload`, {
       method: 'POST',
     }),
   usage: (params: { groupBy?: ModelUsageGroupBy; days?: number } = {}) =>

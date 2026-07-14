@@ -92,9 +92,14 @@
                     <div class="resource-id">{{ profile.profile_id }}</div>
                   </div>
                 </div>
-                <n-tag size="small" :bordered="false" :type="profile.enabled ? 'success' : 'default'">
-                  {{ profile.enabled ? t('common.enabled') : t('common.disabled') }}
-                </n-tag>
+                <div class="profile-status-tags">
+                  <n-tag size="small" :bordered="false" :type="profile.enabled ? 'success' : 'default'">
+                    {{ profile.enabled ? t('common.enabled') : t('common.disabled') }}
+                  </n-tag>
+                  <n-tag size="small" :bordered="false" :type="runtimeTagType(profile)">
+                    {{ runtimePhaseLabel(profile) }}
+                  </n-tag>
+                </div>
               </header>
 
               <div class="tag-row">
@@ -120,23 +125,61 @@
                 <span>{{ profile.artifact?.local_path || '—' }}</span>
               </div>
 
+              <div v-if="profileRuntime(profile)" class="profile-runtime-panel">
+                <div class="profile-runtime-heading">
+                  <span>{{ runtimeStageLabel(profileRuntime(profile)?.stage) }}</span>
+                  <strong>{{ rocm?.devices?.[0] ? formatMemoryUsage(rocm.devices[0]) : '—' }}</strong>
+                </div>
+                <n-progress
+                  v-if="isRuntimeTransitioning(profile)"
+                  type="line"
+                  :percentage="profileRuntime(profile)?.progress_percent ?? 0"
+                  :processing="profileRuntime(profile)?.progress_percent == null"
+                  :show-indicator="profileRuntime(profile)?.progress_percent != null"
+                  status="info"
+                />
+                <div v-if="profileRuntime(profile)?.error" class="runtime-error">
+                  {{ profileRuntime(profile)?.error }}
+                </div>
+              </div>
+
               <div class="spec-grid">
-                <div class="spec-item"><span>{{ t('localModel.dtype') }}</span><strong>{{ profile.inference.dtype }}</strong></div>
-                <div class="spec-item"><span>{{ t('localModel.tensorParallel') }}</span><strong>{{ profile.inference.tensor_parallel_size }}</strong></div>
-                <div class="spec-item"><span>{{ t('localModel.gpuMemoryUtilization') }}</span><strong>{{ formatRatio(profile.inference.gpu_memory_utilization) }}</strong></div>
+                <template v-if="profile.kind === 'chat'">
+                  <div class="spec-item"><span>{{ t('localModel.dtype') }}</span><strong>{{ dtypeLabel(profile.inference.dtype) }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.tensorParallel') }}</span><strong>{{ profile.inference.tensor_parallel_size }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.gpuMemoryLimit') }}</span><strong>{{ formatRatio(profile.inference.gpu_memory_utilization) }}</strong></div>
+                </template>
+                <div v-else class="spec-item"><span>{{ t('localModel.embeddingDimensions') }}</span><strong>{{ profile.embedding_dimensions || '—' }}</strong></div>
                 <div class="spec-item"><span>{{ t('modelPool.maxInput') }}</span><strong>{{ formatTokens(profile.limits.max_input_tokens) }}</strong></div>
               </div>
 
               <footer class="resource-actions">
-                <n-button size="small" secondary :loading="checkingProfileId === profile.profile_id" @click="checkProfile(profile)">
-                  {{ t('localModel.checkLoad') }}
+                <n-button
+                  v-if="profileRuntime(profile)?.phase === 'ready'"
+                  size="small"
+                  secondary
+                  @click="unloadProfile(profile)"
+                >
+                  {{ t('localModel.unload') }}
+                </n-button>
+                <n-button
+                  v-else
+                  size="small"
+                  secondary
+                  :disabled="!profile.enabled"
+                  :loading="isRuntimeTransitioning(profile)"
+                  @click="loadProfile(profile)"
+                >
+                  {{ t('localModel.load') }}
                 </n-button>
                 <n-dropdown
                   trigger="click"
                   :options="defaultRoleOptions(profile)"
                   @select="(role) => handleDefaultRoleSelect(role, profile)"
                 >
-                  <n-button size="small" quaternary>{{ t('localModel.setDefault') }}</n-button>
+                  <n-button size="small" quaternary :disabled="profileRuntime(profile)?.phase !== 'ready'">
+                    {{ t('localModel.setDefault') }}
+                  </n-button>
                 </n-dropdown>
                 <div class="action-spacer" />
                 <n-button size="small" quaternary @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
@@ -265,13 +308,33 @@
         </n-form-item>
         <n-form-item :label="t('localModel.servedModelName')"><n-input v-model:value="profileForm.served_model_name" /></n-form-item>
         <div class="form-grid">
-          <n-form-item :label="t('localModel.dtype')"><n-input v-model:value="profileForm.dtype" /></n-form-item>
-          <n-form-item :label="t('localModel.quantization')"><n-input v-model:value="profileForm.quantization" clearable /></n-form-item>
-          <n-form-item :label="t('localModel.tensorParallel')">
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.dtype')">
+            <n-select v-model:value="profileForm.dtype" :options="dtypeOptions" />
+          </n-form-item>
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.quantization')">
+            <n-select v-model:value="profileForm.quantization" :options="quantizationOptions" />
+          </n-form-item>
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.tensorParallel')">
             <n-input-number v-model:value="profileForm.tensor_parallel_size" :min="1" />
           </n-form-item>
-          <n-form-item :label="t('localModel.gpuMemoryUtilization')">
-            <n-input-number v-model:value="profileForm.gpu_memory_utilization" :min="0.01" :max="1" :step="0.05" clearable />
+          <n-form-item v-if="profileForm.kind === 'chat'" class="memory-form-item" :label="t('localModel.gpuMemoryLimit')">
+            <div class="memory-limit-control">
+              <n-slider
+                v-model:value="profileForm.gpu_memory_percent"
+                :min="gpuMemoryConfig?.min"
+                :max="gpuMemoryConfig?.max"
+                :step="gpuMemoryConfig?.step"
+              />
+              <n-input-number
+                v-model:value="profileForm.gpu_memory_percent"
+                :min="gpuMemoryConfig?.min"
+                :max="gpuMemoryConfig?.max"
+                :step="gpuMemoryConfig?.step"
+              >
+                <template #suffix>%</template>
+              </n-input-number>
+              <p>{{ t('localModel.gpuMemoryLimitHint') }}</p>
+            </div>
           </n-form-item>
           <n-form-item :label="t('modelPool.maxInput')">
             <n-input-number v-model:value="profileForm.max_input_tokens" :min="1" clearable />
@@ -284,7 +347,7 @@
           </n-form-item>
         </div>
         <n-space vertical>
-          <n-checkbox v-model:checked="profileForm.enabled">{{ t('common.enabled') }}</n-checkbox>
+          <n-checkbox v-model:checked="profileForm.enabled">{{ t('localModel.loadWhenEnabled') }}</n-checkbox>
           <n-checkbox v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
@@ -300,7 +363,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useDialog, useMessage } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
 import {
@@ -313,12 +376,14 @@ import {
 } from '@/components/icons'
 import {
   modelPoolApi,
+  type LocalEngine,
   type LocalModelArtifact,
   type LocalModelDefaultRole,
   type LocalModelDefaults,
   type LocalModelStorage,
   type LocalModelKind,
   type LocalModelProfile,
+  type LocalModelRuntime,
   type RocmRuntimeInfo,
 } from '@/api/modelPool'
 
@@ -327,10 +392,12 @@ const dialog = useDialog()
 const message = useMessage()
 const loading = ref(false)
 const saving = ref(false)
-const checkingProfileId = ref('')
+const runtimeRefreshing = ref(false)
 const activeTab = ref<'profiles' | 'artifacts'>('profiles')
 const artifacts = ref<LocalModelArtifact[]>([])
 const profiles = ref<LocalModelProfile[]>([])
+const engines = ref<LocalEngine[]>([])
+const runtimes = ref<LocalModelRuntime[]>([])
 const defaults = ref<LocalModelDefaults>({
   main: null,
   task: null,
@@ -350,8 +417,8 @@ const artifactForm = reactive({
 })
 const profileForm = reactive({
   display_name: '', artifact_id: '', kind: 'chat' as LocalModelKind,
-  served_model_name: '', dtype: '', quantization: '', tensor_parallel_size: 1,
-  gpu_memory_utilization: null as number | null, max_input_tokens: null as number | null,
+  served_model_name: '', dtype: 'auto', quantization: 'none', tensor_parallel_size: 1,
+  gpu_memory_percent: 0, max_input_tokens: null as number | null,
   max_output_tokens: null as number | null, embedding_dimensions: null as number | null,
   trust_remote_code: false, tool_calling: true, reasoning_supported: false,
   normalize_embeddings: true, enabled: true,
@@ -365,6 +432,18 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
   label: `${item.display_name} · ${item.kind}`,
   value: item.artifact_id,
 })))
+const currentEngine = computed(() => engineForKind(profileForm.kind))
+const dtypeOptions = computed(() => (
+  currentEngine.value?.parameters.dtype.options.map((value) => ({ label: dtypeLabel(value), value })) || []
+))
+const quantizationOptions = computed(() => [
+  { label: t('localModel.noQuantization'), value: 'none' },
+  ...(currentEngine.value?.parameters.quantization.options || []).map((value) => ({
+    label: value.toUpperCase(),
+    value,
+  })),
+])
+const gpuMemoryConfig = computed(() => currentEngine.value?.parameters.gpu_memory_percent || null)
 const modelDirectoryOptions = computed(() => {
   const options = (modelStorage.value?.directories || []).map((item) => ({
     label: [item.display_name, item.model_type, item.dtype].filter(Boolean).join(' · '),
@@ -383,16 +462,19 @@ const selectedModelDirectory = computed(() => (
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [artifactData, profileData, runtimeData, defaultData, storageData] = await Promise.all([
+    const [artifactData, profileData, engineData, runtimeData, defaultData, storageData] = await Promise.all([
       modelPoolApi.artifacts(),
       modelPoolApi.profiles(),
-      modelPoolApi.rocmRuntime(),
+      modelPoolApi.engines(),
+      modelPoolApi.runtimes(),
       modelPoolApi.defaults(),
       modelPoolApi.storage(),
     ])
     artifacts.value = artifactData.artifacts
     profiles.value = profileData.profiles
-    rocm.value = runtimeData
+    engines.value = engineData.engines
+    runtimes.value = runtimeData.runtimes
+    rocm.value = runtimeData.rocm
     defaults.value = defaultData.defaults
     modelStorage.value = storageData
   } catch (error) {
@@ -427,18 +509,23 @@ async function saveArtifact(): Promise<void> {
 
 function openProfile(item?: LocalModelProfile): void {
   const artifact = item?.artifact || artifacts.value[0]
+  const kind = item?.kind || artifact?.kind || 'chat'
+  const engine = engineForKind(kind)
+  const directory = artifact ? directoryForArtifact(artifact) : null
   profileEditing.value = item || null
-  profileForm.display_name = item?.display_name || ''
+  profileForm.display_name = item?.display_name || artifact?.display_name || ''
   profileForm.artifact_id = item?.artifact_id || artifact?.artifact_id || ''
-  profileForm.kind = item?.kind || artifact?.kind || 'chat'
-  profileForm.served_model_name = item?.served_model_name || ''
-  profileForm.dtype = item?.inference.dtype || ''
-  profileForm.quantization = item?.inference.quantization || ''
+  profileForm.kind = kind
+  profileForm.served_model_name = item?.served_model_name || artifact?.display_name || ''
+  profileForm.dtype = item?.inference.dtype || directory?.dtype || engine?.parameters.dtype.default || 'auto'
+  profileForm.quantization = item?.inference.quantization || 'none'
   profileForm.tensor_parallel_size = item?.inference.tensor_parallel_size || 1
-  profileForm.gpu_memory_utilization = item?.inference.gpu_memory_utilization ?? null
+  profileForm.gpu_memory_percent = typeof item?.inference.gpu_memory_utilization === 'number'
+    ? Math.round(item.inference.gpu_memory_utilization * 100)
+    : engine?.parameters.gpu_memory_percent?.default ?? 0
   profileForm.max_input_tokens = item?.limits.max_input_tokens ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
-  profileForm.embedding_dimensions = item?.embedding_dimensions ?? null
+  profileForm.embedding_dimensions = item?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
   profileForm.trust_remote_code = item?.inference.trust_remote_code ?? false
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
@@ -449,7 +536,33 @@ function openProfile(item?: LocalModelProfile): void {
 
 function syncProfileKind(artifactId: string): void {
   const artifact = artifacts.value.find((item) => item.artifact_id === artifactId)
-  if (artifact) profileForm.kind = artifact.kind
+  if (!artifact) return
+  const engine = engineForKind(artifact.kind)
+  const directory = directoryForArtifact(artifact)
+  profileForm.kind = artifact.kind
+  profileForm.display_name = artifact.display_name
+  profileForm.served_model_name = artifact.display_name
+  profileForm.dtype = directory?.dtype || engine?.parameters.dtype.default || 'auto'
+  profileForm.quantization = 'none'
+  profileForm.tensor_parallel_size = 1
+  profileForm.gpu_memory_percent = engine?.parameters.gpu_memory_percent?.default ?? 0
+  profileForm.embedding_dimensions = directory?.embedding_dimensions ?? null
+}
+
+function engineForKind(kind: LocalModelKind): LocalEngine | undefined {
+  return engines.value.find((engine) => engine.kind === kind)
+}
+
+function directoryForArtifact(artifact: LocalModelArtifact) {
+  return modelStorage.value?.directories.find((directory) => directory.absolute_path === artifact.local_path)
+}
+
+function dtypeLabel(value: string): string {
+  if (value === 'auto') return t('localModel.dtypeAuto')
+  if (value === 'bfloat16') return 'BF16'
+  if (value === 'float16') return 'FP16'
+  if (value === 'float32') return 'FP32'
+  return value
 }
 
 function openProfileEmptyAction(): void {
@@ -488,29 +601,103 @@ async function saveProfile(): Promise<void> {
         timeout_seconds: null,
       },
       inference: {
-        dtype: profileForm.dtype,
-        quantization: profileForm.quantization || null,
-        tensor_parallel_size: profileForm.tensor_parallel_size,
-        gpu_memory_utilization: profileForm.gpu_memory_utilization,
+        dtype: isChat ? profileForm.dtype : 'auto',
+        quantization: isChat && profileForm.quantization !== 'none' ? profileForm.quantization : null,
+        tensor_parallel_size: isChat ? profileForm.tensor_parallel_size : 1,
+        gpu_memory_utilization: isChat ? profileForm.gpu_memory_percent / 100 : null,
         trust_remote_code: profileForm.trust_remote_code,
       },
       embedding_dimensions: isChat ? null : profileForm.embedding_dimensions,
       normalize_embeddings: profileForm.normalize_embeddings,
       notes: '',
     }
-    if (profileEditing.value) await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
-    else await modelPoolApi.saveProfile(payload)
+    const result = profileEditing.value
+      ? await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
+      : await modelPoolApi.saveProfile(payload)
+    upsertRuntime(result.runtime)
+    if (result.runtime.phase === 'failed') message.error(result.runtime.error)
+    else if (profileForm.enabled) message.info(t('localModel.runtimeLoading'))
     profileModalOpen.value = false
     await refresh()
   } catch (error) { message.error(errorText(error)) } finally { saving.value = false }
 }
 
-async function checkProfile(profile: LocalModelProfile): Promise<void> {
-  checkingProfileId.value = profile.profile_id
+async function loadProfile(profile: LocalModelProfile): Promise<void> {
   try {
-    const result = await modelPoolApi.checkProfile(profile.profile_id)
-    message.success(`${t('localModel.checkComplete')} · ${String(result.status || '')}`)
-  } catch (error) { message.error(errorText(error)) } finally { checkingProfileId.value = '' }
+    const result = await modelPoolApi.loadProfile(profile.profile_id)
+    upsertRuntime(result.runtime)
+    if (result.runtime.phase === 'failed') message.error(result.runtime.error)
+  } catch (error) { message.error(errorText(error)) }
+}
+
+async function unloadProfile(profile: LocalModelProfile): Promise<void> {
+  try {
+    const result = await modelPoolApi.unloadProfile(profile.profile_id)
+    upsertRuntime(result.runtime)
+    await refreshRuntimeState()
+  } catch (error) { message.error(errorText(error)) }
+}
+
+function profileRuntime(profile: LocalModelProfile): LocalModelRuntime | undefined {
+  return runtimes.value.find((runtime) => runtime.profile_id === profile.profile_id)
+}
+
+function isRuntimeTransitioning(profile: LocalModelProfile): boolean {
+  return ['starting', 'loading', 'stopping'].includes(profileRuntime(profile)?.phase || '')
+}
+
+function runtimeTagType(profile: LocalModelProfile): 'default' | 'info' | 'success' | 'error' | 'warning' {
+  const phase = profileRuntime(profile)?.phase
+  if (phase === 'ready') return 'success'
+  if (phase === 'failed') return 'error'
+  if (phase === 'starting' || phase === 'loading' || phase === 'stopping') return 'info'
+  return profile.enabled ? 'warning' : 'default'
+}
+
+function runtimePhaseLabel(profile: LocalModelProfile): string {
+  const phase = profileRuntime(profile)?.phase
+  if (phase === 'ready') return t('localModel.runtimeReady')
+  if (phase === 'failed') return t('localModel.runtimeFailed')
+  if (phase === 'starting' || phase === 'loading') return t('localModel.runtimeLoading')
+  if (phase === 'stopping') return t('localModel.runtimeStopping')
+  return t('localModel.runtimeNotLoaded')
+}
+
+function runtimeStageLabel(stage?: string): string {
+  const labels: Record<string, string> = {
+    validating_runtime: t('localModel.runtimeStageValidating'),
+    process_started: t('localModel.runtimeStageStarting'),
+    loading_weights: t('localModel.runtimeStageWeights'),
+    initializing_engine: t('localModel.runtimeStageEngine'),
+    initializing_service: t('localModel.runtimeStageService'),
+    ready: t('localModel.runtimeReady'),
+    failed: t('localModel.runtimeFailed'),
+  }
+  return labels[stage || ''] || t('localModel.runtimeLoading')
+}
+
+function upsertRuntime(runtime: LocalModelRuntime): void {
+  if (runtime.phase === 'idle') {
+    runtimes.value = runtimes.value.filter((item) => item.profile_id !== runtime.profile_id)
+    return
+  }
+  const next = runtimes.value.filter((item) => item.kind !== runtime.kind)
+  next.push(runtime)
+  runtimes.value = next
+}
+
+async function refreshRuntimeState(): Promise<void> {
+  if (runtimeRefreshing.value) return
+  runtimeRefreshing.value = true
+  try {
+    const summary = await modelPoolApi.runtimes()
+    runtimes.value = summary.runtimes
+    rocm.value = summary.rocm
+  } catch {
+    // The full page refresh already owns user-visible transport errors.
+  } finally {
+    runtimeRefreshing.value = false
+  }
 }
 
 function profileDefaultRoles(profileId: string): LocalModelDefaultRole[] {
@@ -610,7 +797,16 @@ function formatTokens(value?: number | null): string {
 
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 
-onMounted(refresh)
+let runtimePollTimer: ReturnType<typeof setInterval> | null = null
+
+onMounted(async () => {
+  await refresh()
+  runtimePollTimer = setInterval(refreshRuntimeState, 2000)
+})
+
+onBeforeUnmount(() => {
+  if (runtimePollTimer) clearInterval(runtimePollTimer)
+})
 </script>
 
 <style scoped>
@@ -712,6 +908,7 @@ onMounted(refresh)
 }
 .resource-card:hover { transform: translateY(-1px); border-color: var(--app-border-hover); box-shadow: var(--app-shadow-md); }
 .resource-identity { display: flex; align-items: center; gap: var(--app-space-sm); min-width: 0; }
+.profile-status-tags { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--app-space-xs); }
 .resource-icon { width: 38px; height: 38px; font-size: 20px; }
 .resource-title-block { min-width: 0; }
 .resource-title { overflow: hidden; color: var(--app-text-strong); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
@@ -720,6 +917,17 @@ onMounted(refresh)
 .model-name { margin-top: var(--app-space-md); color: var(--app-text); font-family: 'SF Mono', Monaco, monospace; font-size: var(--app-font-sm); font-weight: 600; }
 .path-line { display: flex; align-items: center; gap: var(--app-space-xs); min-width: 0; margin-top: var(--app-space-xs); color: var(--app-text-muted); font-size: var(--app-font-sm); }
 .path-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-runtime-panel {
+  display: grid;
+  gap: var(--app-space-xs);
+  margin-top: var(--app-space-md);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+.profile-runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--app-space-md); color: var(--app-text-secondary); font-size: var(--app-font-xs); }
+.profile-runtime-heading strong { color: var(--app-text); font-weight: 600; }
+.runtime-error { color: var(--app-error); font-size: var(--app-font-xs); line-height: var(--app-leading-normal); overflow-wrap: anywhere; }
 .spec-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--app-space-xs); margin-top: var(--app-space-lg); }
 .spec-item { display: flex; align-items: center; justify-content: space-between; gap: var(--app-space-sm); padding: var(--app-space-sm); border-radius: var(--app-radius-sm); background: var(--app-surface-muted); }
 .spec-item strong { color: var(--app-text); font-size: var(--app-font-sm); }
@@ -780,6 +988,9 @@ onMounted(refresh)
 .empty-panel p { max-width: 460px; margin: 0 0 var(--app-space-sm); color: var(--app-text-muted); font-size: var(--app-font-sm); line-height: var(--app-leading-normal); }
 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--app-space-lg); }
+.memory-form-item { grid-column: 1 / -1; }
+.memory-limit-control { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: var(--app-space-sm) var(--app-space-md); width: 100%; align-items: center; }
+.memory-limit-control p { grid-column: 1 / -1; margin: 0; color: var(--app-text-muted); font-size: var(--app-font-xs); line-height: var(--app-leading-normal); }
 
 @container local-model (max-width: 900px) {
   .overview-grid { grid-template-columns: 1fr 1fr; }
@@ -794,6 +1005,9 @@ onMounted(refresh)
   .runtime-card { grid-column: auto; }
   .model-panel { padding: 0 var(--app-space-md) var(--app-space-md); }
   .form-grid { grid-template-columns: 1fr; }
+  .memory-form-item { grid-column: auto; }
+  .memory-limit-control { grid-template-columns: 1fr; }
+  .memory-limit-control p { grid-column: auto; }
   .content-header { align-items: flex-start; }
 }
 </style>

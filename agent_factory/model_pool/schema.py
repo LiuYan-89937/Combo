@@ -20,6 +20,9 @@ ModelSelectionSource = Literal["auto", "manual"]
 ModelSelectionOptimizeFor = Literal["balanced", "quality", "latency", "context"]
 LocalInferenceEngine = Literal["vllm_rocm", "transformers_rocm"]
 
+SUPPORTED_LOCAL_DTYPES: tuple[str, ...] = ("auto", "bfloat16", "float16", "float32")
+SUPPORTED_VLLM_QUANTIZATIONS: tuple[str, ...] = ("awq", "gptq")
+
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -128,7 +131,7 @@ class ModelPoolLimits(BaseModel):
 class LocalInferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    dtype: str
+    dtype: str = "auto"
     quantization: str | None = None
     tensor_parallel_size: int = Field(ge=1)
     gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1)
@@ -137,16 +140,22 @@ class LocalInferenceConfig(BaseModel):
     @field_validator("dtype")
     @classmethod
     def _dtype(cls, value: str) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            raise ValueError("dtype is required")
+        text = str(value or "").strip().lower() or "auto"
+        if text not in SUPPORTED_LOCAL_DTYPES:
+            raise ValueError(f"dtype must be one of: {', '.join(SUPPORTED_LOCAL_DTYPES)}")
         return text
 
     @field_validator("quantization")
     @classmethod
     def _quantization(cls, value: str | None) -> str | None:
         text = str(value or "").strip().lower()
-        return text or None
+        if not text:
+            return None
+        if text not in SUPPORTED_VLLM_QUANTIZATIONS:
+            raise ValueError(
+                f"quantization must be one of: {', '.join(SUPPORTED_VLLM_QUANTIZATIONS)}"
+            )
+        return text
 
 
 class ModelPoolProfile(BaseModel):
@@ -189,6 +198,12 @@ class ModelPoolProfile(BaseModel):
             raise ValueError("embedding profiles require engine=transformers_rocm")
         if self.kind == "embedding" and self.embedding_dimensions is None:
             raise ValueError("embedding profiles require embedding_dimensions")
+        if self.kind == "embedding" and (
+            self.inference.quantization is not None
+            or self.inference.gpu_memory_utilization is not None
+            or self.inference.tensor_parallel_size != 1
+        ):
+            raise ValueError("embedding profiles do not accept vLLM runtime parameters")
         return self
 
     @property

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +39,7 @@ class VllmLaunchConfig:
 def build_vllm_command(config: VllmLaunchConfig) -> list[str]:
     config.validate()
     command = [
-        "python",
+        sys.executable,
         "-m",
         "vllm.entrypoints.openai.api_server",
         "--model",

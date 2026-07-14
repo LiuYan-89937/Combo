@@ -7,9 +7,11 @@ from agent_factory.local_inference.config import (
 from agent_factory.local_inference.embedding import LocalEmbeddingModel
 from agent_factory.local_inference.launcher import VllmLaunchConfig, build_vllm_command
 from agent_factory.local_inference.rocm import RocmRuntimeInfo, inspect_rocm_runtime
+from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 
 __all__ = [
     "LocalInferenceEndpoint",
+    "LocalInferenceRuntimeManager",
     "LocalEmbeddingModel",
     "LocalVllmChatModel",
     "RocmRuntimeInfo",

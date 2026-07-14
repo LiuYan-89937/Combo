@@ -1,17 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 import re
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, HTTPException
 
 from agent_factory.local_inference import (
     inspect_rocm_runtime,
-    load_local_embedding_endpoint,
-    load_local_inference_endpoint,
+    LocalInferenceRuntimeManager,
 )
 from agent_factory.model_pool import (
     LocalModelArtifact,
@@ -27,7 +26,7 @@ from agent_factory.model_pool.store import ModelPoolStoreError
 from agent_factory.models import reset_chat_models, reset_embedding_model
 
 
-def create_model_pool_router() -> APIRouter:
+def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> APIRouter:
     router = APIRouter(prefix="/api/model-pool")
 
     @router.get("/engines")
@@ -37,6 +36,11 @@ def create_model_pool_router() -> APIRouter:
     @router.get("/runtime/rocm")
     async def rocm_runtime():
         return inspect_rocm_runtime(require_available=False).payload()
+
+    @router.get("/runtimes")
+    async def inference_runtimes():
+        rocm = await asyncio.to_thread(inspect_rocm_runtime, require_available=False)
+        return {"runtimes": runtime_manager.states(), "rocm": rocm.payload()}
 
     @router.get("/defaults")
     async def default_profiles():
@@ -54,9 +58,12 @@ def create_model_pool_router() -> APIRouter:
     @router.put("/defaults/{role}")
     async def set_default_profile(role: str, payload: dict[str, Any]):
         try:
+            requested_profile_id = str(payload.get("profile_id") or "").strip()
+            if requested_profile_id and not runtime_manager.is_ready(requested_profile_id):
+                raise ValueError("model must finish loading before it can be set as default")
             profile_id = ModelPoolStore().set_default_profile_id(
                 role=role,
-                profile_id=str(payload.get("profile_id") or "") or None,
+                profile_id=requested_profile_id or None,
             )
             _reset_model_caches()
         except Exception as exc:
@@ -110,50 +117,54 @@ def create_model_pool_router() -> APIRouter:
         store = ModelPoolStore()
         try:
             profile = store.upsert_profile(_profile_from_payload(payload, store=store))
+            if profile.enabled:
+                store.disable_other_profiles(profile.kind, profile.profile_id)
             artifact = store.get_artifact(profile.artifact_id)
+            runtime = await _apply_runtime_intent(runtime_manager, profile)
             _reset_model_caches()
         except Exception as exc:
             raise _http_error(exc) from exc
-        return {"profile": profile.to_public(artifact).model_dump(mode="json")}
+        return {
+            "profile": profile.to_public(artifact).model_dump(mode="json"),
+            "runtime": runtime,
+        }
 
     @router.patch("/profiles/{profile_id}")
     async def patch_profile(profile_id: str, payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
             profile = store.patch_profile(profile_id, payload)
+            if profile.enabled:
+                store.disable_other_profiles(profile.kind, profile.profile_id)
             artifact = store.get_artifact(profile.artifact_id)
+            runtime = await _apply_runtime_intent(runtime_manager, profile)
             _reset_model_caches()
         except Exception as exc:
             raise _http_error(exc) from exc
-        return {"profile": profile.to_public(artifact).model_dump(mode="json")}
+        return {
+            "profile": profile.to_public(artifact).model_dump(mode="json"),
+            "runtime": runtime,
+        }
 
     @router.delete("/profiles/{profile_id}")
     async def delete_profile(profile_id: str):
+        await runtime_manager.unload(profile_id)
         deleted = ModelPoolStore().delete_profile(profile_id)
         if deleted:
             _reset_model_caches()
         return {"deleted": deleted}
 
-    @router.post("/profiles/{profile_id}/check")
-    async def check_profile(profile_id: str):
-        store = ModelPoolStore()
+    @router.post("/profiles/{profile_id}/load")
+    async def load_profile(profile_id: str):
         try:
-            profile = store.require_profile(profile_id)
-            artifact = store.require_artifact(profile.artifact_id)
-            path = artifact.resolved_path()
-            result: dict[str, Any] = {
-                "status": "ready" if path.is_dir() else "missing",
-                "profile_id": profile.profile_id,
-                "artifact_id": artifact.artifact_id,
-                "local_path": str(path),
-                "path_exists": path.is_dir(),
-                "engine": profile.engine,
-            }
-            if profile.kind == "chat" and path.is_dir():
-                result["runtime"] = await _chat_runtime_status(profile.served_model_name)
-            elif profile.kind == "embedding" and path.is_dir():
-                result["runtime"] = await _embedding_runtime_status(profile.profile_id)
-            return result
+            return {"runtime": await runtime_manager.load(profile_id)}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
+    @router.post("/profiles/{profile_id}/unload")
+    async def unload_profile(profile_id: str):
+        try:
+            return {"runtime": await runtime_manager.unload(profile_id)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -173,6 +184,15 @@ def create_model_pool_router() -> APIRouter:
         return result.model_dump(mode="json")
 
     return router
+
+
+async def _apply_runtime_intent(
+    runtime_manager: LocalInferenceRuntimeManager,
+    profile: ModelPoolProfile,
+) -> dict[str, Any]:
+    if profile.enabled:
+        return await runtime_manager.load(profile.profile_id)
+    return await runtime_manager.unload(profile.profile_id)
 
 
 def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> LocalModelArtifact:
@@ -200,34 +220,6 @@ def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> 
             salt=str(data.get("artifact_id") or "") + ":" + str(data.get("engine") or ""),
         )
     return ModelPoolProfile.model_validate(data)
-
-
-async def _chat_runtime_status(model_name: str) -> dict[str, Any]:
-    endpoint = load_local_inference_endpoint()
-    async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
-        response = await client.get(endpoint.endpoint("/models"))
-        response.raise_for_status()
-        body = response.json()
-    models = body.get("data") if isinstance(body, dict) else None
-    names = [str(item.get("id") or "") for item in models or [] if isinstance(item, dict)]
-    return {
-        "status": "ready" if model_name in names else "model_not_served",
-        "served_models": names,
-    }
-
-
-async def _embedding_runtime_status(profile_id: str) -> dict[str, Any]:
-    endpoint = load_local_embedding_endpoint()
-    async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
-        response = await client.get(endpoint.endpoint("/health"))
-        response.raise_for_status()
-        body = response.json()
-    loaded_profile_id = str(body.get("profile_id") or "") if isinstance(body, dict) else ""
-    return {
-        "status": "ready" if loaded_profile_id == profile_id else "profile_not_loaded",
-        "loaded_profile_id": loaded_profile_id,
-        "dimensions": body.get("dimensions") if isinstance(body, dict) else None,
-    }
 
 
 def _http_error(exc: Exception) -> HTTPException:
