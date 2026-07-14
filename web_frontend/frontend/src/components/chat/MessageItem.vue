@@ -3,6 +3,7 @@
     class="message-item"
     :class="[`role-${message.role}`, { streaming }]"
     :data-reference-label="`${roleLabel} · ${formatTime(message.timestamp)}`"
+    :data-tip-source-key="registeredSourceKey || undefined"
   >
     <div class="message-avatar">
       <n-avatar :size="36" :style="avatarStyle">
@@ -76,17 +77,33 @@
         ></span>
       </div>
     </div>
+
+    <button
+      v-if="messageTips.length"
+      class="tip-marker"
+      :class="{ 'tip-marker-answering': hasAnsweringTip }"
+      type="button"
+      title="Tiping"
+      @click="openLatestTip"
+    >
+      <TipingIcon :size="28" scroll-motion />
+      <b v-if="messageTips.length > 1">{{ messageTips.length }}</b>
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import { NAvatar, NButton, NIcon, NText } from 'naive-ui'
 import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
 import type { TranscriptItem } from '@/types/protocol'
+import { useTipStore, type TipMessageContext } from '@/stores/tips'
+import TipingIcon from './TipingIcon.vue'
+
+type TipContextConfig = Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'>
 
 const props = withDefaults(
   defineProps<{
@@ -94,11 +111,13 @@ const props = withDefaults(
     streaming?: boolean
     thinking?: boolean
     quoteable?: boolean
+    tipContext?: TipContextConfig | null
   }>(),
   {
     streaming: false,
     thinking: false,
     quoteable: false,
+    tipContext: null,
   }
 )
 
@@ -107,6 +126,41 @@ defineEmits<{
 }>()
 
 const { locale, t } = useI18n()
+const tipStore = useTipStore()
+const registeredSourceKey = ref('')
+const messageTips = computed(() => registeredSourceKey.value ? tipStore.tipsForSource(registeredSourceKey.value) : [])
+const hasAnsweringTip = computed(() => messageTips.value.some(tip => tip.status === 'answering'))
+
+watch(
+  () => props.tipContext,
+  (context) => {
+    if (registeredSourceKey.value) tipStore.unregisterSource(registeredSourceKey.value)
+    registeredSourceKey.value = context
+      ? tipStore.registerSource({
+          ...context,
+          sourceMessageId: props.message.id,
+          sourceRole: props.message.role,
+          sourceContent: props.message.content,
+        })
+      : ''
+  },
+  { immediate: true, deep: true },
+)
+
+onBeforeUnmount(() => {
+  if (registeredSourceKey.value) tipStore.unregisterSource(registeredSourceKey.value)
+})
+
+function openLatestTip(event: MouseEvent) {
+  const tip = messageTips.value[0]
+  if (!tip) return
+  const marker = event.currentTarget as HTMLElement
+  const bounds = marker.getBoundingClientRect()
+  tipStore.selectTip(tip.scope_type, tip.scope_id, tip.tip_id, {
+    x: bounds.left + bounds.width / 2,
+    y: bounds.top + bounds.height / 2,
+  })
+}
 
 const roleLabel = computed(() => {
   if (collaborationReport.value) return collaborationReportTitle.value
@@ -242,12 +296,69 @@ function stableColorIndex(value: string, size: number): number {
 
 <style scoped>
 .message-item {
+  position: relative;
   display: flex;
   gap: var(--app-space-md);
   padding: var(--app-space-lg) var(--app-space-md);
   border-radius: var(--app-radius-lg);
   transition: background-color var(--app-transition-base), transform var(--app-transition-spring), box-shadow var(--app-transition-base);
   animation: app-fade-in-up 0.55s var(--app-transition-spring) both;
+}
+
+.tip-marker {
+  position: absolute;
+  top: 50%;
+  right: -6px;
+  transform: translate(50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--app-text);
+  box-shadow: none;
+  cursor: pointer;
+  font: inherit;
+  z-index: 2;
+  transition: border-color var(--app-transition-base), background-color var(--app-transition-base), transform var(--app-transition-spring);
+  animation: tip-marker-pop .34s var(--app-transition-spring) both;
+}
+
+.tip-marker:hover {
+  background: transparent;
+  transform: translate(50%, -50%) scale(1.06);
+}
+
+.tip-marker b {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--app-text);
+  color: var(--app-text-inverse);
+  font-size: 9px;
+}
+
+.tip-marker-answering {
+  animation: tip-marker-breathe 1.55s ease-in-out infinite;
+}
+
+@keyframes tip-marker-pop {
+  from { opacity: 0; transform: translate(50%, -50%) scale(.72); }
+  to { opacity: 1; transform: translate(50%, -50%) scale(1); }
+}
+
+@keyframes tip-marker-breathe {
+  0%, 100% { opacity: .68; transform: translate(50%, -50%) scale(.96); }
+  50% { opacity: 1; transform: translate(50%, -50%) scale(1.04); }
 }
 
 .message-item.role-assistant {

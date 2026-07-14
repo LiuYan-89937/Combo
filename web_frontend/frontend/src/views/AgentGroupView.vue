@@ -14,6 +14,7 @@
             :message="message"
             :streaming="message.status === 'streaming'"
             quoteable
+            :tip-context="tipContextFor(message)"
             @quote="quoteMessage"
           />
         </div>
@@ -97,6 +98,7 @@
         />
       </footer>
     </section>
+    <TipPanel v-if="tipScopeId" scope-type="agent-group" :scope-id="tipScopeId" />
   </div>
 </template>
 
@@ -110,6 +112,8 @@ import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { FactoryFrontendEvent, RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
+import TipPanel from '@/components/chat/TipPanel.vue'
+import type { TipMessageContext } from '@/stores/tips'
 
 const store = useAgentGroupStore()
 const inputRef = ref()
@@ -120,6 +124,7 @@ const mentionQuery = ref('')
 const quotedMessage = ref<TranscriptItem | null>(null)
 const referenceStore = useContextReferenceStore()
 const referenceScope = computed(() => `agent-group:${store.activeGroup?.group_id || 'new'}`)
+const tipScopeId = computed(() => store.activeGroup?.group_id || '')
 
 const activeRunKey = computed(() => store.activeRuns.map(run => `${run.group_run_id}:${run.status}`).join('|'))
 const retryableRuns = computed(() => store.runs.filter(run => ['failed', 'cancelled'].includes(run.status)))
@@ -187,6 +192,15 @@ function quoteMessage(message: TranscriptItem) {
   nextTick(() => inputRef.value?.focus())
 }
 
+function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'> | null {
+  if (!tipScopeId.value || message.role !== 'assistant') return null
+  return {
+    scopeType: 'agent-group',
+    scopeId: tipScopeId.value,
+    agentPackageId: String(message.metadata?.package_id || ''),
+  }
+}
+
 function messageSpeaker(message: TranscriptItem): string {
   return String(message.metadata?.display_name || (message.role === 'user' ? '你' : 'Assistant'))
 }
@@ -209,8 +223,8 @@ watch(() => activeRunKey.value, () => undefined)
 </script>
 
 <style scoped>
-.agent-group-view { height: 100%; min-height: 0; }
-.chat-container { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.agent-group-view { height: 100%; min-height: 0; display: flex; position: relative; }
+.chat-container { height: 100%; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; transition: width .24s var(--app-transition-spring); }
 .messages-scrollbar { flex: 1; min-height: 0; }
 .messages-list { width: min(100%, 920px); margin: 0 auto; padding: var(--app-space-lg); }
 .group-empty { min-height: 320px; display: grid; place-items: center; }

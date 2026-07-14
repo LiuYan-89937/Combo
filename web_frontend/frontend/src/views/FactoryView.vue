@@ -39,6 +39,7 @@
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
                 quoteable
+                :tip-context="tipContextFor(item.message)"
                 @quote="addMessageReference"
               />
             </template>
@@ -90,6 +91,7 @@
         />
       </div>
     </div>
+    <TipPanel v-if="tipScopeId" :scope-type="tipScopeType" :scope-id="tipScopeId" />
   </div>
 </template>
 
@@ -99,6 +101,7 @@ import { useRoute } from 'vue-router'
 import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
 import { ChatbubbleEllipses } from '@/components/icons'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useAgentStore } from '@/stores/agent'
 import { useI18n } from '@/composables/useI18n'
 import { useFactoryConversation } from '@/composables/factory/useFactoryConversation'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
@@ -111,8 +114,11 @@ import type { RuntimeAttachmentInput } from '@/types/protocol'
 import type { TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
+import TipPanel from '@/components/chat/TipPanel.vue'
+import type { TipMessageContext } from '@/stores/tips'
 
 const runtimeStore = useRuntimeStore()
+const agentStore = useAgentStore()
 const route = useRoute()
 const { t } = useI18n()
 const scrollbarRef = ref()
@@ -123,6 +129,14 @@ const referenceScope = computed(() => [
   runtimeStore.currentMode,
   runtimeStore.activeFactorySessionId || runtimeStore.activeAgentSessionId || 'new',
 ].join(':'))
+const tipAllowed = computed(() => !['Manufacturing', 'Evolution'].includes(String(route.name || '')))
+const tipScopeType = computed(() => agentStore.activeChatPackageId ? 'agent-session' : 'factory-session')
+const tipScopeId = computed(() => {
+  if (!tipAllowed.value) return ''
+  return agentStore.activeChatPackageId
+    ? runtimeStore.activeAgentSessionId || ''
+    : runtimeStore.activeFactorySessionId || ''
+})
 
 const {
   isEvolutionRoute,
@@ -172,6 +186,17 @@ function handleCancel() {
 function addMessageReference(message: TranscriptItem) {
   referenceStore.add(messageContextReference(message), referenceScope.value)
   nextTick(() => inputRef.value?.focus())
+}
+
+function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'> | null {
+  if (!tipScopeId.value || message.role !== 'assistant') return null
+  return {
+    scopeType: tipScopeType.value,
+    scopeId: tipScopeId.value,
+    agentPackageId: String(message.metadata?.package_id || agentStore.activeChatPackageId || 'factory_chat'),
+    modelProfileId: selectedMainModelProfileId.value || null,
+    reasoningIntensity: reasoningIntensity.value,
+  }
 }
 
 function handleResourceConfigured(resourceId: string) {
@@ -241,19 +266,22 @@ watch(() => route.name, applyRouteMode)
 .factory-view {
   height: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   background: var(--app-surface);
+  position: relative;
 }
 
 .chat-container {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   padding: var(--app-space-xl) var(--app-space-xl) var(--app-space-lg);
   max-width: var(--app-chat-max-width);
   margin: 0 auto;
-  width: 100%;
+  width: min(100%, var(--app-chat-max-width));
+  transition: width .24s var(--app-transition-spring), max-width .24s var(--app-transition-spring);
 }
 
 .evolution-target-bar {

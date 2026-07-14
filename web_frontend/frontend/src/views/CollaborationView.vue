@@ -15,6 +15,7 @@
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
                 quoteable
+                :tip-context="tipContextFor(item.message)"
                 @quote="addMessageReference"
               />
             </template>
@@ -51,6 +52,7 @@
         />
       </footer>
     </div>
+    <TipPanel v-if="tipScopeId" scope-type="collaboration" :scope-id="tipScopeId" />
   </div>
 </template>
 
@@ -72,6 +74,8 @@ import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
+import TipPanel from '@/components/chat/TipPanel.vue'
+import type { TipMessageContext } from '@/stores/tips'
 
 const store = useCollaborationStore()
 const runtimeStore = useRuntimeStore()
@@ -81,6 +85,7 @@ const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const referenceScope = computed(() => `collaboration:${store.activeSession?.collaboration_id || 'new'}`)
+const tipScopeId = computed(() => store.activeSession?.collaboration_id || '')
 const {
   activeStreamContentKey,
   cancelMainAgentRequest,
@@ -118,6 +123,15 @@ function cancelRequest() {
 function addMessageReference(message: TranscriptItem) {
   referenceStore.add(messageContextReference(message), referenceScope.value)
   nextTick(() => inputRef.value?.focus())
+}
+
+function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'> | null {
+  if (!tipScopeId.value || message.role !== 'assistant') return null
+  return {
+    scopeType: 'collaboration',
+    scopeId: tipScopeId.value,
+    agentPackageId: String(message.metadata?.package_id || store.mainAgentId || 'factory_chat'),
+  }
 }
 
 function scrollToBottom(behavior: ScrollBehavior = 'auto') {
@@ -168,19 +182,22 @@ watch(
 .collaboration-view {
   height: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   background: var(--app-surface);
+  position: relative;
 }
 
 .chat-container {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   padding: var(--app-space-xl) var(--app-space-xl) var(--app-space-lg);
   max-width: var(--app-chat-max-width);
   margin: 0 auto;
-  width: 100%;
+  width: min(100%, var(--app-chat-max-width));
+  transition: width .24s var(--app-transition-spring), max-width .24s var(--app-transition-spring);
 }
 
 .conversation-panel {
