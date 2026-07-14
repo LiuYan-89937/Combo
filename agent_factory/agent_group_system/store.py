@@ -117,6 +117,7 @@ class AgentGroupStore:
                     content text not null,
                     context_version integer,
                     reply_to_message_id text,
+                    context_references_json text not null default '[]',
                     group_run_id text,
                     event_ref text,
                     created_at text not null,
@@ -210,6 +211,7 @@ class AgentGroupStore:
             _ensure_column(conn, "agent_group_members", "consumed_context_version", "integer not null default 0")
             _ensure_column(conn, "agent_group_messages", "context_version", "integer")
             _ensure_column(conn, "agent_group_messages", "reply_to_message_id", "text")
+            _ensure_column(conn, "agent_group_messages", "context_references_json", "text not null default '[]'")
             _ensure_column(conn, "agent_group_member_runs", "request_id", "text")
 
 
@@ -286,7 +288,7 @@ class AgentGroupStore:
             # 消息（最近 200 条）
             message_rows = conn.execute("""
                 select message_id, group_id, speaker_type, speaker_package_id, message_kind,
-                       content, reply_to_message_id, group_run_id, event_ref, created_at
+                       content, reply_to_message_id, context_references_json, group_run_id, event_ref, created_at
                 from agent_group_messages
                 where group_id = ?
                 order by created_at desc
@@ -406,7 +408,7 @@ class AgentGroupStore:
             row = conn.execute(
                 """
                 select message_id, group_id, speaker_type, speaker_package_id, message_kind,
-                       content, reply_to_message_id, group_run_id, event_ref, created_at
+                       content, reply_to_message_id, context_references_json, group_run_id, event_ref, created_at
                 from agent_group_messages where message_id = ?
                 """,
                 (message_id,),
@@ -479,6 +481,7 @@ class AgentGroupStore:
         client_message_id: str,
         target_package_ids: list[str],
         reply_to_message_id: str | None = None,
+        context_references: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """添加用户消息（幂等，基于 client_message_id）"""
         if not content.strip():
@@ -502,10 +505,10 @@ class AgentGroupStore:
             conn.execute("""
                 insert into agent_group_messages
                 (message_id, group_id, speaker_type, speaker_package_id, message_kind, content,
-                 reply_to_message_id, group_run_id, event_ref, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reply_to_message_id, context_references_json, group_run_id, event_ref, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (message_id, group_id, "user", None, "user_message", content.strip(),
-                  reply_to_message_id, None, f"user:{client_message_id}", now))
+                  reply_to_message_id, json_dumps(context_references or []), None, f"user:{client_message_id}", now))
 
             context_version = self._append_context_delta_conn(
                 conn,
@@ -956,7 +959,9 @@ class AgentGroupStore:
 
     def _message_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """消息视图"""
-        return dict(row)
+        data = dict(row)
+        data["context_references"] = json_loads(data.pop("context_references_json", "[]"), [])
+        return data
 
     def _run_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """运行记录视图"""

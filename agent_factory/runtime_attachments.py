@@ -303,6 +303,7 @@ def _import_payload_attachment(
     kind = str(item.get("kind") or "").strip().lower()
     display_name = _safe_filename(str(item.get("name") or item.get("display_name") or kind or "attachment"))
     mime_type = str(item.get("mime_type") or item.get("mime") or "").strip() or None
+    declared_source_kind = str(item.get("source_kind") or "").strip()
     content = item.get("content")
     if kind == "text":
         text = str(content or "")
@@ -313,7 +314,7 @@ def _import_payload_attachment(
         return _write_runtime_attachment(
             data=text.encode("utf-8"),
             display_name=filename,
-            source_kind="inline_text",
+            source_kind=declared_source_kind or "inline_text",
             mime_type=mime_type or "text/plain",
             storage_root=storage_root,
             runtime_path_root=runtime_path_root,
@@ -350,7 +351,7 @@ def _import_payload_attachment(
             return _write_runtime_attachment(
                 data=data,
                 display_name=display_name,
-                source_kind="uploaded_file",
+                source_kind=declared_source_kind or "uploaded_file",
                 mime_type=mime_type,
                 storage_root=storage_root,
                 runtime_path_root=runtime_path_root,
@@ -373,7 +374,7 @@ def _import_payload_attachment(
             return _write_runtime_attachment(
                 data=data,
                 display_name=display_name,
-                source_kind="uploaded_file",
+                source_kind=declared_source_kind or "uploaded_file",
                 mime_type=mime_type,
                 storage_root=storage_root,
                 runtime_path_root=runtime_path_root,

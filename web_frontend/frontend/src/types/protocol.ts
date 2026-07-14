@@ -24,6 +24,13 @@ export interface RuntimeAttachmentInput {
   mime_type?: string
 }
 
+export type ContextReferenceKind = 'message_reference' | 'workspace_file' | 'text_selection'
+
+export interface ContextReferenceInput extends RuntimeAttachmentInput {
+  kind: 'text' | 'file'
+  source_kind: ContextReferenceKind
+}
+
 export interface TranscriptAttachmentView {
   kind: RuntimeAttachmentKind
   name: string

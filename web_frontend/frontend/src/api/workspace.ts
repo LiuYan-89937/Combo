@@ -1,5 +1,5 @@
 import type { WorkspaceContextInput, WorkspaceRequestContext, WorkspaceScope } from './resourceTypes'
-import { requestEvent, withQuery } from './http'
+import { requestEvent, requestJson, withQuery } from './http'
 
 export const workspaceApi = {
   roots: (context?: WorkspaceContextInput) =>
@@ -10,6 +10,11 @@ export const workspaceApi = {
     requestEvent(withQuery('/api/workspace/file', { scope, path, ...workspaceQuery(context), max_chars: maxChars })),
   rawUrl: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
     withQuery('/api/workspace/raw', { scope, path, ...workspaceQuery(context) }),
+  deleteFile: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
+    requestJson<{ deleted: boolean; path: string }>(
+      withQuery('/api/workspace/file', { scope, path, ...workspaceQuery(context) }),
+      { method: 'DELETE' },
+    ),
 }
 
 function workspaceQuery(context: WorkspaceContextInput): Record<string, string | undefined | null> {

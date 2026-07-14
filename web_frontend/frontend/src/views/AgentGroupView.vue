@@ -90,6 +90,7 @@
           :placeholder="selectedMentions.length ? '输入消息...' : '输入 @ 选择 Agent，然后输入消息'"
           :disabled="store.saving"
           :is-running="false"
+          :reference-scope="referenceScope"
           @send="sendMessage"
           @cancel="cancelActiveRuns"
           @input="handleComposerInput"
@@ -107,6 +108,8 @@ import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { FactoryFrontendEvent, RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
+import { useContextReferenceStore } from '@/stores/contextReferences'
+import { messageContextReference } from '@/utils/contextReferences'
 
 const store = useAgentGroupStore()
 const inputRef = ref()
@@ -115,6 +118,8 @@ const selectedMentions = ref<string[]>([])
 const showMentionPicker = ref(false)
 const mentionQuery = ref('')
 const quotedMessage = ref<TranscriptItem | null>(null)
+const referenceStore = useContextReferenceStore()
+const referenceScope = computed(() => `agent-group:${store.activeGroup?.group_id || 'new'}`)
 
 const activeRunKey = computed(() => store.activeRuns.map(run => `${run.group_run_id}:${run.status}`).join('|'))
 const retryableRuns = computed(() => store.runs.filter(run => ['failed', 'cancelled'].includes(run.status)))
@@ -159,7 +164,7 @@ function handleComposerInput(value: string) {
   mentionQuery.value = match?.[1] || ''
 }
 
-async function sendMessage(content: string, _attachments: RuntimeAttachmentInput[]) {
+async function sendMessage(content: string, attachments: RuntimeAttachmentInput[]) {
   const message = content.trim()
   if (!message || !store.activeGroup) return
   const mentionPrefix = selectedMentions.value.map(packageId => `@${agentName(packageId)}`).join(' ')
@@ -168,6 +173,7 @@ async function sendMessage(content: string, _attachments: RuntimeAttachmentInput
     visibleMessage,
     selectedMentions.value,
     quotedMessage.value ? String(quotedMessage.value.metadata?.group_message_id || '') : undefined,
+    attachments,
   )
   selectedMentions.value = []
   quotedMessage.value = null
@@ -177,6 +183,7 @@ async function sendMessage(content: string, _attachments: RuntimeAttachmentInput
 function quoteMessage(message: TranscriptItem) {
   if (!String(message.metadata?.group_message_id || '').trim()) return
   quotedMessage.value = message
+  referenceStore.add(messageContextReference(message), referenceScope.value)
   nextTick(() => inputRef.value?.focus())
 }
 

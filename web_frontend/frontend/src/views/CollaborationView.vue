@@ -14,6 +14,8 @@
               <MessageItem
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
+                quoteable
+                @quote="addMessageReference"
               />
             </template>
 
@@ -43,6 +45,7 @@
           :disabled="inputDisabled"
           :is-running="isMainAgentRunning"
           attachments-enabled
+          :reference-scope="referenceScope"
           @send="sendMessage"
           @cancel="cancelRequest"
         />
@@ -52,7 +55,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   NEmpty,
   NScrollbar,
@@ -66,7 +69,9 @@ import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import type { RuntimeAttachmentInput } from '@/types/protocol'
+import type { RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
+import { useContextReferenceStore } from '@/stores/contextReferences'
+import { messageContextReference } from '@/utils/contextReferences'
 
 const store = useCollaborationStore()
 const runtimeStore = useRuntimeStore()
@@ -74,6 +79,8 @@ const uiStore = useUiStore()
 const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
+const referenceStore = useContextReferenceStore()
+const referenceScope = computed(() => `collaboration:${store.activeSession?.collaboration_id || 'new'}`)
 const {
   activeStreamContentKey,
   cancelMainAgentRequest,
@@ -106,6 +113,11 @@ async function sendMessage(message: string, attachments: RuntimeAttachmentInput[
 
 function cancelRequest() {
   cancelMainAgentRequest()
+}
+
+function addMessageReference(message: TranscriptItem) {
+  referenceStore.add(messageContextReference(message), referenceScope.value)
+  nextTick(() => inputRef.value?.focus())
 }
 
 function scrollToBottom(behavior: ScrollBehavior = 'auto') {

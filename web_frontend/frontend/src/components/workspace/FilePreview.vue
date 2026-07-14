@@ -8,12 +8,27 @@
         </n-text>
       </div>
       <n-space>
+        <n-button size="small" @click="addToReferences">
+          <template #icon>
+            <n-icon><AddCircleOutline /></n-icon>
+          </template>
+          {{ t('references.add') }}
+        </n-button>
         <n-button size="small" @click="handleDownload">
           <template #icon>
             <n-icon><Download /></n-icon>
           </template>
           {{ t('common.download') }}
         </n-button>
+        <n-popconfirm @positive-click="handleDelete">
+          <template #trigger>
+            <n-button size="small" type="error" secondary>
+              <template #icon><n-icon><TrashOutline /></n-icon></template>
+              {{ t('workspace.deleteFile') }}
+            </n-button>
+          </template>
+          {{ t('workspace.deleteFileConfirm', { name: file.name }) }}
+        </n-popconfirm>
         <n-button size="small" @click="handleClose">
           <template #icon>
             <n-icon><Close /></n-icon>
@@ -23,9 +38,9 @@
       </n-space>
     </div>
 
-    <div class="preview-content" :class="`preview-${previewKind}`">
+    <div class="preview-content" :class="`preview-${previewKind}`" :data-reference-label="file.path || file.name">
       <div
-        v-if="previewKind === 'markdown'"
+        v-if="previewKind === 'markdown' || previewKind === 'code'"
         ref="markdownPreviewRef"
         class="markdown-preview markdown-content"
         v-html="renderedMarkdown"
@@ -69,15 +84,18 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NIcon, NSpace, NText } from 'naive-ui'
-import { Close, DocumentOutline, Download } from '@/components/icons'
+import { NAlert, NButton, NEmpty, NIcon, NPopconfirm, NSpace, NText } from 'naive-ui'
+import { AddCircleOutline, Close, DocumentOutline, Download, TrashOutline } from '@/components/icons'
 import { workspaceApi } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceTypes'
 import type { WorkspaceFileView } from '@/types/protocol'
+import { useContextReferenceStore } from '@/stores/contextReferences'
+import { workspaceFileContextReference } from '@/utils/contextReferences'
+import { useMessage } from 'naive-ui'
 
-type PreviewKind = 'text' | 'markdown' | 'image' | 'pdf' | 'unsupported'
+type PreviewKind = 'text' | 'markdown' | 'code' | 'image' | 'pdf' | 'unsupported'
 
 const props = defineProps<{
   file: WorkspaceFileView
@@ -85,9 +103,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
+  deleted: [path: string]
 }>()
 
 const { t } = useI18n()
+const message = useMessage()
+const referenceStore = useContextReferenceStore()
 const markdownPreviewRef = ref<HTMLElement | null>(null)
 const { renderMarkdown } = useMarkdownRenderer(markdownPreviewRef)
 
@@ -95,6 +116,7 @@ const extension = computed(() => props.file.name.split('.').pop()?.toLowerCase()
 const mimeType = computed(() => String(props.file.mimeType || '').toLowerCase())
 const previewKind = computed<PreviewKind>(() => {
   if (isMarkdownFile()) return 'markdown'
+  if (isCodeFile()) return 'code'
   if (isImageFile()) return 'image'
   if (isPdfFile()) return 'pdf'
   if (props.file.kind === 'text') return 'text'
@@ -102,13 +124,19 @@ const previewKind = computed<PreviewKind>(() => {
 })
 const previewLabel = computed(() => {
   if (previewKind.value === 'markdown') return 'Markdown'
+  if (previewKind.value === 'code') return extension.value.toUpperCase()
   if (previewKind.value === 'image') return t('workspace.preview.image')
   if (previewKind.value === 'pdf') return 'PDF'
   if (previewKind.value === 'text' && props.file.payload?.preview_mode === 'extracted_text') return t('workspace.preview.documentText')
   if (previewKind.value === 'text') return t('workspace.preview.text')
   return t('workspace.preview.binary')
 })
-const renderedMarkdown = computed(() => renderMarkdown(props.file.content || '', { surface: 'workspace_preview' }))
+const renderedMarkdown = computed(() => renderMarkdown(
+  previewKind.value === 'code'
+    ? `\`\`\`${extension.value}\n${props.file.content || ''}\n\`\`\``
+    : props.file.content || '',
+  { surface: 'workspace_preview' },
+))
 const packageId = computed(() => {
   const payload = props.file.payload || {}
   return String(payload.package_id || payload.packageId || '').trim() || null
@@ -122,6 +150,7 @@ const workspaceContext = computed<WorkspaceRequestContext>(() => {
     factorySessionId: String(payload.factory_session_id || payload.factorySessionId || '').trim() || null,
     createAgentSessionId: String(payload.create_agent_session_id || payload.createAgentSessionId || '').trim() || null,
     collaborationId: String(payload.collaboration_id || payload.collaborationId || '').trim() || null,
+    groupId: String(payload.group_id || payload.groupId || '').trim() || null,
   }
 })
 const rawFileUrl = computed(() => {
@@ -147,6 +176,14 @@ const previewTruncated = computed(() => {
 
 function isMarkdownFile(): boolean {
   return props.file.kind === 'text' && ['md', 'markdown', 'mdx'].includes(extension.value)
+}
+
+function isCodeFile(): boolean {
+  return props.file.kind === 'text' && [
+    'c', 'cc', 'cpp', 'css', 'go', 'h', 'hpp', 'html', 'java', 'js', 'jsx', 'json',
+    'kt', 'php', 'py', 'rb', 'rs', 'sh', 'sql', 'swift', 'ts', 'tsx', 'vue', 'xml',
+    'yaml', 'yml',
+  ].includes(extension.value)
 }
 
 function isImageFile(): boolean {
@@ -181,6 +218,27 @@ function handleDownload() {
   anchor.download = props.file.name
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+async function handleDelete() {
+  if (!props.file.path) return
+  const scope = (props.file.scope || 'workdir') as WorkspaceScope
+  await workspaceApi.deleteFile(scope, props.file.path, workspaceContext.value)
+  message.success(t('workspace.fileDeleted'))
+  emit('deleted', props.file.path)
+}
+
+function addToReferences() {
+  const reference = workspaceFileContextReference(props.file)
+  if (!reference) {
+    message.warning(t('references.unsupportedFile'))
+    return
+  }
+  if (!referenceStore.add(reference)) {
+    message.warning(t('references.limitReached'))
+    return
+  }
+  message.success(t('references.added'))
 }
 
 function base64Blob(content: string, mimeType: string): Blob {

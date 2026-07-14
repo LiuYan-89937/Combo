@@ -6,12 +6,11 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { FactoryFrontendEvent, TranscriptItem, ChatMessagePart } from '@/types/protocol'
-import { reasoningPart, textPart, upsertPart } from '@/stores/runtime/messageParts'
+import type { ContextReferenceInput, FactoryFrontendEvent, RuntimeAttachmentInput, TranscriptItem, ChatMessagePart } from '@/types/protocol'
+import { attachmentPart, reasoningPart, textPart, upsertPart } from '@/stores/runtime/messageParts'
 import {
   agentGroupApi,
   type AgentGroupSessionView,
-  type AgentGroupMemberView,
   type AgentGroupMessageView,
   type AgentView,
 } from '@/api/agentGroup'
@@ -254,7 +253,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     }
   }
 
-  const sendMessage = async (content: string, targetPackageIds: string[], replyToMessageId?: string) => {
+  const sendMessage = async (content: string, targetPackageIds: string[], replyToMessageId?: string, attachments: RuntimeAttachmentInput[] = []) => {
     if (!activeGroup.value) return
     saving.value = true
     error.value = null
@@ -265,6 +264,10 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
         client_message_id: clientMessageId,
         target_package_ids: targetPackageIds,
         ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+        context_references: attachments.filter(attachment => (
+          ['message_reference', 'workspace_file', 'text_selection'].includes(String(attachment.source_kind || ''))
+          && typeof attachment.content === 'string'
+        )) as ContextReferenceInput[],
       })
       replaceActive(group)
     } catch (e) {
@@ -491,13 +494,24 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
 function messageToTranscript(message: AgentGroupMessageView, agentName?: string, mentionNames: string[] = []): TranscriptItem {
   const role = message.speaker_type === 'user' ? 'user' : message.speaker_type === 'system' ? 'system' : 'assistant'
   const displayName = message.speaker_type === 'agent' ? agentName || message.speaker_package_id || 'Assistant' : undefined
+  const references = (message.context_references || []).map(reference => ({
+    kind: reference.kind,
+    name: reference.name,
+    source_kind: reference.source_kind,
+    mime_type: reference.mime_type,
+  }))
+  const timestamp = message.created_at
   return {
     id: `group-message-${message.message_id}`,
     role,
     content: message.content,
-    timestamp: message.created_at,
+    timestamp,
     status: 'completed',
-    parts: [textPart(`group-message-${message.message_id}:text`, message.content, { timestamp: message.created_at })],
+    parts: [
+      textPart(`group-message-${message.message_id}:text`, message.content, { timestamp }),
+      ...references.map((reference, index) => attachmentPart(`group-message-${message.message_id}:reference:${index}`, reference, timestamp)),
+    ],
+    attachments: references,
     metadata: {
       group_message_id: message.message_id,
       group_run_id: message.group_run_id,

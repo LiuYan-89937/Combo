@@ -116,6 +116,7 @@ def create_agent_group_router(
             client_message_id = payload.get("client_message_id", "").strip()
             target_package_ids = payload.get("target_package_ids", [])
             reply_to_message_id = str(payload.get("reply_to_message_id") or "").strip() or None
+            context_references = payload.get("context_references")
 
             if not content:
                 raise HTTPException(status_code=400, detail="content is required")
@@ -127,6 +128,7 @@ def create_agent_group_router(
                 client_message_id,
                 target_package_ids,
                 reply_to_message_id=reply_to_message_id,
+                context_references=context_references,
             )
             runtime = _agent_package_runtime(runtime_bridge)
             commands = service.prepare_queued_run_commands(group_id, runtime)

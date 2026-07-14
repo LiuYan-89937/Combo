@@ -8,6 +8,7 @@
       v-else-if="runtimeStore.workspaceFile"
       :file="runtimeStore.workspaceFile"
       @close="closeWorkspacePreview"
+      @deleted="closeWorkspacePreview"
     />
     <div v-else class="workspace-browser">
       <div class="context-bar">

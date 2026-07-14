@@ -1,5 +1,23 @@
 <template>
   <div class="message-input-container">
+    <div v-if="contextReferences.length > 0" class="attachments-preview context-references-preview">
+      <div
+        v-for="(reference, index) in contextReferences"
+        :key="`${reference.source_kind}:${reference.name}:${index}`"
+        class="attachment-item context-reference-item"
+      >
+        <n-icon size="18">
+          <Document v-if="reference.source_kind === 'workspace_file'" />
+          <Text v-else />
+        </n-icon>
+        <span class="attachment-name">{{ reference.name }}</span>
+        <n-text depth="3" class="reference-kind">{{ referenceKindLabel(reference.source_kind) }}</n-text>
+        <n-button text size="small" @click="referenceStore.remove(index, normalizedReferenceScope)">
+          <n-icon><Close /></n-icon>
+        </n-button>
+      </div>
+    </div>
+
     <!-- 附件预览区 -->
     <div v-if="attachmentsEnabled && attachments.length > 0" class="attachments-preview">
       <div
@@ -167,7 +185,7 @@
     <AttachmentPickerModal
       v-if="attachmentsEnabled"
       v-model:show="showAttachmentPicker"
-      :current-count="attachments.length"
+      :current-count="attachments.length + contextReferences.length"
       :max-count="maxAttachments"
       @attach="handleAttach"
     />
@@ -183,9 +201,11 @@ import { useI18n } from '@/composables/useI18n'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
 import { REASONING_SLIDER_DEFAULT, REASONING_SLIDER_MAX } from '@/utils/reasoning'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
+import { useContextReferenceStore } from '@/stores/contextReferences'
 
 const { t } = useI18n()
 const messageApi = useMessage()
+const referenceStore = useContextReferenceStore()
 
 const props = withDefaults(
   defineProps<{
@@ -200,6 +220,7 @@ const props = withDefaults(
     selectedModelProfileId?: string | null
     reasoningControlEnabled?: boolean
     reasoningIntensity?: number | null
+    referenceScope?: string
   }>(),
   {
     placeholder: '',
@@ -213,6 +234,7 @@ const props = withDefaults(
     selectedModelProfileId: '',
     reasoningControlEnabled: false,
     reasoningIntensity: null,
+    referenceScope: 'global',
   }
 )
 
@@ -227,6 +249,8 @@ const emit = defineEmits<{
 const inputRef = ref()
 const inputText = ref('')
 const attachments = ref<RuntimeAttachmentInput[]>([])
+const normalizedReferenceScope = computed(() => String(props.referenceScope || '').trim() || 'global')
+const contextReferences = computed(() => referenceStore.references(normalizedReferenceScope.value))
 const showAttachmentPicker = ref(false)
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
 const reasoningSliderValue = computed(() => props.reasoningIntensity === null ? REASONING_SLIDER_DEFAULT : props.reasoningIntensity + 1)
@@ -241,7 +265,7 @@ const reasoningLabels = computed(() => [
 const reasoningLabel = computed(() => reasoningLabels.value[reasoningSliderValue.value] || reasoningLabels.value[0])
 const reasoningMarks = computed(() => Object.fromEntries(reasoningLabels.value.map((label, index) => [index, label])))
 const maxAttachments = MAX_RUNTIME_ATTACHMENTS
-const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length))
+const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length - contextReferences.value.length))
 
 const canSend = computed(() => {
   const hasText = inputText.value.trim().length > 0
@@ -281,11 +305,12 @@ function handleSend() {
   if (!canSend.value) return
 
   const message = inputText.value.trim()
-  emit('send', message, props.attachmentsEnabled ? attachments.value : [])
+  emit('send', message, props.attachmentsEnabled ? [...contextReferences.value, ...attachments.value] : [...contextReferences.value])
 
   // 清空输入
   inputText.value = ''
   attachments.value = []
+  referenceStore.clear(normalizedReferenceScope.value)
 }
 
 function handleCancel() {
@@ -352,6 +377,12 @@ function removeAttachment(index: number) {
   attachments.value.splice(index, 1)
 }
 
+function referenceKindLabel(sourceKind?: string): string {
+  if (sourceKind === 'workspace_file') return t('references.workspaceFile')
+  if (sourceKind === 'text_selection') return t('references.selection')
+  return t('references.message')
+}
+
 // 聚焦输入框
 function focus() {
   nextTick(() => {
@@ -364,6 +395,12 @@ function clearTrailingAtMention() {
   emit('input', inputText.value)
   focus()
 }
+
+watch(
+  normalizedReferenceScope,
+  scope => referenceStore.activate(scope),
+  { immediate: true },
+)
 
 watch(
   () => props.attachmentsEnabled,
@@ -436,6 +473,11 @@ defineExpose({
 .attachment-count {
   align-self: center;
   margin-left: auto;
+  font-size: var(--app-font-sm);
+  white-space: nowrap;
+}
+
+.reference-kind {
   font-size: var(--app-font-sm);
   white-space: nowrap;
 }

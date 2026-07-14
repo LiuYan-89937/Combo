@@ -1,5 +1,9 @@
 <template>
-  <div class="message-item" :class="[`role-${message.role}`, { streaming }]">
+  <div
+    class="message-item"
+    :class="[`role-${message.role}`, { streaming }]"
+    :data-reference-label="`${roleLabel} · ${formatTime(message.timestamp)}`"
+  >
     <div class="message-avatar">
       <n-avatar :size="36" :style="avatarStyle">
         {{ avatarText }}

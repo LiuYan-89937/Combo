@@ -45,8 +45,11 @@ class AnthropicChatAdapter:
 
 
 def _thinking_payload(settings: Any) -> dict[str, Any]:
-    if reasoning_enabled(settings) is not True:
+    enabled = reasoning_enabled(settings)
+    if enabled is None:
         return {}
+    if enabled is False:
+        return {"type": "disabled"}
     budget = reasoning_budget_tokens(settings)
     if budget is not None:
         payload: dict[str, Any] = {"type": "enabled", "budget_tokens": budget}

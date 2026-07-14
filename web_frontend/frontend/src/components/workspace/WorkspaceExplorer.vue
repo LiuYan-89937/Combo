@@ -49,6 +49,19 @@
           <span v-if="row.entry.kind === 'file' && row.entry.sizeBytes" class="entry-size">
             {{ formatFileSize(row.entry.sizeBytes) }}
           </span>
+          <div v-if="row.entry.kind === 'file'" class="entry-actions" @click.stop>
+            <n-button quaternary circle size="tiny" :title="t('references.addWorkspaceFile')" @click="addFileReference(row.entry)">
+              <template #icon><n-icon><AddCircleOutline /></n-icon></template>
+            </n-button>
+            <n-popconfirm @positive-click="deleteFile(row.entry)">
+              <template #trigger>
+                <n-button quaternary circle size="tiny" type="error" :title="t('workspace.deleteFile')">
+                  <template #icon><n-icon><TrashOutline /></n-icon></template>
+                </n-button>
+              </template>
+              {{ t('workspace.deleteFileConfirm', { name: row.entry.name }) }}
+            </n-popconfirm>
+          </div>
         </div>
 
         <div v-if="rootLoading" class="tree-hint">{{ t('workspace.loading') }}</div>
@@ -73,6 +86,8 @@ import {
   NSelect,
   NSpace,
   NText,
+  NPopconfirm,
+  useMessage,
 } from 'naive-ui'
 import {
   ChevronForward,
@@ -82,11 +97,17 @@ import {
   FolderOutline,
   ImageOutline,
   Refresh,
+  AddCircleOutline,
+  TrashOutline,
 } from '@/components/icons'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
+import { workspaceFileView } from '@/stores/runtime/viewMappers'
+import { workspaceApi } from '@/api/workspace'
+import { useContextReferenceStore } from '@/stores/contextReferences'
+import { workspaceFileContextReference } from '@/utils/contextReferences'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import type { FactoryFrontendEvent, WorkspaceEntry, WorkspaceScope } from '@/types/protocol'
 
@@ -109,6 +130,8 @@ const props = defineProps<{
 const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const { t } = useI18n()
+const message = useMessage()
+const referenceStore = useContextReferenceStore()
 const entriesByPath = ref<Record<string, WorkspaceEntry[]>>({})
 const loadingPaths = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
@@ -213,6 +236,31 @@ function handleEntryClick(entry: WorkspaceEntry) {
   emit('selectFile', entry)
 }
 
+async function addFileReference(entry: WorkspaceEntry) {
+  const event = await workspaceApi.file(workspaceStore.currentScope, entry.path, requestContext.value, 1_000_000)
+  const reference = workspaceFileContextReference(workspaceFileView(event.payload || {}))
+  if (!reference) {
+    message.warning(t('references.unsupportedFile'))
+    return
+  }
+  if (!referenceStore.add(reference)) {
+    message.warning(t('references.limitReached'))
+    return
+  }
+  message.success(t('references.added'))
+}
+
+async function deleteFile(entry: WorkspaceEntry) {
+  await workspaceApi.deleteFile(workspaceStore.currentScope, entry.path, requestContext.value)
+  const parentPath = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : ''
+  entriesByPath.value = {
+    ...entriesByPath.value,
+    [parentPath]: (entriesByPath.value[parentPath] || []).filter(item => item.path !== entry.path),
+  }
+  if (selectedPath.value === entry.path) selectedPath.value = ''
+  message.success(t('workspace.fileDeleted'))
+}
+
 async function toggleDirectory(entry: WorkspaceEntry) {
   toggleExpanded(entry.path)
   if (isExpanded(entry.path) && !entriesByPath.value[entry.path]) {
@@ -289,6 +337,7 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
     context.factorySessionId || '',
     context.createAgentSessionId || '',
     context.collaborationId || '',
+    context.groupId || '',
   ].join(':')
 }
 </script>
@@ -401,6 +450,18 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
   color: var(--app-text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.entry-actions {
+  display: flex;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity var(--app-transition-fast);
+}
+
+.tree-row:hover .entry-actions,
+.tree-row:focus-within .entry-actions {
+  opacity: 1;
 }
 
 .tree-hint {

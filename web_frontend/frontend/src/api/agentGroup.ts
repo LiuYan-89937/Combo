@@ -5,6 +5,7 @@
  */
 
 import { requestJson } from './http'
+import type { ContextReferenceInput } from '@/types/protocol'
 
 // ===== 类型定义 =====
 
@@ -33,6 +34,7 @@ export interface AgentGroupMessageView {
   group_run_id?: string
   event_ref?: string
   created_at: string
+  context_references?: ContextReferenceInput[]
 }
 
 export interface AgentGroupMemberRunView {
@@ -139,6 +141,7 @@ export const agentGroupApi = {
       client_message_id: string
       target_package_ids: string[]
       reply_to_message_id?: string
+      context_references?: ContextReferenceInput[]
     }
   ): Promise<{ group: AgentGroupSessionView }> {
     return requestJson(`/api/agent-group/groups/${groupId}/messages`, {

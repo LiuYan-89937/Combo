@@ -38,6 +38,8 @@
               <MessageItem
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
+                quoteable
+                @quote="addMessageReference"
               />
             </template>
 
@@ -80,6 +82,7 @@
           :selected-model-profile-id="selectedMainModelProfileId"
           reasoning-control-enabled
           :reasoning-intensity="reasoningIntensity"
+          :reference-scope="referenceScope"
           @update:selected-model-profile-id="setSelectedMainModelProfileId"
           @update:reasoning-intensity="setReasoningIntensity"
           @send="handleSend"
@@ -105,12 +108,21 @@ import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
+import type { TranscriptItem } from '@/types/protocol'
+import { useContextReferenceStore } from '@/stores/contextReferences'
+import { messageContextReference } from '@/utils/contextReferences'
 
 const runtimeStore = useRuntimeStore()
 const route = useRoute()
 const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
+const referenceStore = useContextReferenceStore()
+const referenceScope = computed(() => [
+  'factory',
+  runtimeStore.currentMode,
+  runtimeStore.activeFactorySessionId || runtimeStore.activeAgentSessionId || 'new',
+].join(':'))
 
 const {
   isEvolutionRoute,
@@ -155,6 +167,11 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
 
 function handleCancel() {
   cancelRequest()
+}
+
+function addMessageReference(message: TranscriptItem) {
+  referenceStore.add(messageContextReference(message), referenceScope.value)
+  nextTick(() => inputRef.value?.focus())
 }
 
 function handleResourceConfigured(resourceId: string) {

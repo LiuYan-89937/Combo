@@ -10,6 +10,7 @@
         <n-dialog-provider>
           <n-loading-bar-provider>
             <AppContent />
+            <SelectionReferenceMenu />
           </n-loading-bar-provider>
         </n-dialog-provider>
       </n-notification-provider>
@@ -27,6 +28,7 @@ import { useUiStore } from '@/stores/ui'
 import { getPalette, type AppPalette } from '@/theme/palette'
 import { applyPaletteToRoot } from '@/theme/cssVariables'
 import AppContent from '@/layouts/AppContent.vue'
+import SelectionReferenceMenu from '@/components/chat/SelectionReferenceMenu.vue'
 
 const route = useRoute()
 const { locale, t } = useI18n()

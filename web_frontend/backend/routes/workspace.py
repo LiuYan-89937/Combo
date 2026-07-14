@@ -157,6 +157,41 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
             headers={"Content-Disposition": f"inline; filename*=UTF-8''{quoted_filename}"},
         )
 
+    @router.delete("/file")
+    async def delete_workspace_file(
+        scope: str = "workdir",
+        path: str = "",
+        package_id: str | None = None,
+        resource_mode: str | None = None,
+        factory_session_id: str | None = None,
+        package_session_id: str | None = None,
+        create_agent_session_id: str | None = None,
+        collaboration_id: str | None = None,
+        group_id: str | None = None,
+    ):
+        service = FrontendWorkspaceService(
+            agent_package_runtime=AgentPackageRuntimeManager(),
+            session_manager=FactorySessionManager.from_env(),
+        )
+        try:
+            return service.delete_file(
+                workspace_context_payload(
+                    package_id=package_id,
+                    resource_mode=resource_mode,
+                    factory_session_id=factory_session_id,
+                    package_session_id=package_session_id,
+                    create_agent_session_id=create_agent_session_id,
+                    collaboration_id=collaboration_id,
+                    group_id=group_id,
+                ),
+                scope=scope,
+                relative_path=path,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return router
 
 
