@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
 from agent_factory.models import get_compression_model, get_main_model, get_task_model
 from agent_factory.models.usage import normalize_usage_metadata
-
-MODEL_MAX_INPUT_TOKENS_ENV = "AGENTFACTORY_MODEL_MAX_INPUT_TOKENS"
-
 
 @dataclass(frozen=True, slots=True)
 class TokenCountResult:
@@ -20,15 +16,14 @@ class TokenCountResult:
     model_role: str | None = None
 
 
-def context_window_tokens_from_env() -> int | None:
-    value = os.getenv(MODEL_MAX_INPUT_TOKENS_ENV)
-    if not value:
-        return None
-    try:
-        parsed = int(value)
-    except ValueError:
-        return None
-    return parsed if parsed > 0 else None
+def context_window_tokens_from_profile(*, services: Any | None = None) -> int | None:
+    settings = _chat_model_settings_for_role(_model_role_from_services(services))
+    return settings.max_input_tokens if settings is not None else None
+
+
+def compression_threshold_tokens_from_profile(*, services: Any | None = None) -> int | None:
+    settings = _chat_model_settings_for_role(_model_role_from_services(services))
+    return settings.context_compression_threshold_tokens if settings is not None else None
 
 
 def effective_compression_threshold(
@@ -126,18 +121,17 @@ def context_window_payload(
     model_role: str | None = None,
     source: str,
 ) -> dict[str, Any]:
-    window = context_window_tokens if context_window_tokens is not None else context_window_tokens_from_env()
     payload: dict[str, Any] = {
         "node_id": node_id,
         "source": source,
         "token_count": token_count,
         "token_count_method": token_count_method,
-        "context_window_tokens": window,
+        "context_window_tokens": context_window_tokens,
         "compression_threshold_tokens": compression_threshold_tokens,
         "model_role": model_role,
     }
-    if token_count is not None and window:
-        payload["window_usage_ratio"] = min(float(token_count) / float(window), 1.0)
+    if token_count is not None and context_window_tokens:
+        payload["window_usage_ratio"] = min(float(token_count) / float(context_window_tokens), 1.0)
     if token_count is not None and compression_threshold_tokens:
         payload["compression_usage_ratio"] = min(float(token_count) / float(compression_threshold_tokens), 1.0)
     if error:
@@ -208,6 +202,20 @@ def _model_for_role(role: str | None, *, services: Any | None = None) -> Any | N
     if role == "compression":
         return get_compression_model()
     return get_main_model()
+
+
+def _chat_model_settings_for_role(role: str | None) -> Any | None:
+    from agent_factory.models.chat_model import (
+        get_compression_model_settings,
+        get_main_model_settings,
+        get_task_model_settings,
+    )
+
+    if role == "task":
+        return get_task_model_settings()
+    if role == "compression":
+        return get_compression_model_settings()
+    return get_main_model_settings()
 
 
 def _count_error(exc: Exception, *, model_role: str | None) -> TokenCountResult:

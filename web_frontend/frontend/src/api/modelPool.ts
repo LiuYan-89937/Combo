@@ -1,7 +1,7 @@
 import { requestJson, withQuery } from './http'
 
 export type LocalModelKind = 'chat' | 'embedding'
-export type LocalInferenceEngine = 'vllm_rocm' | 'transformers_rocm'
+export type LocalInferenceEngine = 'llama_cpp_rocm' | 'transformers_rocm'
 export type LocalModelDefaultRole = 'main' | 'task' | 'compression' | 'embedding'
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
 
@@ -12,16 +12,7 @@ export interface LocalEngine {
   display_name: string
   kind: LocalModelKind
   transport: string
-  parameters: {
-    dtype: { default: string; options: string[] }
-    quantization: { default: string | null; options: string[] }
-    gpu_memory_percent: {
-      default: number
-      min: number
-      max: number
-      step: number
-    } | null
-  }
+  parameters: Record<string, unknown>
 }
 
 export interface LocalModelArtifact {
@@ -29,7 +20,6 @@ export interface LocalModelArtifact {
   display_name: string
   kind: LocalModelKind
   local_path: string
-  tokenizer_path?: string | null
   model_format: string
   revision: string
   checksum: string
@@ -48,6 +38,7 @@ export interface LocalModelDirectory {
   embedding_dimensions?: number | null
   architectures: string[]
   tokenizer_available: boolean
+  supported_kinds: LocalModelKind[]
 }
 
 export interface LocalModelStorage {
@@ -56,12 +47,10 @@ export interface LocalModelStorage {
   directories: LocalModelDirectory[]
 }
 
-export interface LocalModelProfile {
+interface LocalModelProfileBase {
   profile_id: string
   display_name: string
-  kind: LocalModelKind
   artifact_id: string
-  engine: LocalInferenceEngine
   served_model_name: string
   enabled: boolean
   capabilities: {
@@ -80,19 +69,35 @@ export interface LocalModelProfile {
     max_input_tokens?: number | null
     max_output_tokens?: number | null
     timeout_seconds?: number | null
-  }
-  inference: {
-    dtype: string
-    quantization?: string | null
-    tensor_parallel_size: number
-    gpu_memory_utilization?: number | null
-    trust_remote_code: boolean
+    context_compression_threshold_tokens?: number | null
   }
   embedding_dimensions?: number | null
   normalize_embeddings: boolean
   notes: string
   artifact?: LocalModelArtifact | null
 }
+
+export interface LocalChatModelProfile extends LocalModelProfileBase {
+  kind: 'chat'
+  engine: 'llama_cpp_rocm'
+  inference: {
+    gpu_layers: number
+    parallel_slots: number
+    cache_type_k: string
+    cache_type_v: string
+    flash_attention: boolean
+  }
+}
+
+export interface LocalEmbeddingModelProfile extends LocalModelProfileBase {
+  kind: 'embedding'
+  engine: 'transformers_rocm'
+  inference: {
+    trust_remote_code: boolean
+  }
+}
+
+export type LocalModelProfile = LocalChatModelProfile | LocalEmbeddingModelProfile
 
 export type LocalModelRuntimePhase = 'idle' | 'starting' | 'loading' | 'ready' | 'stopping' | 'failed'
 

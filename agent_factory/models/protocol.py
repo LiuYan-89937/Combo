@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 
 StructuredOutputMethod = Literal["function_calling", "json_mode", "json_schema"]
-ModelTransport = Literal["local_vllm"]
+ModelTransport = Literal["local_llama_cpp"]
 ContentPartType = Literal["text", "image", "file", "audio", "video"]
 ModelStreamEventType = Literal[
     "message_start",

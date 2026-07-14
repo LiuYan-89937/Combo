@@ -10,7 +10,7 @@ LOCAL_INFERENCE_ENDPOINT_ENV = "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT"
 LOCAL_INFERENCE_ALLOWED_HOSTS_ENV = "AGENTFACTORY_LOCAL_INFERENCE_ALLOWED_HOSTS"
 LOCAL_EMBEDDING_ENDPOINT_ENV = "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT"
 LOCAL_EMBEDDING_ALLOWED_HOSTS_ENV = "AGENTFACTORY_LOCAL_EMBEDDING_ALLOWED_HOSTS"
-DEFAULT_LOCAL_INFERENCE_ENDPOINT = "http://127.0.0.1:8001/v1"
+DEFAULT_LOCAL_INFERENCE_ENDPOINT = "http://127.0.0.1:8003/v1"
 DEFAULT_LOCAL_EMBEDDING_ENDPOINT = "http://127.0.0.1:8002"
 
 
@@ -22,6 +22,13 @@ class LocalInferenceEndpoint:
     def endpoint(self, path: str) -> str:
         suffix = path if path.startswith("/") else f"/{path}"
         return f"{self.base_url.rstrip('/')}{suffix}"
+
+    def server_endpoint(self, path: str) -> str:
+        base = self.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        suffix = path if path.startswith("/") else f"/{path}"
+        return f"{base}{suffix}"
 
 
 def load_local_inference_endpoint(*, timeout_seconds: float | None = None) -> LocalInferenceEndpoint:

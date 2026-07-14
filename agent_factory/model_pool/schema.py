@@ -18,10 +18,7 @@ ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "audio_input"]
 ModelSelectionSource = Literal["auto", "manual"]
 ModelSelectionOptimizeFor = Literal["balanced", "quality", "latency", "context"]
-LocalInferenceEngine = Literal["vllm_rocm", "transformers_rocm"]
-
-SUPPORTED_LOCAL_DTYPES: tuple[str, ...] = ("auto", "bfloat16", "float16", "float32")
-SUPPORTED_VLLM_QUANTIZATIONS: tuple[str, ...] = ("awq", "gptq")
+LocalInferenceEngine = Literal["llama_cpp_rocm", "transformers_rocm"]
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -38,7 +35,6 @@ class LocalModelArtifact(BaseModel):
     display_name: str
     kind: ModelPoolProfileKind
     local_path: str
-    tokenizer_path: str | None = None
     model_format: str = "transformers"
     revision: str = ""
     checksum: str = ""
@@ -75,17 +71,6 @@ class LocalModelArtifact(BaseModel):
         if value is None:
             return None
         return str(value).strip()
-
-    @field_validator("tokenizer_path")
-    @classmethod
-    def _tokenizer_path(cls, value: str | None) -> str | None:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        path = Path(text).expanduser()
-        if not path.is_absolute():
-            raise ValueError("tokenizer_path must be an absolute path")
-        return str(path)
 
     def resolved_path(self) -> Path:
         return Path(self.local_path).expanduser().resolve()
@@ -126,36 +111,35 @@ class ModelPoolLimits(BaseModel):
     max_input_tokens: int | None = Field(default=None, ge=1)
     max_output_tokens: int | None = Field(default=None, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0)
+    context_compression_threshold_tokens: int | None = Field(default=None, ge=1000)
 
 
-class LocalInferenceConfig(BaseModel):
+class LlamaCppInferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    dtype: str = "auto"
-    quantization: str | None = None
-    tensor_parallel_size: int = Field(ge=1)
-    gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1)
+    gpu_layers: int = Field(default=99, ge=0)
+    parallel_slots: int = Field(default=1, ge=1)
+    cache_type_k: str = "f16"
+    cache_type_v: str = "f16"
+    flash_attention: bool = True
+
+    @field_validator("cache_type_k", "cache_type_v")
+    @classmethod
+    def _cache_type(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        supported = {"f16", "bf16", "q8_0", "q4_0"}
+        if text not in supported:
+            raise ValueError(f"cache type must be one of: {', '.join(sorted(supported))}")
+        return text
+
+
+class TransformersInferenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     trust_remote_code: bool = False
 
-    @field_validator("dtype")
-    @classmethod
-    def _dtype(cls, value: str) -> str:
-        text = str(value or "").strip().lower() or "auto"
-        if text not in SUPPORTED_LOCAL_DTYPES:
-            raise ValueError(f"dtype must be one of: {', '.join(SUPPORTED_LOCAL_DTYPES)}")
-        return text
 
-    @field_validator("quantization")
-    @classmethod
-    def _quantization(cls, value: str | None) -> str | None:
-        text = str(value or "").strip().lower()
-        if not text:
-            return None
-        if text not in SUPPORTED_VLLM_QUANTIZATIONS:
-            raise ValueError(
-                f"quantization must be one of: {', '.join(SUPPORTED_VLLM_QUANTIZATIONS)}"
-            )
-        return text
+LocalInferenceConfig = LlamaCppInferenceConfig | TransformersInferenceConfig
 
 
 class ModelPoolProfile(BaseModel):
@@ -192,18 +176,18 @@ class ModelPoolProfile(BaseModel):
 
     @model_validator(mode="after")
     def _engine_matches_kind(self) -> "ModelPoolProfile":
-        if self.kind == "chat" and self.engine != "vllm_rocm":
-            raise ValueError("chat profiles require engine=vllm_rocm")
-        if self.kind == "embedding" and self.engine != "transformers_rocm":
-            raise ValueError("embedding profiles require engine=transformers_rocm")
-        if self.kind == "embedding" and self.embedding_dimensions is None:
-            raise ValueError("embedding profiles require embedding_dimensions")
-        if self.kind == "embedding" and (
-            self.inference.quantization is not None
-            or self.inference.gpu_memory_utilization is not None
-            or self.inference.tensor_parallel_size != 1
-        ):
-            raise ValueError("embedding profiles do not accept vLLM runtime parameters")
+        if self.kind == "chat":
+            if self.engine != "llama_cpp_rocm":
+                raise ValueError("chat profiles require engine=llama_cpp_rocm")
+            if not isinstance(self.inference, LlamaCppInferenceConfig):
+                raise ValueError("chat profiles require llama.cpp inference settings")
+        if self.kind == "embedding":
+            if self.engine != "transformers_rocm":
+                raise ValueError("embedding profiles require engine=transformers_rocm")
+            if not isinstance(self.inference, TransformersInferenceConfig):
+                raise ValueError("embedding profiles require Transformers inference settings")
+            if self.embedding_dimensions is None:
+                raise ValueError("embedding profiles require embedding_dimensions")
         return self
 
     @property

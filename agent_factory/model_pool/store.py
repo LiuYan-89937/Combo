@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any, cast
@@ -38,6 +39,8 @@ class ModelPoolStore:
 
     def upsert_artifact(self, artifact: LocalModelArtifact) -> LocalModelArtifact:
         existing = self.get_artifact(artifact.artifact_id)
+        if existing is not None and existing.kind != artifact.kind:
+            raise ModelPoolStoreError("artifact kind cannot be changed after registration")
         artifact = artifact.model_copy(
             update={
                 "created_at": existing.created_at if existing else artifact.created_at,
@@ -127,6 +130,8 @@ class ModelPoolStore:
                 f"profile kind {profile.kind!r} must match artifact kind {artifact.kind!r}"
             )
         existing = self.get_profile(profile.profile_id)
+        if existing is not None and existing.kind != profile.kind:
+            raise ModelPoolStoreError("profile kind cannot be changed after registration")
         profile = profile.model_copy(
             update={
                 "created_at": existing.created_at if existing else profile.created_at,
@@ -412,3 +417,74 @@ class ModelPoolStore:
                   on local_model_active_profiles(profile_id);
                 """
             )
+            legacy_rows = conn.execute(
+                "select profile_id from local_model_profiles where kind = 'chat' and engine = 'vllm_rocm'"
+            ).fetchall()
+            legacy_profile_ids = [str(row["profile_id"]) for row in legacy_rows]
+            if legacy_profile_ids:
+                placeholders = ", ".join("?" for _ in legacy_profile_ids)
+                conn.execute(
+                    f"delete from local_model_default_profiles where profile_id in ({placeholders})",
+                    legacy_profile_ids,
+                )
+                conn.execute(
+                    f"delete from local_model_active_profiles where profile_id in ({placeholders})",
+                    legacy_profile_ids,
+                )
+                conn.execute(
+                    f"delete from local_model_profiles where profile_id in ({placeholders})",
+                    legacy_profile_ids,
+                )
+            legacy_artifact_rows = conn.execute(
+                "select artifact_id, payload_json from local_model_artifacts where kind = 'chat'"
+            ).fetchall()
+            for row in legacy_artifact_rows:
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                if str(payload.get("model_format") or "").strip().lower() == "llama_cpp":
+                    continue
+                artifact_id = str(row["artifact_id"])
+                referenced = conn.execute(
+                    "select 1 from local_model_profiles where artifact_id = ? limit 1",
+                    (artifact_id,),
+                ).fetchone()
+                if referenced is None:
+                    conn.execute(
+                        "delete from local_model_artifacts where artifact_id = ?",
+                        (artifact_id,),
+                    )
+            artifact_rows = conn.execute(
+                "select artifact_id, payload_json from local_model_artifacts"
+            ).fetchall()
+            for row in artifact_rows:
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict) or "tokenizer_path" not in payload:
+                    continue
+                payload.pop("tokenizer_path", None)
+                conn.execute(
+                    "update local_model_artifacts set payload_json = ? where artifact_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), str(row["artifact_id"])),
+                )
+            embedding_rows = conn.execute(
+                "select profile_id, payload_json from local_model_profiles where kind = 'embedding'"
+            ).fetchall()
+            for row in embedding_rows:
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                inference = payload.get("inference") if isinstance(payload, dict) else None
+                if not isinstance(inference, dict) or set(inference) == {"trust_remote_code"}:
+                    continue
+                payload["inference"] = {
+                    "trust_remote_code": bool(inference.get("trust_remote_code")),
+                }
+                conn.execute(
+                    "update local_model_profiles set payload_json = ? where profile_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), str(row["profile_id"])),
+                )

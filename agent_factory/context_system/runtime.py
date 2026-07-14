@@ -20,8 +20,9 @@ from agent_factory.context_system.schema import (
 from agent_factory.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
 from agent_factory.context_system.token_counter import (
     TokenCountResult,
-    context_window_tokens_from_env,
+    compression_threshold_tokens_from_profile,
     count_messages_tokens,
+    context_window_tokens_from_profile,
     context_window_payload,
     effective_compression_threshold,
 )
@@ -73,9 +74,16 @@ class ContextSystemRuntime:
             )
         policy = self.policy_for_node(node_id)
         context_window_tokens = _context_window_token_limit(services)
-        trigger_limit = _compression_trigger_limit(policy=policy, context_window_tokens=context_window_tokens)
+        trigger_limit = _compression_trigger_limit(
+            policy=policy,
+            services=services,
+            context_window_tokens=context_window_tokens,
+        )
         compression_policy = policy.compression.model_copy(
-            update={"trigger_token_threshold": trigger_limit}
+            update={
+                "enabled": policy.compression.enabled and trigger_limit is not None,
+                "trigger_token_threshold": trigger_limit,
+            }
         )
         working_messages = list(messages)
         working_state = state
@@ -478,12 +486,24 @@ def _effective_context_token_count(
     )
 
 
-def _compression_trigger_limit(*, policy: ContextPolicy, context_window_tokens: int | None) -> int:
+def _compression_trigger_limit(
+    *,
+    policy: ContextPolicy,
+    services: Any | None,
+    context_window_tokens: int | None,
+) -> int | None:
+    configured_threshold = (
+        policy.compression.trigger_token_threshold
+        if policy.compression.trigger_token_threshold is not None
+        else compression_threshold_tokens_from_profile(services=services)
+    )
+    if configured_threshold is None:
+        return None
     threshold = effective_compression_threshold(
-        configured_threshold=int(policy.compression.trigger_token_threshold),
+        configured_threshold=int(configured_threshold),
         context_window_tokens=context_window_tokens,
     )
-    return int(threshold or policy.compression.trigger_token_threshold)
+    return int(threshold or configured_threshold)
 
 
 def _context_window_token_limit(services: Any) -> int | None:
@@ -496,7 +516,7 @@ def _context_window_token_limit(services: Any) -> int | None:
             parsed = 0
         if parsed > 0:
             return parsed
-    return context_window_tokens_from_env()
+    return context_window_tokens_from_profile(services=services)
 
 
 def _emit_context_window_if_available(
@@ -505,7 +525,7 @@ def _emit_context_window_if_available(
     state: Any,
     node_id: str,
     count: TokenCountResult,
-    compression_threshold_tokens: int,
+    compression_threshold_tokens: int | None,
     context_window_tokens: int | None,
     source: str,
 ) -> None:

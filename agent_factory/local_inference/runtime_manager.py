@@ -147,7 +147,7 @@ class LocalInferenceRuntimeManager:
     def _command(self, profile: ModelPoolProfile, endpoint: LocalInferenceEndpoint) -> list[str]:
         host, port = _local_binding(endpoint)
         if profile.kind == "chat":
-            module = "agent_factory.local_inference.run_vllm"
+            module = "agent_factory.local_inference.run_llama_server"
         else:
             module = "agent_factory.local_inference.embedding_server"
         return [
@@ -330,7 +330,16 @@ async def _runtime_is_ready(
 
 def _update_progress_from_log(slot: _RuntimeSlot, text: str) -> None:
     normalized = text.lower()
-    if "loading" in normalized and any(
+    if slot.kind == "chat" and any(
+        token in normalized
+        for token in ("load_model: loading model", "llama_model_loader", "loading model")
+    ):
+        slot.stage = "loading_weights"
+        slot.progress_percent = None
+    elif slot.kind == "chat" and "model loaded" in normalized:
+        slot.stage = "initializing_service"
+        slot.progress_percent = max(slot.progress_percent or 0, 90)
+    elif "loading" in normalized and any(
         token in normalized for token in ("weight", "checkpoint", "safetensor")
     ):
         slot.stage = "loading_weights"

@@ -13,7 +13,7 @@ from agent_factory.model_pool.resolver import (
     resolve_chat_model_profile,
 )
 from agent_factory.model_pool.schema import (
-    LocalInferenceConfig,
+    LlamaCppInferenceConfig,
     LocalModelArtifact,
     ModelBindingSource,
     ModelPoolCapabilities,
@@ -29,6 +29,7 @@ from agent_factory.model_pool.schema import (
     ModelToolBinding,
     ModelToolSelectionRecommendation,
     ModelToolSelectionRequirement,
+    TransformersInferenceConfig,
 )
 from agent_factory.model_pool.selector import ModelPoolSelector
 from agent_factory.model_pool.store import ModelPoolStore
@@ -38,7 +39,7 @@ from agent_factory.model_pool.usage import ModelUsageStore, record_model_usage_f
 __all__ = [
     "MODEL_POOL_STORE_PATH_ENV",
     "MODEL_ROOT_ENV",
-    "LocalInferenceConfig",
+    "LlamaCppInferenceConfig",
     "LocalModelArtifact",
     "ModelBindingSource",
     "ModelPoolCapabilities",
@@ -59,6 +60,7 @@ __all__ = [
     "ModelToolBinding",
     "ModelToolSelectionRecommendation",
     "ModelToolSelectionRequirement",
+    "TransformersInferenceConfig",
     "ModelUsageStore",
     "ResolvedChatModelProfile",
     "default_model_pool_store_path",

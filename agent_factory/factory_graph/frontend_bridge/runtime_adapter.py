@@ -53,7 +53,7 @@ class FactoryRuntimeAdapter(
     def __post_init__(self) -> None:
         load_agentfactory_dotenv()
         if self.options.context_window_tokens is None and self.options.context_window_tokens_source == "unset":
-            self.options = FactoryBridgeOptions.from_env()
+            self.options = FactoryBridgeOptions.defaults()
         if self.session_manager is None:
             self.session_manager = FactorySessionManager.from_env()
         if self.agent_package_runtime is None:

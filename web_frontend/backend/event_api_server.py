@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from agent_factory.env import load_agentfactory_dotenv
-from agent_factory.local_inference import LocalInferenceRuntimeManager
+from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.collaboration_system import CollaborationService
 from agent_factory.agent_group_system import AgentGroupService
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager

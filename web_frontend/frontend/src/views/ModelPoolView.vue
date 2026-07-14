@@ -105,9 +105,6 @@
               <div class="tag-row">
                 <n-tag size="small" :bordered="false">{{ kindLabel(profile.kind) }}</n-tag>
                 <n-tag size="small" :bordered="false" type="info">{{ engineLabel(profile.engine) }}</n-tag>
-                <n-tag v-if="profile.inference.quantization" size="small" :bordered="false" type="warning">
-                  {{ profile.inference.quantization.toUpperCase() }}
-                </n-tag>
                 <n-tag
                   v-for="role in profileDefaultRoles(profile.profile_id)"
                   :key="role"
@@ -145,9 +142,9 @@
 
               <div class="spec-grid">
                 <template v-if="profile.kind === 'chat'">
-                  <div class="spec-item"><span>{{ t('localModel.dtype') }}</span><strong>{{ dtypeLabel(profile.inference.dtype) }}</strong></div>
-                  <div class="spec-item"><span>{{ t('localModel.tensorParallel') }}</span><strong>{{ profile.inference.tensor_parallel_size }}</strong></div>
-                  <div class="spec-item"><span>{{ t('localModel.gpuMemoryLimit') }}</span><strong>{{ formatRatio(profile.inference.gpu_memory_utilization) }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.gpuLayers') }}</span><strong>{{ profile.inference.gpu_layers }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ profile.inference.parallel_slots }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ profile.inference.cache_type_k }} / {{ profile.inference.cache_type_v }}</strong></div>
                 </template>
                 <div v-else class="spec-item"><span>{{ t('localModel.embeddingDimensions') }}</span><strong>{{ profile.embedding_dimensions || '—' }}</strong></div>
                 <div class="spec-item"><span>{{ t('modelPool.maxInput') }}</span><strong>{{ formatTokens(profile.limits.max_input_tokens) }}</strong></div>
@@ -316,33 +313,17 @@
         </n-form-item>
         <n-form-item :label="t('localModel.servedModelName')"><n-input v-model:value="profileForm.served_model_name" /></n-form-item>
         <div class="form-grid">
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.dtype')">
-            <n-select v-model:value="profileForm.dtype" :options="dtypeOptions" />
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.gpuLayers')">
+            <n-input-number v-model:value="profileForm.gpu_layers" :min="0" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.quantization')">
-            <n-select v-model:value="profileForm.quantization" :options="quantizationOptions" />
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.parallelSlots')">
+            <n-input-number v-model:value="profileForm.parallel_slots" :min="1" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.tensorParallel')">
-            <n-input-number v-model:value="profileForm.tensor_parallel_size" :min="1" />
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.kCacheType')">
+            <n-select v-model:value="profileForm.cache_type_k" :options="cacheTypeOptions" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat'" class="memory-form-item" :label="t('localModel.gpuMemoryLimit')">
-            <div class="memory-limit-control">
-              <n-slider
-                v-model:value="profileForm.gpu_memory_percent"
-                :min="gpuMemoryConfig?.min"
-                :max="gpuMemoryConfig?.max"
-                :step="gpuMemoryConfig?.step"
-              />
-              <n-input-number
-                v-model:value="profileForm.gpu_memory_percent"
-                :min="gpuMemoryConfig?.min"
-                :max="gpuMemoryConfig?.max"
-                :step="gpuMemoryConfig?.step"
-              >
-                <template #suffix>%</template>
-              </n-input-number>
-              <p>{{ t('localModel.gpuMemoryLimitHint') }}</p>
-            </div>
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.vCacheType')">
+            <n-select v-model:value="profileForm.cache_type_v" :options="cacheTypeOptions" />
           </n-form-item>
           <n-form-item :label="t('modelPool.maxInput')">
             <n-input-number v-model:value="profileForm.max_input_tokens" :min="1" clearable />
@@ -350,13 +331,17 @@
           <n-form-item :label="t('modelPool.maxOutput')">
             <n-input-number v-model:value="profileForm.max_output_tokens" :min="1" clearable />
           </n-form-item>
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.contextCompressionThreshold')">
+            <n-input-number v-model:value="profileForm.context_compression_threshold_tokens" :min="1000" clearable />
+          </n-form-item>
           <n-form-item v-if="profileForm.kind === 'embedding'" :label="t('localModel.embeddingDimensions')">
             <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" />
           </n-form-item>
         </div>
         <n-space vertical>
           <n-checkbox v-model:checked="profileForm.enabled">{{ t('localModel.loadWhenEnabled') }}</n-checkbox>
-          <n-checkbox v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.flash_attention">{{ t('localModel.flashAttention') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.normalize_embeddings">{{ t('localModel.normalizeEmbeddings') }}</n-checkbox>
@@ -384,7 +369,6 @@ import {
 } from '@/components/icons'
 import {
   modelPoolApi,
-  type LocalEngine,
   type LocalModelArtifact,
   type LocalModelDefaultRole,
   type LocalModelDefaults,
@@ -404,7 +388,6 @@ const runtimeRefreshing = ref(false)
 const activeTab = ref<'profiles' | 'artifacts'>('profiles')
 const artifacts = ref<LocalModelArtifact[]>([])
 const profiles = ref<LocalModelProfile[]>([])
-const engines = ref<LocalEngine[]>([])
 const runtimes = ref<LocalModelRuntime[]>([])
 const defaults = ref<LocalModelDefaults>({
   main: null,
@@ -420,14 +403,16 @@ const artifactEditing = ref<LocalModelArtifact | null>(null)
 const profileEditing = ref<LocalModelProfile | null>(null)
 
 const artifactForm = reactive({
-  display_name: '', kind: 'chat' as LocalModelKind, local_path: '', tokenizer_path: '',
+  display_name: '', kind: 'chat' as LocalModelKind, local_path: '',
   revision: '', checksum: '', enabled: true,
 })
 const profileForm = reactive({
   display_name: '', artifact_id: '', kind: 'chat' as LocalModelKind,
-  served_model_name: '', dtype: 'auto', quantization: 'none', tensor_parallel_size: 1,
-  gpu_memory_percent: 0, max_input_tokens: null as number | null,
-  max_output_tokens: null as number | null, embedding_dimensions: null as number | null,
+  served_model_name: '', gpu_layers: 99, parallel_slots: 1,
+  cache_type_k: 'f16', cache_type_v: 'f16', flash_attention: true,
+  max_input_tokens: null as number | null,
+  max_output_tokens: null as number | null, context_compression_threshold_tokens: null as number | null,
+  embedding_dimensions: null as number | null,
   trust_remote_code: false, tool_calling: true, reasoning_supported: false,
   normalize_embeddings: true, enabled: true,
 })
@@ -440,23 +425,14 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
   label: `${item.display_name} · ${item.kind}`,
   value: item.artifact_id,
 })))
-const currentEngine = computed(() => engineForKind(profileForm.kind))
-const dtypeOptions = computed(() => (
-  currentEngine.value?.parameters.dtype.options.map((value) => ({ label: dtypeLabel(value), value })) || []
-))
-const quantizationOptions = computed(() => [
-  { label: t('localModel.noQuantization'), value: 'none' },
-  ...(currentEngine.value?.parameters.quantization.options || []).map((value) => ({
-    label: value.toUpperCase(),
-    value,
-  })),
-])
-const gpuMemoryConfig = computed(() => currentEngine.value?.parameters.gpu_memory_percent || null)
+const cacheTypeOptions = ['f16', 'bf16', 'q8_0', 'q4_0'].map((value) => ({ label: value.toUpperCase(), value }))
 const modelDirectoryOptions = computed(() => {
-  const options = (modelStorage.value?.directories || []).map((item) => ({
-    label: [item.display_name, item.model_type, item.dtype].filter(Boolean).join(' · '),
-    value: item.absolute_path,
-  }))
+  const options = (modelStorage.value?.directories || [])
+    .filter((item) => item.supported_kinds.includes(artifactForm.kind))
+    .map((item) => ({
+      label: [item.display_name, item.model_type, item.dtype].filter(Boolean).join(' · '),
+      value: item.absolute_path,
+    }))
   const currentPath = artifactForm.local_path
   if (currentPath && !options.some((item) => item.value === currentPath)) {
     options.unshift({ label: currentPath, value: currentPath })
@@ -470,17 +446,15 @@ const selectedModelDirectory = computed(() => (
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [artifactData, profileData, engineData, runtimeData, defaultData, storageData] = await Promise.all([
+    const [artifactData, profileData, runtimeData, defaultData, storageData] = await Promise.all([
       modelPoolApi.artifacts(),
       modelPoolApi.profiles(),
-      modelPoolApi.engines(),
       modelPoolApi.runtimes(),
       modelPoolApi.defaults(),
       modelPoolApi.storage(),
     ])
     artifacts.value = artifactData.artifacts
     profiles.value = profileData.profiles
-    engines.value = engineData.engines
     runtimes.value = runtimeData.runtimes
     rocm.value = runtimeData.rocm
     defaults.value = defaultData.defaults
@@ -497,7 +471,6 @@ function openArtifact(item?: LocalModelArtifact): void {
   artifactForm.display_name = item?.display_name || ''
   artifactForm.kind = item?.kind || 'chat'
   artifactForm.local_path = item?.local_path || ''
-  artifactForm.tokenizer_path = item?.tokenizer_path || ''
   artifactForm.revision = item?.revision || ''
   artifactForm.checksum = item?.checksum || ''
   artifactForm.enabled = item?.enabled ?? true
@@ -507,7 +480,11 @@ function openArtifact(item?: LocalModelArtifact): void {
 async function saveArtifact(): Promise<void> {
   saving.value = true
   try {
-    const payload = { ...artifactForm, artifact_id: artifactEditing.value?.artifact_id }
+    const payload = {
+      ...artifactForm,
+      model_format: artifactForm.kind === 'chat' ? 'llama_cpp' : 'transformers',
+      artifact_id: artifactEditing.value?.artifact_id,
+    }
     if (artifactEditing.value) await modelPoolApi.patchArtifact(artifactEditing.value.artifact_id, payload)
     else await modelPoolApi.saveArtifact(payload)
     artifactModalOpen.value = false
@@ -518,23 +495,26 @@ async function saveArtifact(): Promise<void> {
 function openProfile(item?: LocalModelProfile): void {
   const artifact = item?.artifact || artifacts.value[0]
   const kind = item?.kind || artifact?.kind || 'chat'
-  const engine = engineForKind(kind)
   const directory = artifact ? directoryForArtifact(artifact) : null
   profileEditing.value = item || null
   profileForm.display_name = item?.display_name || artifact?.display_name || ''
   profileForm.artifact_id = item?.artifact_id || artifact?.artifact_id || ''
   profileForm.kind = kind
   profileForm.served_model_name = item?.served_model_name || artifact?.display_name || ''
-  profileForm.dtype = item?.inference.dtype || directory?.dtype || engine?.parameters.dtype.default || 'auto'
-  profileForm.quantization = item?.inference.quantization || 'none'
-  profileForm.tensor_parallel_size = item?.inference.tensor_parallel_size || 1
-  profileForm.gpu_memory_percent = typeof item?.inference.gpu_memory_utilization === 'number'
-    ? Math.round(item.inference.gpu_memory_utilization * 100)
-    : engine?.parameters.gpu_memory_percent?.default ?? 0
+  const chatInference = item?.kind === 'chat' ? item.inference : null
+  const embeddingInference = item?.kind === 'embedding' ? item.inference : null
+  profileForm.gpu_layers = chatInference && 'gpu_layers' in chatInference ? chatInference.gpu_layers : 99
+  profileForm.parallel_slots = chatInference && 'parallel_slots' in chatInference ? chatInference.parallel_slots : 1
+  profileForm.cache_type_k = chatInference && 'cache_type_k' in chatInference ? chatInference.cache_type_k : 'f16'
+  profileForm.cache_type_v = chatInference && 'cache_type_v' in chatInference ? chatInference.cache_type_v : 'f16'
+  profileForm.flash_attention = chatInference && 'flash_attention' in chatInference ? chatInference.flash_attention : true
   profileForm.max_input_tokens = item?.limits.max_input_tokens ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
+  profileForm.context_compression_threshold_tokens = item?.limits.context_compression_threshold_tokens ?? null
   profileForm.embedding_dimensions = item?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
-  profileForm.trust_remote_code = item?.inference.trust_remote_code ?? false
+  profileForm.trust_remote_code = embeddingInference && 'trust_remote_code' in embeddingInference
+    ? embeddingInference.trust_remote_code
+    : false
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.normalize_embeddings = item?.normalize_embeddings ?? true
@@ -545,32 +525,20 @@ function openProfile(item?: LocalModelProfile): void {
 function syncProfileKind(artifactId: string): void {
   const artifact = artifacts.value.find((item) => item.artifact_id === artifactId)
   if (!artifact) return
-  const engine = engineForKind(artifact.kind)
   const directory = directoryForArtifact(artifact)
   profileForm.kind = artifact.kind
   profileForm.display_name = artifact.display_name
   profileForm.served_model_name = artifact.display_name
-  profileForm.dtype = directory?.dtype || engine?.parameters.dtype.default || 'auto'
-  profileForm.quantization = 'none'
-  profileForm.tensor_parallel_size = 1
-  profileForm.gpu_memory_percent = engine?.parameters.gpu_memory_percent?.default ?? 0
+  profileForm.gpu_layers = 99
+  profileForm.parallel_slots = 1
+  profileForm.cache_type_k = 'f16'
+  profileForm.cache_type_v = 'f16'
+  profileForm.flash_attention = true
   profileForm.embedding_dimensions = directory?.embedding_dimensions ?? null
-}
-
-function engineForKind(kind: LocalModelKind): LocalEngine | undefined {
-  return engines.value.find((engine) => engine.kind === kind)
 }
 
 function directoryForArtifact(artifact: LocalModelArtifact) {
   return modelStorage.value?.directories.find((directory) => directory.absolute_path === artifact.local_path)
-}
-
-function dtypeLabel(value: string): string {
-  if (value === 'auto') return t('localModel.dtypeAuto')
-  if (value === 'bfloat16') return 'BF16'
-  if (value === 'float16') return 'FP16'
-  if (value === 'float32') return 'FP32'
-  return value
 }
 
 function openProfileEmptyAction(): void {
@@ -591,7 +559,7 @@ async function saveProfile(): Promise<void> {
       display_name: profileForm.display_name,
       kind: profileForm.kind,
       artifact_id: profileForm.artifact_id,
-      engine: isChat ? 'vllm_rocm' : 'transformers_rocm',
+      engine: isChat ? 'llama_cpp_rocm' : 'transformers_rocm',
       served_model_name: profileForm.served_model_name,
       enabled: profileForm.enabled,
       capabilities: {
@@ -607,14 +575,17 @@ async function saveProfile(): Promise<void> {
         max_input_tokens: profileForm.max_input_tokens,
         max_output_tokens: profileForm.max_output_tokens,
         timeout_seconds: null,
+        context_compression_threshold_tokens: isChat ? profileForm.context_compression_threshold_tokens : null,
       },
-      inference: {
-        dtype: isChat ? profileForm.dtype : 'auto',
-        quantization: isChat && profileForm.quantization !== 'none' ? profileForm.quantization : null,
-        tensor_parallel_size: isChat ? profileForm.tensor_parallel_size : 1,
-        gpu_memory_utilization: isChat ? profileForm.gpu_memory_percent / 100 : null,
-        trust_remote_code: profileForm.trust_remote_code,
-      },
+      inference: isChat
+        ? {
+            gpu_layers: profileForm.gpu_layers,
+            parallel_slots: profileForm.parallel_slots,
+            cache_type_k: profileForm.cache_type_k,
+            cache_type_v: profileForm.cache_type_v,
+            flash_attention: profileForm.flash_attention,
+          }
+        : { trust_remote_code: profileForm.trust_remote_code },
       embedding_dimensions: isChat ? null : profileForm.embedding_dimensions,
       normalize_embeddings: profileForm.normalize_embeddings,
       notes: '',
@@ -772,11 +743,7 @@ function kindLabel(kind: LocalModelKind): string {
 }
 
 function engineLabel(engine: LocalModelProfile['engine']): string {
-  return engine === 'vllm_rocm' ? 'vLLM · ROCm' : 'Transformers · ROCm'
-}
-
-function formatRatio(value?: number | null): string {
-  return typeof value === 'number' ? `${Math.round(value * 100)}%` : '—'
+  return engine === 'llama_cpp_rocm' ? 'llama.cpp · ROCm' : 'Transformers · ROCm'
 }
 
 function formatPercent(value?: number | null): string {

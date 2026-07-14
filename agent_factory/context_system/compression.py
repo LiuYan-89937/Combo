@@ -43,7 +43,7 @@ def maybe_compress_messages(
             ),
         )
     token_before = count_before.token_count
-    if token_before < policy.trigger_token_threshold:
+    if policy.trigger_token_threshold is None or token_before < policy.trigger_token_threshold:
         return (
             messages,
             ContextCompressionReport(

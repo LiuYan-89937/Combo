@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.local_inference.rocm import RocmRuntimeInfo, inspect_rocm_runtime
+from agent_factory.model_pool.schema import TransformersInferenceConfig
 from agent_factory.model_pool.store import ModelPoolStore
 
 
@@ -86,9 +87,15 @@ def _load_runtime(profile_id: str) -> EmbeddingRuntime:
     model_path = artifact.resolved_path()
     if not model_path.is_dir():
         raise ValueError(f"embedding model directory does not exist: {model_path}")
+    if not isinstance(profile.inference, TransformersInferenceConfig):
+        raise ValueError(f"profile {profile.profile_id} does not contain Transformers inference settings")
     from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(str(model_path), device="cuda", trust_remote_code=profile.inference.trust_remote_code)
+    model = SentenceTransformer(
+        str(model_path),
+        device="cuda",
+        trust_remote_code=profile.inference.trust_remote_code,
+    )
     actual_dimensions = int(model.get_sentence_embedding_dimension())
     if actual_dimensions != profile.embedding_dimensions:
         raise ValueError(

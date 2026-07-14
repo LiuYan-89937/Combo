@@ -36,6 +36,7 @@ class ModelDirectoryInfo:
     embedding_dimensions: int | None
     architectures: tuple[str, ...]
     tokenizer_available: bool
+    supported_kinds: tuple[str, ...]
 
     def payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -61,6 +62,9 @@ class ModelStorage:
             if not self._contains(directory) or not self._has_supported_weights(directory):
                 continue
             models.append(self._describe(directory, config_path=config_path))
+        for model_path in self.root.rglob("*.gguf"):
+            if self._contains(model_path.resolve()):
+                models.append(self._describe_gguf(model_path.resolve()))
         return sorted(models, key=lambda item: item.relative_path.casefold())
 
     def require_model_directory(self, value: str | Path) -> Path:
@@ -70,6 +74,14 @@ class ModelStorage:
                 "model directory must contain config.json and supported Transformers weights"
             )
         return directory
+
+    def require_llama_model_file(self, value: str | Path) -> Path:
+        text = str(value or "").strip()
+        raw_path = Path(text).expanduser()
+        model_path = (raw_path if raw_path.is_absolute() else self.root / raw_path).resolve()
+        if not self._contains(model_path) or not model_path.is_file():
+            raise ModelStorageError("llama.cpp model file must exist inside the model root")
+        return model_path
 
     def resolve_directory(self, value: str | Path) -> Path:
         text = str(value or "").strip()
@@ -115,6 +127,20 @@ class ModelStorage:
             embedding_dimensions=_positive_integer(config.get("hidden_size")),
             architectures=architectures,
             tokenizer_available=tokenizer_available,
+            supported_kinds=("embedding",),
+        )
+
+    def _describe_gguf(self, model_path: Path) -> ModelDirectoryInfo:
+        return ModelDirectoryInfo(
+            relative_path=model_path.relative_to(self.root).as_posix(),
+            absolute_path=str(model_path),
+            display_name=model_path.stem,
+            model_type="gguf",
+            dtype="quantized",
+            embedding_dimensions=None,
+            architectures=(),
+            tokenizer_available=True,
+            supported_kinds=("chat",),
         )
 
     def _modelscope_model_id(self, directory: Path) -> str:

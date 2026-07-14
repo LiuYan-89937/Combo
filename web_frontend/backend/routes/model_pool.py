@@ -8,10 +8,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from agent_factory.local_inference import (
-    inspect_rocm_runtime,
-    LocalInferenceRuntimeManager,
-)
+from agent_factory.local_inference.rocm import inspect_rocm_runtime
+from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.model_pool import (
     LocalModelArtifact,
     ModelPoolProfile,
@@ -85,8 +83,11 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
 
     @router.patch("/artifacts/{artifact_id}")
     async def patch_artifact(artifact_id: str, payload: dict[str, Any]):
+        store = ModelPoolStore()
         try:
-            artifact = ModelPoolStore().patch_artifact(artifact_id, payload)
+            existing = store.require_artifact(artifact_id)
+            merged = {**existing.model_dump(mode="json"), **dict(payload), "artifact_id": artifact_id}
+            artifact = store.upsert_artifact(_artifact_from_payload(merged, store=store))
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"artifact": artifact.model_dump(mode="json")}
@@ -205,10 +206,13 @@ async def _apply_runtime_intent(
 def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> LocalModelArtifact:
     data = dict(payload)
     storage = ModelStorage()
-    data["local_path"] = str(storage.require_model_directory(str(data.get("local_path") or "")))
-    tokenizer_path = str(data.get("tokenizer_path") or "").strip()
-    if tokenizer_path:
-        data["tokenizer_path"] = str(storage.resolve_directory(tokenizer_path))
+    kind = str(data.get("kind") or "").strip().lower()
+    if kind == "chat":
+        data["model_format"] = "llama_cpp"
+        data["local_path"] = str(storage.require_llama_model_file(str(data.get("local_path") or "")))
+    else:
+        data["model_format"] = "transformers"
+        data["local_path"] = str(storage.require_model_directory(str(data.get("local_path") or "")))
     if not str(data.get("artifact_id") or "").strip():
         data["artifact_id"] = _unique_id(
             _slug(str(data.get("display_name") or Path(str(data.get("local_path") or "model")).name)),

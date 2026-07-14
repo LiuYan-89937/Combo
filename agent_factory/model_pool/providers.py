@@ -2,26 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.model_pool.schema import (
-    SUPPORTED_LOCAL_DTYPES,
-    SUPPORTED_VLLM_QUANTIZATIONS,
-)
 
 
 def list_local_inference_engines() -> list[dict[str, Any]]:
     return [
         {
-            "engine": "vllm_rocm",
-            "display_name": "vLLM on AMD ROCm",
+            "engine": "llama_cpp_rocm",
+            "display_name": "llama.cpp on AMD ROCm",
             "kind": "chat",
-            "transport": "local_vllm",
+            "transport": "local_llama_cpp",
             "parameters": {
-                "dtype": {"default": "auto", "options": list(SUPPORTED_LOCAL_DTYPES)},
-                "quantization": {
-                    "default": None,
-                    "options": list(SUPPORTED_VLLM_QUANTIZATIONS),
-                },
-                "gpu_memory_percent": {"default": 80, "min": 50, "max": 95, "step": 5},
+                "gpu_layers": {"default": 99, "min": 0},
+                "parallel_slots": {"default": 1, "min": 1},
+                "cache_types": ["f16", "bf16", "q8_0", "q4_0"],
             },
         },
         {
@@ -29,10 +22,6 @@ def list_local_inference_engines() -> list[dict[str, Any]]:
             "display_name": "Transformers on AMD ROCm",
             "kind": "embedding",
             "transport": "in_process",
-            "parameters": {
-                "dtype": {"default": "auto", "options": ["auto"]},
-                "quantization": {"default": None, "options": []},
-                "gpu_memory_percent": None,
-            },
+            "parameters": {},
         },
     ]

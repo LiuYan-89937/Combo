@@ -16,11 +16,6 @@ from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
-from agent_factory.context_system.schema import (
-    DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
-    MODEL_COMPRESSION_TRIGGER_TOKENS_ENV,
-)
-from agent_factory.context_system.token_counter import context_window_tokens_from_env
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
 from agent_factory.mcp_gateway import HostMCPGatewayManager
@@ -1595,22 +1590,25 @@ def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
 
 def _context_contract_summary(package_root: Path) -> dict[str, Any]:
     contract_path = package_root / "contracts" / "context.json"
-    env_context_window = context_window_tokens_from_env()
-    env_compression_threshold = _compression_threshold_from_env()
-    env_effective_compression_threshold = (
-        min(env_compression_threshold, env_context_window)
-        if isinstance(env_context_window, int) and env_context_window > 0
-        else env_compression_threshold
+    from agent_factory.models.chat_model import get_main_model_settings
+
+    profile = get_main_model_settings()
+    profile_window = profile.max_input_tokens
+    profile_threshold = profile.context_compression_threshold_tokens
+    effective_profile_threshold = (
+        min(profile_threshold, profile_window)
+        if isinstance(profile_threshold, int) and isinstance(profile_window, int)
+        else profile_threshold
     )
     base = {
         "version": "",
-        "context_window_tokens": None,
-        "context_window_tokens_source": "env" if env_context_window is not None else "unset",
-        "context_window_tokens_env": env_context_window,
+        "context_window_tokens": profile_window,
+        "context_window_tokens_source": "profile" if profile_window is not None else "unset",
+        "context_window_tokens_profile_id": profile.profile_id,
         "context_window_tokens_custom": None,
-        "compression_threshold_tokens": env_effective_compression_threshold,
-        "compression_threshold_tokens_source": "env",
-        "compression_threshold_tokens_env": env_compression_threshold,
+        "compression_threshold_tokens": effective_profile_threshold,
+        "compression_threshold_tokens_source": "profile" if profile_threshold is not None else "unset",
+        "compression_threshold_tokens_profile_id": profile.profile_id,
         "compression_threshold_tokens_custom": None,
     }
     if not contract_path.is_file():
@@ -1622,13 +1620,13 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         return {**base, "error": f"{type(exc).__name__}: {exc}"}
     config = document.get("config") if isinstance(document.get("config"), dict) else {}
     custom_window = config.get("context_window_tokens")
-    window = custom_window if isinstance(custom_window, int) and custom_window > 0 else env_context_window
+    window = custom_window if isinstance(custom_window, int) and custom_window > 0 else profile_window
     compression = {}
     default_policy = config.get("default_policy") if isinstance(config.get("default_policy"), dict) else {}
     if isinstance(default_policy, dict):
         compression = default_policy.get("compression") if isinstance(default_policy.get("compression"), dict) else {}
     custom_threshold = compression.get("trigger_token_threshold") if isinstance(compression, dict) else None
-    threshold = custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else env_compression_threshold
+    threshold = custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else profile_threshold
     effective_threshold = min(threshold, window) if isinstance(window, int) and window > 0 else threshold
     return {
         **base,
@@ -1637,7 +1635,7 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         "context_window_tokens_source": "package" if isinstance(custom_window, int) and custom_window > 0 else base["context_window_tokens_source"],
         "context_window_tokens_custom": custom_window if isinstance(custom_window, int) and custom_window > 0 else None,
         "compression_threshold_tokens": effective_threshold,
-        "compression_threshold_tokens_source": "package" if isinstance(custom_threshold, int) and custom_threshold > 0 else "env",
+        "compression_threshold_tokens_source": "package" if isinstance(custom_threshold, int) and custom_threshold > 0 else base["compression_threshold_tokens_source"],
         "compression_threshold_tokens_custom": custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else None,
     }
 
@@ -1725,18 +1723,6 @@ def _trace_root_from_ref(ref: dict[str, Any]) -> Path | None:
 
 def _safe_path_id(value: str) -> bool:
     return bool(value) and all(char.isalnum() or char in {"-", "_"} for char in value)
-
-
-def _compression_threshold_from_env() -> int:
-    value = os.getenv(MODEL_COMPRESSION_TRIGGER_TOKENS_ENV)
-    if value:
-        try:
-            parsed = int(value)
-        except ValueError:
-            parsed = 0
-        if parsed >= 1000:
-            return parsed
-    return DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD
 
 
 def _package_detail_summary(

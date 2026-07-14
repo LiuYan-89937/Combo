@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-import os
 
 from langchain_core.embeddings import Embeddings
 
@@ -55,15 +54,11 @@ def _get_embedding_model() -> Embeddings | None:
 
 
 def _embedding_settings() -> EmbeddingModelSettings:
-    profile_id = str(os.getenv("AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID") or "").strip()
-    if not profile_id:
-        from agent_factory.model_pool.store import ModelPoolStore
-
-        profile_id = str(ModelPoolStore().resolve_default_profile_id("embedding") or "")
-    if not profile_id:
-        return EmbeddingModelSettings(profile_id=None, model=None, dims=None)
     from agent_factory.model_pool.store import ModelPoolStore
 
+    profile_id = str(ModelPoolStore().resolve_default_profile_id("embedding") or "")
+    if not profile_id:
+        return EmbeddingModelSettings(profile_id=None, model=None, dims=None)
     profile = ModelPoolStore().require_profile(profile_id)
     if profile.kind != "embedding":
         raise ValueError(f"local model profile {profile_id} is not an embedding profile")

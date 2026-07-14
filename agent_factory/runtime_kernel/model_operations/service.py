@@ -28,7 +28,7 @@ from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
     count_messages_tokens,
     context_window_payload,
-    context_window_tokens_from_env,
+    context_window_tokens_from_profile,
     effective_compression_threshold,
     provider_token_budget_payload,
     token_count_from_usage_metadata,
@@ -931,13 +931,13 @@ def _compression_threshold(*, services: Any, node_id: str) -> int | None:
 def _context_window_tokens(services: Any | None) -> int | None:
     resources = getattr(services, "runtime_resources", None)
     if not isinstance(resources, dict):
-        return context_window_tokens_from_env()
+        return context_window_tokens_from_profile(services=services)
     value = resources.get("context_window_tokens")
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        return context_window_tokens_from_env()
-    return parsed if parsed > 0 else context_window_tokens_from_env()
+        return context_window_tokens_from_profile(services=services)
+    return parsed if parsed > 0 else context_window_tokens_from_profile(services=services)
 
 
 def _model_role(services: Any) -> str:

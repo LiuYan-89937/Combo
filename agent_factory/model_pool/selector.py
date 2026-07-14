@@ -177,8 +177,6 @@ def _candidate_warnings(requirement: ModelSelectionRequirement, profile: ModelPo
     warnings: list[str] = []
     if requirement.structured_output_methods and not profile.capabilities.strict_tool_schema:
         warnings.append("Profile does not advertise strict tool schema support.")
-    if not profile.inference.quantization:
-        warnings.append("Profile does not use a quantized model configuration.")
     return warnings
 
 
