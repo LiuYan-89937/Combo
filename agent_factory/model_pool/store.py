@@ -4,14 +4,27 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from agent_factory.model_pool.config import resolve_model_pool_store_path
-from agent_factory.model_pool.schema import LocalModelArtifact, ModelPoolProfile, utc_now_text
+from agent_factory.model_pool.schema import (
+    LocalModelArtifact,
+    ModelPoolDefaultRole,
+    ModelPoolProfile,
+    utc_now_text,
+)
 
 
 class ModelPoolStoreError(RuntimeError):
     pass
+
+
+_DEFAULT_PROFILE_ROLES: tuple[ModelPoolDefaultRole, ...] = (
+    "main",
+    "task",
+    "compression",
+    "embedding",
+)
 
 
 class ModelPoolStore:
@@ -200,8 +213,83 @@ class ModelPoolStore:
 
     def delete_profile(self, profile_id: str) -> bool:
         with self._connect() as conn:
+            conn.execute("delete from local_model_default_profiles where profile_id = ?", (profile_id,))
             cursor = conn.execute("delete from local_model_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
+
+    def default_profile_ids(self) -> dict[ModelPoolDefaultRole, str | None]:
+        return {role: self.resolve_default_profile_id(role) for role in _DEFAULT_PROFILE_ROLES}
+
+    def resolve_default_profile_id(self, role: str) -> str | None:
+        normalized_role = self._validate_default_role(role)
+        with self._connect() as conn:
+            row = conn.execute(
+                "select profile_id from local_model_default_profiles where role = ?",
+                (normalized_role,),
+            ).fetchone()
+        if row:
+            profile = self.get_profile(str(row["profile_id"]))
+            if profile is not None and self._profile_can_be_default(profile, normalized_role):
+                return profile.profile_id
+
+        kind = "embedding" if normalized_role == "embedding" else "chat"
+        candidates = sorted(
+            self.list_profiles(kind=kind, enabled=True),
+            key=lambda profile: (profile.created_at, profile.profile_id),
+        )
+        for profile in candidates:
+            if self._profile_can_be_default(profile, normalized_role):
+                return profile.profile_id
+        return None
+
+    def set_default_profile_id(
+        self,
+        role: str,
+        profile_id: str | None,
+    ) -> str | None:
+        normalized_role = self._validate_default_role(role)
+        normalized_profile_id = str(profile_id or "").strip()
+        if not normalized_profile_id:
+            with self._connect() as conn:
+                conn.execute("delete from local_model_default_profiles where role = ?", (normalized_role,))
+            return self.resolve_default_profile_id(normalized_role)
+
+        profile = self.require_profile(normalized_profile_id)
+        if not self._profile_can_be_default(profile, normalized_role):
+            expected_kind = "embedding" if normalized_role == "embedding" else "chat"
+            raise ModelPoolStoreError(
+                f"default role {normalized_role!r} requires an enabled {expected_kind} profile and artifact"
+            )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into local_model_default_profiles (role, profile_id, updated_at)
+                values (?, ?, ?)
+                on conflict(role) do update set
+                  profile_id=excluded.profile_id,
+                  updated_at=excluded.updated_at
+                """,
+                (normalized_role, profile.profile_id, utc_now_text()),
+            )
+        return profile.profile_id
+
+    @staticmethod
+    def _validate_default_role(role: str) -> ModelPoolDefaultRole:
+        normalized = str(role or "").strip().lower()
+        if normalized not in _DEFAULT_PROFILE_ROLES:
+            raise ModelPoolStoreError(f"unsupported default model role: {role}")
+        return cast(ModelPoolDefaultRole, normalized)
+
+    def _profile_can_be_default(
+        self,
+        profile: ModelPoolProfile,
+        role: ModelPoolDefaultRole,
+    ) -> bool:
+        expected_kind = "embedding" if role == "embedding" else "chat"
+        if profile.kind != expected_kind or not profile.enabled:
+            return False
+        artifact = self.get_artifact(profile.artifact_id)
+        return artifact is not None and artifact.enabled
 
     def public_profiles(self) -> list[dict[str, Any]]:
         artifacts = {artifact.artifact_id: artifact for artifact in self.list_artifacts()}
@@ -255,5 +343,13 @@ class ModelPoolStore:
                   on local_model_profiles(kind);
                 create index if not exists idx_local_model_profiles_enabled
                   on local_model_profiles(enabled);
+
+                create table if not exists local_model_default_profiles (
+                  role text primary key,
+                  profile_id text not null,
+                  updated_at text not null
+                );
+                create index if not exists idx_local_model_default_profiles_profile
+                  on local_model_default_profiles(profile_id);
                 """
             )

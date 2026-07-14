@@ -179,7 +179,9 @@ def _profile_id_for_role(role: str) -> str | None:
         value = str(os.getenv(name) or "").strip()
         if value:
             return value
-    return None
+    from agent_factory.model_pool.store import ModelPoolStore
+
+    return ModelPoolStore().resolve_default_profile_id(role)
 
 
 def _role_float(role: str, suffix: str) -> float | None:

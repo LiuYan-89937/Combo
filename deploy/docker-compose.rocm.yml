@@ -11,8 +11,6 @@ services:
       - python
       - -m
       - agent_factory.local_inference.run_vllm
-      - --profile-id
-      - ${AGENTFACTORY_MAIN_MODEL_PROFILE_ID:?AGENTFACTORY_MAIN_MODEL_PROFILE_ID is required}
       - --host
       - 0.0.0.0
       - --port
@@ -41,8 +39,6 @@ services:
       - python
       - -m
       - agent_factory.local_inference.embedding_server
-      - --profile-id
-      - ${AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID:?AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID is required}
       - --host
       - 0.0.0.0
       - --port

@@ -23,6 +23,7 @@ from agent_factory.model_pool import (
     list_local_inference_engines,
 )
 from agent_factory.model_pool.store import ModelPoolStoreError
+from agent_factory.models import reset_chat_models, reset_embedding_model
 
 
 def create_model_pool_router() -> APIRouter:
@@ -35,6 +36,22 @@ def create_model_pool_router() -> APIRouter:
     @router.get("/runtime/rocm")
     async def rocm_runtime():
         return inspect_rocm_runtime(require_available=False).payload()
+
+    @router.get("/defaults")
+    async def default_profiles():
+        return {"defaults": ModelPoolStore().default_profile_ids()}
+
+    @router.put("/defaults/{role}")
+    async def set_default_profile(role: str, payload: dict[str, Any]):
+        try:
+            profile_id = ModelPoolStore().set_default_profile_id(
+                role=role,
+                profile_id=str(payload.get("profile_id") or "") or None,
+            )
+            _reset_model_caches()
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"role": role, "profile_id": profile_id}
 
     @router.get("/artifacts")
     async def list_artifacts():
@@ -84,6 +101,7 @@ def create_model_pool_router() -> APIRouter:
         try:
             profile = store.upsert_profile(_profile_from_payload(payload, store=store))
             artifact = store.get_artifact(profile.artifact_id)
+            _reset_model_caches()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(artifact).model_dump(mode="json")}
@@ -94,13 +112,17 @@ def create_model_pool_router() -> APIRouter:
         try:
             profile = store.patch_profile(profile_id, payload)
             artifact = store.get_artifact(profile.artifact_id)
+            _reset_model_caches()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(artifact).model_dump(mode="json")}
 
     @router.delete("/profiles/{profile_id}")
     async def delete_profile(profile_id: str):
-        return {"deleted": ModelPoolStore().delete_profile(profile_id)}
+        deleted = ModelPoolStore().delete_profile(profile_id)
+        if deleted:
+            _reset_model_caches()
+        return {"deleted": deleted}
 
     @router.post("/profiles/{profile_id}/check")
     async def check_profile(profile_id: str):
@@ -196,6 +218,11 @@ async def _embedding_runtime_status(profile_id: str) -> dict[str, Any]:
 def _http_error(exc: Exception) -> HTTPException:
     status = 404 if isinstance(exc, ModelPoolStoreError) and str(exc).startswith("unknown ") else 400
     return HTTPException(status_code=status, detail=f"{type(exc).__name__}: {exc}")
+
+
+def _reset_model_caches() -> None:
+    reset_chat_models()
+    reset_embedding_model()
 
 
 def _slug(value: str) -> str:

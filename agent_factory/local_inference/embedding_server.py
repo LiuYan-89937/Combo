@@ -105,13 +105,16 @@ def _load_runtime(profile_id: str) -> EmbeddingRuntime:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local ROCm embedding service")
-    parser.add_argument("--profile-id", required=True)
+    parser.add_argument("--profile-id")
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", required=True, type=int)
     args = parser.parse_args()
     import uvicorn
 
-    uvicorn.run(create_app(args.profile_id), host=args.host, port=args.port)
+    profile_id = args.profile_id or ModelPoolStore().resolve_default_profile_id("embedding")
+    if not profile_id:
+        raise ValueError("no enabled default embedding profile is configured in the local model pool")
+    uvicorn.run(create_app(profile_id), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

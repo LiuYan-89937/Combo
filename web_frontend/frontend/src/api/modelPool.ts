@@ -2,7 +2,10 @@ import { requestJson, withQuery } from './http'
 
 export type LocalModelKind = 'chat' | 'embedding'
 export type LocalInferenceEngine = 'vllm_rocm' | 'transformers_rocm'
+export type LocalModelDefaultRole = 'main' | 'task' | 'compression' | 'embedding'
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
+
+export type LocalModelDefaults = Record<LocalModelDefaultRole, string | null>
 
 export interface LocalEngine {
   engine: LocalInferenceEngine
@@ -97,6 +100,15 @@ export interface ModelUsageSummary {
 export const modelPoolApi = {
   engines: () => requestJson<{ engines: LocalEngine[] }>('/api/model-pool/engines'),
   rocmRuntime: () => requestJson<RocmRuntimeInfo>('/api/model-pool/runtime/rocm'),
+  defaults: () => requestJson<{ defaults: LocalModelDefaults }>('/api/model-pool/defaults'),
+  setDefault: (role: LocalModelDefaultRole, profileId: string) =>
+    requestJson<{ role: LocalModelDefaultRole; profile_id: string | null }>(
+      `/api/model-pool/defaults/${encodeURIComponent(role)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ profile_id: profileId }),
+      },
+    ),
   artifacts: () => requestJson<{ artifacts: LocalModelArtifact[] }>('/api/model-pool/artifacts'),
   saveArtifact: (payload: Record<string, unknown>) =>
     requestJson<{ artifact: LocalModelArtifact }>('/api/model-pool/artifacts', {

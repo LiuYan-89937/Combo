@@ -60,7 +60,7 @@ Agent 制造把需求分析、能力装配、工具调用和发布过程放在�
 - Docker Engine 或兼容的容器运行时
 - 已下载到本机的对话模型和 Embedding 模型
 
-### 配置环境变量
+### 初始化本地配置
 
 复制模板：
 
@@ -68,26 +68,22 @@ Agent 制造把需求分析、能力装配、工具调用和发布过程放在�
 cp .env.example .env
 ```
 
-填写 `.env`。最小可运行配置包括：
+模型 Profile 和默认角色在“本地模型”页面中配置并保存到模型池数据库，不需要把 Profile ID 写入 `.env`。本机推理服务默认使用 `127.0.0.1:8001/v1`，Embedding 服务默认使用 `127.0.0.1:8002`。
+
+`.env` 最小只需配置资源加密密钥：
 
 ```bash
-AGENTFACTORY_MAIN_MODEL_PROFILE_ID=
-AGENTFACTORY_TASK_MODEL_PROFILE_ID=
-AGENTFACTORY_COMPRESSION_MODEL_PROFILE_ID=
-AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID=
-AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT=
-AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT=
 AGENTFACTORY_RESOURCE_MASTER_KEY=
 ```
 
 说明：
 
-- 主模型用于闲聊、制造、进化和普通 Agent 对话。
-- 任务模型用于结构化输出、分类、抽取、意图分析等辅助任务；未单独配置时会回退到主模型。
-- 压缩模型用于上下文压缩。
-- `factory_chat` 读取已注册的默认本地模型 Profile。
+- 主模型用于闲聊、制造、进化和普通 Agent 对话；任务模型用于结构化输出、分类、抽取和意图分析；压缩模型用于上下文压缩。
+- 第一个可用的对话 Profile 会自动成为默认值，也可以在“本地模型”页面分别指定主模型、任务模型和压缩模型。
+- 第一个可用的 Embedding Profile 会自动成为默认值，也可以在页面中显式指定。
 - Embedding 模型由独立的本地 ROCm 服务加载，用于知识库、RAG、长期记忆和 Agent 检索。
 - 模型端点支持回环、私有地址以及明确列入允许列表的内部服务主机。
+- Profile ID 与推理端点环境变量仍可作为部署级覆盖项，但不是常规配置的必填项。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 用于加密 Agent 的运行时资源配置；请使用稳定的长随机值，丢失后无法解密已保存的资源。
 - `.env` 是本地私有配置，不要提交到 git。
 

@@ -10,6 +10,8 @@ LOCAL_INFERENCE_ENDPOINT_ENV = "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT"
 LOCAL_INFERENCE_ALLOWED_HOSTS_ENV = "AGENTFACTORY_LOCAL_INFERENCE_ALLOWED_HOSTS"
 LOCAL_EMBEDDING_ENDPOINT_ENV = "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT"
 LOCAL_EMBEDDING_ALLOWED_HOSTS_ENV = "AGENTFACTORY_LOCAL_EMBEDDING_ALLOWED_HOSTS"
+DEFAULT_LOCAL_INFERENCE_ENDPOINT = "http://127.0.0.1:8001/v1"
+DEFAULT_LOCAL_EMBEDDING_ENDPOINT = "http://127.0.0.1:8002"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +27,7 @@ class LocalInferenceEndpoint:
 def load_local_inference_endpoint(*, timeout_seconds: float | None = None) -> LocalInferenceEndpoint:
     return load_local_endpoint(
         endpoint_env=LOCAL_INFERENCE_ENDPOINT_ENV,
+        default_endpoint=DEFAULT_LOCAL_INFERENCE_ENDPOINT,
         allowed_hosts_env=LOCAL_INFERENCE_ALLOWED_HOSTS_ENV,
         timeout_env="AGENTFACTORY_LOCAL_INFERENCE_TIMEOUT_SECONDS",
         timeout_seconds=timeout_seconds,
@@ -34,6 +37,7 @@ def load_local_inference_endpoint(*, timeout_seconds: float | None = None) -> Lo
 def load_local_embedding_endpoint(*, timeout_seconds: float | None = None) -> LocalInferenceEndpoint:
     return load_local_endpoint(
         endpoint_env=LOCAL_EMBEDDING_ENDPOINT_ENV,
+        default_endpoint=DEFAULT_LOCAL_EMBEDDING_ENDPOINT,
         allowed_hosts_env=LOCAL_EMBEDDING_ALLOWED_HOSTS_ENV,
         timeout_env="AGENTFACTORY_LOCAL_EMBEDDING_TIMEOUT_SECONDS",
         timeout_seconds=timeout_seconds,
@@ -43,13 +47,12 @@ def load_local_embedding_endpoint(*, timeout_seconds: float | None = None) -> Lo
 def load_local_endpoint(
     *,
     endpoint_env: str,
+    default_endpoint: str,
     allowed_hosts_env: str,
     timeout_env: str,
     timeout_seconds: float | None = None,
 ) -> LocalInferenceEndpoint:
-    raw_url = str(os.getenv(endpoint_env) or "").strip()
-    if not raw_url:
-        raise ValueError(f"{endpoint_env} is required")
+    raw_url = str(os.getenv(endpoint_env) or default_endpoint).strip()
     parsed = urlparse(raw_url)
     if parsed.scheme != "http" or not parsed.hostname:
         raise ValueError("local inference endpoint must be an http URL with a hostname")

@@ -22,6 +22,7 @@ export function useFactoryConversation() {
   const commands = useCommand()
   const { t } = useI18n()
   const chatModelProfiles = ref<LocalModelProfile[]>([])
+  const defaultMainModelProfileId = ref('')
   const selectedMainModelProfileId = ref(localStorage.getItem(MAIN_MODEL_PROFILE_STORAGE_KEY) || '')
   const reasoningIntensity = ref<number | null>(loadReasoningIntensity())
 
@@ -48,13 +49,21 @@ export function useFactoryConversation() {
     label: pkg.agent_name || pkg.name || pkg.package_id,
     value: pkg.package_id,
   })))
-  const runtimeMainModelOptions = computed(() => [
-    { label: t('chat.defaultMainModel'), value: '' },
-    ...chatModelProfiles.value.map((profile) => ({
-      label: profile.display_name || profile.served_model_name || profile.profile_id,
-      value: profile.profile_id,
-    })),
-  ])
+  const runtimeMainModelOptions = computed(() => {
+    const defaultProfile = chatModelProfiles.value.find(
+      (profile) => profile.profile_id === defaultMainModelProfileId.value,
+    )
+    const defaultLabel = defaultProfile
+      ? `${t('chat.defaultMainModel')} · ${defaultProfile.display_name || defaultProfile.served_model_name}`
+      : t('chat.defaultMainModel')
+    return [
+      { label: defaultLabel, value: '' },
+      ...chatModelProfiles.value.map((profile) => ({
+        label: profile.display_name || profile.served_model_name || profile.profile_id,
+        value: profile.profile_id,
+      })),
+    ]
+  })
   const inputPlaceholder = computed(() => (
     isAgentChatActive.value
       ? t('factory.sendToAgentPlaceholder', { name: activeChatPackageTitle.value })
@@ -97,10 +106,14 @@ export function useFactoryConversation() {
 
   async function loadRuntimeMainModelProfiles() {
     try {
-      const response = await modelPoolApi.profiles()
+      const [response, defaultResponse] = await Promise.all([
+        modelPoolApi.profiles(),
+        modelPoolApi.defaults(),
+      ])
       chatModelProfiles.value = response.profiles.filter((profile) => (
         profile.kind === 'chat' && profile.enabled && profile.artifact?.enabled !== false
       ))
+      defaultMainModelProfileId.value = defaultResponse.defaults.main || ''
       if (
         selectedMainModelProfileId.value
         && !chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)

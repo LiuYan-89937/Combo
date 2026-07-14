@@ -83,6 +83,15 @@
                 <n-tag v-if="profile.inference.quantization" size="small" :bordered="false" type="warning">
                   {{ profile.inference.quantization.toUpperCase() }}
                 </n-tag>
+                <n-tag
+                  v-for="role in profileDefaultRoles(profile.profile_id)"
+                  :key="role"
+                  size="small"
+                  :bordered="false"
+                  type="success"
+                >
+                  {{ defaultRoleLabel(role) }}
+                </n-tag>
               </div>
 
               <div class="model-name">{{ profile.served_model_name }}</div>
@@ -102,6 +111,13 @@
                 <n-button size="small" secondary :loading="checkingProfileId === profile.profile_id" @click="checkProfile(profile)">
                   {{ t('localModel.checkLoad') }}
                 </n-button>
+                <n-dropdown
+                  trigger="click"
+                  :options="defaultRoleOptions(profile)"
+                  @select="(role) => handleDefaultRoleSelect(role, profile)"
+                >
+                  <n-button size="small" quaternary>{{ t('localModel.setDefault') }}</n-button>
+                </n-dropdown>
                 <div class="action-spacer" />
                 <n-button size="small" quaternary @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
                 <n-button size="small" type="error" quaternary @click="removeProfile(profile)">{{ t('common.delete') }}</n-button>
@@ -256,6 +272,8 @@ import {
 import {
   modelPoolApi,
   type LocalModelArtifact,
+  type LocalModelDefaultRole,
+  type LocalModelDefaults,
   type LocalModelKind,
   type LocalModelProfile,
   type RocmRuntimeInfo,
@@ -270,6 +288,12 @@ const checkingProfileId = ref('')
 const activeTab = ref<'profiles' | 'artifacts'>('profiles')
 const artifacts = ref<LocalModelArtifact[]>([])
 const profiles = ref<LocalModelProfile[]>([])
+const defaults = ref<LocalModelDefaults>({
+  main: null,
+  task: null,
+  compression: null,
+  embedding: null,
+})
 const rocm = ref<RocmRuntimeInfo | null>(null)
 const artifactModalOpen = ref(false)
 const profileModalOpen = ref(false)
@@ -301,12 +325,16 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [artifactData, profileData, runtimeData] = await Promise.all([
-      modelPoolApi.artifacts(), modelPoolApi.profiles(), modelPoolApi.rocmRuntime(),
+    const [artifactData, profileData, runtimeData, defaultData] = await Promise.all([
+      modelPoolApi.artifacts(),
+      modelPoolApi.profiles(),
+      modelPoolApi.rocmRuntime(),
+      modelPoolApi.defaults(),
     ])
     artifacts.value = artifactData.artifacts
     profiles.value = profileData.profiles
     rocm.value = runtimeData
+    defaults.value = defaultData.defaults
   } catch (error) {
     message.error(errorText(error))
   } finally {
@@ -423,6 +451,41 @@ async function checkProfile(profile: LocalModelProfile): Promise<void> {
     const result = await modelPoolApi.checkProfile(profile.profile_id)
     message.success(`${t('localModel.checkComplete')} · ${String(result.status || '')}`)
   } catch (error) { message.error(errorText(error)) } finally { checkingProfileId.value = '' }
+}
+
+function profileDefaultRoles(profileId: string): LocalModelDefaultRole[] {
+  return (Object.entries(defaults.value) as Array<[LocalModelDefaultRole, string | null]>)
+    .filter(([, defaultProfileId]) => defaultProfileId === profileId)
+    .map(([role]) => role)
+}
+
+function defaultRoleOptions(profile: LocalModelProfile) {
+  const roles: LocalModelDefaultRole[] = profile.kind === 'embedding'
+    ? ['embedding']
+    : ['main', 'task', 'compression']
+  return roles.map((role) => ({
+    key: role,
+    label: defaultRoleLabel(role),
+    disabled: defaults.value[role] === profile.profile_id,
+  }))
+}
+
+function defaultRoleLabel(role: LocalModelDefaultRole): string {
+  return t(`localModel.defaultRole.${role}`)
+}
+
+async function handleDefaultRoleSelect(
+  role: string | number,
+  profile: LocalModelProfile,
+): Promise<void> {
+  const normalizedRole = String(role) as LocalModelDefaultRole
+  try {
+    const result = await modelPoolApi.setDefault(normalizedRole, profile.profile_id)
+    defaults.value = { ...defaults.value, [normalizedRole]: result.profile_id }
+    message.success(t('localModel.defaultUpdated'))
+  } catch (error) {
+    message.error(errorText(error))
+  }
 }
 
 function removeArtifact(item: LocalModelArtifact): void {

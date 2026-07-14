@@ -48,10 +48,6 @@ web_check_env_configuration() {
     fi
 
     local required_vars=(
-        "AGENTFACTORY_MAIN_MODEL_PROFILE_ID"
-        "AGENTFACTORY_EMBEDDING_MODEL_PROFILE_ID"
-        "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT"
-        "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT"
         "AGENTFACTORY_RESOURCE_MASTER_KEY"
     )
 
@@ -66,7 +62,7 @@ web_check_env_configuration() {
         return 0
     fi
 
-    web_warn ".env exists but the following model settings are empty:"
+    web_warn ".env exists but the following required settings are empty:"
     for name in "${missing[@]}"; do
         echo "         - ${name}"
     done

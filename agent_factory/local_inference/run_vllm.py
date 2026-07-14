@@ -11,16 +11,19 @@ from agent_factory.model_pool.store import ModelPoolStore
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Load a registered local chat model with vLLM on AMD ROCm")
-    parser.add_argument("--profile-id", required=True)
+    parser.add_argument("--profile-id")
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", required=True, type=int)
     args = parser.parse_args()
 
     inspect_rocm_runtime(require_available=True)
-    store = ModelPoolStore(setup=False)
-    profile = store.require_profile(args.profile_id)
+    store = ModelPoolStore()
+    profile_id = args.profile_id or store.resolve_default_profile_id("main")
+    if not profile_id:
+        raise ValueError("no enabled default chat profile is configured in the local model pool")
+    profile = store.require_profile(profile_id)
     if profile.kind != "chat" or profile.engine != "vllm_rocm":
-        raise ValueError(f"profile {args.profile_id} is not a local vLLM chat profile")
+        raise ValueError(f"profile {profile_id} is not a local vLLM chat profile")
     if not profile.enabled:
         raise ValueError(f"local chat profile is disabled: {profile.profile_id}")
     artifact = store.require_artifact(profile.artifact_id)

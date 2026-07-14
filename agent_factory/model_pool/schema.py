@@ -12,6 +12,7 @@ from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutp
 
 ModelPoolProfileKind = Literal["chat", "embedding"]
 ModelBindingRole = Literal["main", "task", "compression"]
+ModelPoolDefaultRole = Literal["main", "task", "compression", "embedding"]
 ModelBindingSource = Literal["local_registry", "local_default"]
 ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "audio_input"]
