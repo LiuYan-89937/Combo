@@ -32,6 +32,8 @@ set +a
 required_config=(
     SSH_HOST SSH_PORT SSH_USER REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT
     REMOTE_LLAMA_CPP_DIR LOCAL_LLAMA_CPP_DIR LLAMA_CPP_REPOSITORY LLAMA_CPP_REVISION
+    CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION CHAT_MODEL_FILENAME CHAT_MODEL_SHA256
+    CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION
     CHAT_PROFILE_ID CHAT_SERVED_MODEL_NAME CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
     CHAT_COMPRESSION_THRESHOLD CHAT_GPU_LAYERS CHAT_PARALLEL_SLOTS CHAT_CACHE_TYPE_K
     CHAT_CACHE_TYPE_V EMBEDDING_PROFILE_ID EMBEDDING_SERVED_MODEL_NAME EMBEDDING_DIMENSIONS
@@ -42,6 +44,15 @@ for name in "${required_config[@]}"; do
     [[ -n "${!name:-}" ]] || fail "Missing deployment setting: ${name}"
 done
 [[ "${SSH_PORT}" =~ ^[0-9]+$ ]] || fail "SSH_PORT must be an integer"
+(( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fail "SSH_PORT must be between 1 and 65535"
+for name in LOCAL_CHAT_PORT LOCAL_EMBEDDING_PORT LOCAL_TELEMETRY_PORT; do
+    [[ "${!name}" =~ ^[0-9]+$ ]] && (( ${!name} >= 1 && ${!name} <= 65535 )) \
+        || fail "${name} must be an integer between 1 and 65535"
+done
+[[ "${LOCAL_CHAT_PORT}" != "${LOCAL_EMBEDDING_PORT}" \
+    && "${LOCAL_CHAT_PORT}" != "${LOCAL_TELEMETRY_PORT}" \
+    && "${LOCAL_EMBEDDING_PORT}" != "${LOCAL_TELEMETRY_PORT}" ]] \
+    || fail "Local Chat, Embedding and Telemetry ports must be different"
 
 require_command ssh "Install the OpenSSH client."
 require_command scp "Install the OpenSSH client."
@@ -96,6 +107,7 @@ upload_controller() {
     scp "${SCP_ARGS[@]}" "${REMOTE_CONTROLLER}" "${CONFIG_FILE}" \
         "${SSH_TARGET}:/tmp/"
     ssh_run chmod 700 /tmp/remote_runtime.sh
+    ssh_run chmod 600 /tmp/"$(basename "${CONFIG_FILE}")"
 }
 
 remote_command() {
@@ -140,6 +152,7 @@ sync_sources() {
         --exclude '.agent_runtime/' \
         --exclude '.deploy/' \
         --exclude '.env' \
+        --exclude 'deploy/deploy.env' \
         --exclude '.venv/' \
         --exclude 'node_modules/' \
         --exclude 'vendor/llama.cpp/' \
@@ -208,8 +221,22 @@ configure_local_profiles() {
         "$(boolean_argument "${EMBEDDING_TRUST_REMOTE_CODE:-0}" embedding-trust-remote-code)"
 }
 
-bootstrap() {
+check_bootstrap_prerequisites() {
+    require_command git "Install Git first."
     require_command python3 "Install Python 3.11 or newer."
+    require_command rsync "Install rsync on the local development machine."
+    require_command uv "Install uv from https://docs.astral.sh/uv/."
+}
+
+check_web_prerequisites() {
+    require_command node "Install Node.js 18 or newer."
+    require_command npm "Install npm."
+    require_command docker "Install Docker Desktop or Docker Engine."
+    docker info >/dev/null 2>&1 || fail "Docker is installed but the daemon is not running"
+}
+
+bootstrap() {
+    check_bootstrap_prerequisites
     log "Checking SSH connectivity"
     ssh_run true
     prepare_local_llama
@@ -225,6 +252,7 @@ bootstrap() {
 
 case "${COMMAND}" in
     up)
+        check_web_prerequisites
         bootstrap
         log "Starting the local Web application and SSH tunnel"
         exec "${PROJECT_ROOT}/start.sh"

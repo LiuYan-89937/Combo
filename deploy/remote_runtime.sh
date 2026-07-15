@@ -18,7 +18,8 @@ set +a
 required_config=(
     REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT REMOTE_LLAMA_CPP_DIR
     PYPI_INDEX_URL HF_ENDPOINT CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
-    CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256
+    CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MODEL_SIZE_BYTES
+    CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 CHAT_MMPROJ_SIZE_BYTES
     EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION CHAT_PROFILE_ID CHAT_SERVED_MODEL_NAME
     CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS CHAT_COMPRESSION_THRESHOLD CHAT_GPU_LAYERS
     CHAT_PARALLEL_SLOTS CHAT_CACHE_TYPE_K CHAT_CACHE_TYPE_V EMBEDDING_PROFILE_ID
@@ -31,6 +32,30 @@ for name in "${required_config[@]}"; do
         exit 2
     fi
 done
+
+numeric_config=(
+    CHAT_MODEL_SIZE_BYTES CHAT_MMPROJ_SIZE_BYTES CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
+    CHAT_COMPRESSION_THRESHOLD CHAT_GPU_LAYERS CHAT_PARALLEL_SLOTS EMBEDDING_DIMENSIONS
+    REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT
+)
+for name in "${numeric_config[@]}"; do
+    [[ "${!name}" =~ ^[0-9]+$ ]] || {
+        echo "Deployment setting must be a non-negative integer: ${name}" >&2
+        exit 2
+    }
+done
+for name in REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT; do
+    (( ${!name} >= 1 && ${!name} <= 65535 )) || {
+        echo "Deployment port must be between 1 and 65535: ${name}" >&2
+        exit 2
+    }
+done
+[[ "${REMOTE_CHAT_PORT}" != "${REMOTE_EMBEDDING_PORT}" \
+    && "${REMOTE_CHAT_PORT}" != "${REMOTE_TELEMETRY_PORT}" \
+    && "${REMOTE_EMBEDDING_PORT}" != "${REMOTE_TELEMETRY_PORT}" ]] || {
+    echo "Remote Chat, Embedding and Telemetry ports must be different" >&2
+    exit 2
+}
 
 VENV_DIR="${REMOTE_STATE_ROOT}/venv"
 PYTHON_BIN="${VENV_DIR}/bin/python"
@@ -83,7 +108,10 @@ prepare_host() {
 doctor() {
     log "Host: $(hostname)"
     log "Disk"
-    df -h "${REMOTE_PROJECT_ROOT}" "${REMOTE_MODEL_ROOT}" | awk 'NR == 1 || !seen[$1]++'
+    if ! df -h "${REMOTE_PROJECT_ROOT}" "${REMOTE_MODEL_ROOT}" 2>/dev/null \
+        | awk 'NR == 1 || !seen[$1]++'; then
+        df -h /
+    fi
     log "ROCm GPU"
     if command_exists rocminfo; then
         rocminfo 2>/dev/null | grep -E 'Marketing Name|Name:' | head -n 8 || true
@@ -115,6 +143,19 @@ PY
     else
         echo "llama-server: not built"
     fi
+}
+
+verify_rocm_runtime() {
+    command_exists rocminfo || fail "rocminfo is unavailable; use an AMD ROCm workspace image"
+    python3 - <<'PY'
+import torch
+
+if not torch.version.hip:
+    raise SystemExit("PyTorch is not a ROCm/HIP build")
+if not torch.cuda.is_available():
+    raise SystemExit("PyTorch cannot access an AMD GPU")
+print(f"Verified ROCm PyTorch on {torch.cuda.get_device_name(0)}")
+PY
 }
 
 prepare_python() {
@@ -167,15 +208,29 @@ download_file() {
     local url="$1"
     local destination="$2"
     local checksum="$3"
+    local expected_size="$4"
     local checksum_marker="${destination}.sha256"
-    if [[ -f "${destination}" && -f "${checksum_marker}" && "$(<"${checksum_marker}")" == "${checksum}" ]]; then
-        log "Using verified model file: ${destination}"
-        return
-    fi
-    if [[ -f "${destination}" ]] && printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum --check --status; then
-        printf '%s\n' "${checksum}" > "${checksum_marker}"
-        log "Verified existing model file: ${destination}"
-        return
+    if [[ -f "${destination}" ]]; then
+        local actual_size
+        actual_size="$(stat --format='%s' "${destination}")"
+        if [[ "${actual_size}" == "${expected_size}" \
+            && -f "${checksum_marker}" \
+            && "$(<"${checksum_marker}")" == "${checksum}" ]]; then
+            log "Using verified model file: ${destination}"
+            return
+        fi
+        if [[ "${actual_size}" == "${expected_size}" ]]; then
+            if printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum --check --status; then
+                printf '%s\n' "${checksum}" > "${checksum_marker}"
+                log "Verified existing model file: ${destination}"
+                return
+            fi
+            log "Removing a complete file that failed checksum validation: ${destination}"
+            rm -f "${destination}" "${checksum_marker}"
+        elif (( actual_size > expected_size )); then
+            log "Removing an oversized incomplete download: ${destination}"
+            rm -f "${destination}" "${checksum_marker}"
+        fi
     fi
     log "Downloading $(basename "${destination}") with resume support"
     curl \
@@ -186,6 +241,8 @@ download_file() {
         --continue-at - \
         --output "${destination}" \
         "${url}"
+    [[ "$(stat --format='%s' "${destination}")" == "${expected_size}" ]] \
+        || fail "Downloaded file size mismatch: ${destination}"
     printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum --check --status \
         || fail "Checksum mismatch: ${destination}"
     printf '%s\n' "${checksum}" > "${checksum_marker}"
@@ -194,8 +251,16 @@ download_file() {
 download_models() {
     prepare_python
     local model_base_url="${HF_ENDPOINT%/}/${CHAT_MODEL_REPOSITORY}/resolve/${CHAT_MODEL_REVISION}"
-    download_file "${model_base_url}/${CHAT_MODEL_FILENAME}?download=true" "${CHAT_MODEL_PATH}" "${CHAT_MODEL_SHA256}"
-    download_file "${model_base_url}/${CHAT_MMPROJ_FILENAME}?download=true" "${CHAT_MMPROJ_PATH}" "${CHAT_MMPROJ_SHA256}"
+    download_file \
+        "${model_base_url}/${CHAT_MODEL_FILENAME}?download=true" \
+        "${CHAT_MODEL_PATH}" \
+        "${CHAT_MODEL_SHA256}" \
+        "${CHAT_MODEL_SIZE_BYTES}"
+    download_file \
+        "${model_base_url}/${CHAT_MMPROJ_FILENAME}?download=true" \
+        "${CHAT_MMPROJ_PATH}" \
+        "${CHAT_MMPROJ_SHA256}" \
+        "${CHAT_MMPROJ_SIZE_BYTES}"
     log "Downloading or reusing ModelScope embedding model: ${EMBEDDING_MODEL_ID}"
     local embedding_path
     embedding_path="$(
@@ -300,7 +365,7 @@ stop_node() {
         sleep 1
     done
     if kill -0 "${pid}" >/dev/null 2>&1; then
-        kill -TERM "${pid}" >/dev/null 2>&1 || true
+        kill -KILL "${pid}" >/dev/null 2>&1 || true
     fi
     rm -f "${PID_FILE}"
 }
@@ -360,6 +425,7 @@ status() {
 bootstrap() {
     prepare_host
     doctor
+    verify_rocm_runtime
     prepare_python
     build_llama
     download_models
@@ -368,6 +434,16 @@ bootstrap() {
     start_node
     wait_ready
     status
+}
+
+refresh_models() {
+    download_models
+    configure_profiles
+    if node_running; then
+        stop_node
+        start_node
+        wait_ready
+    fi
 }
 
 case "${COMMAND}" in
@@ -379,7 +455,7 @@ case "${COMMAND}" in
     status) status ;;
     doctor) doctor ;;
     logs) tail -n 200 "${LOG_FILE}" 2>/dev/null || true ;;
-    models) download_models; configure_profiles ;;
+    models) refresh_models ;;
     build-llama) build_llama ;;
     *) fail "Unsupported command: ${COMMAND}" ;;
 esac

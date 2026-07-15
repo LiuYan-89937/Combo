@@ -156,7 +156,7 @@ http://localhost:3000
 | `./deploy.sh logs` | 查看远端推理节点最近 200 行日志。 |
 | `./deploy.sh restart` | 重启远端推理节点并等待两个模型 ready。 |
 | `./deploy.sh down` | 停止远端推理节点，同时卸载 Chat 与 Embedding、释放显存。 |
-| `./deploy.sh models` | 续传/校验模型并更新远端 Profile，不重装 ROCm。 |
+| `./deploy.sh models` | 续传/校验模型并更新远端 Profile；节点已运行时自动重启模型，不重装 ROCm。 |
 | `./deploy.sh sync` | 同步当前 FastAgentFactory 与本机 llama.cpp 工作树到远端。 |
 | `./deploy.sh build-llama` | 在远端对已同步源码增量构建 llama-server。 |
 
