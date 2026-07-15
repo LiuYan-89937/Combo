@@ -47,6 +47,9 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
       agentStore.leaveAgentChat()
       agentStore.selectPackage(evolutionPackageId)
     }
+    if (event.event_type === 'session_deleted') {
+      useAgentStore().removeRecentSessionsForPackage(SYSTEM_CHAT_PACKAGE_ID)
+    }
   }
 
   if (
@@ -206,6 +209,8 @@ function resourceEventMode(event: FactoryFrontendEvent): string | null {
 }
 
 function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
+  const mode = resourceEventMode(event)
+  if (mode) return normalizeResourcePackageId(mode)
   const payload = event.payload || {}
   const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
   const execution = nested.execution && typeof nested.execution === 'object' ? nested.execution : {}

@@ -106,6 +106,7 @@
     <!-- 创建知识源弹窗 -->
     <KnowledgeSourceFormModal
       v-model:show="showCreateModal"
+      :submitting="busyAction === 'create'"
       @submit="handleCreate"
     />
 

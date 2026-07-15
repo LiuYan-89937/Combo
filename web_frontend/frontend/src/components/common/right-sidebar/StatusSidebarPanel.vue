@@ -139,11 +139,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSpin, NTag } from 'naive-ui'
 import { RefreshOutline, SearchOutline, TrashOutline } from '@/components/icons'
 import { memoryApi, type MemoryContextItemView } from '@/api/memory'
+import type { LocalModelDefaultRole, LocalModelProfile } from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
+import { useModelPoolStore } from '@/stores/modelPool'
 import { useRuntimeStore } from '@/stores/runtime'
 import PlanPanel from '@/components/plan/PlanPanel.vue'
-import type { ToolActivity } from '@/types/protocol'
+import type { ContextWindowView, ToolActivity } from '@/types/protocol'
 import { toolActivityDisplayStatus, type ToolActivityDisplayStatus } from '@/utils/toolActivityState'
 import {
   contextWindowPercentLabel,
@@ -154,6 +156,7 @@ import {
 } from '@/utils/contextWindowMeter'
 
 const runtimeStore = useRuntimeStore()
+const modelPoolStore = useModelPoolStore()
 const resourceContext = useResourceContext()
 const { t } = useI18n()
 const memoryQuery = ref('')
@@ -163,7 +166,61 @@ const memoryError = ref('')
 const deletingMemoryIds = ref<Record<string, boolean>>({})
 let memoryRequestSerial = 0
 
-const contextWindow = computed(() => runtimeStore.contextWindow)
+const configuredContextWindow = computed(() => {
+  const role = activeModelRole(runtimeStore.contextWindow?.modelRole)
+  const profile = activeChatProfile(role)
+  const packageContext = resourceContext.packageInfo.value?.context_contract
+  const packageWindow = packageContext?.context_window_tokens_source === 'package'
+    ? positiveTokenLimit(packageContext.context_window_tokens_custom ?? packageContext.context_window_tokens)
+    : null
+  const packageThreshold = packageContext?.compression_threshold_tokens_source === 'package'
+    ? positiveTokenLimit(
+        packageContext.compression_threshold_tokens_custom
+          ?? packageContext.compression_threshold_tokens,
+      )
+    : null
+  return {
+    contextWindowTokens: packageWindow
+      ?? positiveTokenLimit(profile?.limits.max_input_tokens)
+      ?? positiveTokenLimit(packageContext?.context_window_tokens),
+    compressionThresholdTokens: packageThreshold
+      ?? positiveTokenLimit(profile?.limits.context_compression_threshold_tokens)
+      ?? positiveTokenLimit(packageContext?.compression_threshold_tokens),
+    source: packageWindow !== null || packageThreshold !== null
+      ? 'package_context_contract'
+      : profile ? 'model_pool_profile' : null,
+    modelRole: role,
+    updatedAt: '',
+  }
+})
+const contextWindow = computed<ContextWindowView | null>(() => {
+  const live = runtimeStore.contextWindow
+  const configured = configuredContextWindow.value
+  const contextWindowTokens = configured.contextWindowTokens ?? live?.contextWindowTokens ?? null
+  const configuredThreshold = configured.compressionThresholdTokens ?? live?.compressionThresholdTokens ?? null
+  const compressionThresholdTokens = (
+    contextWindowTokens !== null && configuredThreshold !== null
+      ? Math.min(configuredThreshold, contextWindowTokens)
+      : configuredThreshold
+  )
+  if (!live && contextWindowTokens === null && compressionThresholdTokens === null) return null
+  return {
+    tokenCount: live?.tokenCount ?? null,
+    contextWindowTokens,
+    compressionThresholdTokens,
+    tokenCountMethod: live?.tokenCountMethod ?? null,
+    source: live?.source ?? configured.source,
+    modelRole: live?.modelRole ?? configured.modelRole,
+    nodeId: live?.nodeId ?? null,
+    updatedAt: live?.updatedAt || configured.updatedAt,
+    payload: {
+      ...(live?.payload || {}),
+      context_window_tokens: contextWindowTokens,
+      compression_threshold_tokens: compressionThresholdTokens,
+      configuration_source: configured.source,
+    },
+  }
+})
 const contextWindowPercent = computed(() => (
   contextWindow.value ? contextWindowUsagePercent(contextWindow.value) : null
 ))
@@ -290,7 +347,27 @@ function formatMemoryTime(value: string): string {
   return date.toLocaleString()
 }
 
+function activeModelRole(value: string | null | undefined): Exclude<LocalModelDefaultRole, 'embedding'> {
+  if (value === 'task' || value === 'compression') return value
+  return 'main'
+}
+
+function activeChatProfile(role: Exclude<LocalModelDefaultRole, 'embedding'>): LocalModelProfile | null {
+  const binding = resourceContext.packageInfo.value?.model_contract?.bindings?.[role]
+  const explicitProfileId = String(binding?.profile_id || '').trim()
+  const profile = explicitProfileId
+    ? modelPoolStore.profile(explicitProfileId)
+    : modelPoolStore.defaultProfile(role)
+  return profile?.kind === 'chat' ? profile : null
+}
+
+function positiveTokenLimit(value: unknown): number | null {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : null
+}
+
 onMounted(() => {
+  void modelPoolStore.ensureLoaded().catch(() => undefined)
   refreshMemory()
 })
 

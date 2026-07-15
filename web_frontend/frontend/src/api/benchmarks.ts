@@ -66,6 +66,13 @@ export interface BenchmarkMetricStats {
   standard_deviation: number
 }
 
+export interface BenchmarkPromptCacheSummary {
+  prompt_tokens: number
+  cached_tokens: number
+  processed_tokens: number
+  hit_rate_percent: number
+}
+
 export interface BenchmarkSummary {
   measured_samples: number
   successful_samples: number
@@ -78,6 +85,7 @@ export interface BenchmarkSummary {
   peak_gpu_utilization_percent?: BenchmarkMetricStats | null
   average_power_watts?: BenchmarkMetricStats | null
   peak_power_watts?: BenchmarkMetricStats | null
+  prompt_cache?: BenchmarkPromptCacheSummary | null
 }
 
 export interface BenchmarkRun {

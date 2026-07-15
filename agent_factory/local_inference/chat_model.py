@@ -2,22 +2,26 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Sequence
+from operator import itemgetter
+from typing import Any, Iterator, Sequence
 from uuid import uuid4
 
 import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.runnables import RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.local_inference.config import LocalInferenceEndpoint
 from agent_factory.local_inference.http_client import create_private_http_client
@@ -46,16 +50,56 @@ class LocalLlamaCppChatModel(BaseChatModel):
         self,
         tools: Sequence[dict[str, Any] | type | BaseTool],
         *,
-        tool_choice: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs: Any,
     ):
         converted = [convert_to_openai_tool(tool) for tool in tools]
         return self.model_copy(
             update={
                 "bound_tools": converted,
-                "bound_tool_choice": tool_choice,
+                "bound_tool_choice": _llama_cpp_tool_choice(tool_choice),
             },
             deep=True,
+        )
+
+    def with_structured_output(
+        self,
+        schema: dict[str, Any] | type,
+        *,
+        include_raw: bool = False,
+        method: str | None = None,
+        strict: bool | None = None,
+        **kwargs: Any,
+    ):
+        if kwargs:
+            names = ", ".join(sorted(kwargs))
+            raise ValueError(f"unsupported structured output arguments: {names}")
+        structured_method = str(method or "function_calling").strip()
+        if structured_method == "function_calling":
+            return super().with_structured_output(schema, include_raw=include_raw)
+        if structured_method != "json_mode":
+            raise ValueError(f"unsupported structured output method: {structured_method}")
+
+        response_format = {
+            "type": "json_schema",
+            "schema": _structured_json_schema(schema),
+        }
+        raw_model = self.bind(response_format=response_format)
+        parser = (
+            PydanticOutputParser(pydantic_object=schema)
+            if isinstance(schema, type) and issubclass(schema, BaseModel)
+            else JsonOutputParser()
+        )
+        if not include_raw:
+            return raw_model | parser
+        parser_assign = RunnablePassthrough.assign(
+            parsed=itemgetter("raw") | parser,
+            parsing_error=lambda _: None,
+        )
+        parser_none = RunnablePassthrough.assign(parsed=lambda _: None)
+        return RunnableMap(raw=raw_model) | parser_assign.with_fallbacks(
+            [parser_none],
+            exception_key="parsing_error",
         )
 
     def _generate(
@@ -65,25 +109,7 @@ class LocalLlamaCppChatModel(BaseChatModel):
         run_manager=None,
         **kwargs: Any,
     ) -> ChatResult:
-        payload: dict[str, Any] = {
-            "model": self.model_name,
-            "messages": [_message_payload(message) for message in messages],
-            "stream": False,
-        }
-        tools = kwargs.get("tools") or self.bound_tools
-        tool_choice = kwargs.get("tool_choice") or self.bound_tool_choice
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = tool_choice or "auto"
-        if self.temperature is not None:
-            payload["temperature"] = self.temperature
-        if self.max_output_tokens is not None:
-            payload["max_tokens"] = self.max_output_tokens
-        if stop:
-            payload["stop"] = stop
-        if self.reasoning_enabled is not None:
-            payload["chat_template_kwargs"] = {"enable_thinking": self.reasoning_enabled}
-
+        payload = self._request_payload(messages, stop=stop, stream=False, kwargs=kwargs)
         with create_private_http_client(self.endpoint) as client:
             response = client.post(self.endpoint.endpoint("/chat/completions"), json=payload)
             _raise_for_local_inference_error(response)
@@ -97,6 +123,77 @@ class LocalLlamaCppChatModel(BaseChatModel):
             generations=[ChatGeneration(message=message, generation_info=generation_info)],
             llm_output={"usage": dict(body.get("usage") or {}), "model": generation_info["model"]},
         )
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager=None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        payload = self._request_payload(messages, stop=stop, stream=True, kwargs=kwargs)
+        with create_private_http_client(self.endpoint) as client:
+            with client.stream(
+                "POST",
+                self.endpoint.endpoint("/chat/completions"),
+                json=payload,
+            ) as response:
+                if response.is_error:
+                    response.read()
+                    _raise_for_local_inference_error(response)
+                for line in response.iter_lines():
+                    data = _sse_data(line)
+                    if data is None:
+                        continue
+                    if data == "[DONE]":
+                        return
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError("llama.cpp returned an invalid SSE JSON event") from exc
+                    if not isinstance(event, dict):
+                        raise RuntimeError("llama.cpp returned a non-object SSE event")
+                    error = event.get("error")
+                    if error is not None:
+                        detail = _stream_error_detail(error)
+                        raise RuntimeError(f"llama.cpp streaming request failed: {detail}")
+                    chunk = _chat_generation_chunk(event)
+                    if chunk is not None:
+                        yield chunk
+
+    def _request_payload(
+        self,
+        messages: list[BaseMessage],
+        *,
+        stop: list[str] | None,
+        stream: bool,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": [_message_payload(message) for message in messages],
+            "stream": stream,
+        }
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
+        tools = kwargs.get("tools") or self.bound_tools
+        tool_choice = kwargs.get("tool_choice") or self.bound_tool_choice
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = _llama_cpp_tool_choice(tool_choice) or "auto"
+            payload["parse_tool_calls"] = True
+        response_format = kwargs.get("response_format")
+        if response_format is not None:
+            payload["response_format"] = response_format
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.max_output_tokens is not None:
+            payload["max_tokens"] = self.max_output_tokens
+        if stop:
+            payload["stop"] = stop
+        if self.reasoning_enabled is not None:
+            payload["chat_template_kwargs"] = {"enable_thinking": self.reasoning_enabled}
+        return payload
 
     def get_token_ids(self, text: str) -> list[int]:
         with create_private_http_client(self.endpoint) as client:
@@ -171,11 +268,6 @@ def _response_message(body: dict[str, Any]) -> AIMessage:
         if tool_calls:
             content = _without_xml_tool_calls(content)
     usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
-    usage_metadata = {
-        "input_tokens": int(usage.get("prompt_tokens") or 0),
-        "output_tokens": int(usage.get("completion_tokens") or 0),
-        "total_tokens": int(usage.get("total_tokens") or 0),
-    }
     additional_kwargs: dict[str, Any] = {}
     if raw_message.get("reasoning_content") is not None:
         additional_kwargs["reasoning_content"] = raw_message.get("reasoning_content")
@@ -183,12 +275,155 @@ def _response_message(body: dict[str, Any]) -> AIMessage:
         content=content,
         tool_calls=tool_calls,
         additional_kwargs=additional_kwargs,
-        usage_metadata=usage_metadata,
+        usage_metadata=_usage_metadata(usage),
         response_metadata={
             "finish_reason": choice.get("finish_reason"),
             "model": body.get("model"),
         },
     )
+
+
+def _chat_generation_chunk(body: dict[str, Any]) -> ChatGenerationChunk | None:
+    choices = body.get("choices")
+    choice = (
+        choices[0]
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+        else None
+    )
+    delta = (
+        choice.get("delta")
+        if isinstance(choice, dict) and isinstance(choice.get("delta"), dict)
+        else {}
+    )
+    content = delta.get("content")
+    if not isinstance(content, (str, list)):
+        content = ""
+    reasoning = _stream_reasoning_content(delta)
+    tool_call_chunks = _tool_call_chunks(delta.get("tool_calls"))
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else None
+    usage_metadata = _usage_metadata(usage) if usage is not None else None
+    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+    timings = body.get("timings") if isinstance(body.get("timings"), dict) else None
+    if (
+        not content
+        and not reasoning
+        and not tool_call_chunks
+        and usage_metadata is None
+        and finish_reason is None
+    ):
+        return None
+
+    additional_kwargs = {"reasoning_content": reasoning} if reasoning else {}
+    response_metadata: dict[str, Any] = {}
+    generation_info: dict[str, Any] = {}
+    if finish_reason is not None:
+        generation_info["finish_reason"] = finish_reason
+        response_metadata["finish_reason"] = finish_reason
+    if body.get("model") is not None and (finish_reason is not None or usage_metadata is not None):
+        response_metadata["model"] = body.get("model")
+    if timings is not None:
+        response_metadata["timings"] = timings
+    return ChatGenerationChunk(
+        message=AIMessageChunk(
+            content=content,
+            additional_kwargs=additional_kwargs,
+            response_metadata=response_metadata,
+            tool_call_chunks=tool_call_chunks,
+            usage_metadata=usage_metadata,
+        ),
+        generation_info=generation_info or None,
+    )
+
+
+def _tool_call_chunks(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    chunks: list[dict[str, Any]] = []
+    for position, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function") if isinstance(item.get("function"), dict) else {}
+        arguments = function.get("arguments")
+        if isinstance(arguments, dict):
+            arguments = json.dumps(arguments, ensure_ascii=False)
+        elif arguments is not None and not isinstance(arguments, str):
+            arguments = str(arguments)
+        index = item.get("index")
+        chunks.append(
+            {
+                "name": str(function["name"]) if function.get("name") is not None else None,
+                "args": arguments,
+                "id": str(item["id"]) if item.get("id") is not None else None,
+                "index": index if isinstance(index, int) and not isinstance(index, bool) else position,
+                "type": "tool_call_chunk",
+            }
+        )
+    return chunks
+
+
+def _stream_reasoning_content(delta: dict[str, Any]) -> str | None:
+    for key in ("reasoning_content", "reasoning", "reasoning_details"):
+        text = _reasoning_text(delta.get(key))
+        if text is not None:
+            return text
+    return None
+
+
+def _reasoning_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, dict):
+        for key in ("reasoning_content", "text", "content", "summary"):
+            if key in value:
+                return _reasoning_text(value[key])
+        return None
+    if isinstance(value, list):
+        parts = [_reasoning_text(item) for item in value]
+        text = "".join(part for part in parts if part)
+        return text or None
+    return str(value)
+
+
+def _usage_metadata(usage: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "input_tokens": _non_negative_int(usage.get("prompt_tokens")),
+        "output_tokens": _non_negative_int(usage.get("completion_tokens")),
+        "total_tokens": _non_negative_int(usage.get("total_tokens")),
+    }
+    prompt_token_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_token_details, dict):
+        cached_tokens = _optional_non_negative_int(prompt_token_details.get("cached_tokens"))
+        if cached_tokens is not None:
+            metadata["input_token_details"] = {"cache_read": cached_tokens}
+    return metadata
+
+
+def _non_negative_int(value: Any) -> int:
+    parsed = _optional_non_negative_int(value)
+    return parsed if parsed is not None else 0
+
+
+def _optional_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value >= 0:
+        return int(value)
+    return None
+
+
+def _sse_data(line: str) -> str | None:
+    text = line.strip()
+    if not text or text.startswith(":") or not text.startswith("data:"):
+        return None
+    return text[5:].strip()
+
+
+def _stream_error_detail(error: Any) -> str:
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("detail") or error)
+    return str(error)
 
 
 def _choice(body: dict[str, Any]) -> dict[str, Any]:
@@ -208,6 +443,30 @@ def _tool_arguments(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"value": value}
     return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _llama_cpp_tool_choice(value: str | dict[str, Any] | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        raise ValueError("llama.cpp does not support object-valued OpenAI tool_choice")
+    normalized = str(value).strip().lower()
+    if normalized == "any":
+        return "required"
+    if normalized in {"auto", "none", "required"}:
+        return normalized
+    raise ValueError(f"unsupported llama.cpp tool_choice: {value!r}")
+
+
+def _structured_json_schema(schema: dict[str, Any] | type) -> dict[str, Any]:
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        return schema.model_json_schema()
+    if not isinstance(schema, dict):
+        raise TypeError("structured output schema must be a Pydantic model or JSON schema")
+    function = schema.get("function")
+    if isinstance(function, dict) and isinstance(function.get("parameters"), dict):
+        return dict(function["parameters"])
+    return dict(schema)
 
 
 def _raise_for_local_inference_error(response: httpx.Response) -> None:

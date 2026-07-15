@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import send_and_wait
 
@@ -45,7 +46,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         sessions: list[dict[str, Any]] = []
         for package in runtime.list_packages():
             package_id = str(package.get("package_id") or "").strip()
-            if not package_id:
+            if not package_id or package_id == SYSTEM_CHAT_PACKAGE_ID:
                 continue
             package_name = str(package.get("agent_name") or package.get("name") or package_id)
             try:

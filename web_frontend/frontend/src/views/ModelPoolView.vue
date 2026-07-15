@@ -396,7 +396,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useDialog, useMessage } from 'naive-ui'
+import { storeToRefs } from 'pinia'
 import { useI18n } from '@/composables/useI18n'
+import { useModelPoolStore } from '@/stores/modelPool'
 import {
   Add,
   CubeOutline,
@@ -409,7 +411,6 @@ import {
   modelPoolApi,
   type LocalModelArtifact,
   type LocalModelDefaultRole,
-  type LocalModelDefaults,
   type LocalModelStorage,
   type LocalModelKind,
   type LocalModelProfile,
@@ -420,19 +421,14 @@ import {
 const { t } = useI18n()
 const dialog = useDialog()
 const message = useMessage()
+const modelPoolStore = useModelPoolStore()
+const { defaults, profiles } = storeToRefs(modelPoolStore)
 const loading = ref(false)
 const saving = ref(false)
 const runtimeRefreshing = ref(false)
 const activeTab = ref<'profiles' | 'artifacts'>('profiles')
 const artifacts = ref<LocalModelArtifact[]>([])
-const profiles = ref<LocalModelProfile[]>([])
 const runtimes = ref<LocalModelRuntime[]>([])
-const defaults = ref<LocalModelDefaults>({
-  main: null,
-  task: null,
-  compression: null,
-  embedding: null,
-})
 const rocm = ref<RocmRuntimeInfo | null>(null)
 const modelStorage = ref<LocalModelStorage | null>(null)
 const artifactModalOpen = ref(false)
@@ -510,18 +506,15 @@ const profileSupportsImage = computed(() => (
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [artifactData, profileData, runtimeData, defaultData, storageData] = await Promise.all([
+    const [artifactData, runtimeData, storageData] = await Promise.all([
       modelPoolApi.artifacts(),
-      modelPoolApi.profiles(),
       modelPoolApi.runtimes(),
-      modelPoolApi.defaults(),
       modelPoolApi.storage(),
+      modelPoolStore.refresh(),
     ])
     artifacts.value = artifactData.artifacts
-    profiles.value = profileData.profiles
     runtimes.value = runtimeData.runtimes
     rocm.value = runtimeData.rocm
-    defaults.value = defaultData.defaults
     modelStorage.value = storageData
   } catch (error) {
     message.error(errorText(error))
@@ -694,6 +687,7 @@ async function saveProfile(): Promise<void> {
     const result = profileEditing.value
       ? await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
       : await modelPoolApi.saveProfile(payload)
+    modelPoolStore.upsertProfile(result.profile)
     upsertRuntime(result.runtime)
     if (result.runtime.phase === 'failed') message.error(result.runtime.error)
     else if (profileForm.enabled) message.info(t('localModel.runtimeLoading'))
@@ -816,7 +810,7 @@ async function handleDefaultRoleSelect(
   const normalizedRole = String(role) as LocalModelDefaultRole
   try {
     const result = await modelPoolApi.setDefault(normalizedRole, profile.profile_id)
-    defaults.value = { ...defaults.value, [normalizedRole]: result.profile_id }
+    modelPoolStore.setDefault(normalizedRole, result.profile_id)
     message.success(t('localModel.defaultUpdated'))
   } catch (error) {
     message.error(errorText(error))
@@ -835,7 +829,11 @@ function removeProfile(item: LocalModelProfile): void {
   dialog.warning({
     title: t('common.delete'), content: item.display_name,
     positiveText: t('common.delete'), negativeText: t('common.cancel'),
-    onPositiveClick: async () => { await modelPoolApi.deleteProfile(item.profile_id); await refresh() },
+    onPositiveClick: async () => {
+      await modelPoolApi.deleteProfile(item.profile_id)
+      modelPoolStore.removeProfile(item.profile_id)
+      await refresh()
+    },
   })
 }
 

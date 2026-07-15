@@ -9,8 +9,8 @@ from langgraph.errors import GraphInterrupt
 from agent_factory.artifact_system import ArtifactStore, ReportStore
 from agent_factory.context_system.runtime import ContextSystemRuntime
 from agent_factory.context_system.sources import default_context_sources
-from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeIngestionWorker, KnowledgeRuntime
-from agent_factory.knowledge_system.store_index import build_knowledge_store_index
+from agent_factory.knowledge_system import KnowledgeIngestionWorker
+from agent_factory.knowledge_system.factory import build_knowledge_runtime
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
@@ -50,6 +50,7 @@ from agent_factory.runtime_kernel.persistence import (
 from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
 from agent_factory.runtime_kernel.types import ToolExecutionResult
 from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
+from agent_factory.runtime_kernel.wrappers.system_knowledge import KNOWLEDGE_GUIDANCE_SYSTEM_WRAPPER_ID
 from agent_factory.scheduler_system import SchedulerExecutor, SchedulerRuntime, SchedulerWorker, SQLiteSchedulerStore
 from agent_factory.tooling.approval_policy import (
     ToolApprovalPolicyConfig,
@@ -334,32 +335,14 @@ class KnowledgeContractBuilder:
                 ),
             }
         )
-        catalog = KnowledgeCatalog(config.catalog_path)
-        store_handle = LangGraphStoreFactory().build(
-            LangGraphStoreConfig(
-                backend=config.rag_store.backend,
-                path=(
-                    Path(config.rag_store.path)
-                    if config.rag_store.backend == "sqlite" and config.rag_store.path.strip()
-                    else None
-                ),
-                connection_uri=config.rag_store.connection_uri,
-                database_name=config.rag_store.database_name,
-                collection_name=config.rag_store.collection_name,
-                setup=config.rag_store.setup,
-                provider_options=config.rag_store.provider_options,
-                index=build_knowledge_store_index(config),
-            )
-        )
-        runtime = KnowledgeRuntime(
+        runtime = build_knowledge_runtime(
             config=config,
             owner_type="agent",
             owner_id=context.package.assembly_spec.agent.id,
-            catalog=catalog,
-            store=store_handle.store,
         )
         return RuntimeContribution(
             services={"knowledge_runtime": runtime},
+            system_wrappers=[KNOWLEDGE_GUIDANCE_SYSTEM_WRAPPER_ID],
             tool_runtime_resources={
                 "knowledge_runtime": runtime,
             },

@@ -12,6 +12,7 @@ import httpx
 
 from agent_factory.benchmarking.schema import (
     BenchmarkMetricStats,
+    BenchmarkPromptCacheSummary,
     BenchmarkRun,
     BenchmarkRunSpec,
     BenchmarkSample,
@@ -375,11 +376,15 @@ def _completed_sample(
         warmup=warmup,
         ttft_ms=_elapsed_ms(started_ns, first_token_ns) if first_token_ns else None,
         end_to_end_ms=_elapsed_ms(started_ns, completed_ns),
-        prompt_tokens=_optional_int(timings.get("prompt_n") or usage.get("prompt_tokens")),
+        prompt_tokens=_optional_int(
+            _first_defined(timings.get("prompt_n"), usage.get("prompt_tokens"))
+        ),
         completion_tokens=_optional_int(
             timings.get("predicted_n") or usage.get("completion_tokens")
         ),
-        cache_tokens=_optional_int(timings.get("cache_n")),
+        cache_tokens=_optional_int(
+            _first_defined(timings.get("cache_n"), _usage_cached_tokens(usage))
+        ),
         prompt_ms=_optional_float(timings.get("prompt_ms")),
         decode_ms=_optional_float(timings.get("predicted_ms")),
         prompt_tokens_per_second=_optional_float(timings.get("prompt_per_second")),
@@ -413,6 +418,30 @@ def _summarize(samples: list[BenchmarkSample]) -> BenchmarkSummary:
         peak_gpu_utilization_percent=_stats(successful, "peak_gpu_utilization_percent"),
         average_power_watts=_stats(successful, "average_power_watts"),
         peak_power_watts=_stats(successful, "peak_power_watts"),
+        prompt_cache=_prompt_cache_summary(successful),
+    )
+
+
+def _prompt_cache_summary(
+    samples: list[BenchmarkSample],
+) -> BenchmarkPromptCacheSummary | None:
+    reported = [
+        sample
+        for sample in samples
+        if sample.prompt_tokens is not None and sample.cache_tokens is not None
+    ]
+    if not reported:
+        return None
+    prompt_tokens = sum(sample.prompt_tokens or 0 for sample in reported)
+    cached_tokens = sum(
+        min(sample.prompt_tokens or 0, sample.cache_tokens or 0)
+        for sample in reported
+    )
+    return BenchmarkPromptCacheSummary(
+        prompt_tokens=prompt_tokens,
+        cached_tokens=cached_tokens,
+        processed_tokens=prompt_tokens - cached_tokens,
+        hit_rate_percent=(cached_tokens / prompt_tokens * 100) if prompt_tokens else 0,
     )
 
 
@@ -474,6 +503,15 @@ def _optional_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return result if result >= 0 else None
+
+
+def _usage_cached_tokens(usage: dict[str, Any]) -> Any:
+    details = usage.get("prompt_tokens_details")
+    return details.get("cached_tokens") if isinstance(details, dict) else None
+
+
+def _first_defined(*values: Any) -> Any:
+    return next((value for value in values if value is not None), None)
 
 
 def _elapsed_ms(started_ns: int, completed_ns: int | None) -> float:

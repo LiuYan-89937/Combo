@@ -154,6 +154,31 @@
             </article>
           </div>
 
+          <template v-if="selectedRun.summary.prompt_cache">
+            <div class="section-heading cache-heading">
+              <h3>{{ t('benchmark.promptCache') }}</h3>
+              <span>{{ t('benchmark.weightedHitRateHint') }}</span>
+            </div>
+            <div class="metric-grid cache-metric-grid">
+              <article class="metric-card">
+                <span class="metric-label">{{ t('benchmark.cacheHitRate') }}</span>
+                <strong class="metric-value">{{ formatPercent(selectedRun.summary.prompt_cache.hit_rate_percent) }}</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">{{ t('benchmark.cachedTokens') }}</span>
+                <strong class="metric-value">{{ formatTokenCount(selectedRun.summary.prompt_cache.cached_tokens) }}</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">{{ t('benchmark.processedPromptTokens') }}</span>
+                <strong class="metric-value">{{ formatTokenCount(selectedRun.summary.prompt_cache.processed_tokens) }}</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">{{ t('benchmark.promptTokens') }}</span>
+                <strong class="metric-value">{{ formatTokenCount(selectedRun.summary.prompt_cache.prompt_tokens) }}</strong>
+              </article>
+            </div>
+          </template>
+
           <div class="comparison-heading">
             <div class="section-heading">
               <h3>{{ t('benchmark.comparison') }}</h3>
@@ -180,6 +205,17 @@
                 {{ formatDelta(metric, selectedRun, baselineRun) }}
               </span>
             </div>
+            <div
+              v-if="selectedRun.summary?.prompt_cache && baselineRun.summary?.prompt_cache"
+              class="comparison-row"
+            >
+              <span>{{ t('benchmark.cacheHitRate') }}</span>
+              <strong>{{ formatPercent(selectedRun.summary.prompt_cache.hit_rate_percent) }}</strong>
+              <span>{{ formatPercent(baselineRun.summary.prompt_cache.hit_rate_percent) }}</span>
+              <span :class="cacheDeltaClass(selectedRun, baselineRun)">
+                {{ formatCacheDelta(selectedRun, baselineRun) }}
+              </span>
+            </div>
           </div>
         </template>
 
@@ -195,6 +231,9 @@
                   <th>{{ t('benchmark.promptTps') }}</th>
                   <th>{{ t('benchmark.decodeTps') }}</th>
                   <th>{{ t('benchmark.endToEnd') }}</th>
+                  <th>{{ t('benchmark.cachedTokens') }}</th>
+                  <th>{{ t('benchmark.processedPromptTokens') }}</th>
+                  <th>{{ t('benchmark.cacheHitRate') }}</th>
                   <th>{{ t('benchmark.peakVram') }}</th>
                   <th>{{ t('benchmark.peakGpu') }}</th>
                 </tr>
@@ -211,6 +250,9 @@
                   <td>{{ formatMetric('prompt_tokens_per_second', sample.prompt_tokens_per_second) }}</td>
                   <td>{{ formatMetric('decode_tokens_per_second', sample.decode_tokens_per_second) }}</td>
                   <td>{{ formatMetric('end_to_end_ms', sample.end_to_end_ms) }}</td>
+                  <td>{{ formatTokenCount(sample.cache_tokens) }}</td>
+                  <td>{{ formatTokenCount(sampleProcessedPromptTokens(sample)) }}</td>
+                  <td>{{ formatPercent(sampleCacheHitRate(sample)) }}</td>
                   <td>{{ formatMetric('peak_vram_bytes', sample.peak_vram_bytes) }}</td>
                   <td>{{ formatMetric('peak_gpu_utilization_percent', sample.peak_gpu_utilization_percent) }}</td>
                 </tr>
@@ -296,6 +338,7 @@ import type {
   BenchmarkRun,
   BenchmarkRunSpec,
   BenchmarkRunStatus,
+  BenchmarkSample,
 } from '@/api/benchmarks'
 import { modelPoolApi } from '@/api/modelPool'
 import type { LocalModelProfile, LocalModelRuntime } from '@/api/modelPool'
@@ -475,6 +518,27 @@ function formatBytes(value: number) {
   return `${gib.toFixed(gib >= 10 ? 1 : 2)} GiB`
 }
 
+function formatTokenCount(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return Math.round(value).toLocaleString()
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return `${value.toFixed(1)}%`
+}
+
+function sampleProcessedPromptTokens(sample: BenchmarkSample) {
+  if (sample.prompt_tokens === null || sample.prompt_tokens === undefined) return null
+  if (sample.cache_tokens === null || sample.cache_tokens === undefined) return null
+  return Math.max(0, sample.prompt_tokens - sample.cache_tokens)
+}
+
+function sampleCacheHitRate(sample: BenchmarkSample) {
+  if (!sample.prompt_tokens || sample.cache_tokens === null || sample.cache_tokens === undefined) return null
+  return Math.min(100, Math.max(0, sample.cache_tokens / sample.prompt_tokens * 100))
+}
+
 function metricDelta(metric: MetricDefinition, current: BenchmarkRun, baseline: BenchmarkRun) {
   const currentValue = metricMean(current, metric.key)
   const baselineValue = metricMean(baseline, metric.key)
@@ -492,6 +556,27 @@ function formatDelta(metric: MetricDefinition, current: BenchmarkRun, baseline: 
 function deltaClass(metric: MetricDefinition, current: BenchmarkRun, baseline: BenchmarkRun) {
   const delta = metricDelta(metric, current, baseline)
   if (delta === null || Math.abs(delta) < 0.05) return 'delta-neutral'
+  return delta > 0 ? 'delta-positive' : 'delta-negative'
+}
+
+function cacheHitRate(run: BenchmarkRun) {
+  return run.summary?.prompt_cache?.hit_rate_percent ?? null
+}
+
+function formatCacheDelta(current: BenchmarkRun, baseline: BenchmarkRun) {
+  const currentValue = cacheHitRate(current)
+  const baselineValue = cacheHitRate(baseline)
+  if (currentValue === null || baselineValue === null) return '—'
+  const delta = currentValue - baselineValue
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pp`
+}
+
+function cacheDeltaClass(current: BenchmarkRun, baseline: BenchmarkRun) {
+  const currentValue = cacheHitRate(current)
+  const baselineValue = cacheHitRate(baseline)
+  if (currentValue === null || baselineValue === null) return 'delta-neutral'
+  const delta = currentValue - baselineValue
+  if (Math.abs(delta) < 0.05) return 'delta-neutral'
   return delta > 0 ? 'delta-positive' : 'delta-negative'
 }
 
@@ -645,6 +730,7 @@ onUnmounted(() => {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--app-space-md);
 }
+.cache-metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 .metric-card {
   min-width: 0;

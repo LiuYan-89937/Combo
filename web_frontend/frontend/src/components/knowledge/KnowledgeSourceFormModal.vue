@@ -1,5 +1,14 @@
 <template>
-  <n-modal v-model:show="show" preset="card" :title="t('knowledge.formTitle')" style="width: 640px">
+  <n-modal
+    v-model:show="show"
+    preset="card"
+    :title="t('knowledge.formTitle')"
+    :closable="!submitting"
+    :mask-closable="!submitting"
+    :close-on-esc="!submitting"
+    style="width: min(560px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 48px))"
+    content-style="min-height: 0; overflow-y: auto"
+  >
     <n-form ref="formRef" :model="formData" :rules="rules">
       <n-form-item :label="t('knowledge.kind')" path="kind">
         <n-select v-model:value="formData.kind" :options="kindOptions" @update:value="handleKindChange" />
@@ -10,44 +19,51 @@
       </n-form-item>
 
       <n-form-item v-if="usesUpload" :label="t('knowledge.fileContent')">
-        <div
-          class="upload-zone"
-          @dragover.prevent
-          @drop.prevent="handleDrop"
-        >
-          <n-text>{{ uploadTitle }}</n-text>
-          <n-text depth="3" class="upload-hint">
-            {{ t('knowledge.uploadHint') }}
-          </n-text>
-          <n-space>
-            <n-button @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
-            <n-button @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
-          </n-space>
-        </div>
-        <input
-          ref="fileInputRef"
-          class="native-input"
-          type="file"
-          multiple
-          @change="handleFileInput"
-        />
-        <input
-          ref="folderInputRef"
-          class="native-input"
-          type="file"
-          multiple
-          webkitdirectory
-          directory
-          @change="handleFileInput"
-        />
-        <div v-if="selectedFiles.length" class="selected-files">
-          <n-text depth="3">{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
-          <div v-for="item in selectedFiles.slice(0, 8)" :key="item.relativePath" class="selected-file">
-            {{ item.relativePath }}
+        <div class="upload-field">
+          <div
+            class="upload-zone"
+            @dragover.prevent
+            @drop.prevent="handleDrop"
+          >
+            <n-text>{{ uploadTitle }}</n-text>
+            <n-text depth="3" class="upload-hint">
+              {{ t('knowledge.uploadHint') }}
+            </n-text>
+            <n-space>
+              <n-button @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
+              <n-button @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
+            </n-space>
           </div>
-          <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
-            {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
-          </n-text>
+          <input
+            ref="fileInputRef"
+            class="native-input"
+            type="file"
+            multiple
+            @change="handleFileInput"
+          />
+          <input
+            ref="folderInputRef"
+            class="native-input"
+            type="file"
+            multiple
+            webkitdirectory
+            directory
+            @change="handleFileInput"
+          />
+          <div v-if="selectedFiles.length" class="selected-files">
+            <n-text depth="3">{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
+            <div
+              v-for="item in selectedFiles.slice(0, 8)"
+              :key="item.relativePath"
+              class="selected-file"
+              :title="item.relativePath"
+            >
+              {{ item.relativePath }}
+            </div>
+            <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
+              {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
+            </n-text>
+          </div>
         </div>
       </n-form-item>
 
@@ -90,15 +106,17 @@
 
     <template #footer>
       <n-space justify="end">
-        <n-button @click="show = false">{{ t('common.cancel') }}</n-button>
-        <n-button type="primary" :disabled="!canSubmit" @click="handleSubmit">{{ t('common.add') }}</n-button>
+        <n-button :disabled="submitting" @click="show = false">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :disabled="!canSubmit" :loading="submitting" @click="handleSubmit">
+          {{ t('common.add') }}
+        </n-button>
       </n-space>
     </template>
   </n-modal>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   NButton,
   NCollapseTransition,
@@ -138,6 +156,7 @@ interface FileSystemDirectoryEntryLike extends FileSystemEntryLike {
 
 const props = defineProps<{
   show: boolean
+  submitting?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -149,6 +168,7 @@ const show = computed({
   get: () => props.show,
   set: (value) => emit('update:show', value),
 })
+const submitting = computed(() => props.submitting === true)
 
 const formRef = ref<FormInst | null>(null)
 const { t } = useI18n()
@@ -309,13 +329,16 @@ function readDirectoryEntries(entry: FileSystemDirectoryEntryLike): Promise<File
 }
 
 function handleSubmit() {
-  if (!canSubmit.value) return
+  if (!canSubmit.value || submitting.value) return
   formRef.value?.validate((errors) => {
     if (errors) return
     emit('submit', buildSourceInput())
-    resetForm()
   })
 }
+
+watch(show, (visible) => {
+  if (!visible) resetForm()
+})
 
 function buildSourceInput(): KnowledgeSourceInput {
   const base: KnowledgeSourceInput = {
@@ -374,9 +397,18 @@ function isValidUrl(value: string): boolean {
 </script>
 
 <style scoped>
-.upload-zone {
+.upload-field {
   width: 100%;
-  min-height: 150px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.upload-zone {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 112px;
   border: 1px dashed var(--app-border-hover);
   border-radius: var(--app-radius-md);
   display: flex;
@@ -402,11 +434,18 @@ function isValidUrl(value: string): boolean {
 }
 
 .selected-files {
+  box-sizing: border-box;
   width: 100%;
-  margin-top: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
   display: flex;
   flex-direction: column;
   gap: 4px;
+  background: var(--app-surface-muted);
+  max-height: 132px;
+  overflow-y: auto;
 }
 
 .selected-file {
@@ -418,7 +457,7 @@ function isValidUrl(value: string): boolean {
 }
 
 .rag-options {
-  padding: 12px;
+  padding: 10px 12px 0;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
   margin-bottom: 12px;
@@ -429,5 +468,11 @@ function isValidUrl(value: string): boolean {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+@media (max-width: 560px) {
+  .chunk-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

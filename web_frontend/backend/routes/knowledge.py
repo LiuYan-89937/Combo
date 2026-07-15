@@ -9,20 +9,21 @@ from uuid import uuid4
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.knowledge_system.identifiers import build_source_id
 from agent_factory.paths import factory_artifact_path
 from web_frontend.backend.runtime_bridge import RuntimeBridge
-from web_frontend.backend.routes.utils import optional_package, resource_command
+from web_frontend.backend.routes.utils import optional_package, optional_resource_mode, resource_command
 
 
 def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     router = APIRouter(prefix="/api/knowledge")
 
     @router.get("/sources")
-    async def list_knowledge_sources(package_id: str | None = None):
+    async def list_knowledge_sources(package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "list_sources", **optional_package(package_id)},
+            {"action": "list_sources", **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_sources_listed"},
         )
         return {"event": event}
@@ -42,12 +43,13 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     async def upload_knowledge_source(
         source: str = Form(...),
         package_id: str | None = Form(default=None),
+        resource_mode: str | None = Form(default=None),
         files: list[UploadFile] = File(...),
     ):
         source_payload = _source_payload_from_form(source)
         resolved_package_id = package_id or str(source_payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
         display_name = str(source_payload.get("display_name") or "uploaded_source").strip()
-        source_id = _safe_source_id(display_name)
+        source_id = build_source_id(display_name, fallback="uploaded_source", suffix=uuid4().hex[:10])
         upload_root = _knowledge_upload_root(resolved_package_id, source_id)
         if upload_root.exists():
             shutil.rmtree(upload_root)
@@ -91,6 +93,7 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "action": "confirm_source",
                 "source": source_payload,
                 **optional_package(package_id),
+                **optional_resource_mode(resource_mode),
             },
             {"knowledge_source_registered"},
             timeout_seconds=120.0,
@@ -98,32 +101,32 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return {"event": event}
 
     @router.delete("/sources/{source_id}")
-    async def delete_knowledge_source(source_id: str, package_id: str | None = None):
+    async def delete_knowledge_source(source_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "remove_source", "source_id": source_id, **optional_package(package_id)},
+            {"action": "remove_source", "source_id": source_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_source_removed"},
         )
         return {"event": event}
 
     @router.post("/sources/{source_id}/reindex")
-    async def reindex_knowledge_source(source_id: str, package_id: str | None = None):
+    async def reindex_knowledge_source(source_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "reindex", "source_id": source_id, **optional_package(package_id)},
+            {"action": "reindex", "source_id": source_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_source_reindex_requested"},
             timeout_seconds=120.0,
         )
         return {"event": event}
 
     @router.get("/documents")
-    async def list_knowledge_documents(source_id: str, package_id: str | None = None):
+    async def list_knowledge_documents(source_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "list_documents", "source_id": source_id, **optional_package(package_id)},
+            {"action": "list_documents", "source_id": source_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_documents_listed"},
         )
         return {"event": event}
@@ -133,19 +136,20 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         query: str,
         source_id: str | None = None,
         package_id: str | None = None,
+        resource_mode: str | None = None,
     ):
-        payload = {"action": "search", "query": query, **optional_package(package_id)}
+        payload = {"action": "search", "query": query, **optional_package(package_id), **optional_resource_mode(resource_mode)}
         if source_id:
             payload["source_id"] = source_id
         event = await resource_command(runtime_bridge, "knowledge_manage", payload, {"knowledge_search_completed"})
         return {"event": event}
 
     @router.get("/document")
-    async def read_knowledge_document(document_id: str, package_id: str | None = None):
+    async def read_knowledge_document(document_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "read", "document_id": document_id, **optional_package(package_id)},
+            {"action": "read", "document_id": document_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_document_read"},
         )
         return {"event": event}
@@ -173,15 +177,6 @@ def _knowledge_upload_root(package_id: str, source_id: str):
         "uploads",
         source_id,
     )
-
-
-def _safe_source_id(display_name: str) -> str:
-    cleaned = "".join(char.lower() if char.isalnum() else "_" for char in display_name).strip("_")
-    while "__" in cleaned:
-        cleaned = cleaned.replace("__", "_")
-    if not cleaned or not cleaned[0].isalpha():
-        cleaned = f"source_{cleaned or 'upload'}"
-    return f"{cleaned[:40].rstrip('_')}_{uuid4().hex[:10]}"
 
 
 def _safe_upload_relative_path(filename: str):

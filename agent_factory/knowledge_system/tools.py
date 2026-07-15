@@ -37,8 +37,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             results = runtime.search(
                 query=str(arguments.get("query") or ""),
                 source_id=arguments.get("source_id"),
-                mode=str(arguments.get("mode") or "auto"),
-                top_k=int(arguments.get("top_k") or 8),
+                mode=str(arguments.get("mode") or runtime.config.prompt_guidance.default_search_mode),
+                top_k=int(arguments.get("top_k") or runtime.config.prompt_guidance.default_top_k),
             )
             return tool_envelope({"status": "completed", "results": [result.model_dump(mode="json") for result in results]})
         if action == "open":

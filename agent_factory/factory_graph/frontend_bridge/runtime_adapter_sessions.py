@@ -348,7 +348,10 @@ class RuntimeSessionCommandMixin:
         if self.agent_package_runtime is None:
             return {}
         try:
-            sessions = self.agent_package_runtime.list_sessions(SYSTEM_CHAT_PACKAGE_ID)
+            sessions = self.agent_package_runtime.list_sessions(
+                SYSTEM_CHAT_PACKAGE_ID,
+                include_internal=True,
+            )
         except Exception:
             return {}
         result: dict[str, dict[str, Any]] = {}

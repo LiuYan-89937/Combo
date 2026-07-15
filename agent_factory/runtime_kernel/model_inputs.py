@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from agent_factory.knowledge_system.prompting import KNOWLEDGE_GUIDANCE_CONTEXT_KEY, KNOWLEDGE_TOOL_ID
 from agent_factory.models.message_layout import system_messages_first
 from agent_factory.runtime_attachments import (
     format_attachments_for_model,
@@ -102,7 +103,20 @@ def build_runtime_model_input(
         node_id=node_id,
         include_extracted_text_for_images=not image_input_enabled,
     )
+    knowledge_guidance = _knowledge_guidance_text(state) if _has_tool(tools, KNOWLEDGE_TOOL_ID) else ""
+    dynamic_system_text = "\n\n".join(item for item in [knowledge_guidance, dynamic_evidence] if item)
     system_messages: list[Any] = [SystemMessage(content=stable_system)]
+    if knowledge_guidance:
+        system_messages.append(
+            SystemMessage(
+                content=knowledge_guidance,
+                additional_kwargs={
+                    "kind": "runtime_knowledge_guidance",
+                    "source": "knowledge_catalog",
+                    "node_id": node_id or "",
+                },
+            )
+        )
     if dynamic_evidence:
         system_messages.append(
             SystemMessage(
@@ -118,10 +132,10 @@ def build_runtime_model_input(
     return ModelInputEnvelope(
         messages=request_messages,
         stable_prefix_digest=_digest_text(stable_system),
-        dynamic_evidence_digest=_digest_text(dynamic_evidence),
+        dynamic_evidence_digest=_digest_text(dynamic_system_text),
         tool_surface_digest=_tool_surface_digest(tools),
         stable_system_chars=len(stable_system),
-        dynamic_evidence_chars=len(dynamic_evidence),
+        dynamic_evidence_chars=len(dynamic_system_text),
         history_message_count=len(history_messages),
         tool_count=len(tools),
         image_input_enabled=image_input_enabled,
@@ -434,6 +448,13 @@ def _dynamic_evidence_text(
     return "\n\n".join(item for item in [plan_text, attachments_text, context_text] if item)
 
 
+def _knowledge_guidance_text(state: Any) -> str:
+    model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
+    if not isinstance(model_context, dict):
+        return ""
+    return str(model_context.get(KNOWLEDGE_GUIDANCE_CONTEXT_KEY) or "").strip()
+
+
 def _runtime_attachments(state: Any) -> Any:
     user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
     if not isinstance(user_config, dict):
@@ -652,6 +673,10 @@ def _tool_surface_digest(tools: list[BaseTool]) -> str:
             }
         )
     return _digest_json(payload)
+
+
+def _has_tool(tools: list[BaseTool], tool_id: str) -> bool:
+    return any(str(getattr(tool, "name", "") or "") == tool_id for tool in tools)
 
 
 def _tool_args_payload(tool: BaseTool) -> Any:

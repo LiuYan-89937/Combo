@@ -108,6 +108,15 @@ class BenchmarkMetricStats(BaseModel):
     standard_deviation: float = Field(ge=0)
 
 
+class BenchmarkPromptCacheSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_tokens: int = Field(ge=0)
+    cached_tokens: int = Field(ge=0)
+    processed_tokens: int = Field(ge=0)
+    hit_rate_percent: float = Field(ge=0, le=100)
+
+
 class BenchmarkSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -122,6 +131,7 @@ class BenchmarkSummary(BaseModel):
     peak_gpu_utilization_percent: BenchmarkMetricStats | None = None
     average_power_watts: BenchmarkMetricStats | None = None
     peak_power_watts: BenchmarkMetricStats | None = None
+    prompt_cache: BenchmarkPromptCacheSummary | None = None
 
 
 class BenchmarkRun(BaseModel):

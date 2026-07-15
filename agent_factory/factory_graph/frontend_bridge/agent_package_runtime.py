@@ -11,7 +11,8 @@ import subprocess
 from typing import Any, Iterator
 from uuid import uuid4
 
-from agent_factory.knowledge_system import KnowledgeCatalog, KnowledgeRuntime
+from agent_factory.knowledge_system import KnowledgeRuntime
+from agent_factory.knowledge_system.factory import build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.collaboration_system.store import CollaborationStore
@@ -480,9 +481,17 @@ class AgentPackageRuntimeManager:
     def export_package_archive(self, package_id: str) -> Path:
         return self.repository.export_user_package_archive(package_id)
 
-    def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
+    def list_sessions(
+        self,
+        package_id: str,
+        *,
+        include_internal: bool = False,
+    ) -> list[dict[str, Any]]:
         package = self.load_package(package_id)
-        return self._list_sessions_for_loaded_package(package)
+        return self._list_sessions_for_loaded_package(
+            package,
+            include_internal=include_internal,
+        )
 
     def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
@@ -640,12 +649,10 @@ class AgentPackageRuntimeManager:
             },
             deep=True,
         )
-        return KnowledgeRuntime(
+        return build_knowledge_runtime(
             config=config,
             owner_type="agent",
             owner_id=package.assembly_spec.agent.id,
-            catalog=KnowledgeCatalog(config.catalog_path),
-            store=None,
         )
 
     def knowledge_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -964,11 +971,19 @@ class AgentPackageRuntimeManager:
                 root = _host_session_root(package_id=package_id, package=package, configured=configured)
         return AgentSessionManager(AgentSessionConfig(root=root))
 
-    def _list_sessions_for_loaded_package(self, package: LoadedAgentPackage) -> list[dict[str, Any]]:
+    def _list_sessions_for_loaded_package(
+        self,
+        package: LoadedAgentPackage,
+        *,
+        include_internal: bool = False,
+    ) -> list[dict[str, Any]]:
         manager = self._session_manager_for_package(package.package_root.name, package)
         return [
             record.model_dump(mode="json")
-            for record in manager.list_sessions(agent_id=package.assembly_spec.agent.id)
+            for record in manager.list_sessions(
+                agent_id=package.assembly_spec.agent.id,
+                include_internal=include_internal,
+            )
         ]
 
     def close_all(self) -> None:
