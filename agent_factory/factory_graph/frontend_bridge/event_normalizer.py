@@ -26,6 +26,8 @@ INTERNAL_MODEL_MESSAGE_NODES = {"intent_gate"}
 NODE_EVENT_TYPES: set[str] = {
     "model_cache_metrics",
     "model_call_started",
+    "model_call_completed",
+    "model_call_failed",
     "model_reasoning_delta",
     "model_reasoning_completed",
     "model_stream_delta",

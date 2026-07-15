@@ -497,6 +497,7 @@ class AgentEvolutionRuntime:
                         continue
                     if stream_mode == "messages":
                         model_trace.accept(chunk)
+                        continue
                     if stream_mode == "custom":
                         model_trace.flush()
                         if _is_model_cache_chunk(chunk):

@@ -441,6 +441,8 @@ class CreateAgentRuntime:
                         continue
                     if stream_mode == "messages" and graph_kind == "manufacture":
                         model_trace.accept(chunk)
+                    if stream_mode == "messages":
+                        continue
                     if stream_mode == "custom" and graph_kind == "manufacture":
                         model_trace.flush()
                         if _is_model_cache_chunk(chunk):
