@@ -20,7 +20,12 @@ from agent_factory.agent_runtime_bridge.paths import (
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.model_pool import MODEL_POOL_STORE_PATH_ENV, ModelPoolStore, resolve_model_pool_store_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
-from agent_factory.environment_system import EnvironmentResolver, dependency_pool_path
+from agent_factory.environment_system import (
+    EnvironmentResolver,
+    RuntimeImageResolutionError,
+    dependency_pool_path,
+    resolve_runtime_image,
+)
 from agent_factory.environment_system.runtime import CONTAINER_DEPENDENCY_POOL_ROOT, runtime_environment
 from agent_factory.resource_system import ResourceStore
 from agent_factory.resource_system.store import RESOURCE_MASTER_KEY_ENV, RESOURCE_STORE_PATH_ENV, RESOURCE_STORE_READ_ONLY_ENV
@@ -103,7 +108,21 @@ class DockerAgentRuntimeLauncher:
         environment_lock = EnvironmentResolver().read_lock(package.package_root)
         image = str(environment_lock["image"])
         self._assert_daemon_available(docker)
-        resolved_image = self._resolve_image_reference(docker, image)
+        pinned_image = str(environment_lock.get("image_digest") or "").strip() or None
+        try:
+            resolved_image = resolve_runtime_image(docker, image, pinned_image=pinned_image).resolved
+        except RuntimeImageResolutionError as exc:
+            suggested_action = (
+                _runtime_image_build_suggestion()
+                if exc.status == "runtime_image_missing"
+                else "Check Docker context, Docker socket permissions, and Docker Desktop status."
+            )
+            raise AgentRuntimeLaunchError(
+                where="docker.image_preflight",
+                why=exc.status,
+                message=f"Docker runtime image preflight failed for {pinned_image or image}: {exc}",
+                suggested_action=suggested_action,
+            ) from exc
         network = self._network_mode(sandbox)
         extension_root = extension_root or runtime_root / "extensions"
         extension_root = self._prepare_runtime_extension_root(
@@ -398,68 +417,6 @@ class DockerAgentRuntimeLauncher:
                 message=(result.stderr or result.stdout or "Docker daemon is not available.").strip(),
                 suggested_action="Start Docker Desktop and retry.",
             )
-
-    def _resolve_image_reference(self, docker: str, image: str) -> str:
-        try:
-            result = subprocess.run(
-                [docker, "image", "inspect", image],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise AgentRuntimeLaunchError(
-                where="docker.image_preflight",
-                why="runtime_image_check_timeout",
-                message=f"Docker runtime image preflight timed out: {image}",
-                suggested_action=_runtime_image_build_suggestion(),
-            ) from exc
-        if result.returncode != 0:
-            detail = _docker_error_text(result)
-            resolved = self._image_id_from_exact_reference(docker, image)
-            if resolved:
-                return resolved
-            why = "runtime_image_missing" if _looks_like_missing_image(detail) else "runtime_image_inspect_failed"
-            suggested_action = (
-                _runtime_image_build_suggestion()
-                if why == "runtime_image_missing"
-                else "Check Docker context, Docker socket permissions, and Docker Desktop status."
-            )
-            raise AgentRuntimeLaunchError(
-                where="docker.image_preflight",
-                why=why,
-                message=f"Docker runtime image preflight failed for {image}: {detail or 'unknown docker error'}",
-                suggested_action=suggested_action,
-            )
-        return image
-
-    def _image_id_from_exact_reference(self, docker: str, image: str) -> str:
-        try:
-            result = subprocess.run(
-                [
-                    docker,
-                    "image",
-                    "ls",
-                    "--filter",
-                    f"reference={image}",
-                    "--format",
-                    "{{.ID}}",
-                    "--no-trunc",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return ""
-        if result.returncode != 0:
-            return ""
-        ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if len(ids) != 1:
-            return ""
-        return ids[0]
 
     def _network_mode(self, sandbox: dict[str, Any]) -> str:
         policy = sandbox.get("network_policy") if isinstance(sandbox.get("network_policy"), dict) else {}
@@ -835,11 +792,6 @@ def _incompatible_container_policy() -> str:
 
 
 _SHARED_RUNTIME = _SharedDockerRuntime()
-
-
-def _looks_like_missing_image(value: str) -> bool:
-    normalized = value.lower()
-    return "no such image" in normalized or "no such object" in normalized or "not found" in normalized
 
 
 def _runtime_image_build_suggestion() -> str:

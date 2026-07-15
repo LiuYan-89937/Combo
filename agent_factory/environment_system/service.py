@@ -11,6 +11,11 @@ from typing import Any
 from agent_factory.agent_runtime_bridge.dependencies import load_dependencies_contract
 
 from .pool import DependencyPool, DependencyPoolError, DependencyPoolResolution
+from .runtime_image import (
+    RuntimeImageResolutionError,
+    configured_runtime_image_id,
+    resolve_runtime_image,
+)
 
 
 ENVIRONMENT_LOCK_VERSION = "environment_lock.v2"
@@ -34,10 +39,11 @@ class EnvironmentResolver:
         config = contract.config
         base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
         if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
+            base_digest = configured_runtime_image_id(base_image) or ""
             request = _dependency_request(
                 enabled=contract.enabled,
                 base_image=base_image,
-                base_digest="",
+                base_digest=base_digest,
                 architecture="",
                 config=config,
             )
@@ -52,7 +58,7 @@ class EnvironmentResolver:
                     "status": "ready",
                     "request_fingerprint": request_fingerprint,
                     "image": base_image,
-                    "image_digest": "",
+                    "image_digest": base_digest,
                     "platform": {"os": "linux", "architecture": ""},
                     "requirements": request,
                     "pool": DependencyPoolResolution([], [], None).to_lock_payload(),
@@ -70,7 +76,10 @@ class EnvironmentResolver:
                 f"package requires architectures {sorted(allowed)}, current Docker architecture is {architecture}",
             )
         base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
-        base_digest = _image_identity(docker, base_image)
+        try:
+            base_digest = resolve_runtime_image(docker, base_image).resolved
+        except RuntimeImageResolutionError as exc:
+            raise EnvironmentResolutionError(exc.status, str(exc)) from exc
         request = _dependency_request(
             enabled=contract.enabled,
             base_image=base_image,
@@ -85,7 +94,7 @@ class EnvironmentResolver:
         try:
             resolution = self.pool.resolve(
                 docker=docker,
-                base_image=base_image,
+                base_image=base_digest,
                 architecture=architecture,
                 python_requirements=request["python_requirements"],
                 system_packages=request["system_packages"],
@@ -205,19 +214,6 @@ def _docker_architecture(docker: str) -> str:
         raise EnvironmentResolutionError("docker_unavailable", (completed.stderr or "Docker daemon is unavailable").strip())
     value = completed.stdout.strip().lower()
     return {"aarch64": "arm64", "x86_64": "amd64"}.get(value, value)
-
-
-def _image_identity(docker: str, image: str) -> str:
-    completed = subprocess.run(
-        [docker, "image", "inspect", image, "--format", "{{.Id}}"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise EnvironmentResolutionError("runtime_image_missing", (completed.stderr or f"image is unavailable: {image}").strip())
-    return completed.stdout.strip()
 
 
 def _now() -> str:
