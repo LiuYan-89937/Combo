@@ -10,6 +10,6 @@
     "package_tools_enabled": true,
     "instance_extensions_enabled": true,
     "instance_extension_root": ".agent_runtime/extensions",
-    "approval_policy": {"mode": "allow_below_high", "tool_overrides": {}}
+    "approval_policy": {"mode": "allow_all", "tool_overrides": {}}
   }
 }

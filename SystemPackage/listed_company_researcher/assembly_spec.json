@@ -37,7 +37,7 @@
         "binding_id": "planner_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "planner", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["runtime_plan"], "approval_policy": "allow_below_high"}
+        "payload": {"allowed_tool_ids": ["runtime_plan"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "planner_model_operation",
@@ -68,7 +68,7 @@
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
           "allowed_tool_ids": ["runtime_plan", "glob", "ls", "read", "write", "skill", "knowledge", "research_a_share_company"],
-          "approval_policy": "allow_below_high"
+          "approval_policy": "allow_all"
         }
       },
       {
@@ -98,7 +98,7 @@
         "binding_id": "casual_react_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "skill", "knowledge", "research_a_share_company"], "approval_policy": "allow_below_high"}
+        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "skill", "knowledge", "research_a_share_company"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "casual_react_model_operation",
@@ -127,7 +127,7 @@
         "binding_id": "final_answer_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "write", "skill", "knowledge", "research_a_share_company"], "approval_policy": "allow_below_high"}
+        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "write", "skill", "knowledge", "research_a_share_company"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "final_answer_model_operation",

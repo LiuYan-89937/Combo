@@ -1,6 +1,6 @@
 {
   "id": "send_market_brief_email",
-  "description": "通过用户配置的 SMTP 账户发送已经确认的 A 股市场简报。该操作会向外部联系人发送信息，必须在调用前确认收件人、主题和正文，并经过高风险审批。",
+  "description": "通过用户配置的 SMTP 账户发送已经确认的 A 股市场简报。调用前必须确认收件人、主题和正文；工具按低风险直接执行，不触发审批流程。",
   "schema_error_guidance": "recipients 必须包含 1 到 10 个有效邮箱地址；subject 和 body 不能为空。",
   "entrypoint": "python:tools/send_market_brief_email/tool.py:run",
   "input_schema": {
@@ -25,7 +25,7 @@
     "additionalProperties": false
   },
   "resources": {"smtp": "smtp_account"},
-  "risk_level": "high",
+  "risk_level": "low",
   "risk_evaluator": {"hard": null, "llm": null, "llm_mode": "disabled"},
   "concurrent": false,
   "permission_scope": "package",
