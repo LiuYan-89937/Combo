@@ -11,6 +11,11 @@ from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.create_agent.contract_catalog import base_contract_paths, default_contract_payload
 from agent_factory.create_agent.mcp_inheritance import materialize_referenced_factory_mcp
 from agent_factory.create_agent.model_tool_access import model_tool_ids_from_package_root
+from agent_factory.create_agent.models import (
+    KNOWLEDGE_SOURCES_FILE,
+    PackageKnowledgeSourceEvidence,
+    PackageKnowledgeSourceRecord,
+)
 from agent_factory.create_agent.stage_sync import sync_authoring_stage
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.environment_system.python_requirements import merge_python_requirements
@@ -49,6 +54,7 @@ CREATE_AGENT_AUTHORING_ACTIONS = {
     "reset_contract",
     "materialize_mcp_inheritance",
     "remove_package_tool",
+    "remove_knowledge_file",
     "set_identity",
     "configure_pattern_assembly",
     "upsert_knowledge_file",
@@ -62,6 +68,13 @@ RESETTABLE_CONTRACT_KEYS = frozenset(base_contract_paths())
 REACT_AGENT_PROMPT_KEYS = frozenset({"answer"})
 PLAN_AND_EXECUTE_PROMPT_KEYS = frozenset({"planner", "executor", "final_answer"})
 PLAN_AND_EXECUTE_OPTIONAL_PROMPT_KEYS = frozenset({"casual"})
+PACKAGE_KNOWLEDGE_PURPOSES = ("curated_facts", "domain_reference", "operational_reference")
+PACKAGE_KNOWLEDGE_SOURCE_KINDS = (
+    "authorized_public_source",
+    "project_asset",
+    "skill_asset",
+    "user_provided",
+)
 
 
 def _prompt_object_schema(keys: frozenset[str], *, optional_keys: frozenset[str] = frozenset()) -> dict[str, Any]:
@@ -80,7 +93,9 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
         description=(
             "Deterministically writes coherent AgentPackage authoring increments. Use this instead of manually "
             "hand-editing cross-file contracts for identity, built-in pattern assembly, package tools, scheduler seeds, "
-            "runtime resources, package knowledge files, or package state."
+            "runtime resources, confirmed package knowledge files, or package state. Package knowledge is opt-in and "
+            "requires authoritative, distributable source evidence; identity, persona, prompts, and tool instructions "
+            "do not belong in knowledge/."
         ),
         entrypoint="agent_factory.create_agent.authoring_tool:run",
         input_schema={
@@ -134,8 +149,31 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "seed": {"type": "object", "additionalProperties": True},
                 "resources": {"type": "object", "additionalProperties": True},
                 "resource_descriptors": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
-                "knowledge_path": {"type": "string"},
+                "knowledge_path": {
+                    "type": "string",
+                    "description": "Package-relative target under knowledge/ for confirmed retrievable reference material.",
+                },
                 "knowledge_content": {"type": "string"},
+                "knowledge_purpose": {
+                    "type": "string",
+                    "enum": list(PACKAGE_KNOWLEDGE_PURPOSES),
+                    "description": "Why this material must be retrieved at runtime instead of living in identity, prompts, config, or tools.",
+                },
+                "knowledge_source": {
+                    "type": "object",
+                    "description": "Authoritative provenance and redistribution evidence for package-bundled knowledge.",
+                    "properties": {
+                        "source_kind": {"type": "string", "enum": list(PACKAGE_KNOWLEDGE_SOURCE_KINDS)},
+                        "reference": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Concrete user message, repository asset, Skill asset, or authorized public source reference.",
+                        },
+                        "distributable": {"const": True},
+                    },
+                    "required": ["source_kind", "reference", "distributable"],
+                    "additionalProperties": False,
+                },
                 "state_namespace": {"type": "string"},
                 "state_schema": {"type": "object", "additionalProperties": True},
                 "initial_state": {"type": "object", "additionalProperties": True},
@@ -289,9 +327,20 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     },
                 },
                 {"if": {"properties": {"action": {"const": "remove_package_tool"}}}, "then": {"required": ["tool_id"]}},
+                {"if": {"properties": {"action": {"const": "remove_knowledge_file"}}}, "then": {"required": ["knowledge_path"]}},
                 {"if": {"properties": {"action": {"const": "upsert_scheduler_seed"}}}, "then": {"required": ["seed"]}},
                 {"if": {"properties": {"action": {"const": "upsert_resources"}}}, "then": {"required": ["resources", "resource_descriptors"]}},
-                {"if": {"properties": {"action": {"const": "upsert_knowledge_file"}}}, "then": {"required": ["knowledge_path", "knowledge_content"]}},
+                {
+                    "if": {"properties": {"action": {"const": "upsert_knowledge_file"}}},
+                    "then": {
+                        "required": [
+                            "knowledge_path",
+                            "knowledge_content",
+                            "knowledge_purpose",
+                            "knowledge_source",
+                        ]
+                    },
+                },
                 {
                     "if": {"properties": {"action": {"const": "upsert_state"}}},
                     "then": {"required": ["state_namespace", "state_schema", "initial_state", "writable_node_ids"]},
@@ -437,6 +486,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         result = _upsert_resources(workspace, arguments)
     elif action == "upsert_knowledge_file":
         result = _upsert_knowledge_file(workspace, arguments)
+    elif action == "remove_knowledge_file":
+        result = _remove_knowledge_file(workspace, arguments)
     elif action == "reset_contract":
         result = _reset_contract(workspace, arguments)
     elif action == "materialize_mcp_inheritance":
@@ -943,10 +994,55 @@ def _upsert_knowledge_file(workspace: CreateAgentWorkspace, arguments: dict[str,
     content = str(arguments.get("knowledge_content") or "")
     if not content.strip():
         raise ValueError("knowledge_content is required")
+    source = PackageKnowledgeSourceEvidence.model_validate(_required_dict(arguments, "knowledge_source"))
+    record = PackageKnowledgeSourceRecord.model_validate(
+        {
+            "knowledge_path": relative_path,
+            "purpose": str(arguments.get("knowledge_purpose") or ""),
+            "source": source,
+        }
+    )
+    registry = workspace.read_knowledge_sources()
+    records = [item for item in registry.records if item.knowledge_path != relative_path]
     target = workspace.root / relative_path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    return _result("upsert_knowledge_file", [relative_path], f"Upserted package knowledge file {relative_path}.")
+    workspace.write_knowledge_sources(registry.model_copy(update={"records": [*records, record]}))
+    return _result(
+        "upsert_knowledge_file",
+        [relative_path, KNOWLEDGE_SOURCES_FILE],
+        f"Upserted sourced package knowledge file {relative_path}.",
+        knowledge_source=record.model_dump(mode="json"),
+    )
+
+
+def _remove_knowledge_file(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
+    relative_path = _knowledge_relative_path(str(arguments.get("knowledge_path") or ""))
+    registry = workspace.read_knowledge_sources()
+    remaining_records = [record for record in registry.records if record.knowledge_path != relative_path]
+    target = workspace.root / relative_path
+    if target.is_file():
+        target.unlink()
+        _remove_empty_knowledge_directories(target.parent, root=workspace.root / "knowledge")
+    if remaining_records:
+        workspace.write_knowledge_sources(registry.model_copy(update={"records": remaining_records}))
+    elif workspace.knowledge_sources_path.exists():
+        workspace.knowledge_sources_path.unlink()
+    return _result(
+        "remove_knowledge_file",
+        [relative_path, KNOWLEDGE_SOURCES_FILE],
+        f"Removed package knowledge file {relative_path} and its source evidence.",
+    )
+
+
+def _remove_empty_knowledge_directories(path: Path, *, root: Path) -> None:
+    current = path
+    while current != root and root in current.parents:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 def _upsert_state(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:

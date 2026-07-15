@@ -19,6 +19,7 @@ from agent_factory.create_agent.control_tool import (
 )
 from agent_factory.create_agent.models import (
     ACTION_FILE,
+    KNOWLEDGE_SOURCES_FILE,
     PUBLISH_FILE,
     PUBLISH_DECISION_FILE,
     SKILL_GATEWAY_STATE_FILE,
@@ -193,6 +194,7 @@ class CreateAgentToolEnvironmentBuilder:
                 read_only_paths.append(f".factory/{ATTACHMENT_INPUT_DIR}")
             filesystem_resource["protected_write_paths"] = [
                 ACTION_FILE,
+                KNOWLEDGE_SOURCES_FILE,
                 SYSTEM_STATE_FILE,
                 VALIDATION_FILE,
                 VALIDATION_STATE_FILE,
@@ -217,6 +219,10 @@ class CreateAgentToolEnvironmentBuilder:
                 TASK_ANALYSIS_FILE: {
                     "read_tool": CREATE_AGENT_STAGE_TOOL_ID,
                     "write_tool": "create-agent task analysis",
+                },
+                KNOWLEDGE_SOURCES_FILE: {
+                    "read_tool": CREATE_AGENT_AUTHORING_TOOL_ID,
+                    "write_tool": CREATE_AGENT_AUTHORING_TOOL_ID,
                 },
             }
             filesystem_resource["managed_write_paths"] = {

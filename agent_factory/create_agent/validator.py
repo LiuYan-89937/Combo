@@ -16,6 +16,8 @@ from agent_factory.create_agent.mcp_inheritance import factory_mcp_tool_ids, mat
 from agent_factory.create_agent.model_tool_access import model_tool_ids_from_contract
 from agent_factory.create_agent.validation_state import package_fingerprint, package_tool_digest
 from agent_factory.create_agent.models import (
+    KNOWLEDGE_SOURCES_FILE,
+    PackageKnowledgeSourceRegistry,
     PackageToolProbeState,
     PackageValidationIssue,
     PackageValidationReport,
@@ -117,6 +119,13 @@ class CreateAgentPackageValidator:
         file_contract_report = _package_file_contract_report(root, package, scope=scope, changed_files=changed)
         if file_contract_report is not None:
             return file_contract_report
+        knowledge_source_report = _package_knowledge_source_report(
+            root,
+            scope=scope,
+            changed_files=changed,
+        )
+        if knowledge_source_report is not None:
+            return knowledge_source_report
         if scope in {"python_syntax", "full_static"}:
             syntax_report = _python_syntax(root, changed)
             if syntax_report is not None:
@@ -751,6 +760,82 @@ def _workspace_hygiene(root: Path, changed_files: list[str]) -> PackageValidatio
                 ],
             )
     return None
+
+
+def _package_knowledge_source_report(
+    root: Path,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    if scope != "full_static":
+        return None
+    knowledge_root = root / "knowledge"
+    knowledge_files = (
+        sorted(path.relative_to(root).as_posix() for path in knowledge_root.rglob("*") if path.is_file())
+        if knowledge_root.is_dir()
+        else []
+    )
+    registry_path = root / KNOWLEDGE_SOURCES_FILE
+    if not knowledge_files and not registry_path.exists():
+        return None
+    try:
+        registry = (
+            PackageKnowledgeSourceRegistry.model_validate_json(registry_path.read_text(encoding="utf-8"))
+            if registry_path.is_file()
+            else PackageKnowledgeSourceRegistry()
+        )
+    except Exception as exc:
+        return _failed(
+            root,
+            "knowledge.source_registry",
+            exc,
+            [KNOWLEDGE_SOURCES_FILE],
+            scope=scope,
+            changed_files=changed_files,
+        )
+    recorded_paths = [record.knowledge_path for record in registry.records]
+    missing = sorted(set(knowledge_files) - set(recorded_paths))
+    stale = sorted(set(recorded_paths) - set(knowledge_files))
+    duplicates = sorted(path for path in set(recorded_paths) if recorded_paths.count(path) > 1)
+    invalid = sorted(path for path in recorded_paths if not path.startswith("knowledge/"))
+    if not any((missing, stale, duplicates, invalid)):
+        return None
+    details = {
+        "missing_source_evidence": missing,
+        "stale_source_evidence": stale,
+        "duplicate_source_evidence": duplicates,
+        "invalid_knowledge_paths": invalid,
+    }
+    return _with_scope(
+        PackageValidationReport(
+            package_root=str(root),
+            summary="Package knowledge requires one authoritative source record per bundled knowledge file.",
+            issues=[
+                PackageValidationIssue(
+                    where="knowledge.source_evidence",
+                    summary="Package knowledge source evidence is incomplete",
+                    message=str(details),
+                    path=KNOWLEDGE_SOURCES_FILE,
+                    expected="Every knowledge/* file has exactly one authoritative, distributable source record.",
+                    actual=str(details),
+                    repair_hint=(
+                        "Remove identity, persona, prompt, tool instruction, or unsupported generated files with "
+                        "create_agent_authoring(action='remove_knowledge_file', knowledge_path=...). For real bundled "
+                        "reference material, call "
+                        "create_agent_authoring(action='upsert_knowledge_file', knowledge_path=..., "
+                        "knowledge_content=..., knowledge_purpose=..., knowledge_source={source_kind, reference, "
+                        "distributable: true})."
+                    ),
+                    target_files=["knowledge/", KNOWLEDGE_SOURCES_FILE],
+                    recommended_skill="08-knowledge-system",
+                    details=details,
+                )
+            ],
+        ),
+        scope=scope,
+        changed_files=changed_files,
+    )
 
 
 def _json_syntax_report(

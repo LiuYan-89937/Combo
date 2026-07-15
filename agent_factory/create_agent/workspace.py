@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from agent_factory.create_agent.models import (
     ACTION_FILE,
+    KNOWLEDGE_SOURCES_FILE,
     PUBLISH_FILE,
     PUBLISH_DECISION_FILE,
     RESOURCES_FILE,
@@ -23,6 +24,7 @@ from agent_factory.create_agent.models import (
     CreateAgentPublishDecision,
     CreateAgentTaskAnalysis,
     PackageToolProbeState,
+    PackageKnowledgeSourceRegistry,
     PackageValidationReport,
     PackageValidationState,
     SystemManufacturingState,
@@ -105,6 +107,10 @@ class CreateAgentWorkspace:
         return self.root / RESOURCES_FILE
 
     @property
+    def knowledge_sources_path(self) -> Path:
+        return self.root / KNOWLEDGE_SOURCES_FILE
+
+    @property
     def skill_gateway_state_path(self) -> Path:
         return self.root / SKILL_GATEWAY_STATE_FILE
 
@@ -131,6 +137,16 @@ class CreateAgentWorkspace:
 
     def write_system_state(self, state: SystemManufacturingState) -> None:
         self._write_json(self.system_state_path, state.model_dump(mode="json"))
+
+    def read_knowledge_sources(self) -> PackageKnowledgeSourceRegistry:
+        if not self.knowledge_sources_path.exists():
+            return PackageKnowledgeSourceRegistry()
+        return PackageKnowledgeSourceRegistry.model_validate_json(
+            self.knowledge_sources_path.read_text(encoding="utf-8")
+        )
+
+    def write_knowledge_sources(self, registry: PackageKnowledgeSourceRegistry) -> None:
+        self._write_json(self.knowledge_sources_path, registry.model_dump(mode="json"))
 
     def read_task_analysis(self) -> CreateAgentTaskAnalysis:
         analysis = _read_managed_model(

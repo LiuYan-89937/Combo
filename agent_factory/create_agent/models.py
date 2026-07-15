@@ -21,7 +21,57 @@ PUBLISH_FILE = ".factory/publish.json"
 PUBLISH_DECISION_FILE = ".factory/publish_decision.json"
 RESOURCES_FILE = ".factory/resources.json"
 SKILL_GATEWAY_STATE_FILE = ".factory/skill_gateway_state.json"
+KNOWLEDGE_SOURCES_FILE = ".factory/knowledge_sources.json"
 TEXT_SUMMARY_LIMIT = 240
+
+
+PackageKnowledgePurpose = Literal["domain_reference", "operational_reference", "curated_facts"]
+PackageKnowledgeSourceKind = Literal[
+    "user_provided",
+    "project_asset",
+    "skill_asset",
+    "authorized_public_source",
+]
+
+
+class PackageKnowledgeSourceEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_kind: PackageKnowledgeSourceKind
+    reference: str = Field(min_length=1)
+    distributable: Literal[True]
+
+    @field_validator("reference")
+    @classmethod
+    def validate_reference(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("reference must identify the concrete source material")
+        return normalized
+
+
+class PackageKnowledgeSourceRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_path: str = Field(min_length=1)
+    purpose: PackageKnowledgePurpose
+    source: PackageKnowledgeSourceEvidence
+
+    @field_validator("knowledge_path")
+    @classmethod
+    def validate_knowledge_path(cls, value: str) -> str:
+        normalized = value.strip().replace("\\", "/")
+        parts = normalized.split("/")
+        if len(parts) < 2 or parts[0] != "knowledge" or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("knowledge_path must identify a package-relative file under knowledge/")
+        return normalized
+
+
+class PackageKnowledgeSourceRegistry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["package_knowledge_sources.v0"] = "package_knowledge_sources.v0"
+    records: list[PackageKnowledgeSourceRecord] = Field(default_factory=list)
 
 
 class ResourceFact(BaseModel):
