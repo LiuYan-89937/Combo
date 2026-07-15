@@ -15,7 +15,6 @@ from agent_factory.models.message_layout import system_messages_first
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_attachments import format_attachments_for_model
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
-from agent_factory.runtime_kernel.observability.node_events import langgraph_model_event_sink
 from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
 
 
@@ -68,7 +67,6 @@ class CreateAgentAssistWorkflow:
             prompt_binding=prompt_binding,
             messages=chat_messages,
             tools=self.tools,
-            emit_event=langgraph_model_event_sink("create_agent_assist"),
             node_id="create_agent_assist",
         )
         response = result.ai_message if isinstance(result.ai_message, BaseMessage) else AIMessage(content=result.assistant_draft or "")

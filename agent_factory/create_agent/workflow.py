@@ -19,7 +19,6 @@ from agent_factory.models import get_main_model
 from agent_factory.models.content import content_to_text
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
-from agent_factory.runtime_kernel.observability.node_events import langgraph_model_event_sink
 from agent_factory.tooling.langgraph_node import (
     build_tool_node_runner,
     latest_ai_declared_tool_calls,
@@ -111,7 +110,6 @@ class CreateAgentWorkflow:
             prompt_binding=prompt_binding,
             messages=chat_messages,
             tools=self.tools,
-            emit_event=langgraph_model_event_sink(node_id),
             node_id=node_id,
         )
         _emit_model_cache_metrics(
