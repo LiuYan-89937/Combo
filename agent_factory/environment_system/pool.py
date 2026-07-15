@@ -133,11 +133,11 @@ class DependencyPool:
             requirements = normalize_python_requirements(requirements)
         except PythonRequirementError as exc:
             raise DependencyPoolError("unsupported", str(exc)) from exc
-        download_cache = self.root / "python" / "download_cache"
-        download_cache.mkdir(parents=True, exist_ok=True)
+        pip_cache = self.root / "python" / "download_cache"
+        pip_cache.mkdir(parents=True, exist_ok=True)
         with self._staging_directory() as staging:
-            downloads = staging / "downloads"
-            downloads.mkdir()
+            wheel_output = staging / "wheels"
+            wheel_output.mkdir()
             wheelhouse = staging / "wheelhouse"
             wheelhouse.mkdir()
             self._materialize_python_wheelhouse(wheelhouse)
@@ -151,29 +151,29 @@ class DependencyPool:
                     "-v",
                     f"{staging}:/dependency_staging:rw",
                     "-v",
-                    f"{download_cache}:/root/.cache/pip:rw",
+                    f"{pip_cache}:/root/.cache/pip:rw",
                     base_image,
                     "python",
                     "-m",
                     "pip",
-                    "download",
+                    "wheel",
                     "--disable-pip-version-check",
-                    "--only-binary=:all:",
+                    "--prefer-binary",
                     "--find-links",
                     "/dependency_staging/wheelhouse",
-                    "--dest",
-                    "/dependency_staging/downloads",
+                    "--wheel-dir",
+                    "/dependency_staging/wheels",
                     *requirements,
                 ],
                 timeout_seconds=timeout_seconds,
-                action="download Python dependency artifacts",
+                action="resolve and build Python dependency wheels",
             )
-            wheels = sorted(path for path in downloads.iterdir() if path.is_file() and path.suffix == ".whl")
-            unsupported = sorted(path.name for path in downloads.iterdir() if path.is_file() and path.suffix != ".whl")
+            wheels = sorted(path for path in wheel_output.iterdir() if path.is_file() and path.suffix == ".whl")
+            unsupported = sorted(path.name for path in wheel_output.iterdir() if path.is_file() and path.suffix != ".whl")
             if unsupported:
                 raise DependencyPoolError(
-                    "unsupported",
-                    "Python dependency pool only accepts binary wheels; unsupported artifacts: " + ", ".join(unsupported),
+                    "build_failed",
+                    "Python dependency build returned non-wheel artifacts: " + ", ".join(unsupported),
                 )
             if not wheels:
                 raise DependencyPoolError("build_failed", "Python dependency resolution returned no wheel artifacts")

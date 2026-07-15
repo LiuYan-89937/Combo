@@ -146,7 +146,7 @@ class AgentPackageRuntimeManager:
         self._emit = emit
         self.resource_store = ResourceStore()
         self._resource_migration = self._migrate_package_resources()
-        self._environment_migration = self._migrate_package_environments()
+        self._environment_preparation_errors: dict[str, str] = {}
 
         # 容器池支持（可通过环境变量禁用）
         self._use_container_pool = _env_int("AGENTFACTORY_USE_CONTAINER_POOL", 1) == 1
@@ -242,21 +242,6 @@ class AgentPackageRuntimeManager:
                 results[manifest_path.parent.name] = {"status": "pending", "reason": f"{type(exc).__name__}: {exc}"}
         return results
 
-    def _migrate_package_environments(self) -> dict[str, dict[str, Any]]:
-        results: dict[str, dict[str, Any]] = {}
-        resolver = EnvironmentResolver()
-        for manifest_path in self.repository.manifest_paths():
-            package_id = manifest_path.parent.name
-            if self._resource_migration.get(package_id, {}).get("status") != "complete":
-                results[package_id] = {"status": "pending", "reason": "resource migration is pending"}
-                continue
-            try:
-                lock = resolver.ensure(manifest_path.parent)
-                results[package_id] = {"status": "complete", "image": lock.get("image")}
-            except Exception as exc:
-                results[package_id] = {"status": "pending", "reason": f"{type(exc).__name__}: {exc}"}
-        return results
-
     def load_package(self, package_id: str) -> LoadedAgentPackage:
         return self.repository.load(package_id)
 
@@ -340,7 +325,11 @@ class AgentPackageRuntimeManager:
             },
         }
         latest_status: dict[str, Any] | None = None
+        environment_prepared = False
         try:
+            EnvironmentResolver().ensure(package.package_root)
+            environment_prepared = True
+            self._environment_preparation_errors.pop(package_id, None)
             for stream_mode, chunk in self._runtime_events(package_id, package=package, command=command):
                 if stream_mode != "frontend_event":
                     continue
@@ -372,6 +361,8 @@ class AgentPackageRuntimeManager:
                 if self._emit is not None:
                     self._emit(item)
         except Exception as exc:
+            if not environment_prepared:
+                self._environment_preparation_errors[package_id] = f"{type(exc).__name__}: {exc}"
             latest_status = self._instance_status_payload(
                 package_id=package_id,
                 package=package,
@@ -498,6 +489,7 @@ class AgentPackageRuntimeManager:
         self._close_package_containers(package_id)
         self._close_package_system_handles(package_id)
         result = self.repository.delete_user_package(package_id)
+        self._environment_preparation_errors.pop(package_id, None)
         result["deleted_resource_count"] = self.resource_store.delete_package(package_id)
         result["agent_registry_refresh"] = _refresh_agent_registry_index(package_id)
         return result
@@ -983,7 +975,10 @@ class AgentPackageRuntimeManager:
                 "model_contract": _model_contract_summary(package),
                 "context_contract": _context_contract_summary(manifest_path.parent),
                 "resources": self.resource_status(package_id),
-                "environment": {**_environment_summary(manifest_path.parent), "migration": self._environment_migration.get(package_id)},
+                "environment": _environment_summary(
+                    manifest_path.parent,
+                    preparation_error=self._environment_preparation_errors.get(package_id),
+                ),
                 "extensions": _extensions_summary(package_id, package=package),
                 **detail,
             }
@@ -1535,7 +1530,7 @@ def _runtime_fingerprint(package_id: str, package: LoadedAgentPackage) -> str:
     return digest.hexdigest()
 
 
-def _environment_summary(package_root: Path) -> dict[str, Any]:
+def _environment_summary(package_root: Path, *, preparation_error: str | None = None) -> dict[str, Any]:
     try:
         lock = EnvironmentResolver().read_lock(package_root)
         pool = lock.get("pool") if isinstance(lock.get("pool"), dict) else {}
@@ -1552,7 +1547,10 @@ def _environment_summary(package_root: Path) -> dict[str, Any]:
             "verified_at": lock.get("verified_at"),
         }
     except Exception as exc:
-        return {"status": "missing", "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "status": "failed" if preparation_error else "missing",
+            "error": preparation_error or f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _hash_tree(digest: "hashlib._Hash", root: Path) -> None:
