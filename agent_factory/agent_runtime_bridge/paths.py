@@ -10,6 +10,7 @@ BRIDGE_ARTIFACTS_ROOT_ENV = "AGENTFACTORY_BRIDGE_ARTIFACTS_ROOT"
 BRIDGE_RUNTIME_ROOT_ENV = "AGENTFACTORY_BRIDGE_RUNTIME_ROOT"
 BRIDGE_WORKDIR_ROOT_ENV = "AGENTFACTORY_BRIDGE_WORKDIR_ROOT"
 BRIDGE_EXTENSION_ROOT_ENV = "AGENTFACTORY_BRIDGE_EXTENSION_ROOT"
+BRIDGE_RUNTIME_INSTANCE_ID_ENV = "AGENTFACTORY_BRIDGE_RUNTIME_INSTANCE_ID"
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +20,7 @@ class RuntimeBridgePaths:
     runtime_root: Path
     workdir_root: Path
     extension_root: Path
+    runtime_instance_id: str | None
 
 
 def runtime_bridge_paths() -> RuntimeBridgePaths:
@@ -31,4 +33,5 @@ def runtime_bridge_paths() -> RuntimeBridgePaths:
         extension_root=Path(
             os.getenv(BRIDGE_EXTENSION_ROOT_ENV, str(runtime_root / "extensions"))
         ),
+        runtime_instance_id=(os.getenv(BRIDGE_RUNTIME_INSTANCE_ID_ENV, "").strip() or None),
     )

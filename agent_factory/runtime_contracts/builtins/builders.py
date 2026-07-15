@@ -20,7 +20,11 @@ from agent_factory.model_pool import (
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution
 from agent_factory.runtime_contracts.memory_config import resolve_memory_system_config
-from agent_factory.runtime_contracts.paths import package_runtime_path_text, resolve_package_runtime_path
+from agent_factory.runtime_contracts.paths import (
+    instance_checkpoint_path,
+    package_runtime_path_text,
+    resolve_package_runtime_path,
+)
 from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
@@ -76,7 +80,14 @@ class SessionContractBuilder:
         config = contract.config
         session_root = package_runtime_path_text(context, config.session_root, field_path="session.config.session_root")
         checkpoint_path = (
-            resolve_package_runtime_path(context, config.checkpoint_path, field_path="session.config.checkpoint_path")
+            instance_checkpoint_path(
+                resolve_package_runtime_path(
+                    context,
+                    config.checkpoint_path,
+                    field_path="session.config.checkpoint_path",
+                ),
+                context.runtime_instance_id,
+            )
             if config.checkpointer_backend == "sqlite"
             else None
         )

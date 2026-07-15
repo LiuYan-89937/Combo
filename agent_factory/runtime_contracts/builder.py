@@ -21,6 +21,7 @@ from agent_factory.runtime_kernel.wrappers.system_render import RENDER_NODE_SYST
 class RuntimeBuildContext:
     package_root: Path
     runtime_root: Path | None
+    runtime_instance_id: str | None
     instance_extension_root: Path | None
     package: LoadedAgentPackage
     resources: dict[str, object]
@@ -31,6 +32,7 @@ def runtime_build_context(
     package: LoadedAgentPackage,
     *,
     runtime_root: str | Path | None = None,
+    runtime_instance_id: str | None = None,
     instance_extension_root: str | Path | None = None,
     resources: dict[str, object] | None = None,
     tool_runtime_resources: dict[str, object] | None = None,
@@ -38,6 +40,7 @@ def runtime_build_context(
     return RuntimeBuildContext(
         package_root=package.package_root,
         runtime_root=Path(runtime_root).expanduser().resolve() if runtime_root is not None else None,
+        runtime_instance_id=str(runtime_instance_id).strip() if runtime_instance_id else None,
         instance_extension_root=(
             Path(instance_extension_root).expanduser().resolve()
             if instance_extension_root is not None
@@ -59,6 +62,7 @@ class RuntimeBuildPlanner:
         *,
         base_services: RuntimeServices,
         runtime_root: str | Path | None = None,
+        runtime_instance_id: str | None = None,
         instance_extension_root: str | Path | None = None,
     ) -> RuntimeBuildResult:
         missing = sorted(REQUIRED_AGENT_PACKAGE_CONTRACTS - set(package.contracts))
@@ -67,6 +71,7 @@ class RuntimeBuildPlanner:
         context = runtime_build_context(
             package,
             runtime_root=runtime_root,
+            runtime_instance_id=runtime_instance_id,
             instance_extension_root=instance_extension_root,
         )
         contracts = sorted(
@@ -82,6 +87,7 @@ class RuntimeBuildPlanner:
             contract_context = runtime_build_context(
                 context.package,
                 runtime_root=context.runtime_root,
+                runtime_instance_id=context.runtime_instance_id,
                 instance_extension_root=context.instance_extension_root,
                 resources=build_resources,
                 tool_runtime_resources=build_tool_runtime_resources,

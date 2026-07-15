@@ -16,6 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import interrupt_payload
 from agent_factory.runtime_contracts import LoadedAgentPackage, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
+from agent_factory.runtime_contracts.paths import instance_checkpoint_path
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig
@@ -65,6 +66,7 @@ class PackageRuntimeCore:
         *,
         package: LoadedAgentPackage,
         runtime_root: str | Path | None = None,
+        runtime_instance_id: str | None = None,
         instance_extension_root: str | Path | None = None,
         emit_background: Emit | None = None,
         graph_id: str = "agent_package_runtime",
@@ -73,6 +75,7 @@ class PackageRuntimeCore:
     ) -> None:
         self.package = package
         self.runtime_root = Path(runtime_root).expanduser().resolve() if runtime_root is not None else None
+        self.runtime_instance_id = str(runtime_instance_id).strip() if runtime_instance_id else None
         self.instance_extension_root = (
             Path(instance_extension_root).expanduser().resolve()
             if instance_extension_root is not None
@@ -223,7 +226,10 @@ class PackageRuntimeCore:
             facade = RuntimeKernelFacade(
                 checkpointer_config=LangGraphCheckpointerConfig(
                     backend="sqlite",
-                    path=runtime_root / "checkpoints" / "agent.sqlite",
+                    path=instance_checkpoint_path(
+                        runtime_root / "checkpoints" / "agent.sqlite",
+                        self.runtime_instance_id,
+                    ),
                 ),
                 memory_system_config=_runtime_memory_config(runtime_root),
                 session_config=AgentSessionConfig(root=runtime_root / "sessions"),
@@ -232,6 +238,7 @@ class PackageRuntimeCore:
                 self.package,
                 base_services=facade.instance.services,
                 runtime_root=self.runtime_root,
+                runtime_instance_id=self.runtime_instance_id,
                 instance_extension_root=self.instance_extension_root,
             )
             runtime_build.services.runtime_resources.update(self.runtime_resources_override)

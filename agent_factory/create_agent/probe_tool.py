@@ -433,6 +433,7 @@ def _run_docker_probe(
             runtime_root=runtime_root,
             artifacts_root=artifacts_root,
             workdir_root=workdir_root,
+            runtime_instance_id=str(runtime_root),
             extension_root=extension_root,
         )
     except AgentRuntimeLaunchError as exc:

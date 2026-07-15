@@ -19,6 +19,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import interrupt_payload
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
+from agent_factory.runtime_contracts.paths import instance_checkpoint_path
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
@@ -55,6 +56,7 @@ ARTIFACTS_ROOT = _BRIDGE_PATHS.artifacts_root
 RUNTIME_ROOT = _BRIDGE_PATHS.runtime_root
 WORKDIR_ROOT = _BRIDGE_PATHS.workdir_root
 EXTENSION_ROOT = _BRIDGE_PATHS.extension_root
+RUNTIME_INSTANCE_ID = _BRIDGE_PATHS.runtime_instance_id
 
 
 @dataclass(slots=True)
@@ -291,7 +293,10 @@ class BridgeRuntimeState:
             facade = RuntimeKernelFacade(
                 checkpointer_config=LangGraphCheckpointerConfig(
                     backend="sqlite",
-                    path=RUNTIME_ROOT / "checkpoints" / "agent.sqlite",
+                    path=instance_checkpoint_path(
+                        RUNTIME_ROOT / "checkpoints" / "agent.sqlite",
+                        RUNTIME_INSTANCE_ID,
+                    ),
                 ),
                 memory_system_config=_runtime_memory_config(),
                 session_config=AgentSessionConfig(root=RUNTIME_ROOT / "sessions"),
@@ -300,6 +305,7 @@ class BridgeRuntimeState:
                 package,
                 base_services=facade.instance.services,
                 runtime_root=RUNTIME_ROOT,
+                runtime_instance_id=RUNTIME_INSTANCE_ID,
                 instance_extension_root=EXTENSION_ROOT,
             )
             compiler = AgentAssemblyCompiler(facade=facade)
