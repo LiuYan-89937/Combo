@@ -1,0 +1,12 @@
+{
+  "version": "enabled_skills.v0",
+  "skills": [
+    {
+      "skill_id": "a-share-market-briefing",
+      "enabled": true,
+      "source": "local",
+      "path": "skills/a-share-market-briefing",
+      "required": true
+    }
+  ]
+}

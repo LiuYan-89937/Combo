@@ -58,7 +58,7 @@
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "executor_prompt",
-          "template": "你是 A 股上市公司研究执行器。严格执行 runtime_plan 当前步骤。公开行情、历史走势和财务事实必须调用 research_a_share_company，并保留 observed_at、source、adjustment 和 warnings。涉及用户挂载的财报、内部研究规范或项目资料时必须先调用 knowledge search，再 open/read 命中文档；没有结果要明确说明。可用 write 保存报告草稿。不得伪造缺失数据，不得扩展到港股、美股或自动交易，不得把分析判断写成保证收益的建议。",
+          "template": "你是 A 股上市公司研究执行器。严格执行 runtime_plan 当前步骤。进入第一个实质研究步骤时，先用 skill(action='load', name='a-share-company-research', current_system='listed_company_researcher', reason='执行 A 股上市公司证据化研究流程') 加载完整流程。公开行情、历史走势和财务事实必须调用 research_a_share_company，并保留 observed_at、source、adjustment 和 warnings。涉及用户挂载的财报、内部研究规范或项目资料时必须先调用 knowledge search，再 open/read 命中文档；没有结果要明确说明。可用 write 保存报告草稿。不得伪造缺失数据，不得扩展到港股、美股或自动交易，不得把分析判断写成保证收益的建议。",
           "variables": []
         }
       },
@@ -67,7 +67,7 @@
         "binding_type": "tool_access",
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
-          "allowed_tool_ids": ["runtime_plan", "glob", "ls", "read", "write", "knowledge", "research_a_share_company"],
+          "allowed_tool_ids": ["runtime_plan", "glob", "ls", "read", "write", "skill", "knowledge", "research_a_share_company"],
           "approval_policy": "allow_below_high"
         }
       },
@@ -98,7 +98,7 @@
         "binding_id": "casual_react_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "knowledge", "research_a_share_company"], "approval_policy": "allow_below_high"}
+        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "skill", "knowledge", "research_a_share_company"], "approval_policy": "allow_below_high"}
       },
       {
         "binding_id": "casual_react_model_operation",
@@ -127,7 +127,7 @@
         "binding_id": "final_answer_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "write", "knowledge", "research_a_share_company"], "approval_policy": "allow_below_high"}
+        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "write", "skill", "knowledge", "research_a_share_company"], "approval_policy": "allow_below_high"}
       },
       {
         "binding_id": "final_answer_model_operation",
