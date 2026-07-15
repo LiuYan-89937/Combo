@@ -96,8 +96,6 @@ def _verify_commands(commands: list[Any], *, timeout_seconds: int | None) -> Non
     for raw in commands:
         if not isinstance(raw, list) or not raw or not all(isinstance(item, str) and item for item in raw):
             raise RuntimeDependencyError("dependency verification commands must be non-empty string argument lists")
-        if any(item in {"sh", "bash", "-c"} for item in raw):
-            raise RuntimeDependencyError("dependency verification commands cannot use shell execution")
         try:
             completed = subprocess.run(raw, capture_output=True, text=True, timeout=timeout_seconds, check=False)
         except subprocess.TimeoutExpired as exc:
