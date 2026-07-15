@@ -282,11 +282,16 @@ export const useRuntimeStore = defineStore('runtime', {
         this._restoreActiveRequestsFromRuntimeSnapshot(event)
         console.info('Runtime ready')
       } else if (type === 'session_started') {
+        const continuedPendingRequest = this._promoteFactoryScopeFromSessionEvent(event)
         this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
-        this.currentMode = event.mode || null
+        this.currentMode = event.mode || this.currentMode
         this._upsertFactorySession(payload?.session)
-        this._clearSessionScopedState()
-        this._restoreSessionSnapshot(payload)
+        if (continuedPendingRequest) {
+          this._saveActiveConversationScope()
+        } else {
+          this._clearSessionScopedState()
+          this._restoreSessionSnapshot(payload)
+        }
       } else if (type === 'session_switched') {
         this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
         this._upsertFactorySession(payload?.session)
@@ -1217,6 +1222,30 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    _promoteFactoryScopeFromSessionEvent(event: FactoryFrontendEvent): boolean {
+      const requestId = event.request_id || null
+      if (!requestId || requestId !== this.activeRequestId) return false
+      const request = this.activeRequests[requestId]
+      if (!request || request.source !== 'user') return false
+      const sessionId = String(
+        event.session_id || event.payload?.session_id || event.payload?.session?.session_id || '',
+      ).trim()
+      if (!sessionId) return false
+      const nextScope = conversationScopeForMode(event.mode || request.mode || this.currentMode, {
+        ...(event.payload || {}),
+        session_id: sessionId,
+      })
+      const previousScope = request.conversationScope || this.activeConversationScope
+      if (!isMoreSpecificConversationScope(previousScope, nextScope)) return false
+      this._renameConversationScope(previousScope as string, nextScope as string)
+      request.conversationScope = nextScope
+      request.payload = {
+        ...(request.payload || {}),
+        session_id: sessionId,
+      }
+      return this.activeConversationScope === nextScope
+    },
+
     _hasLiveConversationState(): boolean {
       return Boolean(
         this.pendingInterrupt ||
@@ -1304,6 +1333,12 @@ export const useRuntimeStore = defineStore('runtime', {
       metadata: Record<string, any> = {},
       attachments: TranscriptItem['attachments'] = [],
     ) {
+      const conversationScope = requestId
+        ? scopeFromMessageMetadata(metadata, this.currentMode, this.activeFactorySessionId)
+        : null
+      if (conversationScope) {
+        this._switchConversationScope(conversationScope)
+      }
       const timestamp = new Date().toISOString()
       const messageId = `user-${Date.now()}`
       const item: TranscriptItem = {
@@ -1335,7 +1370,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this.activeRequestId = requestId
         this.runStatus = 'running'
         this.pendingInterrupt = null
-        const conversationScope = scopeFromMessageMetadata(metadata, this.currentMode, this.activeFactorySessionId)
         this.activeRequests[requestId] = {
           requestId,
           status: 'running',
