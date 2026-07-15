@@ -16,6 +16,7 @@ from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
+from agent_factory.models.content import content_to_text
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.langgraph_node import (
@@ -151,35 +152,22 @@ class CreateAgentWorkflow:
             if not _publish_readiness_error(workspace=workspace, report=ready_report):
                 workspace.write_action(CreateAgentAction())
                 return _publish_ready_result(workspace, ready_report)
-            answer = interrupt(
-                {
-                    "type": "create_agent_question",
-                    "presentation": "assistant_dialogue",
-                    "resume_kind": "answer",
-                    "title": "补充制造信息",
-                    "message": action.message or "请补充制造这个 AgentPackage 所需的信息。",
-                    "workspace_path": str(workspace.root),
-                    "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
-                    "resource_requests": [item.model_dump(mode="json") for item in action.resource_requests],
-                }
+            return self._interrupt_for_user(
+                workspace,
+                action=action,
+                interrupt_type="create_agent_question",
+                title="补充制造信息",
+                default_message="请补充制造这个 AgentPackage 所需的信息。",
             )
-            workspace.write_action(CreateAgentAction())
-            previous_report = workspace.read_validation() or PackageValidationReport(
-                package_root=str(workspace.root),
-                validation_scope="workspace_hygiene",
-                skipped=True,
-                summary="Validation skipped while waiting for user input.",
+        implicit_question = _plain_assistant_turn(state)
+        if implicit_question:
+            return self._interrupt_for_user(
+                workspace,
+                action=CreateAgentAction(action="ask_user", message=implicit_question),
+                interrupt_type="create_agent_question",
+                title="补充制造信息",
+                default_message="请补充制造这个 AgentPackage 所需的信息。",
             )
-            return {
-                "messages": [_resume_message(answer, question=action.message, interrupt_type="create_agent_question")],
-                "interrupt_answer": _interrupt_answer_context(
-                    answer,
-                    question=action.message,
-                    interrupt_type="create_agent_question",
-                ),
-                "validation": previous_report.to_digest().model_dump(mode="json"),
-                "done": False,
-            }
         if action.action != "finalize":
             return {"done": False}
         report = workspace.read_validation()
@@ -196,34 +184,22 @@ class CreateAgentWorkflow:
     def _evolution_control_gate(self, state: CreateAgentGraphState, workspace: CreateAgentWorkspace) -> dict[str, Any]:
         action = workspace.read_action()
         if action.action == "ask_user":
-            answer = interrupt(
-                {
-                    "type": "agent_evolution_question",
-                    "presentation": "assistant_dialogue",
-                    "resume_kind": "answer",
-                    "title": "补充进化信息",
-                    "message": action.message or "请补充进化这个已发布 AgentPackage 所需的信息。",
-                    "workspace_path": str(workspace.root),
-                    "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
-                }
+            return self._interrupt_for_user(
+                workspace,
+                action=action,
+                interrupt_type="agent_evolution_question",
+                title="补充进化信息",
+                default_message="请补充进化这个已发布 AgentPackage 所需的信息。",
             )
-            workspace.write_action(CreateAgentAction())
-            previous_report = workspace.read_validation() or PackageValidationReport(
-                package_root=str(workspace.root),
-                validation_scope="workspace_hygiene",
-                skipped=True,
-                summary="Validation skipped while waiting for user input.",
+        implicit_question = _plain_assistant_turn(state)
+        if implicit_question:
+            return self._interrupt_for_user(
+                workspace,
+                action=CreateAgentAction(action="ask_user", message=implicit_question),
+                interrupt_type="agent_evolution_question",
+                title="补充进化信息",
+                default_message="请补充进化这个已发布 AgentPackage 所需的信息。",
             )
-            return {
-                "messages": [_resume_message(answer, question=action.message, interrupt_type="agent_evolution_question")],
-                "interrupt_answer": _interrupt_answer_context(
-                    answer,
-                    question=action.message,
-                    interrupt_type="agent_evolution_question",
-                ),
-                "validation": previous_report.to_digest().model_dump(mode="json"),
-                "done": False,
-            }
         if action.action != "finalize":
             return {"done": False}
         report = workspace.read_validation()
@@ -240,6 +216,46 @@ class CreateAgentWorkflow:
             "validation": report.to_digest().model_dump(mode="json"),
             "done": True,
             "final_answer": final_answer,
+        }
+
+    @staticmethod
+    def _interrupt_for_user(
+        workspace: CreateAgentWorkspace,
+        *,
+        action: CreateAgentAction,
+        interrupt_type: str,
+        title: str,
+        default_message: str,
+    ) -> dict[str, Any]:
+        question = action.message or default_message
+        answer = interrupt(
+            {
+                "type": interrupt_type,
+                "presentation": "assistant_dialogue",
+                "resume_kind": "answer",
+                "title": title,
+                "message": question,
+                "workspace_path": str(workspace.root),
+                "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
+                "resource_requests": [item.model_dump(mode="json") for item in action.resource_requests],
+            }
+        )
+        workspace.write_action(CreateAgentAction())
+        previous_report = workspace.read_validation() or PackageValidationReport(
+            package_root=str(workspace.root),
+            validation_scope="workspace_hygiene",
+            skipped=True,
+            summary="Validation skipped while waiting for user input.",
+        )
+        return {
+            "messages": [_resume_message(answer, question=question, interrupt_type=interrupt_type)],
+            "interrupt_answer": _interrupt_answer_context(
+                answer,
+                question=question,
+                interrupt_type=interrupt_type,
+            ),
+            "validation": previous_report.to_digest().model_dump(mode="json"),
+            "done": False,
         }
 
     def _route_after_supervisor(self, state: CreateAgentGraphState) -> Literal["tools", "control_gate"]:
@@ -333,6 +349,13 @@ def _cached_input_tokens(usage: dict[str, Any]) -> int | None:
 
 def _has_control_action(tool_calls: list[dict[str, Any]]) -> bool:
     return any(str(call.get("name") or "") == "create_agent_control" for call in tool_calls)
+
+
+def _plain_assistant_turn(state: CreateAgentGraphState) -> str:
+    ai_message, tool_calls = latest_ai_declared_tool_calls(state.get("messages") or [])
+    if ai_message is None or tool_calls:
+        return ""
+    return content_to_text(ai_message.content).strip()
 
 
 def _publish_readiness_error(*, workspace: CreateAgentWorkspace, report: PackageValidationReport | None) -> str:

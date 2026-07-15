@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from agent_factory.models.message_layout import system_messages_first
@@ -129,6 +129,8 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "需要用户补充资源或决策时，必须调用 create_agent_control(action=ask_user, message=...)；"
+            "任何向用户索取选择、确认、授权或补充信息的内容，都必须在决定提问的同一次模型响应中调用 ask_user，"
+            "不能只输出问题文字，也不能先输出问题再等待下一次模型调用补发 ask_user。"
             "不要直接写 .factory/action.json，不要输出表单。"
             "中断恢复后的消息是用户对上一条问题的真实回答；先理解回答语言和内容，再决定是否需要用同一种语言重新询问。"
             "如果回答没有明确给出所需决策，必须继续询问，禁止替用户选择方案、补写确认或把自己的上一条文字当作用户回答。"
@@ -270,9 +272,27 @@ def _dynamic_system_context_text(
     state: Mapping[str, Any],
 ) -> str:
     task_analysis = _task_analysis_context(state)
+    interaction_turn = _interaction_turn_context(state)
     attachments = format_attachments_for_model(state.get("runtime_attachments"))
     interrupt_answer = _interrupt_answer_context(state.get("interrupt_answer"))
-    return "\n\n".join(item for item in [task_analysis, interrupt_answer, attachments] if item)
+    return "\n\n".join(
+        item for item in [task_analysis, interaction_turn, interrupt_answer, attachments] if item
+    )
+
+
+def _interaction_turn_context(state: Mapping[str, Any]) -> str:
+    messages = [message for message in state.get("messages") or [] if isinstance(message, BaseMessage)]
+    latest_message = messages[-1] if messages else None
+    has_new_user_input = isinstance(latest_message, HumanMessage)
+    latest_role = str(getattr(latest_message, "type", "") or "none")
+    return (
+        "Create-agent interaction boundary:\n"
+        f"latest_message_role: {latest_role}\n"
+        f"new_user_input_available: {str(has_new_user_input).lower()}\n"
+        "Only a latest HumanMessage is a new user reply. Tool observations and assistant text are not user confirmation. "
+        "If a user decision is required and new_user_input_available is false, call "
+        "create_agent_control(action='ask_user', message=...) now."
+    )
 
 
 def _interrupt_answer_context(value: Any) -> str:
