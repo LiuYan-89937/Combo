@@ -3,11 +3,11 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
-from pathlib import Path
 import sys
 import time
 from typing import Any
 
+from agent_factory.agent_runtime_bridge.paths import runtime_bridge_paths
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.gateway import ToolApprovalDecision
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
@@ -15,10 +15,11 @@ from agent_factory.tooling.providers import PackageToolProvider, ToolProviderCon
 from agent_factory.tooling.spec import ToolRiskResult, ToolSpec
 
 
-PACKAGE_ROOT = Path("/package")
-ARTIFACTS_ROOT = Path("/artifacts")
-RUNTIME_ROOT = Path("/runtime")
-WORKDIR_ROOT = Path("/workdir")
+_BRIDGE_PATHS = runtime_bridge_paths()
+PACKAGE_ROOT = _BRIDGE_PATHS.package_root
+ARTIFACTS_ROOT = _BRIDGE_PATHS.artifacts_root
+RUNTIME_ROOT = _BRIDGE_PATHS.runtime_root
+WORKDIR_ROOT = _BRIDGE_PATHS.workdir_root
 
 
 def main() -> int:

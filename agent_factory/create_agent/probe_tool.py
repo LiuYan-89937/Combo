@@ -446,7 +446,7 @@ def _run_docker_probe(
             "captured_stderr": "",
             "dependency_report": {},
         }
-    command = [*plan.command[:-3], "python", "-m", "agent_factory.create_agent.docker_probe_runner"]
+    command = plan.command_for_python_module("agent_factory.create_agent.docker_probe_runner")
     request = json.dumps({"tool_id": spec.id, "arguments": arguments}, ensure_ascii=False)
     _emit_probe_progress(
         f"Docker probe 启动：{spec.id} image={plan.image}",

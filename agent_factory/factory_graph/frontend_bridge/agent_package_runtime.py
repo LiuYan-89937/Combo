@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 from typing import Any, Iterator
@@ -39,6 +39,8 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     AgentRuntimeLaunchError,
     DEFAULT_RUNTIME_IMAGE,
     DockerAgentRuntimeLauncher,
+    runtime_container_path,
+    shutdown_shared_runtime,
 )
 from agent_factory.factory_graph.frontend_bridge.container_pool import (
     get_global_container_pool,
@@ -846,11 +848,14 @@ class AgentPackageRuntimeManager:
         attachments: Any,
     ) -> AttachmentImportResult:
         attachment_scope = time_named_attachment_scope()
-        runtime_path_root = (
-            str(workdir_root / ATTACHMENT_INPUT_DIR / attachment_scope)
-            if _is_host_system_package(package)
-            else f"/workdir/{ATTACHMENT_INPUT_DIR}/{attachment_scope}"
-        )
+        if _is_host_system_package(package):
+            runtime_workdir = str(workdir_root)
+        else:
+            try:
+                runtime_workdir = str(runtime_container_path(workdir_root))
+            except ValueError:
+                runtime_workdir = "/workdir"
+        runtime_path_root = str(PurePosixPath(runtime_workdir) / ATTACHMENT_INPUT_DIR / attachment_scope)
         return import_runtime_attachments(
             user_input,
             attachments,
@@ -995,6 +1000,7 @@ class AgentPackageRuntimeManager:
         self._skillhub_gateways.close_all()
         if self._use_container_pool:
             shutdown_global_container_pool()
+        shutdown_shared_runtime()
 
     def cancel_active_requests(
         self,
@@ -1293,6 +1299,8 @@ class AgentPackageRuntimeManager:
             "mount_count": plan.mount_count,
             "extension_root": str(plan.extension_root),
             "preflight": plan.preflight,
+            "isolation": plan.isolation,
+            "shared_container_id": plan.shared_container_id,
         }
         return handle
 

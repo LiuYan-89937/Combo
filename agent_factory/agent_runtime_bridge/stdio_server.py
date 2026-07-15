@@ -34,6 +34,7 @@ from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
 from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
+from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.memory_system import default_agent_memory_config
 from agent_factory.package_runtime.session_turns import (
     resume_user_input,
@@ -44,12 +45,16 @@ from agent_factory.package_runtime.session_turns import (
     session_user_input_from_state,
 )
 from agent_factory.runtime_attachments import has_attachment_payload, merge_attachments_into_user_config
+from agent_factory.agent_runtime_bridge.paths import runtime_bridge_paths
 
 
-PACKAGE_ROOT = Path("/package")
+_BRIDGE_PATHS = runtime_bridge_paths()
+PACKAGE_ROOT = _BRIDGE_PATHS.package_root
 PACKAGE_MANIFEST = PACKAGE_ROOT / "agent_package.json"
-ARTIFACTS_ROOT = Path("/artifacts")
-RUNTIME_ROOT = Path("/runtime")
+ARTIFACTS_ROOT = _BRIDGE_PATHS.artifacts_root
+RUNTIME_ROOT = _BRIDGE_PATHS.runtime_root
+WORKDIR_ROOT = _BRIDGE_PATHS.workdir_root
+EXTENSION_ROOT = _BRIDGE_PATHS.extension_root
 
 
 @dataclass(slots=True)
@@ -293,6 +298,7 @@ class BridgeRuntimeState:
                 package,
                 base_services=facade.instance.services,
                 runtime_root=RUNTIME_ROOT,
+                instance_extension_root=EXTENSION_ROOT,
             )
             compiler = AgentAssemblyCompiler(facade=facade)
             compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
@@ -884,7 +890,14 @@ def _run_harness_tool_tests(compiled: Any, plan: dict[str, Any], result: dict[st
 
 
 def _load_package() -> LoadedAgentPackage:
-    return AgentPackageLoader().load_path(PACKAGE_MANIFEST)
+    package = AgentPackageLoader().load_path(PACKAGE_MANIFEST)
+    return host_runtime_package_view(
+        package,
+        runtime_root=RUNTIME_ROOT,
+        artifacts_root=ARTIFACTS_ROOT,
+        workdir_root=WORKDIR_ROOT,
+        extension_root=EXTENSION_ROOT,
+    )
 
 
 def _handle_stream_item(normalizer: RuntimeEventNormalizer, stream_mode: str, chunk: Any) -> bool:
