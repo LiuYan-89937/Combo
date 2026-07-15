@@ -1316,8 +1316,18 @@ onBeforeUnmount(() => {
   .context-bar > .n-button { width: 100%; margin-left: 0; }
   .overview-card,
   .resource-card { padding: var(--app-space-md); }
+  .overview-card { position: relative; align-items: stretch; flex-direction: column; }
+  .overview-icon { width: 36px; height: 36px; }
+  .overview-card .status-dot { position: absolute; top: var(--app-space-md); right: var(--app-space-md); }
+  .runtime-device { padding: var(--app-space-xs); }
+  .runtime-metrics { display: grid; grid-template-columns: 1fr; }
   .model-panel { padding-inline: var(--app-space-sm); }
   .resource-actions > .n-button,
   .resource-actions > .n-dropdown { flex: 1 1 calc(50% - var(--app-space-xs)); }
+}
+
+@media (max-width: 620px) {
+  .form-grid,
+  .memory-preview-grid { grid-template-columns: 1fr; }
 }
 </style>

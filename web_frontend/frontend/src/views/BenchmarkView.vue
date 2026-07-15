@@ -634,6 +634,10 @@ onUnmounted(() => {
 
 <style scoped>
 .benchmark-view {
+  container-name: benchmark;
+  container-type: inline-size;
+  width: 100%;
+  min-width: 0;
   height: 100%;
   background: var(--app-background);
 }
@@ -804,7 +808,7 @@ onUnmounted(() => {
 .history-date { color: var(--app-text-muted); }
 .history-metrics { display: flex; gap: var(--app-space-md); font-variant-numeric: tabular-nums; }
 
-@media (max-width: 1100px) {
+@container benchmark (max-width: 1100px) {
   .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field, .field-wide { grid-column: span 1; }
   .field-full { grid-column: 1 / -1; }
@@ -815,7 +819,7 @@ onUnmounted(() => {
   .history-date { grid-column: 1 / -1; grid-row: 3; font-size: var(--app-font-xs); }
 }
 
-@media (max-width: 700px) {
+@container benchmark (max-width: 700px) {
   .context-bar { align-items: flex-start; flex-wrap: wrap; padding: var(--app-space-md); }
   .context-bar > .n-button { margin-left: 42px; }
   .benchmark-content { padding: var(--app-space-md); }
@@ -836,7 +840,7 @@ onUnmounted(() => {
   .history-date { grid-column: 1 / -1; }
 }
 
-@media (max-width: 420px) {
+@container benchmark (max-width: 420px) {
   .context-bar > .n-button { width: 100%; margin-left: 0; }
   .benchmark-content { padding: var(--app-space-sm); }
   .panel { padding: var(--app-space-sm); }
