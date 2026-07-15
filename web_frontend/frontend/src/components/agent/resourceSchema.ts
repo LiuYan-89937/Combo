@@ -39,10 +39,23 @@ export function resourceSchemaFields(schemaValue: Record<string, unknown>): Reso
     : null
 }
 
-export function createResourceDraft(schema: Record<string, unknown>): unknown {
+export function createResourceDraft(schema: Record<string, unknown>, configuredValue?: unknown): unknown {
   const fields = resourceSchemaFields(schema)
-  if (!fields) return ''
-  return Object.fromEntries(fields.map(field => [field.name, initialFieldValue(field.schema)]))
+  if (!fields) {
+    if (configuredValue === undefined || configuredValue === null) return ''
+    return typeof configuredValue === 'string'
+      ? configuredValue
+      : JSON.stringify(configuredValue, null, 2)
+  }
+  const configured = configuredValue && typeof configuredValue === 'object' && !Array.isArray(configuredValue)
+    ? configuredValue as Record<string, unknown>
+    : {}
+  return Object.fromEntries(
+    fields.map(field => [
+      field.name,
+      configured[field.name] === undefined ? initialFieldValue(field.schema) : configured[field.name],
+    ]),
+  )
 }
 
 export function resourceDraftComplete(schema: Record<string, unknown>, draft: unknown): boolean {

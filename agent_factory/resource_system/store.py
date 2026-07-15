@@ -39,22 +39,32 @@ class ResourceStore:
     def key_available(self) -> bool:
         return bool(self._master_key.strip())
 
-    def status(self, package_id: str, descriptors: list[ResourceDescriptor]) -> list[dict[str, Any]]:
+    def status(
+        self,
+        package_id: str,
+        descriptors: list[ResourceDescriptor],
+        *,
+        include_values: bool = False,
+    ) -> list[dict[str, Any]]:
         existing = self._existing_resource_ids(package_id)
-        return [
-            {
+        items: list[dict[str, Any]] = []
+        for descriptor in descriptors:
+            configured = descriptor.resource_id in existing
+            item = {
                 "resource_id": descriptor.resource_id,
                 "description": descriptor.description,
                 "required": descriptor.required,
-                "configured": descriptor.resource_id in existing,
+                "configured": configured,
                 "secret_fields": list(descriptor.secret_fields),
                 "used_by": list(descriptor.used_by),
                 "sandbox_access_expectation": descriptor.sandbox_access_expectation,
                 "value_schema": descriptor.value_schema,
                 "key_available": self.key_available,
             }
-            for descriptor in descriptors
-        ]
+            if include_values:
+                item["value"] = self.resolve(package_id, descriptor) if configured and self.key_available else None
+            items.append(item)
+        return items
 
     def put(self, package_id: str, descriptor: ResourceDescriptor, value: Any) -> dict[str, Any]:
         self._assert_writable()

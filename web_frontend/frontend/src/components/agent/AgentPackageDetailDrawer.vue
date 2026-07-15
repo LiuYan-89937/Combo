@@ -52,7 +52,7 @@
             <n-tag size="small" :type="resourceStatusType">{{ resourceStatusLabel }}</n-tag>
           </div>
           <div class="resource-section-hint">
-            这些配置只保存在本机加密资源库中，不会写入 AgentPackage。已配置项不会回显；覆盖时需要重新填写完整字段。
+            这些配置只保存在本机加密资源库中，不会写入 AgentPackage。已配置值会完整回填；密码字段默认遮挡，可点击眼睛查看。
           </div>
           <div v-if="resourceLoadError" class="resource-error">{{ resourceLoadError }}</div>
           <div v-else class="detail-list">
@@ -543,7 +543,7 @@ async function loadResources(packageId: string): Promise<void> {
   resourceItems.value = payload.resources
   resourceStoreReady.value = payload.key_available
   resourceDrafts.value = Object.fromEntries(
-    payload.resources.map(item => [item.resource_id, createResourceDraft(item.value_schema)]),
+    payload.resources.map(item => [item.resource_id, createResourceDraft(item.value_schema, item.value)]),
   )
   resourceErrors.value = {}
 }
