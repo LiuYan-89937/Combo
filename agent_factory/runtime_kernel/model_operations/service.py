@@ -404,6 +404,8 @@ class ModelOperationService:
             if item is None:
                 raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
             model, settings = item
+            settings_role = _settings_role(settings, fallback=requested_role)
+            model_role_fallback = requested_role == "task" and settings_role == "main"
             return self._apply_runtime_reasoning(
                 model,
                 settings,
@@ -412,24 +414,38 @@ class ModelOperationService:
                     "model": "injected",
                     "requested_model_role": requested_role,
                 },
-                model_role_fallback=(requested_role == "task" and settings.metadata().get("model_role") == "main"),
+                settings_role=settings_role,
+                model_role_fallback=model_role_fallback,
             )
         if self._model is not None:
             if role is not None and role != self.model_role:
                 model, settings = _configured_model_for_role(role)
                 if model is None:
                     raise RuntimeError(f"{role} model is not configured for AgentPackage runtime")
-                return self._apply_runtime_reasoning(model, settings, state, {})
+                return self._apply_runtime_reasoning(
+                    model,
+                    settings,
+                    state,
+                    {},
+                    settings_role=role,
+                )
             return self._apply_runtime_reasoning(
                 self._model,
                 self._settings,
                 state,
                 {"model_role": self.model_role, "model": "injected"},
+                settings_role=_settings_role(self._settings, fallback=self.model_role),
             )
         model, settings = _configured_model_for_role(requested_role)
         if model is None:
             raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
-        return self._apply_runtime_reasoning(model, settings, state, {})
+        return self._apply_runtime_reasoning(
+            model,
+            settings,
+            state,
+            {},
+            settings_role=requested_role,
+        )
 
     @staticmethod
     def _apply_runtime_reasoning(
@@ -438,13 +454,14 @@ class ModelOperationService:
         state: Any | None,
         metadata: dict[str, Any],
         *,
+        settings_role: ModelRole,
         model_role_fallback: bool = False,
     ) -> tuple[Any, dict[str, Any]]:
         if state is not None:
             if settings is None:
-                _, settings = _configured_model_for_role(self.model_role)
+                _, settings = _configured_model_for_role(settings_role)
             if settings is None:
-                raise RuntimeError(f"{self.model_role} model settings are not configured")
+                raise RuntimeError(f"{settings_role} model settings are not configured")
             model, settings = resolve_runtime_reasoning_model(model, settings, state)
         result = {
             **metadata,
@@ -476,6 +493,17 @@ class ModelOperationService:
         except RuntimeError:
             return None
         return model
+
+
+def _settings_role(settings: Any, *, fallback: ModelRole) -> ModelRole:
+    role = str(getattr(settings, "role", "") or "")
+    if role == "main":
+        return "main"
+    if role == "task":
+        return "task"
+    if role == "compression":
+        return "compression"
+    return fallback
 
 
 def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:

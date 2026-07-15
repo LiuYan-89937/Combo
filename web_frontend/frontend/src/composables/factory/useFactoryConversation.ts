@@ -24,6 +24,9 @@ export function useFactoryConversation() {
   const chatModelProfiles = ref<LocalModelProfile[]>([])
   const defaultMainModelProfileId = ref('')
   const selectedMainModelProfileId = ref(localStorage.getItem(MAIN_MODEL_PROFILE_STORAGE_KEY) || '')
+  const effectiveMainModelProfileId = computed(() => (
+    selectedMainModelProfileId.value.trim() || defaultMainModelProfileId.value.trim()
+  ))
   const reasoningIntensity = ref<number | null>(loadReasoningIntensity())
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
@@ -140,7 +143,7 @@ export function useFactoryConversation() {
   }
 
   function runtimeModelOptions() {
-    const profileId = selectedMainModelProfileId.value.trim()
+    const profileId = effectiveMainModelProfileId.value
     if (!profileId && reasoningIntensity.value === null) return undefined
     return {
       ...(profileId ? { mainModelProfileId: profileId } : {}),
@@ -267,6 +270,7 @@ export function useFactoryConversation() {
     loadRuntimeMainModelProfiles,
     runtimeMainModelOptions,
     reasoningIntensity,
+    effectiveMainModelProfileId,
     selectedMainModelProfileId,
     sendMessage,
     setSelectedMainModelProfileId,

@@ -25,7 +25,7 @@ from agent_factory.context_system.token_counter import context_window_payload
 from agent_factory.model_pool.runtime_override import (
     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
     RUNTIME_REASONING_INTENSITY_KEY,
-    main_model_profile_id_from_user_config,
+    effective_main_model_profile_id_from_user_config,
     runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
@@ -128,7 +128,7 @@ class CreateAgentRuntime:
             scope=attachment_scope,
         )
         user_input = attachment_result.message
-        runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
+        runtime_main_model_profile_id = effective_main_model_profile_id_from_user_config(user_config)
         runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
         intent = classify_create_agent_intent(
             user_input=user_input,

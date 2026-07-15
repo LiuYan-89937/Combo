@@ -147,6 +147,7 @@ const {
   loadRuntimeMainModelProfiles,
   runtimeMainModelOptions,
   reasoningIntensity,
+  effectiveMainModelProfileId,
   selectedMainModelProfileId,
   setSelectedMainModelProfileId,
   setReasoningIntensity,
@@ -194,7 +195,7 @@ function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'source
     scopeType: tipScopeType.value,
     scopeId: tipScopeId.value,
     agentPackageId: String(message.metadata?.package_id || agentStore.activeChatPackageId || 'factory_chat'),
-    modelProfileId: selectedMainModelProfileId.value || null,
+    modelProfileId: effectiveMainModelProfileId.value || null,
     reasoningIntensity: reasoningIntensity.value,
   }
 }

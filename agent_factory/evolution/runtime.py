@@ -35,7 +35,7 @@ from agent_factory.factory_graph.session import build_factory_checkpointer_handl
 from agent_factory.model_pool.runtime_override import (
     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
     RUNTIME_REASONING_INTENSITY_KEY,
-    main_model_profile_id_from_user_config,
+    effective_main_model_profile_id_from_user_config,
     runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
@@ -251,7 +251,7 @@ class AgentEvolutionRuntime:
                 backup_path=None,
                 before_fingerprint={},
                 runtime_attachments=[],
-                runtime_main_model_profile_id=main_model_profile_id_from_user_config(user_config),
+                runtime_main_model_profile_id=effective_main_model_profile_id_from_user_config(user_config),
                 runtime_reasoning_intensity=runtime_reasoning_intensity_from_user_config(user_config),
             )
         resolved_thread_id = context.graph_thread_id
