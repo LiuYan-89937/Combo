@@ -18,7 +18,11 @@ from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
-from agent_factory.tooling.langgraph_node import build_tool_node_runner, latest_ai_tool_calls
+from agent_factory.tooling.langgraph_node import (
+    build_tool_node_runner,
+    latest_ai_declared_tool_calls,
+    latest_ai_tool_calls,
+)
 
 
 class CreateAgentGraphState(TypedDict, total=False):
@@ -243,7 +247,7 @@ class CreateAgentWorkflow:
         return "tools" if tool_calls else "control_gate"
 
     def _route_after_tools(self, state: CreateAgentGraphState) -> Literal["supervisor", "control_gate"]:
-        _ai_message, tool_calls = latest_ai_tool_calls(state.get("messages") or [])
+        _ai_message, tool_calls = latest_ai_declared_tool_calls(state.get("messages") or [])
         return "control_gate" if _has_control_action(tool_calls) else "supervisor"
 
     def _route_after_control_gate(self, state: CreateAgentGraphState) -> Literal["supervisor", "end"]:
