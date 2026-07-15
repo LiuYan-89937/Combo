@@ -1,5 +1,5 @@
 {
-  "version": "environment_lock.v2",
+  "version": "environment_lock.v3",
   "status": "ready",
   "request_fingerprint": "c1d1c85a3e43a3e44717243a427fe97ded27b52cab8bfa91dd031e0edd20b875",
   "image": "agentfactory-runtime-python:3.12",
@@ -25,7 +25,7 @@
     "install_timeout_seconds": null
   },
   "pool": {
-    "version": "dependency_pool.v1",
+    "version": "dependency_pool.v2",
     "python_entries": [],
     "system_entries": [],
     "npm_profile": null

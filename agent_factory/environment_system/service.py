@@ -11,14 +11,13 @@ from typing import Any
 from agent_factory.agent_runtime_bridge.dependencies import load_dependencies_contract
 
 from .pool import DependencyPool, DependencyPoolError, DependencyPoolResolution
+from .python_requirements import PythonRequirementError, normalize_python_requirements
 from .runtime_image import (
     RuntimeImageResolutionError,
     configured_runtime_image_id,
     resolve_runtime_image,
 )
-
-
-ENVIRONMENT_LOCK_VERSION = "environment_lock.v2"
+from .versions import DEPENDENCY_POOL_VERSION, ENVIRONMENT_LOCK_VERSION
 
 
 class EnvironmentResolutionError(RuntimeError):
@@ -141,7 +140,7 @@ class EnvironmentResolver:
             and isinstance(value.get("image"), str)
             and value["image"]
             and isinstance(value.get("pool"), dict)
-            and value["pool"].get("version") == "dependency_pool.v1"
+            and value["pool"].get("version") == DEPENDENCY_POOL_VERSION
             and self.pool.references_available(value["pool"])
         )
 
@@ -175,12 +174,16 @@ def _dependency_request(
     architecture: str,
     config: Any,
 ) -> dict[str, Any]:
+    try:
+        python_requirements = normalize_python_requirements(config.python_requirements) if enabled else []
+    except PythonRequirementError as exc:
+        raise EnvironmentResolutionError("dependency_declaration_invalid", str(exc)) from exc
     return {
         "enabled": bool(enabled),
         "base_image": base_image,
         "base_digest": base_digest,
         "architecture": architecture,
-        "python_requirements": _normalized_values(config.python_requirements) if enabled else [],
+        "python_requirements": python_requirements,
         "system_packages": _normalized_values(config.system_packages) if enabled else [],
         "npm_requirements": _normalized_values(config.npm_requirements) if enabled else [],
         "system_binaries": _normalized_values(config.system_binaries) if enabled else [],

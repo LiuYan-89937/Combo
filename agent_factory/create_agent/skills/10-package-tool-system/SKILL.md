@@ -51,6 +51,7 @@ Guides adding executable package tools and their ToolSpec declarations.
 - When tool.py imports non-stdlib Python modules that are not package-local and not `agent_factory`, pass installable distributions as `python_requirements` to create_agent_authoring.
 - create_agent_authoring rejects package tool writes before any files are changed when third-party imports exist but `python_requirements` is empty.
 - Use installable Python distribution names in `python_requirements`; if an import name differs from the distribution name, determine the correct distribution from package documentation or validator evidence instead of guessing.
+- Python requirements are normalized by distribution name and environment marker. Submit one intentional constraint per distribution and marker; a later declaration for the same identity replaces the earlier one.
 - When declaring Python or system package dependencies, provide `install_timeout_seconds` as a task-appropriate positive estimate based on dependency size, platform, and network conditions.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
 - Create package tools only after model_pool_select/model bindings are complete, pattern assembly tool access plus needed inherited MCP materialization are complete, and reusable SkillHub skills have been evaluated.
