@@ -13,6 +13,7 @@ from agent_factory.create_agent.mcp_inheritance import materialize_referenced_fa
 from agent_factory.create_agent.model_tool_access import model_tool_ids_from_package_root
 from agent_factory.create_agent.stage_sync import sync_authoring_stage
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.environment_system.python_requirements import merge_python_requirements
 from agent_factory.runtime_kernel.activation import PLAN_AND_EXECUTE_ACTIVATION_FIELDS
 from agent_factory.runtime_contracts.schema import (
     AgentIdentitySpec,
@@ -110,7 +111,14 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "tool_spec": _tool_spec_authoring_schema(),
                 "tool_id": {"type": "string"},
                 "tool_source": {"type": "string"},
-                "python_requirements": {"type": "array", "items": {"type": "string"}},
+                "python_requirements": {
+                    "type": "array",
+                    "description": (
+                        "Installable Python distribution requirements. Names and markers are normalized; a later "
+                        "declaration for the same distribution and marker replaces the earlier constraint."
+                    ),
+                    "items": {"type": "string"},
+                },
                 "system_packages": {"type": "array", "items": {"type": "string"}},
                 "npm_requirements": {"type": "array", "items": {"type": "string"}},
                 "system_binaries": {"type": "array", "items": {"type": "string"}},
@@ -796,9 +804,11 @@ def _merge_dependency_config(
     verification_commands: list[list[str]],
     install_timeout_seconds: Any,
 ) -> None:
-    requirements = _dependency_list(config, "python_requirements")
-    for requirement in python_requirements:
-        _append_unique(requirements, requirement)
+    requirements = merge_python_requirements(
+        _dependency_list(config, "python_requirements"),
+        python_requirements,
+    )
+    config["python_requirements"] = requirements
     packages = _dependency_list(config, "system_packages")
     for package in system_packages:
         _append_unique(packages, package)

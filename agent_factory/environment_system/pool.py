@@ -13,7 +13,12 @@ from typing import Any, Iterator
 from uuid import uuid4
 import zipfile
 
+from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
+
 from agent_factory.paths import factory_artifact_path
+
+from .python_requirements import PythonRequirementError, normalize_python_requirements
+from .versions import DEPENDENCY_POOL_VERSION
 
 
 class DependencyPoolError(RuntimeError):
@@ -30,7 +35,7 @@ class DependencyPoolResolution:
 
     def to_lock_payload(self) -> dict[str, Any]:
         return {
-            "version": "dependency_pool.v1",
+            "version": DEPENDENCY_POOL_VERSION,
             "python_entries": self.python_entries,
             "system_entries": self.system_entries,
             "npm_profile": self.npm_profile,
@@ -55,23 +60,27 @@ class DependencyPool:
         timeout_seconds: int | None,
     ) -> DependencyPoolResolution:
         self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            normalized_python_requirements = normalize_python_requirements(python_requirements)
+        except PythonRequirementError as exc:
+            raise DependencyPoolError("unsupported", str(exc)) from exc
         profile_key = _fingerprint(
             {
                 "base_image": base_image,
                 "architecture": architecture,
-                "python_requirements": _normalized_values(python_requirements),
+                "python_requirements": normalized_python_requirements,
                 "system_packages": _normalized_values(system_packages),
                 "npm_requirements": _normalized_values(npm_requirements),
             }
         )
-        with self._exclusive_lock():
+        with self._profile_lock(profile_key):
             existing = self._read_profile(profile_key)
             if existing is not None and self.references_available(existing.to_lock_payload()):
                 return existing
             python_entries = self._resolve_python(
                 docker=docker,
                 base_image=base_image,
-                requirements=_normalized_values(python_requirements),
+                requirements=normalized_python_requirements,
                 timeout_seconds=timeout_seconds,
             )
             system_entries = self._resolve_system(
@@ -91,11 +100,12 @@ class DependencyPool:
                 system_entries=system_entries,
                 npm_profile=npm_profile,
             )
-            self._write_profile(profile_key, resolution)
+            with self._exclusive_lock():
+                self._write_profile(profile_key, resolution)
             return resolution
 
     def references_available(self, payload: object) -> bool:
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or payload.get("version") != DEPENDENCY_POOL_VERSION:
             return False
         for key in ("python_entries", "system_entries"):
             entries = payload.get(key)
@@ -103,6 +113,8 @@ class DependencyPool:
                 return False
             for entry in entries:
                 if not isinstance(entry, dict) or not self._entry_exists(entry.get("path")):
+                    return False
+                if key == "python_entries" and not self._entry_exists(entry.get("artifact_path")):
                     return False
         npm_profile = payload.get("npm_profile")
         return npm_profile is None or (isinstance(npm_profile, dict) and self._entry_exists(npm_profile.get("path")))
@@ -117,8 +129,18 @@ class DependencyPool:
     ) -> list[dict[str, str]]:
         if not requirements:
             return []
-        _assert_installable_requirements(requirements, ecosystem="python")
+        try:
+            requirements = normalize_python_requirements(requirements)
+        except PythonRequirementError as exc:
+            raise DependencyPoolError("unsupported", str(exc)) from exc
+        download_cache = self.root / "python" / "download_cache"
+        download_cache.mkdir(parents=True, exist_ok=True)
         with self._staging_directory() as staging:
+            downloads = staging / "downloads"
+            downloads.mkdir()
+            wheelhouse = staging / "wheelhouse"
+            wheelhouse.mkdir()
+            self._materialize_python_wheelhouse(wheelhouse)
             self._run(
                 [
                     docker,
@@ -129,7 +151,7 @@ class DependencyPool:
                     "-v",
                     f"{staging}:/dependency_staging:rw",
                     "-v",
-                    f"{self.root / 'python' / 'download_cache'}:/root/.cache/pip:rw",
+                    f"{download_cache}:/root/.cache/pip:rw",
                     base_image,
                     "python",
                     "-m",
@@ -137,15 +159,17 @@ class DependencyPool:
                     "download",
                     "--disable-pip-version-check",
                     "--only-binary=:all:",
+                    "--find-links",
+                    "/dependency_staging/wheelhouse",
                     "--dest",
-                    "/dependency_staging",
+                    "/dependency_staging/downloads",
                     *requirements,
                 ],
                 timeout_seconds=timeout_seconds,
                 action="download Python dependency artifacts",
             )
-            wheels = sorted(path for path in staging.iterdir() if path.is_file() and path.suffix == ".whl")
-            unsupported = sorted(path.name for path in staging.iterdir() if path.is_file() and path.suffix != ".whl")
+            wheels = sorted(path for path in downloads.iterdir() if path.is_file() and path.suffix == ".whl")
+            unsupported = sorted(path.name for path in downloads.iterdir() if path.is_file() and path.suffix != ".whl")
             if unsupported:
                 raise DependencyPoolError(
                     "unsupported",
@@ -166,12 +190,31 @@ class DependencyPool:
         if not packages:
             return []
         _assert_installable_requirements(packages, ecosystem="system")
+        with self._cache_lock("system"):
+            return self._resolve_system_locked(
+                docker=docker,
+                base_image=base_image,
+                packages=packages,
+                timeout_seconds=timeout_seconds,
+            )
+
+    def _resolve_system_locked(
+        self,
+        *,
+        docker: str,
+        base_image: str,
+        packages: list[str],
+        timeout_seconds: int | None,
+    ) -> list[dict[str, str]]:
         script = (
             "set -eu\n"
+            "mkdir -p /var/cache/apt/archives/partial\n"
             "apt-get update\n"
             "apt-get install --download-only -y --no-install-recommends \"$@\"\n"
             "find /var/cache/apt/archives -maxdepth 1 -type f -name '*.deb' -exec cp {} /dependency_staging/ \\;\n"
         )
+        archive_cache = self.root / "system" / "archive_cache"
+        archive_cache.mkdir(parents=True, exist_ok=True)
         with self._staging_directory() as staging:
             self._run(
                 [
@@ -182,6 +225,8 @@ class DependencyPool:
                     "host",
                     "-v",
                     f"{staging}:/dependency_staging:rw",
+                    "-v",
+                    f"{archive_cache}:/var/cache/apt/archives:rw",
                     base_image,
                     "bash",
                     "-c",
@@ -250,15 +295,28 @@ class DependencyPool:
             profile_hash = _sha256_file(lock_path)
             relative = PurePosixPath("npm") / "profiles" / profile_hash
             target = self.root / relative
-            if not target.exists():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                project.replace(target)
+            with self._exclusive_lock():
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    project.replace(target)
             return {"path": relative.as_posix(), "sha256": profile_hash}
 
     def _store_wheel(self, wheel: Path) -> dict[str, str]:
+        with self._exclusive_lock():
+            return self._store_wheel_locked(wheel)
+
+    def _store_wheel_locked(self, wheel: Path) -> dict[str, str]:
         digest = _sha256_file(wheel)
+        wheel_metadata = _wheel_metadata(wheel.name)
         relative = PurePosixPath("python") / "wheels" / digest
         target = self.root / relative
+        artifact_relative = PurePosixPath("python") / "artifacts" / digest / wheel.name
+        artifact = self.root / artifact_relative
+        if not artifact.is_file():
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            temporary_artifact = artifact.with_name(f".{artifact.name}.{uuid4().hex}.tmp")
+            shutil.copy2(wheel, temporary_artifact)
+            temporary_artifact.replace(artifact)
         site_packages = target / "site-packages"
         if not site_packages.is_dir():
             temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
@@ -267,8 +325,14 @@ class DependencyPool:
                 extracted = temporary / "site-packages"
                 extracted.mkdir()
                 _safe_extract_wheel(wheel, extracted)
+                metadata = {
+                    **wheel_metadata,
+                    "filename": wheel.name,
+                    "sha256": digest,
+                    "artifact_path": artifact_relative.as_posix(),
+                }
                 (temporary / "metadata.json").write_text(
-                    json.dumps({"filename": wheel.name, "sha256": digest}, ensure_ascii=False, indent=2) + "\n",
+                    json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -279,19 +343,127 @@ class DependencyPool:
             finally:
                 if temporary.exists():
                     shutil.rmtree(temporary)
-        return {"path": relative.as_posix(), "sha256": digest, "filename": wheel.name}
+        index = self._read_python_artifact_index()
+        index["artifacts"][digest] = {
+            **wheel_metadata,
+            "filename": wheel.name,
+            "sha256": digest,
+            "artifact_path": artifact_relative.as_posix(),
+        }
+        distributions = index["distributions"]
+        versions = distributions.setdefault(wheel_metadata["name"], {})
+        digests = versions.setdefault(wheel_metadata["version"], [])
+        if digest not in digests:
+            digests.append(digest)
+            digests.sort()
+        self._write_python_artifact_index(index)
+        return {
+            "path": relative.as_posix(),
+            "sha256": digest,
+            "filename": wheel.name,
+            "artifact_path": artifact_relative.as_posix(),
+            **wheel_metadata,
+        }
 
     def _store_file(self, source: Path, *, directory: str) -> dict[str, str]:
-        digest = _sha256_file(source)
-        suffix = source.suffix
-        relative = PurePosixPath(directory) / f"{digest}{suffix}"
-        target = self.root / relative
-        if not target.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
-            shutil.copy2(source, temporary)
-            temporary.replace(target)
-        return {"path": relative.as_posix(), "sha256": digest, "filename": source.name}
+        with self._exclusive_lock():
+            digest = _sha256_file(source)
+            suffix = source.suffix
+            relative = PurePosixPath(directory) / f"{digest}{suffix}"
+            target = self.root / relative
+            if not target.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+                shutil.copy2(source, temporary)
+                temporary.replace(target)
+            return {"path": relative.as_posix(), "sha256": digest, "filename": source.name}
+
+    def _materialize_python_wheelhouse(self, destination: Path) -> None:
+        index = self._read_python_artifact_index()
+        for record in index["artifacts"].values():
+            filename = record.get("filename")
+            artifact_path = record.get("artifact_path")
+            if not isinstance(filename, str) or Path(filename).name != filename:
+                continue
+            if not isinstance(artifact_path, str):
+                continue
+            try:
+                source = self.root / _safe_relative_path(artifact_path)
+            except ValueError:
+                continue
+            if not source.is_file():
+                continue
+            target = destination / filename
+            if target.exists():
+                if _sha256_file(target) != record.get("sha256"):
+                    raise DependencyPoolError("pool_conflict", f"conflicting cached wheel filename: {filename}")
+                continue
+            try:
+                target.hardlink_to(source)
+            except OSError:
+                shutil.copy2(source, target)
+
+    def _read_python_artifact_index(self) -> dict[str, Any]:
+        path = self.root / "python" / "artifact_index.json"
+        value: object = None
+        if path.is_file():
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                value = None
+        artifacts: dict[str, dict[str, Any]] = {}
+        if (
+            isinstance(value, dict)
+            and value.get("version") == "python_artifact_index.v1"
+            and isinstance(value.get("artifacts"), dict)
+        ):
+            artifacts = {
+                str(key): dict(record)
+                for key, record in value["artifacts"].items()
+                if isinstance(record, dict)
+            }
+        artifacts.update(self._python_artifacts_from_storage())
+        return {
+            "version": "python_artifact_index.v1",
+            "artifacts": artifacts,
+            "distributions": _distribution_index(artifacts),
+        }
+
+    def _python_artifacts_from_storage(self) -> dict[str, dict[str, str]]:
+        root = self.root / "python" / "artifacts"
+        if not root.is_dir():
+            return {}
+        artifacts: dict[str, dict[str, str]] = {}
+        for digest_directory in root.iterdir():
+            digest = digest_directory.name
+            if (
+                not digest_directory.is_dir()
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+            ):
+                continue
+            for wheel in digest_directory.iterdir():
+                if not wheel.is_file() or wheel.suffix != ".whl":
+                    continue
+                try:
+                    metadata = _wheel_metadata(wheel.name)
+                except DependencyPoolError:
+                    continue
+                artifact_path = PurePosixPath("python") / "artifacts" / digest / wheel.name
+                artifacts[digest] = {
+                    **metadata,
+                    "filename": wheel.name,
+                    "sha256": digest,
+                    "artifact_path": artifact_path.as_posix(),
+                }
+        return artifacts
+
+    def _write_python_artifact_index(self, index: dict[str, Any]) -> None:
+        path = self.root / "python" / "artifact_index.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        temporary.write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
 
     def _entry_exists(self, value: object) -> bool:
         if not isinstance(value, str) or not value:
@@ -308,6 +480,8 @@ class DependencyPool:
             return None
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
+            if value.get("version") != DEPENDENCY_POOL_VERSION:
+                return None
             python_entries = value.get("python_entries")
             system_entries = value.get("system_entries")
             npm_profile = value.get("npm_profile")
@@ -335,6 +509,28 @@ class DependencyPool:
     @contextmanager
     def _exclusive_lock(self) -> Iterator[None]:
         lock_path = self.root / ".pool.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def _profile_lock(self, profile_key: str) -> Iterator[None]:
+        lock_path = self.root / "profiles" / ".locks" / f"{profile_key}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def _cache_lock(self, ecosystem: str) -> Iterator[None]:
+        lock_path = self.root / ".cache_locks" / f"{ecosystem}.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -381,6 +577,41 @@ def _assert_installable_requirements(values: list[str], *, ecosystem: str) -> No
             "unsupported",
             f"{ecosystem} dependency declarations must be package requirements, not package-manager options: {', '.join(invalid)}",
         )
+
+
+def _wheel_metadata(filename: str) -> dict[str, str]:
+    try:
+        name, version, build, tags = parse_wheel_filename(filename)
+    except InvalidWheelFilename as exc:
+        raise DependencyPoolError("unsupported", f"invalid Python wheel filename {filename!r}: {exc}") from exc
+    return {
+        "name": canonicalize_name(name),
+        "version": str(version),
+        "build": ".".join(str(part) for part in build),
+        "tags": ",".join(sorted(str(tag) for tag in tags)),
+    }
+
+
+def _empty_python_artifact_index() -> dict[str, Any]:
+    return {
+        "version": "python_artifact_index.v1",
+        "artifacts": {},
+        "distributions": {},
+    }
+
+
+def _distribution_index(artifacts: dict[str, dict[str, Any]]) -> dict[str, dict[str, list[str]]]:
+    result: dict[str, dict[str, list[str]]] = {}
+    for digest, record in artifacts.items():
+        name = record.get("name")
+        version = record.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            continue
+        result.setdefault(name, {}).setdefault(version, []).append(digest)
+    for versions in result.values():
+        for digests in versions.values():
+            digests.sort()
+    return result
 
 
 def _safe_extract_wheel(wheel: Path, destination: Path) -> None:

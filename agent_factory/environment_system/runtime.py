@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from typing import Any
 
+from .versions import DEPENDENCY_POOL_VERSION, ENVIRONMENT_LOCK_VERSION
+
 
 DEPENDENCY_POOL_ROOT_ENV = "AGENTFACTORY_DEPENDENCY_POOL_ROOT"
 ENVIRONMENT_LOCK_PATH_ENV = "AGENTFACTORY_ENVIRONMENT_LOCK_PATH"
@@ -106,14 +108,14 @@ def _read_lock(path: Path) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise RuntimeDependencyError(f"unable to read environment lock: {path}") from exc
-    if not isinstance(value, dict) or value.get("version") != "environment_lock.v2":
+    if not isinstance(value, dict) or value.get("version") != ENVIRONMENT_LOCK_VERSION:
         raise RuntimeDependencyError("environment lock is missing or incompatible")
     return value
 
 
 def _pool_payload(lock: dict[str, Any]) -> dict[str, Any]:
     pool = lock.get("pool")
-    if not isinstance(pool, dict) or pool.get("version") != "dependency_pool.v1":
+    if not isinstance(pool, dict) or pool.get("version") != DEPENDENCY_POOL_VERSION:
         raise RuntimeDependencyError("environment lock does not contain a dependency pool reference")
     return pool
 
