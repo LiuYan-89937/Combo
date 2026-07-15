@@ -3,6 +3,7 @@
 .idea/
 .agentfactory/
 .agent_runtime/
+environment.lock.json
 .venv/
 docs/*
 AGENT_GROUP_*.md
