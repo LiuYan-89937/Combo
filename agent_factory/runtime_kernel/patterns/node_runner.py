@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
+import traceback
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -254,6 +255,12 @@ def make_wrapped_runner(
                         "node_impl": node.impl,
                         "error_type": type(exc).__name__,
                         "error": str(exc),
+                        "traceback": "".join(
+                            traceback.TracebackException.from_exception(
+                                exc,
+                                capture_locals=False,
+                            ).format()
+                        ),
                     },
                 )
             emit_state_event(

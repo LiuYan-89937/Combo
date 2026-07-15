@@ -14,6 +14,10 @@ def default_model_pool_store_path() -> Path:
     return factory_artifact_path("model_pool", "factory.sqlite")
 
 
+def default_model_usage_store_path() -> Path:
+    return factory_artifact_path("model_pool", "usage.sqlite")
+
+
 def resolve_model_pool_store_path(value: str | Path | None = None) -> Path:
     configured = value if value is not None else os.getenv(MODEL_POOL_STORE_PATH_ENV)
     if configured:

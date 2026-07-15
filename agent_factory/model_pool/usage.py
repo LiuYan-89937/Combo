@@ -8,23 +8,36 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from agent_factory.model_pool.config import resolve_model_pool_store_path
+from agent_factory.model_pool.config import default_model_usage_store_path, resolve_model_pool_store_path
 from agent_factory.model_pool.schema import ModelPoolProfile
 from agent_factory.model_pool.store import ModelPoolStore
 
 
 ModelUsageGroupBy = Literal["model", "provider", "agent"]
+LEGACY_MODEL_POOL_USAGE_MIGRATION = "legacy_model_pool_usage.v1"
 
 
 class ModelUsageStore:
-    def __init__(self, path: str | Path | None = None, *, setup: bool = True) -> None:
-        self.path = resolve_model_pool_store_path(path)
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        model_pool_path: str | Path | None = None,
+        setup: bool = True,
+    ) -> None:
+        self.path = (
+            Path(path).expanduser().resolve()
+            if path is not None
+            else default_model_usage_store_path()
+        )
+        self.model_pool_path = resolve_model_pool_store_path(model_pool_path)
         if setup:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._ensure_schema()
+            self._migrate_legacy_usage()
 
     def record_frontend_event(self, event_payload: dict[str, Any]) -> bool:
-        record = usage_record_from_frontend_event(event_payload, store_path=self.path)
+        record = usage_record_from_frontend_event(event_payload, model_pool_path=self.model_pool_path)
         if record is None:
             return False
         with self._connect() as conn:
@@ -124,8 +137,45 @@ class ModelUsageStore:
                 create index if not exists idx_model_usage_model on model_usage_events(model_name);
                 create index if not exists idx_model_usage_agent on model_usage_events(agent_id);
                 create index if not exists idx_model_usage_profile on model_usage_events(model_profile_id);
+                create table if not exists model_usage_migrations (
+                  migration_id text primary key,
+                  completed_at text not null
+                );
                 """
             )
+
+    def _migrate_legacy_usage(self) -> None:
+        source = self.model_pool_path.resolve()
+        if source == self.path or not source.is_file():
+            return
+        with self._connect() as conn:
+            migrated = conn.execute(
+                "select 1 from model_usage_migrations where migration_id = ?",
+                (LEGACY_MODEL_POOL_USAGE_MIGRATION,),
+            ).fetchone()
+            if migrated:
+                return
+            conn.execute("attach database ? as legacy_model_pool", (str(source),))
+            try:
+                exists = conn.execute(
+                    "select 1 from legacy_model_pool.sqlite_master "
+                    "where type = 'table' and name = 'model_usage_events'"
+                ).fetchone()
+                if exists:
+                    conn.execute(
+                        "insert or ignore into main.model_usage_events "
+                        "select * from legacy_model_pool.model_usage_events"
+                    )
+                conn.execute(
+                    "insert or ignore into model_usage_migrations(migration_id, completed_at) values (?, ?)",
+                    (LEGACY_MODEL_POOL_USAGE_MIGRATION, datetime.now(UTC).isoformat()),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.execute("detach database legacy_model_pool")
 
 
 def record_model_usage_frontend_event(event_payload: dict[str, Any]) -> bool:
@@ -135,7 +185,7 @@ def record_model_usage_frontend_event(event_payload: dict[str, Any]) -> bool:
 def usage_record_from_frontend_event(
     event_payload: dict[str, Any],
     *,
-    store_path: str | Path | None = None,
+    model_pool_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     if str(event_payload.get("event_type") or "") != "model_cache_metrics":
         return None
@@ -159,7 +209,12 @@ def usage_record_from_frontend_event(
     profile_id = _text(payload.get("model_profile_id") or payload.get("profile_id"))
     provider = _text(payload.get("provider") or payload.get("model_provider"))
     model_name = _text(payload.get("model") or payload.get("model_name"))
-    profile = _resolve_profile(profile_id=profile_id, provider=provider, model_name=model_name, store_path=store_path)
+    profile = _resolve_profile(
+        profile_id=profile_id,
+        provider=provider,
+        model_name=model_name,
+        store_path=model_pool_path,
+    )
     if profile is not None:
         profile_id = profile_id or profile.profile_id
         provider = provider or profile.provider
