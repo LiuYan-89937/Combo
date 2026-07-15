@@ -152,13 +152,14 @@ class ResourceStore:
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         if self.read_only:
-            conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+            conn = sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)
         else:
             conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
-            conn.commit()
+            if not self.read_only:
+                conn.commit()
         finally:
             conn.close()
 

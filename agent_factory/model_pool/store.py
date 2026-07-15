@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
-from agent_factory.model_pool.config import resolve_model_pool_store_path
+from agent_factory.model_pool.config import model_pool_store_read_only, resolve_model_pool_store_path
 from agent_factory.model_pool.schema import (
     LocalModelArtifact,
     ModelPoolDefaultRole,
@@ -29,9 +29,19 @@ _DEFAULT_PROFILE_ROLES: tuple[ModelPoolDefaultRole, ...] = (
 
 
 class ModelPoolStore:
-    def __init__(self, path: str | Path | None = None, *, setup: bool = True) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        setup: bool = True,
+        read_only: bool | None = None,
+    ) -> None:
         self.path = resolve_model_pool_store_path(path)
-        if setup:
+        self.read_only = model_pool_store_read_only() if read_only is None else read_only
+        if self.read_only:
+            if not self.path.is_file():
+                raise ModelPoolStoreError(f"local model registry is not initialized: {self.path}")
+        elif setup:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._ensure_schema()
         elif not self.path.is_file():
@@ -47,7 +57,7 @@ class ModelPoolStore:
                 "updated_at": utc_now_text(),
             }
         )
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.execute(
                 """
                 insert into local_model_artifacts (
@@ -119,7 +129,7 @@ class ModelPoolStore:
     def delete_artifact(self, artifact_id: str) -> bool:
         if self.list_profiles(artifact_id=artifact_id):
             raise ModelPoolStoreError(f"artifact is still used by model profiles: {artifact_id}")
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             cursor = conn.execute("delete from local_model_artifacts where artifact_id = ?", (artifact_id,))
         return cursor.rowcount > 0
 
@@ -139,7 +149,7 @@ class ModelPoolStore:
             },
             deep=True,
         )
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.execute(
                 """
                 insert into local_model_profiles (
@@ -227,7 +237,7 @@ class ModelPoolStore:
         return [ModelPoolProfile.model_validate_json(str(row["payload_json"])) for row in rows]
 
     def delete_profile(self, profile_id: str) -> bool:
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.execute("delete from local_model_default_profiles where profile_id = ?", (profile_id,))
             conn.execute("delete from local_model_active_profiles where profile_id = ?", (profile_id,))
             cursor = conn.execute("delete from local_model_profiles where profile_id = ?", (profile_id,))
@@ -245,7 +255,7 @@ class ModelPoolStore:
     def set_active_profile_id(self, kind: str, profile_id: str | None) -> str | None:
         normalized_kind = self._validate_profile_kind(kind)
         normalized_profile_id = str(profile_id or "").strip()
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             if not normalized_profile_id:
                 conn.execute("delete from local_model_active_profiles where kind = ?", (normalized_kind,))
                 return None
@@ -306,7 +316,7 @@ class ModelPoolStore:
         normalized_role = self._validate_default_role(role)
         normalized_profile_id = str(profile_id or "").strip()
         if not normalized_profile_id:
-            with self._connect() as conn:
+            with self._connect(write=True) as conn:
                 conn.execute("delete from local_model_default_profiles where role = ?", (normalized_role,))
             return self.resolve_default_profile_id(normalized_role)
 
@@ -316,7 +326,7 @@ class ModelPoolStore:
             raise ModelPoolStoreError(
                 f"default role {normalized_role!r} requires an enabled {expected_kind} profile and artifact"
             )
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.execute(
                 """
                 insert into local_model_default_profiles (role, profile_id, updated_at)
@@ -355,17 +365,26 @@ class ModelPoolStore:
         ]
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
+    def _connect(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
+        if write and self.read_only:
+            raise ModelPoolStoreError("local model registry is read-only")
+        conn = (
+            sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)
+            if self.read_only
+            else sqlite3.connect(self.path)
+        )
         conn.row_factory = sqlite3.Row
+        if not write:
+            conn.execute("pragma query_only = on")
         try:
             yield conn
-            conn.commit()
+            if write:
+                conn.commit()
         finally:
             conn.close()
 
     def _ensure_schema(self) -> None:
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.executescript(
                 """
                 create table if not exists local_model_artifacts (

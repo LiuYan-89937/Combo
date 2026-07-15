@@ -1,8 +1,10 @@
 from agent_factory.model_pool.config import (
     MODEL_ROOT_ENV,
     MODEL_POOL_STORE_PATH_ENV,
+    MODEL_POOL_STORE_READ_ONLY_ENV,
     default_model_root,
     default_model_pool_store_path,
+    model_pool_store_read_only,
     resolve_model_root,
     resolve_model_pool_store_path,
 )
@@ -39,6 +41,7 @@ from agent_factory.model_pool.usage import ModelUsageStore, record_model_usage_f
 
 __all__ = [
     "MODEL_POOL_STORE_PATH_ENV",
+    "MODEL_POOL_STORE_READ_ONLY_ENV",
     "MODEL_ROOT_ENV",
     "ExternalInferenceConfig",
     "LlamaCppInferenceConfig",
@@ -68,6 +71,7 @@ __all__ = [
     "default_model_pool_store_path",
     "default_model_root",
     "list_local_inference_engines",
+    "model_pool_store_read_only",
     "record_model_usage_frontend_event",
     "resolve_chat_model_binding",
     "resolve_chat_model_profile",
