@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from agent_factory.paths import factory_artifact_path
@@ -7,19 +8,42 @@ from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.tooling.factory_extensions import default_system_agent_extension_root
 
 
+@dataclass(frozen=True, slots=True)
+class PackageRuntimeWorkspace:
+    """Stable writable workspace owned by exactly one AgentPackage.
+
+    A package may have many chat sessions, but it has one runtime process and
+    one persistent writable workspace. Session identity belongs in the stores
+    (for example checkpoint thread ids), never in filesystem ownership.
+    """
+
+    root: Path
+    workdir: Path
+    artifacts: Path
+    extensions: Path
+
+    def ensure(self) -> "PackageRuntimeWorkspace":
+        for path in (self.root, self.workdir, self.artifacts, self.extensions):
+            path.mkdir(parents=True, exist_ok=True)
+        return self
+
+
+def package_runtime_workspace(package_id: str) -> PackageRuntimeWorkspace:
+    root = factory_artifact_path("agent_runtime", package_id)
+    return PackageRuntimeWorkspace(
+        root=root,
+        workdir=root / "workdirs",
+        artifacts=root / "artifacts",
+        extensions=root / "extensions",
+    )
+
+
 def host_runtime_root(package_id: str) -> Path:
-    return factory_artifact_path("agent_runtime", package_id)
+    return package_runtime_workspace(package_id).root
 
 
-def host_session_workdir(package_id: str, session_id: str) -> Path:
-    normalized = str(session_id or "").strip()
-    if not normalized:
-        raise ValueError("agent package session_id is required for session workdir")
-    return host_runtime_root(package_id) / "workdirs" / normalized
-
-
-def host_scratch_workdir(package_id: str) -> Path:
-    return host_runtime_root(package_id) / "_scratch" / "workdir"
+def host_package_workdir(package_id: str) -> Path:
+    return package_runtime_workspace(package_id).workdir
 
 
 def host_session_root(*, package_id: str, package: LoadedAgentPackage, configured: str) -> Path:
@@ -55,7 +79,7 @@ def extension_root_for_package(package_id: str, package: LoadedAgentPackage) -> 
         return default_system_agent_extension_root("factory_chat")
     if is_system_package(package):
         return package.package_root.parent / "extensions"
-    return host_runtime_root(package_id) / "extensions"
+    return package_runtime_workspace(package_id).extensions
 
 
 def runtime_contract_path(runtime_root: Path, configured: str) -> Path:

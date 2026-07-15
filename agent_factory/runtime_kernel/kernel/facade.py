@@ -7,6 +7,7 @@ from typing import Any
 from agent_factory.context_system.runtime import default_context_runtime
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry
 from agent_factory.memory_system import (
+    MemoryStoreRuntimeConfig,
     MemorySystemConfig,
     default_agent_memory_config,
     default_agent_runtime,
@@ -79,6 +80,36 @@ from agent_factory.trace_system import runtime_trace_ref
 
 
 class RuntimeKernelFacade:
+    @classmethod
+    def for_contract_runtime(
+        cls,
+        *,
+        builtins_dir: str | Path | None = None,
+        session_config: AgentSessionConfig | None = None,
+    ) -> "RuntimeKernelFacade":
+        """Build a kernel whose persistent services come from package contracts.
+
+        AgentPackages require session and memory contracts. Their builders own
+        the persistent SQLite handles, so bootstrap services stay in-memory
+        instead of opening duplicate connections to the same package stores.
+        """
+
+        bootstrap_memory = default_agent_memory_config().model_copy(
+            update={
+                "enabled": False,
+                "write_enabled": False,
+                "injection_enabled": False,
+                "store": MemoryStoreRuntimeConfig(backend="memory"),
+            },
+            deep=True,
+        )
+        return cls(
+            builtins_dir=builtins_dir,
+            checkpointer_config=LangGraphCheckpointerConfig(backend="memory"),
+            memory_system_config=bootstrap_memory,
+            session_config=session_config,
+        )
+
     def __init__(
         self,
         *,

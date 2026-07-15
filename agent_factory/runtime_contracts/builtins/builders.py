@@ -21,7 +21,6 @@ from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution
 from agent_factory.runtime_contracts.memory_config import resolve_memory_system_config
 from agent_factory.runtime_contracts.paths import (
-    instance_checkpoint_path,
     package_runtime_path_text,
     resolve_package_runtime_path,
 )
@@ -50,6 +49,7 @@ from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerFactory,
     LangGraphStoreConfig,
     LangGraphStoreFactory,
+    migrate_legacy_instance_checkpoints,
 )
 from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
 from agent_factory.runtime_kernel.types import ToolExecutionResult
@@ -80,17 +80,16 @@ class SessionContractBuilder:
         config = contract.config
         session_root = package_runtime_path_text(context, config.session_root, field_path="session.config.session_root")
         checkpoint_path = (
-            instance_checkpoint_path(
-                resolve_package_runtime_path(
-                    context,
-                    config.checkpoint_path,
-                    field_path="session.config.checkpoint_path",
-                ),
-                context.runtime_instance_id,
+            resolve_package_runtime_path(
+                context,
+                config.checkpoint_path,
+                field_path="session.config.checkpoint_path",
             )
             if config.checkpointer_backend == "sqlite"
             else None
         )
+        if checkpoint_path is not None:
+            migrate_legacy_instance_checkpoints(checkpoint_path)
         checkpointer = LangGraphCheckpointerFactory().build(
             LangGraphCheckpointerConfig(
                 backend=config.checkpointer_backend,
