@@ -1,0 +1,35 @@
+{
+  "type": "knowledge",
+  "version": "knowledge_contract.v0",
+  "enabled": true,
+  "config": {
+    "root": ".agent_runtime/knowledge",
+    "catalog_path": ".agent_runtime/knowledge/catalog/knowledge.sqlite",
+    "keyword_backend": "sqlite_fts5",
+    "default_mount_mode": "index_only",
+    "rag_store": {
+      "backend": "sqlite",
+      "path": ".agent_runtime/knowledge/catalog/knowledge_store.sqlite",
+      "setup": true,
+      "provider_options": {},
+      "namespace_prefix": ["knowledge"],
+      "index_fields": ["content", "title", "summary"]
+    },
+    "limits": {
+      "max_preview_files": 200,
+      "max_file_bytes": 2000000,
+      "max_search_results": 12,
+      "max_read_chars": 20000,
+      "chunk_size": 800,
+      "chunk_overlap": 120,
+      "splitter_overrides": {}
+    },
+    "prompt_guidance": {
+      "enabled": true,
+      "max_sources": 12,
+      "max_description_chars": 160,
+      "default_search_mode": "auto",
+      "default_top_k": 5
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "type": "context",
+  "version": "context_contract.v0",
+  "enabled": true,
+  "config": {
+    "version": "context_system.v0",
+    "enabled": true,
+    "default_policy": {
+      "version": "context_policy.v0",
+      "compression": {"enabled": true, "keep_recent_messages": 12},
+      "retrieval": {"enabled": true, "source_ids": ["cross_session_memory"], "max_candidates": 24, "min_score": 0.0},
+      "assembly": {"max_items_total": 8, "max_tokens_total": 1200, "per_source_limits": {"cross_session_memory": 4}}
+    },
+    "node_policies": {}
+  }
+}

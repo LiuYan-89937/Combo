@@ -1,0 +1,31 @@
+{
+  "type": "resources",
+  "version": "resources_contract.v0",
+  "enabled": true,
+  "config": {
+    "resource_descriptors": [
+      {
+        "resource_id": "smtp_account",
+        "description": "发送市场简报使用的 SMTP 账户。仅在用户明确要求发送邮件时读取。",
+        "required": false,
+        "value_schema": {
+          "type": "object",
+          "properties": {
+            "host": {"type": "string", "minLength": 1},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "username": {"type": "string", "minLength": 1},
+            "password": {"type": "string", "minLength": 1},
+            "from_address": {"type": "string", "minLength": 3},
+            "security": {"type": "string", "enum": ["ssl", "starttls"]}
+          },
+          "required": ["host", "port", "username", "password", "from_address", "security"],
+          "additionalProperties": false
+        },
+        "default_value": {},
+        "secret_fields": ["password"],
+        "used_by": ["send_market_brief_email"],
+        "sandbox_access_expectation": "仅向已配置的 SMTP 主机建立出站 TLS 连接。"
+      }
+    ]
+  }
+}

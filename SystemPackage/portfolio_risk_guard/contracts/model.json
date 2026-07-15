@@ -1,0 +1,21 @@
+{
+  "type": "model",
+  "version": "model_contract.v1",
+  "enabled": true,
+  "config": {
+    "bindings": {
+      "main": {
+        "source": "local_default",
+        "reason": "使用当前启用的本地 AMD Radeon 推理配置完成中文风险分析规划、工具调用和报告综合。",
+        "required_capabilities": {
+          "input_modalities": ["text"],
+          "output_modalities": ["text"],
+          "tool_calling": true,
+          "structured_output_methods": ["function_calling"]
+        },
+        "overrides": {}
+      }
+    },
+    "tool_bindings": {}
+  }
+}
