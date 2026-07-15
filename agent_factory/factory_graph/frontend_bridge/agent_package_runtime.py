@@ -211,13 +211,17 @@ class AgentPackageRuntimeManager:
         ]
         return sorted(packages, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
 
-    def resource_status(self, package_id: str) -> dict[str, Any]:
+    def resource_status(self, package_id: str, *, include_values: bool = False) -> dict[str, Any]:
         package = self.load_package(package_id)
         contract = ResourcesContract.model_validate(package.contracts.get("resources") or {})
         return {
             "package_id": package_id,
             "key_available": self.resource_store.key_available,
-            "resources": self.resource_store.status(package_id, contract.config.resource_descriptors),
+            "resources": self.resource_store.status(
+                package_id,
+                contract.config.resource_descriptors,
+                include_values=include_values,
+            ),
             "migration": self._resource_migration.get(package_id, {"status": "complete", "migrated": False}),
         }
 

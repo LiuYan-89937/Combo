@@ -13,6 +13,7 @@ export interface AgentPackageResourceDescriptorView {
   description: string
   required: boolean
   configured: boolean
+  value?: unknown
   secret_fields: string[]
   used_by: string[]
   sandbox_access_expectation: string
