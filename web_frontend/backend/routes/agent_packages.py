@@ -42,25 +42,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
     @router.get("/recent-sessions")
     async def list_recent_agent_package_sessions(limit: int = Query(default=5, ge=1, le=20)):
         runtime = AgentPackageRuntimeManager()
-        sessions: list[dict[str, Any]] = []
-        for package in runtime.list_packages():
-            package_id = str(package.get("package_id") or "").strip()
-            if not package_id:
-                continue
-            package_name = str(package.get("agent_name") or package.get("name") or package_id)
-            try:
-                package_sessions = runtime.list_sessions(package_id)
-            except Exception as exc:
-                logger.warning("Failed to list sessions for package %s: %s", package_id, exc)
-                continue
-            for session in package_sessions:
-                item = dict(session)
-                item["package_id"] = package_id
-                item["package_name"] = package_name
-                item["agent_name"] = package_name
-                sessions.append(item)
-        sessions.sort(key=session_updated_sort_key, reverse=True)
-        return {"sessions": sessions[:limit]}
+        return {"sessions": runtime.list_recent_sessions(limit=limit)}
 
     @router.post("/{package_id}/initialize")
     async def initialize_agent_package(package_id: str):
@@ -185,10 +167,6 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         return {"event": event}
 
     return router
-
-
-def session_updated_sort_key(session: dict[str, Any]) -> str:
-    return str(session.get("updated_at") or session.get("created_at") or "")
 
 
 def _is_initialize_terminal_event(item: dict[str, Any], *, package_id: str) -> bool:

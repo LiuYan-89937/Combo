@@ -18,6 +18,9 @@ import { SYSTEM_CHAT_PACKAGE_ID, normalizeResourcePackageId } from '@/utils/reso
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
+  if (Array.isArray(event.payload?.recent_agent_sessions)) {
+    useAgentStore().setRecentSessions(event.payload.recent_agent_sessions as any)
+  }
   if (event.event_type === 'debug_patch' && event.payload?.kind === 'collaboration_session_updated' && event.payload?.session) {
     const collaborationStore = useCollaborationStore()
     collaborationStore.applySessionSnapshot(event.payload.session as any)

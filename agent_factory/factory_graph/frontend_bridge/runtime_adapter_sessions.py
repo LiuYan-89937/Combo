@@ -112,6 +112,7 @@ class RuntimeSessionCommandMixin:
             or record.current_mode
         )
         linked_artifacts = self._delete_linked_session_artifacts(record, mode=delete_mode)
+        recent_agent_sessions = _recent_agent_sessions_from_linked_artifacts(linked_artifacts)
         affected_session_ids = self._delete_or_detach_logical_session(record, mode=delete_mode)
         deleted_active = (
             self.session_record is not None
@@ -135,6 +136,7 @@ class RuntimeSessionCommandMixin:
                     "deleted": True,
                     "deleted_active": deleted_active,
                     "linked_artifacts": linked_artifacts,
+                    "recent_agent_sessions": recent_agent_sessions,
                     "sessions": self._session_payloads_for_client(),
                 },
             )
@@ -600,6 +602,16 @@ def _record_order_key(record: Any) -> tuple[str, str]:
         str(getattr(record, "updated_at", "") or ""),
         str(getattr(record, "session_id", "") or ""),
     )
+
+
+def _recent_agent_sessions_from_linked_artifacts(artifacts: dict[str, object]) -> list[dict[str, Any]] | None:
+    for artifact in artifacts.values():
+        if not isinstance(artifact, dict):
+            continue
+        sessions = artifact.get("recent_agent_sessions")
+        if isinstance(sessions, list):
+            return [dict(session) for session in sessions if isinstance(session, dict)]
+    return None
 
 
 def _turn_request_ids(turns: object) -> list[str]:

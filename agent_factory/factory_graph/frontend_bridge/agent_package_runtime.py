@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -85,6 +86,7 @@ from agent_factory.factory_graph.frontend_bridge.system_package_runtime_handle i
 
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
 Emit = Callable[[FactoryFrontendEvent], None]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,6 +493,27 @@ class AgentPackageRuntimeManager:
         package = self.load_package(package_id)
         return self._list_sessions_for_loaded_package(package)
 
+    def list_recent_sessions(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        sessions: list[dict[str, Any]] = []
+        for package in self.list_packages():
+            package_id = str(package.get("package_id") or "").strip()
+            if not package_id:
+                continue
+            package_name = str(package.get("agent_name") or package.get("name") or package_id)
+            try:
+                package_sessions = self.list_sessions(package_id)
+            except Exception as exc:
+                logger.warning("Failed to list sessions for package %s: %s", package_id, exc)
+                continue
+            for session in package_sessions:
+                item = dict(session)
+                item["package_id"] = package_id
+                item["package_name"] = package_name
+                item["agent_name"] = package_name
+                sessions.append(item)
+        sessions.sort(key=_session_updated_sort_key, reverse=True)
+        return sessions[: max(1, limit)]
+
     def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
@@ -524,6 +547,7 @@ class AgentPackageRuntimeManager:
                 "collaboration_unlink": collaboration_unlink,
                 "cancelled_active_request_count": cancelled_active_request_count,
                 "sessions": self._list_sessions_for_loaded_package(package),
+                "recent_agent_sessions": self.list_recent_sessions(),
             }
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
             package_id=package_id,
@@ -545,6 +569,7 @@ class AgentPackageRuntimeManager:
             "collaboration_unlink": collaboration_unlink,
             "cancelled_active_request_count": cancelled_active_request_count,
             "sessions": self._list_sessions_for_loaded_package(package),
+            "recent_agent_sessions": self.list_recent_sessions(),
         }
 
     def workspace_roots(self, package_id: str, *, session_id: str | None = None) -> dict[str, Any]:
@@ -1810,6 +1835,10 @@ def _public_knowledge_source(source: dict[str, Any], *, document_count: int | No
         "document_count": document_count if document_count is not None else metadata.get("document_count"),
         "sample_titles": metadata.get("sample_titles") if isinstance(metadata.get("sample_titles"), list) else [],
     }
+
+
+def _session_updated_sort_key(session: dict[str, Any]) -> str:
+    return str(session.get("updated_at") or session.get("created_at") or "")
 
 
 def _normalized_source_payload(payload: dict[str, Any]) -> dict[str, Any]:
