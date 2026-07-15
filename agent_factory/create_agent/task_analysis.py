@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_factory.create_agent.models import CreateAgentTaskAnalysis
-from agent_factory.models import get_main_model, get_task_model
+from agent_factory.models import create_control_plane_chat_model
 from agent_factory.runtime_kernel.patterns.registry import PatternRegistry
 
 
@@ -16,7 +16,7 @@ SUPPORTED_CREATE_AGENT_PATTERNS = ("react_agent", "plan_and_execute")
 
 def analyze_create_agent_task(*, user_input: str, model: Any | None = None) -> CreateAgentTaskAnalysis:
     candidates = _pattern_candidates()
-    classifier = model or get_task_model() or get_main_model()
+    classifier = model or create_control_plane_chat_model()
     if classifier is None:
         raise RuntimeError("create-agent task analysis requires a configured task or main model")
     structured = classifier.with_structured_output(

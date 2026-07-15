@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import Any
 
@@ -110,6 +110,23 @@ def create_chat_model_from_settings(settings: ChatModelSettings) -> BaseChatMode
         temperature=settings.temperature,
         max_output_tokens=settings.max_output_tokens,
         reasoning_enabled=settings.reasoning.enabled,
+    )
+
+
+def create_control_plane_chat_model() -> BaseChatModel | None:
+    settings = get_task_model_settings()
+    if not settings.available:
+        settings = get_main_model_settings()
+    return create_chat_model_from_settings(
+        replace(
+            settings,
+            reasoning=replace(
+                settings.reasoning,
+                enabled=False,
+                effort=None,
+                budget_tokens=None,
+            ),
+        )
     )
 
 

@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_factory.create_agent.models import CreateAgentIntentDecision
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
-from agent_factory.models import get_main_model, get_task_model
+from agent_factory.models import create_control_plane_chat_model
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 
 
@@ -16,7 +16,7 @@ def classify_create_agent_intent(
     workspace: CreateAgentWorkspace,
     model: Any | None = None,
 ) -> CreateAgentIntentDecision:
-    classifier = model or get_task_model() or get_main_model()
+    classifier = model or create_control_plane_chat_model()
     if classifier is None:
         raise RuntimeError("create-agent intent classification requires a configured task or main model")
     result = ModelOperationService(model=classifier).structured_json(

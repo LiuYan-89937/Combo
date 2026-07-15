@@ -1,5 +1,6 @@
 from agent_factory.models.chat_model import (
     ChatModelSettings,
+    create_control_plane_chat_model,
     create_chat_model_from_settings,
     get_compression_model,
     get_compression_model_settings,
@@ -39,6 +40,7 @@ __all__ = [
     "ModelToolCall",
     "NormalizedModelUsage",
     "StructuredOutputMethod",
+    "create_control_plane_chat_model",
     "create_chat_model_from_settings",
     "get_compression_model",
     "get_compression_model_settings",

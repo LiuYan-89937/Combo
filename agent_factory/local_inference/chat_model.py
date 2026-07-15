@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from operator import itemgetter
 from typing import Any, Iterator, Sequence
@@ -26,6 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.local_inference.config import LocalInferenceEndpoint
 from agent_factory.local_inference.http_client import create_private_http_client
+
+
+logger = logging.getLogger(__name__)
 
 
 class LocalLlamaCppChatModel(BaseChatModel):
@@ -111,6 +115,7 @@ class LocalLlamaCppChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         payload = self._request_payload(messages, stop=stop, stream=False, kwargs=kwargs)
+        self._log_request_started(payload)
         with create_private_http_client(self.endpoint) as client:
             response = client.post(self.endpoint.endpoint("/chat/completions"), json=payload)
             _raise_for_local_inference_error(response)
@@ -133,6 +138,7 @@ class LocalLlamaCppChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         payload = self._request_payload(messages, stop=stop, stream=True, kwargs=kwargs)
+        self._log_request_started(payload)
         with create_private_http_client(self.endpoint) as client:
             with client.stream(
                 "POST",
@@ -195,6 +201,17 @@ class LocalLlamaCppChatModel(BaseChatModel):
         if self.reasoning_enabled is not None:
             payload["chat_template_kwargs"] = {"enable_thinking": self.reasoning_enabled}
         return payload
+
+    def _log_request_started(self, payload: dict[str, Any]) -> None:
+        logger.info(
+            "llama.cpp chat request started: endpoint=%s model=%s stream=%s messages=%d tools=%d reasoning=%s",
+            self.endpoint.endpoint("/chat/completions"),
+            self.model_name,
+            bool(payload.get("stream")),
+            len(payload.get("messages") or []),
+            len(payload.get("tools") or []),
+            self.reasoning_enabled,
+        )
 
     def get_token_ids(self, text: str) -> list[int]:
         with create_private_http_client(self.endpoint) as client:
