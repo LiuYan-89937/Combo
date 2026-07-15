@@ -392,9 +392,17 @@ const readyChatProfiles = computed(() => profiles.value.filter((profile) =>
   profile.kind === 'chat' && profile.enabled && readyProfileIds.value.has(profile.profile_id),
 ))
 const profileOptions = computed(() => readyChatProfiles.value.map((profile) => ({
-  label: `${profile.display_name} · ${profile.served_model_name}`,
+  label: profileOptionLabel(profile),
   value: profile.profile_id,
 })))
+
+function profileOptionLabel(profile: LocalModelProfile): string {
+  const displayName = profile.display_name.trim()
+  const servedModelName = profile.served_model_name.trim()
+  return !servedModelName || servedModelName.localeCompare(displayName, undefined, { sensitivity: 'base' }) === 0
+    ? displayName
+    : `${displayName} · ${servedModelName}`
+}
 const telemetryIntervalOptions = [100, 250, 500, 1000].map((value) => ({
   label: t('benchmark.milliseconds', { value }),
   value,

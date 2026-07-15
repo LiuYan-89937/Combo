@@ -173,6 +173,7 @@
               </div>
 
               <footer class="resource-actions">
+                <div class="resource-action-group">
                 <n-button
                   v-if="profileRuntime(profile)?.phase === 'ready'"
                   size="small"
@@ -208,9 +209,11 @@
                     {{ t('localModel.setDefault') }}
                   </n-button>
                 </n-dropdown>
-                <div class="action-spacer" />
-                <n-button size="small" quaternary @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
-                <n-button size="small" type="error" quaternary @click="removeProfile(profile)">{{ t('common.delete') }}</n-button>
+                </div>
+                <div class="resource-action-group resource-management-actions">
+                  <n-button size="small" quaternary @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
+                  <n-button size="small" type="error" quaternary @click="removeProfile(profile)">{{ t('common.delete') }}</n-button>
+                </div>
               </footer>
             </article>
           </div>
@@ -277,9 +280,10 @@
               </div>
 
               <footer class="resource-actions">
-                <div class="action-spacer" />
-                <n-button size="small" quaternary @click="openArtifact(artifact)">{{ t('common.edit') }}</n-button>
-                <n-button size="small" type="error" quaternary @click="removeArtifact(artifact)">{{ t('common.delete') }}</n-button>
+                <div class="resource-action-group resource-management-actions">
+                  <n-button size="small" quaternary @click="openArtifact(artifact)">{{ t('common.edit') }}</n-button>
+                  <n-button size="small" type="error" quaternary @click="removeArtifact(artifact)">{{ t('common.delete') }}</n-button>
+                </div>
               </footer>
             </article>
           </div>
@@ -1075,6 +1079,8 @@ onBeforeUnmount(() => {
 .local-model-view {
   container-name: local-model;
   container-type: inline-size;
+  width: 100%;
+  min-width: 0;
   height: 100%;
   padding: var(--app-space-xl);
   background: var(--app-surface);
@@ -1217,8 +1223,9 @@ onBeforeUnmount(() => {
 .memory-preview-grid span { color: var(--app-text-muted); font-size: var(--app-font-xs); }
 .memory-preview-grid strong { color: var(--app-text); overflow-wrap: anywhere; }
 .memory-preview p { margin: 0; color: var(--app-text-muted); font-size: var(--app-font-xs); line-height: var(--app-leading-normal); overflow-wrap: anywhere; }
-.resource-actions { margin-top: auto; padding-top: var(--app-space-lg); }
-.action-spacer { flex: 1; }
+.resource-actions { flex-wrap: wrap; margin-top: auto; padding-top: var(--app-space-lg); }
+.resource-action-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--app-space-xs); min-width: 0; }
+.resource-management-actions { margin-inline-start: auto; }
 
 .path-block { margin-top: var(--app-space-lg); padding: var(--app-space-md); border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: var(--app-surface-muted); }
 .path-block span { display: block; margin-bottom: var(--app-space-xs); }
@@ -1303,8 +1310,8 @@ onBeforeUnmount(() => {
   .spec-grid,
   .memory-preview-grid { grid-template-columns: 1fr; }
   .spec-item { align-items: flex-start; }
-  .resource-actions { align-items: stretch; flex-wrap: wrap; justify-content: flex-start; gap: var(--app-space-xs); }
-  .resource-actions .action-spacer { display: none; }
+  .resource-actions { align-items: stretch; justify-content: flex-start; gap: var(--app-space-xs); }
+  .resource-management-actions { margin-inline-start: 0; }
   .memory-form-item { grid-column: auto; }
   .memory-limit-control { grid-template-columns: 1fr; }
   .memory-limit-control p { grid-column: auto; }
