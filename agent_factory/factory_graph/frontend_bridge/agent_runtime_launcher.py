@@ -10,6 +10,13 @@ import subprocess
 import threading
 from typing import Any
 
+from agent_factory.agent_runtime_bridge.paths import (
+    BRIDGE_ARTIFACTS_ROOT_ENV,
+    BRIDGE_EXTENSION_ROOT_ENV,
+    BRIDGE_PACKAGE_ROOT_ENV,
+    BRIDGE_RUNTIME_ROOT_ENV,
+    BRIDGE_WORKDIR_ROOT_ENV,
+)
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.model_pool import MODEL_POOL_STORE_PATH_ENV, ModelPoolStore, resolve_model_pool_store_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
@@ -38,12 +45,6 @@ CONTAINER_RESOURCE_STORE_PATH = "/resource_store/runtime.sqlite"
 SHARED_PROJECT_ROOT = PurePosixPath("/agentfactory/project")
 CONTAINER_ISOLATION_ENV = "AGENTFACTORY_CONTAINER_ISOLATION"
 CONTAINER_INCOMPATIBLE_POLICY_ENV = "AGENTFACTORY_CONTAINER_INCOMPATIBLE_POLICY"
-BRIDGE_PACKAGE_ROOT_ENV = "AGENTFACTORY_BRIDGE_PACKAGE_ROOT"
-BRIDGE_ARTIFACTS_ROOT_ENV = "AGENTFACTORY_BRIDGE_ARTIFACTS_ROOT"
-BRIDGE_RUNTIME_ROOT_ENV = "AGENTFACTORY_BRIDGE_RUNTIME_ROOT"
-BRIDGE_WORKDIR_ROOT_ENV = "AGENTFACTORY_BRIDGE_WORKDIR_ROOT"
-BRIDGE_EXTENSION_ROOT_ENV = "AGENTFACTORY_BRIDGE_EXTENSION_ROOT"
-
 SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ALLOWED_CONTAINER_ROOTS = (
     PurePosixPath(CONTAINER_DEPENDENCY_POOL_ROOT),
@@ -67,6 +68,11 @@ class DockerAgentRuntimePlan:
     preflight: dict[str, Any]
     isolation: str = "dedicated"
     shared_container_id: str | None = None
+
+    def command_for_python_module(self, module: str) -> list[str]:
+        if self.command[-3:-1] != ["python", "-m"]:
+            raise ValueError("runtime command does not end with a Python module entrypoint")
+        return [*self.command[:-3], "python", "-m", module]
 
 
 class AgentRuntimeLaunchError(RuntimeError):

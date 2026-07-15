@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import errno
 import json
-import os
 import sys
 import threading
 from pathlib import Path
@@ -46,14 +45,16 @@ from agent_factory.package_runtime.session_turns import (
     session_user_input_from_state,
 )
 from agent_factory.runtime_attachments import has_attachment_payload, merge_attachments_into_user_config
+from agent_factory.agent_runtime_bridge.paths import runtime_bridge_paths
 
 
-PACKAGE_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_PACKAGE_ROOT", "/package"))
+_BRIDGE_PATHS = runtime_bridge_paths()
+PACKAGE_ROOT = _BRIDGE_PATHS.package_root
 PACKAGE_MANIFEST = PACKAGE_ROOT / "agent_package.json"
-ARTIFACTS_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_ARTIFACTS_ROOT", "/artifacts"))
-RUNTIME_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_RUNTIME_ROOT", "/runtime"))
-WORKDIR_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_WORKDIR_ROOT", "/workdir"))
-EXTENSION_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_EXTENSION_ROOT", str(RUNTIME_ROOT / "extensions")))
+ARTIFACTS_ROOT = _BRIDGE_PATHS.artifacts_root
+RUNTIME_ROOT = _BRIDGE_PATHS.runtime_root
+WORKDIR_ROOT = _BRIDGE_PATHS.workdir_root
+EXTENSION_ROOT = _BRIDGE_PATHS.extension_root
 
 
 @dataclass(slots=True)
