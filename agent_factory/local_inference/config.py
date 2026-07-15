@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import ipaddress
 import os
+from typing import Literal, cast
 from urllib.parse import urlparse
 
 
@@ -10,8 +11,12 @@ LOCAL_INFERENCE_ENDPOINT_ENV = "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT"
 LOCAL_INFERENCE_ALLOWED_HOSTS_ENV = "AGENTFACTORY_LOCAL_INFERENCE_ALLOWED_HOSTS"
 LOCAL_EMBEDDING_ENDPOINT_ENV = "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT"
 LOCAL_EMBEDDING_ALLOWED_HOSTS_ENV = "AGENTFACTORY_LOCAL_EMBEDDING_ALLOWED_HOSTS"
+INFERENCE_RUNTIME_MODE_ENV = "AGENTFACTORY_INFERENCE_RUNTIME_MODE"
+INFERENCE_TELEMETRY_ENDPOINT_ENV = "AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT"
 DEFAULT_LOCAL_INFERENCE_ENDPOINT = "http://127.0.0.1:8003/v1"
 DEFAULT_LOCAL_EMBEDDING_ENDPOINT = "http://127.0.0.1:8002"
+DEFAULT_INFERENCE_TELEMETRY_ENDPOINT = "http://127.0.0.1:8004"
+InferenceRuntimeMode = Literal["managed", "external"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,23 @@ def load_local_embedding_endpoint(*, timeout_seconds: float | None = None) -> Lo
         timeout_env="AGENTFACTORY_LOCAL_EMBEDDING_TIMEOUT_SECONDS",
         timeout_seconds=timeout_seconds,
     )
+
+
+def load_inference_telemetry_endpoint(*, timeout_seconds: float | None = None) -> LocalInferenceEndpoint:
+    return load_local_endpoint(
+        endpoint_env=INFERENCE_TELEMETRY_ENDPOINT_ENV,
+        default_endpoint=DEFAULT_INFERENCE_TELEMETRY_ENDPOINT,
+        allowed_hosts_env=LOCAL_INFERENCE_ALLOWED_HOSTS_ENV,
+        timeout_env="AGENTFACTORY_LOCAL_INFERENCE_TIMEOUT_SECONDS",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def load_inference_runtime_mode() -> InferenceRuntimeMode:
+    value = str(os.getenv(INFERENCE_RUNTIME_MODE_ENV) or "managed").strip().lower()
+    if value not in {"managed", "external"}:
+        raise ValueError(f"{INFERENCE_RUNTIME_MODE_ENV} must be managed or external")
+    return cast(InferenceRuntimeMode, value)
 
 
 def load_local_endpoint(

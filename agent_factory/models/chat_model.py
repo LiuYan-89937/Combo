@@ -31,7 +31,7 @@ class ChatModelSettings:
 
     @property
     def available(self) -> bool:
-        return self.engine == "llama_cpp_rocm" and bool(self.model and self.profile_id)
+        return self.engine in {"llama_cpp_rocm", "external"} and bool(self.model and self.profile_id)
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -40,7 +40,7 @@ class ChatModelSettings:
             "model_profile_id": self.profile_id or "",
             "model_source": self.source,
             "engine": self.engine,
-            "provider": "local_llama_cpp_rocm",
+            "provider": "external_inference" if self.engine == "external" else "local_llama_cpp_rocm",
             "provider_display_name": "Local AMD ROCm",
             "provider_adapter": "local_openai_compatible",
             "transport": "local_llama_cpp",
@@ -176,5 +176,10 @@ def list_supported_chat_model_profiles() -> list[dict[str, object]]:
             "engine": "llama_cpp_rocm",
             "display_name": "llama.cpp on AMD ROCm",
             "transport": "local_llama_cpp",
-        }
+        },
+        {
+            "engine": "external",
+            "display_name": "External OpenAI-compatible inference",
+            "transport": "openai_compatible",
+        },
     ]

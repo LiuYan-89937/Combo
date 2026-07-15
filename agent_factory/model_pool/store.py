@@ -66,7 +66,7 @@ class ModelPoolStore:
                     artifact.artifact_id,
                     artifact.kind,
                     artifact.display_name,
-                    artifact.local_path,
+                    artifact.local_path or "",
                     1 if artifact.enabled else 0,
                     artifact.model_dump_json(),
                     artifact.created_at,
@@ -443,7 +443,10 @@ class ModelPoolStore:
                     payload = json.loads(str(row["payload_json"]))
                 except json.JSONDecodeError:
                     continue
-                if str(payload.get("model_format") or "").strip().lower() == "llama_cpp":
+                if (
+                    str(payload.get("source") or "local_storage") == "external_endpoint"
+                    or str(payload.get("model_format") or "").strip().lower() == "llama_cpp"
+                ):
                     continue
                 artifact_id = str(row["artifact_id"])
                 referenced = conn.execute(
@@ -471,9 +474,11 @@ class ModelPoolStore:
                     (json.dumps(payload, ensure_ascii=False), str(row["artifact_id"])),
                 )
             embedding_rows = conn.execute(
-                "select profile_id, payload_json from local_model_profiles where kind = 'embedding'"
+                "select profile_id, engine, payload_json from local_model_profiles where kind = 'embedding'"
             ).fetchall()
             for row in embedding_rows:
+                if str(row["engine"]) == "external":
+                    continue
                 try:
                     payload = json.loads(str(row["payload_json"]))
                 except json.JSONDecodeError:

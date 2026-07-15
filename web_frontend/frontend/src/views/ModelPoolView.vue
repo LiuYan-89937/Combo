@@ -69,6 +69,9 @@
     </section>
 
     <section class="model-panel">
+      <n-alert v-if="modelStorage?.remote_error" type="warning" :show-icon="true" class="remote-endpoint-alert">
+        {{ modelStorage.remote_error }}
+      </n-alert>
       <n-tabs v-model:value="activeTab" type="line" animated>
       <n-tab-pane name="profiles" :tab="t('localModel.profiles')">
         <div class="tab-content">
@@ -117,9 +120,9 @@
               </div>
 
               <div class="model-name">{{ profile.served_model_name }}</div>
-              <div class="path-line" :title="profile.artifact?.local_path || ''">
+              <div class="path-line" :title="artifactLocation(profile.artifact)">
                 <n-icon><FolderOpenOutline /></n-icon>
-                <span>{{ profile.artifact?.local_path || '—' }}</span>
+                <span>{{ artifactLocation(profile.artifact) }}</span>
               </div>
 
               <div v-if="profileRuntime(profile)" class="profile-runtime-panel">
@@ -141,11 +144,12 @@
               </div>
 
               <div class="spec-grid">
-                <template v-if="profile.kind === 'chat'">
-                  <div class="spec-item"><span>{{ t('localModel.gpuLayers') }}</span><strong>{{ profile.inference.gpu_layers }}</strong></div>
-                  <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ profile.inference.parallel_slots }}</strong></div>
-                  <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ profile.inference.cache_type_k }} / {{ profile.inference.cache_type_v }}</strong></div>
+                <template v-if="profile.kind === 'chat' && profile.engine !== 'external'">
+                  <div class="spec-item"><span>{{ t('localModel.gpuLayers') }}</span><strong>{{ chatInference(profile)?.gpu_layers }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ chatInference(profile)?.parallel_slots }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ chatInference(profile)?.cache_type_k }} / {{ chatInference(profile)?.cache_type_v }}</strong></div>
                 </template>
+                <div v-else-if="profile.engine === 'external'" class="spec-item"><span>{{ t('localModel.runtimeMode') }}</span><strong>{{ t('localModel.externalEndpoint') }}</strong></div>
                 <div v-else class="spec-item"><span>{{ t('localModel.embeddingDimensions') }}</span><strong>{{ profile.embedding_dimensions || '—' }}</strong></div>
                 <div class="spec-item"><span>{{ t('modelPool.maxInput') }}</span><strong>{{ formatTokens(profile.limits.max_input_tokens) }}</strong></div>
               </div>
@@ -210,9 +214,13 @@
             <div>
               <n-text strong class="section-title">{{ t('localModel.artifacts') }}</n-text>
               <div class="section-description">{{ t('localModel.artifactHint') }}</div>
-              <div class="storage-root">
+              <div v-if="modelStorage?.inference_mode !== 'external'" class="storage-root">
                 <span>{{ t('localModel.storageRoot') }}</span>
                 <code>{{ modelStorage?.root_path || '—' }}</code>
+              </div>
+              <div v-else class="storage-root">
+                <span>{{ t('localModel.runtimeMode') }}</span>
+                <code>{{ t('localModel.externalEndpoint') }}</code>
               </div>
             </div>
             <n-button type="primary" @click="openArtifact()">
@@ -241,9 +249,9 @@
                 <n-tag v-if="artifact.revision" size="small" :bordered="false">{{ artifact.revision }}</n-tag>
               </div>
 
-              <div class="path-block" :title="artifact.local_path">
-                <span>{{ t('localModel.localPath') }}</span>
-                <code>{{ artifact.local_path }}</code>
+              <div class="path-block" :title="artifactLocation(artifact)">
+                <span>{{ artifact.source === 'external_endpoint' ? t('localModel.remoteModel') : t('localModel.localPath') }}</span>
+                <code>{{ artifactLocation(artifact) }}</code>
               </div>
               <div v-if="artifact.checksum" class="checksum-line">
                 <span>{{ t('localModel.checksum') }}</span>
@@ -275,7 +283,24 @@
       <n-form label-placement="top">
         <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="artifactForm.display_name" /></n-form-item>
         <n-form-item :label="t('localModel.kind')"><n-select v-model:value="artifactForm.kind" :options="kindOptions" /></n-form-item>
-        <n-form-item :label="t('localModel.detectedDirectory')">
+        <n-form-item v-if="externalInference" :label="t('localModel.remoteModel')">
+          <n-select
+            v-model:value="artifactForm.external_model_id"
+            :options="remoteModelOptions"
+            :placeholder="t('localModel.remoteModelPlaceholder')"
+            filterable
+            @update:value="syncRemoteModel"
+          />
+        </n-form-item>
+        <div v-if="selectedRemoteModel" class="model-directory-summary">
+          <div class="model-directory-heading">
+            <strong>{{ selectedRemoteModel.model_id }}</strong>
+            <span v-if="selectedRemoteModel.format">{{ selectedRemoteModel.format }}</span>
+            <span v-if="selectedRemoteModel.context_length">{{ formatTokens(selectedRemoteModel.context_length) }} context</span>
+          </div>
+          <code>{{ formatBytes(selectedRemoteModel.size_bytes) }}</code>
+        </div>
+        <n-form-item v-else :label="t('localModel.detectedDirectory')">
           <n-select
             v-model:value="artifactForm.local_path"
             :options="modelDirectoryOptions"
@@ -294,7 +319,7 @@
           </div>
           <code :title="selectedModelDirectory.relative_path">{{ selectedModelDirectory.relative_path }}</code>
         </div>
-        <div class="storage-hint">
+        <div v-if="!externalInference" class="storage-hint">
           {{ t('localModel.modelscopeCache') }}：<code>{{ modelStorage?.modelscope_cache_path || '—' }}</code>
         </div>
         <n-checkbox v-model:checked="artifactForm.enabled">{{ t('common.enabled') }}</n-checkbox>
@@ -313,16 +338,16 @@
         </n-form-item>
         <n-form-item :label="t('localModel.servedModelName')"><n-input v-model:value="profileForm.served_model_name" /></n-form-item>
         <div class="form-grid">
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.gpuLayers')">
+          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.gpuLayers')">
             <n-input-number v-model:value="profileForm.gpu_layers" :min="0" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.parallelSlots')">
+          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.parallelSlots')">
             <n-input-number v-model:value="profileForm.parallel_slots" :min="1" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.kCacheType')">
+          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.kCacheType')">
             <n-select v-model:value="profileForm.cache_type_k" :options="cacheTypeOptions" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.vCacheType')">
+          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.vCacheType')">
             <n-select v-model:value="profileForm.cache_type_v" :options="cacheTypeOptions" />
           </n-form-item>
           <n-form-item :label="t('modelPool.maxInput')">
@@ -340,7 +365,7 @@
         </div>
         <n-space vertical>
           <n-checkbox v-model:checked="profileForm.enabled">{{ t('localModel.loadWhenEnabled') }}</n-checkbox>
-          <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.flash_attention">{{ t('localModel.flashAttention') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'chat' && !externalInference" v-model:checked="profileForm.flash_attention">{{ t('localModel.flashAttention') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
@@ -403,7 +428,7 @@ const artifactEditing = ref<LocalModelArtifact | null>(null)
 const profileEditing = ref<LocalModelProfile | null>(null)
 
 const artifactForm = reactive({
-  display_name: '', kind: 'chat' as LocalModelKind, local_path: '',
+  display_name: '', kind: 'chat' as LocalModelKind, local_path: '', external_model_id: '',
   revision: '', checksum: '', enabled: true,
 })
 const profileForm = reactive({
@@ -426,6 +451,11 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
   value: item.artifact_id,
 })))
 const cacheTypeOptions = ['f16', 'bf16', 'q8_0', 'q4_0'].map((value) => ({ label: value.toUpperCase(), value }))
+const externalInference = computed(() => modelStorage.value?.inference_mode === 'external')
+const remoteModelOptions = computed(() => (modelStorage.value?.remote_models || []).map((item) => ({
+  label: [item.model_id, item.format, formatTokens(item.context_length)].filter(Boolean).join(' · '),
+  value: item.model_id,
+})))
 const modelDirectoryOptions = computed(() => {
   const options = (modelStorage.value?.directories || [])
     .filter((item) => item.supported_kinds.includes(artifactForm.kind))
@@ -441,6 +471,9 @@ const modelDirectoryOptions = computed(() => {
 })
 const selectedModelDirectory = computed(() => (
   modelStorage.value?.directories.find((item) => item.absolute_path === artifactForm.local_path) || null
+))
+const selectedRemoteModel = computed(() => (
+  modelStorage.value?.remote_models.find((item) => item.model_id === artifactForm.external_model_id) || null
 ))
 
 async function refresh(): Promise<void> {
@@ -471,6 +504,7 @@ function openArtifact(item?: LocalModelArtifact): void {
   artifactForm.display_name = item?.display_name || ''
   artifactForm.kind = item?.kind || 'chat'
   artifactForm.local_path = item?.local_path || ''
+  artifactForm.external_model_id = item?.external_model_id || ''
   artifactForm.revision = item?.revision || ''
   artifactForm.checksum = item?.checksum || ''
   artifactForm.enabled = item?.enabled ?? true
@@ -482,7 +516,11 @@ async function saveArtifact(): Promise<void> {
   try {
     const payload = {
       ...artifactForm,
-      model_format: artifactForm.kind === 'chat' ? 'llama_cpp' : 'transformers',
+      source: externalInference.value ? 'external_endpoint' : 'local_storage',
+      local_path: externalInference.value ? null : artifactForm.local_path,
+      model_format: externalInference.value
+        ? modelStorage.value?.remote_models.find((item) => item.model_id === artifactForm.external_model_id)?.format || 'external'
+        : artifactForm.kind === 'chat' ? 'llama_cpp' : 'transformers',
       artifact_id: artifactEditing.value?.artifact_id,
     }
     if (artifactEditing.value) await modelPoolApi.patchArtifact(artifactEditing.value.artifact_id, payload)
@@ -496,11 +534,14 @@ function openProfile(item?: LocalModelProfile): void {
   const artifact = item?.artifact || artifacts.value[0]
   const kind = item?.kind || artifact?.kind || 'chat'
   const directory = artifact ? directoryForArtifact(artifact) : null
+  const remoteModel = artifact?.external_model_id
+    ? modelStorage.value?.remote_models.find((model) => model.model_id === artifact.external_model_id)
+    : null
   profileEditing.value = item || null
   profileForm.display_name = item?.display_name || artifact?.display_name || ''
   profileForm.artifact_id = item?.artifact_id || artifact?.artifact_id || ''
   profileForm.kind = kind
-  profileForm.served_model_name = item?.served_model_name || artifact?.display_name || ''
+  profileForm.served_model_name = item?.served_model_name || artifact?.external_model_id || artifact?.display_name || ''
   const chatInference = item?.kind === 'chat' ? item.inference : null
   const embeddingInference = item?.kind === 'embedding' ? item.inference : null
   profileForm.gpu_layers = chatInference && 'gpu_layers' in chatInference ? chatInference.gpu_layers : 99
@@ -508,7 +549,7 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.cache_type_k = chatInference && 'cache_type_k' in chatInference ? chatInference.cache_type_k : 'f16'
   profileForm.cache_type_v = chatInference && 'cache_type_v' in chatInference ? chatInference.cache_type_v : 'f16'
   profileForm.flash_attention = chatInference && 'flash_attention' in chatInference ? chatInference.flash_attention : true
-  profileForm.max_input_tokens = item?.limits.max_input_tokens ?? null
+  profileForm.max_input_tokens = item?.limits.max_input_tokens ?? remoteModel?.context_length ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
   profileForm.context_compression_threshold_tokens = item?.limits.context_compression_threshold_tokens ?? null
   profileForm.embedding_dimensions = item?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
@@ -528,13 +569,20 @@ function syncProfileKind(artifactId: string): void {
   const directory = directoryForArtifact(artifact)
   profileForm.kind = artifact.kind
   profileForm.display_name = artifact.display_name
-  profileForm.served_model_name = artifact.display_name
+  profileForm.served_model_name = artifact.external_model_id || artifact.display_name
   profileForm.gpu_layers = 99
   profileForm.parallel_slots = 1
   profileForm.cache_type_k = 'f16'
   profileForm.cache_type_v = 'f16'
   profileForm.flash_attention = true
   profileForm.embedding_dimensions = directory?.embedding_dimensions ?? null
+}
+
+function syncRemoteModel(modelId: string): void {
+  const model = modelStorage.value?.remote_models.find((item) => item.model_id === modelId)
+  if (!model) return
+  artifactForm.display_name = model.model_id
+  artifactForm.kind = 'chat'
 }
 
 function directoryForArtifact(artifact: LocalModelArtifact) {
@@ -559,7 +607,7 @@ async function saveProfile(): Promise<void> {
       display_name: profileForm.display_name,
       kind: profileForm.kind,
       artifact_id: profileForm.artifact_id,
-      engine: isChat ? 'llama_cpp_rocm' : 'transformers_rocm',
+      engine: externalInference.value ? 'external' : isChat ? 'llama_cpp_rocm' : 'transformers_rocm',
       served_model_name: profileForm.served_model_name,
       enabled: profileForm.enabled,
       capabilities: {
@@ -577,7 +625,9 @@ async function saveProfile(): Promise<void> {
         timeout_seconds: null,
         context_compression_threshold_tokens: isChat ? profileForm.context_compression_threshold_tokens : null,
       },
-      inference: isChat
+      inference: externalInference.value
+        ? { external: true }
+        : isChat
         ? {
             gpu_layers: profileForm.gpu_layers,
             parallel_slots: profileForm.parallel_slots,
@@ -743,7 +793,16 @@ function kindLabel(kind: LocalModelKind): string {
 }
 
 function engineLabel(engine: LocalModelProfile['engine']): string {
+  if (engine === 'external') return t('localModel.externalEndpoint')
   return engine === 'llama_cpp_rocm' ? 'llama.cpp · ROCm' : 'Transformers · ROCm'
+}
+
+function artifactLocation(artifact?: LocalModelArtifact | null): string {
+  return artifact?.external_model_id || artifact?.local_path || '—'
+}
+
+function chatInference(profile: LocalModelProfile) {
+  return profile.kind === 'chat' && 'gpu_layers' in profile.inference ? profile.inference : null
 }
 
 function formatPercent(value?: number | null): string {

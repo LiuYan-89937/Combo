@@ -18,7 +18,8 @@ ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "audio_input"]
 ModelSelectionSource = Literal["auto", "manual"]
 ModelSelectionOptimizeFor = Literal["balanced", "quality", "latency", "context"]
-LocalInferenceEngine = Literal["llama_cpp_rocm", "transformers_rocm"]
+LocalInferenceEngine = Literal["llama_cpp_rocm", "transformers_rocm", "external"]
+ModelArtifactSource = Literal["local_storage", "external_endpoint"]
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -34,7 +35,9 @@ class LocalModelArtifact(BaseModel):
     artifact_id: str
     display_name: str
     kind: ModelPoolProfileKind
-    local_path: str
+    source: ModelArtifactSource = "local_storage"
+    local_path: str | None = None
+    external_model_id: str | None = None
     model_format: str = "transformers"
     revision: str = ""
     checksum: str = ""
@@ -58,12 +61,27 @@ class LocalModelArtifact(BaseModel):
 
     @field_validator("local_path")
     @classmethod
-    def _local_path(cls, value: str) -> str:
+    def _local_path(cls, value: str | None) -> str | None:
         text = str(value or "").strip()
+        if not text:
+            return None
         path = Path(text).expanduser()
-        if not text or not path.is_absolute():
+        if not path.is_absolute():
             raise ValueError("local_path must be an absolute path")
         return str(path)
+
+    @field_validator("external_model_id")
+    @classmethod
+    def _external_model_id(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
+
+    @model_validator(mode="after")
+    def _source_location(self) -> "LocalModelArtifact":
+        if self.source == "local_storage" and not self.local_path:
+            raise ValueError("local storage artifacts require local_path")
+        if self.source == "external_endpoint" and not self.external_model_id:
+            raise ValueError("external endpoint artifacts require external_model_id")
+        return self
 
     @field_validator("revision", "checksum", "license")
     @classmethod
@@ -73,6 +91,8 @@ class LocalModelArtifact(BaseModel):
         return str(value).strip()
 
     def resolved_path(self) -> Path:
+        if not self.local_path:
+            raise ValueError("external endpoint artifacts do not have a local model path")
         return Path(self.local_path).expanduser().resolve()
 
 
@@ -139,7 +159,13 @@ class TransformersInferenceConfig(BaseModel):
     trust_remote_code: bool = False
 
 
-LocalInferenceConfig = LlamaCppInferenceConfig | TransformersInferenceConfig
+class ExternalInferenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    external: Literal[True] = True
+
+
+LocalInferenceConfig = LlamaCppInferenceConfig | TransformersInferenceConfig | ExternalInferenceConfig
 
 
 class ModelPoolProfile(BaseModel):
@@ -177,15 +203,19 @@ class ModelPoolProfile(BaseModel):
     @model_validator(mode="after")
     def _engine_matches_kind(self) -> "ModelPoolProfile":
         if self.kind == "chat":
-            if self.engine != "llama_cpp_rocm":
-                raise ValueError("chat profiles require engine=llama_cpp_rocm")
-            if not isinstance(self.inference, LlamaCppInferenceConfig):
+            if self.engine == "llama_cpp_rocm" and not isinstance(self.inference, LlamaCppInferenceConfig):
                 raise ValueError("chat profiles require llama.cpp inference settings")
+            if self.engine == "external" and not isinstance(self.inference, ExternalInferenceConfig):
+                raise ValueError("external chat profiles require external inference settings")
+            if self.engine not in {"llama_cpp_rocm", "external"}:
+                raise ValueError("unsupported chat inference engine")
         if self.kind == "embedding":
-            if self.engine != "transformers_rocm":
-                raise ValueError("embedding profiles require engine=transformers_rocm")
-            if not isinstance(self.inference, TransformersInferenceConfig):
+            if self.engine == "transformers_rocm" and not isinstance(self.inference, TransformersInferenceConfig):
                 raise ValueError("embedding profiles require Transformers inference settings")
+            if self.engine == "external" and not isinstance(self.inference, ExternalInferenceConfig):
+                raise ValueError("external embedding profiles require external inference settings")
+            if self.engine not in {"transformers_rocm", "external"}:
+                raise ValueError("unsupported embedding inference engine")
             if self.embedding_dimensions is None:
                 raise ValueError("embedding profiles require embedding_dimensions")
         return self

@@ -1,7 +1,7 @@
 import { requestJson, withQuery } from './http'
 
 export type LocalModelKind = 'chat' | 'embedding'
-export type LocalInferenceEngine = 'llama_cpp_rocm' | 'transformers_rocm'
+export type LocalInferenceEngine = 'llama_cpp_rocm' | 'transformers_rocm' | 'external'
 export type LocalModelDefaultRole = 'main' | 'task' | 'compression' | 'embedding'
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
 
@@ -19,7 +19,9 @@ export interface LocalModelArtifact {
   artifact_id: string
   display_name: string
   kind: LocalModelKind
-  local_path: string
+  source: 'local_storage' | 'external_endpoint'
+  local_path?: string | null
+  external_model_id?: string | null
   model_format: string
   revision: string
   checksum: string
@@ -42,9 +44,20 @@ export interface LocalModelDirectory {
 }
 
 export interface LocalModelStorage {
+  inference_mode: 'managed' | 'external'
   root_path: string
   modelscope_cache_path: string
   directories: LocalModelDirectory[]
+  remote_models: RemoteInferenceModel[]
+  remote_error: string
+}
+
+export interface RemoteInferenceModel {
+  model_id: string
+  format: string
+  context_length?: number | null
+  parameter_count?: number | null
+  size_bytes?: number | null
 }
 
 interface LocalModelProfileBase {
@@ -79,22 +92,22 @@ interface LocalModelProfileBase {
 
 export interface LocalChatModelProfile extends LocalModelProfileBase {
   kind: 'chat'
-  engine: 'llama_cpp_rocm'
+  engine: 'llama_cpp_rocm' | 'external'
   inference: {
     gpu_layers: number
     parallel_slots: number
     cache_type_k: string
     cache_type_v: string
     flash_attention: boolean
-  }
+  } | { external: true }
 }
 
 export interface LocalEmbeddingModelProfile extends LocalModelProfileBase {
   kind: 'embedding'
-  engine: 'transformers_rocm'
+  engine: 'transformers_rocm' | 'external'
   inference: {
     trust_remote_code: boolean
-  }
+  } | { external: true }
 }
 
 export type LocalModelProfile = LocalChatModelProfile | LocalEmbeddingModelProfile
@@ -103,6 +116,7 @@ export type LocalModelRuntimePhase = 'idle' | 'starting' | 'loading' | 'ready' |
 
 export interface LocalModelRuntime {
   kind: LocalModelKind
+  mode: 'managed' | 'external'
   profile_id: string
   phase: LocalModelRuntimePhase
   stage: string

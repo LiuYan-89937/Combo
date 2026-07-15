@@ -15,11 +15,6 @@ echo "==================================="
 echo ""
 
 web_check_env_configuration
-echo ""
-web_sync_python_dependencies
-web_sync_frontend_dependencies
-web_ensure_builtin_web_search_mcp
-web_ensure_runtime_image
 
 BACKEND_PID=""
 
@@ -32,9 +27,17 @@ cleanup() {
         kill "${BACKEND_PID}" >/dev/null 2>&1 || true
         wait "${BACKEND_PID}" 2>/dev/null || true
     fi
+    web_stop_inference_ssh_tunnel
     exit "${exit_code}"
 }
 trap cleanup EXIT INT TERM
+
+echo ""
+web_start_inference_ssh_tunnel
+web_sync_python_dependencies
+web_sync_frontend_dependencies
+web_ensure_builtin_web_search_mcp
+web_ensure_runtime_image
 
 echo ""
 echo "Starting backend web runtime service on port 8000..."

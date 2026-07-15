@@ -5,12 +5,22 @@ WEB_FRONTEND_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_FRONTEND_DIR="$(cd "${WEB_FRONTEND_LIB_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${WEB_FRONTEND_DIR}/.." && pwd)"
 FRONTEND_DIR="${WEB_FRONTEND_DIR}/frontend"
+PROJECT_ENV_FILE="${PROJECT_ROOT}/.env"
+
+if [[ -f "${PROJECT_ENV_FILE}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${PROJECT_ENV_FILE}"
+    set +a
+fi
+
 PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
 RUNTIME_IMAGE="${AGENTFACTORY_RUNTIME_IMAGE:-agentfactory-runtime-python:3.12}"
 RUNTIME_DOCKERFILE="${AGENTFACTORY_RUNTIME_DOCKERFILE:-${PROJECT_ROOT}/docker/agent-runtime/Dockerfile}"
 RUNTIME_SOURCE_DIGEST_LABEL="org.fastagentfactory.runtime.source_digest"
 WEB_SEARCH_MCP_DIR="${AGENTFACTORY_WEB_SEARCH_MCP_DIR:-${PROJECT_ROOT}/.agentfactory/mcp/web_search}"
 WEB_SEARCH_MCP_REPOSITORY="${AGENTFACTORY_WEB_SEARCH_MCP_REPOSITORY:-https://github.com/LiuYan-89937/WebSearchApi.git}"
+INFERENCE_SSH_TUNNEL_PID=""
 
 web_fail() {
     echo "ERROR: $*" >&2
@@ -31,6 +41,127 @@ web_require_command() {
     if ! command -v "${command_name}" >/dev/null 2>&1; then
         web_fail "${command_name} not found. ${install_hint}"
     fi
+}
+
+web_validate_port() {
+    local name="$1"
+    local value="$2"
+    if [[ ! "${value}" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+        web_fail "${name} must be an integer between 1 and 65535"
+    fi
+}
+
+web_require_available_local_port() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+        web_fail "Local port ${port} is already in use; stop its listener or choose another SSH local port in .env"
+    fi
+}
+
+web_expand_home_path() {
+    local path="$1"
+    if [[ "${path}" == "~/"* ]]; then
+        printf '%s' "${HOME}/${path#\~/}"
+        return
+    fi
+    printf '%s' "${path}"
+}
+
+web_start_inference_ssh_tunnel() {
+    if [[ "${AGENTFACTORY_INFERENCE_RUNTIME_MODE:-managed}" != "external" ]]; then
+        return
+    fi
+
+    web_require_command "ssh" "Install the OpenSSH client first."
+    web_require_command "curl" "Install curl first."
+
+    local required_names=(
+        AGENTFACTORY_INFERENCE_SSH_HOST
+        AGENTFACTORY_INFERENCE_SSH_PORT
+        AGENTFACTORY_INFERENCE_SSH_USER
+        AGENTFACTORY_INFERENCE_SSH_CHAT_LOCAL_PORT
+        AGENTFACTORY_INFERENCE_SSH_CHAT_REMOTE_PORT
+        AGENTFACTORY_INFERENCE_SSH_TELEMETRY_LOCAL_PORT
+        AGENTFACTORY_INFERENCE_SSH_TELEMETRY_REMOTE_PORT
+        AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT
+        AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT
+    )
+    local name
+    for name in "${required_names[@]}"; do
+        if [[ -z "${!name:-}" ]]; then
+            web_fail "${name} is required when AGENTFACTORY_INFERENCE_RUNTIME_MODE=external"
+        fi
+    done
+
+    web_validate_port "AGENTFACTORY_INFERENCE_SSH_PORT" "${AGENTFACTORY_INFERENCE_SSH_PORT}"
+    web_validate_port "AGENTFACTORY_INFERENCE_SSH_CHAT_LOCAL_PORT" "${AGENTFACTORY_INFERENCE_SSH_CHAT_LOCAL_PORT}"
+    web_validate_port "AGENTFACTORY_INFERENCE_SSH_CHAT_REMOTE_PORT" "${AGENTFACTORY_INFERENCE_SSH_CHAT_REMOTE_PORT}"
+    web_validate_port "AGENTFACTORY_INFERENCE_SSH_TELEMETRY_LOCAL_PORT" "${AGENTFACTORY_INFERENCE_SSH_TELEMETRY_LOCAL_PORT}"
+    web_validate_port "AGENTFACTORY_INFERENCE_SSH_TELEMETRY_REMOTE_PORT" "${AGENTFACTORY_INFERENCE_SSH_TELEMETRY_REMOTE_PORT}"
+    if [[ "${AGENTFACTORY_INFERENCE_SSH_CHAT_LOCAL_PORT}" == "${AGENTFACTORY_INFERENCE_SSH_TELEMETRY_LOCAL_PORT}" ]]; then
+        web_fail "Chat and telemetry SSH local ports must be different"
+    fi
+
+    web_require_available_local_port "${AGENTFACTORY_INFERENCE_SSH_CHAT_LOCAL_PORT}"
+    web_require_available_local_port "${AGENTFACTORY_INFERENCE_SSH_TELEMETRY_LOCAL_PORT}"
+
+    local ssh_key="${AGENTFACTORY_INFERENCE_SSH_KEY:-}"
+    local ssh_command=(
+        ssh -N
+        -o BatchMode=yes
+        -o ExitOnForwardFailure=yes
+        -o ServerAliveInterval=30
+        -o ServerAliveCountMax=3
+        -p "${AGENTFACTORY_INFERENCE_SSH_PORT}"
+        -L "${AGENTFACTORY_INFERENCE_SSH_CHAT_LOCAL_PORT}:127.0.0.1:${AGENTFACTORY_INFERENCE_SSH_CHAT_REMOTE_PORT}"
+        -L "${AGENTFACTORY_INFERENCE_SSH_TELEMETRY_LOCAL_PORT}:127.0.0.1:${AGENTFACTORY_INFERENCE_SSH_TELEMETRY_REMOTE_PORT}"
+    )
+    if [[ -n "${ssh_key}" ]]; then
+        ssh_key="$(web_expand_home_path "${ssh_key}")"
+        [[ -r "${ssh_key}" ]] || web_fail "SSH private key is not readable: ${ssh_key}"
+        ssh_command+=(-i "${ssh_key}")
+    fi
+    ssh_command+=("${AGENTFACTORY_INFERENCE_SSH_USER}@${AGENTFACTORY_INFERENCE_SSH_HOST}")
+
+    echo "Opening SSH tunnel to external inference host..."
+    "${ssh_command[@]}" &
+    INFERENCE_SSH_TUNNEL_PID=$!
+
+    local attempt
+    for attempt in {1..20}; do
+        if ! kill -0 "${INFERENCE_SSH_TUNNEL_PID}" >/dev/null 2>&1; then
+            wait "${INFERENCE_SSH_TUNNEL_PID}" 2>/dev/null || true
+            INFERENCE_SSH_TUNNEL_PID=""
+            web_fail "SSH tunnel exited before the inference endpoints became available"
+        fi
+        if web_check_inference_ssh_tunnel; then
+            echo "External model and telemetry endpoints are reachable"
+            return
+        fi
+        sleep 0.5
+    done
+
+    web_stop_inference_ssh_tunnel
+    web_fail "SSH tunnel opened, but model or telemetry endpoint validation failed"
+}
+
+web_check_inference_ssh_tunnel() {
+    local model_endpoint="${AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT%/}"
+    local telemetry_endpoint="${AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT%/}"
+    curl --fail --silent --show-error --max-time 2 "${model_endpoint}/models" >/dev/null 2>&1 \
+        && curl --fail --silent --show-error --max-time 2 "${telemetry_endpoint}/runtime/rocm" >/dev/null 2>&1
+}
+
+web_stop_inference_ssh_tunnel() {
+    if [[ -z "${INFERENCE_SSH_TUNNEL_PID}" ]]; then
+        return
+    fi
+    if kill -0 "${INFERENCE_SSH_TUNNEL_PID}" >/dev/null 2>&1; then
+        echo "Stopping inference SSH tunnel..."
+        kill "${INFERENCE_SSH_TUNNEL_PID}" >/dev/null 2>&1 || true
+        wait "${INFERENCE_SSH_TUNNEL_PID}" 2>/dev/null || true
+    fi
+    INFERENCE_SSH_TUNNEL_PID=""
 }
 
 web_check_env_configuration() {

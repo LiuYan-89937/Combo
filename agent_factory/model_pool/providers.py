@@ -24,4 +24,11 @@ def list_local_inference_engines() -> list[dict[str, Any]]:
             "transport": "in_process",
             "parameters": {},
         },
+        {
+            "engine": "external",
+            "display_name": "External inference endpoint",
+            "kind": "chat",
+            "transport": "openai_compatible",
+            "parameters": {},
+        },
     ]

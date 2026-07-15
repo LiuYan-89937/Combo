@@ -13,6 +13,7 @@ from agent_factory.model_pool.resolver import (
     resolve_chat_model_profile,
 )
 from agent_factory.model_pool.schema import (
+    ExternalInferenceConfig,
     LlamaCppInferenceConfig,
     LocalModelArtifact,
     ModelBindingSource,
@@ -39,6 +40,7 @@ from agent_factory.model_pool.usage import ModelUsageStore, record_model_usage_f
 __all__ = [
     "MODEL_POOL_STORE_PATH_ENV",
     "MODEL_ROOT_ENV",
+    "ExternalInferenceConfig",
     "LlamaCppInferenceConfig",
     "LocalModelArtifact",
     "ModelBindingSource",

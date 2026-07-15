@@ -35,6 +35,7 @@ _PERCENT_PATTERN = re.compile(r"(?<!\d)(\d{1,3})%")
 @dataclass(slots=True)
 class _RuntimeSlot:
     kind: RuntimeKind
+    mode: str = "managed"
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     process: asyncio.subprocess.Process | None = None
     readiness_task: asyncio.Task[None] | None = None
@@ -51,6 +52,7 @@ class _RuntimeSlot:
     def payload(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
+            "mode": self.mode,
             "profile_id": self.profile_id,
             "phase": self.phase,
             "stage": self.stage,
@@ -145,6 +147,8 @@ class LocalInferenceRuntimeManager:
         return load_local_embedding_endpoint(timeout_seconds=2.0)
 
     def _command(self, profile: ModelPoolProfile, endpoint: LocalInferenceEndpoint) -> list[str]:
+        if profile.engine == "external":
+            raise ValueError("external inference profiles do not start a local process")
         host, port = _local_binding(endpoint)
         if profile.kind == "chat":
             module = "agent_factory.local_inference.run_llama_server"
@@ -167,11 +171,13 @@ class LocalInferenceRuntimeManager:
         slot: _RuntimeSlot,
         profile: ModelPoolProfile,
         endpoint: LocalInferenceEndpoint,
+        *,
+        require_process: bool,
     ) -> None:
         deadline = asyncio.get_running_loop().time() + _LOAD_TIMEOUT_SECONDS[slot.kind]
         async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
             while asyncio.get_running_loop().time() < deadline:
-                if slot.process is None or slot.process.returncode is not None:
+                if require_process and (slot.process is None or slot.process.returncode is not None):
                     return
                 try:
                     ready = await _runtime_is_ready(client, endpoint, profile)
@@ -182,7 +188,8 @@ class LocalInferenceRuntimeManager:
                     return
                 await asyncio.sleep(1.0)
         self._fail(slot, TimeoutError(f"{slot.kind} model loading timed out"))
-        await self._terminate(slot)
+        if require_process:
+            await self._terminate(slot)
 
     async def _watch_output(self, slot: _RuntimeSlot) -> None:
         process = slot.process
@@ -214,6 +221,7 @@ class LocalInferenceRuntimeManager:
         slot.readiness_task = None
         slot.output_task = None
         slot.profile_id = ""
+        slot.mode = "managed"
         slot.phase = "idle"
         slot.stage = "idle"
         slot.progress_percent = None
@@ -229,6 +237,7 @@ class LocalInferenceRuntimeManager:
     ) -> dict[str, Any]:
         await self._stop_locked(slot, clear_active=False)
         slot.profile_id = profile.profile_id
+        slot.mode = "external" if profile.engine == "external" else "managed"
         slot.phase = "starting"
         slot.stage = "validating_runtime"
         slot.progress_percent = 0
@@ -237,8 +246,15 @@ class LocalInferenceRuntimeManager:
         slot.updated_at = slot.started_at
         slot.logs.clear()
         try:
-            await asyncio.to_thread(inspect_rocm_runtime, require_available=True)
             endpoint = self._endpoint(profile.kind)
+            if profile.engine == "external":
+                ModelPoolStore().set_active_profile_id(profile.kind, profile.profile_id)
+                self._update(slot, phase="loading", stage="connecting_external", progress_percent=None)
+                slot.readiness_task = asyncio.create_task(
+                    self._wait_until_ready(slot, profile, endpoint, require_process=False)
+                )
+                return slot.payload()
+            await asyncio.to_thread(inspect_rocm_runtime, require_available=True)
             command = self._command(profile, endpoint)
             environment = dict(os.environ)
             environment["PYTHONUNBUFFERED"] = "1"
@@ -254,7 +270,9 @@ class LocalInferenceRuntimeManager:
             ModelPoolStore().set_active_profile_id(profile.kind, profile.profile_id)
             self._update(slot, phase="loading", stage="process_started", progress_percent=5)
             slot.output_task = asyncio.create_task(self._watch_output(slot))
-            slot.readiness_task = asyncio.create_task(self._wait_until_ready(slot, profile, endpoint))
+            slot.readiness_task = asyncio.create_task(
+                self._wait_until_ready(slot, profile, endpoint, require_process=True)
+            )
         except Exception as exc:
             self._fail(slot, exc)
         return slot.payload()
@@ -373,6 +391,7 @@ def _observe_log_line(slot: _RuntimeSlot, line: str) -> None:
 def _idle_runtime_payload(kind: RuntimeKind, profile_id: str) -> dict[str, Any]:
     return {
         "kind": kind,
+        "mode": "managed",
         "profile_id": profile_id,
         "phase": "idle",
         "stage": "idle",

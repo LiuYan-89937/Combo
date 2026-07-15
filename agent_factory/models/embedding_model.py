@@ -24,7 +24,7 @@ class EmbeddingModelSettings:
             self.profile_id
             and self.model
             and self.dims
-            and self.engine == "transformers_rocm"
+            and self.engine in {"transformers_rocm", "external"}
         )
 
 

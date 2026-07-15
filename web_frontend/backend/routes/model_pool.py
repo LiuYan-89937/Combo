@@ -7,9 +7,15 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+import httpx
 
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
+from agent_factory.local_inference.config import (
+    load_inference_runtime_mode,
+    load_inference_telemetry_endpoint,
+    load_local_inference_endpoint,
+)
 from agent_factory.model_pool import (
     LocalModelArtifact,
     ModelPoolProfile,
@@ -33,12 +39,18 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
 
     @router.get("/runtime/rocm")
     async def rocm_runtime():
+        if load_inference_runtime_mode() == "external":
+            return await _external_rocm_payload()
         return inspect_rocm_runtime(require_available=False).payload()
 
     @router.get("/runtimes")
     async def inference_runtimes():
-        rocm = await asyncio.to_thread(inspect_rocm_runtime, require_available=False)
-        return {"runtimes": runtime_manager.states(), "rocm": rocm.payload()}
+        if load_inference_runtime_mode() == "external":
+            rocm_payload = await _external_rocm_payload()
+        else:
+            rocm = await asyncio.to_thread(inspect_rocm_runtime, require_available=False)
+            rocm_payload = rocm.payload()
+        return {"runtimes": runtime_manager.states(), "rocm": rocm_payload}
 
     @router.get("/defaults")
     async def default_profiles():
@@ -46,11 +58,30 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
 
     @router.get("/storage")
     async def model_storage():
+        mode = load_inference_runtime_mode()
+        if mode == "external":
+            try:
+                remote_models = await _external_model_list()
+                remote_error = ""
+            except (httpx.HTTPError, ValueError) as exc:
+                remote_models = []
+                remote_error = f"{type(exc).__name__}: {exc}"
+            return {
+                "inference_mode": mode,
+                "root_path": "",
+                "modelscope_cache_path": "",
+                "directories": [],
+                "remote_models": remote_models,
+                "remote_error": remote_error,
+            }
         storage = ModelStorage()
         return {
+            "inference_mode": mode,
             "root_path": str(storage.root),
             "modelscope_cache_path": str(storage.modelscope_cache),
             "directories": [item.payload() for item in storage.list_model_directories()],
+            "remote_models": [],
+            "remote_error": "",
         }
 
     @router.put("/defaults/{role}")
@@ -205,7 +236,21 @@ async def _apply_runtime_intent(
 
 def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> LocalModelArtifact:
     data = dict(payload)
+    if str(data.get("source") or "local_storage") == "external_endpoint":
+        data["source"] = "external_endpoint"
+        data["local_path"] = None
+        external_model_id = str(data.get("external_model_id") or "").strip()
+        data["external_model_id"] = external_model_id
+        if not str(data.get("artifact_id") or "").strip():
+            data["artifact_id"] = _unique_id(
+                _slug(str(data.get("display_name") or external_model_id or "model")),
+                existing={item.artifact_id for item in store.list_artifacts()},
+                salt=external_model_id,
+            )
+        return LocalModelArtifact.model_validate(data)
     storage = ModelStorage()
+    data["source"] = "local_storage"
+    data["external_model_id"] = None
     kind = str(data.get("kind") or "").strip().lower()
     if kind == "chat":
         data["model_format"] = "llama_cpp"
@@ -220,6 +265,53 @@ def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) ->
             salt=str(data.get("local_path") or ""),
         )
     return LocalModelArtifact.model_validate(data)
+
+
+async def _external_model_list() -> list[dict[str, Any]]:
+    endpoint = load_local_inference_endpoint(timeout_seconds=5.0)
+    async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
+        response = await client.get(endpoint.endpoint("/models"))
+        response.raise_for_status()
+        payload = response.json()
+    models = payload.get("data") if isinstance(payload, dict) else None
+    result: list[dict[str, Any]] = []
+    for item in models or []:
+        if not isinstance(item, dict) or not str(item.get("id") or "").strip():
+            continue
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        result.append(
+            {
+                "model_id": str(item["id"]),
+                "format": str(meta.get("ftype") or ""),
+                "context_length": meta.get("n_ctx"),
+                "parameter_count": meta.get("n_params"),
+                "size_bytes": meta.get("size"),
+            }
+        )
+    return result
+
+
+async def _external_rocm_payload() -> dict[str, Any]:
+    endpoint = load_inference_telemetry_endpoint(timeout_seconds=5.0)
+    try:
+        async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
+            response = await client.get(endpoint.endpoint("/runtime/rocm"))
+            response.raise_for_status()
+            payload = response.json()
+        if isinstance(payload, dict):
+            return payload
+    except (httpx.HTTPError, ValueError) as exc:
+        return {
+            "available": False,
+            "torch_version": "",
+            "hip_version": "",
+            "rocm_version": "",
+            "device_count": 0,
+            "devices": [],
+            "telemetry_source": "external",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    raise ValueError("external telemetry response must be a JSON object")
 
 
 def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> ModelPoolProfile:
