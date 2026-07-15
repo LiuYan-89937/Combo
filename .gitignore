@@ -6,6 +6,7 @@ vendor/llama.cpp/
 .idea/
 .agentfactory/
 .agent_runtime/
+environment.lock.json
 .venv/
 AGENT_GROUP_*.md
 开发规范以及架构初版.md
