@@ -13,7 +13,10 @@ def run(arguments: dict, resources: dict) -> dict:
     smtp_config = resources.get("smtp")
     if not isinstance(smtp_config, dict):
         raise ValueError("smtp_account resource is required")
-    recipients = _recipients(arguments.get("recipients"))
+    recipients_value = arguments.get("recipients")
+    if recipients_value is None:
+        recipients_value = smtp_config.get("default_recipients")
+    recipients = _recipients(recipients_value)
     subject = _header(arguments.get("subject"), field="subject", max_length=200)
     body = str(arguments.get("body") or "").strip()
     if not body:

@@ -11,14 +11,22 @@
         "value_schema": {
           "type": "object",
           "properties": {
-            "host": {"type": "string", "minLength": 1},
-            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
-            "username": {"type": "string", "minLength": 1},
-            "password": {"type": "string", "minLength": 1},
-            "from_address": {"type": "string", "minLength": 3},
-            "security": {"type": "string", "enum": ["ssl", "starttls"]}
+            "host": {"type": "string", "title": "SMTP 主机", "minLength": 1},
+            "port": {"type": "integer", "title": "SMTP 端口", "minimum": 1, "maximum": 65535},
+            "username": {"type": "string", "title": "登录账号", "minLength": 1},
+            "password": {"type": "string", "title": "授权码或密码", "minLength": 1},
+            "from_address": {"type": "string", "title": "发件邮箱", "minLength": 3},
+            "security": {"type": "string", "title": "安全协议", "enum": ["ssl", "starttls"]},
+            "default_recipients": {
+              "type": "array",
+              "title": "默认收件人",
+              "items": {"type": "string", "minLength": 3},
+              "minItems": 1,
+              "maxItems": 10,
+              "uniqueItems": true
+            }
           },
-          "required": ["host", "port", "username", "password", "from_address", "security"],
+          "required": ["host", "port", "username", "password", "from_address", "security", "default_recipients"],
           "additionalProperties": false
         },
         "default_value": {},

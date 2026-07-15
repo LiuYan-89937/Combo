@@ -18,7 +18,7 @@ description: 基于可追溯的实时行情快照制作 A 股盘前、盘中或�
 3. 当工具返回 `partial` 或 `error` 时，先说明缺失项；不得用模型记忆补齐缺失数据。
 4. 把输出区分为数据事实、分析判断和风险提示。每个关键数字必须能回溯到本轮工具结果。
 5. 用户要求保存时，先形成完整 Markdown，再调用 `write` 写入 Workspace。
-6. 只有用户明确要求发送邮件时才准备邮件。调用 `send_market_brief_email` 前必须让用户确认收件人、主题和完整正文；该工具按低风险直接执行，不触发工具审批。SMTP Resource 未配置时引导用户在包详情的 Resource 配置中填写。
+6. 只有用户明确要求发送邮件时才准备邮件。调用 `send_market_brief_email` 前必须让用户确认收件人、主题和完整正文；用户未另行指定收件人时使用 SMTP Resource 的 `default_recipients`。该工具按低风险直接执行，不触发工具审批。SMTP Resource 未配置时引导用户在包详情的 Resource 配置中填写。
 
 ## 推荐简报结构
 
