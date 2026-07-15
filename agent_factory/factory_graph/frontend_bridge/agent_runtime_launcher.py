@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from agent_factory.agent_runtime_bridge.paths import (
     BRIDGE_ARTIFACTS_ROOT_ENV,
@@ -55,6 +56,12 @@ MODEL_ENV_ALLOWLIST: tuple[str, ...] = (
     "AGENTFACTORY_LOCAL_EMBEDDING_ALLOWED_HOSTS",
     "AGENTFACTORY_LOCAL_EMBEDDING_TIMEOUT_SECONDS",
 )
+CONTAINER_ENDPOINT_ENV_PAIRS: tuple[tuple[str, str], ...] = (
+    ("AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT", "AGENTFACTORY_LOCAL_INFERENCE_ALLOWED_HOSTS"),
+    ("AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT", "AGENTFACTORY_LOCAL_EMBEDDING_ALLOWED_HOSTS"),
+)
+CONTAINER_HOST_ALIAS = "host.docker.internal"
+LOOPBACK_ENDPOINT_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 CONTAINER_MODEL_POOL_STORE_PATH = "/model_pool/factory.sqlite"
 CONTAINER_COLLABORATION_ROOT = "/collaboration"
 CONTAINER_RESOURCE_STORE_PATH = "/resource_store/runtime.sqlite"
@@ -210,6 +217,8 @@ class DockerAgentRuntimeLauncher:
             "-i",
             "--network",
             network,
+            "--add-host",
+            f"{CONTAINER_HOST_ALIAS}:host-gateway",
         ]
         mounts = [
             f"{package.package_root.resolve()}:/package:ro",
@@ -463,6 +472,7 @@ class DockerAgentRuntimeLauncher:
                     suggested_action=f"Set {env_key} in the host environment before starting this AgentPackage.",
                 )
             result[env_key] = value
+        _rewrite_container_endpoints(result)
         return result
 
     def _service_environment(self, sandbox: dict[str, Any]) -> dict[str, str]:
@@ -692,6 +702,8 @@ class _SharedDockerRuntime:
                 "-d",
                 "--network",
                 network,
+                "--add-host",
+                f"{CONTAINER_HOST_ALIAS}:host-gateway",
                 "--cap-drop",
                 "ALL",
                 "--security-opt",
@@ -787,6 +799,35 @@ def runtime_container_path(path: str | Path) -> PurePosixPath:
     except ValueError as exc:
         raise ValueError(f"logical runtime path is outside the shared project root: {host}") from exc
     return SHARED_PROJECT_ROOT.joinpath(*relative.parts)
+
+
+def _rewrite_container_endpoints(environment: dict[str, str]) -> None:
+    for endpoint_key, allowed_hosts_key in CONTAINER_ENDPOINT_ENV_PAIRS:
+        endpoint = environment.get(endpoint_key)
+        if not endpoint:
+            continue
+        rewritten = _container_endpoint(endpoint)
+        if rewritten == endpoint:
+            continue
+        environment[endpoint_key] = rewritten
+        allowed_hosts = [
+            item.strip()
+            for item in environment.get(allowed_hosts_key, "").split(",")
+            if item.strip()
+        ]
+        if CONTAINER_HOST_ALIAS not in {item.lower() for item in allowed_hosts}:
+            allowed_hosts.append(CONTAINER_HOST_ALIAS)
+        environment[allowed_hosts_key] = ",".join(allowed_hosts)
+
+
+def _container_endpoint(endpoint: str) -> str:
+    parsed = urlsplit(endpoint)
+    if (parsed.hostname or "").lower() not in LOOPBACK_ENDPOINT_HOSTS:
+        return endpoint
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return urlunsplit(
+        (parsed.scheme, f"{CONTAINER_HOST_ALIAS}{port}", parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def shutdown_shared_runtime() -> None:
