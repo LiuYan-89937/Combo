@@ -16,6 +16,7 @@ fi
 
 PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
 RUNTIME_IMAGE="${AGENTFACTORY_RUNTIME_IMAGE:-agentfactory-runtime-python:3.12}"
+export AGENTFACTORY_RUNTIME_IMAGE="${RUNTIME_IMAGE}"
 RUNTIME_DOCKERFILE="${AGENTFACTORY_RUNTIME_DOCKERFILE:-${PROJECT_ROOT}/docker/agent-runtime/Dockerfile}"
 RUNTIME_SOURCE_DIGEST_LABEL="org.fastagentfactory.runtime.source_digest"
 WEB_SEARCH_MCP_DIR="${AGENTFACTORY_WEB_SEARCH_MCP_DIR:-${PROJECT_ROOT}/.agentfactory/mcp/web_search}"
@@ -338,6 +339,7 @@ web_ensure_runtime_image() {
         image_digest="$(docker image inspect "${RUNTIME_IMAGE}" --format "{{ index .Config.Labels \"${RUNTIME_SOURCE_DIGEST_LABEL}\" }}" 2>/dev/null || true)"
         if [[ "${image_digest}" == "${source_digest}" ]]; then
             echo "Docker runtime image exists and is up to date: ${RUNTIME_IMAGE}"
+            web_export_runtime_image_id
             return
         fi
         echo "Docker runtime image is stale; rebuilding ${RUNTIME_IMAGE}"
@@ -346,6 +348,16 @@ web_ensure_runtime_image() {
     fi
 
     web_build_runtime_image "${source_digest}"
+    web_export_runtime_image_id
+}
+
+web_export_runtime_image_id() {
+    local runtime_image_id
+    runtime_image_id="$(docker image inspect "${RUNTIME_IMAGE}" --format '{{.Id}}')" \
+        || web_fail "Docker runtime image identity could not be resolved: ${RUNTIME_IMAGE}"
+    [[ -n "${runtime_image_id}" ]] || web_fail "Docker returned an empty runtime image identity: ${RUNTIME_IMAGE}"
+    export AGENTFACTORY_RUNTIME_IMAGE_ID="${runtime_image_id}"
+    echo "Pinned Docker runtime image: ${RUNTIME_IMAGE} -> ${runtime_image_id}"
 }
 
 web_runtime_source_digest() {
