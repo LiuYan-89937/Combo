@@ -136,7 +136,10 @@ class RuntimeBridge:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     raise HTTPException(status_code=504, detail=f"Timed out waiting for {command.type}")
-                event_payload = await asyncio.wait_for(event_queue.get(), timeout=remaining)
+                try:
+                    event_payload = await asyncio.wait_for(event_queue.get(), timeout=remaining)
+                except TimeoutError as exc:
+                    raise HTTPException(status_code=504, detail=f"Timed out waiting for {command.type}") from exc
                 if event_payload.get("request_id") != command.request_id:
                     continue
                 if event_payload.get("event_type") == "error":

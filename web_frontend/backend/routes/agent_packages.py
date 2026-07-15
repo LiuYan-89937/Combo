@@ -70,8 +70,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             "initialize_agent_package",
             {"package_id": package_id},
             {"agent_package_instance_updated"},
-            timeout_seconds=180.0,
-            event_filter=lambda item: _is_initialize_terminal_event(item, package_id=package_id),
+            event_filter=lambda item: _is_initialize_status_event(item, package_id=package_id),
         )
         return {"event": event}
 
@@ -192,12 +191,9 @@ def session_updated_sort_key(session: dict[str, Any]) -> str:
     return str(session.get("updated_at") or session.get("created_at") or "")
 
 
-def _is_initialize_terminal_event(item: dict[str, Any], *, package_id: str) -> bool:
+def _is_initialize_status_event(item: dict[str, Any], *, package_id: str) -> bool:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    if str(payload.get("package_id") or "").strip() != package_id:
-        return False
-    status = str(payload.get("status") or "").strip()
-    return payload.get("ready") is True or status == "failed"
+    return str(payload.get("package_id") or "").strip() == package_id
 
 
 def _validated_context_config_payload(payload: dict[str, Any]) -> dict[str, int | None]:
