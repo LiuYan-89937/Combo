@@ -4,11 +4,11 @@ import json
 from pathlib import PurePosixPath
 import shutil
 from typing import Any
-from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.knowledge_system.identifiers import new_source_id
 from agent_factory.paths import factory_artifact_path
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import optional_package, resource_command
@@ -47,7 +47,7 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         source_payload = _source_payload_from_form(source)
         resolved_package_id = package_id or str(source_payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
         display_name = str(source_payload.get("display_name") or "uploaded_source").strip()
-        source_id = _safe_source_id(display_name)
+        source_id = new_source_id()
         upload_root = _knowledge_upload_root(resolved_package_id, source_id)
         if upload_root.exists():
             shutil.rmtree(upload_root)
@@ -173,15 +173,6 @@ def _knowledge_upload_root(package_id: str, source_id: str):
         "uploads",
         source_id,
     )
-
-
-def _safe_source_id(display_name: str) -> str:
-    cleaned = "".join(char.lower() if char.isalnum() else "_" for char in display_name).strip("_")
-    while "__" in cleaned:
-        cleaned = cleaned.replace("__", "_")
-    if not cleaned or not cleaned[0].isalpha():
-        cleaned = f"source_{cleaned or 'upload'}"
-    return f"{cleaned[:40].rstrip('_')}_{uuid4().hex[:10]}"
 
 
 def _safe_upload_relative_path(filename: str):

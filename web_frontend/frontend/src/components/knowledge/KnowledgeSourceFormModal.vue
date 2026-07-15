@@ -10,44 +10,50 @@
       </n-form-item>
 
       <n-form-item v-if="usesUpload" :label="t('knowledge.fileContent')">
-        <div
-          class="upload-zone"
-          @dragover.prevent
-          @drop.prevent="handleDrop"
-        >
-          <n-text>{{ uploadTitle }}</n-text>
-          <n-text depth="3" class="upload-hint">
-            {{ t('knowledge.uploadHint') }}
-          </n-text>
-          <n-space>
-            <n-button @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
-            <n-button @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
-          </n-space>
-        </div>
-        <input
-          ref="fileInputRef"
-          class="native-input"
-          type="file"
-          multiple
-          @change="handleFileInput"
-        />
-        <input
-          ref="folderInputRef"
-          class="native-input"
-          type="file"
-          multiple
-          webkitdirectory
-          directory
-          @change="handleFileInput"
-        />
-        <div v-if="selectedFiles.length" class="selected-files">
-          <n-text depth="3">{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
-          <div v-for="item in selectedFiles.slice(0, 8)" :key="item.relativePath" class="selected-file">
-            {{ item.relativePath }}
+        <div class="upload-field">
+          <div
+            class="upload-zone"
+            @dragover.prevent
+            @drop.prevent="handleDrop"
+          >
+            <n-text class="upload-title">{{ uploadTitle }}</n-text>
+            <n-text depth="3" class="upload-hint">
+              {{ t('knowledge.uploadHint') }}
+            </n-text>
+            <n-space>
+              <n-button @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
+              <n-button @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
+            </n-space>
           </div>
-          <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
-            {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
-          </n-text>
+          <input
+            ref="fileInputRef"
+            class="native-input"
+            type="file"
+            multiple
+            @change="handleFileInput"
+          />
+          <input
+            ref="folderInputRef"
+            class="native-input"
+            type="file"
+            multiple
+            webkitdirectory
+            directory
+            @change="handleFileInput"
+          />
+          <div v-if="selectedFiles.length" class="selected-files">
+            <div class="selected-files-header">
+              <n-text>{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
+            </div>
+            <div class="selected-files-list">
+              <div v-for="item in selectedFiles.slice(0, 8)" :key="item.relativePath" class="selected-file">
+                {{ item.relativePath }}
+              </div>
+              <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
+                {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
+              </n-text>
+            </div>
+          </div>
         </div>
       </n-form-item>
 
@@ -374,18 +380,28 @@ function isValidUrl(value: string): boolean {
 </script>
 
 <style scoped>
+.upload-field {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: var(--app-space-sm);
+}
+
 .upload-zone {
   width: 100%;
-  min-height: 150px;
+  min-height: 156px;
+  box-sizing: border-box;
+  padding: var(--app-space-lg);
   border: 1px dashed var(--app-border-hover);
-  border-radius: var(--app-radius-md);
+  border-radius: var(--app-radius-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: var(--app-space-sm);
   background: var(--app-surface-muted);
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  text-align: center;
+  transition: border-color var(--app-transition-base), background-color var(--app-transition-base);
 }
 
 .upload-zone:hover {
@@ -393,8 +409,14 @@ function isValidUrl(value: string): boolean {
   background: var(--app-surface-hover);
 }
 
+.upload-title {
+  font-weight: 600;
+}
+
 .upload-hint {
+  max-width: 480px;
   font-size: 12px;
+  line-height: 1.55;
 }
 
 .native-input {
@@ -403,13 +425,30 @@ function isValidUrl(value: string): boolean {
 
 .selected-files {
   width: 100%;
-  margin-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.selected-files-header {
+  padding: var(--app-space-sm) var(--app-space-md);
+  border-bottom: 1px solid var(--app-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.selected-files-list {
+  max-height: 152px;
+  overflow: auto;
+  padding: var(--app-space-xs) var(--app-space-md);
 }
 
 .selected-file {
+  min-width: 0;
+  padding: 4px 0;
   font-size: 12px;
   color: var(--app-text-secondary);
   overflow: hidden;
