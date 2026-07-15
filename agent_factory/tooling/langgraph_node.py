@@ -329,16 +329,7 @@ def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, lis
             continue
         if not isinstance(message, AIMessage):
             continue
-        calls = [
-            *list(getattr(message, "tool_calls", None) or []),
-            *list(getattr(message, "invalid_tool_calls", None) or []),
-        ]
-        origin_node_id = _message_origin_node_id(message)
-        origin_impl = _message_origin_impl(message)
-        normalized = [
-            _normalize_tool_call(item, index=index, origin_node_id=origin_node_id, origin_impl=origin_impl)
-            for index, item in enumerate(calls)
-        ]
+        normalized = _declared_ai_tool_calls(message)
         unresolved = [
             call
             for call in normalized
@@ -346,6 +337,27 @@ def latest_ai_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, lis
         ]
         return message, unresolved
     return None, []
+
+
+def latest_ai_declared_tool_calls(messages: Sequence[Any]) -> tuple[AIMessage | None, list[dict[str, Any]]]:
+    """Return every tool call declared by the latest AI message, including completed calls."""
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            return message, _declared_ai_tool_calls(message)
+    return None, []
+
+
+def _declared_ai_tool_calls(message: AIMessage) -> list[dict[str, Any]]:
+    calls = [
+        *list(getattr(message, "tool_calls", None) or []),
+        *list(getattr(message, "invalid_tool_calls", None) or []),
+    ]
+    origin_node_id = _message_origin_node_id(message)
+    origin_impl = _message_origin_impl(message)
+    return [
+        _normalize_tool_call(item, index=index, origin_node_id=origin_node_id, origin_impl=origin_impl)
+        for index, item in enumerate(calls)
+    ]
 
 
 def _partition_invalid_tool_calls(tool_calls: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
