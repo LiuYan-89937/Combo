@@ -174,41 +174,41 @@
 
               <footer class="resource-actions">
                 <div class="resource-action-group">
-                <n-button
-                  v-if="profileRuntime(profile)?.phase === 'ready'"
-                  size="small"
-                  secondary
-                  @click="restartProfile(profile)"
-                >
-                  {{ t('localModel.restart') }}
-                </n-button>
-                <n-button
-                  v-if="profileRuntime(profile)?.phase === 'ready'"
-                  size="small"
-                  secondary
-                  @click="unloadProfile(profile)"
-                >
-                  {{ t('localModel.unload') }}
-                </n-button>
-                <n-button
-                  v-else
-                  size="small"
-                  secondary
-                  :disabled="!profile.enabled"
-                  :loading="isRuntimeTransitioning(profile)"
-                  @click="loadProfile(profile)"
-                >
-                  {{ t('localModel.load') }}
-                </n-button>
-                <n-dropdown
-                  trigger="click"
-                  :options="defaultRoleOptions(profile)"
-                  @select="(role: string | number) => handleDefaultRoleSelect(role, profile)"
-                >
-                  <n-button size="small" quaternary :disabled="profileRuntime(profile)?.phase !== 'ready'">
-                    {{ t('localModel.setDefault') }}
+                  <n-button
+                    v-if="profileRuntime(profile)?.phase === 'ready'"
+                    size="small"
+                    secondary
+                    @click="restartProfile(profile)"
+                  >
+                    {{ t('localModel.restart') }}
                   </n-button>
-                </n-dropdown>
+                  <n-button
+                    v-if="profileRuntime(profile)?.phase === 'ready'"
+                    size="small"
+                    secondary
+                    @click="unloadProfile(profile)"
+                  >
+                    {{ t('localModel.unload') }}
+                  </n-button>
+                  <n-button
+                    v-else
+                    size="small"
+                    secondary
+                    :disabled="!profile.enabled"
+                    :loading="isRuntimeTransitioning(profile)"
+                    @click="loadProfile(profile)"
+                  >
+                    {{ t('localModel.load') }}
+                  </n-button>
+                  <n-dropdown
+                    trigger="click"
+                    :options="defaultRoleOptions(profile)"
+                    @select="(role: string | number) => handleDefaultRoleSelect(role, profile)"
+                  >
+                    <n-button size="small" quaternary :disabled="profileRuntime(profile)?.phase !== 'ready'">
+                      {{ t('localModel.setDefault') }}
+                    </n-button>
+                  </n-dropdown>
                 </div>
                 <div class="resource-action-group resource-management-actions">
                   <n-button size="small" quaternary @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
@@ -1329,8 +1329,8 @@ onBeforeUnmount(() => {
   .runtime-device { padding: var(--app-space-xs); }
   .runtime-metrics { display: grid; grid-template-columns: 1fr; }
   .model-panel { padding-inline: var(--app-space-sm); }
-  .resource-actions > .n-button,
-  .resource-actions > .n-dropdown { flex: 1 1 calc(50% - var(--app-space-xs)); }
+  .resource-action-group > .n-button,
+  .resource-action-group > .n-dropdown { flex: 1 1 calc(50% - var(--app-space-xs)); }
 }
 
 @media (max-width: 620px) {
