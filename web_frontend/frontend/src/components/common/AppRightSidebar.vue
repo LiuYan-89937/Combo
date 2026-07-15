@@ -26,6 +26,18 @@
 
     <AgentGroupSidebarPanel v-else-if="isAgentGroupRoute" class="right-panel-body" />
 
+    <AgentPackageDetailDrawer
+      v-else-if="isPublishedRoute && agentStore.selectedPackage"
+      embedded
+      :agent-package="agentStore.selectedPackage"
+      :instance="agentStore.selectedPackageInstance"
+      :context-config-saving="contextConfigSaving"
+      class="right-panel-body"
+      @save-context-config="handleSaveContextConfig"
+    />
+
+    <n-empty v-else-if="isPublishedRoute" :description="t('agents.empty')" class="published-detail-empty" />
+
     <n-tabs v-else v-model:value="uiStore.activeRightSidebarTab" type="line" animated class="right-tabs">
       <n-tab-pane name="workspace" :tab="t('right.workspace')">
         <WorkspaceSidebarPanel />
@@ -45,9 +57,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NIcon, NTabPane, NTabs } from 'naive-ui'
+import { NButton, NEmpty, NIcon, NTabPane, NTabs } from 'naive-ui'
 import { ChevronForward } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
+import { useCommand } from '@/composables/useCommand'
+import AgentPackageDetailDrawer from '@/components/agent/AgentPackageDetailDrawer.vue'
+import { useAgentStore } from '@/stores/agent'
 import { RIGHT_SIDEBAR_WIDTH, useUiStore } from '@/stores/ui'
 import AgentGroupSidebarPanel from './right-sidebar/AgentGroupSidebarPanel.vue'
 import CollaborationSidebarPanel from './right-sidebar/CollaborationSidebarPanel.vue'
@@ -58,10 +73,13 @@ import WorkspaceSidebarPanel from './right-sidebar/WorkspaceSidebarPanel.vue'
 const MAIN_CONTENT_MIN_WIDTH = 520
 
 const uiStore = useUiStore()
+const agentStore = useAgentStore()
+const commands = useCommand()
 const route = useRoute()
 const { t } = useI18n()
 const allowedTabs = new Set(['workspace', 'sessions', 'status'])
 const isResizing = ref(false)
+const contextConfigSaving = ref(false)
 const viewportWidth = ref(RIGHT_SIDEBAR_WIDTH.max + MAIN_CONTENT_MIN_WIDTH)
 let resizeStartX = 0
 let resizeStartWidth = RIGHT_SIDEBAR_WIDTH.default
@@ -73,6 +91,18 @@ const displayedRightSidebarWidth = computed(() => {
 })
 const isCollaborationRoute = computed(() => route.name === 'Collaboration')
 const isAgentGroupRoute = computed(() => route.name === 'AgentGroup')
+const isPublishedRoute = computed(() => route.name === 'Agents')
+
+async function handleSaveContextConfig(payload: { context_window_tokens: number | null; compression_threshold_tokens: number | null }) {
+  const packageId = agentStore.selectedPackageId
+  if (!packageId || contextConfigSaving.value) return
+  contextConfigSaving.value = true
+  try {
+    await commands.updateAgentPackageContextConfig(packageId, payload)
+  } finally {
+    contextConfigSaving.value = false
+  }
+}
 
 watch(
   () => uiStore.activeRightSidebarTab,
@@ -204,6 +234,14 @@ function availableRightSidebarWidth(): number {
 .right-panel-body {
   flex: 1;
   min-height: 0;
+}
+
+.published-detail-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .right-sidebar :deep(.n-tabs-pane-wrapper),

@@ -53,6 +53,7 @@
           :key="pkg.package_id"
           hoverable
           class="package-card"
+          :class="{ 'package-card-selected': agentStore.selectedPackageId === pkg.package_id }"
           @click="handleSelectPackage(pkg)"
         >
           <div class="package-header">
@@ -143,20 +144,6 @@
       </div>
     </div>
 
-    <AgentPackageDetailDrawer
-      v-model:show="detailDrawerOpen"
-      :agent-package="detailPackage"
-      :instance="detailPackage ? packageInstance(detailPackage) : null"
-      :instance-busy="detailPackage ? isInstanceBusy(detailPackage) : false"
-      :export-busy="busyAction === 'export'"
-      :context-config-saving="contextConfigSaving"
-      @initialize="handleInitializeInstance"
-      @shutdown="handleShutdownInstance"
-      @run="handleRun"
-      @evolve="handleEvolve"
-      @export="handleExport"
-      @save-context-config="handleSaveContextConfig"
-    />
   </div>
 </template>
 
@@ -180,7 +167,6 @@ import {
   useDialog,
 } from 'naive-ui'
 import { Search, Refresh, Build, ChatbubbleEllipses, EllipsisHorizontal, Rocket } from '@/components/icons'
-import AgentPackageDetailDrawer from './AgentPackageDetailDrawer.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -212,11 +198,8 @@ const { locale, t } = useI18n()
 const searchQuery = ref('')
 const filterStatus = ref<string | null>(null)
 const selectedPackageIds = ref<Set<string>>(new Set())
-const detailDrawerOpen = ref(false)
-const detailPackage = ref<AgentPackageView | null>(null)
 const busyAction = ref<'delete' | 'export' | 'instance' | null>(null)
 const busyInstancePackageId = ref<string | null>(null)
-const contextConfigSaving = ref(false)
 
 const statusOptions = computed(() => [
   { label: t('common.all'), value: null },
@@ -254,7 +237,8 @@ function handleRefresh() {
 }
 
 function handleSelectPackage(pkg: AgentPackageView) {
-  enterPackageContext(pkg, 'run')
+  agentStore.selectPackage(pkg.package_id)
+  uiStore.openRightSidebar('status')
 }
 
 function handleRun(pkg: AgentPackageView) {
@@ -314,10 +298,6 @@ function enterPackageContext(pkg: AgentPackageView, purpose: 'run' | 'evolution'
 
 function handleAction(key: string, pkg: AgentPackageView) {
   switch (key) {
-    case 'detail':
-      detailPackage.value = pkg
-      detailDrawerOpen.value = true
-      break
     case 'delete':
       confirmDeletePackages([pkg])
       break
@@ -329,7 +309,6 @@ function handleAction(key: string, pkg: AgentPackageView) {
 
 function getPackageActions() {
   return [
-    { label: t('common.details'), key: 'detail' },
     { label: t('common.export'), key: 'export' },
     { label: t('common.delete'), key: 'delete' },
   ]
@@ -391,22 +370,6 @@ async function handleExport(pkg: AgentPackageView) {
     await commands.exportAgentPackage(pkg)
   } finally {
     busyAction.value = null
-  }
-}
-
-async function handleSaveContextConfig(payload: { context_window_tokens: number | null; compression_threshold_tokens: number | null }) {
-  if (!detailPackage.value || contextConfigSaving.value) return
-  contextConfigSaving.value = true
-  try {
-    const updated = await commands.updateAgentPackageContextConfig(
-      detailPackage.value.package_id,
-      payload,
-    )
-    if (updated) {
-      detailPackage.value = updated
-    }
-  } finally {
-    contextConfigSaving.value = false
   }
 }
 
@@ -495,6 +458,11 @@ onMounted(() => {
 .package-card:hover {
   transform: translateY(-4px);
   box-shadow: var(--app-shadow-lg);
+}
+
+.package-card-selected {
+  border-color: var(--app-primary);
+  box-shadow: 0 0 0 1px var(--app-primary);
 }
 
 .package-card:active {

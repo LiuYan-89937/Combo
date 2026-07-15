@@ -1,6 +1,10 @@
 <template>
-  <n-drawer :show="show" :width="460" placement="right" @update:show="emit('update:show', $event)">
-    <n-drawer-content :title="t('agentDetail.title')" closable>
+  <component
+    :is="embedded ? 'div' : NDrawer"
+    v-bind="drawerContainerProps"
+    @update:show="emit('update:show', $event)"
+  >
+    <component :is="embedded ? 'div' : NDrawerContent" v-bind="detailContentProps">
       <div v-if="agentPackage" class="detail-panel">
         <section class="detail-section">
           <div class="detail-title">{{ packageDisplayName(agentPackage, t) }}</div>
@@ -320,7 +324,7 @@
           </div>
         </section>
 
-        <div class="detail-actions">
+        <div v-if="!embedded" class="detail-actions">
           <n-button
             v-if="ready"
             :loading="instanceBusy"
@@ -342,8 +346,8 @@
           </n-button>
         </div>
       </div>
-    </n-drawer-content>
-  </n-drawer>
+    </component>
+  </component>
 </template>
 
 <script setup lang="ts">
@@ -382,14 +386,22 @@ import {
   toolMeta,
 } from './agentPackagePresentation'
 
-const props = defineProps<{
-  show: boolean
+const props = withDefaults(defineProps<{
+  show?: boolean
+  embedded?: boolean
   agentPackage: AgentPackageView | null
-  instance: AgentPackageInstanceView | null
-  instanceBusy: boolean
-  exportBusy: boolean
-  contextConfigSaving: boolean
-}>()
+  instance?: AgentPackageInstanceView | null
+  instanceBusy?: boolean
+  exportBusy?: boolean
+  contextConfigSaving?: boolean
+}>(), {
+  show: true,
+  embedded: false,
+  instance: null,
+  instanceBusy: false,
+  exportBusy: false,
+  contextConfigSaving: false,
+})
 
 const emit = defineEmits<{
   'update:show': [value: boolean]
@@ -403,6 +415,13 @@ const emit = defineEmits<{
 
 const ready = computed(() => isPackageReady(props.instance))
 const { locale, t } = useI18n()
+const drawerContainerProps = computed(() => props.embedded
+  ? { class: 'embedded-detail-shell' }
+  : { show: props.show, width: 460, placement: 'right' as const })
+const detailContentProps = computed(() => props.embedded
+  ? { class: 'embedded-detail-content' }
+  : { title: t('agentDetail.title'), closable: true })
+const detailVisible = computed(() => props.embedded || props.show)
 const packageTools = computed<AgentPackageToolView[]>(() => props.agentPackage?.tools || [])
 const mcpServers = computed<AgentPackageExtensionView[]>(() => props.agentPackage?.mcp_servers || [])
 const skills = computed<AgentPackageExtensionView[]>(() => props.agentPackage?.skills || [])
@@ -410,6 +429,7 @@ const knowledgeSources = computed<AgentPackageKnowledgeSourceView[]>(() => props
 const resourceItems = ref<AgentPackageResourceDescriptorView[]>([])
 const resourceStoreReady = ref(false)
 const resourceDrafts = ref<Record<string, string>>({})
+let resourceRequestId = 0
 const resourceStatusType = computed(() => resourceItems.value.every(item => !item.required || item.configured) ? 'success' : 'warning')
 const resourceStatusLabel = computed(() => resourceStoreReady.value ? '运行时配置' : '需要主密钥')
 const environmentMeta = computed(() => {
@@ -458,16 +478,32 @@ watch(
 )
 
 watch(
-  () => [props.show, props.agentPackage?.package_id] as const,
-  async ([show, packageId]) => {
-    if (!show || !packageId) return
-    const payload = await agentPackagesApi.resources(packageId)
-    resourceItems.value = payload.resources
-    resourceStoreReady.value = payload.key_available
-    resourceDrafts.value = Object.fromEntries(payload.resources.map(item => [item.resource_id, '']))
+  () => [detailVisible.value, props.agentPackage?.package_id] as const,
+  async ([visible, packageId]) => {
+    if (!visible || !packageId) {
+      resourceRequestId += 1
+      resourceItems.value = []
+      resourceStoreReady.value = false
+      resourceDrafts.value = {}
+      return
+    }
+    await loadResources(packageId)
   },
   { immediate: true },
 )
+
+async function loadResources(packageId: string): Promise<void> {
+  const requestId = ++resourceRequestId
+  const payload = await agentPackagesApi.resources(packageId)
+  if (
+    requestId !== resourceRequestId ||
+    !detailVisible.value ||
+    props.agentPackage?.package_id !== packageId
+  ) return
+  resourceItems.value = payload.resources
+  resourceStoreReady.value = payload.key_available
+  resourceDrafts.value = Object.fromEntries(payload.resources.map(item => [item.resource_id, '']))
+}
 
 function resourceInputHint(resource: AgentPackageResourceDescriptorView): string {
   if (resource.secret_fields.length) return `填写 ${resource.secret_fields.join(', ')} 后保存`
@@ -481,17 +517,14 @@ async function saveResource(resource: AgentPackageResourceDescriptorView) {
   let value: unknown = raw
   try { value = JSON.parse(raw) } catch { /* String values are valid resource input. */ }
   await agentPackagesApi.putResource(packageId, resource.resource_id, value)
-  const payload = await agentPackagesApi.resources(packageId)
-  resourceItems.value = payload.resources
-  resourceDrafts.value[resource.resource_id] = ''
+  await loadResources(packageId)
 }
 
 async function removeResource(resourceId: string) {
   const packageId = props.agentPackage?.package_id
   if (!packageId) return
   await agentPackagesApi.deleteResource(packageId, resourceId)
-  const payload = await agentPackagesApi.resources(packageId)
-  resourceItems.value = payload.resources
+  await loadResources(packageId)
 }
 
 function contextConfigSavePayload(): { context_window_tokens: number | null; compression_threshold_tokens: number | null } {
@@ -541,6 +574,34 @@ function packageStatusLabel(status: string | null | undefined): string {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.embedded-detail-shell,
+.embedded-detail-content {
+  height: 100%;
+  min-height: 0;
+}
+
+.embedded-detail-content {
+  overflow-y: auto;
+  padding: var(--app-space-lg);
+}
+
+.embedded-detail-content .detail-list-item {
+  flex-direction: column;
+}
+
+.embedded-detail-content .item-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.embedded-detail-content .resource-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .detail-section {
