@@ -12,13 +12,19 @@ from .versions import DEPENDENCY_POOL_VERSION, ENVIRONMENT_LOCK_VERSION
 DEPENDENCY_POOL_ROOT_ENV = "AGENTFACTORY_DEPENDENCY_POOL_ROOT"
 ENVIRONMENT_LOCK_PATH_ENV = "AGENTFACTORY_ENVIRONMENT_LOCK_PATH"
 CONTAINER_DEPENDENCY_POOL_ROOT = "/dependency_pool"
+CONTAINER_ENVIRONMENT_LOCK_PATH = "/package/environment.lock.json"
 
 
 class RuntimeDependencyError(RuntimeError):
     pass
 
 
-def runtime_environment(lock: dict[str, Any], *, inherited: dict[str, str] | None = None) -> dict[str, str]:
+def runtime_environment(
+    lock: dict[str, Any],
+    *,
+    inherited: dict[str, str] | None = None,
+    environment_lock_path: str = CONTAINER_ENVIRONMENT_LOCK_PATH,
+) -> dict[str, str]:
     environment = dict(inherited or {})
     pool = _pool_payload(lock)
     python_paths = [
@@ -32,12 +38,12 @@ def runtime_environment(lock: dict[str, Any], *, inherited: dict[str, str] | Non
     if python_paths:
         environment["PYTHONPATH"] = _prepend_paths(python_paths, environment.get("PYTHONPATH"))
     environment[DEPENDENCY_POOL_ROOT_ENV] = CONTAINER_DEPENDENCY_POOL_ROOT
-    environment[ENVIRONMENT_LOCK_PATH_ENV] = "/package/environment.lock.json"
+    environment[ENVIRONMENT_LOCK_PATH_ENV] = environment_lock_path
     return environment
 
 
 def activate_runtime_dependencies() -> dict[str, Any]:
-    lock_path = Path(os.environ.get(ENVIRONMENT_LOCK_PATH_ENV, "/package/environment.lock.json"))
+    lock_path = Path(os.environ.get(ENVIRONMENT_LOCK_PATH_ENV, CONTAINER_ENVIRONMENT_LOCK_PATH))
     pool_root = Path(os.environ.get(DEPENDENCY_POOL_ROOT_ENV, CONTAINER_DEPENDENCY_POOL_ROOT))
     lock = _read_lock(lock_path)
     pool = _pool_payload(lock)
