@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import shutil
 import threading
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -130,37 +131,165 @@ class CreateAgentRuntime:
         user_input = attachment_result.message
         runtime_main_model_profile_id = effective_main_model_profile_id_from_user_config(user_config)
         runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
-        intent = classify_create_agent_intent(
-            user_input=user_input,
-            workspace=workspace,
-            model=self.model,
-        )
-        graph_kind = "manufacture" if intent.intent == "manufacture_agent" else "assist"
-        self._active_graph_by_session[resolved_session_id] = graph_kind
-        task_analysis = None
-        if graph_kind == "manufacture":
-            task_analysis = analyze_create_agent_task(user_input=user_input, model=self.model)
-            workspace.initialize(user_input=user_input, task_analysis=task_analysis)
-        else:
-            workspace.root.mkdir(parents=True, exist_ok=True)
         return CreateAgentStreamRun(
             session_id=resolved_session_id,
             workspace=workspace,
-            events=self._events(
+            events=self._preflight_events(
                 user_input=user_input,
                 session_id=resolved_session_id,
                 request_id=resolved_request_id,
                 workspace=workspace,
-                resume_payload=None,
-                graph_kind=graph_kind,
                 attachments=attachment_result.attachments,
                 runtime_main_model_profile_id=runtime_main_model_profile_id,
                 runtime_reasoning_intensity=runtime_reasoning_intensity,
-                intent={
-                    **intent.model_dump(mode="json"),
-                    **({"task_analysis": task_analysis.model_dump(mode="json")} if task_analysis is not None else {}),
-                },
             ),
+        )
+
+    def _preflight_events(
+        self,
+        *,
+        user_input: str,
+        session_id: str,
+        request_id: str,
+        workspace: CreateAgentWorkspace,
+        attachments: list[dict[str, Any]],
+        runtime_main_model_profile_id: str | None,
+        runtime_reasoning_intensity: int | None,
+    ) -> Iterator[tuple[str, Any]]:
+        pending_events: list[FactoryFrontendEvent] = []
+        normalizer = RuntimeEventNormalizer(
+            emit=pending_events.append,
+            request_id=request_id,
+            session_id=session_id,
+            mode="create_agent",
+            graph_id="create_agent_preflight",
+            producer_type="create_agent_preflight",
+        )
+
+        def drain_events() -> Iterator[tuple[str, FactoryFrontendEvent]]:
+            while pending_events:
+                yield "frontend_event", pending_events.pop(0)
+
+        normalizer.emit_run_started(
+            {
+                "workspace_path": str(workspace.root),
+                "status": "started",
+                "phase": "intent_analysis",
+                "attachment_count": len(attachments),
+            }
+        )
+        normalizer.runtime_event(
+            "node_started",
+            node_id="create_agent_intent_analysis",
+            node_label="Intent Analysis",
+            node_kind="control",
+            message="Analyzing request intent",
+            payload={"status_key": "intent_analysis", "visible_to_user": True},
+        )
+        yield from drain_events()
+
+        intent_started_at = time.monotonic()
+        try:
+            intent = classify_create_agent_intent(
+                user_input=user_input,
+                workspace=workspace,
+                model=self.model,
+            )
+        except Exception as exc:
+            normalizer.runtime_event(
+                "node_failed",
+                node_id="create_agent_intent_analysis",
+                node_label="Intent Analysis",
+                node_kind="control",
+                severity="error",
+                message=str(exc),
+                payload={"status_key": "intent_analysis", "visible_to_user": True},
+            )
+            normalizer.emit_run_failed(exc)
+            yield from drain_events()
+            return
+
+        graph_kind = "manufacture" if intent.intent == "manufacture_agent" else "assist"
+        self._active_graph_by_session[session_id] = graph_kind
+        normalizer.runtime_event(
+            "node_completed",
+            node_id="create_agent_intent_analysis",
+            node_label="Intent Analysis",
+            node_kind="control",
+            message="Request intent analyzed",
+            payload={
+                "status_key": "intent_analysis",
+                "visible_to_user": True,
+                "intent": intent.intent,
+                "graph_kind": graph_kind,
+                "duration_ms": round((time.monotonic() - intent_started_at) * 1000),
+            },
+        )
+        yield from drain_events()
+
+        task_analysis = None
+        if graph_kind == "manufacture":
+            normalizer.runtime_event(
+                "node_started",
+                node_id="create_agent_task_analysis",
+                node_label="Task Analysis",
+                node_kind="control",
+                message="Analyzing manufacturing task",
+                payload={"status_key": "task_analysis", "visible_to_user": True},
+            )
+            yield from drain_events()
+            task_started_at = time.monotonic()
+            try:
+                task_analysis = analyze_create_agent_task(user_input=user_input, model=self.model)
+                workspace.initialize(user_input=user_input, task_analysis=task_analysis)
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "node_failed",
+                    node_id="create_agent_task_analysis",
+                    node_label="Task Analysis",
+                    node_kind="control",
+                    severity="error",
+                    message=str(exc),
+                    payload={"status_key": "task_analysis", "visible_to_user": True},
+                )
+                normalizer.emit_run_failed(exc)
+                yield from drain_events()
+                return
+            normalizer.runtime_event(
+                "node_completed",
+                node_id="create_agent_task_analysis",
+                node_label="Task Analysis",
+                node_kind="control",
+                message="Manufacturing task analyzed",
+                payload={
+                    "status_key": "task_analysis",
+                    "visible_to_user": True,
+                    "selected_pattern_id": task_analysis.selected_pattern_id,
+                    "duration_ms": round((time.monotonic() - task_started_at) * 1000),
+                },
+            )
+            yield from drain_events()
+        else:
+            workspace.root.mkdir(parents=True, exist_ok=True)
+
+        yield from self._events(
+            user_input=user_input,
+            session_id=session_id,
+            request_id=request_id,
+            workspace=workspace,
+            resume_payload=None,
+            graph_kind=graph_kind,
+            attachments=attachments,
+            runtime_main_model_profile_id=runtime_main_model_profile_id,
+            runtime_reasoning_intensity=runtime_reasoning_intensity,
+            intent={
+                **intent.model_dump(mode="json"),
+                **({"task_analysis": task_analysis.model_dump(mode="json")} if task_analysis is not None else {}),
+            },
+            emit_run_started=False,
+            run_id=normalizer.run_id,
+            run_span_id=normalizer.run_span_id,
+            initial_event_sequence=normalizer.sequence,
         )
 
     def _checkpoint_snapshot(self, *, session_id: str, graph_kind: str) -> dict[str, Any] | None:
@@ -253,6 +382,10 @@ class CreateAgentRuntime:
         runtime_main_model_profile_id: str | None,
         runtime_reasoning_intensity: int | None,
         intent: dict[str, Any] | None,
+        emit_run_started: bool = True,
+        run_id: str | None = None,
+        run_span_id: str | None = None,
+        initial_event_sequence: int = 0,
     ) -> Iterator[tuple[str, Any]]:
         request_id = request_id or uuid4().hex
         cancel_token = self._register_cancel_token(request_id)
@@ -299,6 +432,9 @@ class CreateAgentRuntime:
             mode="create_agent",
             graph_id=graph_id,
             producer_type=graph_id,
+            run_id=run_id or uuid4().hex,
+            run_span_id=run_span_id or uuid4().hex,
+            sequence=initial_event_sequence,
         )
         model_trace = _ModelTraceAccumulator(record_trace)
 
@@ -333,16 +469,17 @@ class CreateAgentRuntime:
             yield from drain_events()
 
         selected_pattern_payload = _selected_runtime_pattern_payload(intent)
-        normalizer.emit_run_started(
-            payload={
-                "workspace_path": str(workspace.root),
-                "status": "started",
-                "intent": intent,
-                "graph_kind": graph_kind,
-                "attachment_count": len(attachments),
-                **selected_pattern_payload,
-            },
-        )
+        if emit_run_started:
+            normalizer.emit_run_started(
+                payload={
+                    "workspace_path": str(workspace.root),
+                    "status": "started",
+                    "intent": intent,
+                    "graph_kind": graph_kind,
+                    "attachment_count": len(attachments),
+                    **selected_pattern_payload,
+                },
+            )
         record_trace(
             "lifecycle",
             {

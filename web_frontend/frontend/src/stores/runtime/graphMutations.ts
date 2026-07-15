@@ -86,6 +86,7 @@ export function applyNodeCompleted(state: GraphMutationState, event: FactoryFron
   state.nodes[nodeId].status = 'completed'
   state.nodes[nodeId].completedAt = event.timestamp
   state.nodes[nodeId].message = event.message || null
+  state.nodes[nodeId].payload = { ...state.nodes[nodeId].payload, ...event.payload }
 }
 
 export function applyNodeFailed(state: GraphMutationState, event: FactoryFrontendEvent) {
@@ -109,5 +110,6 @@ export function applyNodeFailed(state: GraphMutationState, event: FactoryFronten
     state.nodes[nodeId].status = 'failed'
     state.nodes[nodeId].failedAt = event.timestamp
     state.nodes[nodeId].message = event.message || null
+    state.nodes[nodeId].payload = { ...state.nodes[nodeId].payload, ...event.payload }
   }
 }

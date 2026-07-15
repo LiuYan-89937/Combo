@@ -36,15 +36,16 @@ export function useFactoryMessageProjection() {
     const activeTurn = runtimeStore.activeTurn
     if (!activeTurn?.userMessage) return []
     if (activeTurn.assistantMessages.some(messageHasDisplayParts)) return []
+    const statusText = activeRuntimeStatusText(runtimeStore.nodes, t)
     return [
       {
         id: `thinking-${activeTurn.id}`,
         role: 'assistant',
-        content: '',
+        content: statusText,
         timestamp: activeTurn.startedAt || new Date().toISOString(),
         status: 'streaming',
         parts: [
-          textPart(`thinking-${activeTurn.id}:status`, '', {
+          textPart(`thinking-${activeTurn.id}:status`, statusText, {
             format: 'plain',
             status: 'streaming',
             timestamp: activeTurn.startedAt || new Date().toISOString(),
@@ -73,7 +74,7 @@ export function useFactoryMessageProjection() {
     return [
       runtimeStore.transcript.map(messagePartsKey).join('|'),
       toolActivityHint.value,
-      thinkingMessages.value.length,
+      thinkingMessages.value.map(message => message.content).join('|'),
     ].join('')
   })
 
@@ -91,6 +92,19 @@ export function useFactoryMessageProjection() {
     timelineItems,
     toolActivityHint,
   }
+}
+
+function activeRuntimeStatusText(
+  nodes: ReturnType<typeof useRuntimeStore>['nodes'],
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  const activeNode = Object.values(nodes)
+    .filter(node => node.status === 'running' && node.payload?.visible_to_user !== false)
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0]
+  const statusKey = String(activeNode?.payload?.status_key || '')
+  if (statusKey === 'intent_analysis') return t('factory.status.intentAnalysis')
+  if (statusKey === 'task_analysis') return t('factory.status.taskAnalysis')
+  return t('roles.assistantThinking')
 }
 
 function compareTimelineItems(left: FactoryTimelineItem, right: FactoryTimelineItem): number {

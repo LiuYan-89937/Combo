@@ -53,11 +53,14 @@
           class="thinking-content"
           role="status"
           aria-live="polite"
-          :aria-label="t('roles.assistantThinking')"
+          :aria-label="message.content || t('roles.assistantThinking')"
         >
-          <span class="thinking-dot"></span>
-          <span class="thinking-dot"></span>
-          <span class="thinking-dot"></span>
+          <span class="thinking-label">{{ message.content || t('roles.assistantThinking') }}</span>
+          <span class="thinking-dots" aria-hidden="true">
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+          </span>
         </div>
         <template v-else>
           <MessagePartRenderer
@@ -526,21 +529,32 @@ function stableColorIndex(value: string, size: number): number {
 
 .thinking-content {
   width: fit-content;
-  min-width: 54px;
-  height: 28px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 0 12px;
+  gap: 10px;
+  padding: 5px 12px;
   border: 1px solid var(--app-border);
   border-radius: 999px;
   background: var(--app-surface-muted);
 }
 
+.thinking-label {
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .thinking-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--app-text);
   animation: thinking-pulse 1.05s ease-in-out infinite;
