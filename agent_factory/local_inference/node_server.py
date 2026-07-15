@@ -15,7 +15,10 @@ from agent_factory.model_pool.store import ModelPoolStore
 
 
 def create_app() -> FastAPI:
-    runtime_manager = LocalInferenceRuntimeManager(allow_external_control=False)
+    runtime_manager = LocalInferenceRuntimeManager(
+        allow_external_control=False,
+        restore_enabled_fallback=False,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

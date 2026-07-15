@@ -68,10 +68,16 @@ class _RuntimeSlot:
 
 
 class LocalInferenceRuntimeManager:
-    def __init__(self, *, allow_external_control: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        allow_external_control: bool = True,
+        restore_enabled_fallback: bool = True,
+    ) -> None:
         self._slots = {kind: _RuntimeSlot(kind=kind) for kind in _RUNTIME_KINDS}
         self._project_root = Path(__file__).resolve().parents[2]
         self._node_client = InferenceNodeClient() if allow_external_control else None
+        self._restore_enabled_fallback = restore_enabled_fallback
 
     def states(self) -> list[dict[str, Any]]:
         return [self._slots[kind].payload() for kind in _RUNTIME_KINDS]
@@ -95,7 +101,7 @@ class LocalInferenceRuntimeManager:
                 if profile_id:
                     store.set_active_profile_id(kind, None)
                 profile_id = None
-            if not profile_id:
+            if not profile_id and self._restore_enabled_fallback:
                 candidates = store.list_profiles(kind=kind, enabled=True)
                 profile_id = candidates[0].profile_id if candidates else None
             if profile_id:
