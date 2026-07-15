@@ -47,7 +47,7 @@ def _get_embedding_model() -> Embeddings | None:
         return None
     endpoint = load_local_embedding_endpoint(timeout_seconds=settings.timeout_seconds)
     return LocalEmbeddingModel(
-        profile_id=str(settings.profile_id),
+        profile_id=str(settings.model),
         endpoint=endpoint,
         dimensions=int(settings.dims),
     )

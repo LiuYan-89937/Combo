@@ -108,6 +108,9 @@
               <div class="tag-row">
                 <n-tag size="small" :bordered="false">{{ kindLabel(profile.kind) }}</n-tag>
                 <n-tag size="small" :bordered="false" type="info">{{ engineLabel(profile.engine) }}</n-tag>
+                <n-tag v-if="profile.capabilities.input_modalities.includes('image')" size="small" :bordered="false" type="success">
+                  {{ t('localModel.imageInput') }}
+                </n-tag>
                 <n-tag
                   v-for="role in profileDefaultRoles(profile.profile_id)"
                   :key="role"
@@ -282,7 +285,9 @@
     <n-modal v-model:show="artifactModalOpen" preset="dialog" :title="t('localModel.artifactEditor')">
       <n-form label-placement="top">
         <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="artifactForm.display_name" /></n-form-item>
-        <n-form-item :label="t('localModel.kind')"><n-select v-model:value="artifactForm.kind" :options="kindOptions" /></n-form-item>
+        <n-form-item :label="t('localModel.kind')">
+          <n-select v-model:value="artifactForm.kind" :options="kindOptions" @update:value="syncArtifactKind" />
+        </n-form-item>
         <n-form-item v-if="externalInference" :label="t('localModel.remoteModel')">
           <n-select
             v-model:value="artifactForm.external_model_id"
@@ -292,15 +297,17 @@
             @update:value="syncRemoteModel"
           />
         </n-form-item>
-        <div v-if="selectedRemoteModel" class="model-directory-summary">
+        <div v-if="externalInference && selectedRemoteModel" class="model-directory-summary">
           <div class="model-directory-heading">
             <strong>{{ selectedRemoteModel.model_id }}</strong>
+            <span>{{ kindLabel(selectedRemoteModel.kind) }}</span>
             <span v-if="selectedRemoteModel.format">{{ selectedRemoteModel.format }}</span>
             <span v-if="selectedRemoteModel.context_length">{{ formatTokens(selectedRemoteModel.context_length) }} context</span>
+            <span v-if="selectedRemoteModel.embedding_dimensions">{{ selectedRemoteModel.embedding_dimensions }}D</span>
           </div>
           <code>{{ formatBytes(selectedRemoteModel.size_bytes) }}</code>
         </div>
-        <n-form-item v-else :label="t('localModel.detectedDirectory')">
+        <n-form-item v-if="!externalInference" :label="t('localModel.detectedDirectory')">
           <n-select
             v-model:value="artifactForm.local_path"
             :options="modelDirectoryOptions"
@@ -368,6 +375,12 @@
           <n-checkbox v-if="profileForm.kind === 'chat' && !externalInference" v-model:checked="profileForm.flash_attention">{{ t('localModel.flashAttention') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
+          <n-checkbox
+            v-if="profileForm.kind === 'chat' && profileSupportsImage"
+            v-model:checked="profileForm.image_input"
+          >
+            {{ t('localModel.imageInput') }}
+          </n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.normalize_embeddings">{{ t('localModel.normalizeEmbeddings') }}</n-checkbox>
         </n-space>
@@ -439,6 +452,7 @@ const profileForm = reactive({
   max_output_tokens: null as number | null, context_compression_threshold_tokens: null as number | null,
   embedding_dimensions: null as number | null,
   trust_remote_code: false, tool_calling: true, reasoning_supported: false,
+  image_input: false,
   normalize_embeddings: true, enabled: true,
 })
 
@@ -452,10 +466,18 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
 })))
 const cacheTypeOptions = ['f16', 'bf16', 'q8_0', 'q4_0'].map((value) => ({ label: value.toUpperCase(), value }))
 const externalInference = computed(() => modelStorage.value?.inference_mode === 'external')
-const remoteModelOptions = computed(() => (modelStorage.value?.remote_models || []).map((item) => ({
-  label: [item.model_id, item.format, formatTokens(item.context_length)].filter(Boolean).join(' · '),
-  value: item.model_id,
-})))
+const remoteModelOptions = computed(() => (modelStorage.value?.remote_models || [])
+  .filter((item) => item.kind === artifactForm.kind)
+  .map((item) => ({
+    label: [
+      item.model_id,
+      item.format,
+      item.kind === 'embedding' && item.embedding_dimensions
+        ? `${item.embedding_dimensions}D`
+        : formatTokens(item.context_length),
+    ].filter(Boolean).join(' · '),
+    value: item.model_id,
+  })))
 const modelDirectoryOptions = computed(() => {
   const options = (modelStorage.value?.directories || [])
     .filter((item) => item.supported_kinds.includes(artifactForm.kind))
@@ -473,7 +495,16 @@ const selectedModelDirectory = computed(() => (
   modelStorage.value?.directories.find((item) => item.absolute_path === artifactForm.local_path) || null
 ))
 const selectedRemoteModel = computed(() => (
-  modelStorage.value?.remote_models.find((item) => item.model_id === artifactForm.external_model_id) || null
+  modelStorage.value?.remote_models.find((item) => (
+    item.model_id === artifactForm.external_model_id && item.kind === artifactForm.kind
+  )) || null
+))
+const profileRemoteModel = computed(() => {
+  const artifact = artifacts.value.find((item) => item.artifact_id === profileForm.artifact_id)
+  return artifact ? remoteModelForArtifact(artifact) : null
+})
+const profileSupportsImage = computed(() => (
+  profileRemoteModel.value?.capabilities.includes('multimodal') || false
 ))
 
 async function refresh(): Promise<void> {
@@ -519,7 +550,7 @@ async function saveArtifact(): Promise<void> {
       source: externalInference.value ? 'external_endpoint' : 'local_storage',
       local_path: externalInference.value ? null : artifactForm.local_path,
       model_format: externalInference.value
-        ? modelStorage.value?.remote_models.find((item) => item.model_id === artifactForm.external_model_id)?.format || 'external'
+        ? selectedRemoteModel.value?.format || 'external'
         : artifactForm.kind === 'chat' ? 'llama_cpp' : 'transformers',
       artifact_id: artifactEditing.value?.artifact_id,
     }
@@ -534,9 +565,7 @@ function openProfile(item?: LocalModelProfile): void {
   const artifact = item?.artifact || artifacts.value[0]
   const kind = item?.kind || artifact?.kind || 'chat'
   const directory = artifact ? directoryForArtifact(artifact) : null
-  const remoteModel = artifact?.external_model_id
-    ? modelStorage.value?.remote_models.find((model) => model.model_id === artifact.external_model_id)
-    : null
+  const remoteModel = artifact ? remoteModelForArtifact(artifact) : null
   profileEditing.value = item || null
   profileForm.display_name = item?.display_name || artifact?.display_name || ''
   profileForm.artifact_id = item?.artifact_id || artifact?.artifact_id || ''
@@ -552,11 +581,17 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.max_input_tokens = item?.limits.max_input_tokens ?? remoteModel?.context_length ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
   profileForm.context_compression_threshold_tokens = item?.limits.context_compression_threshold_tokens ?? null
-  profileForm.embedding_dimensions = item?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
+  profileForm.embedding_dimensions = item?.embedding_dimensions
+    ?? remoteModel?.embedding_dimensions
+    ?? directory?.embedding_dimensions
+    ?? null
   profileForm.trust_remote_code = embeddingInference && 'trust_remote_code' in embeddingInference
     ? embeddingInference.trust_remote_code
     : false
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
+  profileForm.image_input = item?.capabilities.input_modalities.includes('image')
+    ?? remoteModel?.capabilities.includes('multimodal')
+    ?? false
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.normalize_embeddings = item?.normalize_embeddings ?? true
   profileForm.enabled = item?.enabled ?? true
@@ -567,6 +602,7 @@ function syncProfileKind(artifactId: string): void {
   const artifact = artifacts.value.find((item) => item.artifact_id === artifactId)
   if (!artifact) return
   const directory = directoryForArtifact(artifact)
+  const remoteModel = remoteModelForArtifact(artifact)
   profileForm.kind = artifact.kind
   profileForm.display_name = artifact.display_name
   profileForm.served_model_name = artifact.external_model_id || artifact.display_name
@@ -575,18 +611,32 @@ function syncProfileKind(artifactId: string): void {
   profileForm.cache_type_k = 'f16'
   profileForm.cache_type_v = 'f16'
   profileForm.flash_attention = true
-  profileForm.embedding_dimensions = directory?.embedding_dimensions ?? null
+  profileForm.image_input = remoteModel?.capabilities.includes('multimodal') || false
+  profileForm.embedding_dimensions = remoteModel?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
 }
 
 function syncRemoteModel(modelId: string): void {
-  const model = modelStorage.value?.remote_models.find((item) => item.model_id === modelId)
+  const model = modelStorage.value?.remote_models.find((item) => (
+    item.model_id === modelId && item.kind === artifactForm.kind
+  ))
   if (!model) return
   artifactForm.display_name = model.model_id
-  artifactForm.kind = 'chat'
+  artifactForm.kind = model.kind
+}
+
+function syncArtifactKind(): void {
+  artifactForm.external_model_id = ''
+  artifactForm.local_path = ''
 }
 
 function directoryForArtifact(artifact: LocalModelArtifact) {
   return modelStorage.value?.directories.find((directory) => directory.absolute_path === artifact.local_path)
+}
+
+function remoteModelForArtifact(artifact: LocalModelArtifact) {
+  return modelStorage.value?.remote_models.find((model) => (
+    model.model_id === artifact.external_model_id && model.kind === artifact.kind
+  ))
 }
 
 function openProfileEmptyAction(): void {
@@ -611,7 +661,8 @@ async function saveProfile(): Promise<void> {
       served_model_name: profileForm.served_model_name,
       enabled: profileForm.enabled,
       capabilities: {
-        input_modalities: ['text'], output_modalities: ['text'],
+        input_modalities: isChat && profileForm.image_input ? ['text', 'image'] : ['text'],
+        output_modalities: ['text'],
         tool_calling: isChat && profileForm.tool_calling,
         streaming_tool_calls: false, strict_tool_schema: false,
         structured_output_methods: isChat ? ['function_calling', 'json_mode'] : [],

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 import shutil
 
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
@@ -59,6 +60,11 @@ def main() -> None:
         "--jinja",
     ]
     command.extend(["--flash-attn", "on" if profile.inference.flash_attention else "off"])
+    if profile.inference.mmproj_path:
+        mmproj_path = Path(profile.inference.mmproj_path).expanduser().resolve()
+        if not mmproj_path.is_file():
+            raise ValueError(f"llama.cpp multimodal projector does not exist: {mmproj_path}")
+        command.extend(["--mmproj", str(mmproj_path)])
     if profile.limits.max_input_tokens is not None:
         command.extend(["--ctx-size", str(profile.limits.max_input_tokens)])
     os.execv(binary, command)

@@ -54,10 +54,13 @@ export interface LocalModelStorage {
 
 export interface RemoteInferenceModel {
   model_id: string
+  kind: LocalModelKind
+  capabilities: string[]
   format: string
   context_length?: number | null
   parameter_count?: number | null
   size_bytes?: number | null
+  embedding_dimensions?: number | null
 }
 
 interface LocalModelProfileBase {
@@ -99,6 +102,7 @@ export interface LocalChatModelProfile extends LocalModelProfileBase {
     cache_type_k: string
     cache_type_v: string
     flash_attention: boolean
+    mmproj_path?: string | null
   } | { external: true }
 }
 

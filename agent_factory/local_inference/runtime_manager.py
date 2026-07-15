@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import signal
 import sys
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -19,6 +19,7 @@ from agent_factory.local_inference.config import (
     load_local_inference_endpoint,
 )
 from agent_factory.local_inference.http_client import create_private_async_http_client
+from agent_factory.local_inference.node_control import InferenceNodeClient, RuntimeAction
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.model_pool.schema import ModelPoolProfile, utc_now_text
 from agent_factory.model_pool.store import ModelPoolStore
@@ -67,9 +68,10 @@ class _RuntimeSlot:
 
 
 class LocalInferenceRuntimeManager:
-    def __init__(self) -> None:
+    def __init__(self, *, allow_external_control: bool = True) -> None:
         self._slots = {kind: _RuntimeSlot(kind=kind) for kind in _RUNTIME_KINDS}
         self._project_root = Path(__file__).resolve().parents[2]
+        self._node_client = InferenceNodeClient() if allow_external_control else None
 
     def states(self) -> list[dict[str, Any]]:
         return [self._slots[kind].payload() for kind in _RUNTIME_KINDS]
@@ -114,7 +116,7 @@ class LocalInferenceRuntimeManager:
         async with slot.lock:
             if slot.profile_id == profile.profile_id and slot.phase in {"starting", "loading", "ready"}:
                 return slot.payload()
-            return await self._start_locked(slot, profile)
+            return await self._start_locked(slot, profile, external_action="load")
 
     async def restart(self, profile_id: str) -> dict[str, Any]:
         store = ModelPoolStore()
@@ -124,7 +126,7 @@ class LocalInferenceRuntimeManager:
             raise ValueError("profile and model artifact must be enabled before restarting")
         slot = self._slots[profile.kind]
         async with slot.lock:
-            return await self._start_locked(slot, profile)
+            return await self._start_locked(slot, profile, external_action="restart")
 
     async def unload(self, profile_id: str) -> dict[str, Any]:
         state = self.state_for_profile(profile_id)
@@ -134,6 +136,17 @@ class LocalInferenceRuntimeManager:
             return _idle_runtime_payload(kind, profile_id)
         slot = self._slots[state["kind"]]
         async with slot.lock:
+            profile = ModelPoolStore().get_profile(profile_id)
+            if slot.mode == "external" and profile is not None:
+                if self._node_client is None:
+                    raise ValueError("external inference control is disabled")
+                remote = await self._node_client.action(
+                    "unload",
+                    kind=profile.kind,
+                    model_id=profile.served_model_name,
+                )
+                await self._stop_locked(slot, clear_active=True)
+                return _external_runtime_payload(remote, profile)
             await self._stop_locked(slot, clear_active=True)
             return slot.payload()
 
@@ -235,6 +248,8 @@ class LocalInferenceRuntimeManager:
         self,
         slot: _RuntimeSlot,
         profile: ModelPoolProfile,
+        *,
+        external_action: RuntimeAction,
     ) -> dict[str, Any]:
         await self._stop_locked(slot, clear_active=False)
         slot.profile_id = profile.profile_id
@@ -249,11 +264,17 @@ class LocalInferenceRuntimeManager:
         try:
             endpoint = self._endpoint(profile.kind)
             if profile.engine == "external":
-                ModelPoolStore().set_active_profile_id(profile.kind, profile.profile_id)
-                self._update(slot, phase="loading", stage="connecting_external", progress_percent=None)
-                slot.readiness_task = asyncio.create_task(
-                    self._wait_until_ready(slot, profile, endpoint, require_process=False)
+                if self._node_client is None:
+                    raise ValueError("external inference control is disabled")
+                remote = await self._node_client.action(
+                    external_action,
+                    kind=profile.kind,
+                    model_id=profile.served_model_name,
                 )
+                ModelPoolStore().set_active_profile_id(profile.kind, profile.profile_id)
+                _apply_external_runtime(slot, remote, profile)
+                if slot.phase in {"starting", "loading", "stopping"}:
+                    slot.readiness_task = asyncio.create_task(self._sync_external_runtime(slot, profile))
                 return slot.payload()
             await asyncio.to_thread(inspect_rocm_runtime, require_available=True)
             command = self._command(profile, endpoint)
@@ -277,6 +298,33 @@ class LocalInferenceRuntimeManager:
         except Exception as exc:
             self._fail(slot, exc)
         return slot.payload()
+
+    async def _sync_external_runtime(self, slot: _RuntimeSlot, profile: ModelPoolProfile) -> None:
+        if self._node_client is None:
+            self._fail(slot, ValueError("external inference control is disabled"))
+            return
+        deadline = asyncio.get_running_loop().time() + _LOAD_TIMEOUT_SECONDS[slot.kind]
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                runtimes = await self._node_client.runtimes()
+                remote = next(
+                    (
+                        item
+                        for item in runtimes
+                        if str(item.get("kind") or "") == profile.kind
+                        and str(item.get("served_model_name") or "") == profile.served_model_name
+                    ),
+                    None,
+                )
+                if remote is not None:
+                    _apply_external_runtime(slot, remote, profile)
+                    if slot.phase in {"ready", "failed", "idle"}:
+                        return
+            except (httpx.HTTPError, ValueError) as exc:
+                slot.error = f"{type(exc).__name__}: {exc}"
+                slot.updated_at = utc_now_text()
+            await asyncio.sleep(1.0)
+        self._fail(slot, TimeoutError(f"external {slot.kind} model loading timed out"))
 
     async def _terminate(self, slot: _RuntimeSlot) -> None:
         process = slot.process
@@ -327,6 +375,42 @@ def _local_binding(endpoint: LocalInferenceEndpoint) -> tuple[str, int]:
     return host, port
 
 
+def _apply_external_runtime(
+    slot: _RuntimeSlot,
+    remote: dict[str, Any],
+    profile: ModelPoolProfile,
+) -> None:
+    phase = str(remote.get("phase") or "failed")
+    if phase not in {"idle", "starting", "loading", "ready", "stopping", "failed"}:
+        phase = "failed"
+    progress = remote.get("progress_percent")
+    slot.mode = "external"
+    slot.profile_id = profile.profile_id
+    slot.phase = cast(RuntimePhase, phase)
+    slot.stage = str(remote.get("stage") or phase)
+    slot.progress_percent = int(progress) if isinstance(progress, (int, float)) else None
+    slot.error = str(remote.get("error") or "")
+    slot.started_at = str(remote.get("started_at") or slot.started_at)
+    slot.updated_at = str(remote.get("updated_at") or utc_now_text())
+    logs = remote.get("logs")
+    slot.logs.clear()
+    if isinstance(logs, list):
+        slot.logs.extend(str(item) for item in logs[-_LOG_LIMIT:])
+
+
+def _external_runtime_payload(remote: dict[str, Any], profile: ModelPoolProfile) -> dict[str, Any]:
+    payload = dict(remote)
+    payload.update(
+        {
+            "kind": profile.kind,
+            "mode": "external",
+            "profile_id": profile.profile_id,
+            "pid": None,
+        }
+    )
+    return payload
+
+
 async def _runtime_is_ready(
     client: httpx.AsyncClient,
     endpoint: LocalInferenceEndpoint,
@@ -344,7 +428,15 @@ async def _runtime_is_ready(
     response = await client.get(endpoint.endpoint("/health"))
     response.raise_for_status()
     payload = response.json()
-    return isinstance(payload, dict) and str(payload.get("profile_id") or "") == profile.profile_id
+    if not isinstance(payload, dict):
+        return False
+    if profile.engine == "external":
+        remote_model_ids = {
+            str(payload.get("model_id") or ""),
+            str(payload.get("profile_id") or ""),
+        }
+        return profile.served_model_name in remote_model_ids
+    return str(payload.get("profile_id") or "") == profile.profile_id
 
 
 def _update_progress_from_log(slot: _RuntimeSlot, text: str) -> None:

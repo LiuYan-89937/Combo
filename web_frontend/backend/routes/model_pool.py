@@ -14,7 +14,6 @@ from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeM
 from agent_factory.local_inference.config import (
     load_inference_runtime_mode,
     load_inference_telemetry_endpoint,
-    load_local_inference_endpoint,
 )
 from agent_factory.local_inference.http_client import create_private_async_http_client
 from agent_factory.model_pool import (
@@ -61,12 +60,7 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
     async def model_storage():
         mode = load_inference_runtime_mode()
         if mode == "external":
-            try:
-                remote_models = await _external_model_list()
-                remote_error = ""
-            except (httpx.HTTPError, ValueError) as exc:
-                remote_models = []
-                remote_error = f"{type(exc).__name__}: {exc}"
+            remote_models, remote_error = await _external_model_catalog()
             return {
                 "inference_mode": mode,
                 "root_path": "",
@@ -268,28 +262,19 @@ def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) ->
     return LocalModelArtifact.model_validate(data)
 
 
-async def _external_model_list() -> list[dict[str, Any]]:
-    endpoint = load_local_inference_endpoint(timeout_seconds=5.0)
-    async with create_private_async_http_client(endpoint) as client:
-        response = await client.get(endpoint.endpoint("/models"))
-        response.raise_for_status()
-        payload = response.json()
-    models = payload.get("data") if isinstance(payload, dict) else None
-    result: list[dict[str, Any]] = []
-    for item in models or []:
-        if not isinstance(item, dict) or not str(item.get("id") or "").strip():
-            continue
-        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
-        result.append(
-            {
-                "model_id": str(item["id"]),
-                "format": str(meta.get("ftype") or ""),
-                "context_length": meta.get("n_ctx"),
-                "parameter_count": meta.get("n_params"),
-                "size_bytes": meta.get("size"),
-            }
-        )
-    return result
+async def _external_model_catalog() -> tuple[list[dict[str, Any]], str]:
+    endpoint = load_inference_telemetry_endpoint(timeout_seconds=5.0)
+    try:
+        async with create_private_async_http_client(endpoint) as client:
+            response = await client.get(endpoint.endpoint("/models"))
+            response.raise_for_status()
+            payload = response.json()
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            raise ValueError("inference node response does not contain a model catalog")
+        return [item for item in models if isinstance(item, dict)], ""
+    except (httpx.HTTPError, ValueError) as exc:
+        return [], f"{type(exc).__name__}: {exc}"
 
 
 async def _external_rocm_payload() -> dict[str, Any]:

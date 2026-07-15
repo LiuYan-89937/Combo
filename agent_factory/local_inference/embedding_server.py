@@ -23,6 +23,8 @@ class EmbeddingRequest(BaseModel):
 @dataclass(slots=True)
 class EmbeddingRuntime:
     profile_id: str
+    model_id: str
+    model_format: str
     model: Any
     dimensions: int
     normalize_embeddings: bool
@@ -49,6 +51,9 @@ def create_app(profile_id: str) -> FastAPI:
         return {
             "status": "ready",
             "profile_id": runtime.profile_id,
+            "model_id": runtime.model_id,
+            "kind": "embedding",
+            "format": runtime.model_format,
             "dimensions": runtime.dimensions,
             "rocm": runtime.rocm.payload(),
         }
@@ -57,7 +62,7 @@ def create_app(profile_id: str) -> FastAPI:
     async def embed(request: EmbeddingRequest) -> dict[str, Any]:
         if runtime is None:
             raise HTTPException(status_code=503, detail="embedding model is not loaded")
-        if request.profile_id != runtime.profile_id:
+        if request.profile_id not in {runtime.profile_id, runtime.model_id}:
             raise HTTPException(status_code=409, detail="requested embedding profile is not loaded")
         vectors = runtime.model.encode(
             request.texts,
@@ -103,6 +108,8 @@ def _load_runtime(profile_id: str) -> EmbeddingRuntime:
         )
     return EmbeddingRuntime(
         profile_id=profile.profile_id,
+        model_id=profile.served_model_name,
+        model_format=artifact.model_format,
         model=model,
         dimensions=actual_dimensions,
         normalize_embeddings=profile.normalize_embeddings,

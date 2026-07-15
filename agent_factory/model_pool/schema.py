@@ -142,6 +142,7 @@ class LlamaCppInferenceConfig(BaseModel):
     cache_type_k: str = "f16"
     cache_type_v: str = "f16"
     flash_attention: bool = True
+    mmproj_path: str | None = None
 
     @field_validator("cache_type_k", "cache_type_v")
     @classmethod
@@ -151,6 +152,17 @@ class LlamaCppInferenceConfig(BaseModel):
         if text not in supported:
             raise ValueError(f"cache type must be one of: {', '.join(sorted(supported))}")
         return text
+
+    @field_validator("mmproj_path")
+    @classmethod
+    def _mmproj_path(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError("mmproj_path must be an absolute path")
+        return str(path)
 
 
 class TransformersInferenceConfig(BaseModel):
@@ -209,6 +221,13 @@ class ModelPoolProfile(BaseModel):
                 raise ValueError("external chat profiles require external inference settings")
             if self.engine not in {"llama_cpp_rocm", "external"}:
                 raise ValueError("unsupported chat inference engine")
+            if (
+                self.engine == "llama_cpp_rocm"
+                and "image" in self.capabilities.input_modalities
+                and isinstance(self.inference, LlamaCppInferenceConfig)
+                and not self.inference.mmproj_path
+            ):
+                raise ValueError("image input requires a llama.cpp mmproj_path")
         if self.kind == "embedding":
             if self.engine == "transformers_rocm" and not isinstance(self.inference, TransformersInferenceConfig):
                 raise ValueError("embedding profiles require Transformers inference settings")
