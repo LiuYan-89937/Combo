@@ -147,14 +147,29 @@
               </div>
 
               <div class="spec-grid">
-                <template v-if="profile.kind === 'chat' && profile.engine !== 'external'">
-                  <div class="spec-item"><span>{{ t('localModel.gpuLayers') }}</span><strong>{{ chatInference(profile)?.gpu_layers }}</strong></div>
-                  <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ chatInference(profile)?.parallel_slots }}</strong></div>
-                  <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ chatInference(profile)?.cache_type_k }} / {{ chatInference(profile)?.cache_type_v }}</strong></div>
+                <template v-if="profile.kind === 'chat'">
+                  <div class="spec-item"><span>{{ t('localModel.gpuLayers') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.gpu_layers ?? '—' }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.parallel_slots ?? '—' }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.cache_type_k || '—' }} / {{ chatRuntimeConfiguration(profile)?.cache_type_v || '—' }}</strong></div>
                 </template>
-                <div v-else-if="profile.engine === 'external'" class="spec-item"><span>{{ t('localModel.runtimeMode') }}</span><strong>{{ t('localModel.externalEndpoint') }}</strong></div>
                 <div v-else class="spec-item"><span>{{ t('localModel.embeddingDimensions') }}</span><strong>{{ profile.embedding_dimensions || '—' }}</strong></div>
                 <div class="spec-item"><span>{{ t('modelPool.maxInput') }}</span><strong>{{ formatTokens(profile.limits.max_input_tokens) }}</strong></div>
+              </div>
+
+              <div
+                v-if="profileMemoryEstimate(profile)"
+                class="memory-budget-card"
+                :class="memoryBudgetClass(profileMemoryEstimate(profile))"
+              >
+                <div class="memory-budget-heading">
+                  <strong>{{ t('localModel.memoryBudget') }}</strong>
+                  <span>{{ memoryFitLabel(profileMemoryEstimate(profile)) }}</span>
+                </div>
+                <div class="memory-budget-metrics">
+                  <span>{{ t('localModel.kvEstimate') }} <strong>{{ formatBytes(profileMemoryEstimate(profile)?.kv_cache_bytes) }}</strong></span>
+                  <span>{{ t('localModel.projectedVram') }} <strong>{{ formatBytes(profileMemoryEstimate(profile)?.projected_used_bytes) }}</strong></span>
+                  <span>{{ t('localModel.remainingVram') }} <strong>{{ formatBytes(profileMemoryEstimate(profile)?.remaining_memory_bytes) }}</strong></span>
+                </div>
               </div>
 
               <footer class="resource-actions">
@@ -187,7 +202,7 @@
                 <n-dropdown
                   trigger="click"
                   :options="defaultRoleOptions(profile)"
-                  @select="(role) => handleDefaultRoleSelect(role, profile)"
+                  @select="(role: string | number) => handleDefaultRoleSelect(role, profile)"
                 >
                   <n-button size="small" quaternary :disabled="profileRuntime(profile)?.phase !== 'ready'">
                     {{ t('localModel.setDefault') }}
@@ -345,16 +360,16 @@
         </n-form-item>
         <n-form-item :label="t('localModel.servedModelName')"><n-input v-model:value="profileForm.served_model_name" /></n-form-item>
         <div class="form-grid">
-          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.gpuLayers')">
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.gpuLayers')">
             <n-input-number v-model:value="profileForm.gpu_layers" :min="0" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.parallelSlots')">
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.parallelSlots')">
             <n-input-number v-model:value="profileForm.parallel_slots" :min="1" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.kCacheType')">
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.kCacheType')">
             <n-select v-model:value="profileForm.cache_type_k" :options="cacheTypeOptions" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat' && !externalInference" :label="t('localModel.vCacheType')">
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.vCacheType')">
             <n-select v-model:value="profileForm.cache_type_v" :options="cacheTypeOptions" />
           </n-form-item>
           <n-form-item :label="t('modelPool.maxInput')">
@@ -370,9 +385,24 @@
             <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" />
           </n-form-item>
         </div>
+        <div v-if="profileForm.kind === 'chat'" class="memory-preview" :class="memoryBudgetClass(memoryEstimate)">
+          <div class="memory-budget-heading">
+            <strong>{{ t('localModel.memoryBudget') }}</strong>
+            <n-spin v-if="memoryEstimateLoading" size="small" />
+            <span v-else>{{ memoryFitLabel(memoryEstimate) }}</span>
+          </div>
+          <div v-if="memoryEstimate?.available" class="memory-preview-grid">
+            <div><span>{{ t('localModel.modelAllocation') }}</span><strong>{{ formatBytes(memoryEstimate.model_allocation_bytes) }}</strong></div>
+            <div><span>{{ t('localModel.kvEstimate') }}</span><strong>{{ formatBytes(memoryEstimate.kv_cache_bytes) }}</strong></div>
+            <div><span>{{ t('localModel.projectedVram') }}</span><strong>{{ formatBytes(memoryEstimate.projected_used_bytes) }} / {{ formatBytes(memoryEstimate.total_memory_bytes) }}</strong></div>
+            <div><span>{{ t('localModel.remainingVram') }}</span><strong>{{ formatBytes(memoryEstimate.remaining_memory_bytes) }}</strong></div>
+          </div>
+          <p v-else-if="memoryEstimate?.error">{{ memoryEstimate.error }}</p>
+          <p v-else>{{ t('localModel.memoryEstimatePending') }}</p>
+        </div>
         <n-space vertical>
           <n-checkbox v-model:checked="profileForm.enabled">{{ t('localModel.loadWhenEnabled') }}</n-checkbox>
-          <n-checkbox v-if="profileForm.kind === 'chat' && !externalInference" v-model:checked="profileForm.flash_attention">{{ t('localModel.flashAttention') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.flash_attention">{{ t('localModel.flashAttention') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
           <n-checkbox
@@ -394,7 +424,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useDialog, useMessage } from 'naive-ui'
 import { storeToRefs } from 'pinia'
 import { useI18n } from '@/composables/useI18n'
@@ -415,6 +445,8 @@ import {
   type LocalModelKind,
   type LocalModelProfile,
   type LocalModelRuntime,
+  type InferenceMemoryEstimate,
+  type LlamaCppRuntimeConfiguration,
   type RocmRuntimeInfo,
 } from '@/api/modelPool'
 
@@ -435,6 +467,8 @@ const artifactModalOpen = ref(false)
 const profileModalOpen = ref(false)
 const artifactEditing = ref<LocalModelArtifact | null>(null)
 const profileEditing = ref<LocalModelProfile | null>(null)
+const memoryEstimate = ref<InferenceMemoryEstimate | null>(null)
+const memoryEstimateLoading = ref(false)
 
 const artifactForm = reactive({
   display_name: '', kind: 'chat' as LocalModelKind, local_path: '', external_model_id: '',
@@ -564,13 +598,13 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.artifact_id = item?.artifact_id || artifact?.artifact_id || ''
   profileForm.kind = kind
   profileForm.served_model_name = item?.served_model_name || artifact?.external_model_id || artifact?.display_name || ''
-  const chatInference = item?.kind === 'chat' ? item.inference : null
+  const chatInference = item?.kind === 'chat' ? chatRuntimeConfiguration(item, remoteModel) : null
   const embeddingInference = item?.kind === 'embedding' ? item.inference : null
-  profileForm.gpu_layers = chatInference && 'gpu_layers' in chatInference ? chatInference.gpu_layers : 99
-  profileForm.parallel_slots = chatInference && 'parallel_slots' in chatInference ? chatInference.parallel_slots : 1
-  profileForm.cache_type_k = chatInference && 'cache_type_k' in chatInference ? chatInference.cache_type_k : 'f16'
-  profileForm.cache_type_v = chatInference && 'cache_type_v' in chatInference ? chatInference.cache_type_v : 'f16'
-  profileForm.flash_attention = chatInference && 'flash_attention' in chatInference ? chatInference.flash_attention : true
+  profileForm.gpu_layers = chatInference?.gpu_layers ?? 99
+  profileForm.parallel_slots = chatInference?.parallel_slots ?? 1
+  profileForm.cache_type_k = chatInference?.cache_type_k ?? 'f16'
+  profileForm.cache_type_v = chatInference?.cache_type_v ?? 'f16'
+  profileForm.flash_attention = chatInference?.flash_attention ?? true
   profileForm.max_input_tokens = item?.limits.max_input_tokens ?? remoteModel?.context_length ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
   profileForm.context_compression_threshold_tokens = item?.limits.context_compression_threshold_tokens ?? null
@@ -588,6 +622,7 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.normalize_embeddings = item?.normalize_embeddings ?? true
   profileForm.enabled = item?.enabled ?? true
+  memoryEstimate.value = remoteModel?.memory_estimate || null
   profileModalOpen.value = true
 }
 
@@ -596,14 +631,16 @@ function syncProfileKind(artifactId: string): void {
   if (!artifact) return
   const directory = directoryForArtifact(artifact)
   const remoteModel = remoteModelForArtifact(artifact)
+  const runtimeConfiguration = remoteChatRuntimeConfiguration(remoteModel)
   profileForm.kind = artifact.kind
   profileForm.display_name = artifact.display_name
   profileForm.served_model_name = artifact.external_model_id || artifact.display_name
-  profileForm.gpu_layers = 99
-  profileForm.parallel_slots = 1
-  profileForm.cache_type_k = 'f16'
-  profileForm.cache_type_v = 'f16'
-  profileForm.flash_attention = true
+  profileForm.gpu_layers = runtimeConfiguration?.gpu_layers ?? 99
+  profileForm.parallel_slots = runtimeConfiguration?.parallel_slots ?? 1
+  profileForm.cache_type_k = runtimeConfiguration?.cache_type_k ?? 'f16'
+  profileForm.cache_type_v = runtimeConfiguration?.cache_type_v ?? 'f16'
+  profileForm.flash_attention = runtimeConfiguration?.flash_attention ?? true
+  profileForm.max_input_tokens = remoteModel?.context_length ?? profileForm.max_input_tokens
   profileForm.image_input = remoteModel?.capabilities.includes('multimodal') || false
   profileForm.embedding_dimensions = remoteModel?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
 }
@@ -670,7 +707,18 @@ async function saveProfile(): Promise<void> {
         context_compression_threshold_tokens: isChat ? profileForm.context_compression_threshold_tokens : null,
       },
       inference: externalInference.value
-        ? { external: true }
+        ? {
+            external: true,
+            remote_inference: isChat
+              ? {
+                  gpu_layers: profileForm.gpu_layers,
+                  parallel_slots: profileForm.parallel_slots,
+                  cache_type_k: profileForm.cache_type_k,
+                  cache_type_v: profileForm.cache_type_v,
+                  flash_attention: profileForm.flash_attention,
+                }
+              : { trust_remote_code: profileForm.trust_remote_code },
+          }
         : isChat
         ? {
             gpu_layers: profileForm.gpu_layers,
@@ -850,8 +898,48 @@ function artifactLocation(artifact?: LocalModelArtifact | null): string {
   return artifact?.external_model_id || artifact?.local_path || '—'
 }
 
-function chatInference(profile: LocalModelProfile) {
-  return profile.kind === 'chat' && 'gpu_layers' in profile.inference ? profile.inference : null
+function chatRuntimeConfiguration(
+  profile: LocalModelProfile,
+  remoteModel = remoteModelForProfile(profile),
+): LlamaCppRuntimeConfiguration | null {
+  if (profile.kind !== 'chat') return null
+  if ('gpu_layers' in profile.inference) return profile.inference
+  if ('remote_inference' in profile.inference && profile.inference.remote_inference && 'gpu_layers' in profile.inference.remote_inference) {
+    return profile.inference.remote_inference
+  }
+  return remoteChatRuntimeConfiguration(remoteModel)
+}
+
+function remoteChatRuntimeConfiguration(remoteModel?: LocalModelStorage['remote_models'][number] | null): LlamaCppRuntimeConfiguration | null {
+  const configuration = remoteModel?.runtime_configuration
+  if (!configuration || typeof configuration.gpu_layers !== 'number') return null
+  return {
+    gpu_layers: configuration.gpu_layers,
+    parallel_slots: typeof configuration.parallel_slots === 'number' ? configuration.parallel_slots : 1,
+    cache_type_k: typeof configuration.cache_type_k === 'string' ? configuration.cache_type_k : 'f16',
+    cache_type_v: typeof configuration.cache_type_v === 'string' ? configuration.cache_type_v : 'f16',
+    flash_attention: configuration.flash_attention !== false,
+  }
+}
+
+function profileMemoryEstimate(profile: LocalModelProfile): InferenceMemoryEstimate | null {
+  if (profile.kind !== 'chat') return null
+  return remoteModelForProfile(profile)?.memory_estimate || null
+}
+
+function remoteModelForProfile(profile: LocalModelProfile) {
+  const artifact = profile.artifact || artifacts.value.find((item) => item.artifact_id === profile.artifact_id)
+  return artifact ? remoteModelForArtifact(artifact) : null
+}
+
+function memoryBudgetClass(estimate?: InferenceMemoryEstimate | null): string {
+  if (!estimate?.available || estimate.fits === null || estimate.fits === undefined) return 'is-unknown'
+  return estimate.fits ? 'is-safe' : 'is-overflow'
+}
+
+function memoryFitLabel(estimate?: InferenceMemoryEstimate | null): string {
+  if (!estimate?.available) return t('localModel.memoryEstimateUnavailable')
+  return estimate.fits ? t('localModel.memoryFits') : t('localModel.memoryOverflow')
 }
 
 function formatPercent(value?: number | null): string {
@@ -889,6 +977,88 @@ function formatTokens(value?: number | null): string {
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 
 let runtimePollTimer: ReturnType<typeof setInterval> | null = null
+let memoryEstimateTimer: ReturnType<typeof setTimeout> | null = null
+let memoryEstimateSerial = 0
+
+function scheduleMemoryEstimate(): void {
+  if (memoryEstimateTimer) clearTimeout(memoryEstimateTimer)
+  if (!profileModalOpen.value || profileForm.kind !== 'chat') return
+  memoryEstimateTimer = setTimeout(refreshMemoryEstimate, 250)
+}
+
+async function refreshMemoryEstimate(): Promise<void> {
+  const modelId = profileForm.served_model_name.trim()
+  if (!modelId || !profileForm.max_input_tokens) {
+    memoryEstimate.value = null
+    return
+  }
+  const serial = ++memoryEstimateSerial
+  memoryEstimateLoading.value = true
+  try {
+    const result = await modelPoolApi.estimateMemory({
+      kind: 'chat',
+      model_id: modelId,
+      profile: {
+        limits: {
+          max_input_tokens: profileForm.max_input_tokens,
+          max_output_tokens: profileForm.max_output_tokens,
+          timeout_seconds: null,
+          context_compression_threshold_tokens: profileForm.context_compression_threshold_tokens,
+        },
+        capabilities: {
+          input_modalities: profileForm.image_input ? ['text', 'image'] : ['text'],
+          output_modalities: ['text'],
+          tool_calling: profileForm.tool_calling,
+          streaming_tool_calls: false,
+          strict_tool_schema: false,
+          structured_output_methods: ['function_calling', 'json_mode'],
+          reasoning_supported: profileForm.reasoning_supported,
+          reasoning_efforts: [],
+          reasoning_content: profileForm.reasoning_supported,
+          cache_usage: false,
+        },
+        inference: {
+          gpu_layers: profileForm.gpu_layers,
+          parallel_slots: profileForm.parallel_slots,
+          cache_type_k: profileForm.cache_type_k,
+          cache_type_v: profileForm.cache_type_v,
+          flash_attention: profileForm.flash_attention,
+        },
+        embedding_dimensions: null,
+        normalize_embeddings: true,
+      },
+    })
+    if (serial === memoryEstimateSerial) memoryEstimate.value = result.estimate
+  } catch (error) {
+    if (serial === memoryEstimateSerial) {
+      memoryEstimate.value = {
+        available: false,
+        model_id: modelId,
+        parallel_slots: profileForm.parallel_slots,
+        cache_type_k: profileForm.cache_type_k,
+        cache_type_v: profileForm.cache_type_v,
+        basis: 'unavailable',
+        error: errorText(error),
+      }
+    }
+  } finally {
+    if (serial === memoryEstimateSerial) memoryEstimateLoading.value = false
+  }
+}
+
+watch(
+  () => [
+    profileModalOpen.value,
+    profileForm.served_model_name,
+    profileForm.max_input_tokens,
+    profileForm.parallel_slots,
+    profileForm.cache_type_k,
+    profileForm.cache_type_v,
+    profileForm.gpu_layers,
+    profileForm.flash_attention,
+  ],
+  scheduleMemoryEstimate,
+)
 
 onMounted(async () => {
   await refresh()
@@ -897,6 +1067,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (runtimePollTimer) clearInterval(runtimePollTimer)
+  if (memoryEstimateTimer) clearTimeout(memoryEstimateTimer)
 })
 </script>
 
@@ -1022,6 +1193,30 @@ onBeforeUnmount(() => {
 .spec-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--app-space-xs); margin-top: var(--app-space-lg); }
 .spec-item { display: flex; align-items: center; justify-content: space-between; gap: var(--app-space-sm); padding: var(--app-space-sm); border-radius: var(--app-radius-sm); background: var(--app-surface-muted); }
 .spec-item strong { color: var(--app-text); font-size: var(--app-font-sm); }
+.memory-budget-card,
+.memory-preview {
+  display: grid;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+.memory-budget-card.is-safe,
+.memory-preview.is-safe { border-color: color-mix(in srgb, var(--app-success) 42%, var(--app-border)); }
+.memory-budget-card.is-overflow,
+.memory-preview.is-overflow { border-color: color-mix(in srgb, var(--app-error) 55%, var(--app-border)); }
+.memory-budget-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--app-space-md); }
+.memory-budget-heading span { color: var(--app-text-secondary); font-size: var(--app-font-xs); }
+.memory-budget-metrics { display: flex; flex-wrap: wrap; gap: var(--app-space-xs) var(--app-space-lg); color: var(--app-text-muted); font-size: var(--app-font-xs); }
+.memory-budget-metrics strong { margin-left: 3px; color: var(--app-text); }
+.memory-preview { margin: 0 0 var(--app-space-lg); }
+.memory-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--app-space-sm); }
+.memory-preview-grid > div { display: grid; gap: 3px; min-width: 0; }
+.memory-preview-grid span { color: var(--app-text-muted); font-size: var(--app-font-xs); }
+.memory-preview-grid strong { color: var(--app-text); overflow-wrap: anywhere; }
+.memory-preview p { margin: 0; color: var(--app-text-muted); font-size: var(--app-font-xs); line-height: var(--app-leading-normal); overflow-wrap: anywhere; }
 .resource-actions { margin-top: auto; padding-top: var(--app-space-lg); }
 .action-spacer { flex: 1; }
 
@@ -1091,14 +1286,38 @@ onBeforeUnmount(() => {
 
 @container local-model (max-width: 620px) {
   .local-model-view { padding: var(--app-space-md); }
+  .context-bar { align-items: flex-start; flex-wrap: wrap; }
+  .context-bar > .n-button { margin-left: 42px; }
   .context-subtitle { padding-left: 0; }
   .overview-grid { grid-template-columns: 1fr; }
   .runtime-card { grid-column: auto; }
+  .overview-detail { overflow: visible; text-overflow: clip; white-space: normal; line-height: var(--app-leading-normal); }
+  .runtime-device-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
   .model-panel { padding: 0 var(--app-space-md) var(--app-space-md); }
   .form-grid { grid-template-columns: 1fr; }
+  .resource-header { align-items: flex-start; flex-direction: column; }
+  .profile-status-tags { justify-content: flex-start; }
+  .resource-title { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+  .model-name,
+  .path-line span { white-space: normal; overflow-wrap: anywhere; }
+  .spec-grid,
+  .memory-preview-grid { grid-template-columns: 1fr; }
+  .spec-item { align-items: flex-start; }
+  .resource-actions { align-items: stretch; flex-wrap: wrap; justify-content: flex-start; gap: var(--app-space-xs); }
+  .resource-actions .action-spacer { display: none; }
   .memory-form-item { grid-column: auto; }
   .memory-limit-control { grid-template-columns: 1fr; }
   .memory-limit-control p { grid-column: auto; }
   .content-header { align-items: flex-start; }
+}
+
+@container local-model (max-width: 420px) {
+  .local-model-view { padding: var(--app-space-sm); }
+  .context-bar > .n-button { width: 100%; margin-left: 0; }
+  .overview-card,
+  .resource-card { padding: var(--app-space-md); }
+  .model-panel { padding-inline: var(--app-space-sm); }
+  .resource-actions > .n-button,
+  .resource-actions > .n-dropdown { flex: 1 1 calc(50% - var(--app-space-xs)); }
 }
 </style>

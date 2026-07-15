@@ -10,6 +10,11 @@ from fastapi import APIRouter, HTTPException
 import httpx
 
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
+from agent_factory.local_inference.memory_budget import estimate_inference_memory
+from agent_factory.local_inference.node_control import (
+    InferenceMemoryEstimateRequest,
+    InferenceNodeClient,
+)
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.local_inference.config import (
     load_inference_runtime_mode,
@@ -138,6 +143,38 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
                 for profile in store.list_profiles(kind=profile_kind)
             ]
         }
+
+    @router.post("/memory-estimate")
+    async def memory_estimate(payload: dict[str, Any]):
+        try:
+            request = InferenceMemoryEstimateRequest.model_validate(payload)
+            if load_inference_runtime_mode() == "external":
+                estimate = await InferenceNodeClient().memory_estimate(request)
+            else:
+                store = ModelPoolStore()
+                profile = next(
+                    (
+                        item
+                        for item in store.list_profiles(kind=request.kind, enabled=True)
+                        if item.served_model_name == request.model_id
+                    ),
+                    None,
+                )
+                if profile is None:
+                    raise ValueError("enabled model profile is not registered")
+                artifact = store.require_artifact(profile.artifact_id)
+                rocm = await asyncio.to_thread(inspect_rocm_runtime, require_available=False)
+                device = rocm.devices[0] if rocm.devices else None
+                estimate = estimate_inference_memory(
+                    profile=profile,
+                    artifact=artifact,
+                    requested=request.profile,
+                    runtime=runtime_manager.state_for_profile(profile.profile_id),
+                    device=device,
+                ).payload()
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"estimate": estimate}
 
     @router.post("/profiles")
     async def upsert_profile(payload: dict[str, Any]):

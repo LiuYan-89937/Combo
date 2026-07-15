@@ -175,6 +175,7 @@ class ExternalInferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     external: Literal[True] = True
+    remote_inference: LlamaCppInferenceConfig | TransformersInferenceConfig | None = None
 
 
 LocalInferenceConfig = LlamaCppInferenceConfig | TransformersInferenceConfig | ExternalInferenceConfig

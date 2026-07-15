@@ -66,6 +66,39 @@ export interface RemoteInferenceModel {
   parameter_count?: number | null
   size_bytes?: number | null
   embedding_dimensions?: number | null
+  memory_estimate?: InferenceMemoryEstimate | null
+}
+
+export interface LlamaCppRuntimeConfiguration {
+  gpu_layers: number
+  parallel_slots: number
+  cache_type_k: string
+  cache_type_v: string
+  flash_attention: boolean
+  mmproj_path?: string | null
+}
+
+export interface TransformersRuntimeConfiguration {
+  trust_remote_code: boolean
+}
+
+export interface InferenceMemoryEstimate {
+  available: boolean
+  model_id: string
+  context_tokens?: number | null
+  parallel_slots: number
+  cache_type_k: string
+  cache_type_v: string
+  model_allocation_bytes?: number | null
+  kv_cache_bytes?: number | null
+  current_used_bytes?: number | null
+  projected_used_bytes?: number | null
+  total_memory_bytes?: number | null
+  remaining_memory_bytes?: number | null
+  utilization_percent?: number | null
+  fits?: boolean | null
+  basis: string
+  error: string
 }
 
 interface LocalModelProfileBase {
@@ -108,7 +141,10 @@ export interface LocalChatModelProfile extends LocalModelProfileBase {
     cache_type_v: string
     flash_attention: boolean
     mmproj_path?: string | null
-  } | { external: true }
+  } | {
+    external: true
+    remote_inference?: LlamaCppRuntimeConfiguration | null
+  }
 }
 
 export interface LocalEmbeddingModelProfile extends LocalModelProfileBase {
@@ -116,7 +152,10 @@ export interface LocalEmbeddingModelProfile extends LocalModelProfileBase {
   engine: 'transformers_rocm' | 'external'
   inference: {
     trust_remote_code: boolean
-  } | { external: true }
+  } | {
+    external: true
+    remote_inference?: TransformersRuntimeConfiguration | null
+  }
 }
 
 export type LocalModelProfile = LocalChatModelProfile | LocalEmbeddingModelProfile
@@ -222,6 +261,11 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   profiles: () => requestJson<{ profiles: LocalModelProfile[] }>('/api/model-pool/profiles'),
+  estimateMemory: (payload: Record<string, unknown>) =>
+    requestJson<{ estimate: InferenceMemoryEstimate }>('/api/model-pool/memory-estimate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   saveProfile: (payload: Record<string, unknown>) =>
     requestJson<{ profile: LocalModelProfile; runtime: LocalModelRuntime }>('/api/model-pool/profiles', {
       method: 'POST',

@@ -276,6 +276,7 @@ class LocalInferenceRuntimeManager:
                     external_action,
                     kind=profile.kind,
                     model_id=profile.served_model_name,
+                    profile=profile,
                 )
                 ModelPoolStore().set_active_profile_id(profile.kind, profile.profile_id)
                 _apply_external_runtime(slot, remote, profile)

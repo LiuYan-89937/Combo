@@ -12,10 +12,19 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from agent_factory.env import load_agentfactory_dotenv
-from agent_factory.local_inference.node_control import InferenceNodeAction
+from agent_factory.local_inference.memory_budget import estimate_inference_memory
+from agent_factory.local_inference.node_control import (
+    InferenceMemoryEstimateRequest,
+    InferenceNodeAction,
+    InferenceNodeProfileConfiguration,
+)
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
-from agent_factory.model_pool.schema import ModelPoolProfile
+from agent_factory.model_pool.schema import (
+    LlamaCppInferenceConfig,
+    ModelPoolProfile,
+    TransformersInferenceConfig,
+)
 from agent_factory.model_pool.store import ModelPoolStore
 
 
@@ -55,6 +64,8 @@ def create_app() -> FastAPI:
     @app.get("/models")
     async def models() -> dict[str, Any]:
         store = ModelPoolStore()
+        rocm = inspect_rocm_runtime(require_available=False)
+        device = rocm.devices[0] if rocm.devices else None
         runtime_by_profile = {
             str(item.get("profile_id") or ""): item
             for item in runtime_manager.states()
@@ -71,8 +82,7 @@ def create_app() -> FastAPI:
             capabilities = ["embedding"] if profile.kind == "embedding" else ["completion"]
             if "image" in profile.capabilities.input_modalities:
                 capabilities.append("multimodal")
-            result.append(
-                {
+            model_payload = {
                     "model_id": profile.served_model_name,
                     "kind": profile.kind,
                     "format": artifact.model_format,
@@ -88,12 +98,36 @@ def create_app() -> FastAPI:
                     "checksum": artifact.checksum,
                     "runtime_configuration": _runtime_configuration(profile),
                 }
-            )
+            if profile.kind == "chat":
+                model_payload["memory_estimate"] = estimate_inference_memory(
+                    profile=profile,
+                    artifact=artifact,
+                    requested=InferenceNodeProfileConfiguration.from_profile(profile),
+                    runtime=runtime,
+                    device=device,
+                ).payload()
+            result.append(model_payload)
         return {"models": result}
+
+    @app.post("/models/memory-estimate")
+    async def memory_estimate(request: InferenceMemoryEstimateRequest) -> dict[str, Any]:
+        profile = _resolve_profile_identity(request.kind, request.model_id)
+        artifact = ModelPoolStore().require_artifact(profile.artifact_id)
+        runtime = runtime_manager.state_for_profile(profile.profile_id)
+        rocm = inspect_rocm_runtime(require_available=False)
+        device = rocm.devices[0] if rocm.devices else None
+        estimate = estimate_inference_memory(
+            profile=profile,
+            artifact=artifact,
+            requested=request.profile,
+            runtime=runtime,
+            device=device,
+        )
+        return {"estimate": estimate.payload()}
 
     @app.post("/runtimes/load")
     async def load_runtime(request: InferenceNodeAction) -> dict[str, Any]:
-        profile = _resolve_profile(request)
+        profile = _resolve_profile(request, apply_configuration=True)
         return {"runtime": _runtime_payload(await runtime_manager.load(profile.profile_id))}
 
     @app.post("/runtimes/unload")
@@ -103,17 +137,28 @@ def create_app() -> FastAPI:
 
     @app.post("/runtimes/restart")
     async def restart_runtime(request: InferenceNodeAction) -> dict[str, Any]:
-        profile = _resolve_profile(request)
+        profile = _resolve_profile(request, apply_configuration=True)
         return {"runtime": _runtime_payload(await runtime_manager.restart(profile.profile_id))}
 
     return app
 
 
-def _resolve_profile(request: InferenceNodeAction) -> ModelPoolProfile:
+def _resolve_profile(
+    request: InferenceNodeAction,
+    *,
+    apply_configuration: bool = False,
+) -> ModelPoolProfile:
+    profile = _resolve_profile_identity(request.kind, request.model_id)
+    if apply_configuration and request.profile is not None:
+        profile = _apply_profile_configuration(profile, request.profile)
+    return profile
+
+
+def _resolve_profile_identity(kind: str, model_id: str) -> ModelPoolProfile:
     profiles = [
         profile
-        for profile in ModelPoolStore().list_profiles(kind=request.kind, enabled=True)
-        if profile.served_model_name == request.model_id
+        for profile in ModelPoolStore().list_profiles(kind=kind, enabled=True)
+        if profile.served_model_name == model_id
     ]
     if len(profiles) != 1:
         raise HTTPException(
@@ -121,6 +166,40 @@ def _resolve_profile(request: InferenceNodeAction) -> ModelPoolProfile:
             detail=f"enabled {request.kind} model is not registered on the inference node: {request.model_id}",
         )
     return profiles[0]
+
+
+def _apply_profile_configuration(
+    profile: ModelPoolProfile,
+    configuration: InferenceNodeProfileConfiguration,
+) -> ModelPoolProfile:
+    inference = configuration.inference
+    if profile.kind == "chat" and inference is not None and not isinstance(
+        inference,
+        LlamaCppInferenceConfig,
+    ):
+        raise ValueError("chat inference nodes require llama.cpp settings")
+    if profile.kind == "embedding" and inference is not None and not isinstance(
+        inference,
+        TransformersInferenceConfig,
+    ):
+        raise ValueError("embedding inference nodes require Transformers settings")
+
+    payload = profile.model_dump(mode="json")
+    payload.update(
+        {
+            "limits": configuration.limits.model_dump(mode="json"),
+            "capabilities": configuration.capabilities.model_dump(mode="json"),
+            "embedding_dimensions": configuration.embedding_dimensions,
+            "normalize_embeddings": configuration.normalize_embeddings,
+        }
+    )
+    if inference is not None:
+        payload["inference"] = {
+            **profile.inference.model_dump(mode="json"),
+            **inference.model_dump(mode="json", exclude_none=True),
+        }
+    updated = ModelPoolProfile.model_validate(payload)
+    return ModelPoolStore().upsert_profile(updated)
 
 
 def _runtime_payload(

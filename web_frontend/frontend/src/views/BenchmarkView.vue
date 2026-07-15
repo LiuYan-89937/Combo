@@ -8,7 +8,7 @@
         </div>
         <n-text depth="3" class="context-subtitle">{{ t('benchmark.subtitle') }}</n-text>
       </div>
-      <n-button secondary :loading="loading" @click="refresh">
+      <n-button secondary :loading="loading" @click="refresh()">
         <template #icon><n-icon><Refresh /></n-icon></template>
         {{ t('common.refresh') }}
       </n-button>
@@ -669,7 +669,8 @@ onUnmounted(() => {
 }
 
 .page-title { font-size: 20px; }
-.context-subtitle { display: block; margin-top: 4px; }
+.context-title { min-width: 0; }
+.context-subtitle { display: block; margin-top: 4px; white-space: normal; line-height: var(--app-leading-normal); }
 
 .benchmark-content {
   width: min(1480px, 100%);
@@ -741,11 +742,11 @@ onUnmounted(() => {
 }
 .metric-label { color: var(--app-text-muted); font-size: 12px; }
 .metric-value { display: block; margin-top: 8px; font-size: 24px; color: var(--app-text-strong); }
-.metric-detail { margin-top: 10px; display: flex; gap: var(--app-space-md); color: var(--app-text-muted); font-size: 11px; }
+.metric-detail { margin-top: 10px; display: flex; flex-wrap: wrap; gap: var(--app-space-xs) var(--app-space-md); color: var(--app-text-muted); font-size: 11px; }
 
 .comparison-heading { margin-top: var(--app-space-lg); align-items: end; }
 .comparison-heading .n-select { width: min(420px, 50%); }
-.comparison-table { border: 1px solid var(--app-divider); border-radius: var(--app-radius-md); overflow: hidden; }
+.comparison-table { border: 1px solid var(--app-divider); border-radius: var(--app-radius-md); overflow-x: auto; }
 .comparison-row {
   display: grid;
   grid-template-columns: 1.3fr repeat(3, 1fr);
@@ -808,18 +809,38 @@ onUnmounted(() => {
   .field, .field-wide { grid-column: span 1; }
   .field-full { grid-column: 1 / -1; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .history-item { grid-template-columns: 1fr auto auto; }
-  .history-metrics, .history-date { display: none; }
+  .history-item { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .history-main { grid-column: 1; }
+  .history-metrics { grid-column: 1 / -1; grid-row: 2; flex-wrap: wrap; }
+  .history-date { grid-column: 1 / -1; grid-row: 3; font-size: var(--app-font-xs); }
 }
 
 @media (max-width: 700px) {
-  .context-bar { align-items: flex-start; }
+  .context-bar { align-items: flex-start; flex-wrap: wrap; padding: var(--app-space-md); }
+  .context-bar > .n-button { margin-left: 42px; }
   .benchmark-content { padding: var(--app-space-md); }
   .panel { padding: var(--app-space-md); }
+  .panel-heading,
+  .section-heading,
+  .progress-copy { align-items: flex-start; flex-wrap: wrap; }
   .form-grid, .metric-grid { grid-template-columns: 1fr; }
   .field, .field-wide, .field-full { grid-column: 1; }
   .comparison-heading { align-items: stretch; flex-direction: column; }
   .comparison-heading .n-select { width: 100%; }
-  .comparison-row { grid-template-columns: 1.2fr repeat(3, 1fr); font-size: 12px; }
+  .comparison-row { min-width: 620px; grid-template-columns: 1.2fr repeat(3, 1fr); font-size: 12px; }
+  .sample-table th,
+  .sample-table td { padding: 8px 10px; }
+  .history-item { grid-template-columns: minmax(0, 1fr) auto; gap: var(--app-space-sm); }
+  .history-main { grid-column: 1 / -1; }
+  .history-metrics { grid-column: 1 / -1; }
+  .history-date { grid-column: 1 / -1; }
+}
+
+@media (max-width: 420px) {
+  .context-bar > .n-button { width: 100%; margin-left: 0; }
+  .benchmark-content { padding: var(--app-space-sm); }
+  .panel { padding: var(--app-space-sm); }
+  .metric-value { font-size: 20px; overflow-wrap: anywhere; }
+  .form-actions > .n-button { width: 100%; }
 }
 </style>
