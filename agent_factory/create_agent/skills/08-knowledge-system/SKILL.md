@@ -19,9 +19,11 @@ Guides knowledge contract and package knowledge assets for produced agents.
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
-- The agent needs packaged knowledge files, retrieval config, domain references, or curated source material.
+- The agent explicitly needs fixed, authoritative reference material bundled with the AgentPackage and retrieved or cited at runtime.
 - A package tool/node depends on knowledge assets.
 - Validator reports knowledge contract issues.
+
+Do not use this skill merely because an Agent has an identity, persona, system prompt, tool instructions, or because the user may upload knowledge after publication.
 
 ## Focus Files
 - `contracts/knowledge.json`
@@ -35,10 +37,17 @@ Guides knowledge contract and package knowledge assets for produced agents.
 5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
+- Default to no package knowledge. An empty knowledge/ directory is correct for chat, creative, persona, and general tool-using Agents without fixed reference material.
 - Do not invent knowledge content or claim live external knowledge unless backed by confirmed resources/tools.
-- Use knowledge/ for package-owned static assets; use resource facts for external or user-provided sources.
+- Identity, persona, tone, behavior rules, system prompts, tool instructions, schemas, manufacturing guidance, secrets, and dynamic external data do not belong in knowledge/.
+- Valid sources, in priority order, are user-provided material approved for bundling, project-owned reference assets, distributable Skill assets, and public sources explicitly authorized by the user.
+- Use runtime resources, mounted knowledge sources, APIs, databases, or search tools for external, mutable, user-managed, or post-publication material.
 - Update the knowledge contract only when the package includes real knowledge assets or retrieval behavior.
-- Write package-owned static knowledge with create_agent_authoring(action="upsert_knowledge_file") instead of generic filesystem write.
+- Before writing, verify that the material is authoritative, distributable, stable enough to bundle, and genuinely needs retrieval or citation rather than prompt/config placement.
+- Write confirmed package knowledge with create_agent_authoring(action="upsert_knowledge_file", knowledge_path=..., knowledge_content=..., knowledge_purpose=..., knowledge_source={source_kind, reference, distributable: true}) instead of generic filesystem write.
+- Remove an invalid or obsolete package knowledge file with create_agent_authoring(action="remove_knowledge_file", knowledge_path=...); this also removes its source record.
+- The source registry is maintained by create_agent_authoring and must not be edited directly.
+- If authoritative material is missing, ask the user for it. Do not synthesize domain facts to fill knowledge/.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.

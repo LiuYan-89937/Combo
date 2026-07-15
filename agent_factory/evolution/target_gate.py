@@ -106,15 +106,30 @@ def decide_evolution_target(
             rationale="The user goal changes runtime pattern prompts or tool exposure rather than package tool code.",
             constraints=["For plan_and_execute, planner must only expose runtime_plan."],
         )
-    if _has_any(text, ("knowledge", "知识", "文档", "资料")):
+    if _has_any(
+        text,
+        (
+            "package knowledge",
+            "bundled knowledge",
+            "内置知识",
+            "随包知识",
+            "打包资料",
+            "内置文档",
+        ),
+    ):
         return EvolutionTargetPlan(
             surface="knowledge",
-            write_strategy="create_agent_authoring.upsert_knowledge_file",
-            allowed_authoring_actions=["upsert_knowledge_file"],
-            target_files=["knowledge/", "contracts/knowledge.json"],
+            write_strategy="create_agent_authoring package knowledge actions",
+            allowed_authoring_actions=["upsert_knowledge_file", "remove_knowledge_file"],
+            target_files=["knowledge/", ".factory/knowledge_sources.json", "contracts/knowledge.json"],
             required_first_reads=["contracts/knowledge.json"],
             requires_probe=False,
-            rationale="The user goal adds or changes package knowledge content.",
+            rationale="The user explicitly requested fixed knowledge content bundled with the AgentPackage.",
+            constraints=[
+                "Default to no package knowledge unless authoritative, distributable source material is confirmed.",
+                "Do not store identity, persona, prompts, tool instructions, or model-generated facts in knowledge/.",
+                "upsert_knowledge_file requires knowledge_purpose and knowledge_source provenance.",
+            ],
         )
     if _has_any(text, ("scheduler", "定时", "计划任务", "cron")):
         return EvolutionTargetPlan(
@@ -136,6 +151,7 @@ def decide_evolution_target(
             "configure_dependencies",
             "upsert_resources",
             "upsert_knowledge_file",
+            "remove_knowledge_file",
             "upsert_scheduler_seed",
             "upsert_state",
             "reset_contract",

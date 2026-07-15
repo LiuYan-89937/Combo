@@ -16,6 +16,7 @@ AUTHORING_STAGE_BY_ACTION: dict[str, str] = {
     "upsert_scheduler_seed": "capability_implementation",
     "upsert_resources": "capability_implementation",
     "upsert_knowledge_file": "capability_implementation",
+    "remove_knowledge_file": "capability_implementation",
     "upsert_state": "capability_implementation",
     "reset_contract": "capability_implementation",
     "configure_pattern_assembly": "experience_assembly",

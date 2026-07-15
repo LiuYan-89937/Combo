@@ -150,10 +150,17 @@ def _invariant_system_prompt_text() -> str:
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
             "你的职责是根据用户需求完成一个完整能力增量闭环，然后显式调用 create_agent_validate。"
-            "身份、内置 pattern assembly、package tool、scheduler seed、runtime resources、package knowledge、package state 这些稳定包面必须优先调用 create_agent_authoring，"
+            "身份、内置 pattern assembly、package tool、scheduler seed、runtime resources、经确认的 package knowledge、package state 这些稳定包面必须优先调用 create_agent_authoring，"
             "不要手动散写多个 package 文件后等待 validator 教你修。"
             "如果 validator 指向 scaffold-owned contract 结构损坏，优先用 create_agent_authoring(action='reset_contract', contract_key=...) 重置默认契约。"
             "业务代码内容、知识正文、资源值和自然语言 prompt 内容由你提供给 authoring 工具。"
+        ),
+        (
+            "package knowledge 默认不创建。身份、人设、语气、行为规则、system prompt、工具调用说明和制造说明必须留在 identity、assembly prompt、配置或工具实现中，禁止写入 knowledge/。"
+            "只有 Agent 核心能力确实需要运行期检索或引用随包发布的固定资料，并且资料来自用户明确提供、项目自有资产、可分发 Skill asset 或用户授权的公开来源时，才允许调用 upsert_knowledge_file。"
+            "缺少权威资料时必须通过 create_agent_control(action='ask_user', ...) 请求资料，禁止由模型生成领域事实填充 knowledge/；动态网页、API、数据库和用户后续上传资料应保留为运行期工具、resource 或挂载知识源。"
+            "upsert_knowledge_file 必须同时填写 knowledge_purpose，以及包含 source_kind、具体 reference、distributable=true 的 knowledge_source。"
+            "来源注册表由 create_agent_authoring 维护，不得直接读写；发现不应存在的 package knowledge 时，调用 remove_knowledge_file 同步删除文件及来源记录。"
         ),
         (
             "create_agent_authoring 参数必须使用 canonical shape。"
