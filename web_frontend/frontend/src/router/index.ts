@@ -67,6 +67,11 @@ const routes: RouteRecordRaw[] = [
     name: 'ModelPool',
     component: () => import('@/views/ModelPoolView.vue'),
   },
+  {
+    path: '/benchmarks',
+    name: 'Benchmarks',
+    component: () => import('@/views/BenchmarkView.vue'),
+  },
 ]
 
 const router = createRouter({

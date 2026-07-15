@@ -1,0 +1,117 @@
+import { requestJson, withQuery } from './http'
+
+export type BenchmarkRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+
+export interface BenchmarkImplementation {
+  label: string
+  revision: string
+  parameters: Record<string, unknown>
+}
+
+export interface BenchmarkRunSpec {
+  name: string
+  profile_id: string
+  prompt: string
+  max_output_tokens: number
+  temperature: number
+  seed: number
+  warmup_iterations: number
+  measured_iterations: number
+  telemetry_interval_ms: number
+  implementation: BenchmarkImplementation
+}
+
+export interface BenchmarkTelemetryPoint {
+  elapsed_ms: number
+  used_memory_bytes?: number | null
+  gpu_utilization_percent?: number | null
+  memory_activity_percent?: number | null
+  power_watts?: number | null
+  temperature_celsius?: number | null
+}
+
+export interface BenchmarkSample {
+  sample_index: number
+  warmup: boolean
+  status: 'completed' | 'failed'
+  started_at: string
+  ttft_ms?: number | null
+  end_to_end_ms?: number | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  cache_tokens?: number | null
+  prompt_ms?: number | null
+  decode_ms?: number | null
+  prompt_tokens_per_second?: number | null
+  decode_tokens_per_second?: number | null
+  peak_vram_bytes?: number | null
+  average_gpu_utilization_percent?: number | null
+  peak_gpu_utilization_percent?: number | null
+  average_power_watts?: number | null
+  peak_power_watts?: number | null
+  peak_temperature_celsius?: number | null
+  output_text: string
+  finish_reason: string
+  telemetry: BenchmarkTelemetryPoint[]
+  error: string
+}
+
+export interface BenchmarkMetricStats {
+  count: number
+  mean: number
+  minimum: number
+  maximum: number
+  p50: number
+  p95: number
+  standard_deviation: number
+}
+
+export interface BenchmarkSummary {
+  measured_samples: number
+  successful_samples: number
+  ttft_ms?: BenchmarkMetricStats | null
+  end_to_end_ms?: BenchmarkMetricStats | null
+  prompt_tokens_per_second?: BenchmarkMetricStats | null
+  decode_tokens_per_second?: BenchmarkMetricStats | null
+  peak_vram_bytes?: BenchmarkMetricStats | null
+  average_gpu_utilization_percent?: BenchmarkMetricStats | null
+  peak_gpu_utilization_percent?: BenchmarkMetricStats | null
+  average_power_watts?: BenchmarkMetricStats | null
+  peak_power_watts?: BenchmarkMetricStats | null
+}
+
+export interface BenchmarkRun {
+  run_id: string
+  status: BenchmarkRunStatus
+  spec: BenchmarkRunSpec
+  progress_completed: number
+  progress_total: number
+  environment: Record<string, unknown>
+  samples: BenchmarkSample[]
+  summary?: BenchmarkSummary | null
+  error: string
+  created_at: string
+  started_at: string
+  completed_at: string
+  updated_at: string
+}
+
+export const benchmarkApi = {
+  list: (limit = 100) =>
+    requestJson<{ runs: BenchmarkRun[] }>(withQuery('/api/benchmarks', { limit })),
+  get: (runId: string) =>
+    requestJson<{ run: BenchmarkRun }>(`/api/benchmarks/${encodeURIComponent(runId)}`),
+  start: (spec: BenchmarkRunSpec) =>
+    requestJson<{ run: BenchmarkRun }>('/api/benchmarks', {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    }),
+  cancel: (runId: string) =>
+    requestJson<{ run: BenchmarkRun }>(`/api/benchmarks/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
+    }),
+  delete: (runId: string) =>
+    requestJson<{ deleted: boolean }>(`/api/benchmarks/${encodeURIComponent(runId)}`, {
+      method: 'DELETE',
+    }),
+}

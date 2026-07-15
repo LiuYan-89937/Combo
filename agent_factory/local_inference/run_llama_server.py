@@ -58,6 +58,7 @@ def main() -> None:
         "--cache-type-v",
         profile.inference.cache_type_v,
         "--jinja",
+        "--metrics",
     ]
     command.extend(["--flash-attn", "on" if profile.inference.flash_attention else "off"])
     if profile.inference.mmproj_path:

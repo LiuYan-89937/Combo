@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import argparse
 from contextlib import asynccontextmanager
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -39,6 +44,10 @@ def create_app() -> FastAPI:
     async def rocm_runtime() -> dict[str, Any]:
         return inspect_rocm_runtime(require_available=False).payload()
 
+    @app.get("/runtime/software")
+    async def runtime_software() -> dict[str, Any]:
+        return _software_payload()
+
     @app.get("/runtimes")
     async def runtimes() -> dict[str, Any]:
         return {"runtimes": [_runtime_payload(item) for item in runtime_manager.states()]}
@@ -73,6 +82,11 @@ def create_app() -> FastAPI:
                     "embedding_dimensions": profile.embedding_dimensions,
                     "capabilities": capabilities,
                     "phase": str(runtime.get("phase") or "idle"),
+                    "profile_id": profile.profile_id,
+                    "engine": profile.engine,
+                    "revision": artifact.revision,
+                    "checksum": artifact.checksum,
+                    "runtime_configuration": _runtime_configuration(profile),
                 }
             )
         return {"models": result}
@@ -120,6 +134,43 @@ def _runtime_payload(
         **runtime,
         "served_model_name": resolved.served_model_name if resolved else "",
     }
+
+
+def _runtime_configuration(profile: ModelPoolProfile) -> dict[str, Any]:
+    configuration = profile.inference.model_dump(mode="json")
+    mmproj_path = configuration.pop("mmproj_path", None)
+    if mmproj_path is not None:
+        configuration["multimodal_projector"] = bool(mmproj_path)
+    return configuration
+
+
+def _software_payload() -> dict[str, Any]:
+    configured_binary = str(os.environ.get("AGENTFACTORY_LLAMA_SERVER_PATH") or "llama-server").strip()
+    binary = shutil.which(configured_binary)
+    return {
+        "python_version": sys.version.split()[0],
+        "project_revision": _command_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+        ),
+        "llama_server_version": _command_output([binary, "--version"]) if binary else "",
+    }
+
+
+def _command_output(command: list[str], *, cwd: Path | None = None) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    output = result.stdout.strip() or result.stderr.strip()
+    return output.splitlines()[0] if output else ""
 
 
 def main() -> None:

@@ -141,25 +141,23 @@ web_start_inference_ssh_tunnel() {
         if ! kill -0 "${INFERENCE_SSH_TUNNEL_PID}" >/dev/null 2>&1; then
             wait "${INFERENCE_SSH_TUNNEL_PID}" 2>/dev/null || true
             INFERENCE_SSH_TUNNEL_PID=""
-            web_fail "SSH tunnel exited before the inference endpoints became available"
+            web_fail "SSH tunnel exited before the inference control endpoint became available"
         fi
         if web_check_inference_ssh_tunnel; then
-            echo "External model and telemetry endpoints are reachable"
+            echo "External inference control endpoint is reachable"
             return
         fi
         sleep 0.5
     done
 
     web_stop_inference_ssh_tunnel
-    web_fail "SSH tunnel opened, but model or telemetry endpoint validation failed"
+    web_fail "SSH tunnel opened, but the inference control endpoint validation failed"
 }
 
 web_check_inference_ssh_tunnel() {
-    local model_endpoint="${AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT%/}"
-    local embedding_endpoint="${AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT%/}"
     local telemetry_endpoint="${AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT%/}"
-    curl --fail --silent --show-error --max-time 2 "${model_endpoint}/models" >/dev/null 2>&1 \
-        && curl --fail --silent --show-error --max-time 2 "${embedding_endpoint}/health" >/dev/null 2>&1 \
+    curl --fail --silent --show-error --max-time 2 "${telemetry_endpoint}/health" >/dev/null 2>&1 \
+        && curl --fail --silent --show-error --max-time 2 "${telemetry_endpoint}/models" >/dev/null 2>&1 \
         && curl --fail --silent --show-error --max-time 2 "${telemetry_endpoint}/runtime/rocm" >/dev/null 2>&1
 }
 

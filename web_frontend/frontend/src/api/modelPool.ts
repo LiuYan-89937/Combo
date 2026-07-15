@@ -54,9 +54,14 @@ export interface LocalModelStorage {
 
 export interface RemoteInferenceModel {
   model_id: string
+  profile_id?: string
   kind: LocalModelKind
+  engine?: LocalInferenceEngine
   capabilities: string[]
   format: string
+  revision?: string
+  checksum?: string
+  runtime_configuration?: Record<string, unknown>
   context_length?: number | null
   parameter_count?: number | null
   size_bytes?: number | null
