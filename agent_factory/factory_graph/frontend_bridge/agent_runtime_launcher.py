@@ -18,8 +18,13 @@ from agent_factory.agent_runtime_bridge.paths import (
     BRIDGE_RUNTIME_ROOT_ENV,
     BRIDGE_WORKDIR_ROOT_ENV,
 )
+from agent_factory.model_pool import (
+    MODEL_POOL_STORE_PATH_ENV,
+    MODEL_POOL_STORE_READ_ONLY_ENV,
+    ModelPoolStore,
+    resolve_model_pool_store_path,
+)
 from agent_factory.paths import factory_artifact_path, project_root
-from agent_factory.model_pool import MODEL_POOL_STORE_PATH_ENV, ModelPoolStore, resolve_model_pool_store_path
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 from agent_factory.environment_system import (
     EnvironmentResolver,
@@ -162,6 +167,7 @@ class DockerAgentRuntimeLauncher:
             inherited={**self._environment(sandbox), **service_env},
         )
         env[MODEL_POOL_STORE_PATH_ENV] = CONTAINER_MODEL_POOL_STORE_PATH
+        env[MODEL_POOL_STORE_READ_ONLY_ENV] = "1"
         env["AGENTFACTORY_COLLABORATION_ROOT"] = CONTAINER_COLLABORATION_ROOT
         env[RESOURCE_STORE_PATH_ENV] = CONTAINER_RESOURCE_STORE_PATH
         env[RESOURCE_STORE_READ_ONLY_ENV] = "1"

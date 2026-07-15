@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent_factory.model_pool.config import resolve_model_pool_store_path
+from agent_factory.model_pool.config import model_pool_store_read_only, resolve_model_pool_store_path
 from agent_factory.model_pool.schema import (
     ModelPoolCredential,
     ModelPoolProfile,
@@ -21,9 +21,19 @@ class ModelPoolStoreError(RuntimeError):
 
 
 class ModelPoolStore:
-    def __init__(self, path: str | Path | None = None, *, setup: bool = True) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        setup: bool = True,
+        read_only: bool | None = None,
+    ) -> None:
         self.path = resolve_model_pool_store_path(path)
-        if setup:
+        self.read_only = model_pool_store_read_only() if read_only is None else read_only
+        if self.read_only:
+            if not self.path.is_file():
+                raise ModelPoolStoreError(f"model pool store is not initialized: {self.path}")
+        elif setup:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._ensure_schema()
         elif not self.path.is_file():
@@ -38,7 +48,7 @@ class ModelPoolStore:
                 "updated_at": now,
             }
         )
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.execute(
                 """
                 insert into model_credentials (
@@ -90,7 +100,7 @@ class ModelPoolStore:
     def delete_credential(self, credential_id: str) -> bool:
         if self.list_profiles(credential_id=credential_id):
             raise ModelPoolStoreError(f"credential is still used by model profiles: {credential_id}")
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             cursor = conn.execute("delete from model_credentials where credential_id = ?", (credential_id,))
         return cursor.rowcount > 0
 
@@ -119,7 +129,7 @@ class ModelPoolStore:
             },
             deep=True,
         )
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.execute(
                 """
                 insert into model_pool_profiles (
@@ -186,7 +196,7 @@ class ModelPoolStore:
         return [ModelPoolProfile.model_validate_json(str(row["payload_json"])) for row in rows]
 
     def delete_profile(self, profile_id: str) -> bool:
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             cursor = conn.execute("delete from model_pool_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
 
@@ -198,17 +208,26 @@ class ModelPoolStore:
         ]
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
+    def _connect(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
+        if write and self.read_only:
+            raise ModelPoolStoreError("model pool store is read-only")
+        conn = (
+            sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)
+            if self.read_only
+            else sqlite3.connect(self.path)
+        )
         conn.row_factory = sqlite3.Row
+        if not write:
+            conn.execute("pragma query_only = on")
         try:
             yield conn
-            conn.commit()
+            if write:
+                conn.commit()
         finally:
             conn.close()
 
     def _ensure_schema(self) -> None:
-        with self._connect() as conn:
+        with self._connect(write=True) as conn:
             conn.executescript(
                 """
                 create table if not exists model_credentials (

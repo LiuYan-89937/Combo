@@ -1,6 +1,8 @@
 from agent_factory.model_pool.config import (
     MODEL_POOL_STORE_PATH_ENV,
+    MODEL_POOL_STORE_READ_ONLY_ENV,
     default_model_pool_store_path,
+    model_pool_store_read_only,
     resolve_model_pool_store_path,
 )
 from agent_factory.model_pool.resolver import (
@@ -35,6 +37,7 @@ from agent_factory.model_pool.usage import ModelUsageStore, record_model_usage_f
 
 __all__ = [
     "MODEL_POOL_STORE_PATH_ENV",
+    "MODEL_POOL_STORE_READ_ONLY_ENV",
     "ModelPoolCapabilities",
     "ModelPoolCredential",
     "ModelPoolCredentialPublic",
@@ -57,6 +60,7 @@ __all__ = [
     "ResolvedImageGenerationProfile",
     "default_model_pool_store_path",
     "list_model_pool_provider_profiles",
+    "model_pool_store_read_only",
     "resolve_chat_model_profile",
     "resolve_chat_model_binding",
     "resolve_image_generation_binding",
