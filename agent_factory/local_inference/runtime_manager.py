@@ -18,6 +18,7 @@ from agent_factory.local_inference.config import (
     load_local_embedding_endpoint,
     load_local_inference_endpoint,
 )
+from agent_factory.local_inference.http_client import create_private_async_http_client
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.model_pool.schema import ModelPoolProfile, utc_now_text
 from agent_factory.model_pool.store import ModelPoolStore
@@ -175,7 +176,7 @@ class LocalInferenceRuntimeManager:
         require_process: bool,
     ) -> None:
         deadline = asyncio.get_running_loop().time() + _LOAD_TIMEOUT_SECONDS[slot.kind]
-        async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
+        async with create_private_async_http_client(endpoint) as client:
             while asyncio.get_running_loop().time() < deadline:
                 if require_process and (slot.process is None or slot.process.returncode is not None):
                     return

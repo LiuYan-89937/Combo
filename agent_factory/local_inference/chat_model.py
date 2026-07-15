@@ -20,6 +20,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ConfigDict, Field
 
 from agent_factory.local_inference.config import LocalInferenceEndpoint
+from agent_factory.local_inference.http_client import create_private_http_client
 
 
 class LocalLlamaCppChatModel(BaseChatModel):
@@ -83,7 +84,7 @@ class LocalLlamaCppChatModel(BaseChatModel):
         if self.reasoning_enabled is not None:
             payload["chat_template_kwargs"] = {"enable_thinking": self.reasoning_enabled}
 
-        with httpx.Client(timeout=self.endpoint.timeout_seconds) as client:
+        with create_private_http_client(self.endpoint) as client:
             response = client.post(self.endpoint.endpoint("/chat/completions"), json=payload)
             _raise_for_local_inference_error(response)
             body = response.json()
@@ -98,7 +99,7 @@ class LocalLlamaCppChatModel(BaseChatModel):
         )
 
     def get_token_ids(self, text: str) -> list[int]:
-        with httpx.Client(timeout=self.endpoint.timeout_seconds) as client:
+        with create_private_http_client(self.endpoint) as client:
             response = client.post(
                 self.endpoint.server_endpoint("/tokenize"),
                 json={"content": text, "add_special": False},

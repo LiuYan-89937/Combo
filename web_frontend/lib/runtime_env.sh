@@ -268,10 +268,14 @@ web_ensure_builtin_web_search_mcp() {
     local current_revision=""
     local needs_build=0
     if [[ -d "${WEB_SEARCH_MCP_DIR}/.git" ]]; then
-        echo "Updating built-in web search MCP..."
         previous_revision="$(git -C "${WEB_SEARCH_MCP_DIR}" rev-parse HEAD)"
-        git -C "${WEB_SEARCH_MCP_DIR}" fetch --quiet origin
-        git -C "${WEB_SEARCH_MCP_DIR}" pull --ff-only --quiet
+        if [[ "${AGENTFACTORY_UPDATE_WEB_SEARCH_MCP:-0}" == "1" ]]; then
+            echo "Updating built-in web search MCP..."
+            git -C "${WEB_SEARCH_MCP_DIR}" fetch --quiet origin
+            git -C "${WEB_SEARCH_MCP_DIR}" pull --ff-only --quiet
+        else
+            echo "Using installed built-in web search MCP"
+        fi
     elif [[ -e "${WEB_SEARCH_MCP_DIR}" ]]; then
         web_fail "web search MCP directory exists but is not a Git checkout: ${WEB_SEARCH_MCP_DIR}"
     else

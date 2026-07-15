@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 from langchain_core.embeddings import Embeddings
 
 from agent_factory.local_inference.config import LocalInferenceEndpoint
+from agent_factory.local_inference.http_client import create_private_http_client
 
 
 @dataclass(slots=True)
@@ -27,7 +27,7 @@ class LocalEmbeddingModel(Embeddings):
     def _embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        with httpx.Client(timeout=self.endpoint.timeout_seconds) as client:
+        with create_private_http_client(self.endpoint) as client:
             response = client.post(
                 self.endpoint.endpoint("/embed"),
                 json={"profile_id": self.profile_id, "texts": texts},

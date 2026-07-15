@@ -16,6 +16,7 @@ from agent_factory.local_inference.config import (
     load_inference_telemetry_endpoint,
     load_local_inference_endpoint,
 )
+from agent_factory.local_inference.http_client import create_private_async_http_client
 from agent_factory.model_pool import (
     LocalModelArtifact,
     ModelPoolProfile,
@@ -269,7 +270,7 @@ def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) ->
 
 async def _external_model_list() -> list[dict[str, Any]]:
     endpoint = load_local_inference_endpoint(timeout_seconds=5.0)
-    async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
+    async with create_private_async_http_client(endpoint) as client:
         response = await client.get(endpoint.endpoint("/models"))
         response.raise_for_status()
         payload = response.json()
@@ -294,7 +295,7 @@ async def _external_model_list() -> list[dict[str, Any]]:
 async def _external_rocm_payload() -> dict[str, Any]:
     endpoint = load_inference_telemetry_endpoint(timeout_seconds=5.0)
     try:
-        async with httpx.AsyncClient(timeout=endpoint.timeout_seconds) as client:
+        async with create_private_async_http_client(endpoint) as client:
             response = await client.get(endpoint.endpoint("/runtime/rocm"))
             response.raise_for_status()
             payload = response.json()
