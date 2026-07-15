@@ -5,11 +5,15 @@ export interface ResourceJsonSchema {
   default?: unknown
   enum?: unknown[]
   properties?: Record<string, ResourceJsonSchema>
+  items?: ResourceJsonSchema
   required?: string[]
   minimum?: number
   maximum?: number
   minLength?: number
   maxLength?: number
+  minItems?: number
+  maxItems?: number
+  uniqueItems?: boolean
 }
 
 export interface ResourceSchemaField {
@@ -30,7 +34,7 @@ export function resourceSchemaFields(schemaValue: Record<string, unknown>): Reso
     schema: fieldSchema,
     required: required.has(name),
   }))
-  return fields.every(field => field.schema.enum?.length || STRUCTURED_FIELD_TYPES.has(String(field.schema.type)))
+  return fields.every(field => isStructuredField(field.schema))
     ? fields
     : null
 }
@@ -48,7 +52,7 @@ export function resourceDraftComplete(schema: Record<string, unknown>, draft: un
   const values = draft as Record<string, unknown>
   return fields
     .filter(field => field.required)
-    .every(field => !isEmptyResourceValue(values[field.name]))
+    .every(field => resourceFieldComplete(field.schema, values[field.name]))
 }
 
 export function resourceDraftValue(schema: Record<string, unknown>, draft: unknown): unknown {
@@ -75,9 +79,25 @@ export function resourceDraftValue(schema: Record<string, unknown>, draft: unkno
 function initialFieldValue(schema: ResourceJsonSchema): unknown {
   if (schema.default !== undefined) return schema.default
   if (schema.type === 'boolean') return false
+  if (schema.type === 'array') return []
   return null
 }
 
 function isEmptyResourceValue(value: unknown): boolean {
-  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
+  return value === undefined || value === null ||
+    (typeof value === 'string' && value.trim() === '') ||
+    (Array.isArray(value) && value.length === 0)
+}
+
+function isStructuredField(schema: ResourceJsonSchema): boolean {
+  if (schema.enum?.length) return true
+  if (STRUCTURED_FIELD_TYPES.has(String(schema.type))) return true
+  return schema.type === 'array' && schema.items?.type === 'string'
+}
+
+function resourceFieldComplete(schema: ResourceJsonSchema, value: unknown): boolean {
+  if (isEmptyResourceValue(value)) return false
+  if (schema.type !== 'array' || !Array.isArray(value)) return true
+  return value.length >= Math.max(1, schema.minItems || 0) &&
+    (schema.maxItems === undefined || value.length <= schema.maxItems)
 }
