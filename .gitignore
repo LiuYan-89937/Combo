@@ -7,7 +7,6 @@ vendor/llama.cpp/
 .agentfactory/
 .agent_runtime/
 .venv/
-docs/*
 AGENT_GROUP_*.md
 开发规范以及架构初版.md
 examples/customer_service_agent/memory/

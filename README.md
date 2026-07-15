@@ -12,6 +12,11 @@ FastAgentFactory 是面向私有 AI Agent 开发与本地部署的工作台。�
 
 ![FastAgentFactory 闲聊工作台](readme-assets/images/chat.png)
 
+## 文档导航
+
+- [部署与验收指南](docs/Deployment.md)：从 SSH 配置到双端启动、模型下载、验收、更新与实例迁移。
+- README 当前页面：项目定位、系统架构、主要功能、日常使用和开发入口。
+
 ## 系统架构
 
 ```text
