@@ -1333,6 +1333,12 @@ export const useRuntimeStore = defineStore('runtime', {
       metadata: Record<string, any> = {},
       attachments: TranscriptItem['attachments'] = [],
     ) {
+      const conversationScope = requestId
+        ? scopeFromMessageMetadata(metadata, this.currentMode, this.activeFactorySessionId)
+        : null
+      if (conversationScope) {
+        this._switchConversationScope(conversationScope)
+      }
       const timestamp = new Date().toISOString()
       const messageId = `user-${Date.now()}`
       const item: TranscriptItem = {
@@ -1364,7 +1370,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this.activeRequestId = requestId
         this.runStatus = 'running'
         this.pendingInterrupt = null
-        const conversationScope = scopeFromMessageMetadata(metadata, this.currentMode, this.activeFactorySessionId)
         this.activeRequests[requestId] = {
           requestId,
           status: 'running',
