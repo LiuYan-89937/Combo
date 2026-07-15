@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 import re
 import shutil
 import subprocess
+import threading
 from typing import Any
 
 from agent_factory.paths import factory_artifact_path, project_root
@@ -34,6 +35,14 @@ MODEL_ENV_ALLOWLIST: tuple[str, ...] = ()
 CONTAINER_MODEL_POOL_STORE_PATH = "/model_pool/factory.sqlite"
 CONTAINER_COLLABORATION_ROOT = "/collaboration"
 CONTAINER_RESOURCE_STORE_PATH = "/resource_store/runtime.sqlite"
+SHARED_PROJECT_ROOT = PurePosixPath("/agentfactory/project")
+CONTAINER_ISOLATION_ENV = "AGENTFACTORY_CONTAINER_ISOLATION"
+CONTAINER_INCOMPATIBLE_POLICY_ENV = "AGENTFACTORY_CONTAINER_INCOMPATIBLE_POLICY"
+BRIDGE_PACKAGE_ROOT_ENV = "AGENTFACTORY_BRIDGE_PACKAGE_ROOT"
+BRIDGE_ARTIFACTS_ROOT_ENV = "AGENTFACTORY_BRIDGE_ARTIFACTS_ROOT"
+BRIDGE_RUNTIME_ROOT_ENV = "AGENTFACTORY_BRIDGE_RUNTIME_ROOT"
+BRIDGE_WORKDIR_ROOT_ENV = "AGENTFACTORY_BRIDGE_WORKDIR_ROOT"
+BRIDGE_EXTENSION_ROOT_ENV = "AGENTFACTORY_BRIDGE_EXTENSION_ROOT"
 
 SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ALLOWED_CONTAINER_ROOTS = (
@@ -56,6 +65,8 @@ class DockerAgentRuntimePlan:
     mount_count: int
     service_env: dict[str, str]
     preflight: dict[str, Any]
+    isolation: str = "dedicated"
+    shared_container_id: str | None = None
 
 
 class AgentRuntimeLaunchError(RuntimeError):
@@ -117,6 +128,45 @@ class DockerAgentRuntimeLauncher:
             env["AGENTFACTORY_MCP_GATEWAY_URL"] = mcp_gateway_url
         if skillhub_gateway_url:
             env["AGENTFACTORY_SKILLHUB_GATEWAY_URL"] = skillhub_gateway_url
+        contract_mounts = [*(sandbox.get("mounts") or []), *(sandbox.get("volumes") or [])]
+        logical_fallback_reason: str | None = None
+        requested_isolation = _container_isolation(package)
+        if requested_isolation == "logical":
+            if contract_mounts:
+                logical_fallback_reason = "package declares container-specific mounts"
+            else:
+                try:
+                    return self._prepare_logical_plan(
+                        docker=docker,
+                        package=package,
+                        runtime_root=runtime_root,
+                        artifacts_root=artifacts_root,
+                        workdir_root=workdir_root,
+                        extension_root=extension_root,
+                        environment_lock=environment_lock,
+                        image=image,
+                        resolved_image=resolved_image,
+                        network=network,
+                        env=env,
+                        service_env=service_env,
+                        model_pool_path=model_pool_path,
+                        collaboration_root=collaboration_root,
+                        resource_store=resource_store,
+                        dependency_pool=dependency_pool,
+                        mcp_gateway_url=mcp_gateway_url,
+                        skillhub_gateway_url=skillhub_gateway_url,
+                    )
+                except _SharedRuntimeIncompatible as exc:
+                    logical_fallback_reason = str(exc)
+            if logical_fallback_reason and _incompatible_container_policy() == "error":
+                raise AgentRuntimeLaunchError(
+                    where="docker.logical_isolation",
+                    why="shared_runtime_incompatible",
+                    message=logical_fallback_reason,
+                    suggested_action=(
+                        f"Set {CONTAINER_ISOLATION_ENV}=dedicated or align the package runtime image and mounts."
+                    ),
+                )
         command = [
             docker,
             "run",
@@ -124,27 +174,29 @@ class DockerAgentRuntimeLauncher:
             "-i",
             "--network",
             network,
-            "-v",
+        ]
+        mounts = [
             f"{package.package_root.resolve()}:/package:ro",
             f"{artifacts_root.resolve()}:/artifacts:rw",
-            "-v",
             f"{workdir_root.resolve()}:/workdir:rw",
-            "-v",
             f"{runtime_root.resolve()}:/runtime:rw",
-            "-v",
             f"{model_pool_path.parent.resolve()}:/model_pool:ro",
-            "-v",
             f"{collaboration_root.resolve()}:{CONTAINER_COLLABORATION_ROOT}:rw",
-            "-v",
             f"{resource_store.path.parent.resolve()}:/resource_store:ro",
-            "-v",
             f"{dependency_pool}:{CONTAINER_DEPENDENCY_POOL_ROOT}:ro",
         ]
-        contract_mounts = [*(sandbox.get("mounts") or []), *(sandbox.get("volumes") or [])]
+        try:
+            workdir_alias = runtime_container_path(workdir_root)
+        except ValueError:
+            workdir_alias = None
+        if workdir_alias is not None:
+            mounts.append(f"{workdir_root.resolve()}:{workdir_alias}:rw")
         for mount in contract_mounts:
             mount_arg = self._mount_arg(mount)
             if mount_arg:
-                command.extend(["-v", mount_arg])
+                mounts.append(mount_arg)
+        for mount in mounts:
+            command.extend(["-v", mount])
         for key, value in env.items():
             command.extend(["-e", f"{key}={value}"])
         command.extend([resolved_image, "python", "-m", "agent_factory.agent_runtime_bridge.stdio_server"])
@@ -154,7 +206,7 @@ class DockerAgentRuntimeLauncher:
             resolved_image=resolved_image,
             network=network,
             extension_root=extension_root,
-            mount_count=8 + len(contract_mounts),
+            mount_count=len(mounts),
             service_env=service_env,
             preflight={
                 "status": "ok",
@@ -165,12 +217,109 @@ class DockerAgentRuntimeLauncher:
                 "image_check": IMAGE_INSPECT_COMMAND_LABEL,
                 "network": network,
                 "extension_root": str(extension_root),
-                "mount_count": 8 + len(contract_mounts),
+                "mount_count": len(mounts),
                 "dependency_pool": str(dependency_pool),
                 "service_env_keys": sorted(service_env),
                 "mcp_gateway_url": mcp_gateway_url,
                 "skillhub_gateway_url": skillhub_gateway_url,
+                "isolation": "dedicated",
+                "requested_isolation": requested_isolation,
+                "logical_fallback_reason": logical_fallback_reason,
             },
+            isolation="dedicated",
+        )
+
+    def _prepare_logical_plan(
+        self,
+        *,
+        docker: str,
+        package: LoadedAgentPackage,
+        runtime_root: Path,
+        artifacts_root: Path,
+        workdir_root: Path,
+        extension_root: Path,
+        environment_lock: dict[str, Any],
+        image: str,
+        resolved_image: str,
+        network: str,
+        env: dict[str, str],
+        service_env: dict[str, str],
+        model_pool_path: Path,
+        collaboration_root: Path,
+        resource_store: ResourceStore,
+        dependency_pool: Path,
+        mcp_gateway_url: str | None,
+        skillhub_gateway_url: str | None,
+    ) -> DockerAgentRuntimePlan:
+        try:
+            container_paths = {
+                "package": runtime_container_path(package.package_root),
+                "runtime": runtime_container_path(runtime_root),
+                "artifacts": runtime_container_path(artifacts_root),
+                "workdir": runtime_container_path(workdir_root),
+                "extension": runtime_container_path(extension_root),
+                "model_pool": runtime_container_path(model_pool_path),
+                "collaboration": runtime_container_path(collaboration_root),
+                "resource_store": runtime_container_path(resource_store.path),
+            }
+        except ValueError as exc:
+            raise _SharedRuntimeIncompatible(str(exc)) from exc
+        runtime_parent = factory_artifact_path("agent_runtime")
+        runtime_parent.mkdir(parents=True, exist_ok=True)
+        shared = _SHARED_RUNTIME.ensure(
+            docker=docker,
+            image=image,
+            resolved_image=resolved_image,
+            network=network,
+            runtime_parent=runtime_parent,
+            collaboration_root=collaboration_root,
+            dependency_pool=dependency_pool,
+        )
+        logical_env = dict(env)
+        logical_env.update(
+            {
+                MODEL_POOL_STORE_PATH_ENV: str(container_paths["model_pool"]),
+                "AGENTFACTORY_COLLABORATION_ROOT": str(container_paths["collaboration"]),
+                RESOURCE_STORE_PATH_ENV: str(container_paths["resource_store"]),
+                BRIDGE_PACKAGE_ROOT_ENV: str(container_paths["package"]),
+                BRIDGE_ARTIFACTS_ROOT_ENV: str(container_paths["artifacts"]),
+                BRIDGE_RUNTIME_ROOT_ENV: str(container_paths["runtime"]),
+                BRIDGE_WORKDIR_ROOT_ENV: str(container_paths["workdir"]),
+                BRIDGE_EXTENSION_ROOT_ENV: str(container_paths["extension"]),
+            }
+        )
+        command = [docker, "exec", "-i", "-w", str(container_paths["workdir"])]
+        for key, value in logical_env.items():
+            command.extend(["-e", f"{key}={value}"])
+        command.extend([shared.container_id, "python", "-m", "agent_factory.agent_runtime_bridge.stdio_server"])
+        return DockerAgentRuntimePlan(
+            command=command,
+            image=image,
+            resolved_image=resolved_image,
+            network=network,
+            extension_root=extension_root,
+            mount_count=shared.mount_count,
+            service_env=service_env,
+            preflight={
+                "status": "ok",
+                "docker": docker,
+                "image": image,
+                "environment_lock": environment_lock,
+                "resolved_image": resolved_image,
+                "image_check": IMAGE_INSPECT_COMMAND_LABEL,
+                "network": network,
+                "extension_root": str(extension_root),
+                "mount_count": shared.mount_count,
+                "dependency_pool": str(dependency_pool),
+                "service_env_keys": sorted(service_env),
+                "mcp_gateway_url": mcp_gateway_url,
+                "skillhub_gateway_url": skillhub_gateway_url,
+                "isolation": "logical",
+                "shared_container_id": shared.container_id,
+                "context_paths": {key: str(value) for key, value in container_paths.items()},
+            },
+            isolation="logical",
+            shared_container_id=shared.container_id,
         )
 
     def _prepare_runtime_extension_root(self, *, source_extension_root: Path, runtime_root: Path) -> Path:
@@ -513,6 +662,173 @@ def _volume_resource_id(path: PurePosixPath) -> str:
 
 def _docker_error_text(result: subprocess.CompletedProcess[str]) -> str:
     return (result.stderr or result.stdout or "").strip()
+
+
+@dataclass(frozen=True, slots=True)
+class SharedRuntimeLease:
+    container_id: str
+    mount_count: int
+
+
+class _SharedRuntimeIncompatible(RuntimeError):
+    pass
+
+
+class _SharedDockerRuntime:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._container_id: str | None = None
+        self._docker: str | None = None
+        self._resolved_image: str | None = None
+        self._network: str | None = None
+        self._mount_count = 0
+
+    def ensure(
+        self,
+        *,
+        docker: str,
+        image: str,
+        resolved_image: str,
+        network: str,
+        runtime_parent: Path,
+        collaboration_root: Path,
+        dependency_pool: Path,
+    ) -> SharedRuntimeLease:
+        with self._lock:
+            if self._container_id and self._is_running(docker, self._container_id):
+                if self._resolved_image != resolved_image:
+                    raise _SharedRuntimeIncompatible(
+                        f"shared runtime image is {self._resolved_image}, requested package image is {resolved_image}"
+                    )
+                if self._network != network:
+                    raise _SharedRuntimeIncompatible(
+                        f"shared runtime network is {self._network}, requested package network is {network}"
+                    )
+                return SharedRuntimeLease(self._container_id, self._mount_count)
+            self._reset()
+            project = project_root().resolve()
+            runtime_mount = runtime_container_path(runtime_parent)
+            collaboration_mount = runtime_container_path(collaboration_root)
+            command = [
+                docker,
+                "run",
+                "--rm",
+                "-d",
+                "--network",
+                network,
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--label",
+                "agentfactory.runtime.isolation=logical",
+                "-v",
+                f"{project}:{SHARED_PROJECT_ROOT}:ro",
+                "-v",
+                f"{runtime_parent.resolve()}:{runtime_mount}:rw",
+                "-v",
+                f"{collaboration_root.resolve()}:{collaboration_mount}:rw",
+                "-v",
+                f"{dependency_pool.resolve()}:{CONTAINER_DEPENDENCY_POOL_ROOT}:ro",
+                resolved_image,
+                "python",
+                "-m",
+                "agent_factory.agent_runtime_bridge.container_keeper",
+            ]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+            except Exception as exc:
+                raise AgentRuntimeLaunchError(
+                    where="docker.shared_runtime",
+                    why="shared_container_start_failed",
+                    message=f"Failed to start shared runtime container from {image}: {type(exc).__name__}: {exc}",
+                ) from exc
+            container_id = result.stdout.strip()
+            if result.returncode != 0 or not container_id:
+                raise AgentRuntimeLaunchError(
+                    where="docker.shared_runtime",
+                    why="shared_container_start_failed",
+                    message=_docker_error_text(result) or f"Failed to start shared runtime container from {image}",
+                )
+            if not self._is_running(docker, container_id):
+                raise AgentRuntimeLaunchError(
+                    where="docker.shared_runtime",
+                    why="shared_container_exited",
+                    message=f"Shared runtime container exited immediately after starting from {image}",
+                    suggested_action=RUNTIME_IMAGE_BUILD_COMMAND,
+                )
+            self._container_id = container_id
+            self._docker = docker
+            self._resolved_image = resolved_image
+            self._network = network
+            self._mount_count = 4
+            return SharedRuntimeLease(container_id, self._mount_count)
+
+    def close(self) -> None:
+        with self._lock:
+            container_id = self._container_id
+            docker = self._docker
+            self._reset()
+        if not container_id or not docker:
+            return
+        try:
+            subprocess.run(
+                [docker, "stop", "--time", "5", container_id],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return
+
+    def _is_running(self, docker: str, container_id: str) -> bool:
+        try:
+            result = subprocess.run(
+                [docker, "container", "inspect", container_id, "--format", "{{.State.Running}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            return False
+        return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
+    def _reset(self) -> None:
+        self._container_id = None
+        self._docker = None
+        self._resolved_image = None
+        self._network = None
+        self._mount_count = 0
+
+
+def runtime_container_path(path: str | Path) -> PurePosixPath:
+    host = Path(path).expanduser().resolve()
+    root = project_root().resolve()
+    try:
+        relative = host.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"logical runtime path is outside the shared project root: {host}") from exc
+    return SHARED_PROJECT_ROOT.joinpath(*relative.parts)
+
+
+def shutdown_shared_runtime() -> None:
+    _SHARED_RUNTIME.close()
+
+
+def _container_isolation(package: LoadedAgentPackage) -> str:
+    runtime = package.manifest.runtime if isinstance(package.manifest.runtime, dict) else {}
+    value = str(runtime.get("container_isolation") or os.getenv(CONTAINER_ISOLATION_ENV) or "logical").strip().lower()
+    return value if value in {"logical", "dedicated"} else "logical"
+
+
+def _incompatible_container_policy() -> str:
+    value = str(os.getenv(CONTAINER_INCOMPATIBLE_POLICY_ENV) or "dedicated").strip().lower()
+    return value if value in {"dedicated", "error"} else "dedicated"
+
+
+_SHARED_RUNTIME = _SharedDockerRuntime()
 
 
 def _looks_like_missing_image(value: str) -> bool:

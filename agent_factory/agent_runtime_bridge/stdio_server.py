@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import errno
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -34,6 +35,7 @@ from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
 from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
+from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.memory_system import default_agent_memory_config
 from agent_factory.package_runtime.session_turns import (
     resume_user_input,
@@ -46,10 +48,12 @@ from agent_factory.package_runtime.session_turns import (
 from agent_factory.runtime_attachments import has_attachment_payload, merge_attachments_into_user_config
 
 
-PACKAGE_ROOT = Path("/package")
+PACKAGE_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_PACKAGE_ROOT", "/package"))
 PACKAGE_MANIFEST = PACKAGE_ROOT / "agent_package.json"
-ARTIFACTS_ROOT = Path("/artifacts")
-RUNTIME_ROOT = Path("/runtime")
+ARTIFACTS_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_ARTIFACTS_ROOT", "/artifacts"))
+RUNTIME_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_RUNTIME_ROOT", "/runtime"))
+WORKDIR_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_WORKDIR_ROOT", "/workdir"))
+EXTENSION_ROOT = Path(os.getenv("AGENTFACTORY_BRIDGE_EXTENSION_ROOT", str(RUNTIME_ROOT / "extensions")))
 
 
 @dataclass(slots=True)
@@ -293,6 +297,7 @@ class BridgeRuntimeState:
                 package,
                 base_services=facade.instance.services,
                 runtime_root=RUNTIME_ROOT,
+                instance_extension_root=EXTENSION_ROOT,
             )
             compiler = AgentAssemblyCompiler(facade=facade)
             compiled = compiler.compile(package.assembly_spec, runtime_build=runtime_build)
@@ -884,7 +889,14 @@ def _run_harness_tool_tests(compiled: Any, plan: dict[str, Any], result: dict[st
 
 
 def _load_package() -> LoadedAgentPackage:
-    return AgentPackageLoader().load_path(PACKAGE_MANIFEST)
+    package = AgentPackageLoader().load_path(PACKAGE_MANIFEST)
+    return host_runtime_package_view(
+        package,
+        runtime_root=RUNTIME_ROOT,
+        artifacts_root=ARTIFACTS_ROOT,
+        workdir_root=WORKDIR_ROOT,
+        extension_root=EXTENSION_ROOT,
+    )
 
 
 def _handle_stream_item(normalizer: RuntimeEventNormalizer, stream_mode: str, chunk: Any) -> bool:

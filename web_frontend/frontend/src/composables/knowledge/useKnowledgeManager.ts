@@ -20,6 +20,7 @@ export function useKnowledgeManager() {
   const selectedSourceIds = ref<Set<string>>(new Set())
   const busyAction = ref<'delete' | 'reindex' | null>(null)
   const busySourceId = ref<string | null>(null)
+  const creatingSource = ref(false)
 
   const selectedSources = computed(() => {
     return knowledgeStore.sources.filter((source) => {
@@ -52,9 +53,17 @@ export function useKnowledgeManager() {
     }
   }
 
-  function handleCreate(sourceData: any) {
-    void commands.addKnowledgeSource(sourceData, resourceContext.packageIdForApi.value)
-    showCreateModal.value = false
+  async function handleCreate(sourceData: any) {
+    if (creatingSource.value) return
+    creatingSource.value = true
+    try {
+      const event = await commands.addKnowledgeSource(sourceData, resourceContext.packageIdForApi.value)
+      if (event) {
+        showCreateModal.value = false
+      }
+    } finally {
+      creatingSource.value = false
+    }
   }
 
   function handleAction(key: string, source: KnowledgeSourceView) {
@@ -154,6 +163,7 @@ export function useKnowledgeManager() {
   return {
     busyAction,
     busySourceId,
+    creatingSource,
     confirmDeleteSources,
     documentsDrawerOpen,
     documentsTitle,

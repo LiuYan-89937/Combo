@@ -1,5 +1,13 @@
 <template>
-  <n-modal v-model:show="show" preset="card" :title="t('knowledge.formTitle')" style="width: 640px">
+  <n-modal
+    v-model:show="show"
+    preset="card"
+    :title="t('knowledge.formTitle')"
+    :closable="!submitting"
+    :mask-closable="!submitting"
+    :close-on-esc="!submitting"
+    style="width: 640px"
+  >
     <n-form ref="formRef" :model="formData" :rules="rules">
       <n-form-item :label="t('knowledge.kind')" path="kind">
         <n-select v-model:value="formData.kind" :options="kindOptions" @update:value="handleKindChange" />
@@ -96,15 +104,17 @@
 
     <template #footer>
       <n-space justify="end">
-        <n-button @click="show = false">{{ t('common.cancel') }}</n-button>
-        <n-button type="primary" :disabled="!canSubmit" @click="handleSubmit">{{ t('common.add') }}</n-button>
+        <n-button :disabled="submitting" @click="show = false">{{ t('common.cancel') }}</n-button>
+        <n-button type="primary" :disabled="!canSubmit" :loading="submitting" @click="handleSubmit">
+          {{ t('common.add') }}
+        </n-button>
       </n-space>
     </template>
   </n-modal>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   NButton,
   NCollapseTransition,
@@ -144,6 +154,7 @@ interface FileSystemDirectoryEntryLike extends FileSystemEntryLike {
 
 const props = defineProps<{
   show: boolean
+  submitting?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -155,6 +166,7 @@ const show = computed({
   get: () => props.show,
   set: (value) => emit('update:show', value),
 })
+const submitting = computed(() => Boolean(props.submitting))
 
 const formRef = ref<FormInst | null>(null)
 const { t } = useI18n()
@@ -315,11 +327,10 @@ function readDirectoryEntries(entry: FileSystemDirectoryEntryLike): Promise<File
 }
 
 function handleSubmit() {
-  if (!canSubmit.value) return
+  if (!canSubmit.value || submitting.value) return
   formRef.value?.validate((errors) => {
     if (errors) return
     emit('submit', buildSourceInput())
-    resetForm()
   })
 }
 
@@ -368,6 +379,13 @@ function resetForm() {
   }
   selectedFiles.value = []
 }
+
+watch(
+  () => props.show,
+  (visible, previous) => {
+    if (!visible && previous) resetForm()
+  },
+)
 
 function isValidUrl(value: string): boolean {
   try {

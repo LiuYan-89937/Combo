@@ -715,9 +715,11 @@ def _structured_input_diagnostics(
     else:
         diagnostics = {
             "stable_prefix_digest": "",
+            "knowledge_guidance_digest": "",
             "dynamic_evidence_digest": "",
             "tool_surface_digest": "",
             "stable_system_chars": 0,
+            "knowledge_guidance_chars": 0,
             "dynamic_evidence_chars": 0,
             "history_message_count": _base_message_count(request_messages),
             "tool_count": tool_count,

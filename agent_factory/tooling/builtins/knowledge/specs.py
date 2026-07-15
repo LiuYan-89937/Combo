@@ -8,8 +8,12 @@ def get_knowledge_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="knowledge",
             description=(
-                "管理和检索当前 Agent 显式挂载的知识源。"
-                "已有知识使用 list/search/open/read；新增知识源必须先 prepare_source 预览，再 confirm_source 确认。"
+                "查询和管理当前 Agent 挂载的私有知识。"
+                "当问题涉及内部文档、项目事实、产品参数、业务规则、操作流程、代码规范、历史资料，"
+                "或用户明确要求根据知识库、文档、规范回答时，必须调用本工具，不得只凭模型记忆作答。"
+                "检索时先使用 search（默认 mode=auto），命中后按需使用 open/read 获取完整内容；"
+                "无结果时如实说明，不得伪造知识库内容或声称已经查询。"
+                "新增知识源必须先 prepare_source 预览，再 confirm_source 确认。"
             ),
             entrypoint="agent_factory.knowledge_system.tools:run",
             input_schema=_input_schema(),

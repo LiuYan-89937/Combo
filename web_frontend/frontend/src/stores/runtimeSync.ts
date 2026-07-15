@@ -174,11 +174,13 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
 
 function resourceEventMatchesCurrentContext(event: FactoryFrontendEvent): boolean {
   const eventMode = resourceEventMode(event)
-  const currentMode = currentResourceMode()
-  if (eventMode || currentMode) {
-    return eventMode === currentMode && resourceEventPackageId(event) === currentResourcePackageId()
+  if (eventMode) {
+    return (
+      eventMode === currentResourceMode() &&
+      resourceEventPackageId(event) === currentResourcePackageId()
+    )
   }
-  return resourceEventPackageId(event) === currentResourcePackageId()
+  return resourceEventPackageId(event) === currentPackageResourceId()
 }
 
 function currentResourceMode(): string | null {
@@ -195,6 +197,18 @@ function currentResourcePackageId(): string | null {
   if (runtimeStore.currentMode === 'evolve_agent') return normalizeResourcePackageId('evolve_agent')
   if (agentStore.activeChatPackageId) {
     return normalizeResourcePackageId(agentStore.activeChatPackageId)
+  }
+  return normalizeResourcePackageId(SYSTEM_CHAT_PACKAGE_ID)
+}
+
+function currentPackageResourceId(): string | null {
+  const runtimeStore = useRuntimeStore()
+  const agentStore = useAgentStore()
+  if (agentStore.activeChatPackageId) {
+    return normalizeResourcePackageId(agentStore.activeChatPackageId)
+  }
+  if (runtimeStore.currentMode === 'evolve_agent' && agentStore.selectedPackageId) {
+    return normalizeResourcePackageId(agentStore.selectedPackageId)
   }
   return normalizeResourcePackageId(SYSTEM_CHAT_PACKAGE_ID)
 }

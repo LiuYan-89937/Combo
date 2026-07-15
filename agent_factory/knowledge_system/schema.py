@@ -155,6 +155,14 @@ class KnowledgeRagStoreConfig(BaseModel):
         return self
 
 
+class KnowledgeGuidanceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_sources: int = Field(default=24, ge=1, le=200)
+    max_description_chars: int = Field(default=160, ge=40, le=1000)
+
+
 class KnowledgeContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -164,6 +172,7 @@ class KnowledgeContractConfig(BaseModel):
     default_mount_mode: MountMode = "index_only"
     rag_store: KnowledgeRagStoreConfig = Field(default_factory=KnowledgeRagStoreConfig)
     limits: KnowledgeLimits = Field(default_factory=KnowledgeLimits)
+    guidance: KnowledgeGuidanceConfig = Field(default_factory=KnowledgeGuidanceConfig)
 
     @field_validator("root", "catalog_path")
     @classmethod
