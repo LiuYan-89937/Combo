@@ -28,17 +28,23 @@ class RuntimeRequestPolicy:
         )
 
     @classmethod
-    def from_payload(cls, payload: object) -> "RuntimeRequestPolicy":
+    def from_payload(
+        cls,
+        payload: object,
+        *,
+        default: "RuntimeRequestPolicy | None" = None,
+    ) -> "RuntimeRequestPolicy":
+        baseline = default or cls.from_env()
         if not isinstance(payload, dict):
-            return cls.from_env()
+            return baseline
         return cls(
             timeout_seconds=_positive_int(
                 payload.get("timeout_seconds"),
-                DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS,
+                baseline.timeout_seconds,
             ),
             heartbeat_seconds=_positive_int(
                 payload.get("heartbeat_seconds"),
-                DEFAULT_RUNTIME_REQUEST_HEARTBEAT_SECONDS,
+                baseline.heartbeat_seconds,
             ),
         )
 

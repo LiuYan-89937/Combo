@@ -333,6 +333,15 @@ class BridgeRuntimeState:
 
 def main() -> int:
     state = BridgeRuntimeState()
+    _write_event(
+        event(
+            "runtime_ready",
+            mode="agent_package",
+            graph_id="agent_runtime_bridge",
+            producer_type="agent_runtime",
+            payload={"status": "ready", "transport": "stdio"},
+        )
+    )
     for line in sys.stdin:
         if _STDOUT_WRITER.closed:
             break
@@ -348,7 +357,22 @@ def main() -> int:
         if str(command.get("type") or "") == "shutdown":
             state.shutdown()
             break
-        if str(command.get("type") or "") == "cancel_runtime_request":
+        command_type = str(command.get("type") or "")
+        request_id = str(command.get("request_id") or "") or None
+        _write_event(
+            event(
+                "node_progress",
+                request_id=request_id,
+                mode="agent_package",
+                graph_id="agent_runtime_bridge",
+                producer_type="agent_runtime",
+                node_id="runtime_container",
+                node_label="Runtime Container",
+                node_kind="system",
+                payload={"status": "command_received", "command_type": command_type},
+            )
+        )
+        if command_type == "cancel_runtime_request":
             state.handle(command)
         else:
             state.start(command)

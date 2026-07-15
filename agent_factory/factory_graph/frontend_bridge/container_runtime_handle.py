@@ -58,6 +58,7 @@ class AgentRuntimeContainerHandle:
         package_fingerprint: str,
         idle_timeout_seconds: int,
         request_policy: RuntimeRequestPolicy,
+        bridge_startup_timeout_seconds: int,
         command: list[str],
         emit: Emit | None = None,
     ) -> None:
@@ -75,6 +76,7 @@ class AgentRuntimeContainerHandle:
         self._reader_error: BaseException | None = None
         self._stdout_closed = False
         self._closing = False
+        self._bridge_ready = False
         self.process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -91,6 +93,11 @@ class AgentRuntimeContainerHandle:
             daemon=True,
         )
         self._reader_thread.start()
+        try:
+            self._wait_until_bridge_ready(bridge_startup_timeout_seconds)
+        except Exception:
+            self.close()
+            raise
         self._schedule_idle_shutdown()
 
     def set_emit(self, emit: Emit | None) -> None:
@@ -131,6 +138,12 @@ class AgentRuntimeContainerHandle:
         self._write_command(command)
         self.last_used = time.monotonic()
         self._cancel_idle_shutdown()
+        request_policy = RuntimeRequestPolicy.from_payload(
+            (command.get("payload") or {}).get("runtime_request")
+            if isinstance(command.get("payload"), dict)
+            else None,
+            default=self.request_policy,
+        )
         terminal_seen = False
         started_at = time.monotonic()
         last_heartbeat_at = started_at
@@ -144,23 +157,23 @@ class AgentRuntimeContainerHandle:
                 if terminal_seen:
                     return
                 now = time.monotonic()
-                if request_timed_out(started_at, now, self.request_policy):
+                if request_timed_out(started_at, now, request_policy):
                     payload = request_timeout_payload(
                         package_id=self.package_id,
                         request_id=request_id,
                         elapsed_seconds=now - started_at,
-                        timeout_seconds=self.request_policy.timeout_seconds,
+                        timeout_seconds=request_policy.timeout_seconds,
                     )
                     self.close()
                     yield "frontend_event", run_failed_event(request_id, payload)
                     return
-                if heartbeat_due(last_heartbeat_at, now, self.request_policy):
+                if heartbeat_due(last_heartbeat_at, now, request_policy):
                     last_heartbeat_at = now
                     yield "frontend_event", request_heartbeat_event(
                         request_id,
                         package_id=self.package_id,
                         elapsed_seconds=now - started_at,
-                        timeout_seconds=self.request_policy.timeout_seconds,
+                        timeout_seconds=request_policy.timeout_seconds,
                     )
         finally:
             with self._condition:
@@ -287,6 +300,10 @@ class AgentRuntimeContainerHandle:
     def _dispatch_event(self, item: FactoryFrontendEvent) -> None:
         background_event: FactoryFrontendEvent | None = None
         with self._condition:
+            if item.event_type == "runtime_ready" and item.payload.get("transport") == "stdio":
+                self._bridge_ready = True
+                self._condition.notify_all()
+                return
             queue = self._request_events.get(str(item.request_id or ""))
             if queue is not None:
                 queue.append(("frontend_event", item))
@@ -319,6 +336,25 @@ class AgentRuntimeContainerHandle:
             self._emit(item)
         if not self._request_events:
             self._schedule_idle_shutdown()
+
+    def _wait_until_bridge_ready(self, timeout_seconds: float) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        with self._condition:
+            while not self._bridge_ready:
+                if self._reader_error is not None:
+                    raise RuntimeError(
+                        f"agent runtime bridge startup failed: {self._reader_error}"
+                    ) from self._reader_error
+                if self._stdout_closed or not self.is_running:
+                    raise RuntimeError(
+                        f"agent runtime bridge exited before ready with code {self.process.poll()}"
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(
+                        f"agent runtime bridge did not become ready within {timeout_seconds:g} seconds"
+                    )
+                self._condition.wait(timeout=min(remaining, 0.2))
 
     def _write_command(self, command: dict[str, Any]) -> None:
         if self.process.stdin is None:

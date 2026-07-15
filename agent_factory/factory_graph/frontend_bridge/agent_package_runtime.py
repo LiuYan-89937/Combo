@@ -85,6 +85,8 @@ from agent_factory.factory_graph.frontend_bridge.system_package_runtime_handle i
 
 
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
+DEFAULT_AGENT_RUNTIME_INITIALIZE_TIMEOUT_SECONDS = 120
+DEFAULT_AGENT_RUNTIME_BRIDGE_STARTUP_TIMEOUT_SECONDS = 30
 Emit = Callable[[FactoryFrontendEvent], None]
 logger = logging.getLogger(__name__)
 
@@ -127,6 +129,14 @@ class AgentPackageRuntimeManager:
             DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS,
         )
         self.request_policy = RuntimeRequestPolicy.from_env()
+        self.initialize_timeout_seconds = _env_int(
+            "AGENTFACTORY_AGENT_RUNTIME_INITIALIZE_TIMEOUT_SECONDS",
+            DEFAULT_AGENT_RUNTIME_INITIALIZE_TIMEOUT_SECONDS,
+        )
+        self.bridge_startup_timeout_seconds = _env_int(
+            "AGENTFACTORY_AGENT_RUNTIME_BRIDGE_STARTUP_TIMEOUT_SECONDS",
+            DEFAULT_AGENT_RUNTIME_BRIDGE_STARTUP_TIMEOUT_SECONDS,
+        )
         self._containers: dict[str, AgentRuntimeContainerHandle] = {}
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
@@ -311,7 +321,7 @@ class AgentPackageRuntimeManager:
             self._emit(
                 event(
                     "agent_package_instance_updated",
-                    request_id=None,
+                    request_id=request_id,
                     mode="agent_package",
                     graph_id="agent_package_runtime",
                     producer_type="factory_runtime",
@@ -321,7 +331,12 @@ class AgentPackageRuntimeManager:
         command = {
             "type": "initialize_runtime",
             "request_id": request_id or uuid4().hex,
-            "payload": {},
+            "payload": {
+                "runtime_request": RuntimeRequestPolicy(
+                    timeout_seconds=self.initialize_timeout_seconds,
+                    heartbeat_seconds=self.request_policy.heartbeat_seconds,
+                ).as_payload(),
+            },
         }
         latest_status: dict[str, Any] | None = None
         try:
@@ -1300,6 +1315,7 @@ class AgentPackageRuntimeManager:
             package_fingerprint=fingerprint,
             idle_timeout_seconds=self.idle_timeout_seconds,
             request_policy=self.request_policy,
+            bridge_startup_timeout_seconds=self.bridge_startup_timeout_seconds,
             command=plan.command,
             emit=self._emit,
         )
