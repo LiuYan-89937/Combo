@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
@@ -12,7 +13,10 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from agent_factory.env import load_agentfactory_dotenv
-from agent_factory.local_inference.memory_budget import estimate_inference_memory
+from agent_factory.local_inference.memory_budget import (
+    estimate_inference_memory,
+    warm_inference_memory_metadata,
+)
 from agent_factory.local_inference.node_control import (
     InferenceMemoryEstimateRequest,
     InferenceNodeAction,
@@ -37,6 +41,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         del app
+        await asyncio.to_thread(_warm_enabled_model_metadata)
         await runtime_manager.restore()
         try:
             yield
@@ -234,6 +239,12 @@ def _software_payload() -> dict[str, Any]:
         ),
         "llama_server_version": _command_output([binary, "--version"]) if binary else "",
     }
+
+
+def _warm_enabled_model_metadata() -> None:
+    store = ModelPoolStore()
+    for profile in store.list_profiles(kind="chat", enabled=True):
+        warm_inference_memory_metadata(store.require_artifact(profile.artifact_id))
 
 
 def _command_output(command: list[str], *, cwd: Path | None = None) -> str:

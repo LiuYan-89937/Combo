@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,14 @@ class _GgufAttentionMetadata:
     head_count_kv: int
     key_length: int
     value_length: int
+
+
+def warm_inference_memory_metadata(artifact: LocalModelArtifact) -> str:
+    try:
+        _read_attention_metadata(artifact.resolved_path())
+    except (ImportError, OSError, ValueError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return ""
 
 
 def estimate_inference_memory(
@@ -112,12 +121,23 @@ def estimate_inference_memory(
 
 
 def _read_attention_metadata(path: Path) -> _GgufAttentionMetadata:
+    stat = path.stat()
+    return _read_attention_metadata_cached(str(path), stat.st_size, stat.st_mtime_ns)
+
+
+@lru_cache(maxsize=32)
+def _read_attention_metadata_cached(
+    path_text: str,
+    file_size: int,
+    modified_at_ns: int,
+) -> _GgufAttentionMetadata:
+    del file_size, modified_at_ns
     try:
         from gguf import GGUFReader
     except ImportError as exc:
         raise ImportError("the gguf package is required to inspect model metadata") from exc
 
-    reader = GGUFReader(str(path))
+    reader = GGUFReader(path_text)
     architecture = str(_field_value(reader, "general.architecture"))
     if not architecture:
         raise ValueError("GGUF metadata does not define general.architecture")

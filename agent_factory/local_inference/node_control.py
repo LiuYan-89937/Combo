@@ -64,7 +64,7 @@ class InferenceMemoryEstimateRequest(BaseModel):
 
 class InferenceNodeClient:
     async def runtimes(self) -> list[dict[str, Any]]:
-        endpoint = load_inference_telemetry_endpoint(timeout_seconds=5.0)
+        endpoint = load_inference_telemetry_endpoint()
         async with create_private_async_http_client(endpoint) as client:
             response = await client.get(endpoint.endpoint("/runtimes"))
             response.raise_for_status()
@@ -82,7 +82,7 @@ class InferenceNodeClient:
         model_id: str,
         profile: ModelPoolProfile | None = None,
     ) -> dict[str, Any]:
-        endpoint = load_inference_telemetry_endpoint(timeout_seconds=10.0)
+        endpoint = load_inference_telemetry_endpoint()
         request = InferenceNodeAction(
             kind=kind,
             model_id=model_id,
@@ -104,7 +104,7 @@ class InferenceNodeClient:
         self,
         request: InferenceMemoryEstimateRequest,
     ) -> dict[str, Any]:
-        endpoint = load_inference_telemetry_endpoint(timeout_seconds=10.0)
+        endpoint = load_inference_telemetry_endpoint()
         async with create_private_async_http_client(endpoint) as client:
             response = await client.post(
                 endpoint.endpoint("/models/memory-estimate"),

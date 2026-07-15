@@ -262,6 +262,9 @@ async def _apply_runtime_intent(
     profile: ModelPoolProfile,
 ) -> dict[str, Any]:
     if profile.enabled:
+        current = runtime_manager.state_for_profile(profile.profile_id)
+        if current is not None and str(current.get("phase") or "") != "idle":
+            return await runtime_manager.restart(profile.profile_id)
         return await runtime_manager.load(profile.profile_id)
     return await runtime_manager.unload(profile.profile_id)
 
@@ -300,7 +303,7 @@ def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) ->
 
 
 async def _external_model_catalog() -> tuple[list[dict[str, Any]], str]:
-    endpoint = load_inference_telemetry_endpoint(timeout_seconds=5.0)
+    endpoint = load_inference_telemetry_endpoint()
     try:
         async with create_private_async_http_client(endpoint) as client:
             response = await client.get(endpoint.endpoint("/models"))
@@ -315,7 +318,7 @@ async def _external_model_catalog() -> tuple[list[dict[str, Any]], str]:
 
 
 async def _external_rocm_payload() -> dict[str, Any]:
-    endpoint = load_inference_telemetry_endpoint(timeout_seconds=5.0)
+    endpoint = load_inference_telemetry_endpoint()
     try:
         async with create_private_async_http_client(endpoint) as client:
             response = await client.get(endpoint.endpoint("/runtime/rocm"))
