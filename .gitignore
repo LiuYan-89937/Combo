@@ -1,4 +1,7 @@
 .env
+deploy/deploy.env
+.deploy/
+vendor/llama.cpp/
 .DS_Store
 .idea/
 .agentfactory/
