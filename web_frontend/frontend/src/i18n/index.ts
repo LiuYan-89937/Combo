@@ -171,6 +171,8 @@ const zhCN = {
   'roles.assistantThinking': 'Assistant 正在思考',
   'roles.assistantReasoning': '思考过程',
   'roles.assistantReasoningActive': '思考中',
+  'factory.status.intentAnalysis': '正在分析请求意图',
+  'factory.status.taskAnalysis': '正在分析制造任务',
 
   'attachments.title': '添加附件',
   'attachments.localFile': '本地文件',
@@ -910,6 +912,8 @@ const enUS: Record<MessageKey, string> = {
   'roles.assistantThinking': 'Assistant is thinking',
   'roles.assistantReasoning': 'Reasoning',
   'roles.assistantReasoningActive': 'Reasoning',
+  'factory.status.intentAnalysis': 'Analyzing request intent',
+  'factory.status.taskAnalysis': 'Analyzing manufacturing task',
 
   'attachments.title': 'Add attachment',
   'attachments.localFile': 'Local file',
