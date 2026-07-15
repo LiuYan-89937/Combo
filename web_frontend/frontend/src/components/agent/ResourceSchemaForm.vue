@@ -25,6 +25,18 @@
         :placeholder="fieldPlaceholder(field)"
         @update:value="setFieldValue(field.name, $event)"
       />
+      <n-select
+        v-else-if="isStringArray(field.schema)"
+        :value="stringArrayFieldValue(field.name)"
+        :options="arrayOptions(field.name, field.schema)"
+        multiple
+        tag
+        filterable
+        clearable
+        size="small"
+        :placeholder="fieldPlaceholder(field)"
+        @update:value="setFieldValue(field.name, $event)"
+      />
       <div v-else-if="field.schema.type === 'boolean'" class="boolean-field">
         <n-switch
           :value="Boolean(fieldValue(field.name))"
@@ -98,6 +110,11 @@ function numberFieldValue(name: string): number | null {
   return typeof value === 'number' ? value : null
 }
 
+function stringArrayFieldValue(name: string): string[] {
+  const value = fieldValue(name)
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
 function setFieldValue(name: string, value: unknown): void {
   emit('update:modelValue', { ...draftObject(), [name]: value })
 }
@@ -114,7 +131,20 @@ function enumOptions(values: unknown[]): Array<{ label: string; value: string | 
     .map(value => ({ label: String(value), value }))
 }
 
+function arrayOptions(name: string, schema: ResourceJsonSchema): Array<{ label: string; value: string }> {
+  const declared = Array.isArray(schema.items?.enum)
+    ? schema.items.enum.filter((value): value is string => typeof value === 'string')
+    : []
+  return [...new Set([...declared, ...stringArrayFieldValue(name)])]
+    .map(value => ({ label: value, value }))
+}
+
+function isStringArray(schema: ResourceJsonSchema): boolean {
+  return schema.type === 'array' && schema.items?.type === 'string'
+}
+
 function fieldPlaceholder(field: ResourceSchemaField): string {
+  if (isStringArray(field.schema)) return `输入${field.schema.title || field.name}后按回车添加`
   return field.required ? `填写 ${field.schema.title || field.name}` : `可选：${field.schema.title || field.name}`
 }
 </script>
