@@ -19,6 +19,7 @@ from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
+from agent_factory.runtime_contracts.paths import instance_checkpoint_path
 from agent_factory.mcp_gateway import HostMCPGatewayManager
 from agent_factory.skillhub_gateway import HostSkillHubGatewayManager
 from agent_factory.package_runtime import host_runtime_package_view
@@ -547,6 +548,7 @@ class AgentPackageRuntimeManager:
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
             package_id=package_id,
             package=package,
+            session_id=result.record.session_id,
             thread_id=result.record.thread_id,
         )
         deleted_workdir = _delete_session_workdir(package_id, result.record.session_id)
@@ -1240,12 +1242,19 @@ class AgentPackageRuntimeManager:
 
             # 从池中获取或创建容器
             def create_container_for_pool():
-                return self._create_container_handle(package_id, package, fingerprint, workdir_root)
+                return self._create_container_handle(
+                    package_id,
+                    package,
+                    fingerprint,
+                    runtime_key,
+                    workdir_root,
+                )
 
             try:
                 handle = self._container_pool.acquire(
                     package_id=package_id,
                     package_fingerprint=fingerprint,
+                    runtime_instance_id=runtime_key,
                     create_fn=create_container_for_pool,
                 )
                 # 将容器关联到当前 runtime_key
@@ -1266,7 +1275,13 @@ class AgentPackageRuntimeManager:
             return existing
 
         self._close_container(runtime_key)
-        handle = self._create_container_handle(package_id, package, fingerprint, workdir_root)
+        handle = self._create_container_handle(
+            package_id,
+            package,
+            fingerprint,
+            runtime_key,
+            workdir_root,
+        )
         self._containers[runtime_key] = handle
         return handle
 
@@ -1275,6 +1290,7 @@ class AgentPackageRuntimeManager:
         package_id: str,
         package: LoadedAgentPackage,
         fingerprint: str,
+        runtime_instance_id: str,
         workdir_root: Path | None,
     ) -> "AgentRuntimeContainerHandle":
         """创建新的容器 handle（提取为独立方法供池使用）"""
@@ -1293,6 +1309,7 @@ class AgentPackageRuntimeManager:
             runtime_root=runtime_root,
             artifacts_root=artifacts_root,
             workdir_root=workdir_root,
+            runtime_instance_id=runtime_instance_id,
             extension_root=extension_root,
             mcp_gateway_url=mcp_gateway.docker_url if mcp_gateway is not None else None,
             skillhub_gateway_url=skillhub_gateway.docker_url,
@@ -1355,6 +1372,7 @@ class AgentPackageRuntimeManager:
             package=host_package,
             package_fingerprint=fingerprint,
             runtime_root=runtime_root,
+            runtime_instance_id=runtime_key,
             instance_extension_root=extension_root,
             idle_timeout_seconds=self.idle_timeout_seconds,
             request_policy=self.request_policy,
@@ -1575,6 +1593,7 @@ def _delete_agent_session_checkpoint(
     *,
     package_id: str,
     package: LoadedAgentPackage,
+    session_id: str,
     thread_id: str,
 ) -> int:
     session_contract = package.contracts.get("session") if isinstance(package.contracts, dict) else None
@@ -1584,6 +1603,7 @@ def _delete_agent_session_checkpoint(
         return 0
     checkpoint_path = str(config.get("checkpoint_path") or ".agent_runtime/checkpoints/agent.sqlite").strip()
     path = _runtime_contract_path(_host_runtime_root(package_id), checkpoint_path)
+    path = instance_checkpoint_path(path, f"{package_id}:session:{session_id}")
     return 1 if delete_sqlite_checkpoint_thread(path, thread_id) else 0
 
 

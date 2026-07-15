@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
@@ -29,6 +30,14 @@ def resolve_package_runtime_path(context: RuntimeBuildContext, value: str, *, fi
 
 def package_runtime_path_text(context: RuntimeBuildContext, value: str, *, field_path: str) -> str:
     return str(resolve_package_runtime_path(context, value, field_path=field_path))
+
+
+def instance_checkpoint_path(path: Path, runtime_instance_id: str | None) -> Path:
+    instance_id = str(runtime_instance_id or "").strip()
+    if not instance_id:
+        return path
+    namespace = hashlib.sha256(instance_id.encode("utf-8")).hexdigest()
+    return path.parent / "instances" / namespace / path.name
 
 
 def _runtime_relative_path(value: str) -> Path | None:

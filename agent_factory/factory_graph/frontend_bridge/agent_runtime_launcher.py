@@ -16,6 +16,7 @@ from agent_factory.agent_runtime_bridge.paths import (
     BRIDGE_EXTENSION_ROOT_ENV,
     BRIDGE_PACKAGE_ROOT_ENV,
     BRIDGE_RUNTIME_ROOT_ENV,
+    BRIDGE_RUNTIME_INSTANCE_ID_ENV,
     BRIDGE_WORKDIR_ROOT_ENV,
 )
 from agent_factory.model_pool import (
@@ -122,10 +123,18 @@ class DockerAgentRuntimeLauncher:
         runtime_root: Path,
         artifacts_root: Path,
         workdir_root: Path,
+        runtime_instance_id: str,
         extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
         skillhub_gateway_url: str | None = None,
     ) -> DockerAgentRuntimePlan:
+        runtime_instance_id = str(runtime_instance_id or "").strip()
+        if not runtime_instance_id:
+            raise AgentRuntimeLaunchError(
+                where="docker.runtime_instance",
+                why="runtime_instance_id_missing",
+                message="Docker Agent runtime requires a stable runtime instance identifier.",
+            )
         docker = self._docker_executable()
         sandbox: dict[str, Any] = {}
         environment_lock = EnvironmentResolver().read_lock(package.package_root)
@@ -168,6 +177,7 @@ class DockerAgentRuntimeLauncher:
         )
         env[MODEL_POOL_STORE_PATH_ENV] = CONTAINER_MODEL_POOL_STORE_PATH
         env[MODEL_POOL_STORE_READ_ONLY_ENV] = "1"
+        env[BRIDGE_RUNTIME_INSTANCE_ID_ENV] = runtime_instance_id
         env["AGENTFACTORY_COLLABORATION_ROOT"] = CONTAINER_COLLABORATION_ROOT
         env[RESOURCE_STORE_PATH_ENV] = CONTAINER_RESOURCE_STORE_PATH
         env[RESOURCE_STORE_READ_ONLY_ENV] = "1"
@@ -274,6 +284,7 @@ class DockerAgentRuntimeLauncher:
                 "mcp_gateway_url": mcp_gateway_url,
                 "skillhub_gateway_url": skillhub_gateway_url,
                 "isolation": "dedicated",
+                "runtime_instance_id": runtime_instance_id,
                 "requested_isolation": requested_isolation,
                 "logical_fallback_reason": logical_fallback_reason,
             },
@@ -367,6 +378,7 @@ class DockerAgentRuntimeLauncher:
                 "mcp_gateway_url": mcp_gateway_url,
                 "skillhub_gateway_url": skillhub_gateway_url,
                 "isolation": "logical",
+                "runtime_instance_id": logical_env[BRIDGE_RUNTIME_INSTANCE_ID_ENV],
                 "shared_container_id": shared.container_id,
                 "context_paths": {key: str(value) for key, value in container_paths.items()},
                 "environment_lock_path": logical_env[ENVIRONMENT_LOCK_PATH_ENV],
@@ -397,6 +409,7 @@ class DockerAgentRuntimeLauncher:
         runtime_root: Path,
         artifacts_root: Path,
         workdir_root: Path,
+        runtime_instance_id: str,
         extension_root: Path | None = None,
         mcp_gateway_url: str | None = None,
         skillhub_gateway_url: str | None = None,
@@ -406,6 +419,7 @@ class DockerAgentRuntimeLauncher:
             runtime_root=runtime_root,
             artifacts_root=artifacts_root,
             workdir_root=workdir_root,
+            runtime_instance_id=runtime_instance_id,
             extension_root=extension_root,
             mcp_gateway_url=mcp_gateway_url,
             skillhub_gateway_url=skillhub_gateway_url,
