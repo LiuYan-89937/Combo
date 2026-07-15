@@ -46,6 +46,61 @@
           </div>
         </section>
 
+        <section v-if="resourceItems.length > 0 || resourceLoadError" class="detail-section resource-section">
+          <div class="section-header">
+            <div class="section-label">Resource 配置</div>
+            <n-tag size="small" :type="resourceStatusType">{{ resourceStatusLabel }}</n-tag>
+          </div>
+          <div class="resource-section-hint">
+            这些配置只保存在本机加密资源库中，不会写入 AgentPackage。已配置项不会回显；覆盖时需要重新填写完整字段。
+          </div>
+          <div v-if="resourceLoadError" class="resource-error">{{ resourceLoadError }}</div>
+          <div v-else class="detail-list">
+            <div v-for="resource in resourceItems" :key="resource.resource_id" class="detail-list-item resource-item">
+              <div class="item-main">
+                <div class="item-title">{{ resource.resource_id }}</div>
+                <div v-if="resource.description" class="item-description">{{ resource.description }}</div>
+                <div class="item-meta">
+                  {{ resource.required ? '必填' : '按需配置' }} · {{ resource.used_by.join(', ') || '运行时' }}
+                </div>
+                <resource-schema-form
+                  :model-value="resourceDrafts[resource.resource_id]"
+                  :schema="resource.value_schema"
+                  :secret-fields="resource.secret_fields"
+                  class="resource-input"
+                  @update:model-value="resourceDrafts[resource.resource_id] = $event"
+                />
+                <div v-if="resourceErrors[resource.resource_id]" class="resource-error">
+                  {{ resourceErrors[resource.resource_id] }}
+                </div>
+              </div>
+              <div class="resource-actions">
+                <n-tag size="small" :type="resource.configured ? 'success' : resource.required ? 'warning' : 'default'">
+                  {{ resource.configured ? '已配置' : '待配置' }}
+                </n-tag>
+                <n-button
+                  size="tiny"
+                  type="primary"
+                  :loading="resourceSavingId === resource.resource_id"
+                  :disabled="!resourceStoreReady || !resourceDraftComplete(resource.value_schema, resourceDrafts[resource.resource_id])"
+                  @click="saveResource(resource)"
+                >
+                  {{ resource.configured ? '覆盖' : '保存' }}
+                </n-button>
+                <n-button
+                  v-if="resource.configured"
+                  size="tiny"
+                  quaternary
+                  :disabled="resourceSavingId === resource.resource_id"
+                  @click="removeResource(resource.resource_id)"
+                >
+                  移除
+                </n-button>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="detail-section">
           <div class="section-header">
             <div class="section-label">{{ t('agentDetail.contextPolicy') }}</div>
@@ -196,38 +251,6 @@
 
         <section class="detail-section">
           <div class="section-header">
-            <div class="section-label">运行时资源</div>
-            <n-tag size="small" :type="resourceStatusType">{{ resourceStatusLabel }}</n-tag>
-          </div>
-          <n-empty v-if="resourceItems.length === 0" description="此 Agent 未声明运行时资源" size="small" />
-          <div v-else class="detail-list">
-            <div v-for="resource in resourceItems" :key="resource.resource_id" class="detail-list-item resource-item">
-              <div class="item-main">
-                <div class="item-title">{{ resource.resource_id }}</div>
-                <div v-if="resource.description" class="item-description">{{ resource.description }}</div>
-                <div class="item-meta">{{ resource.required ? '必填' : '可选' }} · {{ resource.used_by.join(', ') || '运行时' }}</div>
-                <n-input
-                  v-model:value="resourceDrafts[resource.resource_id]"
-                  size="small"
-                  class="resource-input"
-                  :type="resource.secret_fields.length ? 'password' : 'textarea'"
-                  :show-password-on="resource.secret_fields.length ? 'click' : undefined"
-                  :placeholder="resourceInputHint(resource)"
-                />
-              </div>
-              <div class="resource-actions">
-                <n-tag size="small" :type="resource.configured ? 'success' : resource.required ? 'warning' : 'default'">
-                  {{ resource.configured ? '已配置' : '待配置' }}
-                </n-tag>
-                <n-button size="tiny" type="primary" :disabled="!resourceStoreReady" @click="saveResource(resource)">保存</n-button>
-                <n-button v-if="resource.configured" size="tiny" quaternary @click="removeResource(resource.resource_id)">移除</n-button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="detail-section">
-          <div class="section-header">
             <div class="section-label">运行环境</div>
             <n-tag size="small" :type="agentPackage.environment?.status === 'ready' ? 'success' : 'warning'">{{ agentPackage.environment?.status || 'missing' }}</n-tag>
           </div>
@@ -358,7 +381,6 @@ import {
   NDrawerContent,
   NEmpty,
   NInputNumber,
-  NInput,
   NRadioButton,
   NRadioGroup,
   NTag,
@@ -385,6 +407,12 @@ import {
   statusType,
   toolMeta,
 } from './agentPackagePresentation'
+import ResourceSchemaForm from './ResourceSchemaForm.vue'
+import {
+  createResourceDraft,
+  resourceDraftComplete,
+  resourceDraftValue,
+} from './resourceSchema'
 
 const props = withDefaults(defineProps<{
   show?: boolean
@@ -428,7 +456,10 @@ const skills = computed<AgentPackageExtensionView[]>(() => props.agentPackage?.s
 const knowledgeSources = computed<AgentPackageKnowledgeSourceView[]>(() => props.agentPackage?.knowledge_sources || [])
 const resourceItems = ref<AgentPackageResourceDescriptorView[]>([])
 const resourceStoreReady = ref(false)
-const resourceDrafts = ref<Record<string, string>>({})
+const resourceDrafts = ref<Record<string, unknown>>({})
+const resourceErrors = ref<Record<string, string>>({})
+const resourceLoadError = ref('')
+const resourceSavingId = ref('')
 let resourceRequestId = 0
 const resourceStatusType = computed(() => resourceItems.value.every(item => !item.required || item.configured) ? 'success' : 'warning')
 const resourceStatusLabel = computed(() => resourceStoreReady.value ? '运行时配置' : '需要主密钥')
@@ -485,6 +516,8 @@ watch(
       resourceItems.value = []
       resourceStoreReady.value = false
       resourceDrafts.value = {}
+      resourceErrors.value = {}
+      resourceLoadError.value = ''
       return
     }
     await loadResources(packageId)
@@ -494,7 +527,14 @@ watch(
 
 async function loadResources(packageId: string): Promise<void> {
   const requestId = ++resourceRequestId
-  const payload = await agentPackagesApi.resources(packageId)
+  resourceLoadError.value = ''
+  let payload
+  try {
+    payload = await agentPackagesApi.resources(packageId)
+  } catch (error) {
+    if (requestId === resourceRequestId) resourceLoadError.value = errorMessage(error)
+    return
+  }
   if (
     requestId !== resourceRequestId ||
     !detailVisible.value ||
@@ -502,29 +542,45 @@ async function loadResources(packageId: string): Promise<void> {
   ) return
   resourceItems.value = payload.resources
   resourceStoreReady.value = payload.key_available
-  resourceDrafts.value = Object.fromEntries(payload.resources.map(item => [item.resource_id, '']))
-}
-
-function resourceInputHint(resource: AgentPackageResourceDescriptorView): string {
-  if (resource.secret_fields.length) return `填写 ${resource.secret_fields.join(', ')} 后保存`
-  return '填写 JSON 值或普通文本后保存'
+  resourceDrafts.value = Object.fromEntries(
+    payload.resources.map(item => [item.resource_id, createResourceDraft(item.value_schema)]),
+  )
+  resourceErrors.value = {}
 }
 
 async function saveResource(resource: AgentPackageResourceDescriptorView) {
   const packageId = props.agentPackage?.package_id
   if (!packageId) return
-  const raw = resourceDrafts.value[resource.resource_id] || ''
-  let value: unknown = raw
-  try { value = JSON.parse(raw) } catch { /* String values are valid resource input. */ }
-  await agentPackagesApi.putResource(packageId, resource.resource_id, value)
-  await loadResources(packageId)
+  resourceSavingId.value = resource.resource_id
+  resourceErrors.value = { ...resourceErrors.value, [resource.resource_id]: '' }
+  try {
+    const value = resourceDraftValue(resource.value_schema, resourceDrafts.value[resource.resource_id])
+    await agentPackagesApi.putResource(packageId, resource.resource_id, value)
+    await loadResources(packageId)
+  } catch (error) {
+    resourceErrors.value = { ...resourceErrors.value, [resource.resource_id]: errorMessage(error) }
+  } finally {
+    resourceSavingId.value = ''
+  }
 }
 
 async function removeResource(resourceId: string) {
   const packageId = props.agentPackage?.package_id
   if (!packageId) return
-  await agentPackagesApi.deleteResource(packageId, resourceId)
-  await loadResources(packageId)
+  resourceSavingId.value = resourceId
+  resourceErrors.value = { ...resourceErrors.value, [resourceId]: '' }
+  try {
+    await agentPackagesApi.deleteResource(packageId, resourceId)
+    await loadResources(packageId)
+  } catch (error) {
+    resourceErrors.value = { ...resourceErrors.value, [resourceId]: errorMessage(error) }
+  } finally {
+    resourceSavingId.value = ''
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function contextConfigSavePayload(): { context_window_tokens: number | null; compression_threshold_tokens: number | null } {
@@ -609,9 +665,30 @@ function packageStatusLabel(status: string | null | undefined): string {
   border-bottom: 1px solid var(--app-divider);
 }
 
-.resource-item { align-items: flex-start; }
-.resource-input { margin-top: var(--app-space-sm); }
+.resource-section {
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.resource-section-hint {
+  margin-bottom: var(--app-space-md);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+  line-height: 1.45;
+}
+
+.resource-item { align-items: flex-start; background: var(--app-surface); }
+.resource-input { margin-top: var(--app-space-md); }
 .resource-actions { display: grid; justify-items: end; gap: var(--app-space-xs); }
+
+.resource-error {
+  margin-top: var(--app-space-sm);
+  color: var(--n-color-error, #d03050);
+  font-size: var(--app-font-xs);
+  line-height: 1.45;
+}
 
 .detail-section:last-child {
   border-bottom: 0;
