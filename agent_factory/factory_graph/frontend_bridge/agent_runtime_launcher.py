@@ -6,6 +6,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 import re
 import shutil
+import sqlite3
 import subprocess
 import threading
 from typing import Any
@@ -68,9 +69,9 @@ CONTAINER_ENDPOINT_ENV_PAIRS: tuple[tuple[str, str], ...] = (
 )
 CONTAINER_HOST_ALIAS = "host.docker.internal"
 LOOPBACK_ENDPOINT_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-CONTAINER_MODEL_POOL_STORE_PATH = "/model_pool/factory.sqlite"
+CONTAINER_MODEL_POOL_STORE_PATH = "/runtime/control_plane/model_pool.sqlite"
 CONTAINER_COLLABORATION_ROOT = "/collaboration"
-CONTAINER_RESOURCE_STORE_PATH = "/resource_store/runtime.sqlite"
+CONTAINER_RESOURCE_STORE_PATH = "/runtime/control_plane/resources.sqlite"
 SHARED_PROJECT_ROOT = PurePosixPath("/agentfactory/project")
 CONTAINER_ISOLATION_ENV = "AGENTFACTORY_CONTAINER_ISOLATION"
 CONTAINER_INCOMPATIBLE_POLICY_ENV = "AGENTFACTORY_CONTAINER_INCOMPATIBLE_POLICY"
@@ -173,6 +174,11 @@ class DockerAgentRuntimeLauncher:
         model_pool_path = resolve_model_pool_store_path()
         ModelPoolStore(model_pool_path)
         resource_store = ResourceStore()
+        control_plane_root = runtime_root / "control_plane"
+        model_pool_snapshot = control_plane_root / "model_pool.sqlite"
+        resource_store_snapshot = control_plane_root / "resources.sqlite"
+        _refresh_sqlite_snapshot(model_pool_path, model_pool_snapshot)
+        _refresh_sqlite_snapshot(resource_store.path, resource_store_snapshot)
         collaboration_root = factory_artifact_path("collaboration")
         collaboration_root.mkdir(parents=True, exist_ok=True)
         dependency_pool = dependency_pool_path()
@@ -214,9 +220,9 @@ class DockerAgentRuntimeLauncher:
                         network=network,
                         env=env,
                         service_env=service_env,
-                        model_pool_path=model_pool_path,
+                        model_pool_path=model_pool_snapshot,
                         collaboration_root=collaboration_root,
-                        resource_store=resource_store,
+                        resource_store_path=resource_store_snapshot,
                         dependency_pool=dependency_pool,
                         mcp_gateway_url=mcp_gateway_url,
                         skillhub_gateway_url=skillhub_gateway_url,
@@ -247,9 +253,7 @@ class DockerAgentRuntimeLauncher:
             f"{artifacts_root.resolve()}:/artifacts:rw",
             f"{workdir_root.resolve()}:/workdir:rw",
             f"{runtime_root.resolve()}:/runtime:rw",
-            f"{model_pool_path.parent.resolve()}:/model_pool:ro",
             f"{collaboration_root.resolve()}:{CONTAINER_COLLABORATION_ROOT}:rw",
-            f"{resource_store.path.parent.resolve()}:/resource_store:ro",
             f"{dependency_pool}:{CONTAINER_DEPENDENCY_POOL_ROOT}:ro",
         ]
         try:
@@ -314,7 +318,7 @@ class DockerAgentRuntimeLauncher:
         service_env: dict[str, str],
         model_pool_path: Path,
         collaboration_root: Path,
-        resource_store: ResourceStore,
+        resource_store_path: Path,
         dependency_pool: Path,
         mcp_gateway_url: str | None,
         skillhub_gateway_url: str | None,
@@ -328,7 +332,7 @@ class DockerAgentRuntimeLauncher:
                 "extension": runtime_container_path(extension_root),
                 "model_pool": runtime_container_path(model_pool_path),
                 "collaboration": runtime_container_path(collaboration_root),
-                "resource_store": runtime_container_path(resource_store.path),
+                "resource_store": runtime_container_path(resource_store_path),
             }
         except ValueError as exc:
             raise _SharedRuntimeIncompatible(str(exc)) from exc
@@ -684,6 +688,34 @@ class SharedRuntimeLease:
 
 class _SharedRuntimeIncompatible(RuntimeError):
     pass
+
+
+def _refresh_sqlite_snapshot(source: Path, target: Path) -> None:
+    """Create an atomic, transactionally consistent runtime read snapshot."""
+
+    source_path = source.expanduser().resolve()
+    target_path = target.expanduser().resolve()
+    if not source_path.is_file():
+        raise AgentRuntimeLaunchError(
+            where="docker.control_plane_snapshot",
+            why="source_database_missing",
+            message=f"Runtime control-plane database is not initialized: {source_path}",
+        )
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = target_path.with_suffix(target_path.suffix + ".tmp")
+    temporary_path.unlink(missing_ok=True)
+    try:
+        with sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True) as source_conn:
+            with sqlite3.connect(temporary_path) as target_conn:
+                source_conn.backup(target_conn)
+        temporary_path.replace(target_path)
+    except Exception as exc:
+        temporary_path.unlink(missing_ok=True)
+        raise AgentRuntimeLaunchError(
+            where="docker.control_plane_snapshot",
+            why="snapshot_failed",
+            message=f"Failed to snapshot runtime control-plane database {source_path}: {exc}",
+        ) from exc
 
 
 def _assert_package_runtime_workspace(
