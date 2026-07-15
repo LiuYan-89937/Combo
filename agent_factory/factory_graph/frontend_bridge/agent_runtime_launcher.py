@@ -161,6 +161,12 @@ class DockerAgentRuntimeLauncher:
             source_extension_root=extension_root,
             runtime_root=runtime_root,
         )
+        _assert_package_runtime_workspace(
+            runtime_root=runtime_root,
+            artifacts_root=artifacts_root,
+            workdir_root=workdir_root,
+            extension_root=extension_root,
+        )
         input_files_root = workdir_root / ATTACHMENT_INPUT_DIR
         input_files_root.mkdir(parents=True, exist_ok=True)
         service_env = self._service_environment(sandbox)
@@ -678,6 +684,33 @@ class SharedRuntimeLease:
 
 class _SharedRuntimeIncompatible(RuntimeError):
     pass
+
+
+def _assert_package_runtime_workspace(
+    *,
+    runtime_root: Path,
+    artifacts_root: Path,
+    workdir_root: Path,
+    extension_root: Path,
+) -> None:
+    root = runtime_root.resolve()
+    for field_name, path in (
+        ("artifacts_root", artifacts_root),
+        ("workdir_root", workdir_root),
+        ("extension_root", extension_root),
+    ):
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise AgentRuntimeLaunchError(
+                where="docker.runtime_workspace",
+                why="writable_path_outside_package_runtime",
+                message=(
+                    f"{field_name} must resolve inside the package runtime workspace: "
+                    f"root={root}, path={resolved}"
+                ),
+            ) from exc
 
 
 class _SharedDockerRuntime:

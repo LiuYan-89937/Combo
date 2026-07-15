@@ -16,10 +16,8 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import interrupt_payload
 from agent_factory.runtime_contracts import LoadedAgentPackage, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
-from agent_factory.runtime_contracts.paths import instance_checkpoint_path
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager, WorkerLifecycleEvent
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
-from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig
 from agent_factory.runtime_kernel.session import AgentSessionConfig
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
@@ -28,7 +26,6 @@ from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.management import manage_scheduler_runtime
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
-from agent_factory.memory_system import default_agent_memory_config
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
 from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
@@ -223,15 +220,7 @@ class PackageRuntimeCore:
                 runtime_root=self.runtime_root,
                 package_root=self.package.package_root,
             )
-            facade = RuntimeKernelFacade(
-                checkpointer_config=LangGraphCheckpointerConfig(
-                    backend="sqlite",
-                    path=instance_checkpoint_path(
-                        runtime_root / "checkpoints" / "agent.sqlite",
-                        self.runtime_instance_id,
-                    ),
-                ),
-                memory_system_config=_runtime_memory_config(runtime_root),
+            facade = RuntimeKernelFacade.for_contract_runtime(
                 session_config=AgentSessionConfig(root=runtime_root / "sessions"),
             )
             runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
@@ -959,21 +948,6 @@ def _runtime_workspace_root(*, runtime_root: Path | None, package_root: Path) ->
     if runtime_root is not None:
         return runtime_root
     return (package_root / ".agent_runtime").resolve()
-
-
-def _runtime_memory_config(runtime_root: Path):
-    config = default_agent_memory_config()
-    return config.model_copy(
-        update={
-            "store": config.store.model_copy(
-                update={"path": str(runtime_root / "memory" / "agent.sqlite")}
-            ),
-            "background": config.background.model_copy(
-                update={"journal_root": str(runtime_root / "memory" / "jobs")}
-            ),
-        },
-        deep=True,
-    )
 
 
 def _extract_interrupt_payload(chunk: Any) -> Any | None:

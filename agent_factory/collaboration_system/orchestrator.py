@@ -323,7 +323,7 @@ class CollaborationOrchestrator:
             task_id,
             {"assignee_session_id": assignee_session_id},
         )
-        worker_workdir = self.runtime.session_workdir_for_package(package_id, assignee_session_id)
+        worker_workdir = self.runtime.workdir_for_package(package_id)
         shared_materials = _materialize_authorized_artifacts(
             shared_workspace=self.store.session_workdir(collaboration_id),
             worker_workdir=worker_workdir,
@@ -433,7 +433,7 @@ class CollaborationOrchestrator:
             raise ValueError("task assignee_package_id is required")
         if not assignee_session_id:
             raise ValueError("blocked task does not have an assignee_session_id")
-        worker_workdir = self.runtime.session_workdir_for_package(package_id, assignee_session_id)
+        worker_workdir = self.runtime.workdir_for_package(package_id)
         before_snapshot = _workspace_snapshot(worker_workdir)
         output = VisibleAssistantOutputAccumulator()
         event_recorder = CollaborationWorkerEventRecorder(

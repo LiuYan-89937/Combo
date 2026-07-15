@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
+import threading
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -19,7 +20,6 @@ from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
-from agent_factory.runtime_contracts.paths import instance_checkpoint_path
 from agent_factory.mcp_gateway import HostMCPGatewayManager
 from agent_factory.skillhub_gateway import HostSkillHubGatewayManager
 from agent_factory.package_runtime import host_runtime_package_view
@@ -43,10 +43,6 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
     runtime_container_path,
     shutdown_shared_runtime,
 )
-from agent_factory.factory_graph.frontend_bridge.container_pool import (
-    get_global_container_pool,
-    shutdown_global_container_pool,
-)
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
     AgentPackageRepository,
 )
@@ -59,8 +55,8 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_extensions import
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     extension_root_for_package as _extension_root_for_package,
     host_runtime_root as _host_runtime_root,
-    host_scratch_workdir as _host_scratch_workdir,
-    host_session_workdir as _host_session_workdir,
+    package_runtime_workspace as _package_runtime_workspace,
+    host_package_workdir as _host_package_workdir,
     host_session_root as _host_session_root,
     is_host_system_package as _is_host_system_package,
     is_system_package as _is_system_package,
@@ -134,6 +130,7 @@ class AgentPackageRuntimeManager:
         )
         self._containers: dict[str, AgentRuntimeContainerHandle] = {}
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
+        self._runtime_handle_lock = threading.RLock()
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
         self._skillhub_gateways = HostSkillHubGatewayManager()
@@ -141,13 +138,6 @@ class AgentPackageRuntimeManager:
         self.resource_store = ResourceStore()
         self._resource_migration = self._migrate_package_resources()
         self._environment_preparation_errors: dict[str, str] = {}
-
-        # 容器池支持（可通过环境变量禁用）
-        self._use_container_pool = _env_int("AGENTFACTORY_USE_CONTAINER_POOL", 1) == 1
-        if self._use_container_pool:
-            self._container_pool = get_global_container_pool()
-        else:
-            self._container_pool = None
 
     def set_emit(self, emit: Emit | None) -> None:
         self._emit = emit
@@ -246,8 +236,8 @@ class AgentPackageRuntimeManager:
     def runtime_root_for_package(self, package_id: str) -> Path:
         return _host_runtime_root(package_id)
 
-    def session_workdir_for_package(self, package_id: str, session_id: str) -> Path:
-        return _host_session_workdir(package_id, session_id)
+    def workdir_for_package(self, package_id: str) -> Path:
+        return _host_package_workdir(package_id)
 
     def list_instance_statuses(self) -> list[dict[str, Any]]:
         package_ids = {item.get("package_id") for item in self.list_packages()}
@@ -414,20 +404,10 @@ class AgentPackageRuntimeManager:
         *,
         session_id: str,
     ) -> bool:
-        clean_session_id = str(session_id or "").strip()
-        if not clean_session_id:
-            return False
-        package = self.load_package(package_id)
-        runtime_key = f"{package_id}:session:{clean_session_id}"
-        if _is_host_system_package(package):
-            if runtime_key not in self._system_handles:
-                return False
-            self._close_system(runtime_key)
-            return True
-        if runtime_key not in self._containers:
-            return False
-        self._close_container(runtime_key)
-        return True
+        del package_id, session_id
+        # A session does not own a runtime process. The package runtime remains
+        # alive so other sessions and persistent package state are unaffected.
+        return False
 
     def scheduler_events(
         self,
@@ -547,7 +527,6 @@ class AgentPackageRuntimeManager:
             session_id=result.record.session_id,
             thread_id=result.record.thread_id,
         )
-        deleted_workdir = _delete_session_workdir(package_id, result.record.session_id)
         collaboration_unlink = CollaborationStore().unlink_runtime_session(
             package_id=package_id,
             session_id=result.record.session_id,
@@ -558,7 +537,7 @@ class AgentPackageRuntimeManager:
             "deleted": True,
             "deleted_trace_count": result.deleted_trace_count,
             "deleted_checkpoint_count": deleted_checkpoint_count,
-            "deleted_workdir": deleted_workdir,
+            "deleted_workdir": False,
             "collaboration_unlink": collaboration_unlink,
             "cancelled_active_request_count": cancelled_active_request_count,
             "sessions": self._list_sessions_for_loaded_package(package),
@@ -811,7 +790,7 @@ class AgentPackageRuntimeManager:
                 agent_group_id=agent_group_id,
                 visible_in_agent_session_list=visible_in_agent_session_list,
             )
-        resolved_workdir_root = workdir_root or self.session_workdir_for_package(package_id, session.session_id)
+        resolved_workdir_root = workdir_root or self.workdir_for_package(package_id)
         attachment_result = self._prepare_runtime_attachments(
             package_id=package_id,
             package=package,
@@ -889,7 +868,7 @@ class AgentPackageRuntimeManager:
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
-        resolved_workdir_root = workdir_root or self.session_workdir_for_package(package_id, session.session_id)
+        resolved_workdir_root = workdir_root or self.workdir_for_package(package_id)
         command = {
             "type": "resume_interrupt",
             "request_id": request_id or uuid4().hex,
@@ -1014,8 +993,6 @@ class AgentPackageRuntimeManager:
             self._close_system(runtime_key)
         self._mcp_gateways.close_all()
         self._skillhub_gateways.close_all()
-        if self._use_container_pool:
-            shutdown_global_container_pool()
         shutdown_shared_runtime()
 
     def cancel_active_requests(
@@ -1224,65 +1201,25 @@ class AgentPackageRuntimeManager:
         workdir_root: Path | None = None,
     ) -> "AgentRuntimeContainerHandle":
         fingerprint = _runtime_fingerprint(package_id, package)
-
-        # 如果启用容器池，优先从池中获取
-        if self._use_container_pool and self._container_pool is not None and workdir_root is None:
-            # 检查当前 runtime_key 是否已有活跃容器
+        with self._runtime_handle_lock:
             existing = self._containers.get(runtime_key)
             if (
                 existing is not None
                 and existing.is_running
                 and existing.package_fingerprint == fingerprint
+                and not existing.is_idle(self.idle_timeout_seconds)
             ):
                 return existing
-
-            if existing is not None:
-                self._close_container(runtime_key)
-
-            # 从池中获取或创建容器
-            def create_container_for_pool():
-                return self._create_container_handle(
-                    package_id,
-                    package,
-                    fingerprint,
-                    runtime_key,
-                    workdir_root,
-                )
-
-            try:
-                handle = self._container_pool.acquire(
-                    package_id=package_id,
-                    package_fingerprint=fingerprint,
-                    runtime_instance_id=runtime_key,
-                    create_fn=create_container_for_pool,
-                )
-                # 将容器关联到当前 runtime_key
-                self._containers[runtime_key] = handle
-                return handle
-            except Exception:
-                # 池获取失败，回退到传统方式
-                pass
-
-        # 传统方式：每个 session 独立容器
-        existing = self._containers.get(runtime_key)
-        if (
-            existing is not None
-            and existing.is_running
-            and existing.package_fingerprint == fingerprint
-            and not existing.is_idle(self.idle_timeout_seconds)
-        ):
-            return existing
-
-        self._close_container(runtime_key)
-        handle = self._create_container_handle(
-            package_id,
-            package,
-            fingerprint,
-            runtime_key,
-            workdir_root,
-        )
-        self._containers[runtime_key] = handle
-        return handle
+            self._close_container(runtime_key)
+            handle = self._create_container_handle(
+                package_id,
+                package,
+                fingerprint,
+                runtime_key,
+                workdir_root,
+            )
+            self._containers[runtime_key] = handle
+            return handle
 
     def _create_container_handle(
         self,
@@ -1292,10 +1229,11 @@ class AgentPackageRuntimeManager:
         runtime_instance_id: str,
         workdir_root: Path | None,
     ) -> "AgentRuntimeContainerHandle":
-        """创建新的容器 handle（提取为独立方法供池使用）"""
-        runtime_root = _host_runtime_root(package_id)
-        artifacts_root = runtime_root / "artifacts" / uuid4().hex
-        workdir_root = workdir_root or _host_scratch_workdir(package_id)
+        """Create the package's single logical runtime bridge."""
+        workspace = _package_runtime_workspace(package_id).ensure()
+        runtime_root = workspace.root
+        artifacts_root = workspace.artifacts
+        workdir_root = workspace.workdir
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
@@ -1344,51 +1282,53 @@ class AgentPackageRuntimeManager:
         runtime_key: str,
         workdir_root: Path | None = None,
     ) -> "SystemPackageRuntimeHandle":
-        existing = self._system_handles.get(runtime_key)
-        fingerprint = _runtime_fingerprint(package_id, package)
-        if (
-            existing is not None
-            and existing.package_fingerprint == fingerprint
-            and not existing.is_idle(self.idle_timeout_seconds)
-        ):
-            return existing
-        self._close_system(runtime_key)
-        runtime_root = _host_runtime_root(package_id)
-        artifacts_root = runtime_root / "artifacts"
-        workdir_root = workdir_root or _host_scratch_workdir(package_id)
-        extension_root = _extension_root_for_package(package_id, package)
-        for path in (artifacts_root, workdir_root, runtime_root, extension_root):
-            path.mkdir(parents=True, exist_ok=True)
-        host_package = host_runtime_package_view(
-            package,
-            runtime_root=runtime_root,
-            artifacts_root=artifacts_root,
-            workdir_root=workdir_root,
-            extension_root=extension_root,
-        )
-        handle = SystemPackageRuntimeHandle(
-            package_id=package_id,
-            package=host_package,
-            package_fingerprint=fingerprint,
-            runtime_root=runtime_root,
-            runtime_instance_id=runtime_key,
-            instance_extension_root=extension_root,
-            idle_timeout_seconds=self.idle_timeout_seconds,
-            request_policy=self.request_policy,
-            producer_type="factory_runtime" if _is_system_package(package) else "agent_runtime_host",
-            emit=self._emit,
-        )
-        handle.startup_payload = {
-            "status": "running",
-            "backend": "host",
-            "package_id": package_id,
-            "runtime_root": str(runtime_root),
-            "artifact_root": str(artifacts_root),
-            "workdir": str(workdir_root),
-            "extension_root": str(extension_root),
-        }
-        self._system_handles[runtime_key] = handle
-        return handle
+        with self._runtime_handle_lock:
+            existing = self._system_handles.get(runtime_key)
+            fingerprint = _runtime_fingerprint(package_id, package)
+            if (
+                existing is not None
+                and existing.package_fingerprint == fingerprint
+                and not existing.is_idle(self.idle_timeout_seconds)
+            ):
+                return existing
+            self._close_system(runtime_key)
+            workspace = _package_runtime_workspace(package_id).ensure()
+            runtime_root = workspace.root
+            artifacts_root = workspace.artifacts
+            workdir_root = workspace.workdir
+            extension_root = _extension_root_for_package(package_id, package)
+            for path in (artifacts_root, workdir_root, runtime_root, extension_root):
+                path.mkdir(parents=True, exist_ok=True)
+            host_package = host_runtime_package_view(
+                package,
+                runtime_root=runtime_root,
+                artifacts_root=artifacts_root,
+                workdir_root=workdir_root,
+                extension_root=extension_root,
+            )
+            handle = SystemPackageRuntimeHandle(
+                package_id=package_id,
+                package=host_package,
+                package_fingerprint=fingerprint,
+                runtime_root=runtime_root,
+                runtime_instance_id=runtime_key,
+                instance_extension_root=extension_root,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                request_policy=self.request_policy,
+                producer_type="factory_runtime" if _is_system_package(package) else "agent_runtime_host",
+                emit=self._emit,
+            )
+            handle.startup_payload = {
+                "status": "running",
+                "backend": "host",
+                "package_id": package_id,
+                "runtime_root": str(runtime_root),
+                "artifact_root": str(artifacts_root),
+                "workdir": str(workdir_root),
+                "extension_root": str(extension_root),
+            }
+            self._system_handles[runtime_key] = handle
+            return handle
 
     def _has_reusable_container(self, runtime_key: str, package: LoadedAgentPackage) -> bool:
         existing = self._containers.get(runtime_key)
@@ -1420,22 +1360,20 @@ class AgentPackageRuntimeManager:
         )
 
     def _close_container(self, runtime_key: str) -> None:
-        handle = self._containers.pop(runtime_key, None)
-        package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
-        self._instance_status_overrides.pop(package_id, None)
-        if handle is not None:
-            # 如果启用容器池，释放回池而不是直接关闭
-            if self._use_container_pool and self._container_pool is not None:
-                self._container_pool.release(handle)
-            else:
+        with self._runtime_handle_lock:
+            handle = self._containers.pop(runtime_key, None)
+            package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
+            self._instance_status_overrides.pop(package_id, None)
+            if handle is not None:
                 handle.close()
 
     def _close_system(self, runtime_key: str) -> None:
-        handle = self._system_handles.pop(runtime_key, None)
-        package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
-        self._instance_status_overrides.pop(package_id, None)
-        if handle is not None:
-            handle.close()
+        with self._runtime_handle_lock:
+            handle = self._system_handles.pop(runtime_key, None)
+            package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
+            self._instance_status_overrides.pop(package_id, None)
+            if handle is not None:
+                handle.close()
 
     def _close_package_containers(self, package_id: str) -> None:
         for runtime_key, handle in list(self._containers.items()):
@@ -1478,21 +1416,12 @@ def _scoped_runtime_event(chunk: Any, *, package_id: str) -> FactoryFrontendEven
 
 
 def _runtime_handle_key(package_id: str, command: dict[str, Any]) -> str:
-    payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
-    session_id = str(payload.get("session_id") or "").strip()
-    return f"{package_id}:session:{session_id}" if session_id else f"{package_id}:package"
+    del command
+    return package_id
 
 
 def _runtime_key_package_id(runtime_key: str) -> str:
     return runtime_key.split(":", 1)[0]
-
-
-def _delete_session_workdir(package_id: str, session_id: str) -> bool:
-    workdir = _host_session_workdir(package_id, session_id)
-    if not workdir.exists():
-        return False
-    shutil.rmtree(workdir)
-    return True
 
 
 def _package_fingerprint(package: LoadedAgentPackage) -> str:
@@ -1605,7 +1534,6 @@ def _delete_agent_session_checkpoint(
         return 0
     checkpoint_path = str(config.get("checkpoint_path") or ".agent_runtime/checkpoints/agent.sqlite").strip()
     path = _runtime_contract_path(_host_runtime_root(package_id), checkpoint_path)
-    path = instance_checkpoint_path(path, f"{package_id}:session:{session_id}")
     return 1 if delete_sqlite_checkpoint_thread(path, thread_id) else 0
 
 
