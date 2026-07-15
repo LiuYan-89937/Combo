@@ -1,9 +1,9 @@
 {
   "version": "environment_lock.v3",
   "status": "ready",
-  "request_fingerprint": "e70fe121fa7541c82411115adc32ad8c04b6fc2631a0dfd4df54ee8dcf2915f0",
+  "request_fingerprint": "2b9b402826ad844c32aa55e790e3c086914f1b21f435625523c65f5db9471962",
   "image": "agentfactory-runtime-python:3.12",
-  "image_digest": "",
+  "image_digest": "sha256:3eb24014a420b605784ba5d0158355bcdbd799e12429c37b109cd60da91b7002",
   "platform": {
     "os": "linux",
     "architecture": ""
@@ -11,7 +11,7 @@
   "requirements": {
     "enabled": true,
     "base_image": "agentfactory-runtime-python:3.12",
-    "base_digest": "",
+    "base_digest": "sha256:3eb24014a420b605784ba5d0158355bcdbd799e12429c37b109cd60da91b7002",
     "architecture": "",
     "python_requirements": [],
     "system_packages": [],
@@ -30,5 +30,5 @@
     "system_entries": [],
     "npm_profile": null
   },
-  "verified_at": "2026-07-13T03:12:19.016977+00:00"
+  "verified_at": "2026-07-15T11:57:53.637921+00:00"
 }
