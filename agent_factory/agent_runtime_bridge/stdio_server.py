@@ -109,9 +109,10 @@ class BridgeRuntimeState:
             )
             return 0
         if command_type == "initialize_runtime":
-            if not self._ensure_sandbox_initialized(normalizer):
-                return 1
+            package: LoadedAgentPackage | None = None
             try:
+                package = self._load_package()
+                self._ensure_sandbox_initialized(normalizer)
                 runtime = self._ensure_compiled(normalizer)
                 normalizer.runtime_event(
                     "agent_package_instance_updated",
@@ -122,13 +123,16 @@ class BridgeRuntimeState:
                 normalizer.runtime_event(
                     "agent_package_instance_updated",
                     severity="error",
-                    payload=_instance_status_payload(status="failed", error=f"{type(exc).__name__}: {exc}"),
+                    payload=_instance_status_payload(
+                        package=package,
+                        status="failed",
+                        error=f"{type(exc).__name__}: {exc}",
+                    ),
                 )
                 return 1
         if command_type == "scheduler_manage":
-            if not self._ensure_sandbox_initialized(normalizer):
-                return 1
             try:
+                self._ensure_sandbox_initialized(normalizer)
                 runtime = self._ensure_compiled(normalizer)
                 _manage_scheduler(normalizer=normalizer, payload=payload, runtime=runtime)
                 return 0
@@ -146,8 +150,7 @@ class BridgeRuntimeState:
             return _list_sessions(normalizer, self._load_package())
         try:
             if command_type in {"run_message", "resume_interrupt", "run_harness"}:
-                if not self._ensure_sandbox_initialized(normalizer):
-                    return 1
+                self._ensure_sandbox_initialized(normalizer)
                 runtime = self._ensure_compiled(normalizer)
                 if command_type == "run_message":
                     return _run_message(normalizer, payload, runtime, cancel_token=cancel_token)
@@ -216,12 +219,12 @@ class BridgeRuntimeState:
                 )
             )
 
-    def _ensure_sandbox_initialized(self, normalizer: RuntimeEventNormalizer) -> bool:
+    def _ensure_sandbox_initialized(self, normalizer: RuntimeEventNormalizer) -> None:
         if self.sandbox_initialized:
-            return True
+            return
         with self.sandbox_lock:
             if self.sandbox_initialized:
-                return True
+                return
             self._load_package()
             normalizer.runtime_event(
                 "node_started",
@@ -254,14 +257,14 @@ class BridgeRuntimeState:
                 dependency_status = activate_runtime_dependencies()
             except RuntimeDependencyError as exc:
                 normalizer.runtime_event(
-                    "node_completed",
+                    "node_failed",
                     node_id="sandbox_init",
                     node_label="Sandbox Init",
                     node_kind="system",
                     severity="error",
                     payload={"status": "failed", "source": "dependency_pool", "message": str(exc)},
                 )
-                return False
+                raise
             normalizer.runtime_event(
                 "node_completed",
                 node_id="sandbox_init",
@@ -270,7 +273,6 @@ class BridgeRuntimeState:
                 payload={"status": "complete", **dependency_status},
             )
             self.sandbox_initialized = True
-            return True
 
     def _ensure_compiled(self, normalizer: RuntimeEventNormalizer) -> CompiledRuntime:
         if self.compiled_runtime is not None:
@@ -549,15 +551,25 @@ def _knowledge_event_sink(payload: dict[str, Any]) -> None:
     normalizer.emit_custom_event({"type": "knowledge_event", "payload": _normalized_knowledge_payload(payload)})
 
 
-def _instance_status_payload(*, runtime: CompiledRuntime, status: str) -> dict[str, Any]:
-    return {
-        "package_id": runtime.package.package_root.name,
-        "agent_id": runtime.package.assembly_spec.agent.id,
-        "agent_name": runtime.package.assembly_spec.agent.name,
+def _instance_status_payload(
+    *,
+    status: str,
+    runtime: CompiledRuntime | None = None,
+    package: LoadedAgentPackage | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    resolved_package = runtime.package if runtime is not None else package
+    payload = {
+        "package_id": resolved_package.package_root.name if resolved_package is not None else PACKAGE_ROOT.name,
+        "agent_id": resolved_package.assembly_spec.agent.id if resolved_package is not None else PACKAGE_ROOT.name,
+        "agent_name": resolved_package.assembly_spec.agent.name if resolved_package is not None else PACKAGE_ROOT.name,
         "backend": "container",
         "status": status,
         "ready": status == "ready",
     }
+    if error:
+        payload["error"] = error
+    return payload
 
 
 def _manage_scheduler(

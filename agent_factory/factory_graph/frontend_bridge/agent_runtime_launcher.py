@@ -26,7 +26,11 @@ from agent_factory.environment_system import (
     dependency_pool_path,
     resolve_runtime_image,
 )
-from agent_factory.environment_system.runtime import CONTAINER_DEPENDENCY_POOL_ROOT, runtime_environment
+from agent_factory.environment_system.runtime import (
+    CONTAINER_DEPENDENCY_POOL_ROOT,
+    ENVIRONMENT_LOCK_PATH_ENV,
+    runtime_environment,
+)
 from agent_factory.resource_system import ResourceStore
 from agent_factory.resource_system.store import RESOURCE_MASTER_KEY_ENV, RESOURCE_STORE_PATH_ENV, RESOURCE_STORE_READ_ONLY_ENV
 from agent_factory.runtime_contracts import LoadedAgentPackage
@@ -303,6 +307,7 @@ class DockerAgentRuntimeLauncher:
         logical_env = dict(env)
         logical_env.update(
             {
+                ENVIRONMENT_LOCK_PATH_ENV: str(container_paths["package"] / "environment.lock.json"),
                 MODEL_POOL_STORE_PATH_ENV: str(container_paths["model_pool"]),
                 "AGENTFACTORY_COLLABORATION_ROOT": str(container_paths["collaboration"]),
                 RESOURCE_STORE_PATH_ENV: str(container_paths["resource_store"]),
@@ -342,6 +347,7 @@ class DockerAgentRuntimeLauncher:
                 "isolation": "logical",
                 "shared_container_id": shared.container_id,
                 "context_paths": {key: str(value) for key, value in container_paths.items()},
+                "environment_lock_path": logical_env[ENVIRONMENT_LOCK_PATH_ENV],
             },
             isolation="logical",
             shared_container_id=shared.container_id,
