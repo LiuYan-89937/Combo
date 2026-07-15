@@ -70,9 +70,9 @@ def count_messages_tokens(
             model_role=model_role,
         )
     try:
-        method = "model_tokenizer_messages_only" if tools else "model_tokenizer"
+        method = "model_tokenizer_with_tools" if tools else "model_tokenizer"
         return TokenCountResult(
-            token_count=int(counter(normalized)),
+            token_count=int(counter(normalized, tools=tools)),
             method=method,
             model_role=model_role,
         )

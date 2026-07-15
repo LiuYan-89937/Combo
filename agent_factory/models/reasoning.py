@@ -109,12 +109,10 @@ def apply_reasoning_intensity(settings: Any, intensity: int) -> Any:
             reasoning=replace(current, enabled=False, effort=None, budget_tokens=None),
         )
 
-    profile = getattr(settings, "profile", None)
-    capabilities = getattr(profile, "capabilities", None)
-    if capabilities is None or not capabilities.supports_reasoning():
+    if not bool(getattr(settings, "reasoning_supported", False)):
         raise ValueError("the selected model does not support reasoning")
 
-    efforts = tuple(getattr(capabilities, "reasoning_efforts", ()) or ())
+    efforts = tuple(getattr(settings, "reasoning_efforts", ()) or ())
     effort = _effort_for_intensity(efforts, level)
     budget_tokens = _budget_for_intensity(settings, efforts, current, level)
     return replace(

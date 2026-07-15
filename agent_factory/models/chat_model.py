@@ -26,6 +26,8 @@ class ChatModelSettings:
     multimodal: bool = False
     tool_calling: bool = True
     strict_tool_schema: bool = False
+    reasoning_supported: bool = False
+    reasoning_efforts: tuple[str, ...] = ()
     reasoning: ModelReasoningSettings = field(default_factory=ModelReasoningSettings)
     structured_output_method: StructuredOutputMethod | None = None
 
@@ -56,7 +58,8 @@ class ChatModelSettings:
                 "summary": self.reasoning.summary,
                 "budget_tokens": self.reasoning.budget_tokens,
                 "send_history": self.reasoning.send_history,
-                "supported": True if self.reasoning.enabled is not None else None,
+                "supported": self.reasoning_supported,
+                "efforts": list(self.reasoning_efforts),
             },
             "capabilities": {
                 "tools": {
@@ -127,6 +130,8 @@ def settings_from_local_profile(profile: Any, *, role: str) -> ChatModelSettings
         multimodal="image" in capabilities.input_modalities,
         tool_calling=bool(capabilities.tool_calling),
         strict_tool_schema=bool(capabilities.strict_tool_schema),
+        reasoning_supported=bool(capabilities.reasoning_supported),
+        reasoning_efforts=tuple(capabilities.reasoning_efforts),
         reasoning=ModelReasoningSettings(enabled=True if capabilities.reasoning_supported else None),
         structured_output_method=(
             capabilities.structured_output_methods[0]

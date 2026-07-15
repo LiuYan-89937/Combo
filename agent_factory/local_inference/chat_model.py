@@ -15,6 +15,7 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
     ToolMessage,
+    get_buffer_string,
 )
 from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
@@ -207,6 +208,28 @@ class LocalLlamaCppChatModel(BaseChatModel):
         if not isinstance(tokens, list) or not all(isinstance(token, int) for token in tokens):
             raise ValueError("llama-server tokenize response does not contain integer tokens")
         return tokens
+
+    def get_num_tokens_from_messages(
+        self,
+        messages: list[BaseMessage],
+        tools: Sequence[Any] | None = None,
+    ) -> int:
+        if not messages and not tools:
+            return 0
+        rendered = get_buffer_string(messages)
+        if tools:
+            rendered = "\n\n".join(
+                (
+                    rendered,
+                    "Tools:\n"
+                    + json.dumps(
+                        [convert_to_openai_tool(tool) for tool in tools],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            )
+        return len(self.get_token_ids(rendered))
 
 
 def _message_payload(message: BaseMessage) -> dict[str, Any]:
