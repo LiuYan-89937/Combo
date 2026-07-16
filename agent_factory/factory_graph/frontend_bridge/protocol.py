@@ -8,6 +8,8 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent_factory.event_persistence import EventPersistence, event_persistence
+
 
 _PROTOCOL_CATALOG_PATH = Path(__file__).with_name("protocol_catalog.json")
 _PROTOCOL_CATALOG = json.loads(_PROTOCOL_CATALOG_PATH.read_text(encoding="utf-8"))
@@ -57,6 +59,7 @@ class FactoryFrontendEvent(BaseModel):
     event_id: str
     protocol_version: str = FACTORY_FRONTEND_EVENT_PROTOCOL_VERSION
     event_type: FactoryFrontendEventType
+    persistence: EventPersistence = "durable"
     producer_type: str = "factory_runtime"
     request_id: str | None = None
     run_id: str | None = None
@@ -79,7 +82,8 @@ class FactoryFrontendEvent(BaseModel):
 
     @model_validator(mode="after")
     def _derive_process_event(self) -> "FactoryFrontendEvent":
-        self.process_event = self.event_type in FRONTEND_PROCESS_EVENT_TYPES
+        self.persistence = event_persistence(self.event_type)
+        self.process_event = self.persistence == "durable" and self.event_type in FRONTEND_PROCESS_EVENT_TYPES
         return self
 
     @field_validator("event_type")

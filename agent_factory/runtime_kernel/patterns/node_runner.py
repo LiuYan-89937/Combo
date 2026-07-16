@@ -104,7 +104,8 @@ def make_wrapped_runner(
             )
             services.observability_manager.emit(event)
             emit_runtime_node_event(event)
-            emitted_events.append(event.model_dump(mode="json"))
+            if event.persistence == "durable":
+                emitted_events.append(event.model_dump(mode="json"))
             if trace_recorder is not None:
                 trace_recorder.record_event(
                     trace_id=state.observability.trace_id,

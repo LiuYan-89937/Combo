@@ -36,7 +36,7 @@ class RuntimeEventJournal:
         if event_type in SESSION_DELETION_EVENTS:
             self.delete(_session_id_from_event(prepared))
             return prepared
-        if bool(prepared.get("process_event")):
+        if prepared.get("persistence") != "transient" and bool(prepared.get("process_event")):
             self.append(prepared)
         if event_type in FACTORY_SESSION_SNAPSHOT_EVENTS:
             return self._hydrate_factory_snapshot(prepared)
