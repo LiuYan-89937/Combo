@@ -13,28 +13,20 @@
         "SEARXNG_URL": "http://127.0.0.1:8888",
         "SEARXNG_AUTO_START": "true",
         "SEARXNG_DOCKER_PORT": "8888",
-        "DEFAULT_SEARCH_ENGINE": "searxng",
+        "DEFAULT_SEARCH_ENGINE": "tavily",
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost"
       },
       "source": {
         "type": "local",
         "path": "../../.agentfactory/mcp/web_search",
-        "url": "https://github.com/LiuYan-89937/WebSearchApi",
+        "url": "https://github.com/LiuYan-89937/BigOpenLLMSearch",
         "package": "bigopen-llm-search"
       },
       "enabled": true,
       "required": false,
       "tool_id_prefix": "bigopen",
       "risk_level_default": "medium",
-      "tool_input_property_enums": {
-        "web_search": {
-          "engine": [
-            "searxng",
-            "duckduckgo"
-          ]
-        }
-      },
       "tool_loop_policies": {
         "web_search": {
           "max_calls": 12,

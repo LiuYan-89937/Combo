@@ -165,6 +165,7 @@ SSH_KEY=
 | `CHAT_FLASH_ATTENTION` | Flash Attention | `1`，开启 |
 | `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS` | 子 Agent 事件触发主 Agent 恢复前的短聚合窗口 | `0.75` 秒 |
 | `AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` | 单次主 Agent 恢复最多合并的原始事件数 | `64` |
+| `TAVILY_API_KEY` | 内置 `web_search` 的 Tavily Provider 密钥；只配置在本机 `.env`，由 MCP 子进程继承 | 留空时回退到 SearXNG/DuckDuckGo |
 | `REMOTE_INSTALL_BUILD_TOOLS` | 缺少普通工具时允许 apt 安装 | `1` |
 | `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
 | `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
