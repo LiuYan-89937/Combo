@@ -3,7 +3,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from hashlib import sha256
-import json
 import mimetypes
 import os
 from pathlib import Path, PurePosixPath
@@ -17,7 +16,6 @@ from agent_factory.collaboration_runtime_policy import collaboration_runtime_too
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.collaboration_system.store import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
-from agent_factory.factory_graph.frontend_bridge.agent_package_paths import host_runtime_root
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.file_utils import file_sha256
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import VisibleAssistantOutputAccumulator
@@ -227,7 +225,6 @@ class CollaborationOrchestrator:
                 reasoning_content=output.reasoning_content,
                 status=status,
                 tool_activities=tool_activities,
-                trace_ref=_latest_trace_ref(package_id),
             )
             if package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
                 factory_record = _sync_factory_chat_session_from_agent_session(
@@ -922,7 +919,6 @@ class CollaborationOrchestrator:
             reasoning_content=output.reasoning_content,
             status=status,
             tool_activities=tool_activities,
-            trace_ref=_latest_trace_ref(package_id),
         )
 
 
@@ -990,52 +986,6 @@ def _sync_factory_chat_session_from_agent_session(
             [turn for turn in turns if isinstance(turn, dict)],
         )
     return manager.start_turn(factory_session_id, "chat", request_id=request_id, user_input=user_input)
-
-
-def _latest_trace_ref(package_id: str) -> dict[str, str] | None:
-    trace_root = host_runtime_root(package_id) / "trace"
-    runs_root = trace_root / "runs"
-    if not runs_root.is_dir():
-        return None
-    trace_dirs = [path for path in runs_root.iterdir() if path.is_dir() and _is_safe_path_id(path.name)]
-    if not trace_dirs:
-        return None
-    latest = max(trace_dirs, key=lambda path: path.stat().st_mtime)
-    manifest_path = latest / "manifest.json"
-    run_id = ""
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            manifest = {}
-        if isinstance(manifest, dict):
-            run_id = str(manifest.get("run_id") or "").strip()
-    if not run_id:
-        run_id = _latest_trace_run_id(latest / "trace.jsonl")
-    return {
-        "trace_id": latest.name,
-        "trace_root": str(trace_root),
-        **({"run_id": run_id} if run_id else {}),
-    }
-
-
-def _latest_trace_run_id(trace_path: Path) -> str:
-    try:
-        lines = trace_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return ""
-    for line in reversed(lines):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict):
-            run_id = str(item.get("run_id") or "").strip()
-            if run_id:
-                return run_id
-    return ""
 
 
 def _main_agent_frontend_event(
