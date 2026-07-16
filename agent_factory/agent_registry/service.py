@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.models.embedding_model import get_embedding_model
-from agent_factory.paths import factory_artifact_path
+from agent_factory.paths import factory_artifact_path, system_package_root
 
 
 AGENT_REGISTRY_DB_ENV = "AGENTFACTORY_AGENT_REGISTRY_DB"
@@ -35,15 +35,21 @@ class AgentRegistryService:
         self,
         *,
         package_root: str | Path | None = None,
+        system_package_root: str | Path | None = None,
         db_path: str | Path | None = None,
     ) -> None:
         self.package_root = Path(package_root).expanduser() if package_root else factory_artifact_path("packages")
+        self.system_package_root = (
+            Path(system_package_root).expanduser()
+            if system_package_root is not None
+            else (system_package_root() if package_root is None else None)
+        )
         self.db_path = Path(db_path).expanduser() if db_path else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
     def refresh_index(self) -> dict[str, Any]:
-        documents = _scan_package_documents(self.package_root)
+        documents = _scan_package_documents(self._package_roots())
         embedding_model = _embedding_model_or_none()
         embedding_available = embedding_model is not None
         indexed = 0
@@ -86,12 +92,25 @@ class AgentRegistryService:
         package_id = _clean_text(package_id)
         if not package_id:
             return self.refresh_index()
-        package_path = self.package_root / package_id
+        package_path = self._package_path(package_id)
         with self._connect() as conn:
-            if not package_path.is_dir():
+            if package_path is None:
                 conn.execute("delete from agent_search_documents where package_id = ?", (package_id,))
                 return {"status": "removed", "package_id": package_id, "updated_at": _now()}
         return self.refresh_index()
+
+    def _package_roots(self) -> list[Path]:
+        roots = [self.package_root]
+        if self.system_package_root is not None:
+            roots.insert(0, self.system_package_root)
+        return roots
+
+    def _package_path(self, package_id: str) -> Path | None:
+        for root in reversed(self._package_roots()):
+            candidate = root / package_id
+            if candidate.is_dir():
+                return candidate
+        return None
 
     def search(self, *, query: str, limit: int | None = None) -> dict[str, Any]:
         query = _clean_text(query)
@@ -237,15 +256,16 @@ def refresh_agent_registry_index(package_id: str | None = None) -> dict[str, Any
     return service.refresh_index()
 
 
-def _scan_package_documents(package_root: Path) -> list[AgentIndexDocument]:
-    if not package_root.is_dir():
-        return []
-    documents: list[AgentIndexDocument] = []
-    for package_path in sorted(path for path in package_root.iterdir() if path.is_dir()):
-        document = _package_document(package_path)
-        if document is not None:
-            documents.append(document)
-    return documents
+def _scan_package_documents(package_roots: list[Path]) -> list[AgentIndexDocument]:
+    documents_by_id: dict[str, AgentIndexDocument] = {}
+    for package_root in package_roots:
+        if not package_root.is_dir():
+            continue
+        for package_path in sorted(path for path in package_root.iterdir() if path.is_dir()):
+            document = _package_document(package_path)
+            if document is not None:
+                documents_by_id[document.package_id] = document
+    return [documents_by_id[package_id] for package_id in sorted(documents_by_id)]
 
 
 def _package_document(package_path: Path) -> AgentIndexDocument | None:

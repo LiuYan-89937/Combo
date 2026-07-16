@@ -23,7 +23,10 @@ from agent_factory.runtime_kernel.planning import (
     is_plan_and_execute_pattern_id,
 )
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.runtime_kernel.nodes.standard.tool_visibility import runtime_extra_allowed_tool_ids
+from agent_factory.runtime_kernel.nodes.standard.tool_visibility import (
+    runtime_allowed_tool_ids_override,
+    runtime_extra_allowed_tool_ids,
+)
 from agent_factory.tooling.langgraph_node import (
     build_tool_node_runner,
     latest_ai_tool_calls,
@@ -130,6 +133,9 @@ def _visible_tool_ids(
     *,
     origin_node_id: str,
 ) -> list[str]:
+    runtime_override = runtime_allowed_tool_ids_override(state)
+    if runtime_override is not None:
+        return runtime_override
     if is_plan_and_execute_pattern_id(state.run.pattern_id):
         return _plan_and_execute_delegated_tool_ids(state, context, registry, origin_node_id=origin_node_id)
     return merge_tool_ids([
