@@ -20,6 +20,7 @@ from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
 )
 from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
+from agent_factory.runtime_kernel.tool_governance import tool_governance_prompt
 
 
 DEFAULT_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
@@ -433,6 +434,7 @@ def _dynamic_evidence_text(
     include_extracted_text_for_images: bool,
 ) -> str:
     plan_text = _plan_evidence_text(state)
+    governance_text = tool_governance_prompt(state)
     attachments_text = _runtime_attachments_text(
         state,
         include_extracted_text_for_images=include_extracted_text_for_images,
@@ -442,13 +444,13 @@ def _dynamic_evidence_text(
     if not isinstance(frame, dict) and isinstance(model_context, dict):
         frame = _matching_node_frame(model_context.get("llm_context_frame"), node_id=node_id)
     if not isinstance(frame, dict):
-        return "\n\n".join(item for item in [plan_text, attachments_text] if item)
+        return "\n\n".join(item for item in [plan_text, attachments_text, governance_text] if item)
     text = str(frame.get("text") or "").strip()
     if text:
-        return "\n\n".join(item for item in [plan_text, attachments_text, text] if item)
+        return "\n\n".join(item for item in [plan_text, attachments_text, governance_text, text] if item)
     items = frame.get("items")
     if not isinstance(items, list):
-        return "\n\n".join(item for item in [plan_text, attachments_text] if item)
+        return "\n\n".join(item for item in [plan_text, attachments_text, governance_text] if item)
     lines: list[str] = []
     for item in items:
         if not isinstance(item, dict):
@@ -457,7 +459,7 @@ def _dynamic_evidence_text(
         if content:
             lines.append(f"- {content}")
     context_text = "\n".join(lines)
-    return "\n\n".join(item for item in [plan_text, attachments_text, context_text] if item)
+    return "\n\n".join(item for item in [plan_text, attachments_text, governance_text, context_text] if item)
 
 
 def _runtime_attachments(state: Any) -> Any:

@@ -12,7 +12,7 @@ from agent_factory.tooling.providers.base import (
     ToolProviderResult,
     diagnostic,
 )
-from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskLevel, ToolSpec
+from agent_factory.tooling.spec import ToolLoopPolicyConfig, ToolRiskEvaluatorConfig, ToolRiskLevel, ToolSpec
 
 
 SNAKE_CHARS = re.compile(r"[^a-z0-9_]+")
@@ -52,6 +52,7 @@ class MCPServerConfig(BaseModel):
     concurrent_default: bool = False
     timeout_seconds: float = Field(default=30.0, gt=0)
     tool_input_property_enums: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
+    tool_loop_policies: dict[str, ToolLoopPolicyConfig] = Field(default_factory=dict)
 
     @field_validator("tool_input_property_enums", mode="before")
     @classmethod
@@ -80,6 +81,15 @@ class MCPServerConfig(BaseModel):
                 properties[property_name] = allowed
             result[tool_name] = properties
         return result
+
+    @field_validator("tool_loop_policies", mode="before")
+    @classmethod
+    def _validate_tool_loop_policy_names(cls, value: Any) -> Any:
+        if value is None:
+            return {}
+        if not isinstance(value, dict) or any(not str(name or "").strip() for name in value):
+            raise ValueError("tool_loop_policies must use non-empty MCP tool names")
+        return value
 
 
 class MCPServersConfig(BaseModel):
@@ -181,6 +191,7 @@ def _tool_spec_from_mcp_tool(server: MCPServerConfig, tool: MCPDiscoveredTool) -
         risk_evaluator=tool.risk_evaluator or ToolRiskEvaluatorConfig(llm_mode="on_uncertain"),
         concurrent=server.concurrent_default if tool.concurrent is None else tool.concurrent,
         permission_scope="extension",
+        loop_policy=server.tool_loop_policies.get(tool.name, ToolLoopPolicyConfig()),
     )
 
 

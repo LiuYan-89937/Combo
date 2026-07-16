@@ -46,6 +46,26 @@ class ContextState(BaseModel):
     assembly_log: list[str] = Field(default_factory=list)
 
 
+class ToolLoopMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_count: int = 0
+    consecutive_failures: int = 0
+    consecutive_empty_results: int = 0
+    consecutive_no_new_evidence: int = 0
+    exact_call_counts: dict[str, int] = Field(default_factory=dict)
+    semantic_call_counts: dict[str, int] = Field(default_factory=dict)
+    evidence_fingerprints: list[str] = Field(default_factory=list)
+    exhausted: bool = False
+    exhaustion_reason: str | None = None
+
+
+class ToolLoopGovernanceState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tools: dict[str, ToolLoopMetrics] = Field(default_factory=dict)
+
+
 class ToolState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +76,7 @@ class ToolState(BaseModel):
     tool_failures: list[dict[str, Any]] = Field(default_factory=list)
     approval_queue: list[dict[str, Any]] = Field(default_factory=list)
     last_tool_result: dict[str, Any] | None = None
+    loop_governance: ToolLoopGovernanceState = Field(default_factory=ToolLoopGovernanceState)
 
 
 class PlanStep(BaseModel):

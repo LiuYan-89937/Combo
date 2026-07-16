@@ -18,6 +18,8 @@ from agent_factory.runtime_kernel.state.schema import (
     RunState,
     RuntimeConfigState,
     RuntimeState,
+    ToolLoopGovernanceState,
+    ToolLoopMetrics,
     ToolState,
 )
 from agent_factory.runtime_kernel.state.serialization import merge_state_patch
@@ -36,6 +38,8 @@ __all__ = [
     "RuntimeConfigState",
     "RuntimeGraphState",
     "RuntimeState",
+    "ToolLoopGovernanceState",
+    "ToolLoopMetrics",
     "ToolState",
     "dump_message",
     "dump_messages",

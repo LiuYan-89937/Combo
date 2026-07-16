@@ -34,6 +34,7 @@ from agent_factory.tooling.langgraph_node import (
     tool_messages_to_runtime_patch,
 )
 from agent_factory.tooling.envelope import runtime_wait_control
+from agent_factory.runtime_kernel.tool_governance import preflight_tool_calls, record_tool_call_outcomes
 
 
 class OperationalToolCallNode:
@@ -85,7 +86,10 @@ class OperationalToolCallNode:
         visible_tool_ids = _visible_tool_ids(state, context, registry, origin_node_id=origin_node_id)
         visible_tools = list(registry.model_tools(visible_tool_ids)) if delegated_calls else []
         messages: list[ToolMessage] = list(runtime_plan_messages)
-        if delegated_calls:
+        preflight = preflight_tool_calls(working_state, delegated_calls, visible_tools)
+        executable_calls = preflight.allowed_calls
+        messages.extend(preflight.denied_messages)
+        if executable_calls:
             runner = build_tool_node_runner(
                 visible_tools,
                 node_id=context.node_id,
@@ -98,7 +102,7 @@ class OperationalToolCallNode:
             )
             output = runner.invoke(
                 {
-                    "messages": _messages_with_tool_calls(context.graph_messages, delegated_calls),
+                    "messages": _messages_with_tool_calls(context.graph_messages, executable_calls),
                     "runtime": working_state.model_dump(mode="json"),
                 },
                 config=context.graph_config,
@@ -106,6 +110,12 @@ class OperationalToolCallNode:
             )
             messages.extend(output.get("messages") or [])
         results, failures, policy_patch, route_decision = tool_messages_to_runtime_patch(messages)
+        governance = record_tool_call_outcomes(
+            preflight.governance,
+            executable_calls,
+            [*results, *failures],
+            visible_tools,
+        )
         route_decision = _caller_route_decision(working_state, origin_node_id, route_decision)
         wait_control = runtime_wait_control(results)
         execution_patch: dict[str, Any] = {
@@ -129,6 +139,7 @@ class OperationalToolCallNode:
                 "last_tool_result": results[-1] if results else state.tools.last_tool_result,
                 "pending_tool_call": None,
                 "pending_tool_calls": [],
+                "loop_governance": governance.model_dump(mode="json"),
             },
             "execution": execution_patch,
         }

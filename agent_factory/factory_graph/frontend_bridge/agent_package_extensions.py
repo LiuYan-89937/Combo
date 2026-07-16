@@ -830,6 +830,11 @@ def _mcp_server_from_payload(payload: dict[str, Any], *, existing: MCPServerConf
             if "tool_input_property_enums" in raw
             else dict(existing.tool_input_property_enums) if existing is not None else {}
         ),
+        tool_loop_policies=(
+            dict(raw.get("tool_loop_policies") or {})
+            if "tool_loop_policies" in raw
+            else dict(existing.tool_loop_policies) if existing is not None else {}
+        ),
     )
 
 

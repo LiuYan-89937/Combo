@@ -117,6 +117,7 @@ class ToolCompiler:
                     "concurrent": spec.concurrent,
                     "risk_level": spec.risk_level,
                     "approval_request": gateway.approval_request,
+                    "loop_policy": spec.loop_policy.model_dump(mode="json", exclude_none=True),
                 }
             },
             handle_validation_error=lambda error: json.dumps(
