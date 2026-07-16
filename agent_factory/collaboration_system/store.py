@@ -561,6 +561,29 @@ class CollaborationStore:
                 ("failed", str(error or "").strip(), now, event_id),
             )
 
+    def list_archived_main_agent_events(
+        self,
+        collaboration_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        clean_collaboration_id = str(collaboration_id or "").strip()
+        if not clean_collaboration_id:
+            raise CollaborationStoreError("collaboration_id must not be empty")
+        if limit < 1 or limit > 1000:
+            raise CollaborationStoreError("archive event limit must be between 1 and 1000")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select * from collaboration_main_agent_event_archive
+                where collaboration_id = ?
+                order by archived_at desc, created_at asc, event_id asc
+                limit ?
+                """,
+                (clean_collaboration_id, limit),
+            ).fetchall()
+        return [self._archived_main_agent_event_view(row) for row in rows]
+
     def create_task(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self.get_session(collaboration_id)
         task_text = str(payload.get("task_text") or "").strip()
@@ -864,7 +887,60 @@ class CollaborationStore:
         workdir = self._session_root(collaboration_id)
         if workdir.exists():
             shutil.rmtree(workdir)
+        archived_at = utc_now_text()
+        session_snapshot = {
+            key: existing.get(key)
+            for key in (
+                "collaboration_id",
+                "title",
+                "main_agent_package_id",
+                "main_agent_package_session_id",
+                "main_factory_session_id",
+                "approval_mode",
+                "status",
+                "created_at",
+                "updated_at",
+            )
+        }
         with self._connect() as conn:
+            archived_event_count = int(
+                conn.execute(
+                    """
+                    select count(*) as count
+                    from collaboration_main_agent_events
+                    where collaboration_id = ?
+                    """,
+                    (collaboration_id,),
+                ).fetchone()["count"]
+            )
+            conn.execute(
+                """
+                insert into collaboration_main_agent_event_archive (
+                  event_id, collaboration_id, user_message, message_metadata_json,
+                  task_id, event_ref, status, attempts, last_error, created_at,
+                  updated_at, session_snapshot_json, archive_reason, archived_at
+                )
+                select event_id, collaboration_id, user_message, message_metadata_json,
+                       task_id, event_ref, status, attempts, last_error, created_at,
+                       updated_at, ?, ?, ?
+                from collaboration_main_agent_events
+                where collaboration_id = ?
+                on conflict(event_id) do update set
+                  status=excluded.status,
+                  attempts=excluded.attempts,
+                  last_error=excluded.last_error,
+                  updated_at=excluded.updated_at,
+                  session_snapshot_json=excluded.session_snapshot_json,
+                  archive_reason=excluded.archive_reason,
+                  archived_at=excluded.archived_at
+                """,
+                (
+                    json_dumps(session_snapshot),
+                    "collaboration_session_deleted",
+                    archived_at,
+                    collaboration_id,
+                ),
+            )
             conn.execute("delete from collaboration_main_agent_events where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_manufacturing_requests where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_worker_leases where collaboration_id = ?", (collaboration_id,))
@@ -877,6 +953,7 @@ class CollaborationStore:
             "main_agent_package_id": existing["main_agent_package_id"],
             "main_agent_package_session_id": existing.get("main_agent_package_session_id"),
             "main_factory_session_id": existing.get("main_factory_session_id"),
+            "archived_main_agent_event_count": archived_event_count,
             "sessions": self.list_sessions(),
         }
 
@@ -1042,6 +1119,32 @@ class CollaborationStore:
             )
             conn.execute(
                 """
+                create table if not exists collaboration_main_agent_event_archive (
+                  event_id text primary key,
+                  collaboration_id text not null,
+                  user_message text not null,
+                  message_metadata_json text not null,
+                  task_id text,
+                  event_ref text,
+                  status text not null,
+                  attempts integer not null,
+                  last_error text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  session_snapshot_json text not null,
+                  archive_reason text not null,
+                  archived_at text not null
+                )
+                """
+            )
+            conn.execute(
+                """
+                create index if not exists idx_collaboration_main_agent_event_archive_session
+                on collaboration_main_agent_event_archive(collaboration_id, archived_at)
+                """
+            )
+            conn.execute(
+                """
                 create table if not exists collaboration_worker_leases (
                   assignee_package_id text primary key,
                   collaboration_id text not null,
@@ -1172,6 +1275,11 @@ class CollaborationStore:
     def _main_agent_event_view(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["message_metadata"] = json_loads(data.pop("message_metadata_json", "{}"), {})
+        return data
+
+    def _archived_main_agent_event_view(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = self._main_agent_event_view(row)
+        data["session_snapshot"] = json_loads(data.pop("session_snapshot_json", "{}"), {})
         return data
 
     def _insert_message_conn(

@@ -22,6 +22,19 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
     async def list_sessions():
         return {"sessions": service.store.list_sessions()}
 
+    @router.get("/event-archives/{collaboration_id}")
+    async def archived_main_agent_events(collaboration_id: str, limit: int = 200):
+        try:
+            return {
+                "collaboration_id": collaboration_id,
+                "events": service.store.list_archived_main_agent_events(
+                    collaboration_id,
+                    limit=limit,
+                ),
+            }
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     @router.post("/sessions")
     async def create_session(payload: dict[str, Any]):
         try:
