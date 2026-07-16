@@ -18,6 +18,9 @@ import { SYSTEM_CHAT_PACKAGE_ID, normalizeResourcePackageId } from '@/utils/reso
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
+  if (event.event_type === 'agent_package_selected' && !runtimeStore.ownsAgentPackageSelection(event)) {
+    return
+  }
   if (event.event_type === 'debug_patch' && event.payload?.kind === 'collaboration_session_updated' && event.payload?.session) {
     const collaborationStore = useCollaborationStore()
     collaborationStore.applySessionSnapshot(event.payload.session as any)
@@ -89,7 +92,10 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.agent_session, event.payload.package_id)])
     }
     if (event.event_type === 'agent_package_session_loaded' && event.payload?.session?.session_id) {
-      agentStore.setActiveAgentSession(event.payload.session.session_id)
+      const loadedSessionId = String(event.payload.session.session_id)
+      if (runtimeStore.activeAgentSessionId === loadedSessionId) {
+        agentStore.setActiveAgentSession(loadedSessionId)
+      }
     }
     if (hasRunAgentSession && runtimeStore.activeAgentSessionId) {
       agentStore.setActiveAgentSession(runtimeStore.activeAgentSessionId)

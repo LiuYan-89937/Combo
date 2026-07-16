@@ -223,6 +223,11 @@ export interface ConversationScopeState {
   stages?: Record<string, StageStatus>
 }
 
+export interface AgentPackageSelectionIntent {
+  packageId: string | null
+  purpose: 'run' | 'evolution' | null
+}
+
 // ========== 模型流 ==========
 
 export interface ModelStream {
@@ -539,6 +544,7 @@ export interface RuntimeViewState {
   toolPermissions: ToolPermissionsView | null
   sessions: any[]
   agentPackages: any[]
+  agentPackageSelectionIntent: AgentPackageSelectionIntent
   selectedAgentPackage: any | null
   agentSessions: any[]
 }
