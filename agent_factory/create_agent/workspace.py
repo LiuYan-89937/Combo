@@ -12,7 +12,6 @@ from agent_factory.create_agent.models import (
     ACTION_FILE,
     KNOWLEDGE_SOURCES_FILE,
     PUBLISH_FILE,
-    PUBLISH_DECISION_FILE,
     RESOURCES_FILE,
     SKILL_GATEWAY_STATE_FILE,
     SYSTEM_STATE_FILE,
@@ -21,7 +20,6 @@ from agent_factory.create_agent.models import (
     VALIDATION_FILE,
     VALIDATION_STATE_FILE,
     CreateAgentAction,
-    CreateAgentPublishDecision,
     CreateAgentTaskAnalysis,
     PackageToolProbeState,
     PackageKnowledgeSourceRegistry,
@@ -93,10 +91,6 @@ class CreateAgentWorkspace:
     @property
     def publish_path(self) -> Path:
         return self.root / PUBLISH_FILE
-
-    @property
-    def publish_decision_path(self) -> Path:
-        return self.root / PUBLISH_DECISION_FILE
 
     @property
     def tool_probe_path(self) -> Path:
@@ -214,17 +208,6 @@ class CreateAgentWorkspace:
 
     def write_publish_report(self, payload: dict[str, Any]) -> None:
         self._write_json(self.publish_path, payload)
-
-    def read_publish_decision(self) -> CreateAgentPublishDecision:
-        return _read_managed_model(
-            self.publish_decision_path,
-            CreateAgentPublishDecision,
-            missing=CreateAgentPublishDecision(),
-            owner_tool="the create-agent publish API",
-        ) or CreateAgentPublishDecision()
-
-    def write_publish_decision(self, decision: CreateAgentPublishDecision) -> None:
-        self._write_json(self.publish_decision_path, decision.model_dump(mode="json"))
 
     def reset_manufacturing_trace(self, *, session_id: str, request_id: str, graph_id: str) -> None:
         self._write_json(

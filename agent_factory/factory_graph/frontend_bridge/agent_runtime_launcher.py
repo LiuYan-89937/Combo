@@ -338,6 +338,15 @@ class DockerAgentRuntimeLauncher:
             raise _SharedRuntimeIncompatible(str(exc)) from exc
         runtime_parent = factory_artifact_path("agent_runtime")
         runtime_parent.mkdir(parents=True, exist_ok=True)
+        _assert_logical_writable_paths(
+            runtime_parent=runtime_parent,
+            paths={
+                "runtime_root": runtime_root,
+                "artifacts_root": artifacts_root,
+                "workdir_root": workdir_root,
+                "extension_root": extension_root,
+            },
+        )
         shared = _SHARED_RUNTIME.ensure(
             docker=docker,
             image=image,
@@ -884,6 +893,22 @@ def runtime_container_path(path: str | Path) -> PurePosixPath:
     except ValueError as exc:
         raise ValueError(f"logical runtime path is outside the shared project root: {host}") from exc
     return SHARED_PROJECT_ROOT.joinpath(*relative.parts)
+
+
+def _assert_logical_writable_paths(*, runtime_parent: Path, paths: dict[str, Path]) -> None:
+    writable_root = runtime_parent.expanduser().resolve()
+    invalid: list[str] = []
+    for label, path in paths.items():
+        resolved = path.expanduser().resolve()
+        try:
+            resolved.relative_to(writable_root)
+        except ValueError:
+            invalid.append(f"{label}={resolved}")
+    if invalid:
+        raise _SharedRuntimeIncompatible(
+            "logical runtime writable paths must be inside the shared agent_runtime mount: "
+            + ", ".join(invalid)
+        )
 
 
 def _rewrite_container_endpoints(environment: dict[str, str]) -> None:

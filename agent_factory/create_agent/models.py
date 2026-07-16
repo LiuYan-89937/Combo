@@ -18,7 +18,6 @@ VALIDATION_STATE_FILE = ".factory/validation_state.json"
 TOOL_PROBE_FILE = ".factory/tool_probe.json"
 TASK_ANALYSIS_FILE = ".factory/task_analysis.json"
 PUBLISH_FILE = ".factory/publish.json"
-PUBLISH_DECISION_FILE = ".factory/publish_decision.json"
 RESOURCES_FILE = ".factory/resources.json"
 SKILL_GATEWAY_STATE_FILE = ".factory/skill_gateway_state.json"
 KNOWLEDGE_SOURCES_FILE = ".factory/knowledge_sources.json"
@@ -506,18 +505,6 @@ class PackageToolProbeState(BaseModel):
         for record in self.records:
             latest[record.tool_id] = record
         return latest
-
-
-class CreateAgentPublishDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal["create_agent_publish_decision.v0"] = "create_agent_publish_decision.v0"
-    decision: Literal["pending", "approve"] = "pending"
-    input_text: str = ""
-    package_fingerprint: dict[str, str] = Field(default_factory=dict)
-    validation_scope: str = ""
-    validation_status: str = ""
-    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 def initial_system_manufacturing_state() -> SystemManufacturingState:

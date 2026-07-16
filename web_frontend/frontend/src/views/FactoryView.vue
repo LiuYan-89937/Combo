@@ -67,10 +67,6 @@
         v-if="hasApprovalRequests"
         class="approval-section"
       />
-      <PublishConfirmationPanel
-        v-if="runtimeStore.isPublishConfirmationPending"
-        class="approval-section"
-      />
       <ResourceRequestPanel
         v-if="resourceRequests.length && runtimeStore.activeFactorySessionId"
         :session-id="runtimeStore.activeFactorySessionId"
@@ -118,7 +114,6 @@ import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMes
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
 import SchedulerRunStatusCard from '@/components/scheduler/SchedulerRunStatusCard.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
