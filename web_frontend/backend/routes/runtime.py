@@ -27,7 +27,11 @@ def create_runtime_router(runtime_bridge: RuntimeBridge, logger: logging.Logger)
     @router.get("/events")
     async def events_endpoint(request: Request):
         client_id = str(uuid.uuid4())[:8]
-        event_queue = runtime_bridge.subscribe(replay_history=True)
+        last_event_id = str(request.headers.get("last-event-id") or "").strip() or None
+        event_queue = runtime_bridge.subscribe(
+            replay_history=last_event_id is not None,
+            after_event_id=last_event_id,
+        )
         logger.info("SSE client %s connected", client_id)
 
         async def event_stream():
@@ -40,7 +44,8 @@ def create_runtime_router(runtime_bridge: RuntimeBridge, logger: logging.Logger)
                         continue
                     message = {"kind": "factory_frontend_event", "event": event}
                     data = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
-                    yield f"event: factory_frontend_event\ndata: {data}\n\n"
+                    event_id = str(event.get("event_id") or "")
+                    yield f"id: {event_id}\nevent: factory_frontend_event\ndata: {data}\n\n"
             finally:
                 runtime_bridge.unsubscribe(event_queue)
                 logger.info("SSE client %s disconnected", client_id)

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _PROTOCOL_CATALOG_PATH = Path(__file__).with_name("protocol_catalog.json")
@@ -16,6 +16,10 @@ FACTORY_FRONTEND_EVENT_PROTOCOL_VERSION = str(_PROTOCOL_CATALOG["version"])
 FRONTEND_MODES = tuple(str(item) for item in _PROTOCOL_CATALOG["modes"])
 FRONTEND_COMMAND_TYPES = tuple(str(item) for item in _PROTOCOL_CATALOG["command_types"])
 FRONTEND_EVENT_TYPES = tuple(str(item) for item in _PROTOCOL_CATALOG["event_types"])
+FRONTEND_PROCESS_EVENT_TYPES = frozenset(str(item) for item in _PROTOCOL_CATALOG["process_event_types"])
+_UNKNOWN_PROCESS_EVENT_TYPES = FRONTEND_PROCESS_EVENT_TYPES.difference(FRONTEND_EVENT_TYPES)
+if _UNKNOWN_PROCESS_EVENT_TYPES:
+    raise ValueError(f"unknown process event types in protocol catalog: {sorted(_UNKNOWN_PROCESS_EVENT_TYPES)}")
 
 FactoryFrontendCommandType: TypeAlias = str
 FactoryFrontendEventType: TypeAlias = str
@@ -71,6 +75,12 @@ class FactoryFrontendEvent(BaseModel):
     severity: str | None = None
     message: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    process_event: bool = False
+
+    @model_validator(mode="after")
+    def _derive_process_event(self) -> "FactoryFrontendEvent":
+        self.process_event = self.event_type in FRONTEND_PROCESS_EVENT_TYPES
+        return self
 
     @field_validator("event_type")
     @classmethod

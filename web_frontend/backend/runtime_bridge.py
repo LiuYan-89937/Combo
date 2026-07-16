@@ -16,6 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
 )
 from agent_factory.model_pool.usage import record_model_usage_frontend_event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter import FactoryRuntimeAdapter
+from web_frontend.backend.runtime_event_journal import RuntimeEventJournal
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class RuntimeBridge:
     def __init__(self) -> None:
         self.adapter: FactoryRuntimeAdapter | None = None
         self.event_history: deque[dict[str, Any]] = deque(maxlen=500)
+        self.event_journal = RuntimeEventJournal()
         self.subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self.event_observers: set[Callable[[dict[str, Any]], None]] = set()
         self._background_threads: dict[str, threading.Thread] = {}
@@ -154,14 +156,35 @@ class RuntimeBridge:
         finally:
             self.unsubscribe(event_queue)
 
-    def subscribe(self, *, replay_history: bool = True) -> asyncio.Queue[dict[str, Any]]:
+    def subscribe(
+        self,
+        *,
+        replay_history: bool = True,
+        after_event_id: str | None = None,
+    ) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1000)
+        replay_gap = False
         if replay_history:
-            for event_payload in self.event_history:
+            history = list(self.event_history)
+            if after_event_id:
+                cursor_index = next(
+                    (
+                        index
+                        for index, item in enumerate(history)
+                        if str(item.get("event_id") or "") == after_event_id
+                    ),
+                    -1,
+                )
+                replay_gap = cursor_index < 0
+                history = history[cursor_index + 1 :] if cursor_index >= 0 else []
+            for event_payload in history:
                 queue.put_nowait(event_payload)
-            snapshot = self._runtime_ready_event()
-            if snapshot is not None:
-                queue.put_nowait(snapshot.model_dump(mode="json"))
+        snapshot = self._runtime_ready_event(
+            replay_gap=replay_gap,
+            replay_after_event_id=after_event_id,
+        )
+        if snapshot is not None:
+            queue.put_nowait(snapshot.model_dump(mode="json"))
         self.subscribers.add(queue)
         return queue
 
@@ -282,6 +305,10 @@ class RuntimeBridge:
 
     def _record_and_broadcast(self, event_payload: dict[str, Any]) -> None:
         try:
+            event_payload = self.event_journal.prepare_for_delivery(event_payload)
+        except Exception:
+            logger.exception("Failed to persist or hydrate runtime process event")
+        try:
             record_model_usage_frontend_event(event_payload)
         except Exception:
             logger.exception("Failed to record model usage event")
@@ -300,7 +327,12 @@ class RuntimeBridge:
         for queue in stale_subscribers:
             self.unsubscribe(queue)
 
-    def _runtime_ready_event(self):
+    def _runtime_ready_event(
+        self,
+        *,
+        replay_gap: bool = False,
+        replay_after_event_id: str | None = None,
+    ):
         adapter = self.adapter
         if adapter is None:
             return None
@@ -313,6 +345,10 @@ class RuntimeBridge:
                 "checkpointer": adapter.checkpointer_payload(),
                 "options": adapter._options_payload(),
                 "active_requests": self._active_request_payloads(),
+                "event_replay": {
+                    "gap": replay_gap,
+                    "after_event_id": replay_after_event_id,
+                },
             },
         )
 
