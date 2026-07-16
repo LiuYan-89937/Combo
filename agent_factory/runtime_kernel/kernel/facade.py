@@ -429,6 +429,7 @@ class RuntimeKernelFacade:
         if runtime_completed(final_state):
             run_context.session_manager.touch_turn(
                 run_context.session_id,
+                request_id=run_context.session_turn_request_id,
                 final_answer=_session_final_answer(final_state),
                 status=final_state.execution.finish_status,
                 trace_ref=_session_trace_ref(compiled, final_state),
@@ -461,6 +462,7 @@ class RuntimeKernelFacade:
             session_manager=session_manager,
             session_id=session.session_id,
             first_user_input=session.first_user_input or "",
+            session_turn_request_id=_latest_session_turn_request_id(session),
         )
 
 
@@ -475,6 +477,14 @@ def _session_final_answer(state: RuntimeState | None) -> str | None:
         or getattr(conversation, "assistant_draft", None)
         or ""
     ).strip() or None
+
+
+def _latest_session_turn_request_id(session: Any) -> str | None:
+    turns = list(getattr(session, "turns", ()) or ())
+    if not turns:
+        return None
+    request_id = str(getattr(turns[-1], "request_id", "") or "").strip()
+    return request_id or None
 
 
 def _session_trace_ref(compiled: CompiledKernelApp, state: RuntimeState | None) -> dict[str, str] | None:
