@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from agent_factory.create_agent.publish_tool import confirm_and_publish
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.resource_system import ResourceStore
 from agent_factory.runtime_contracts import AgentPackageLoader, ResourcesContract
@@ -11,6 +12,20 @@ from agent_factory.runtime_contracts import AgentPackageLoader, ResourcesContrac
 
 def create_create_agent_router() -> APIRouter:
     router = APIRouter(prefix="/api/create-agent")
+
+    @router.post("/sessions/{session_id}/publish")
+    async def publish_create_agent_workspace(session_id: str, payload: dict[str, Any] | None = None):
+        confirmation = _confirmation_text(payload)
+        try:
+            result = confirm_and_publish(
+                workspace=CreateAgentWorkspace.for_session(session_id),
+                confirmation=confirmation,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"published": result}
 
     @router.put("/sessions/{session_id}/resources/{resource_id}")
     async def put_create_agent_resource(session_id: str, resource_id: str, payload: dict[str, Any]):
@@ -34,3 +49,11 @@ def create_create_agent_router() -> APIRouter:
         return result
 
     return router
+
+
+def _confirmation_text(payload: dict[str, Any] | None) -> str:
+    if isinstance(payload, dict):
+        text = str(payload.get("confirmation") or "").strip()
+        if text:
+            return text
+    return "用户在 Web 界面点击发布"

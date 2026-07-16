@@ -55,7 +55,8 @@ export function useCollaborationRuntime() {
   const isMainAgentRunning = computed(() => Boolean(mainAgentActiveRequestId.value))
   const inputDisabled = computed(() => (
     !collaborationStore.activeSession ||
-    runtimeStore.isInputLocked
+    runtimeStore.isInputLocked ||
+    runtimeStore.isPublishConfirmationPending
   ))
 
   function enterActiveMainAgentContext(): void {

@@ -7,7 +7,9 @@ from collections.abc import Callable
 from hashlib import sha256
 from typing import Any
 
+from agent_factory.create_agent.publish_tool import confirm_and_publish
 from agent_factory.create_agent.runtime import CreateAgentRuntime
+from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.collaboration_system.orchestrator import CollaborationOrchestrator
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
@@ -460,7 +462,7 @@ class CollaborationService:
             request_id=f"collab-manufacture-{request_id}",
             user_config=None,
         )
-        status, message, published_package = _consume_create_agent_run(run)
+        status, message, publish_ready = _consume_create_agent_run(run)
         if status != "completed":
             self.store.update_manufacturing_request(
                 collaboration_id,
@@ -480,9 +482,11 @@ class CollaborationService:
                 user_message=f"制造请求 {request_id} 未完成：{message or status}。请决定是否调整需求或重新制造。",
             )
             return
-        if not published_package:
-            raise RuntimeError("create-agent completed without an auto-publish result")
-        publish_result = published_package
+        workspace = CreateAgentWorkspace.for_session(create_agent_session_id)
+        publish_result = confirm_and_publish(
+            workspace=workspace,
+            confirmation=f"协作主 Agent 代理制造自动发布：{request.get('agent_name')}",
+        )
         package_id = str(publish_result.get("package_id") or "").strip()
         self.store.update_manufacturing_request(
             collaboration_id,
@@ -493,7 +497,8 @@ class CollaborationService:
                 "result_payload": {
                     "create_agent_session_id": create_agent_session_id,
                     "package_id": package_id,
-                    "published_package": publish_result,
+                    "publish": publish_result,
+                    **({"publish_ready": publish_ready} if publish_ready else {}),
                 },
             },
         )
@@ -758,7 +763,7 @@ def _manufacturing_prompt(request: dict[str, Any]) -> str:
         "制造要求：",
         "- 使用现有制造流程完成 package 设计、工具/skill/MCP/模型能力配置与 full_static validation。",
         "- 如果需要外部能力，优先复用已有系统工具、SkillHub skill、MCP 继承和模型池能力，不重复造轮子。",
-        "- 不要在最终阶段要求用户回复确认发布；通过 full_static 后调用 finalize，由制造工作流自动发布。",
+        "- 不要在最终阶段要求用户回复确认发布；通过 full_static 后进入待发布状态即可。",
     ]
     return "\n".join(lines)
 
@@ -773,7 +778,7 @@ def _list_lines(value: Any) -> list[str]:
 def _consume_create_agent_run(run: Any) -> tuple[str, str, dict[str, Any] | None]:
     status = "failed"
     message = "create-agent stream ended without terminal status"
-    published_package: dict[str, Any] | None = None
+    publish_ready: dict[str, Any] | None = None
     for stream_mode, chunk in run.events:
         if stream_mode != "frontend_event":
             continue
@@ -781,7 +786,7 @@ def _consume_create_agent_run(run: Any) -> tuple[str, str, dict[str, Any] | None
         if item.event_type in RUN_TERMINAL_EVENT_TYPES:
             status = runtime_stream_status(item)
             message = str(item.message or item.payload.get("message") or "").strip()
-            if isinstance(item.payload.get("published_package"), dict):
-                published_package = item.payload["published_package"]
+            if isinstance(item.payload.get("publish_ready"), dict):
+                publish_ready = item.payload["publish_ready"]
             break
-    return status, message, published_package
+    return status, message, publish_ready

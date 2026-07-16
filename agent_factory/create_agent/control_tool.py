@@ -73,6 +73,7 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
                 "action_path": {"type": "string"},
                 "resource_fact_count": {"type": "integer"},
                 "current_action": {"type": "object", "additionalProperties": True},
+                "publish_decision": {"type": "object", "additionalProperties": True},
             },
             "required": ["action", "message", "action_path", "resource_fact_count"],
             "additionalProperties": False,
@@ -89,12 +90,14 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     requested_action = str(arguments.get("action") or "").strip()
     if requested_action == "inspect":
         current_action = workspace.read_action()
+        publish_decision = workspace.read_publish_decision()
         return tool_envelope({
             "action": "inspect",
             "message": "Current create-agent control state.",
             "action_path": str(workspace.action_path),
             "resource_fact_count": len(current_action.resource_facts),
             "current_action": current_action.model_dump(mode="json"),
+            "publish_decision": publish_decision.model_dump(mode="json"),
         })
     action = CreateAgentAction.model_validate(
         {
