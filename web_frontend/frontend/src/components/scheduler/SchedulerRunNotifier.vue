@@ -4,7 +4,6 @@
 
 <script setup lang="ts">
 import { watch } from 'vue'
-import { useSchedulerNoticeNavigation } from '@/composables/useSchedulerNoticeNavigation'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
@@ -12,7 +11,6 @@ import type { SchedulerRunNoticeView } from '@/types/protocol'
 
 const runtimeStore = useRuntimeStore()
 const uiStore = useUiStore()
-const { canOpenSchedulerNoticeConversation, openSchedulerNoticeConversation } = useSchedulerNoticeNavigation()
 const { t } = useI18n()
 const notifiedNoticeKeys = new Set(
   runtimeStore.schedulerRunNotices
@@ -34,12 +32,8 @@ watch(
           title: notificationTitle(notice),
           message: notice.summary,
           duration: notificationDuration(notice.status),
-          actionLabel: canOpenSchedulerNoticeConversation(notice) ? t('scheduler.viewConversation') : undefined,
-          onAction: canOpenSchedulerNoticeConversation(notice)
-            ? () => {
-                openSchedulerNoticeConversation(notice)
-              }
-            : undefined,
+          actionLabel: t('scheduler.viewDetails'),
+          onAction: () => uiStore.openSchedulerActivityDrawer(),
         })
       })
   },

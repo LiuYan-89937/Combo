@@ -67,6 +67,8 @@
     <!-- 调试抽屉 -->
     <DebugDrawer v-model:show="uiStore.debugDrawerOpen" />
 
+    <SchedulerActivityDrawer />
+
     <!-- SSE 事件流初始化 -->
     <EventStreamManager />
   </div>
@@ -88,6 +90,7 @@ import AppNotifications from '@/components/common/AppNotifications.vue'
 import SchedulerRunNotifier from '@/components/scheduler/SchedulerRunNotifier.vue'
 import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
+import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDrawer.vue'
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
 
 const uiStore = useUiStore()

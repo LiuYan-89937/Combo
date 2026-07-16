@@ -11,6 +11,7 @@ from agent_factory.scheduler_system.executor import (
     scheduler_tool_approval_override,
 )
 from agent_factory.scheduler_system.runtime import SchedulerRuntime, default_factory_scheduler_runtime
+from agent_factory.scheduler_system.session_policy import scheduler_run_session_id
 from agent_factory.scheduler_system.schema import (
     SchedulerContractConfig,
     SchedulerExecutionReport,
@@ -48,5 +49,6 @@ __all__ = [
     "factory_scheduler_owner_id",
     "runtime_tool_runner",
     "scheduler_enabled_from_env",
+    "scheduler_run_session_id",
     "scheduler_tool_approval_override",
 ]

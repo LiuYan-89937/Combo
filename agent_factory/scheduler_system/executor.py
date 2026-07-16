@@ -201,8 +201,6 @@ def _target_evidence(job: SchedulerJob) -> dict[str, Any]:
     return {
         "target_type": target.target_type,
         "message_preview": _summary(payload.get("message"), limit=360),
-        "thread_policy": _summary(payload.get("thread_policy") or "new_thread_per_run", limit=80),
-        "fixed_thread_id": _summary(payload.get("fixed_thread_id"), limit=120),
     }
 
 

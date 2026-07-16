@@ -429,6 +429,7 @@ export interface SchedulerRunNoticeView {
   reportPath: string | null
   timestamp: string
   unread: boolean
+  conversationScope: string | null
   payload: Record<string, any>
 }
 

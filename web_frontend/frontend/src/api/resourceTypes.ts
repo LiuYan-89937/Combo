@@ -68,8 +68,6 @@ export interface SkillConfig {
 
 export type ScheduleType = 'cron' | 'interval' | 'date'
 export type SchedulerTargetType = 'graph_run' | 'script_run' | 'tool_call'
-export type SchedulerThreadPolicy = 'new_thread_per_run' | 'fixed_thread'
-
 export interface SchedulerJobInput {
   task_content: string
   schedule_type: ScheduleType
@@ -80,8 +78,6 @@ export interface SchedulerJobInput {
         target_type: 'graph_run'
         payload: {
           message: string
-          thread_policy: SchedulerThreadPolicy
-          fixed_thread_id?: string
         }
       }
     | {

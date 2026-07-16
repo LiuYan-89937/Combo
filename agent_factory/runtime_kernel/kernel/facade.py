@@ -331,11 +331,25 @@ class RuntimeKernelFacade:
         session_config = dict(session_config or {})
         agent_id = str(agent_config.get("agent_id") or compiled.metadata.get("agent_id") or compiled.pattern_spec.pattern_id)
         session_manager = session_manager_from_config(session_config, default=self.session_manager)
-        session_id = session_config.get("session_id")
-        session = session_manager.load(str(session_id)) if session_id else session_manager.create(
-            agent_id=agent_id,
-            first_user_input=user_input,
-        )
+        session_id = str(session_config.get("session_id") or "").strip()
+        if session_id:
+            session = session_manager.load_optional(session_id)
+            if session is None and not bool(session_config.get("create_session_if_missing")):
+                raise FileNotFoundError(f"Agent session not found: {session_id}")
+        else:
+            session = None
+        if session is None:
+            session = session_manager.create(
+                agent_id=agent_id,
+                session_id=session_id or None,
+                first_user_input=user_input,
+                session_kind=str(session_config.get("session_kind") or "normal"),
+                visible_in_agent_session_list=session_config.get("visible_in_agent_session_list"),
+            )
+        elif session.agent_id != agent_id:
+            raise ValueError(
+                f"Agent session belongs to {session.agent_id}, expected {agent_id}: {session.session_id}"
+            )
         state = state_for_new_turn(compiled, thread_id=session.thread_id)
         state.run = RunState(
             agent_id=agent_id,

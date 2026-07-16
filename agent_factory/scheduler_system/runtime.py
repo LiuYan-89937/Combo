@@ -212,6 +212,7 @@ class SchedulerRuntime:
             status=status or (run.status if run else report.status if report else None),
             scheduled_at=run.scheduled_at if run else None,
             duration_ms=duration_ms,
+            task_content=job.task_content if job else None,
             error_summary=report.error_summary if report else run.error_summary if run else None,
             report_path=report_path,
             payload=_scheduler_event_payload(payload=payload, report=report),

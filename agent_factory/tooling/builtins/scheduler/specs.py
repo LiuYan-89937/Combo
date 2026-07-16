@@ -141,12 +141,6 @@ def _graph_run_target_schema() -> dict:
                         "minLength": 1,
                         "description": "定时触发时输入给 Agent Graph 的用户消息。",
                     },
-                    "thread_policy": {
-                        "type": "string",
-                        "enum": ["new_thread_per_run", "fixed_thread", "inherit_agent_default"],
-                        "default": "new_thread_per_run",
-                    },
-                    "fixed_thread_id": {"type": "string", "minLength": 1},
                 },
                 "required": ["message"],
             },

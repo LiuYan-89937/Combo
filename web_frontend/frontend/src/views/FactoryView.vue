@@ -44,6 +44,15 @@
               />
             </template>
 
+            <SchedulerRunStatusCard
+              v-for="notice in activeSchedulerRunCards"
+              :key="`scheduler-${notice.id}`"
+              :notice="notice"
+              dismissible
+              @details="uiStore.openSchedulerActivityDrawer"
+              @dismiss="runtimeStore.dismissSchedulerNoticeFromConversation(notice.id)"
+            />
+
             <MessageItem
               v-for="message in thinkingMessages"
               :key="message.id"
@@ -102,6 +111,7 @@ import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
 import { ChatbubbleEllipses } from '@/components/icons'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
+import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
 import { useFactoryConversation } from '@/composables/factory/useFactoryConversation'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
@@ -110,6 +120,7 @@ import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
+import SchedulerRunStatusCard from '@/components/scheduler/SchedulerRunStatusCard.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 import type { TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
@@ -119,6 +130,7 @@ import type { TipMessageContext } from '@/stores/tips'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
+const uiStore = useUiStore()
 const route = useRoute()
 const { t } = useI18n()
 const scrollbarRef = ref()
@@ -170,6 +182,12 @@ const {
 const resourceRequests = computed(() => {
   const values = runtimeStore.pendingInterrupt?.payload?.resource_requests
   return Array.isArray(values) ? values.filter((item): item is { resource_id: string; description?: string; secret?: boolean } => Boolean(item && typeof item.resource_id === 'string')) : []
+})
+
+const activeSchedulerRunCards = computed(() => {
+  const scope = runtimeStore.activeConversationScope
+  if (!scope) return []
+  return runtimeStore.schedulerRunNotices.filter((notice) => notice.conversationScope === scope)
 })
 
 function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
@@ -240,6 +258,11 @@ watch(
 
 watch(
   () => runtimeStore.tools.map((tool) => `${tool.activityKey}:${tool.status}:${tool.timestamp}`).join('|'),
+  followBottomIfNeeded,
+)
+
+watch(
+  () => activeSchedulerRunCards.value.map((notice) => `${notice.id}:${notice.status}`).join('|'),
   followBottomIfNeeded,
 )
 

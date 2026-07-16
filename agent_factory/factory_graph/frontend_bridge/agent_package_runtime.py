@@ -749,6 +749,7 @@ class AgentPackageRuntimeManager:
                 pass
         return manager.create(
             agent_id=package.assembly_spec.agent.id,
+            session_id=session_id,
             first_user_input=first_user_input,
             session_kind=session_kind,
             collaboration_id=collaboration_id,

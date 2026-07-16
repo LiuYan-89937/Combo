@@ -21,7 +21,12 @@ from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.session import AgentSessionConfig
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
-from agent_factory.scheduler_system import SchedulerExecutor, runtime_tool_runner, scheduler_tool_approval_override
+from agent_factory.scheduler_system import (
+    SchedulerExecutor,
+    runtime_tool_runner,
+    scheduler_run_session_id,
+    scheduler_tool_approval_override,
+)
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.management import manage_scheduler_runtime
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
@@ -587,9 +592,14 @@ class PackageRuntimeCore:
             payload = dict(job.target.payload)
             message = str(payload.get("message") or "").strip()
             session_config = dict(runtime.compiled.runtime_config["session_config"])
-            thread_policy = str(payload.get("thread_policy") or "new_thread_per_run")
-            if thread_policy == "fixed_thread":
-                session_config["session_id"] = str(payload.get("fixed_thread_id") or "")
+            session_config["session_id"] = scheduler_run_session_id(
+                job,
+                run_record,
+                namespace=f"agent_package:{runtime.package.package_root.name}",
+            )
+            session_config["session_kind"] = "scheduler"
+            session_config["visible_in_agent_session_list"] = False
+            session_config["create_session_if_missing"] = True
             normalizer = RuntimeEventNormalizer(
                 emit=self._emit_background_or_noop,
                 request_id=None,

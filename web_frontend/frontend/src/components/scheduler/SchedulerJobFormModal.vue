@@ -185,12 +185,8 @@ function buildJobInput(): SchedulerJobInput | null {
     }
   }
 
-  const payload: {
-    message: string
-    thread_policy: 'new_thread_per_run'
-  } = {
+  const payload = {
     message: formData.value.task_content.trim(),
-    thread_policy: 'new_thread_per_run',
   }
   return {
     ...base,
