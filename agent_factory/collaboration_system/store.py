@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
+from agent_factory.collaboration_system.delivery import normalize_delivery_standard
 from agent_factory.paths import factory_artifact_path, resolve_project_path
 
 
@@ -567,7 +568,7 @@ class CollaborationStore:
             raise CollaborationStoreError("task_text must not be empty")
         assignee = normalize_package_id(payload.get("assignee_package_id"))
         depends_on = normalize_dependency_ids(payload.get("depends_on"))
-        delivery_standard = validate_non_empty_object(payload.get("delivery_standard"), "delivery_standard")
+        delivery_standard = validate_delivery_standard(payload.get("delivery_standard"))
         self._validate_task_dependencies(collaboration_id, task_id=None, depends_on=depends_on)
         input_artifacts = merge_artifact_refs(
             dependency_artifact_refs(session, depends_on),
@@ -769,7 +770,7 @@ class CollaborationStore:
                 else list(current["depends_on"])
             )
             delivery_standard = (
-                validate_non_empty_object(payload.get("delivery_standard"), "delivery_standard")
+                validate_delivery_standard(payload.get("delivery_standard"))
                 if "delivery_standard" in payload
                 else current["delivery_standard"]
             )
@@ -1604,10 +1605,11 @@ def _artifact_ref_key(item: Any) -> str:
     return str(item or "").strip()
 
 
-def validate_non_empty_object(value: Any, field_name: str) -> dict[str, Any]:
-    if not isinstance(value, dict) or not value:
-        raise CollaborationStoreError(f"{field_name} must be a non-empty object")
-    return value
+def validate_delivery_standard(value: Any) -> dict[str, Any]:
+    try:
+        return normalize_delivery_standard(value)
+    except (TypeError, ValueError) as exc:
+        raise CollaborationStoreError(f"invalid delivery_standard: {exc}") from exc
 
 
 def validate_approval_mode(value: str) -> str:

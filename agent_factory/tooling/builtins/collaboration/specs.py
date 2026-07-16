@@ -53,6 +53,29 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
 def _collaboration_input_schema() -> dict:
     common = {"collaboration_id": {"type": "string"}}
     flexible_object = {"type": "object", "additionalProperties": True}
+    delivery_standard = {
+        "type": "object",
+        "description": (
+            "可执行的交付契约。至少提供 output_path 或非空 output_paths；路径必须是 worker 工作区内的安全相对路径，"
+            "且不得位于 share_files/。runtime 正常结束后，指定文件必须由本轮新建或修改。"
+        ),
+        "properties": {
+            "format": {"type": "string"},
+            "output_path": {"type": "string", "minLength": 1},
+            "output_paths": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1},
+            },
+            "required_fields": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "require_visible_result": {"type": "boolean"},
+            "minimum_visible_chars": {"type": "integer", "minimum": 1},
+        },
+        "additionalProperties": True,
+    }
     artifact_array = {
         "type": "array",
         "items": {
@@ -88,7 +111,7 @@ def _collaboration_input_schema() -> dict:
                     "assignee_package_id": {"type": "string"},
                     "task_text": {"type": "string"},
                     "depends_on": {"type": "array", "items": {"type": "string"}},
-                    "delivery_standard": flexible_object,
+                    "delivery_standard": delivery_standard,
                     "visible_context": flexible_object,
                     "input_artifacts": artifact_array,
                 },
@@ -102,7 +125,7 @@ def _collaboration_input_schema() -> dict:
                     "status": task_status,
                     "task_text": {"type": "string"},
                     "depends_on": {"type": "array", "items": {"type": "string"}},
-                    "delivery_standard": flexible_object,
+                    "delivery_standard": delivery_standard,
                     "visible_context": flexible_object,
                     "input_artifacts": artifact_array,
                     "result_summary": {"type": "string"},
