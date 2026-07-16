@@ -132,7 +132,7 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp。
 3. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
 4. 仅在缺失时安装普通构建工具、ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
-5. 同步当前 FastAgentFactory 工作树和两套 llama.cpp 源码到远端。
+5. 仅同步推理控制、模型池所需的最小 Python bundle，以及两套 llama.cpp 源码到远端；Factory 前后端不上传。
 6. 独立构建 `official` 与 `amd` 两个 ROCm llama-server，并构建 HIPBLAS `sd-server`。
 7. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
 8. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
@@ -165,7 +165,7 @@ http://localhost:3000
 | `./deploy.sh restart` | 重启远端推理节点并等待两个模型 ready。 |
 | `./deploy.sh down` | 停止远端推理节点，同时卸载 Chat 与 Embedding、释放显存。 |
 | `./deploy.sh models` | 续传/校验模型并更新远端 Profile；节点已运行时自动重启模型，不重装 ROCm。 |
-| `./deploy.sh sync` | 同步当前 FastAgentFactory 与本机 llama.cpp 工作树到远端。 |
+| `./deploy.sh sync` | 同步最小推理 bundle 与本机 llama.cpp 工作树到远端。 |
 | `./deploy.sh build-llama [official\|amd\|all]` | 独立增量构建指定 llama-server；省略参数时构建两者。 |
 | `./deploy.sh switch-llama <official\|amd>` | 切换活动实现并使用相同 Profile 重载模型，失败时恢复原实现。 |
 | `./deploy.sh list-llama-builds` | 查看两套构建的 revision、源码与二进制校验值及活动状态。 |
@@ -305,7 +305,7 @@ vendor/stable-diffusion.cpp/ 随仓库提交的图片推理服务源码
 默认目录：
 
 ```text
-/root/FastAgentFactory       同步的项目源码
+/root/FastAgentFactory       最小推理 bundle，不含 Factory 前后端
 /root/.fastagentfactory      Python venv、模型池 SQLite、PID 与日志
 /root/models                 GGUF、mmproj 与 ModelScope 模型
 /root/fastagentfactory-llama-sources  两套同步源码

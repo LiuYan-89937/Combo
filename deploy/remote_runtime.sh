@@ -39,6 +39,7 @@ required_config=(
     IMAGE_VAE_FILENAME IMAGE_VAE_SHA256 IMAGE_VAE_SIZE_BYTES IMAGE_CLIP_L_URL
     IMAGE_CLIP_L_FILENAME IMAGE_CLIP_L_SHA256 IMAGE_CLIP_L_SIZE_BYTES IMAGE_T5XXL_URL
     IMAGE_T5XXL_FILENAME IMAGE_T5XXL_SHA256 IMAGE_T5XXL_SIZE_BYTES
+    REMOTE_INFERENCE_PYTHON_PACKAGES
 )
 for name in "${required_config[@]}"; do
     if [[ -z "${!name:-}" ]]; then
@@ -265,6 +266,35 @@ print(f"Verified ROCm PyTorch {torch.__version__} on {torch.cuda.get_device_name
 PY
 }
 
+python_has_pytorch_runtime() {
+    local python_bin="$1"
+    [[ -x "${python_bin}" ]] || return 1
+    "${python_bin}" - <<'PY' >/dev/null 2>&1
+import torch
+
+raise SystemExit(0 if torch.version.hip and torch.cuda.is_available() else 1)
+PY
+}
+
+attach_preinstalled_pytorch_runtime() {
+    local runtime_python="${PYTORCH_RUNTIME_PYTHON:-}"
+    [[ -n "${runtime_python}" ]] || return 1
+    python_has_pytorch_runtime "${runtime_python}" || return 1
+
+    local runtime_version project_version runtime_site project_site
+    runtime_version="$("${runtime_python}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    project_version="$("${PYTHON_BIN}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    [[ "${runtime_version}" == "${project_version}" ]] \
+        || fail "Preinstalled PyTorch Python ${runtime_version} is incompatible with project Python ${project_version}"
+    runtime_site="$("${runtime_python}" -c 'import site; print(site.getsitepackages()[0])')"
+    project_site="$("${PYTHON_BIN}" -c 'import site; print(site.getsitepackages()[0])')"
+    [[ -d "${runtime_site}" ]] || fail "Preinstalled PyTorch site-packages is unavailable: ${runtime_site}"
+    printf '%s\n' "${runtime_site}" > "${project_site}/agentfactory-rocm-runtime.pth"
+    python_has_pytorch_runtime "${PYTHON_BIN}" \
+        || fail "Project environment could not activate preinstalled PyTorch from ${runtime_python}"
+    log "Using preinstalled ROCm PyTorch from ${runtime_python}"
+}
+
 prepare_pytorch_runtime() {
     if verify_pytorch_runtime >/dev/null 2>&1; then
         verify_pytorch_runtime
@@ -285,14 +315,32 @@ prepare_pytorch_runtime() {
 }
 
 prepare_python() {
-    [[ -f "${REMOTE_PROJECT_ROOT}/pyproject.toml" ]] || fail "Project is not synchronized to ${REMOTE_PROJECT_ROOT}"
+    [[ -f "${REMOTE_PROJECT_ROOT}/agent_factory/local_inference/node_server.py" ]] \
+        || fail "Inference runtime is not synchronized to ${REMOTE_PROJECT_ROOT}"
+    [[ -f "${REMOTE_PROJECT_ROOT}/deploy/configure_model_pool.py" ]] \
+        || fail "Inference model-pool configurator is not synchronized to ${REMOTE_PROJECT_ROOT}"
     if [[ ! -x "${PYTHON_BIN}" ]]; then
         log "Creating ROCm-compatible Python environment with system site packages"
         python3 -m venv --system-site-packages "${VENV_DIR}"
     fi
+    local project_site
+    project_site="$("${PYTHON_BIN}" -c 'import site; print(site.getsitepackages()[0])')"
+    printf '%s\n' "${REMOTE_PROJECT_ROOT}" > "${project_site}/agentfactory-inference-runtime.pth"
+    attach_preinstalled_pytorch_runtime || true
     prepare_pytorch_runtime
-    local dependency_digest
-    dependency_digest="$(sha256sum "${REMOTE_PROJECT_ROOT}/pyproject.toml" "${REMOTE_PROJECT_ROOT}/uv.lock" | sha256sum | awk '{print $1}')"
+    local source_digest dependency_digest
+    source_digest="$(
+        find "${REMOTE_PROJECT_ROOT}" -type f -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sha256sum \
+            | awk '{print $1}'
+    )"
+    dependency_digest="$(
+        printf '%s\n%s\n' "${source_digest}" "${REMOTE_INFERENCE_PYTHON_PACKAGES}" \
+            | sha256sum \
+            | awk '{print $1}'
+    )"
     local marker="${REMOTE_STATE_ROOT}/python-dependencies.sha256"
     if [[ -f "${marker}" ]] \
         && [[ "$(<"${marker}")" == "${dependency_digest}" ]] \
@@ -300,15 +348,15 @@ prepare_python() {
         log "Python dependencies are ready"
         return
     fi
-    log "Installing project, ModelScope and Embedding dependencies without replacing the ROCm base runtime"
+    local inference_packages=()
+    read -r -a inference_packages <<< "${REMOTE_INFERENCE_PYTHON_PACKAGES}"
+    (( ${#inference_packages[@]} > 0 )) || fail "REMOTE_INFERENCE_PYTHON_PACKAGES must not be empty"
+    log "Installing minimal inference-node dependencies without installing the Factory application"
     "${PYTHON_BIN}" -m pip install --index-url "${PYPI_INDEX_URL}" --upgrade pip
     "${PYTHON_BIN}" -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
         --upgrade-strategy only-if-needed \
-        -e "${REMOTE_PROJECT_ROOT}[web]" \
-        'modelscope>=1.25,<2' \
-        'sentence-transformers>=3,<6' \
-        'transformers>=4.51,<6'
+        "${inference_packages[@]}"
     verify_pytorch_runtime
     printf '%s\n' "${dependency_digest}" > "${marker}"
 }

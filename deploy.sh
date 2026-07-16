@@ -56,6 +56,7 @@ required_config=(
     REMOTE_IMAGE_PORT LOCAL_CHAT_PORT LOCAL_EMBEDDING_PORT LOCAL_TELEMETRY_PORT LOCAL_IMAGE_PORT
     IMAGE_PROFILE_ID IMAGE_SERVED_MODEL_NAME IMAGE_MODEL_FILENAME IMAGE_VAE_FILENAME
     IMAGE_CLIP_L_FILENAME IMAGE_T5XXL_FILENAME
+    REMOTE_INFERENCE_PYTHON_PACKAGES
 )
 for name in "${required_config[@]}"; do
     [[ -n "${!name:-}" ]] || fail "Missing deployment setting: ${name}"
@@ -159,20 +160,30 @@ sync_sources() {
     require_command rsync "Install rsync on the local development machine."
     local rsync_transport
     printf -v rsync_transport '%q ' "${RSYNC_SSH[@]}"
-    log "Synchronizing FastAgentFactory to ${SSH_TARGET}:${REMOTE_PROJECT_ROOT}"
-    rsync -az --delete \
+    log "Synchronizing minimal inference runtime to ${SSH_TARGET}:${REMOTE_PROJECT_ROOT}"
+    rsync -az --delete --delete-excluded --prune-empty-dirs \
         -e "${rsync_transport% }" \
-        --exclude '.agentfactory/' \
-        --exclude '.agent_runtime/' \
-        --exclude '.deploy/' \
-        --exclude '.env' \
-        --exclude 'deploy/deploy.env' \
-        --exclude '.venv/' \
-        --exclude 'node_modules/' \
-        --exclude 'vendor/llama.cpp/' \
-        --exclude 'vendor/llama.cpp-official/' \
-        --exclude 'vendor/llama.cpp-amd/' \
-        --exclude 'vendor/stable-diffusion.cpp/' \
+        --include '/agent_factory/' \
+        --include '/agent_factory/__init__.py' \
+        --include '/agent_factory/warnings.py' \
+        --include '/agent_factory/env.py' \
+        --include '/agent_factory/paths.py' \
+        --include '/agent_factory/local_inference/' \
+        --exclude '/agent_factory/local_inference/__init__.py' \
+        --include '/agent_factory/local_inference/*.py' \
+        --include '/agent_factory/model_pool/' \
+        --exclude '/agent_factory/model_pool/__init__.py' \
+        --include '/agent_factory/model_pool/config.py' \
+        --include '/agent_factory/model_pool/schema.py' \
+        --include '/agent_factory/model_pool/store.py' \
+        --include '/agent_factory/model_pool/storage.py' \
+        --include '/agent_factory/model_pool/download.py' \
+        --include '/agent_factory/models/' \
+        --exclude '/agent_factory/models/__init__.py' \
+        --include '/agent_factory/models/protocol.py' \
+        --include '/deploy/' \
+        --include '/deploy/configure_model_pool.py' \
+        --exclude '*' \
         "${PROJECT_ROOT}/" "${SSH_TARGET}:${REMOTE_PROJECT_ROOT}/"
 
     log "Synchronizing bundled official llama.cpp source"

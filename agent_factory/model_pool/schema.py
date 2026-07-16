@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 from typing import Any, Literal
@@ -8,6 +8,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
+
+
+UTC = timezone.utc
 
 
 ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]

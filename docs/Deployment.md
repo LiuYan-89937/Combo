@@ -24,7 +24,7 @@
 | 远端 | llama-server ROCm | `127.0.0.1:8003` |
 | 远端 | Embedding 服务 | `127.0.0.1:8002` |
 | 远端 | 推理控制与遥测 | `127.0.0.1:8004` |
-| 远端 | FastAgentFactory 源码 | `/root/FastAgentFactory` |
+| 远端 | 最小推理 bundle | `/root/FastAgentFactory` |
 | 远端 | 两套 llama.cpp 源码 | `/root/fastagentfactory-llama-sources` |
 | 远端 | 两套构建与活动入口 | `/root/.fastagentfactory/llama` |
 | 远端 | 模型文件 | `/root/models` |
@@ -138,7 +138,7 @@ SSH_KEY=
 
 | 字段 | 含义 | 默认策略 |
 | --- | --- | --- |
-| `REMOTE_PROJECT_ROOT` | 远端项目源码目录 | `/root/FastAgentFactory` |
+| `REMOTE_PROJECT_ROOT` | 远端最小推理 bundle 目录 | `/root/FastAgentFactory` |
 | `REMOTE_STATE_ROOT` | venv、模型池、PID、日志 | `/root/.fastagentfactory` |
 | `REMOTE_MODEL_ROOT` | 模型根目录 | `/root/models` |
 | `REMOTE_LLAMA_SOURCE_ROOT` | 远端两套 llama.cpp 源码根目录 | `/root/fastagentfactory-llama-sources` |
@@ -167,10 +167,12 @@ SSH_KEY=
 | `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
 | `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
 | `REMOTE_INSTALL_PYTORCH` | 缺失时允许安装配置指定的 PyTorch HIP | `1` |
-| `PYTORCH_INDEX_URL` | PyTorch HIP wheel 源；已有可用 HIP PyTorch 时不会使用 | 官方 ROCm 7.2 wheel 源 |
+| `PYTORCH_RUNTIME_PYTHON` | 镜像预装 HIP PyTorch 的 Python；以 `.pth` 接入项目 venv | `/opt/venv/bin/python` |
+| `REMOTE_INFERENCE_PYTHON_PACKAGES` | 远端推理节点最小依赖，不安装主项目 | FastAPI、HTTP、模型加载和 GGUF 解析依赖 |
+| `PYTORCH_INDEX_URL` | 预装运行时不可用时的 PyTorch HIP wheel 后备源 | 官方 ROCm 7.2 wheel 源 |
 | `PYTORCH_PACKAGES` | 相互匹配的 Torch、TorchVision 与 TorchAudio 发布组 | ROCm 7.2 的 2.11/0.26/2.11 |
 
-部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。缺失时只安装工作空间内的用户态组件；GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供。模板为比赛使用的 ROCm 7.2 镜像提供固定且相互匹配的 PyTorch 发布组；使用其他 ROCm 版本时，必须在 `deploy.env` 中同时覆盖 `PYTORCH_INDEX_URL` 和 `PYTORCH_PACKAGES`。
+部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。比赛镜像的 PyTorch 位于 `/opt/venv`，脚本会校验 Python ABI、HIP 和 GPU 可用性，再通过 `.pth` 接入项目隔离 venv，不重新下载或替换镜像 Torch。只有预装运行时不可用时才安装后备 wheel。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供；使用其他 ROCm 版本时，应覆盖预装 Python 路径，或同时覆盖 `PYTORCH_INDEX_URL` 和 `PYTORCH_PACKAGES`。
 
 ## 5. 首次一键部署
 
@@ -328,7 +330,7 @@ git pull --ff-only origin AMD-Hackson
 ./deploy.sh up
 ```
 
-远端同步以本机工作树为代码源，并使用 `rsync --delete` 清理远端项目源码中的旧文件；`.agentfactory`、`.agent_runtime`、远端模型、远端状态、venv 和 llama.cpp build 均不在删除范围内。
+远端同步以本机工作树为代码源，只传输 inference node、model pool 及其必要公共模块，并使用 `rsync --delete-excluded` 清除 bundle 中不属于该边界的旧文件。Factory 前后端、制造系统、会话与知识库代码不会上传；远端模型、状态、venv 和 llama.cpp build 位于 bundle 之外，不在删除范围内。
 
 ## 9. llama.cpp 算子开发与部署
 
