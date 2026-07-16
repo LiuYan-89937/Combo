@@ -222,6 +222,11 @@ class CollaborationService:
                     limit=dispatch_capacity.capacity,
                 )
                 session = self.store.get_session(collaboration_id)
+                if tasks:
+                    self.runtime_factory().emit_collaboration_session_updated(
+                        collaboration_id=collaboration_id,
+                        session=session,
+                    )
                 if not tasks and ready_tasks and dispatch_capacity.capacity == 0:
                     waiting_tasks = [
                         task
@@ -706,6 +711,10 @@ class CollaborationService:
                 event = self.store.claim_next_main_agent_event(collaboration_id)
                 if event is None:
                     break
+                runtime.emit_collaboration_session_updated(
+                    collaboration_id=collaboration_id,
+                    session=self.store.get_session(collaboration_id),
+                )
                 event_id = str(event.get("event_id") or "")
                 task_id = str(event.get("task_id") or "").strip() or None
                 event_ref = str(event.get("event_ref") or "").strip() or None

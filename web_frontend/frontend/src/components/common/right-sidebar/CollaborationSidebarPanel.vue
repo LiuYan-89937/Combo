@@ -47,7 +47,10 @@
               {{ t('collaboration.deleteSessionConfirm', { title: session.title }) }}
             </n-popconfirm>
           </span>
-          <span class="session-meta">{{ approvalModeLabel(session.approval_mode) }} · {{ session.status }}</span>
+          <span class="session-meta">
+            {{ approvalModeLabel(session.approval_mode) }} · {{ session.status }}
+            <template v-if="session.runtime_status"> · {{ runtimeStatusLabel(session) }}</template>
+          </span>
         </div>
       </div>
     </section>
@@ -657,6 +660,12 @@ function workerStatusTagType(packageId: string): 'default' | 'success' | 'warnin
 
 function approvalModeLabel(mode: CollaborationApprovalMode): string {
   return mode === 'main_agent_delegated' ? t('collaboration.agentApproval') : t('collaboration.userApproval')
+}
+
+function runtimeStatusLabel(session: CollaborationSessionView): string {
+  return session.runtime_status
+    ? t(`collaboration.runtimeStatus.${session.runtime_status}`)
+    : ''
 }
 
 function messageSpeaker(message: CollaborationMessageView): string {

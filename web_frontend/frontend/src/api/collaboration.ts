@@ -2,6 +2,11 @@ import { requestJson } from './http'
 
 export type CollaborationApprovalMode = 'user_controlled' | 'main_agent_delegated'
 export type CollaborationSessionStatus = 'draft' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type CollaborationRuntimeStatus =
+  | 'waiting_for_workers'
+  | 'waiting_for_approval'
+  | 'waiting_for_dependency'
+  | 'resuming_from_event'
 export type CollaborationTaskStatus =
   | 'assigned'
   | 'queued'
@@ -78,6 +83,8 @@ export interface CollaborationSessionView {
   main_factory_session_id?: string | null
   approval_mode: CollaborationApprovalMode
   status: CollaborationSessionStatus
+  runtime_status?: CollaborationRuntimeStatus | null
+  runtime_status_payload?: Record<string, any>
   created_at: string
   updated_at: string
   acceptance_workspace?: {

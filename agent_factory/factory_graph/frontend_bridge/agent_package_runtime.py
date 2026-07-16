@@ -16,7 +16,7 @@ from agent_factory.knowledge_system import KnowledgeRuntime
 from agent_factory.knowledge_system.factory import build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
-from agent_factory.collaboration_system.store import CollaborationStore
+from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
@@ -159,17 +159,38 @@ class AgentPackageRuntimeManager:
     def emit_collaboration_session_updated(self, *, collaboration_id: str, session: dict[str, Any]) -> None:
         if self._emit is None:
             return
+        session_id = str(
+            session.get("main_factory_session_id")
+            or session.get("main_agent_package_session_id")
+            or ""
+        ) or None
+        mode = (
+            "chat"
+            if str(session.get("main_agent_package_id") or "") == SYSTEM_CHAT_PACKAGE_ID
+            else "agent_package"
+        )
+        common = {
+            "request_id": None,
+            "session_id": session_id,
+            "mode": mode,
+            "graph_id": "collaboration",
+            "producer_type": "collaboration_service",
+        }
         self._emit(
             event(
-                "debug_patch",
-                request_id=None,
-                mode="agent_package",
-                graph_id="collaboration",
-                producer_type="collaboration_service",
+                "collaboration_session_updated",
+                **common,
+                payload={"collaboration_id": collaboration_id, "session": session},
+            )
+        )
+        self._emit(
+            event(
+                "collaboration_runtime_status_changed",
+                **common,
                 payload={
-                    "kind": "collaboration_session_updated",
                     "collaboration_id": collaboration_id,
-                    "session": session,
+                    "runtime_status": session.get("runtime_status"),
+                    "runtime_status_payload": session.get("runtime_status_payload") or {},
                 },
             )
         )

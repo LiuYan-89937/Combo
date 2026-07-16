@@ -60,7 +60,10 @@ class CollaborationStore:
                 order by updated_at desc, created_at desc
                 """
             ).fetchall()
-        return [self._session_view(row) for row in rows]
+            sessions = [self._session_view(row) for row in rows]
+            for session in sessions:
+                self._attach_runtime_status(conn, session)
+        return sessions
 
     def list_auto_dispatch_sessions(self) -> list[dict[str, Any]]:
         sessions = [
@@ -258,6 +261,7 @@ class CollaborationStore:
                     (collaboration_id,),
                 ).fetchall()
             ]
+            self._attach_runtime_status(conn, session)
         return session
 
     def update_session(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1253,6 +1257,59 @@ class CollaborationStore:
         }
         return data
 
+    def _attach_runtime_status(self, conn: sqlite3.Connection, session: dict[str, Any]) -> None:
+        collaboration_id = str(session.get("collaboration_id") or "")
+        if str(session.get("status") or "") in TERMINAL_SESSION_STATUSES:
+            session["runtime_status"] = None
+            session["runtime_status_payload"] = {}
+            return
+        tasks = session.get("tasks")
+        if not isinstance(tasks, list):
+            tasks = [
+                self._task_view(row)
+                for row in conn.execute(
+                    """
+                    select * from collaboration_tasks
+                    where collaboration_id = ?
+                    order by created_at asc, task_id asc
+                    """,
+                    (collaboration_id,),
+                ).fetchall()
+            ]
+        manufacturing_requests = session.get("manufacturing_requests")
+        if not isinstance(manufacturing_requests, list):
+            manufacturing_requests = [
+                self._manufacturing_request_view(row)
+                for row in conn.execute(
+                    """
+                    select * from collaboration_manufacturing_requests
+                    where collaboration_id = ?
+                    order by created_at asc, request_id asc
+                    """,
+                    (collaboration_id,),
+                ).fetchall()
+            ]
+        event_counts = {
+            str(row["status"]): int(row["count"])
+            for row in conn.execute(
+                """
+                select status, count(*) as count
+                from collaboration_main_agent_events
+                where collaboration_id = ? and status in (?, ?)
+                group by status
+                """,
+                (collaboration_id, "pending", "processing"),
+            ).fetchall()
+        }
+        runtime_status, runtime_payload = collaboration_runtime_status_view(
+            tasks=tasks,
+            manufacturing_requests=manufacturing_requests,
+            pending_event_count=event_counts.get("pending", 0),
+            processing_event_count=event_counts.get("processing", 0),
+        )
+        session["runtime_status"] = runtime_status
+        session["runtime_status_payload"] = runtime_payload
+
     def _task_view(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["depends_on"] = json_loads(data.pop("depends_on_json", "[]"), [])
@@ -1779,6 +1836,109 @@ def dependencies_satisfied(session: dict[str, Any], depends_on: list[str]) -> bo
     tasks = session.get("tasks") if isinstance(session.get("tasks"), list) else []
     by_id = {str(task.get("task_id") or ""): task for task in tasks if task.get("task_id")}
     return all(str(by_id.get(task_id, {}).get("status") or "") in DEPENDENCY_SATISFIED_TASK_STATUSES for task_id in depends_on)
+
+
+def collaboration_runtime_status_view(
+    *,
+    tasks: list[dict[str, Any]],
+    manufacturing_requests: list[dict[str, Any]],
+    pending_event_count: int,
+    processing_event_count: int,
+) -> tuple[str | None, dict[str, Any]]:
+    task_by_id = {
+        str(task.get("task_id") or ""): task
+        for task in tasks
+        if str(task.get("task_id") or "")
+    }
+    if processing_event_count > 0:
+        return "resuming_from_event", {
+            "reason": "main_agent_event_processing",
+            "processing_event_count": processing_event_count,
+            "pending_event_count": pending_event_count,
+        }
+
+    approval_task_ids = [
+        task_id
+        for task_id, task in task_by_id.items()
+        if str(task.get("status") or "") == "blocked"
+        and isinstance((task.get("result_payload") or {}).get("pending_interrupt"), dict)
+    ]
+    if approval_task_ids:
+        return "waiting_for_approval", {
+            "reason": "worker_tool_approval",
+            "task_ids": approval_task_ids,
+            "task_count": len(approval_task_ids),
+        }
+
+    if pending_event_count > 0:
+        return "resuming_from_event", {
+            "reason": "main_agent_event_pending",
+            "processing_event_count": 0,
+            "pending_event_count": pending_event_count,
+        }
+
+    dependency_task_ids: list[str] = []
+    dependency_reasons: set[str] = set()
+    for task_id, task in task_by_id.items():
+        if str(task.get("status") or "") == "blocked":
+            dependency_task_ids.append(task_id)
+            dependency_reasons.add("worker_blocked")
+            continue
+        if str(task.get("status") or "") not in READY_TO_START_STATUSES:
+            continue
+        result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+        if str(result_payload.get("runtime_status") or "") == "waiting_for_inference_capacity":
+            dependency_task_ids.append(task_id)
+            dependency_reasons.add("inference_capacity")
+            continue
+        depends_on = normalize_dependency_ids(task.get("depends_on"))
+        if depends_on and not all(
+            str(task_by_id.get(dependency_id, {}).get("status") or "") in DEPENDENCY_SATISFIED_TASK_STATUSES
+            for dependency_id in depends_on
+        ):
+            dependency_task_ids.append(task_id)
+            dependency_reasons.add("task_dependency")
+
+    active_task_ids = [
+        task_id
+        for task_id, task in task_by_id.items()
+        if str(task.get("status") or "") in ACTIVE_WORKER_TASK_STATUSES
+    ]
+    active_manufacturing_ids = [
+        str(request.get("request_id") or "")
+        for request in manufacturing_requests
+        if str(request.get("status") or "") in MANUFACTURING_REQUEST_ACTIVE_STATUSES
+        and str(request.get("request_id") or "")
+    ]
+    if active_task_ids or active_manufacturing_ids:
+        return "waiting_for_workers", {
+            "reason": "worker_activity",
+            "task_ids": active_task_ids,
+            "task_count": len(active_task_ids),
+            "manufacturing_request_ids": active_manufacturing_ids,
+            "manufacturing_request_count": len(active_manufacturing_ids),
+        }
+
+    if dependency_task_ids:
+        return "waiting_for_dependency", {
+            "reason": "external_or_task_dependency",
+            "dependency_types": sorted(dependency_reasons),
+            "task_ids": dependency_task_ids,
+            "task_count": len(dependency_task_ids),
+        }
+
+    outstanding_task_ids = [
+        task_id
+        for task_id, task in task_by_id.items()
+        if str(task.get("status") or "") not in {"completed", "cancelled", "failed"}
+    ]
+    if outstanding_task_ids:
+        return "waiting_for_workers", {
+            "reason": "outstanding_tasks",
+            "task_ids": outstanding_task_ids,
+            "task_count": len(outstanding_task_ids),
+        }
+    return None, {}
 
 
 def merge_artifact_refs(*groups: list[Any]) -> list[Any]:

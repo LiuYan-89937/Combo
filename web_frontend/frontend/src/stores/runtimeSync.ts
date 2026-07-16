@@ -21,9 +21,17 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   if (event.event_type === 'agent_package_selected' && !runtimeStore.ownsAgentPackageSelection(event)) {
     return
   }
-  if (event.event_type === 'debug_patch' && event.payload?.kind === 'collaboration_session_updated' && event.payload?.session) {
+  if (event.event_type === 'collaboration_session_updated' && event.payload?.session) {
     const collaborationStore = useCollaborationStore()
     collaborationStore.applySessionSnapshot(event.payload.session as any)
+  }
+  if (event.event_type === 'collaboration_runtime_status_changed' && event.payload?.collaboration_id) {
+    const collaborationStore = useCollaborationStore()
+    collaborationStore.applyRuntimeStatus(
+      String(event.payload.collaboration_id),
+      event.payload.runtime_status || null,
+      event.payload.runtime_status_payload || {},
+    )
   }
   const hasRunAgentSession =
     (event.event_type === 'run_completed' || event.event_type === 'run_cancelled' || event.event_type === 'run_failed') &&

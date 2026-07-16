@@ -1,6 +1,19 @@
 <template>
   <div class="collaboration-view">
     <div class="chat-container">
+      <div
+        v-if="runtimeStatus"
+        class="runtime-status-banner"
+        :data-status="runtimeStatus"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="runtime-status-dot" aria-hidden="true"></span>
+        <div class="runtime-status-copy">
+          <strong>{{ runtimeStatusTitle }}</strong>
+          <span>{{ runtimeStatusDescription }}</span>
+        </div>
+      </div>
       <section class="conversation-panel">
         <n-empty
           v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
@@ -71,6 +84,7 @@ import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
+import type { CollaborationRuntimeStatus } from '@/api/collaboration'
 import type { RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
@@ -99,6 +113,25 @@ const {
   thinkingMessages,
   timelineItems,
 } = useCollaborationRuntime()
+const runtimeStatus = computed<CollaborationRuntimeStatus | null>(() => {
+  if (runtimeStore.runStatus === 'interrupted' && hasApprovalRequests.value) {
+    return 'waiting_for_approval'
+  }
+  const sessionStatus = store.activeSession?.runtime_status || null
+  if (isMainAgentRunning.value) {
+    return sessionStatus === 'resuming_from_event' ? sessionStatus : null
+  }
+  if (runtimeStore.runStatus === 'waiting_for_workers') {
+    return 'waiting_for_workers'
+  }
+  return sessionStatus
+})
+const runtimeStatusTitle = computed(() => (
+  runtimeStatus.value ? t(`collaboration.runtimeStatus.${runtimeStatus.value}`) : ''
+))
+const runtimeStatusDescription = computed(() => (
+  runtimeStatus.value ? t(`collaboration.runtimeStatus.${runtimeStatus.value}.description`) : ''
+))
 
 onMounted(() => {
   uiStore.openRightSidebar('status')
@@ -198,6 +231,51 @@ watch(
   margin: 0 auto;
   width: min(100%, var(--app-chat-max-width));
   transition: width .24s var(--app-transition-spring), max-width .24s var(--app-transition-spring);
+}
+
+.runtime-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--app-primary) 24%, var(--app-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--app-primary) 7%, var(--app-surface));
+}
+
+.runtime-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--app-primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-primary) 14%, transparent);
+  animation: runtime-status-pulse 1.8s ease-in-out infinite;
+}
+
+.runtime-status-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.runtime-status-copy strong {
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.runtime-status-copy span {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@keyframes runtime-status-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
 .conversation-panel {
