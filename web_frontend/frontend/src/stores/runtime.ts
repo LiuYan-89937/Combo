@@ -583,7 +583,12 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleRunCompleted(event: FactoryFrontendEvent) {
-      const completedStatus: RunStatus = event.payload?.status === 'stopped' ? 'stopped' : 'completed'
+      const reportedStatus = String(event.payload?.finish_status || event.payload?.status || '')
+      const completedStatus: RunStatus = reportedStatus === 'stopped'
+        ? 'stopped'
+        : reportedStatus === 'waiting_for_workers'
+          ? 'waiting_for_workers'
+          : 'completed'
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
         this._completeActiveRequest(event, completedStatus)
         return

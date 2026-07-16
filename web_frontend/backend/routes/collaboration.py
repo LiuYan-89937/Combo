@@ -76,7 +76,10 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
                 collaboration_id=collaboration_id,
                 user_message=str(payload.get("message") or ""),
             )
-            return {"prompt": prompt}
+            return {
+                "prompt": prompt,
+                "runtime_tool_access": service.main_agent_runtime_tool_access(),
+            }
         except Exception as exc:
             raise _http_error(exc) from exc
 

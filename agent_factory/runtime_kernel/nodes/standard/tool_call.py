@@ -33,6 +33,7 @@ from agent_factory.tooling.langgraph_node import (
     tool_observation_message,
     tool_messages_to_runtime_patch,
 )
+from agent_factory.tooling.envelope import runtime_wait_control
 
 
 class OperationalToolCallNode:
@@ -106,6 +107,19 @@ class OperationalToolCallNode:
             messages.extend(output.get("messages") or [])
         results, failures, policy_patch, route_decision = tool_messages_to_runtime_patch(messages)
         route_decision = _caller_route_decision(working_state, origin_node_id, route_decision)
+        wait_control = runtime_wait_control(results)
+        execution_patch: dict[str, Any] = {
+            "current_node": context.node_id,
+            "route_decision": route_decision,
+        }
+        if wait_control is not None:
+            execution_patch.update(
+                {
+                    "route_decision": "execution.finished",
+                    "finished": True,
+                    "finish_status": wait_control["status"],
+                }
+            )
         patch: dict[str, Any] = {
             "messages": messages,
             **plan_patch,
@@ -116,10 +130,7 @@ class OperationalToolCallNode:
                 "pending_tool_call": None,
                 "pending_tool_calls": [],
             },
-            "execution": {
-                "current_node": context.node_id,
-                "route_decision": route_decision,
-            },
+            "execution": execution_patch,
         }
         if policy_patch:
             patch["policy"] = policy_patch

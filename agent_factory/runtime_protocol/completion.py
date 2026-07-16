@@ -3,11 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 
+SUCCESSFUL_RUNTIME_FINISH_STATUSES = frozenset({"completed", "waiting_for_workers"})
+
+
 def runtime_completed(state: Any) -> bool:
     execution = getattr(state, "execution", None)
     return bool(
         execution is not None
-        and getattr(execution, "finish_status", None) == "completed"
+        and getattr(execution, "finish_status", None) in SUCCESSFUL_RUNTIME_FINISH_STATUSES
         and not getattr(execution, "last_error", None)
     )
 

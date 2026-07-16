@@ -7,7 +7,7 @@ from typing import Any
 
 from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
 from agent_factory.document_processing import SUPPORTED_FILE_EXTENSIONS, parse_file
-from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -18,7 +18,15 @@ IMMEDIATE_ATTENTION_TASK_STATUSES = {"submitted", "blocked", "failed"}
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     output = _run_action(arguments, resources)
-    return tool_envelope(output, summary=str(output.get("message") or ""))
+    evidence = (
+        runtime_wait_evidence(
+            status="waiting_for_workers",
+            reason="collaboration workers are still running",
+        )
+        if output.get("status") == "deferred"
+        else None
+    )
+    return tool_envelope(output, evidence=evidence, summary=str(output.get("message") or ""))
 
 
 def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
@@ -147,7 +155,7 @@ def _inspect_gate(session: dict[str, Any]) -> dict[str, Any] | None:
     statuses = {str(task.get("status") or "").strip() for task in tasks}
     if statuses & IMMEDIATE_ATTENTION_TASK_STATUSES:
         return None
-    if statuses and statuses <= ACTIVE_TASK_STATUSES:
+    if statuses & ACTIVE_TASK_STATUSES:
         active = [
             {
                 "task_id": task.get("task_id"),
@@ -156,6 +164,7 @@ def _inspect_gate(session: dict[str, Any]) -> dict[str, Any] | None:
                 "updated_at": task.get("updated_at"),
             }
             for task in tasks
+            if str(task.get("status") or "").strip() in ACTIVE_TASK_STATUSES
         ]
         return {
             "action": "inspect",

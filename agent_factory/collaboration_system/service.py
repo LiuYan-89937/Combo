@@ -11,6 +11,7 @@ from agent_factory.create_agent.publish_tool import confirm_and_publish
 from agent_factory.create_agent.runtime import CreateAgentRuntime
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.collaboration_system.orchestrator import CollaborationOrchestrator
+from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_events import RUN_TERMINAL_EVENT_TYPES, runtime_stream_status
@@ -76,6 +77,9 @@ class CollaborationService:
             user_message=user_message,
             session=self.store.get_session(collaboration_id),
         )
+
+    def main_agent_runtime_tool_access(self) -> dict[str, list[str]]:
+        return collaboration_runtime_tool_access()
 
     def create_task(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self.store.create_task(collaboration_id, payload)
@@ -554,6 +558,14 @@ class CollaborationService:
                 store=self.store,
                 runtime=runtime,
             )
+            busy_reason = orchestrator.main_agent_busy_reason(collaboration_id)
+            if busy_reason:
+                self.logger.debug(
+                    "Collaboration main agent is busy for %s: %s",
+                    collaboration_id,
+                    busy_reason,
+                )
+                return
             while True:
                 event = self.store.claim_next_main_agent_event(collaboration_id)
                 if event is None:
@@ -563,12 +575,29 @@ class CollaborationService:
                 event_ref = str(event.get("event_ref") or "").strip() or None
                 user_message = str(event.get("user_message") or "")
                 message_metadata = event.get("message_metadata") if isinstance(event.get("message_metadata"), dict) else None
-                orchestrator.continue_main_agent(
+                continuation = orchestrator.continue_main_agent(
                     collaboration_id,
                     user_message=user_message,
                     message_metadata=message_metadata,
                     event_ref=f"{event_ref}:main-agent" if event_ref else None,
                 )
+                if not continuation.succeeded:
+                    error = f"main agent continuation {continuation.status}: {continuation.message}"
+                    self.store.fail_main_agent_event(event_id, error)
+                    self.store.record_message(
+                        collaboration_id,
+                        speaker_type="system",
+                        speaker_package_id=None,
+                        message_kind="progress",
+                        content=f"主 Agent 触发失败：{error}",
+                        task_id=task_id,
+                        event_ref=event_ref,
+                    )
+                    runtime.emit_collaboration_session_updated(
+                        collaboration_id=collaboration_id,
+                        session=self.store.get_session(collaboration_id),
+                    )
+                    break
                 self.store.complete_main_agent_event(event_id)
                 runtime.emit_collaboration_session_updated(
                     collaboration_id=collaboration_id,
