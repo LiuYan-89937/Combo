@@ -7,12 +7,11 @@ import shutil
 import tempfile
 import zipfile
 
-from agent_factory.paths import project_root
+from agent_factory.paths import project_root, system_package_root
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
 
 
 DEFAULT_AGENT_PACKAGE_ROOT = ".agentfactory/packages"
-DEFAULT_SYSTEM_PACKAGE_ROOT = "SystemPackage"
 
 
 @dataclass(slots=True)
@@ -97,7 +96,7 @@ def default_package_root() -> Path:
 
 
 def default_system_package_root() -> Path:
-    return project_root() / DEFAULT_SYSTEM_PACKAGE_ROOT
+    return system_package_root()
 
 
 def safe_child(root: Path, child_name: str, *, label: str) -> Path:

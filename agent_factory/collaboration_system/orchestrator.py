@@ -141,7 +141,7 @@ class CollaborationOrchestrator:
             user_config={
                 "collaboration_id": collaboration_id,
                 "runtime_tool_access": {
-                    "extra_allowed_tool_ids": ["collaboration", "agent_list", "agent_search", "agent_manufacture"],
+                    "allowed_tool_ids": ["collaboration", "agent_list", "agent_search", "agent_manufacture"],
                 },
             },
             require_ready=True,

@@ -20,7 +20,10 @@ from agent_factory.runtime_kernel.planning import (
     runtime_plan_model_tool,
 )
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.runtime_kernel.nodes.standard.tool_visibility import runtime_extra_allowed_tool_ids
+from agent_factory.runtime_kernel.nodes.standard.tool_visibility import (
+    runtime_allowed_tool_ids_override,
+    runtime_extra_allowed_tool_ids,
+)
 from agent_factory.context_system.token_counter import provider_token_budget_payload
 
 
@@ -204,6 +207,9 @@ def _visible_tools(context: NodeExecutionContext, state: RuntimeState) -> list[A
 
 
 def _model_visible_tool_ids(context: NodeExecutionContext, state: RuntimeState, registry: Any) -> list[str]:
+    runtime_override = runtime_allowed_tool_ids_override(state)
+    if runtime_override is not None:
+        return runtime_override
     if _is_plan_and_execute_node(context, state):
         return plan_and_execute_model_tool_ids(
             node_id=context.node_id,
