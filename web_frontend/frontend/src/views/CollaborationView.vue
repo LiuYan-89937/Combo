@@ -34,6 +34,10 @@
         v-if="hasApprovalRequests"
         class="approval-section"
       />
+      <PublishConfirmationPanel
+        v-if="runtimeStore.isPublishConfirmationPending"
+        class="approval-section"
+      />
 
       <footer class="composer">
         <MessageInput
@@ -65,6 +69,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useCollaborationRuntime } from '@/composables/collaboration/useCollaborationRuntime'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
+import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'

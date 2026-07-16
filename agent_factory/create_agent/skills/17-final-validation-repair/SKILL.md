@@ -1,6 +1,6 @@
 ---
 name: 17-final-validation-repair
-description: Guides final validation, repair interpretation, and automatic publication readiness.
+description: Guides final validation, repair interpretation, and explicit publication readiness.
 metadata:
   system_id: final_validation
   stage_order: 17
@@ -9,7 +9,7 @@ metadata:
 # Final Validation Repair
 
 ## Role
-Guides final validation, repair interpretation, and automatic publication readiness.
+Guides final validation, repair interpretation, and explicit publication readiness.
 
 ## Baseline Package Assumption
 - The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
@@ -21,7 +21,7 @@ Guides final validation, repair interpretation, and automatic publication readin
 ## When To Use This Skill
 - The model is in validation_publish focus and needs to interpret validation results.
 - Full validation fails and repair must be routed to concrete package files.
-- The package is ready for automatic publication after a successful finalize action.
+- The package is ready for explicit Web publication approval after a successful finalize action.
 
 ## Focus Files
 - `whole package readiness`
@@ -38,7 +38,7 @@ Guides final validation, repair interpretation, and automatic publication readin
 - If validator targets a scaffold-owned contract and no capability-specific authoring action applies, use create_agent_authoring(action="reset_contract", contract_key=...) instead of hand-writing contract JSON.
 - Prefer validator fields such as target_files, schema_path, invalid_value_path, expected_shape, repair_template, and replace_strategy when present.
 - If repair requires missing user information, ask the user instead of fabricating config.
-- Call `create_agent_control(action="finalize")` only after `validation_publish` focus and a fresh passed `full_static` validation. Finalize performs physical publication atomically; never request a second user confirmation.
+- Call `create_agent_control(action="finalize")` only after `validation_publish` focus and a fresh passed `full_static` validation. Finalize ends manufacturing in publish-ready state; physical publication requires explicit approval through the Web confirmation panel.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.
@@ -49,7 +49,7 @@ Guides final validation, repair interpretation, and automatic publication readin
 ## Validation And Focus
 - Validator evidence guides repairs; successful or failed deterministic authoring, probe, validation, and publish operations synchronize focus through the manufacturing state machine.
 - Use `create_agent_stage(action="set_focus", focus_id=..., reason=...)` only to correct or intentionally redirect focus.
-- Finalization requires `validation_publish` and a fresh passed `full_static` validation; `create_agent_control(action="finalize")` then publishes automatically.
+- Finalization requires `validation_publish` and a fresh passed `full_static` validation; `create_agent_control(action="finalize")` then enters publish-ready state.
 
 ## Resource Loading
 - Use a listed capability example when this skill provides one; otherwise rely on current package files and validator evidence.

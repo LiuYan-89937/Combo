@@ -56,7 +56,7 @@ Guides the complete SkillHub reuse phase between model/MCP assembly and package-
 ## Validation And Focus
 - SkillHub work belongs to `capability_implementation`; it does not create a separate user-interaction interrupt.
 - Deterministic authoring, installation, probe, and validation results may synchronize manufacturing focus; use `create_agent_stage(action="inspect")` when the active focus is unclear.
-- Finalization requires `validation_publish`, a passed fresh `full_static` validation, and automatic publication by `create_agent_control(action="finalize")`.
+- Finalization requires `validation_publish`, a fresh passed `full_static` validation, and publish-ready finalization by `create_agent_control(action="finalize")`.
 
 ## Resource Loading
 - Use `skillhub` for marketplace status, search, install, and remove.

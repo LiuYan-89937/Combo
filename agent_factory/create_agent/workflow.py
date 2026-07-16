@@ -13,7 +13,6 @@ from langgraph.types import interrupt
 from agent_factory.create_agent.models import CreateAgentAction, PackageValidationReport
 from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
 from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
-from agent_factory.create_agent.publish_tool import publish_workspace
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
@@ -40,7 +39,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     runtime_reasoning_intensity: int | None
     done: bool
     final_answer: str
-    published_package: dict[str, Any]
+    publish_ready: dict[str, Any]
     interrupt_answer: dict[str, Any]
 
 
@@ -173,16 +172,7 @@ class CreateAgentWorkflow:
                 "done": False,
             }
         workspace.write_action(CreateAgentAction())
-        published = publish_workspace(
-            workspace=workspace,
-            trigger="create_agent_finalize",
-        )
-        return {
-            "validation": report.to_digest().model_dump(mode="json"),
-            "published_package": published,
-            "done": True,
-            "final_answer": _published_text(published),
-        }
+        return _publish_ready_result(workspace, report)
 
     def _evolution_control_gate(self, state: CreateAgentGraphState, workspace: CreateAgentWorkspace) -> dict[str, Any]:
         action = workspace.read_action()
@@ -461,7 +451,33 @@ def _explicit_control_action_required(assistant_text: str) -> str:
     )
 
 
-def _published_text(published: dict[str, Any]) -> str:
-    package_id = str(published.get("package_id") or "").strip()
-    package_path = str(published.get("package_path") or "").strip()
-    return f"AgentPackage 已完成制造、最终校验并自动发布：{package_id} ({package_path})"
+def _publish_ready_text(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> str:
+    return (
+        "AgentPackage 已完成制造并通过最终静态校验。\n\n"
+        f"- Workspace: {workspace.root}\n"
+        f"- Validation: {report.validation_scope} / {report.status}\n"
+        f"- Summary: {report.summary}\n\n"
+        "当前包已进入待发布状态。请在下方确认发布面板中决定发布或继续修改。"
+    )
+
+
+def _publish_ready_payload(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> dict[str, Any]:
+    return {
+        "version": "agent_package_publish_report.v0",
+        "status": "ready",
+        "source_workspace": str(workspace.root),
+        "message": _publish_ready_text(workspace, report),
+        "validation": report.to_digest().model_dump(mode="json"),
+        "package_fingerprint": package_fingerprint(workspace.root),
+    }
+
+
+def _publish_ready_result(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> dict[str, Any]:
+    publish_ready = _publish_ready_payload(workspace, report)
+    workspace.write_publish_report(publish_ready)
+    return {
+        "validation": report.to_digest().model_dump(mode="json"),
+        "publish_ready": publish_ready,
+        "done": True,
+        "final_answer": _publish_ready_text(workspace, report),
+    }

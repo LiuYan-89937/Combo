@@ -68,6 +68,7 @@ export function useFactoryConversation() {
   ))
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked
+    || runtimeStore.isPublishConfirmationPending
     || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
   ))
   const emptyDescription = computed(() => {

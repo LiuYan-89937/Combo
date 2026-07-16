@@ -142,10 +142,10 @@ def _invariant_system_prompt_text() -> str:
         (
             "最终出厂流程固定为：当前 focus 是 validation_publish；"
             "先显式调用 create_agent_validate(scope='full_static', reason=...)；"
-            "full_static validation passed 后调用 create_agent_control(action=finalize)，系统立即执行原子发布。"
-            "不要索要发布确认，也不要输出待发布、请点击发布按钮或让用户二次确认之类的文字；发布成功结果由系统返回。"
-            "如果自动发布失败，必须根据系统错误继续修复，不能声称已经发布。"
-            "用户后续提出修改意见时，把它作为已发布 AgentPackage 的进化需求处理。"
+            "full_static validation passed 后调用 create_agent_control(action=finalize)，制造链路结束并进入待发布状态。"
+            "发布确认不通过制造对话索取；物理发布只由用户在 Web 确认发布面板中执行。"
+            "不能声称 finalize 已经完成物理发布，也不能绕过发布 API。"
+            "如果用户选择继续修改，把修改意见作为当前制造会话的新需求处理，修改后重新 full_static validation 和 finalize。"
         ),
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
@@ -244,7 +244,7 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             ".factory/system_state.json、.factory/task_analysis.json 和 .factory/validation.json 只能通过 create_agent_stage inspect 获取摘要，不要直接读写；"
-            ".factory/action.json 只能通过 create_agent_control(action='inspect') 获取摘要。"
+            ".factory/action.json 和 .factory/publish_decision.json 只能通过 create_agent_control(action='inspect') 获取摘要。"
             "如果通用 read 被拒绝，不要再次用 read 访问 managed file。"
         ),
         (
