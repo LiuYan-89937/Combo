@@ -27,6 +27,7 @@ from agent_factory.local_inference.config import (
     load_local_inference_endpoint,
 )
 from agent_factory.local_inference.http_client import create_private_async_http_client
+from agent_factory.local_inference.node_control import InferenceNodeClient
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.model_pool.store import ModelPoolStore
 
@@ -337,26 +338,25 @@ async def _remote_json(path: str) -> dict[str, Any]:
 
 
 async def _active_benchmark_implementation() -> BenchmarkImplementation:
-    software = await _remote_json("/runtime/software")
-    status = software.get("llama_implementation") if isinstance(software, dict) else None
-    active_build = status.get("active_build") if isinstance(status, dict) else None
-    if not isinstance(active_build, dict):
-        raise ValueError("the inference node did not report an active llama.cpp implementation")
-    label = str(active_build.get("display_name") or active_build.get("implementation") or "").strip()
-    revision = str(active_build.get("source_revision") or "").strip()
+    status = await InferenceNodeClient().llama_implementation()
+    active_build = status.active_build
+    if not status.available or active_build is None:
+        raise ValueError(status.error or "the inference node did not report an active llama.cpp implementation")
+    label = str(active_build.display_name or active_build.implementation).strip()
+    revision = active_build.source_revision.strip()
     if not label or not revision:
         raise ValueError("the active llama.cpp implementation metadata is incomplete")
     return BenchmarkImplementation(
         label=label,
         revision=revision,
         parameters={
-            "implementation": active_build.get("implementation"),
-            "source_sha256": active_build.get("source_sha256"),
-            "binary_sha256": active_build.get("binary_sha256"),
-            "custom_kernels": active_build.get("custom_kernels"),
-            "optimization_status": active_build.get("optimization_status"),
-            "build_options": active_build.get("build_options"),
-            "built_at": active_build.get("built_at"),
+            "implementation": active_build.implementation,
+            "source_sha256": active_build.source_sha256,
+            "binary_sha256": active_build.binary_sha256,
+            "custom_kernels": active_build.custom_kernels,
+            "optimization_status": active_build.optimization_status,
+            "build_options": active_build.build_options,
+            "built_at": active_build.built_at,
         },
     )
 

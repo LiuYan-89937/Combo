@@ -52,7 +52,17 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
     @router.get("/runtime/llama")
     async def llama_runtime():
         if load_inference_runtime_mode() == "external":
-            return await _external_runtime_payload("/runtime/llama")
+            try:
+                status = await InferenceNodeClient().llama_implementation()
+            except (httpx.HTTPError, ValueError) as exc:
+                return {
+                    "available": False,
+                    "active": None,
+                    "active_build": None,
+                    "builds": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            return status.model_dump(mode="json")
         return inspect_llama_implementations().model_dump(mode="json")
 
     @router.get("/runtimes")
@@ -350,17 +360,6 @@ async def _external_rocm_payload() -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
         }
     raise ValueError("external telemetry response must be a JSON object")
-
-
-async def _external_runtime_payload(path: str) -> dict[str, Any]:
-    endpoint = load_inference_telemetry_endpoint()
-    async with create_private_async_http_client(endpoint) as client:
-        response = await client.get(endpoint.endpoint(path))
-        response.raise_for_status()
-        payload = response.json()
-    if not isinstance(payload, dict):
-        raise ValueError("external runtime response must be a JSON object")
-    return payload
 
 
 def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> ModelPoolProfile:
