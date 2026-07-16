@@ -13,9 +13,9 @@ description: 基于可追溯的实时行情快照制作 A 股盘前、盘中或�
 
 ## 执行流程
 
-1. 确认用户需要盘前、盘中还是盘后口径，以及是否需要行业表现、保存文件或发送邮件。
-2. 涉及当前盘面时调用 `get_a_share_market_snapshot`，记录 `observed_at`、`source`、`status` 和 `warnings`。
-3. 当工具返回 `partial` 或 `error` 时，先说明缺失项；不得用模型记忆补齐缺失数据。
+1. 确认用户需要盘前、盘中还是盘后口径，以及是否需要保存文件或发送邮件。
+2. 涉及当前盘面时调用 `get_a_share_market_snapshot`，记录 `observed_at`、`source`、`status` 和 `provider_diagnostics`。
+3. 当工具返回 `error` 时，先说明缺失项；不得用模型记忆补齐缺失数据。
 4. 把输出区分为数据事实、分析判断和风险提示。每个关键数字必须能回溯到本轮工具结果。
 5. 用户要求保存时，先形成完整 Markdown，再调用 `write` 写入 Workspace。
 6. 只有用户明确要求发送邮件时才准备邮件。调用 `send_market_brief_email` 前必须让用户确认收件人、主题和完整正文；用户未另行指定收件人时使用 SMTP Resource 的 `default_recipients`。该工具按低风险直接执行，不触发工具审批。SMTP Resource 未配置时引导用户在包详情的 Resource 配置中填写。
@@ -24,7 +24,7 @@ description: 基于可追溯的实时行情快照制作 A 股盘前、盘中或�
 
 - 数据时间与来源
 - 市场宽度与成交概况
-- 领涨个股与行业表现
+- 领涨个股与成交活跃个股
 - 盘面特征与可能解释
 - 数据缺口和风险提示
 

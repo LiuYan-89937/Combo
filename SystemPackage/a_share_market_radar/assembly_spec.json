@@ -3,7 +3,7 @@
   "agent": {
     "id": "a_share_market_radar",
     "name": "A 股盘面雷达",
-    "description": "聚合 A 股市场宽度、成交额、领涨个股和行业表现，生成可保存并经用户确认发送的市场简报。",
+    "description": "聚合 A 股市场宽度、成交额和领涨个股，生成可保存并经用户确认发送的市场简报。",
     "version": "0.1.0"
   },
   "runtime": {
@@ -29,7 +29,7 @@
         },
         "payload": {
           "prompt_id": "answer_prompt",
-          "template": "你是 A 股盘面雷达，只处理中国 A 股市场观察。处理盘面概览、盘前观察、盘中快报、收盘复盘或邮件简报等实质任务时，先用 skill(action='load', name='a-share-market-briefing', current_system='a_share_market_radar', reason='执行 A 股市场简报流程') 加载完整流程。涉及当前行情、涨跌家数、成交额、领涨个股或行业表现时，必须先调用 get_a_share_market_snapshot，明确数据时间、数据源和任何 partial/error 状态，不得凭模型记忆编造实时数据。你可以根据工具事实生成盘前、盘中或盘后简报，并在用户要求时用 write 保存到 Workspace。只有用户明确要求发送邮件时才调用 send_market_brief_email；发送前必须先展示或确认收件人、主题和正文，SMTP 未配置时如实说明需要在包详情的 Resource 配置中填写。scheduler 可用于安排后续市场观察任务，但无人值守任务仍须遵循用户明确指定的发送目标。知识库仅在用户挂载并要求依据内部投研规范或资料回答时查询。输出必须区分数据事实、分析判断和风险提示，不承诺收益、不执行交易，也不把市场观察表述为确定性投资建议。",
+          "template": "你是 A 股盘面雷达，只处理中国 A 股市场观察。处理盘面概览、盘前观察、盘中快报、收盘复盘或邮件简报等实质任务时，先用 skill(action='load', name='a-share-market-briefing', current_system='a_share_market_radar', reason='执行 A 股市场简报流程') 加载完整流程。涉及当前行情、涨跌家数、成交额或领涨个股时，必须先调用 get_a_share_market_snapshot，明确数据时间、数据源和 success/error 状态，不得凭模型记忆编造实时数据。你可以根据工具事实生成盘前、盘中或盘后简报，并在用户要求时用 write 保存到 Workspace。只有用户明确要求发送邮件时才调用 send_market_brief_email；发送前必须先展示或确认收件人、主题和正文，SMTP 未配置时如实说明需要在包详情的 Resource 配置中填写。scheduler 可用于安排后续市场观察任务，但无人值守任务仍须遵循用户明确指定的发送目标。知识库仅在用户挂载并要求依据内部投研规范或资料回答时查询。输出必须区分数据事实、分析判断和风险提示，不承诺收益、不执行交易，也不把市场观察表述为确定性投资建议。",
           "variables": []
         }
       },
@@ -79,31 +79,39 @@
   "tools": [
     {
       "id": "get_a_share_market_snapshot",
-      "description": "获取当前 A 股全市场行情快照，计算涨跌家数、成交额、领涨个股和可选行业表现。涉及当前盘面事实时必须先调用；返回数据时间、来源和部分失败信息。",
-      "schema_error_guidance": "top_n 必须是 1 到 20 的整数；include_industries 必须是布尔值。",
+      "description": "通过腾讯证券获取当前 A 股全市场行情快照，计算涨跌家数、成交额和领涨个股。涉及当前盘面事实时必须先调用；返回数据时间、来源和提供方诊断。",
+      "schema_error_guidance": "top_n 必须是 1 到 20 的整数。",
       "entrypoint": "python:tools/get_a_share_market_snapshot/tool.py:run",
       "input_schema": {
         "type": "object",
         "properties": {
-          "top_n": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
-          "include_industries": {"type": "boolean", "default": true}
+          "top_n": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10}
         },
         "additionalProperties": false
       },
       "output_schema": {
         "type": "object",
         "properties": {
-          "status": {"type": "string", "enum": ["success", "partial", "error"]},
+          "status": {"type": "string", "enum": ["success", "error"]},
           "observed_at": {"type": "string"},
           "source": {"type": "string"},
           "market": {"type": "object"},
           "top_gainers": {"type": "array", "items": {"type": "object"}},
           "top_turnover": {"type": "array", "items": {"type": "object"}},
-          "industries": {"type": "array", "items": {"type": "object"}},
-          "warnings": {"type": "array", "items": {"type": "string"}},
+          "provider_diagnostics": {
+            "type": "object",
+            "properties": {
+              "provider": {"type": "string"},
+              "hosts_used": {"type": "array", "items": {"type": "string"}},
+              "retry_count": {"type": "integer", "minimum": 0},
+              "pages_fetched": {"type": "integer", "minimum": 0}
+            },
+            "required": ["provider", "hosts_used", "retry_count", "pages_fetched"],
+            "additionalProperties": false
+          },
           "message": {"type": "string"}
         },
-        "required": ["status", "observed_at", "source", "warnings"],
+        "required": ["status", "observed_at", "source", "provider_diagnostics"],
         "additionalProperties": false
       },
       "resources": {},

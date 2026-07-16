@@ -4,7 +4,7 @@
   "agent": {
     "id": "a_share_market_radar",
     "name": "A 股盘面雷达",
-    "description": "聚合 A 股市场宽度、成交额、领涨个股和行业表现，生成可保存并经用户确认发送的市场简报。",
+    "description": "聚合 A 股市场宽度、成交额和领涨个股，生成可保存并经用户确认发送的市场简报。",
     "version": "0.1.0"
   },
   "runtime": {

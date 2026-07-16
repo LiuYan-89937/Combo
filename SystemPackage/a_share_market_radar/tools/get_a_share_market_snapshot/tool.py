@@ -11,7 +11,6 @@ import requests
 
 
 STOCK_SOURCE_NAME = "腾讯证券公开行情"
-INDUSTRY_SOURCE_NAME = "东方财富行业板块"
 
 
 class MarketDataUnavailable(RuntimeError):
@@ -75,7 +74,7 @@ class TencentMarketDataProvider:
         return {
             "provider": "tencent_finance",
             "hosts_used": ["proxy.finance.qq.com"],
-            "fallback_count": self._retry_count,
+            "retry_count": self._retry_count,
             "pages_fetched": self._page_count,
         }
 
@@ -133,77 +132,13 @@ class TencentMarketDataProvider:
         self._session = self._new_session()
 
 
-class EastMoneyIndustryProvider:
-    _API_PATH = "/api/qt/clist/get"
-    _HOSTS = (
-        "https://push2.eastmoney.com",
-        "https://17.push2.eastmoney.com",
-        "https://7.push2.eastmoney.com",
-        "https://88.push2.eastmoney.com",
-    )
-    _REQUEST_TIMEOUT = (5, 12)
-    _PARAMS = {
-        "pn": "1",
-        "pz": "100",
-        "po": "1",
-        "np": "1",
-        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-        "fltt": "2",
-        "invt": "2",
-        "fid": "f3",
-        "fs": "m:90 t:2 f:!50",
-        "fields": "f3,f8,f14,f20",
-    }
-    _HEADERS = {
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://quote.eastmoney.com/",
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-        ),
-    }
-
-    def industry_rows(self) -> list[dict[str, Any]]:
-        failures: list[str] = []
-        for attempt, host in enumerate(self._HOSTS):
-            try:
-                response = requests.get(
-                    f"{host}{self._API_PATH}",
-                    params=self._PARAMS,
-                    headers=self._HEADERS,
-                    timeout=self._REQUEST_TIMEOUT,
-                )
-                response.raise_for_status()
-                raw_rows, total = _parse_eastmoney_page(response.json(), dataset="A 股行业板块")
-                rows = [
-                    {
-                        "name": _text(row.get("f14")),
-                        "change_pct": _number(row.get("f3")),
-                        "market_cap_cny": _number(row.get("f20")),
-                        "turnover_rate_pct": _number(row.get("f8")),
-                    }
-                    for row in raw_rows
-                ]
-                unique = _unique_by_field(rows, "name")
-                if len(unique) != total:
-                    raise ValueError(f"行业数据不完整：接口声明 {total} 条，实际获得 {len(unique)} 条")
-                return unique
-            except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
-                failures.append(f"{host}: {type(exc).__name__}")
-                if attempt + 1 < len(self._HOSTS):
-                    time.sleep(0.25 * (2**attempt))
-        raise MarketDataUnavailable(f"东方财富行业板块全部节点失败（{'; '.join(failures)}）")
-
-
 def run(arguments: dict, resources: dict) -> dict:
     del resources
     top_n = int(arguments.get("top_n", 10))
     if top_n < 1 or top_n > 20:
         raise ValueError("top_n must be between 1 and 20")
-    include_industries = bool(arguments.get("include_industries", True))
     observed_at = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
     stock_provider = TencentMarketDataProvider()
-    warnings: list[str] = []
 
     try:
         try:
@@ -216,8 +151,6 @@ def run(arguments: dict, resources: dict) -> dict:
                 "market": {},
                 "top_gainers": [],
                 "top_turnover": [],
-                "industries": [],
-                "warnings": [],
                 "provider_diagnostics": stock_provider.diagnostics(),
                 "message": f"A 股行情获取失败: {exc}",
             }
@@ -237,28 +170,13 @@ def run(arguments: dict, resources: dict) -> dict:
         top_gainers = _top_rows(spot, field="change_pct", limit=top_n)
         top_turnover = _top_rows(spot, field="turnover_cny", limit=top_n)
 
-        industries: list[dict[str, Any]] = []
-        source_names = [STOCK_SOURCE_NAME]
-        if include_industries:
-            try:
-                industries = _top_rows(
-                    EastMoneyIndustryProvider().industry_rows(),
-                    field="change_pct",
-                    limit=top_n,
-                )
-                source_names.append(INDUSTRY_SOURCE_NAME)
-            except MarketDataUnavailable as exc:
-                warnings.append(f"行业数据获取失败: {exc}")
-
         return {
-            "status": "partial" if warnings else "success",
+            "status": "success",
             "observed_at": observed_at,
-            "source": "；".join(source_names),
+            "source": STOCK_SOURCE_NAME,
             "market": market,
             "top_gainers": top_gainers,
             "top_turnover": top_turnover,
-            "industries": industries,
-            "warnings": warnings,
             "provider_diagnostics": stock_provider.diagnostics(),
             "message": "A 股市场快照获取完成。",
         }
@@ -277,32 +195,6 @@ def _parse_tencent_page(payload: Any, *, offset: int) -> tuple[list[dict[str, An
         raise ValueError(f"腾讯证券 offset={offset} rank_list 格式异常")
     total = int(data.get("total") or 0)
     return [row for row in rows if isinstance(row, dict)], total
-
-
-def _parse_eastmoney_page(payload: Any, *, dataset: str) -> tuple[list[dict[str, Any]], int]:
-    if not isinstance(payload, dict) or payload.get("rc") != 0:
-        raise ValueError(f"{dataset}响应状态异常")
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        raise ValueError(f"{dataset}缺少 data")
-    diff = data.get("diff")
-    if isinstance(diff, dict):
-        values: Iterable[Any] = diff.values()
-    elif isinstance(diff, list):
-        values = diff
-    else:
-        raise ValueError(f"{dataset} diff 格式异常")
-    return [row for row in values if isinstance(row, dict)], int(data.get("total") or 0)
-
-
-def _unique_by_field(rows: Iterable[dict[str, Any]], field: str) -> list[dict[str, Any]]:
-    unique: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        key = _text(row.get(field))
-        if not key:
-            raise MarketDataUnavailable(f"行情数据缺少唯一字段 {field}")
-        unique[key] = row
-    return list(unique.values())
 
 
 def _top_rows(rows: Iterable[dict[str, Any]], *, field: str, limit: int) -> list[dict[str, Any]]:
