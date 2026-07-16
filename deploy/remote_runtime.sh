@@ -330,7 +330,7 @@ prepare_python() {
     prepare_pytorch_runtime
     local source_digest dependency_digest
     source_digest="$(
-        find "${REMOTE_PROJECT_ROOT}" -type f -print0 \
+        find "${REMOTE_PROJECT_ROOT}" -type f -name '*.py' -print0 \
             | sort -z \
             | xargs -0 sha256sum \
             | sha256sum \
