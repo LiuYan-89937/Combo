@@ -148,6 +148,8 @@
     "interrupt_requested",
     "runtime_paused",
     "runtime_resumed",
+    "collaboration_session_updated",
+    "collaboration_runtime_status_changed",
     "debug_patch",
     "error"
   ],
@@ -213,6 +215,7 @@
     "interrupt_requested",
     "runtime_paused",
     "runtime_resumed",
+    "collaboration_runtime_status_changed",
     "error"
   ]
 }

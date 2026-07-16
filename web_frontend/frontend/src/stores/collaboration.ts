@@ -4,6 +4,7 @@ import {
   collaborationApi,
   type CollaborationAgentView,
   type CollaborationApprovalMode,
+  type CollaborationRuntimeStatus,
   type CollaborationSessionView,
   type CollaborationTaskStatus,
   type CollaborationTaskView,
@@ -352,6 +353,25 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     }
   }
 
+  function applyRuntimeStatus(
+    collaborationId: string,
+    runtimeStatus: CollaborationRuntimeStatus | null,
+    runtimeStatusPayload: Record<string, any>,
+  ): void {
+    const session = sessions.value.find((item) => item.collaboration_id === collaborationId)
+    if (session) {
+      session.runtime_status = runtimeStatus
+      session.runtime_status_payload = runtimeStatusPayload
+    }
+    if (activeSession.value?.collaboration_id === collaborationId) {
+      activeSession.value = {
+        ...activeSession.value,
+        runtime_status: runtimeStatus,
+        runtime_status_payload: runtimeStatusPayload,
+      }
+    }
+  }
+
   function setActiveSession(session: CollaborationSessionView | null): void {
     activeSession.value = session
     if (session?.collaboration_id) {
@@ -398,6 +418,7 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     deleteSession,
     addUserMessage,
     applySessionSnapshot,
+    applyRuntimeStatus,
     createTask,
     updateTask,
     cancelTask,
