@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
@@ -31,6 +33,10 @@ from agent_factory.factory_graph.session import (
 RuntimeFactory = Callable[[], AgentPackageRuntimeManager]
 InferenceCapacityProbe = Callable[[], ChatInferenceCapacity]
 FactorySessionDeleter = Callable[[str, list[str]], dict[str, Any]]
+MAIN_AGENT_EVENT_COALESCE_WINDOW_ENV = "AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS"
+MAIN_AGENT_EVENT_BATCH_LIMIT_ENV = "AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT"
+DEFAULT_MAIN_AGENT_EVENT_COALESCE_WINDOW_SECONDS = 0.75
+DEFAULT_MAIN_AGENT_EVENT_BATCH_LIMIT = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,19 @@ class CollaborationDispatchCapacity:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class MainAgentEventBatch:
+    event_ids: tuple[str, ...]
+    task_ids: tuple[str, ...]
+    event_ref: str
+    user_message: str
+    message_metadata: dict[str, Any]
+
+    @property
+    def message_task_id(self) -> str | None:
+        return self.task_ids[0] if len(self.task_ids) == 1 else None
+
+
 class CollaborationService:
     def __init__(
         self,
@@ -60,13 +79,34 @@ class CollaborationService:
         inference_capacity_probe: InferenceCapacityProbe = inspect_configured_inference_capacity,
         factory_session_deleter: FactorySessionDeleter | None = None,
         poll_interval_seconds: float = 2.0,
+        main_agent_event_coalesce_window_seconds: float | None = None,
+        main_agent_event_batch_limit: int | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.store = store or CollaborationStore()
         self.runtime_factory = runtime_factory
         self.inference_capacity_probe = inference_capacity_probe
         self.factory_session_deleter = factory_session_deleter or _delete_factory_session_record
-        self.poll_interval_seconds = poll_interval_seconds
+        self.poll_interval_seconds = _positive_float(
+            poll_interval_seconds,
+            name="poll_interval_seconds",
+        )
+        self.main_agent_event_coalesce_window_seconds = (
+            _main_agent_event_coalesce_window_seconds()
+            if main_agent_event_coalesce_window_seconds is None
+            else _positive_float(
+                main_agent_event_coalesce_window_seconds,
+                name="main_agent_event_coalesce_window_seconds",
+            )
+        )
+        self.main_agent_event_batch_limit = (
+            _main_agent_event_batch_limit()
+            if main_agent_event_batch_limit is None
+            else _positive_int(
+                main_agent_event_batch_limit,
+                name="main_agent_event_batch_limit",
+            )
+        )
         self.logger = logger or logging.getLogger(__name__)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -75,6 +115,7 @@ class CollaborationService:
         self._dispatching_sessions: set[str] = set()
         self._reserved_worker_tasks: set[tuple[str, str]] = set()
         self._manufacturing_requests: set[str] = set()
+        self._main_agent_event_timers: dict[str, threading.Timer] = {}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -94,9 +135,16 @@ class CollaborationService:
             daemon=True,
         )
         self._thread.start()
+        for collaboration_id in self.store.list_pending_main_agent_event_collaboration_ids():
+            self._schedule_main_agent_event_drain(collaboration_id)
 
     def stop(self) -> None:
         self._stop_event.set()
+        with self._lock:
+            timers = list(self._main_agent_event_timers.values())
+            self._main_agent_event_timers.clear()
+        for timer in timers:
+            timer.cancel()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
         self._thread = None
@@ -206,6 +254,53 @@ class CollaborationService:
             name=f"collaboration-dispatch-{collaboration_id[:8]}",
             daemon=True,
         ).start()
+
+    def _schedule_main_agent_event_drain(
+        self,
+        collaboration_id: str,
+        *,
+        minimum_delay_seconds: float = 0.0,
+    ) -> None:
+        if self._stop_event.is_set():
+            return
+        oldest_created_at = self.store.oldest_pending_main_agent_event_created_at(collaboration_id)
+        if oldest_created_at is None:
+            return
+        ready_at = _parse_utc_datetime(oldest_created_at) + timedelta(
+            seconds=self.main_agent_event_coalesce_window_seconds
+        )
+        delay_seconds = max(
+            minimum_delay_seconds,
+            0.0,
+            (ready_at - datetime.now(UTC)).total_seconds(),
+        )
+        with self._lock:
+            existing = self._main_agent_event_timers.get(collaboration_id)
+            if existing is not None and existing.is_alive():
+                return
+            timer = threading.Timer(
+                delay_seconds,
+                self._on_main_agent_event_timer,
+                args=(collaboration_id,),
+            )
+            timer.name = f"collaboration-main-event-{collaboration_id[:8]}"
+            timer.daemon = True
+            self._main_agent_event_timers[collaboration_id] = timer
+            timer.start()
+
+    def _on_main_agent_event_timer(self, collaboration_id: str) -> None:
+        current = threading.current_thread()
+        with self._lock:
+            if self._main_agent_event_timers.get(collaboration_id) is not current:
+                return
+            self._main_agent_event_timers.pop(collaboration_id, None)
+        if self._stop_event.is_set():
+            return
+        self._dispatch_soon_worker(collaboration_id)
+        self._schedule_main_agent_event_drain(
+            collaboration_id,
+            minimum_delay_seconds=self.poll_interval_seconds,
+        )
 
     def dispatch_ready(self, collaboration_id: str, *, limit: int | None = None) -> dict[str, Any]:
         if not self._claim_session(collaboration_id):
@@ -688,14 +783,12 @@ class CollaborationService:
             collaboration_id=collaboration_id,
             session=self.store.get_session(collaboration_id),
         )
-        self._drain_main_agent_events(collaboration_id)
+        self._schedule_main_agent_event_drain(collaboration_id)
 
     def _drain_main_agent_events(self, collaboration_id: str) -> None:
         if not self._claim_session(collaboration_id):
             return
-        event_id: str | None = None
-        task_id: str | None = None
-        event_ref: str | None = None
+        active_batch: MainAgentEventBatch | None = None
         try:
             runtime = self.runtime_factory()
             orchestrator = CollaborationOrchestrator(
@@ -711,49 +804,59 @@ class CollaborationService:
                 )
                 return
             while True:
-                event = self.store.claim_next_main_agent_event(collaboration_id)
-                if event is None:
+                ready_before = (
+                    datetime.now(UTC)
+                    - timedelta(seconds=self.main_agent_event_coalesce_window_seconds)
+                ).isoformat()
+                events = self.store.claim_main_agent_event_batch(
+                    collaboration_id,
+                    ready_before=ready_before,
+                    limit=self.main_agent_event_batch_limit,
+                )
+                if not events:
                     break
+                active_batch = _main_agent_event_batch(events)
                 runtime.emit_collaboration_session_updated(
                     collaboration_id=collaboration_id,
                     session=self.store.get_session(collaboration_id),
                 )
-                event_id = str(event.get("event_id") or "")
-                task_id = str(event.get("task_id") or "").strip() or None
-                event_ref = str(event.get("event_ref") or "").strip() or None
-                user_message = str(event.get("user_message") or "")
-                message_metadata = event.get("message_metadata") if isinstance(event.get("message_metadata"), dict) else None
                 continuation = orchestrator.continue_main_agent(
                     collaboration_id,
-                    user_message=user_message,
-                    message_metadata=message_metadata,
-                    event_ref=f"{event_ref}:main-agent" if event_ref else None,
+                    user_message=active_batch.user_message,
+                    message_metadata=active_batch.message_metadata,
+                    event_ref=f"{active_batch.event_ref}:main-agent",
                 )
                 if not continuation.succeeded:
                     error = f"main agent continuation {continuation.status}: {continuation.message}"
-                    self.store.fail_main_agent_event(event_id, error)
+                    self.store.fail_main_agent_event_batch(list(active_batch.event_ids), error)
+                    failed_batch = active_batch
+                    active_batch = None
                     self.store.record_message(
                         collaboration_id,
                         speaker_type="system",
                         speaker_package_id=None,
                         message_kind="progress",
-                        content=f"主 Agent 触发失败：{error}",
-                        task_id=task_id,
-                        event_ref=event_ref,
+                        content=f"主 Agent 批量处理 {len(failed_batch.event_ids)} 个协作事件失败：{error}",
+                        task_id=failed_batch.message_task_id,
+                        event_ref=failed_batch.event_ref,
                     )
                     runtime.emit_collaboration_session_updated(
                         collaboration_id=collaboration_id,
                         session=self.store.get_session(collaboration_id),
                     )
                     break
-                self.store.complete_main_agent_event(event_id)
+                self.store.complete_main_agent_event_batch(list(active_batch.event_ids))
+                active_batch = None
                 runtime.emit_collaboration_session_updated(
                     collaboration_id=collaboration_id,
                     session=self.store.get_session(collaboration_id),
                 )
         except Exception as exc:
-            if event_id:
-                self.store.fail_main_agent_event(event_id, f"{type(exc).__name__}: {exc}")
+            if active_batch is not None:
+                self.store.fail_main_agent_event_batch(
+                    list(active_batch.event_ids),
+                    f"{type(exc).__name__}: {exc}",
+                )
             self.logger.warning(
                 "Collaboration main agent trigger failed for %s: %s: %s",
                 collaboration_id,
@@ -766,8 +869,8 @@ class CollaborationService:
                 speaker_package_id=None,
                 message_kind="progress",
                 content=f"主 Agent 触发失败：{type(exc).__name__}: {exc}",
-                task_id=task_id if isinstance(task_id, str) else None,
-                event_ref=event_ref if isinstance(event_ref, str) else None,
+                task_id=active_batch.message_task_id if active_batch is not None else None,
+                event_ref=active_batch.event_ref if active_batch is not None else None,
             )
             self.runtime_factory().emit_collaboration_session_updated(
                 collaboration_id=collaboration_id,
@@ -921,6 +1024,51 @@ def _max_parallel_worker_tasks(inference: ChatInferenceCapacity) -> int:
     return inference.total_slots
 
 
+def _main_agent_event_coalesce_window_seconds() -> float:
+    raw = str(os.getenv(MAIN_AGENT_EVENT_COALESCE_WINDOW_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_MAIN_AGENT_EVENT_COALESCE_WINDOW_SECONDS
+    return _positive_float(raw, name=MAIN_AGENT_EVENT_COALESCE_WINDOW_ENV)
+
+
+def _main_agent_event_batch_limit() -> int:
+    raw = str(os.getenv(MAIN_AGENT_EVENT_BATCH_LIMIT_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_MAIN_AGENT_EVENT_BATCH_LIMIT
+    return _positive_int(raw, name=MAIN_AGENT_EVENT_BATCH_LIMIT_ENV)
+
+
+def _positive_float(value: Any, *, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive number") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{name} must be a positive number")
+    return parsed
+
+
+def _positive_int(value: Any, *, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if str(parsed) != str(value).strip() or parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return parsed
+
+
+def _parse_utc_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("collaboration event timestamp must include a timezone")
+    return parsed.astimezone(UTC)
+
+
 def _dispatch_capacity_reason(
     *,
     capacity: int,
@@ -987,6 +1135,85 @@ def _main_agent_continuation_metadata_from_result(result: Any, *, assignee_packa
             "artifact_count": len(artifact_refs),
         }
     }
+
+
+def _main_agent_event_batch(events: list[dict[str, Any]]) -> MainAgentEventBatch:
+    if not events:
+        raise ValueError("main agent event batch must not be empty")
+    event_ids: list[str] = []
+    task_ids: list[str] = []
+    source_events: list[dict[str, Any]] = []
+    worker_reports: list[dict[str, Any]] = []
+    artifact_count = 0
+    lines = [
+        f"系统在短时间窗口内汇总了 {len(events)} 个协作事件。",
+        "请一次性检查全部事件和当前协作状态，统一验收并继续推进，避免为同一批状态变化重复规划。",
+    ]
+    for index, event in enumerate(events, start=1):
+        event_id = str(event.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("main agent event is missing event_id")
+        task_id = str(event.get("task_id") or "").strip()
+        event_ref = str(event.get("event_ref") or "").strip()
+        user_message = str(event.get("user_message") or "").strip()
+        message_metadata = (
+            event.get("message_metadata")
+            if isinstance(event.get("message_metadata"), dict)
+            else {}
+        )
+        report = message_metadata.get("collaboration_report")
+        if isinstance(report, dict):
+            worker_reports.append(dict(report))
+            report_artifact_count = report.get("artifact_count")
+            if isinstance(report_artifact_count, int) and not isinstance(report_artifact_count, bool):
+                artifact_count += max(0, report_artifact_count)
+        event_ids.append(event_id)
+        if task_id and task_id not in task_ids:
+            task_ids.append(task_id)
+        source_events.append(
+            {
+                "event_id": event_id,
+                "task_id": task_id or None,
+                "event_ref": event_ref or None,
+                "user_message": user_message,
+                "message_metadata": message_metadata,
+            }
+        )
+        lines.extend(
+            [
+                "",
+                f"事件 {index}：",
+                f"- event_id={event_id}",
+                f"- task_id={task_id or '无'}",
+                f"- event_ref={event_ref or '无'}",
+                "- 原始消息：",
+                user_message,
+            ]
+        )
+    digest = sha256("\n".join(event_ids).encode("utf-8")).hexdigest()[:20]
+    batch_ref = f"main-agent-event-batch:{digest}"
+    metadata = {
+        "collaboration_report": {
+            "kind": "worker_report_batch",
+            "status": "updated",
+            "summary": f"已汇总 {len(events)} 个协作事件，由主 Agent 统一处理。",
+            "artifact_count": artifact_count,
+            "worker_reports": worker_reports,
+        },
+        "collaboration_event_batch": {
+            "event_ref": batch_ref,
+            "event_count": len(events),
+            "events": source_events,
+            "worker_reports": worker_reports,
+        },
+    }
+    return MainAgentEventBatch(
+        event_ids=tuple(event_ids),
+        task_ids=tuple(task_ids),
+        event_ref=batch_ref,
+        user_message="\n".join(lines),
+        message_metadata=metadata,
+    )
 
 
 def _assignee_package_id_for_task(session: dict[str, Any], task_id: str) -> str | None:

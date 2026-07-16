@@ -513,57 +513,124 @@ class CollaborationStore:
             ).fetchone()
         return int(row["count"] if row is not None else 0)
 
-    def claim_next_main_agent_event(self, collaboration_id: str) -> dict[str, Any] | None:
-        now = utc_now_text()
+    def list_pending_main_agent_event_collaboration_ids(self) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select distinct collaboration_id
+                from collaboration_main_agent_events
+                where status = ?
+                order by collaboration_id asc
+                """,
+                ("pending",),
+            ).fetchall()
+        return [str(row["collaboration_id"]) for row in rows]
+
+    def oldest_pending_main_agent_event_created_at(self, collaboration_id: str) -> str | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                select * from collaboration_main_agent_events
+                select created_at
+                from collaboration_main_agent_events
                 where collaboration_id = ? and status = ?
                 order by created_at asc, event_id asc
                 limit 1
                 """,
                 (collaboration_id, "pending"),
             ).fetchone()
-            if row is None:
-                return None
-            conn.execute(
+        return str(row["created_at"]) if row is not None else None
+
+    def claim_main_agent_event_batch(
+        self,
+        collaboration_id: str,
+        *,
+        ready_before: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        clean_ready_before = str(ready_before or "").strip()
+        if not clean_ready_before:
+            raise CollaborationStoreError("main agent event ready_before must not be empty")
+        if limit <= 0:
+            raise CollaborationStoreError("main agent event batch limit must be positive")
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute("begin immediate")
+            ready = conn.execute(
                 """
+                select event_id from collaboration_main_agent_events
+                where collaboration_id = ? and status = ? and created_at <= ?
+                order by created_at asc, event_id asc
+                limit 1
+                """,
+                (collaboration_id, "pending", clean_ready_before),
+            ).fetchone()
+            if ready is None:
+                return []
+            rows = conn.execute(
+                """
+                select * from collaboration_main_agent_events
+                where collaboration_id = ? and status = ?
+                order by created_at asc, event_id asc
+                limit ?
+                """,
+                (collaboration_id, "pending", limit),
+            ).fetchall()
+            event_ids = [str(row["event_id"]) for row in rows]
+            if not event_ids:
+                return []
+            placeholders = ", ".join("?" for _ in event_ids)
+            conn.execute(
+                f"""
                 update collaboration_main_agent_events
                 set status = ?, attempts = attempts + 1, updated_at = ?
-                where event_id = ? and status = ?
+                where event_id in ({placeholders}) and status = ?
                 """,
-                ("processing", now, row["event_id"], "pending"),
+                ("processing", now, *event_ids, "pending"),
             )
             claimed = conn.execute(
-                "select * from collaboration_main_agent_events where event_id = ?",
-                (row["event_id"],),
-            ).fetchone()
-        return self._main_agent_event_view(claimed) if claimed is not None else None
-
-    def complete_main_agent_event(self, event_id: str) -> None:
-        now = utc_now_text()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                update collaboration_main_agent_events
-                set status = ?, updated_at = ?
-                where event_id = ?
+                f"""
+                select * from collaboration_main_agent_events
+                where event_id in ({placeholders})
+                order by created_at asc, event_id asc
                 """,
-                ("completed", now, event_id),
-            )
+                tuple(event_ids),
+            ).fetchall()
+        return [self._main_agent_event_view(row) for row in claimed]
 
-    def fail_main_agent_event(self, event_id: str, error: str) -> None:
+    def complete_main_agent_event_batch(self, event_ids: list[str]) -> None:
+        self._resolve_main_agent_event_batch(event_ids, status="completed", error="")
+
+    def fail_main_agent_event_batch(self, event_ids: list[str], error: str) -> None:
+        self._resolve_main_agent_event_batch(event_ids, status="failed", error=error)
+
+    def _resolve_main_agent_event_batch(
+        self,
+        event_ids: list[str],
+        *,
+        status: str,
+        error: str,
+    ) -> None:
+        clean_ids = list(dict.fromkeys(str(event_id or "").strip() for event_id in event_ids))
+        if not clean_ids or any(not event_id for event_id in clean_ids):
+            raise CollaborationStoreError("main agent event batch must contain non-empty event ids")
+        if status not in {"completed", "failed"}:
+            raise CollaborationStoreError(f"unsupported main agent event terminal status: {status}")
         now = utc_now_text()
+        placeholders = ", ".join("?" for _ in clean_ids)
         with self._connect() as conn:
-            conn.execute(
-                """
+            conn.execute("begin immediate")
+            cursor = conn.execute(
+                f"""
                 update collaboration_main_agent_events
                 set status = ?, last_error = ?, updated_at = ?
-                where event_id = ?
+                where event_id in ({placeholders}) and status = ?
                 """,
-                ("failed", str(error or "").strip(), now, event_id),
+                (status, str(error or "").strip(), now, *clean_ids, "processing"),
             )
+            if cursor.rowcount != len(clean_ids):
+                raise CollaborationStoreError(
+                    "main agent event batch state changed before terminal resolution"
+                )
 
     def list_archived_main_agent_events(
         self,
@@ -1119,6 +1186,12 @@ class CollaborationStore:
                 create unique index if not exists idx_collaboration_main_agent_events_ref
                 on collaboration_main_agent_events(collaboration_id, event_ref)
                 where event_ref is not null
+                """
+            )
+            conn.execute(
+                """
+                create index if not exists idx_collaboration_main_agent_events_pending
+                on collaboration_main_agent_events(collaboration_id, status, created_at, event_id)
                 """
             )
             conn.execute(

@@ -166,7 +166,7 @@ AGENTFACTORY_EMBEDDING_DIMS=
 
 ### 5. 组织多 Agent 协作
 
-进入「多 Agent 协作」，主 Agent 会根据任务检索合适的子 Agent，创建任务并声明依赖。子 Agent 默认彼此不可见，共享材料通过协作工作区传递。子 Agent 提交后，主 Agent 会收到协作事件并继续验收或推进后续任务。
+进入「多 Agent 协作」，主 Agent 会根据任务检索合适的子 Agent，创建任务并声明依赖。子 Agent 默认彼此不可见，共享材料通过协作工作区传递。子 Agent 提交后，主 Agent 会收到协作事件并继续验收或推进后续任务。多个 worker 几乎同时更新状态时，每条原始事件会独立保留用于审计，再通过短窗口合并为一次主 Agent 恢复；窗口和单批上限可分别通过 `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS`、`AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` 配置。
 
 第一版重点支持：
 
