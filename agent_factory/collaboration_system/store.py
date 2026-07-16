@@ -37,6 +37,7 @@ READY_TO_START_STATUSES = {"assigned", "queued", "revision_requested"}
 DEPENDENCY_SATISFIED_TASK_STATUSES = {"completed"}
 RECOVERABLE_RUNNING_TASK_STATUSES = {"accepted", "planning", "working"}
 ACTIVE_WORKER_TASK_STATUSES = {"accepted", "planning", "working"}
+WORKER_LEASE_HOLDING_TASK_STATUSES = {*ACTIVE_WORKER_TASK_STATUSES, "blocked"}
 SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
@@ -78,6 +79,7 @@ class CollaborationStore:
         now = utc_now_text()
         recovered: list[dict[str, str]] = []
         with self._connect() as conn:
+            conn.execute("delete from collaboration_worker_leases")
             statuses = sorted(RECOVERABLE_RUNNING_TASK_STATUSES)
             placeholders = ", ".join("?" for _ in statuses)
             rows = conn.execute(
@@ -125,6 +127,23 @@ class CollaborationStore:
                         "task_id": task_id,
                         "previous_status": previous_status,
                     }
+                )
+            blocked_rows = conn.execute(
+                """
+                select collaboration_id, task_id, assignee_package_id
+                from collaboration_tasks
+                where status = ?
+                order by created_at asc, task_id asc
+                """,
+                ("blocked",),
+            ).fetchall()
+            for row in blocked_rows:
+                self._acquire_worker_lease_conn(
+                    conn,
+                    package_id=str(row["assignee_package_id"]),
+                    collaboration_id=str(row["collaboration_id"]),
+                    task_id=str(row["task_id"]),
+                    acquired_at=now,
                 )
         return {"recovered_count": len(recovered), "tasks": recovered}
 
@@ -768,6 +787,16 @@ class CollaborationStore:
             if status in READY_TO_START_STATUSES and depends_on and dependencies_ready and not input_artifacts:
                 raise CollaborationStoreError("dependent tasks require at least one dependency artifact")
             now = utc_now_text()
+            if status in WORKER_LEASE_HOLDING_TASK_STATUSES:
+                if not self._worker_lease_owned_conn(
+                    conn,
+                    package_id=str(current["assignee_package_id"]),
+                    collaboration_id=collaboration_id,
+                    task_id=task_id,
+                ):
+                    raise CollaborationStoreError(
+                        f"worker lease is not owned by task {task_id}: {current['assignee_package_id']}"
+                    )
             conn.execute(
                 """
                 update collaboration_tasks
@@ -798,6 +827,13 @@ class CollaborationStore:
                     task_id,
                 ),
             )
+            if current["status"] == "blocked" and status not in WORKER_LEASE_HOLDING_TASK_STATUSES:
+                self._release_worker_lease_conn(
+                    conn,
+                    package_id=str(current["assignee_package_id"]),
+                    collaboration_id=collaboration_id,
+                    task_id=task_id,
+                )
             self._insert_message_conn(
                 conn,
                 collaboration_id=collaboration_id,
@@ -817,6 +853,7 @@ class CollaborationStore:
         with self._connect() as conn:
             conn.execute("delete from collaboration_main_agent_events where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_manufacturing_requests where collaboration_id = ?", (collaboration_id,))
+            conn.execute("delete from collaboration_worker_leases where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_tasks where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_messages where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_sessions where collaboration_id = ?", (collaboration_id,))
@@ -990,6 +1027,16 @@ class CollaborationStore:
                 create unique index if not exists idx_collaboration_main_agent_events_ref
                 on collaboration_main_agent_events(collaboration_id, event_ref)
                 where event_ref is not null
+                """
+            )
+            conn.execute(
+                """
+                create table if not exists collaboration_worker_leases (
+                  assignee_package_id text primary key,
+                  collaboration_id text not null,
+                  task_id text not null unique,
+                  acquired_at text not null
+                )
                 """
             )
             self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
@@ -1208,19 +1255,136 @@ class CollaborationStore:
             if str(task.get("status") or "") in ACTIVE_WORKER_TASK_STATUSES
         )
 
+    @staticmethod
+    def _worker_lease_owned_conn(
+        conn: sqlite3.Connection,
+        *,
+        package_id: str,
+        collaboration_id: str,
+        task_id: str,
+    ) -> bool:
+        lease = conn.execute(
+            """
+            select collaboration_id, task_id
+            from collaboration_worker_leases
+            where assignee_package_id = ?
+            """,
+            (package_id,),
+        ).fetchone()
+        return bool(
+            lease is not None
+            and str(lease["collaboration_id"]) == collaboration_id
+            and str(lease["task_id"]) == task_id
+        )
+
+    @staticmethod
+    def _acquire_worker_lease_conn(
+        conn: sqlite3.Connection,
+        *,
+        package_id: str,
+        collaboration_id: str,
+        task_id: str,
+        acquired_at: str,
+    ) -> bool:
+        conn.execute(
+            """
+            insert or ignore into collaboration_worker_leases (
+              assignee_package_id, collaboration_id, task_id, acquired_at
+            ) values (?, ?, ?, ?)
+            """,
+            (package_id, collaboration_id, task_id, acquired_at),
+        )
+        return CollaborationStore._worker_lease_owned_conn(
+            conn,
+            package_id=package_id,
+            collaboration_id=collaboration_id,
+            task_id=task_id,
+        )
+
+    @staticmethod
+    def _release_worker_lease_conn(
+        conn: sqlite3.Connection,
+        *,
+        package_id: str,
+        collaboration_id: str,
+        task_id: str,
+    ) -> bool:
+        deleted = conn.execute(
+            """
+            delete from collaboration_worker_leases
+            where assignee_package_id = ? and collaboration_id = ? and task_id = ?
+            """,
+            (package_id, collaboration_id, task_id),
+        )
+        return deleted.rowcount == 1
+
+    def acquire_worker_lease(self, collaboration_id: str, task_id: str) -> bool:
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute("begin immediate")
+            row = conn.execute(
+                """
+                select assignee_package_id
+                from collaboration_tasks
+                where collaboration_id = ? and task_id = ?
+                """,
+                (collaboration_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise CollaborationStoreError(f"collaboration task not found: {task_id}")
+            package_id = str(row["assignee_package_id"])
+            return self._acquire_worker_lease_conn(
+                conn,
+                package_id=package_id,
+                collaboration_id=collaboration_id,
+                task_id=task_id,
+                acquired_at=now,
+            )
+
+    def release_worker_lease_unless_blocked(self, collaboration_id: str, task_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select assignee_package_id, status
+                from collaboration_tasks
+                where collaboration_id = ? and task_id = ?
+                """,
+                (collaboration_id, task_id),
+            ).fetchone()
+            if row is None or str(row["status"]) == "blocked":
+                return False
+            return self._release_worker_lease_conn(
+                conn,
+                package_id=str(row["assignee_package_id"]),
+                collaboration_id=collaboration_id,
+                task_id=task_id,
+            )
+
     def claim_ready_tasks(self, collaboration_id: str, *, limit: int) -> list[dict[str, Any]]:
         if limit <= 0:
             return []
         session = self.get_session(collaboration_id)
-        selected = self._ready_tasks_from_session(session)[:limit]
+        selected = self._ready_tasks_from_session(session)
         if not selected:
             return []
         now = utc_now_text()
         selected_ids: list[str] = []
         with self._connect() as conn:
+            conn.execute("begin immediate")
             for task in selected:
+                if len(selected_ids) >= limit:
+                    break
                 task_id = str(task.get("task_id") or "")
                 if not task_id:
+                    continue
+                package_id = str(task.get("assignee_package_id") or "").strip()
+                if not self._acquire_worker_lease_conn(
+                    conn,
+                    package_id=package_id,
+                    collaboration_id=collaboration_id,
+                    task_id=task_id,
+                    acquired_at=now,
+                ):
                     continue
                 depends_on = normalize_dependency_ids(task.get("depends_on"))
                 input_artifacts = merge_artifact_refs(
@@ -1254,8 +1418,14 @@ class CollaborationStore:
                         event_ref=f"claim-missing-artifacts:{task_id}:{now}",
                         created_at=now,
                     )
+                    self._release_worker_lease_conn(
+                        conn,
+                        package_id=package_id,
+                        collaboration_id=collaboration_id,
+                        task_id=task_id,
+                    )
                     continue
-                conn.execute(
+                claimed = conn.execute(
                     """
                     update collaboration_tasks
                     set status = ?, input_artifacts_json = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
@@ -1272,6 +1442,14 @@ class CollaborationStore:
                         *sorted(READY_TO_START_STATUSES),
                     ),
                 )
+                if claimed.rowcount != 1:
+                    self._release_worker_lease_conn(
+                        conn,
+                        package_id=package_id,
+                        collaboration_id=collaboration_id,
+                        task_id=task_id,
+                    )
+                    continue
                 selected_ids.append(task_id)
                 self._insert_message_conn(
                     conn,
