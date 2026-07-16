@@ -42,7 +42,8 @@ RadeonCloud                    ▼
 │   ├─ SentenceTransformers + PyTorch HIP :8002              │
 │   └─ ROCm / VRAM / model runtime telemetry                 │
 │                                                            │
-│ /root/llama.cpp            editable llama.cpp source       │
+│ /root/fastagentfactory-llama-sources  official + AMD source│
+│ /root/.fastagentfactory/llama         builds + active link │
 │ /root/models               GGUF + mmproj + bge-m3          │
 │ /root/.fastagentfactory    registry + PID + logs + venv    │
 └────────────────────────────────────────────────────────────┘
@@ -128,18 +129,18 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 首次执行会依次完成：
 
 1. 校验本机配置和 SSH Key 登录。
-2. 将固定版本的 llama.cpp 与 stable-diffusion.cpp 拉到本机 `vendor/`，作为后续 AMD 算子改造工作树。
-3. 探查 RadeonCloud GPU、显存、磁盘、ROCm、PyTorch HIP 与现有 llama-server。
-4. 仅在缺失时安装远端普通构建工具。
-5. 同步当前 FastAgentFactory 工作树和本机 llama.cpp 源码到远端。
-6. 在远端构建 ROCm `llama-server` 与 HIPBLAS `sd-server`。
+2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp。
+3. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
+4. 仅在缺失时安装普通构建工具、ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
+5. 同步当前 FastAgentFactory 工作树和两套 llama.cpp 源码到远端。
+6. 独立构建 `official` 与 `amd` 两个 ROCm llama-server，并构建 HIPBLAS `sd-server`。
 7. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
 8. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 9. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
-10. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile和本机 external Profile。
-10. 启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
-11. 生成本机 `.env` 的 SSH 隧道配置与资源加密密钥。
-12. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
+10. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 和本机 external Profile。
+11. 激活配置指定的 llama.cpp 实现并启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
+12. 生成本机 `.env` 的 SSH 隧道配置与资源加密密钥。
+13. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
 
 模型下载支持续传。已校验文件会通过旁路校验标记直接复用，重复执行不会重新下载 20 GB 以上的 GGUF。
 
@@ -156,6 +157,7 @@ http://localhost:3000
 | 命令 | 作用 |
 | --- | --- |
 | `./deploy.sh up` | 完成幂等部署，然后启动本机 Web 和 SSH 隧道。 |
+| `./deploy.sh up --no-web` | 完成相同的远端部署，但不启动本机前后端。 |
 | `./deploy.sh bootstrap` | 准备本机与远端、下载模型并启动远端推理，但不启动本机 Web。 |
 | `./deploy.sh doctor` | 查看远端 GPU、显存、磁盘、ROCm、PyTorch HIP 和 llama.cpp。 |
 | `./deploy.sh status` | 查看远端推理节点、Chat、Embedding 和软件版本状态。 |
@@ -164,10 +166,13 @@ http://localhost:3000
 | `./deploy.sh down` | 停止远端推理节点，同时卸载 Chat 与 Embedding、释放显存。 |
 | `./deploy.sh models` | 续传/校验模型并更新远端 Profile；节点已运行时自动重启模型，不重装 ROCm。 |
 | `./deploy.sh sync` | 同步当前 FastAgentFactory 与本机 llama.cpp 工作树到远端。 |
-| `./deploy.sh build-llama` | 在远端对已同步源码增量构建 llama-server。 |
+| `./deploy.sh build-llama [official\|amd\|all]` | 独立增量构建指定 llama-server；省略参数时构建两者。 |
+| `./deploy.sh switch-llama <official\|amd>` | 切换活动实现并使用相同 Profile 重载模型，失败时恢复原实现。 |
+| `./deploy.sh list-llama-builds` | 查看两套构建的 revision、源码与二进制校验值及活动状态。 |
+| `./deploy.sh rollback-llama` | 切回上一次活动实现。 |
 | `./deploy.sh build-sd` | 在远端对已同步源码增量构建 sd-server。 |
 
-更换实例时只需修改 SSH Host 和 Port。持久盘路径变化时同时修改 `REMOTE_MODEL_ROOT`、`REMOTE_STATE_ROOT`、`REMOTE_LLAMA_CPP_DIR` 和 `REMOTE_STABLE_DIFFUSION_CPP_DIR`。
+更换实例时只需修改 SSH Host 和 Port。持久盘路径变化时同时修改 `REMOTE_MODEL_ROOT`、`REMOTE_STATE_ROOT`、`REMOTE_LLAMA_SOURCE_ROOT`、`REMOTE_LLAMA_RUNTIME_ROOT` 和 `REMOTE_STABLE_DIFFUSION_CPP_DIR`。
 
 ## 日常启动
 
@@ -252,22 +257,22 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 - Power
 - KV Cache 命中相关指标
 
-每次优化应使用相同 Prompt、输出上限、Context、并发和采样参数，记录 implementation label 与 revision，再与 Baseline 对比。
+每次优化应使用相同 Prompt、输出上限、Context、并发和采样参数。Benchmark 会从远端自动记录活动 implementation、源码 revision、源码摘要和二进制 SHA256，不能手填实现身份。
 
 ## llama.cpp AMD 算子改造
 
-首次 `bootstrap` 后，本机和远端各有一份相同的 llama.cpp 工作树：
+仓库直接携带两套 llama.cpp 源码：
 
 ```text
-本机：vendor/llama.cpp
-远端：/root/llama.cpp
+vendor/llama.cpp-official/   固定官方 Baseline，不接受 AMD 算子修改
+vendor/llama.cpp-amd/        AMD 优化承载目录
 ```
 
-本机目录是改造源。开始开发前创建独立分支：
+当前 AMD 目录与官方基线计算实现相同，仅构建产物名称和实现元数据独立，状态会显示 `optimization_status=placeholder`。后续自定义算子只修改 AMD 目录：
 
 ```bash
-cd vendor/llama.cpp
-git switch -c amd-kernel-experiment
+cd vendor/llama.cpp-amd
+# 修改 ggml HIP 分派和 AMD Kernel
 ```
 
 修改 HIP Kernel 或 llama.cpp 实现后：
@@ -275,13 +280,11 @@ git switch -c amd-kernel-experiment
 ```bash
 cd ../..
 ./deploy.sh sync
-./deploy.sh build-llama
-./deploy.sh restart
+./deploy.sh build-llama amd
+./deploy.sh switch-llama amd
 ```
 
-`sync` 检测到本机 llama.cpp 有未提交修改时会保留当前工作树，不会强制切回固定版本。远端使用增量构建，因此适合反复进行 Kernel 修改、Benchmark 和 rocprofv3 Profiling。
-
-正式提交算子修改时，应将 llama.cpp 改动提交到独立 fork/分支，并将 `LLAMA_CPP_REPOSITORY` 与 `LLAMA_CPP_REVISION` 更新为可复现的提交；不要只保留远端未提交文件。
+官方和 AMD 使用相互独立的 CMake/Ninja 构建目录。切换实现不会改变模型 Profile；Performance Benchmark 自动识别当前活动二进制。实现 AMD Kernel 后必须把构建清单的 `custom_kernels` 和 `optimization_status` 更新为真实状态，并增加 Kernel 命中证据，不能只改显示名称。
 
 ## 配置与数据目录
 
@@ -292,7 +295,8 @@ cd ../..
 deploy/deploy.env            一键部署配置，不提交
 .agentfactory/               模型池、知识库、记忆与平台状态，不提交
 .agent_runtime/              Agent 工作区、Trace 与 Checkpoint，不提交
-vendor/llama.cpp/            可编辑 llama.cpp Git 工作树，不提交到主仓库
+vendor/llama.cpp-official/   随仓库提交的官方 Baseline 源码
+vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
 ```
 
 ### RadeonCloud
@@ -303,7 +307,8 @@ vendor/llama.cpp/            可编辑 llama.cpp Git 工作树，不提交到主
 /root/FastAgentFactory       同步的项目源码
 /root/.fastagentfactory      Python venv、模型池 SQLite、PID 与日志
 /root/models                 GGUF、mmproj 与 ModelScope 模型
-/root/llama.cpp              同步的 llama.cpp 源码及 build 目录
+/root/fastagentfactory-llama-sources  两套同步源码
+/root/.fastagentfactory/llama        两套构建、清单和活动软链接
 ```
 
 `/root` 是否持久取决于实例类型。若平台提供持久卷，应在 `deploy/deploy.env` 将模型、状态和 llama.cpp 路径改到其挂载点；否则工作空间到期前必须备份 Benchmark、Profile、Trace、演示材料和 llama.cpp 改动。
@@ -311,10 +316,10 @@ vendor/llama.cpp/            可编辑 llama.cpp Git 工作树，不提交到主
 ## 安全边界
 
 - SSH 必须使用 Key 登录，不在配置文件中保存密码。
-- `deploy/deploy.env`、`.env`、模型文件、运行状态和本地 llama.cpp 工作树均已排除 Git 提交。
+- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 源码属于交付源码。
 - 远端 `8002`、`8003`、`8004` 只监听 `127.0.0.1`，不要直接暴露公网。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 首次部署自动生成并写入本机 `.env`；丢失后旧的加密资源无法恢复。
-- 部署脚本不会升级 ROCm、驱动或 PyTorch。基础镜像不兼容时应更换工作空间镜像，而不是在原环境盲目覆盖运行时。
+- 部署脚本先复用可用的 ROCm/PyTorch HIP 环境，仅在缺失且配置允许时安装用户态组件。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 工作空间提供。
 
 ## 排障
 

@@ -11,6 +11,7 @@ from uuid import uuid4
 import httpx
 
 from agent_factory.benchmarking.schema import (
+    BenchmarkImplementation,
     BenchmarkMetricStats,
     BenchmarkPromptCacheSummary,
     BenchmarkRun,
@@ -60,6 +61,10 @@ class BenchmarkService:
             raise ValueError("benchmark requires an enabled chat profile")
         if not self._runtime_manager.is_ready(profile.profile_id):
             raise ValueError("benchmark requires the selected model to be loaded and ready")
+        spec = spec.model_copy(
+            update={"implementation": await _active_benchmark_implementation()},
+            deep=True,
+        )
         total = spec.warmup_iterations + spec.measured_iterations
         run = self._store.save(
             BenchmarkRun(
@@ -329,6 +334,31 @@ async def _remote_json(path: str) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except (httpx.HTTPError, ValueError):
         return {}
+
+
+async def _active_benchmark_implementation() -> BenchmarkImplementation:
+    software = await _remote_json("/runtime/software")
+    status = software.get("llama_implementation") if isinstance(software, dict) else None
+    active_build = status.get("active_build") if isinstance(status, dict) else None
+    if not isinstance(active_build, dict):
+        raise ValueError("the inference node did not report an active llama.cpp implementation")
+    label = str(active_build.get("display_name") or active_build.get("implementation") or "").strip()
+    revision = str(active_build.get("source_revision") or "").strip()
+    if not label or not revision:
+        raise ValueError("the active llama.cpp implementation metadata is incomplete")
+    return BenchmarkImplementation(
+        label=label,
+        revision=revision,
+        parameters={
+            "implementation": active_build.get("implementation"),
+            "source_sha256": active_build.get("source_sha256"),
+            "binary_sha256": active_build.get("binary_sha256"),
+            "custom_kernels": active_build.get("custom_kernels"),
+            "optimization_status": active_build.get("optimization_status"),
+            "build_options": active_build.get("build_options"),
+            "built_at": active_build.get("built_at"),
+        },
+    )
 
 
 def _sse_payload(line: str) -> str | None:

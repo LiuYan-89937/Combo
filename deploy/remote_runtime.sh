@@ -4,9 +4,10 @@ set -euo pipefail
 
 COMMAND="${1:-}"
 CONFIG_FILE="${2:-}"
+COMMAND_ARGUMENT="${3:-}"
 
 if [[ -z "${COMMAND}" || -z "${CONFIG_FILE}" || ! -r "${CONFIG_FILE}" ]]; then
-    echo "Usage: remote_runtime.sh <prepare-host|bootstrap|up|down|restart|status|doctor|logs|models|image-models|build-llama|build-sd> <config-file>" >&2
+    echo "Usage: remote_runtime.sh <prepare-host|bootstrap|up|down|restart|status|doctor|logs|models|image-models|build-llama|switch-llama|list-llama-builds|rollback-llama|build-sd> <config-file> [argument]" >&2
     exit 2
 fi
 
@@ -21,7 +22,9 @@ source "${CONFIG_FILE}"
 set +a
 
 required_config=(
-    REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT REMOTE_LLAMA_CPP_DIR
+    REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT REMOTE_LLAMA_SOURCE_ROOT
+    REMOTE_LLAMA_RUNTIME_ROOT LLAMA_OFFICIAL_REVISION LLAMA_AMD_BASE_REVISION
+    LLAMA_DEFAULT_IMPLEMENTATION
     REMOTE_STABLE_DIFFUSION_CPP_DIR
     PYPI_INDEX_URL HF_ENDPOINT CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
     CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MODEL_SIZE_BYTES
@@ -79,7 +82,14 @@ MODEL_POOL_STORE="${REMOTE_MODEL_POOL_STORE:-${REMOTE_STATE_ROOT}/model_pool/fac
 PID_FILE="${REMOTE_STATE_ROOT}/inference-node.pid"
 LOG_FILE="${REMOTE_STATE_ROOT}/logs/inference-node.log"
 EMBEDDING_PATH_FILE="${REMOTE_STATE_ROOT}/embedding-model-path"
-LLAMA_SERVER_BIN="${REMOTE_LLAMA_CPP_DIR}/build/bin/llama-server"
+LLAMA_OFFICIAL_SOURCE_DIR="${REMOTE_LLAMA_SOURCE_ROOT}/official"
+LLAMA_AMD_SOURCE_DIR="${REMOTE_LLAMA_SOURCE_ROOT}/amd"
+LLAMA_BUILDS_ROOT="${REMOTE_LLAMA_RUNTIME_ROOT}/builds"
+LLAMA_ACTIVE_DIR="${REMOTE_LLAMA_RUNTIME_ROOT}/active"
+LLAMA_ACTIVE_LINK="${LLAMA_ACTIVE_DIR}/llama-server"
+LLAMA_ACTIVE_IMPLEMENTATION_FILE="${REMOTE_LLAMA_RUNTIME_ROOT}/active-implementation"
+LLAMA_PREVIOUS_IMPLEMENTATION_FILE="${REMOTE_LLAMA_RUNTIME_ROOT}/previous-implementation"
+LLAMA_SERVER_BIN="${LLAMA_ACTIVE_LINK}"
 SD_SERVER_BIN="${REMOTE_STABLE_DIFFUSION_CPP_DIR}/build/bin/sd-server"
 CHAT_MODEL_PATH="${REMOTE_MODEL_ROOT}/gguf/${CHAT_MODEL_FILENAME}"
 CHAT_MMPROJ_PATH="${REMOTE_MODEL_ROOT}/gguf/${CHAT_MMPROJ_FILENAME}"
@@ -98,6 +108,33 @@ fail() {
     exit 1
 }
 
+validate_llama_implementation() {
+    case "$1" in
+        official|amd) ;;
+        *) fail "llama.cpp implementation must be official or amd" ;;
+    esac
+}
+
+llama_source_dir() {
+    case "$1" in
+        official) printf '%s\n' "${LLAMA_OFFICIAL_SOURCE_DIR}" ;;
+        amd) printf '%s\n' "${LLAMA_AMD_SOURCE_DIR}" ;;
+        *) return 2 ;;
+    esac
+}
+
+llama_build_dir() {
+    printf '%s/%s\n' "${LLAMA_BUILDS_ROOT}" "$1"
+}
+
+llama_binary_path() {
+    local build_dir
+    build_dir="$(llama_build_dir "$1")"
+    printf '%s/cmake/bin/llama-server-%s\n' "${build_dir}" "$1"
+}
+
+validate_llama_implementation "${LLAMA_DEFAULT_IMPLEMENTATION}"
+
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
@@ -108,6 +145,9 @@ prepare_host() {
     for command_name in git curl cmake ninja g++ python3 rsync sha256sum; do
         command_exists "${command_name}" || missing+=("${command_name}")
     done
+    if command_exists python3 && ! python3 -m venv --help >/dev/null 2>&1; then
+        missing+=("python3-venv")
+    fi
     if (( ${#missing[@]} > 0 )); then
         [[ "${REMOTE_INSTALL_BUILD_TOOLS:-1}" == "1" ]] \
             || fail "Missing build commands: ${missing[*]}. Set REMOTE_INSTALL_BUILD_TOOLS=1 or install them manually."
@@ -124,7 +164,10 @@ prepare_host() {
         "${REMOTE_STATE_ROOT}/model_pool" \
         "${REMOTE_MODEL_ROOT}/gguf" \
         "${REMOTE_MODEL_ROOT}/modelscope" \
-        "${REMOTE_LLAMA_CPP_DIR}" \
+        "${LLAMA_OFFICIAL_SOURCE_DIR}" \
+        "${LLAMA_AMD_SOURCE_DIR}" \
+        "${LLAMA_BUILDS_ROOT}" \
+        "${LLAMA_ACTIVE_DIR}" \
         "${REMOTE_STABLE_DIFFUSION_CPP_DIR}" \
         "${IMAGE_MODEL_DIR}"
 }
@@ -164,8 +207,11 @@ PY
     log "llama.cpp"
     if [[ -x "${LLAMA_SERVER_BIN}" ]]; then
         "${LLAMA_SERVER_BIN}" --version | head -n 1
+        if [[ -f "${LLAMA_ACTIVE_IMPLEMENTATION_FILE}" ]]; then
+            echo "active_implementation=$(<"${LLAMA_ACTIVE_IMPLEMENTATION_FILE}")"
+        fi
     else
-        echo "llama-server: not built"
+        echo "llama-server: no active implementation"
     fi
     log "stable-diffusion.cpp"
     if [[ -x "${SD_SERVER_BIN}" ]]; then
@@ -175,17 +221,67 @@ PY
     fi
 }
 
+prepare_rocm_userspace() {
+    [[ -e /dev/kfd ]] \
+        || fail "/dev/kfd is unavailable; select a RadeonCloud GPU workspace with ROCm device access"
+    if command_exists rocminfo && { command_exists hipcc || [[ -x /opt/rocm/llvm/bin/clang++ ]]; }; then
+        log "ROCm user-space runtime and compiler are ready"
+        return
+    fi
+    [[ "${REMOTE_INSTALL_ROCM_USERSPACE:-1}" == "1" ]] \
+        || fail "ROCm user-space tools are missing and REMOTE_INSTALL_ROCM_USERSPACE is disabled"
+    command_exists apt-get \
+        || fail "ROCm user-space tools are missing and apt-get is unavailable"
+    local packages_text="${ROCM_USERSPACE_PACKAGES:-rocminfo rocm-hip-sdk}"
+    local packages=()
+    read -r -a packages <<< "${packages_text}"
+    (( ${#packages[@]} > 0 )) || fail "ROCM_USERSPACE_PACKAGES must contain at least one package"
+    log "Refreshing package metadata before ROCm user-space installation"
+    apt-get -o Acquire::Retries=5 update
+    local package
+    for package in "${packages[@]}"; do
+        apt-cache show "${package}" >/dev/null 2>&1 \
+            || fail "ROCm package is unavailable from the configured repositories: ${package}"
+    done
+    log "Installing missing ROCm user-space inspection and HIP build packages"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends "${packages[@]}"
+}
+
 verify_rocm_runtime() {
-    command_exists rocminfo || fail "rocminfo is unavailable; use an AMD ROCm workspace image"
-    python3 - <<'PY'
+    command_exists rocminfo || fail "rocminfo is unavailable after environment preparation"
+    rocminfo >/dev/null 2>&1 || fail "rocminfo cannot access the AMD GPU"
+}
+
+verify_pytorch_runtime() {
+    "${PYTHON_BIN}" - <<'PY'
 import torch
 
 if not torch.version.hip:
     raise SystemExit("PyTorch is not a ROCm/HIP build")
 if not torch.cuda.is_available():
     raise SystemExit("PyTorch cannot access an AMD GPU")
-print(f"Verified ROCm PyTorch on {torch.cuda.get_device_name(0)}")
+print(f"Verified ROCm PyTorch {torch.__version__} on {torch.cuda.get_device_name(0)}")
 PY
+}
+
+prepare_pytorch_runtime() {
+    if verify_pytorch_runtime >/dev/null 2>&1; then
+        verify_pytorch_runtime
+        return
+    fi
+    [[ "${REMOTE_INSTALL_PYTORCH:-1}" == "1" ]] \
+        || fail "A ROCm/HIP PyTorch build is unavailable and REMOTE_INSTALL_PYTORCH is disabled"
+    [[ -n "${PYTORCH_INDEX_URL:-}" ]] \
+        || fail "A ROCm/HIP PyTorch build is unavailable; set PYTORCH_INDEX_URL to a wheel index compatible with this ROCm image"
+    local packages_text="${PYTORCH_PACKAGES:-torch torchvision torchaudio}"
+    local packages=()
+    read -r -a packages <<< "${packages_text}"
+    (( ${#packages[@]} > 0 )) || fail "PYTORCH_PACKAGES must contain at least torch"
+    log "Installing configured ROCm PyTorch packages into the isolated inference environment"
+    "${PYTHON_BIN}" -m pip install --index-url "${PYPI_INDEX_URL}" --upgrade pip
+    "${PYTHON_BIN}" -m pip install --index-url "${PYTORCH_INDEX_URL}" --upgrade "${packages[@]}"
+    verify_pytorch_runtime
 }
 
 prepare_python() {
@@ -194,6 +290,7 @@ prepare_python() {
         log "Creating ROCm-compatible Python environment with system site packages"
         python3 -m venv --system-site-packages "${VENV_DIR}"
     fi
+    prepare_pytorch_runtime
     local dependency_digest
     dependency_digest="$(sha256sum "${REMOTE_PROJECT_ROOT}/pyproject.toml" "${REMOTE_PROJECT_ROOT}/uv.lock" | sha256sum | awk '{print $1}')"
     local marker="${REMOTE_STATE_ROOT}/python-dependencies.sha256"
@@ -212,17 +309,43 @@ prepare_python() {
         'modelscope>=1.25,<2' \
         'sentence-transformers>=3,<6' \
         'transformers>=4.51,<6'
-    "${PYTHON_BIN}" -c 'import torch; assert torch.version.hip, "The base image must provide ROCm PyTorch"'
+    verify_pytorch_runtime
     printf '%s\n' "${dependency_digest}" > "${marker}"
 }
 
-build_llama() {
-    [[ -f "${REMOTE_LLAMA_CPP_DIR}/CMakeLists.txt" ]] \
-        || fail "llama.cpp source is not synchronized to ${REMOTE_LLAMA_CPP_DIR}"
-    log "Configuring llama.cpp with GGML_HIP=ON"
+llama_source_digest() {
+    local source_dir="$1"
+    find "${source_dir}" \
+        -path '*/.git' -prune -o \
+        -type d -name 'build*' -prune -o \
+        -type f -print0 \
+        | sort -z \
+        | xargs -0 sha256sum \
+        | sha256sum \
+        | awk '{print $1}'
+}
+
+build_llama_implementation() {
+    local implementation="$1"
+    validate_llama_implementation "${implementation}"
+    local source_dir build_dir cmake_dir source_revision source_digest binary binary_sha custom_kernels
+    source_dir="$(llama_source_dir "${implementation}")"
+    build_dir="$(llama_build_dir "${implementation}")"
+    cmake_dir="${build_dir}/cmake"
+    binary="$(llama_binary_path "${implementation}")"
+    [[ -f "${source_dir}/CMakeLists.txt" ]] \
+        || fail "Bundled ${implementation} llama.cpp source is not synchronized to ${source_dir}"
+    if [[ "${implementation}" == "official" ]]; then
+        source_revision="${LLAMA_OFFICIAL_REVISION}"
+        custom_kernels=false
+    else
+        source_revision="${LLAMA_AMD_BASE_REVISION}"
+        custom_kernels=false
+    fi
+    log "Configuring ${implementation} llama.cpp with GGML_HIP=ON"
     cmake \
-        -S "${REMOTE_LLAMA_CPP_DIR}" \
-        -B "${REMOTE_LLAMA_CPP_DIR}/build" \
+        -S "${source_dir}" \
+        -B "${cmake_dir}" \
         -G Ninja \
         -DGGML_HIP=ON \
         -DGGML_NATIVE=ON \
@@ -230,10 +353,97 @@ build_llama() {
         -DLLAMA_BUILD_UI=OFF \
         -DLLAMA_USE_PREBUILT_UI=OFF \
         -DCMAKE_BUILD_TYPE=Release
-    log "Building llama-server"
-    cmake --build "${REMOTE_LLAMA_CPP_DIR}/build" --target llama-server --parallel "$(nproc)"
-    [[ -x "${LLAMA_SERVER_BIN}" ]] || fail "llama-server build did not produce ${LLAMA_SERVER_BIN}"
-    "${LLAMA_SERVER_BIN}" --version | head -n 1
+    log "Building ${implementation} llama-server"
+    cmake --build "${cmake_dir}" --target llama-server --parallel "$(nproc)"
+    [[ -x "${cmake_dir}/bin/llama-server" ]] \
+        || fail "llama-server build did not produce ${cmake_dir}/bin/llama-server"
+    cp -f "${cmake_dir}/bin/llama-server" "${binary}"
+    chmod 755 "${binary}"
+    source_digest="$(llama_source_digest "${source_dir}")"
+    binary_sha="$(sha256sum "${binary}" | awk '{print $1}')"
+    python3 - "${build_dir}/manifest.json" "${implementation}" "${source_revision}" \
+        "${source_digest}" "${binary}" "${binary_sha}" "${custom_kernels}" <<'PY'
+import datetime
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+implementation = sys.argv[2]
+payload = {
+    "implementation": implementation,
+    "display_name": "Official llama.cpp" if implementation == "official" else "AMD llama.cpp",
+    "source_revision": sys.argv[3],
+    "source_sha256": sys.argv[4],
+    "binary_path": sys.argv[5],
+    "binary_sha256": sys.argv[6],
+    "custom_kernels": sys.argv[7].lower() == "true",
+    "optimization_status": "baseline" if implementation == "official" else "placeholder",
+    "build_options": {
+        "GGML_HIP": True,
+        "GGML_NATIVE": True,
+        "CMAKE_BUILD_TYPE": "Release",
+    },
+    "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+}
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+    "${binary}" --version | head -n 1
+    log "Built ${implementation} llama-server: ${binary}"
+}
+
+build_llama() {
+    local implementation="${1:-all}"
+    case "${implementation}" in
+        all)
+            build_llama_implementation official
+            build_llama_implementation amd
+            ;;
+        official|amd) build_llama_implementation "${implementation}" ;;
+        *) fail "build-llama argument must be official, amd, or all" ;;
+    esac
+}
+
+activate_llama_implementation() {
+    local implementation="$1"
+    local record_previous="${2:-1}"
+    validate_llama_implementation "${implementation}"
+    local binary current temporary_link
+    binary="$(llama_binary_path "${implementation}")"
+    [[ -x "${binary}" ]] || fail "${implementation} llama-server is not built: ${binary}"
+    current=""
+    [[ -f "${LLAMA_ACTIVE_IMPLEMENTATION_FILE}" ]] \
+        && current="$(<"${LLAMA_ACTIVE_IMPLEMENTATION_FILE}")"
+    if [[ "${record_previous}" == "1" && -n "${current}" && "${current}" != "${implementation}" ]]; then
+        printf '%s\n' "${current}" > "${LLAMA_PREVIOUS_IMPLEMENTATION_FILE}"
+    fi
+    temporary_link="${LLAMA_ACTIVE_DIR}/.llama-server.$$.tmp"
+    ln -s "${binary}" "${temporary_link}"
+    mv -Tf "${temporary_link}" "${LLAMA_ACTIVE_LINK}"
+    printf '%s\n' "${implementation}" > "${LLAMA_ACTIVE_IMPLEMENTATION_FILE}"
+    log "Active llama.cpp implementation: ${implementation}"
+}
+
+list_llama_builds() {
+    python3 - "${LLAMA_BUILDS_ROOT}" "${LLAMA_ACTIVE_IMPLEMENTATION_FILE}" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+active_file = pathlib.Path(sys.argv[2])
+active = active_file.read_text(encoding="utf-8").strip() if active_file.is_file() else ""
+builds = []
+for implementation in ("official", "amd"):
+    manifest_path = root / implementation / "manifest.json"
+    if not manifest_path.is_file():
+        builds.append({"implementation": implementation, "built": False, "active": implementation == active})
+        continue
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload.update({"built": True, "active": implementation == active})
+    builds.append(payload)
+print(json.dumps({"active": active, "builds": builds}, ensure_ascii=False, indent=2))
+PY
 }
 
 build_sd() {
@@ -438,6 +648,7 @@ node_environment() {
     export AGENTFACTORY_MODEL_ROOT="${REMOTE_MODEL_ROOT}"
     export AGENTFACTORY_MODEL_POOL_STORE_PATH="${MODEL_POOL_STORE}"
     export AGENTFACTORY_LLAMA_SERVER_PATH="${LLAMA_SERVER_BIN}"
+    export AGENTFACTORY_LLAMA_IMPLEMENTATION_ROOT="${REMOTE_LLAMA_RUNTIME_ROOT}"
     export AGENTFACTORY_SD_SERVER_PATH="${SD_SERVER_BIN}"
     export AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT="http://127.0.0.1:${REMOTE_CHAT_PORT}/v1"
     export AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT="http://127.0.0.1:${REMOTE_EMBEDDING_PORT}"
@@ -537,18 +748,58 @@ status() {
     local base_url="http://127.0.0.1:${REMOTE_TELEMETRY_PORT}"
     curl --fail --silent --show-error --max-time 10 "${base_url}/runtime/software" || true
     echo
+    list_llama_builds
     curl --fail --silent --show-error --max-time 10 "${base_url}/runtime/rocm" || true
     echo
     curl --fail --silent --show-error --max-time 10 "${base_url}/runtimes" || true
     echo
 }
 
+switch_llama() {
+    local implementation="$1"
+    validate_llama_implementation "${implementation}"
+    local current was_running=0
+    current=""
+    [[ -f "${LLAMA_ACTIVE_IMPLEMENTATION_FILE}" ]] \
+        && current="$(<"${LLAMA_ACTIVE_IMPLEMENTATION_FILE}")"
+    if [[ "${current}" == "${implementation}" ]]; then
+        log "Reloading the active ${implementation} llama.cpp implementation"
+    fi
+    node_running && was_running=1
+    if (( was_running )); then
+        stop_node
+    fi
+    activate_llama_implementation "${implementation}"
+    if (( ! was_running )); then
+        return
+    fi
+    if (start_node && wait_ready); then
+        status
+        return
+    fi
+    log "Switch to ${implementation} failed; restoring ${current:-previous implementation}"
+    stop_node
+    [[ -n "${current}" ]] || fail "No previous llama.cpp implementation is available for rollback"
+    activate_llama_implementation "${current}" 0
+    start_node
+    wait_ready
+    fail "Switch to ${implementation} failed and ${current} was restored"
+}
+
+rollback_llama() {
+    [[ -f "${LLAMA_PREVIOUS_IMPLEMENTATION_FILE}" ]] \
+        || fail "No previous llama.cpp implementation has been recorded"
+    switch_llama "$(<"${LLAMA_PREVIOUS_IMPLEMENTATION_FILE}")"
+}
+
 bootstrap() {
     prepare_host
     doctor
+    prepare_rocm_userspace
     verify_rocm_runtime
     prepare_python
-    build_llama
+    build_llama all
+    activate_llama_implementation "${LLAMA_DEFAULT_IMPLEMENTATION}"
     build_sd
     download_models
     configure_profiles
@@ -584,7 +835,13 @@ case "${COMMAND}" in
     logs) tail -n 200 "${LOG_FILE}" 2>/dev/null || true ;;
     models) refresh_models ;;
     image-models) refresh_image_models ;;
-    build-llama) build_llama ;;
+    build-llama) build_llama "${COMMAND_ARGUMENT:-all}" ;;
+    switch-llama)
+        [[ -n "${COMMAND_ARGUMENT}" ]] || fail "switch-llama requires official or amd"
+        switch_llama "${COMMAND_ARGUMENT}"
+        ;;
+    list-llama-builds) list_llama_builds ;;
+    rollback-llama) rollback_llama ;;
     build-sd) build_sd ;;
     *) fail "Unsupported command: ${COMMAND}" ;;
 esac

@@ -19,12 +19,14 @@
 | 本机 | Chat SSH 转发 | `127.0.0.1:18003 -> remote:8003` |
 | 本机 | Embedding SSH 转发 | `127.0.0.1:18002 -> remote:8002` |
 | 本机 | Telemetry SSH 转发 | `127.0.0.1:18004 -> remote:8004` |
-| 本机 | 可编辑 llama.cpp 源码 | `vendor/llama.cpp` |
+| 本机 | 官方 llama.cpp 源码 | `vendor/llama.cpp-official` |
+| 本机 | AMD llama.cpp 源码 | `vendor/llama.cpp-amd` |
 | 远端 | llama-server ROCm | `127.0.0.1:8003` |
 | 远端 | Embedding 服务 | `127.0.0.1:8002` |
 | 远端 | 推理控制与遥测 | `127.0.0.1:8004` |
 | 远端 | FastAgentFactory 源码 | `/root/FastAgentFactory` |
-| 远端 | llama.cpp 源码与构建 | `/root/llama.cpp` |
+| 远端 | 两套 llama.cpp 源码 | `/root/fastagentfactory-llama-sources` |
+| 远端 | 两套构建与活动入口 | `/root/.fastagentfactory/llama` |
 | 远端 | 模型文件 | `/root/models` |
 | 远端 | 推理状态与日志 | `/root/.fastagentfactory` |
 
@@ -139,12 +141,15 @@ SSH_KEY=
 | `REMOTE_PROJECT_ROOT` | 远端项目源码目录 | `/root/FastAgentFactory` |
 | `REMOTE_STATE_ROOT` | venv、模型池、PID、日志 | `/root/.fastagentfactory` |
 | `REMOTE_MODEL_ROOT` | 模型根目录 | `/root/models` |
-| `REMOTE_LLAMA_CPP_DIR` | 远端 llama.cpp 源码与构建 | `/root/llama.cpp` |
-| `LOCAL_LLAMA_CPP_DIR` | 本机可修改的 llama.cpp 工作树 | `vendor/llama.cpp` |
+| `REMOTE_LLAMA_SOURCE_ROOT` | 远端两套 llama.cpp 源码根目录 | `/root/fastagentfactory-llama-sources` |
+| `REMOTE_LLAMA_RUNTIME_ROOT` | 两套构建、清单和活动软链接 | `/root/.fastagentfactory/llama` |
+| `LOCAL_LLAMA_OFFICIAL_DIR` | 仓库内官方 Baseline 源码 | `vendor/llama.cpp-official` |
+| `LOCAL_LLAMA_AMD_DIR` | 仓库内 AMD 优化源码 | `vendor/llama.cpp-amd` |
 | `REMOTE_STABLE_DIFFUSION_CPP_DIR` | 远端 stable-diffusion.cpp 源码与构建 | `/root/stable-diffusion.cpp` |
 | `LOCAL_STABLE_DIFFUSION_CPP_DIR` | 本机可修改的 stable-diffusion.cpp 工作树 | `vendor/stable-diffusion.cpp` |
-| `LLAMA_CPP_REPOSITORY` | llama.cpp Git 来源 | GitCode 国内镜像 |
-| `LLAMA_CPP_REVISION` | 可复现构建提交 | 固定 Commit SHA |
+| `LLAMA_OFFICIAL_REVISION` | 官方 Baseline 来源 revision | 固定 Commit SHA |
+| `LLAMA_AMD_BASE_REVISION` | AMD 版本基于的官方 revision | 与 Baseline 对齐 |
+| `LLAMA_DEFAULT_IMPLEMENTATION` | 一键部署后激活的实现 | `amd` |
 | `PYPI_INDEX_URL` | 远端 Python 依赖源 | 清华 PyPI |
 | `HF_ENDPOINT` | GGUF 下载源 | Hugging Face 国内镜像 |
 | `CHAT_MODEL_*` | Chat GGUF 版本、文件、大小和 SHA256 | 固定并校验 |
@@ -158,8 +163,12 @@ SSH_KEY=
 | `CHAT_PARALLEL_SLOTS` | Chat 并发槽位 | `1` |
 | `CHAT_FLASH_ATTENTION` | Flash Attention | `1`，开启 |
 | `REMOTE_INSTALL_BUILD_TOOLS` | 缺少普通工具时允许 apt 安装 | `1` |
+| `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
+| `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
+| `REMOTE_INSTALL_PYTORCH` | 缺失时允许安装配置指定的 PyTorch HIP | `1` |
+| `PYTORCH_INDEX_URL` | PyTorch HIP wheel 源；已有可用 HIP PyTorch 时无需填写 | 空 |
 
-部署脚本不会升级或覆盖 ROCm、GPU 驱动和 PyTorch。若基础镜像中的 HIP 运行时不可用，部署会在模型下载前停止。
+部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。缺失时只安装工作空间内的用户态组件；GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供。如果 PyTorch HIP 缺失，必须配置与当前 ROCm 镜像兼容的 `PYTORCH_INDEX_URL`，脚本不会猜测不匹配的 wheel 版本。
 
 ## 5. 首次一键部署
 
@@ -173,19 +182,19 @@ SSH_KEY=
 
 1. 检查本机 Git、Python、uv、Node、npm、Docker、SSH 与 rsync。
 2. 验证 SSH Key 登录和端口配置。
-3. 在本机创建或复用 `vendor/llama.cpp` 与 `vendor/stable-diffusion.cpp`，切到固定 revision。
+3. 验证仓库自带的 `vendor/llama.cpp-official` 与 `vendor/llama.cpp-amd`；llama.cpp 不在线拉取。
 4. 上传远端控制脚本并探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP。
-5. 仅在缺失时安装普通编译工具。
+5. 仅在缺失时安装普通编译工具、ROCm 用户态组件和配置指定的 PyTorch HIP 包。
 6. 同步 FastAgentFactory 当前工作树到远端项目目录。
-7. 同步两个推理源码工作树，增量构建 ROCm llama-server 与 HIPBLAS sd-server。
+7. 同步官方与 AMD 两套 llama.cpp 源码，使用独立目录构建两个 ROCm llama-server，并构建 HIPBLAS sd-server。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj。
 9. 校验模型文件大小和 SHA256；损坏的完整文件不会被复用。
 10. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 11. 下载并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
 12. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 与本机 external Profile。
 12. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
-13. 启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
-14. 生成本机 `.env`、建立 SSH 隧道并启动本机前后端。
+13. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动远端推理节点并等待 Chat 与 Embedding 都进入 `ready`。
+14. 生成本机 `.env`；默认建立 SSH 隧道并启动本机前后端，传入 `--no-web` 时跳过此步骤。
 
 首次下载和编译时间取决于网络、磁盘和 Radeon GPU 主机 CPU。终端会直接显示 curl 与 ModelScope 下载进度。
 
@@ -274,6 +283,7 @@ http://127.0.0.1:3000
 | 命令 | 作用 |
 | --- | --- |
 | `./deploy.sh up` | 幂等部署并启动远端模型、本机 Web 和 SSH 隧道。 |
+| `./deploy.sh up --no-web` | 完成远端一键部署，不启动本机前后端。 |
 | `./deploy.sh bootstrap` | 部署并启动远端模型，不启动本机 Web。 |
 | `./start.sh` | 已部署环境中只启动本机 Web、Docker Runtime 和 SSH 隧道。 |
 | `./deploy.sh status` | 查看远端软件、ROCm 和模型运行状态。 |
@@ -282,7 +292,10 @@ http://127.0.0.1:3000
 | `./deploy.sh down` | 停止远端推理节点、卸载模型并释放显存。 |
 | `./deploy.sh models` | 续传/校验模型并刷新 Profile；运行中会自动重启。 |
 | `./deploy.sh sync` | 同步 FastAgentFactory 和本机 llama.cpp 到远端。 |
-| `./deploy.sh build-llama` | 在远端增量构建 llama-server。 |
+| `./deploy.sh build-llama [official\|amd\|all]` | 独立增量构建指定实现；默认构建两套。 |
+| `./deploy.sh switch-llama <official\|amd>` | 切换实现并用同一 Profile 重载模型。 |
+| `./deploy.sh list-llama-builds` | 查看构建清单、SHA256 和活动实现。 |
+| `./deploy.sh rollback-llama` | 恢复上一次活动实现。 |
 
 按 `Ctrl+C` 只会停止本机前后端和 SSH 隧道，远端模型继续运行。释放 Radeon GPU 显存必须执行：
 
@@ -317,11 +330,10 @@ git pull --ff-only origin AMD-Hackson
 
 ## 9. llama.cpp 算子开发与部署
 
-本机 `vendor/llama.cpp` 是算子改造源。不要只在远端直接修改代码。
+两套源码都属于 FastAgentFactory 黑客松分支。官方目录保持原样，自定义算子只进入 AMD 目录：
 
 ```bash
-cd vendor/llama.cpp
-git switch -c amd-kernel-experiment
+cd vendor/llama.cpp-amd
 ```
 
 修改后执行：
@@ -329,18 +341,21 @@ git switch -c amd-kernel-experiment
 ```bash
 cd ../..
 ./deploy.sh sync
-./deploy.sh build-llama
-./deploy.sh restart
+./deploy.sh build-llama amd
+./deploy.sh switch-llama amd
 ```
 
-本机 llama.cpp 工作树存在未提交修改时，部署脚本不会强制切回固定 revision。正式交付算子改动时，应提交到独立 llama.cpp fork/分支，并更新：
+当前 AMD 目录暂时与官方计算实现一致，构建清单明确记录：
 
-```dotenv
-LLAMA_CPP_REPOSITORY=<fork-url>
-LLAMA_CPP_REVISION=<commit-sha>
+```json
+{
+  "implementation": "amd",
+  "custom_kernels": false,
+  "optimization_status": "placeholder"
+}
 ```
 
-这样评委才能复现相同 Kernel 构建。
+完成算子实现后再把这些字段改为真实值，并增加 Kernel 命中计数与 rocprofv3 证据。Benchmark 会自动读取活动构建的 source revision、源码摘要、二进制 SHA256 和构建参数，不接受手填实现名称。
 
 ## 10. 更换或重建 RadeonCloud 实例
 

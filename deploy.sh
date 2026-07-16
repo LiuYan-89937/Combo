@@ -7,6 +7,15 @@ CONFIG_FILE="${FASTAGENTFACTORY_DEPLOY_CONFIG:-${PROJECT_ROOT}/deploy/deploy.env
 CONFIG_EXAMPLE="${PROJECT_ROOT}/deploy/deploy.env.example"
 REMOTE_CONTROLLER="${PROJECT_ROOT}/deploy/remote_runtime.sh"
 COMMAND="${1:-up}"
+shift $(( $# > 0 ? 1 : 0 ))
+START_LOCAL_WEB=1
+REMOTE_COMMAND_ARGS=()
+for argument in "$@"; do
+    case "${argument}" in
+        --no-web) START_LOCAL_WEB=0 ;;
+        *) REMOTE_COMMAND_ARGS+=("${argument}") ;;
+    esac
+done
 
 fail() {
     printf 'ERROR: %s\n' "$*" >&2
@@ -33,7 +42,9 @@ set +a
 
 required_config=(
     SSH_HOST SSH_PORT SSH_USER REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT
-    REMOTE_LLAMA_CPP_DIR LOCAL_LLAMA_CPP_DIR LLAMA_CPP_REPOSITORY LLAMA_CPP_REVISION
+    REMOTE_LLAMA_SOURCE_ROOT REMOTE_LLAMA_RUNTIME_ROOT
+    LOCAL_LLAMA_OFFICIAL_DIR LOCAL_LLAMA_AMD_DIR
+    LLAMA_OFFICIAL_REVISION LLAMA_AMD_BASE_REVISION LLAMA_DEFAULT_IMPLEMENTATION
     REMOTE_STABLE_DIFFUSION_CPP_DIR LOCAL_STABLE_DIFFUSION_CPP_DIR
     STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
     CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION CHAT_MODEL_FILENAME CHAT_MODEL_SHA256
@@ -103,9 +114,13 @@ if [[ -n "${SSH_KEY:-}" ]]; then
 fi
 
 SSH_TARGET="${SSH_USER}@${SSH_HOST}"
-LOCAL_LLAMA_PATH="${LOCAL_LLAMA_CPP_DIR}"
-if [[ "${LOCAL_LLAMA_PATH}" != /* ]]; then
-    LOCAL_LLAMA_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_PATH}"
+LOCAL_LLAMA_OFFICIAL_PATH="${LOCAL_LLAMA_OFFICIAL_DIR}"
+if [[ "${LOCAL_LLAMA_OFFICIAL_PATH}" != /* ]]; then
+    LOCAL_LLAMA_OFFICIAL_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_OFFICIAL_PATH}"
+fi
+LOCAL_LLAMA_AMD_PATH="${LOCAL_LLAMA_AMD_DIR}"
+if [[ "${LOCAL_LLAMA_AMD_PATH}" != /* ]]; then
+    LOCAL_LLAMA_AMD_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_AMD_PATH}"
 fi
 LOCAL_SD_PATH="${LOCAL_STABLE_DIFFUSION_CPP_DIR}"
 if [[ "${LOCAL_SD_PATH}" != /* ]]; then
@@ -125,7 +140,8 @@ upload_controller() {
 
 remote_command() {
     local command_name="$1"
-    ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")"
+    shift
+    ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")" "$@"
 }
 
 prepare_local_source() {
@@ -162,7 +178,10 @@ prepare_local_source() {
 }
 
 prepare_local_sources() {
-    prepare_local_source "llama.cpp" "${LOCAL_LLAMA_PATH}" "${LLAMA_CPP_REPOSITORY}" "${LLAMA_CPP_REVISION}"
+    [[ -f "${LOCAL_LLAMA_OFFICIAL_PATH}/CMakeLists.txt" ]] \
+        || fail "Bundled official llama.cpp source is missing: ${LOCAL_LLAMA_OFFICIAL_PATH}"
+    [[ -f "${LOCAL_LLAMA_AMD_PATH}/CMakeLists.txt" ]] \
+        || fail "Bundled AMD llama.cpp source is missing: ${LOCAL_LLAMA_AMD_PATH}"
     prepare_local_source "stable-diffusion.cpp" "${LOCAL_SD_PATH}" "${STABLE_DIFFUSION_CPP_REPOSITORY}" "${STABLE_DIFFUSION_CPP_REVISION}"
 }
 
@@ -181,14 +200,21 @@ sync_sources() {
         --exclude '.venv/' \
         --exclude 'node_modules/' \
         --exclude 'vendor/llama.cpp/' \
+        --exclude 'vendor/llama.cpp-official/' \
+        --exclude 'vendor/llama.cpp-amd/' \
         --exclude 'vendor/stable-diffusion.cpp/' \
         "${PROJECT_ROOT}/" "${SSH_TARGET}:${REMOTE_PROJECT_ROOT}/"
 
-    log "Synchronizing editable llama.cpp source to ${REMOTE_LLAMA_CPP_DIR}"
+    log "Synchronizing bundled official llama.cpp source"
     rsync -az --delete \
         -e "${rsync_transport% }" \
         --exclude 'build*/' \
-        "${LOCAL_LLAMA_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_CPP_DIR}/"
+        "${LOCAL_LLAMA_OFFICIAL_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/official/"
+    log "Synchronizing bundled AMD llama.cpp source"
+    rsync -az --delete \
+        -e "${rsync_transport% }" \
+        --exclude 'build*/' \
+        "${LOCAL_LLAMA_AMD_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/amd/"
     log "Synchronizing editable stable-diffusion.cpp source to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
     rsync -az --delete -e "${rsync_transport% }" --exclude 'build*/' \
         "${LOCAL_SD_PATH}/" "${SSH_TARGET}:${REMOTE_STABLE_DIFFUSION_CPP_DIR}/"
@@ -299,10 +325,15 @@ bootstrap() {
 
 case "${COMMAND}" in
     up)
-        check_web_prerequisites
+        if [[ "${START_LOCAL_WEB}" == "1" ]]; then
+            check_web_prerequisites
+        fi
         bootstrap
-        log "Starting the local Web application and SSH tunnel"
-        exec "${PROJECT_ROOT}/start.sh"
+        if [[ "${START_LOCAL_WEB}" == "1" ]]; then
+            log "Starting the local Web application and SSH tunnel"
+            exec "${PROJECT_ROOT}/start.sh"
+        fi
+        log "Remote inference deployment is ready; local Web startup was skipped"
         ;;
     bootstrap)
         bootstrap
@@ -313,11 +344,11 @@ case "${COMMAND}" in
         remote_command prepare-host
         sync_sources
         ;;
-    models|image-models|build-llama|build-sd|restart|down|status|doctor|logs)
+    models|image-models|build-llama|build-sd|switch-llama|list-llama-builds|rollback-llama|restart|down|status|doctor|logs)
         upload_controller
-        remote_command "${COMMAND}"
+        remote_command "${COMMAND}" "${REMOTE_COMMAND_ARGS[@]}"
         ;;
     *)
-        fail "Unsupported command: ${COMMAND}. Use up, bootstrap, sync, models, image-models, build-llama, build-sd, restart, down, status, doctor, or logs."
+        fail "Unsupported command: ${COMMAND}. Use up, bootstrap, sync, models, image-models, build-llama, build-sd, switch-llama, list-llama-builds, rollback-llama, restart, down, status, doctor, or logs."
         ;;
 esac

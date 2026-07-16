@@ -22,10 +22,16 @@
             <p>{{ t('benchmark.implementationHint') }}</p>
           </div>
           <n-tag v-if="activeRun" type="info" :bordered="false">{{ statusLabel(activeRun.status) }}</n-tag>
+          <n-tag v-else-if="llamaStatus?.active_build" type="success" :bordered="false">
+            {{ llamaStatus.active_build.display_name }}
+          </n-tag>
         </div>
 
         <n-alert v-if="!readyChatProfiles.length" type="warning" :show-icon="true">
           {{ t('benchmark.modelNotReady') }}
+        </n-alert>
+        <n-alert v-else-if="!llamaStatus?.available" type="warning" :show-icon="true">
+          {{ llamaStatus?.error || t('benchmark.implementationUnavailable') }}
         </n-alert>
 
         <div class="form-grid">
@@ -78,14 +84,6 @@
               :options="telemetryIntervalOptions"
               :disabled="Boolean(activeRun)"
             />
-          </label>
-          <label class="field field-wide">
-            <span>{{ t('benchmark.implementationLabel') }}</span>
-            <n-input v-model:value="form.implementation.label" :disabled="Boolean(activeRun)" />
-          </label>
-          <label class="field field-wide">
-            <span>{{ t('benchmark.implementationRevision') }}</span>
-            <n-input v-model:value="form.implementation.revision" :disabled="Boolean(activeRun)" />
           </label>
         </div>
 
@@ -341,7 +339,7 @@ import type {
   BenchmarkSample,
 } from '@/api/benchmarks'
 import { modelPoolApi } from '@/api/modelPool'
-import type { LocalModelProfile, LocalModelRuntime } from '@/api/modelPool'
+import type { LlamaImplementationStatus, LocalModelProfile, LocalModelRuntime } from '@/api/modelPool'
 
 type MetricKey =
   | 'ttft_ms'
@@ -367,6 +365,7 @@ const submitting = ref(false)
 const runs = ref<BenchmarkRun[]>([])
 const profiles = ref<LocalModelProfile[]>([])
 const runtimes = ref<LocalModelRuntime[]>([])
+const llamaStatus = ref<LlamaImplementationStatus | null>(null)
 const selectedRunId = ref<string | null>(null)
 const baselineRunId = ref<string | null>(null)
 let pollTimer: number | undefined
@@ -418,7 +417,11 @@ const baselineOptions = computed(() => runs.value
   .filter((run) => run.status === 'completed' && run.run_id !== selectedRun.value?.run_id)
   .map((run) => ({ label: `${run.spec.name} · ${formatDate(run.created_at)}`, value: run.run_id })))
 const canStart = computed(() => Boolean(
-  form.name.trim() && form.profile_id && form.prompt.trim() && readyProfileIds.value.has(form.profile_id),
+  form.name.trim()
+  && form.profile_id
+  && form.prompt.trim()
+  && readyProfileIds.value.has(form.profile_id)
+  && llamaStatus.value?.available,
 ))
 const primaryMetrics = computed<MetricDefinition[]>(() => [
   { key: 'ttft_ms', label: t('benchmark.ttft'), higherIsBetter: false },
@@ -432,14 +435,16 @@ const primaryMetrics = computed<MetricDefinition[]>(() => [
 async function refresh(showLoading = true) {
   if (showLoading) loading.value = true
   try {
-    const [runResult, profileResult, runtimeResult] = await Promise.all([
+    const [runResult, profileResult, runtimeResult, llamaResult] = await Promise.all([
       benchmarkApi.list(),
       modelPoolApi.profiles(),
       modelPoolApi.runtimes(),
+      modelPoolApi.llamaRuntime(),
     ])
     runs.value = runResult.runs
     profiles.value = profileResult.profiles
     runtimes.value = runtimeResult.runtimes
+    llamaStatus.value = llamaResult
     if (!selectedRunId.value && runs.value.length) selectedRunId.value = runs.value[0].run_id
     if (!form.profile_id && readyChatProfiles.value.length) form.profile_id = readyChatProfiles.value[0].profile_id
   } catch (error) {

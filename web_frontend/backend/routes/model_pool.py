@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 import httpx
 
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
+from agent_factory.local_inference.implementation import inspect_llama_implementations
 from agent_factory.local_inference.memory_budget import estimate_inference_memory
 from agent_factory.local_inference.node_control import (
     InferenceMemoryEstimateRequest,
@@ -47,6 +48,12 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
         if load_inference_runtime_mode() == "external":
             return await _external_rocm_payload()
         return inspect_rocm_runtime(require_available=False).payload()
+
+    @router.get("/runtime/llama")
+    async def llama_runtime():
+        if load_inference_runtime_mode() == "external":
+            return await _external_runtime_payload("/runtime/llama")
+        return inspect_llama_implementations().model_dump(mode="json")
 
     @router.get("/runtimes")
     async def inference_runtimes():
@@ -343,6 +350,17 @@ async def _external_rocm_payload() -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
         }
     raise ValueError("external telemetry response must be a JSON object")
+
+
+async def _external_runtime_payload(path: str) -> dict[str, Any]:
+    endpoint = load_inference_telemetry_endpoint()
+    async with create_private_async_http_client(endpoint) as client:
+        response = await client.get(endpoint.endpoint(path))
+        response.raise_for_status()
+        payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("external runtime response must be a JSON object")
+    return payload
 
 
 def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> ModelPoolProfile:

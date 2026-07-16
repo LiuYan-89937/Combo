@@ -17,6 +17,7 @@ from agent_factory.local_inference.memory_budget import (
     estimate_inference_memory,
     warm_inference_memory_metadata,
 )
+from agent_factory.local_inference.implementation import inspect_llama_implementations
 from agent_factory.local_inference.node_control import (
     InferenceMemoryEstimateRequest,
     InferenceNodeAction,
@@ -62,6 +63,10 @@ def create_app() -> FastAPI:
     @app.get("/runtime/software")
     async def runtime_software() -> dict[str, Any]:
         return _software_payload()
+
+    @app.get("/runtime/llama")
+    async def llama_runtime() -> dict[str, Any]:
+        return inspect_llama_implementations().model_dump(mode="json")
 
     @app.get("/runtimes")
     async def runtimes() -> dict[str, Any]:
@@ -245,6 +250,7 @@ def _software_payload() -> dict[str, Any]:
     binary = shutil.which(configured_binary)
     configured_sd_binary = str(os.environ.get("AGENTFACTORY_SD_SERVER_PATH") or "sd-server").strip()
     sd_binary = shutil.which(configured_sd_binary)
+    implementation = inspect_llama_implementations()
     return {
         "python_version": sys.version.split()[0],
         "project_revision": _command_output(
@@ -252,6 +258,7 @@ def _software_payload() -> dict[str, Any]:
             cwd=Path(__file__).resolve().parents[2],
         ),
         "llama_server_version": _command_output([binary, "--version"]) if binary else "",
+        "llama_implementation": implementation.model_dump(mode="json"),
         "sd_server_version": _command_output([sd_binary, "--version"]) if sd_binary else "",
     }
 

@@ -244,6 +244,29 @@ export interface RocmDeviceInfo {
   compute_units?: number | null
 }
 
+export type LlamaImplementationId = 'official' | 'amd'
+
+export interface LlamaImplementationBuild {
+  implementation: LlamaImplementationId
+  display_name: string
+  source_revision: string
+  source_sha256: string
+  binary_path: string
+  binary_sha256: string
+  custom_kernels: boolean
+  optimization_status: 'baseline' | 'placeholder' | 'optimized'
+  build_options: Record<string, unknown>
+  built_at: string
+}
+
+export interface LlamaImplementationStatus {
+  available: boolean
+  active?: LlamaImplementationId | null
+  active_build?: LlamaImplementationBuild | null
+  builds: LlamaImplementationBuild[]
+  error: string
+}
+
 export interface ModelUsageTotals {
   call_count: number
   input_tokens: number
@@ -269,6 +292,7 @@ export const modelPoolApi = {
   engines: () => requestJson<{ engines: LocalEngine[] }>('/api/model-pool/engines'),
   runtimes: () => requestJson<LocalModelRuntimeSummary>('/api/model-pool/runtimes'),
   rocmRuntime: () => requestJson<RocmRuntimeInfo>('/api/model-pool/runtime/rocm'),
+  llamaRuntime: () => requestJson<LlamaImplementationStatus>('/api/model-pool/runtime/llama'),
   storage: () => requestJson<LocalModelStorage>('/api/model-pool/storage'),
   defaults: () => requestJson<{ defaults: LocalModelDefaults }>('/api/model-pool/defaults'),
   setDefault: (role: LocalModelDefaultRole, profileId: string) =>
