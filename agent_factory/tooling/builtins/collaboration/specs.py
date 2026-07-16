@@ -51,7 +51,6 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
 
 
 def _collaboration_input_schema() -> dict:
-    common = {"collaboration_id": {"type": "string"}}
     flexible_object = {"type": "object", "additionalProperties": True}
     artifact_array = {
         "type": "array",
@@ -78,86 +77,56 @@ def _collaboration_input_schema() -> dict:
             "cancelled",
         ],
     }
-    return {
-        "oneOf": [
-            _action_schema("inspect", common),
-            _action_schema(
-                "create_task",
-                {
-                    **common,
-                    "assignee_package_id": {"type": "string"},
-                    "task_text": {"type": "string"},
-                    "depends_on": {"type": "array", "items": {"type": "string"}},
-                    "delivery_standard": flexible_object,
-                    "visible_context": flexible_object,
-                    "input_artifacts": artifact_array,
-                },
-                required=["assignee_package_id", "task_text", "delivery_standard"],
-            ),
-            _action_schema(
-                "update_task",
-                {
-                    **common,
-                    "task_id": {"type": "string"},
-                    "status": task_status,
-                    "task_text": {"type": "string"},
-                    "depends_on": {"type": "array", "items": {"type": "string"}},
-                    "delivery_standard": flexible_object,
-                    "visible_context": flexible_object,
-                    "input_artifacts": artifact_array,
-                    "result_summary": {"type": "string"},
-                    "review_notes": {"type": "string"},
-                    "artifact_refs": artifact_array,
-                },
-                required=["task_id"],
-            ),
-            _action_schema(
-                "cancel_task",
-                {
-                    **common,
-                    "task_id": {"type": "string"},
-                    "review_notes": {"type": "string"},
-                    "result_summary": {"type": "string"},
-                },
-                required=["task_id"],
-            ),
-            _action_schema(
-                "read_shared",
-                {
-                    **common,
-                    "path": {"type": "string"},
-                    "max_chars": {"type": "integer", "minimum": 1, "maximum": 1000000},
-                },
-                required=["path"],
-            ),
-            _action_schema(
-                "write_shared",
-                {
-                    **common,
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
-                },
-                required=["path", "content"],
-            ),
-            _action_schema(
-                "complete_session",
-                {
-                    **common,
-                    "content": {"type": "string"},
-                },
-                required=["content"],
-            ),
-        ]
-    }
-
-
-def _action_schema(action: str, properties: dict, *, required: list[str] | None = None) -> dict:
+    actions = [
+        "inspect",
+        "create_task",
+        "update_task",
+        "cancel_task",
+        "read_shared",
+        "write_shared",
+        "complete_session",
+    ]
     return {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": [action]},
-            **properties,
+            "action": {"type": "string", "enum": actions},
+            "collaboration_id": {"type": "string"},
+            "assignee_package_id": {"type": "string"},
+            "task_text": {"type": "string"},
+            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "delivery_standard": flexible_object,
+            "visible_context": flexible_object,
+            "input_artifacts": artifact_array,
+            "task_id": {"type": "string"},
+            "status": task_status,
+            "result_summary": {"type": "string"},
+            "review_notes": {"type": "string"},
+            "artifact_refs": artifact_array,
+            "path": {"type": "string"},
+            "max_chars": {"type": "integer", "minimum": 1, "maximum": 1000000},
+            "content": {"type": "string"},
         },
-        "required": ["action", "collaboration_id", *(required or [])],
+        "required": ["action", "collaboration_id"],
+        "allOf": [
+            _action_requirements(
+                "create_task",
+                ["assignee_package_id", "task_text", "delivery_standard"],
+            ),
+            _action_requirements("update_task", ["task_id"]),
+            _action_requirements("cancel_task", ["task_id"]),
+            _action_requirements("read_shared", ["path"]),
+            _action_requirements("write_shared", ["path", "content"]),
+            _action_requirements("complete_session", ["content"]),
+        ],
         "additionalProperties": False,
+    }
+
+
+def _action_requirements(action: str, required: list[str]) -> dict:
+    return {
+        "if": {
+            "properties": {"action": {"const": action}},
+            "required": ["action"],
+        },
+        "then": {"required": required},
     }
