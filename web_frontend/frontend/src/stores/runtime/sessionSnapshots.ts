@@ -1,4 +1,13 @@
-import type { ContextWindowView, ConversationTurn, FactoryMode, RunStatus, RuntimePlanView, TranscriptItem } from '@/types/protocol'
+import type {
+  ContextWindowView,
+  ConversationTurn,
+  FactoryFrontendEvent,
+  FactoryMode,
+  RunStatus,
+  RuntimePlanView,
+  ToolActivity,
+  TranscriptItem,
+} from '@/types/protocol'
 import { conversationScopeForMode } from './scopes'
 
 export interface FactorySessionSnapshotView {
@@ -8,6 +17,9 @@ export interface FactorySessionSnapshotView {
   transcript: TranscriptItem[]
   conversationTurns: ConversationTurn[]
   activeTurn: ConversationTurn | null
+  processEvents: FactoryFrontendEvent[]
+  tools: ToolActivity[]
+  pendingInterrupt: FactoryFrontendEvent | null
 }
 
 export interface AgentPackageSessionSnapshotView {
@@ -17,6 +29,9 @@ export interface AgentPackageSessionSnapshotView {
   activeTurn: ConversationTurn | null
   contextWindow: ContextWindowView | null
   currentPlan: RuntimePlanView | null
+  processEvents: FactoryFrontendEvent[]
+  tools: ToolActivity[]
+  pendingInterrupt: FactoryFrontendEvent | null
 }
 
 export function factorySessionSnapshotView(
@@ -30,6 +45,7 @@ export function factorySessionSnapshotView(
     ? String(session.evolve_agent_package_id || payload?.package_id || '').trim() || null
     : null
   const rawTurns = Array.isArray(snapshot.turns) ? snapshot.turns : []
+  const processEvents = normalizedProcessEvents(snapshot.process_events)
   if (rawTurns.length > 0) {
     const restored = conversationFromTurns(rawTurns, {
       keyPrefix: `factory-restored-${session.session_id || 'session'}`,
@@ -45,6 +61,9 @@ export function factorySessionSnapshotView(
       transcript: restored.transcript,
       conversationTurns: restored.conversationTurns,
       activeTurn: restored.activeTurn,
+      processEvents,
+      tools: toolsFromTurns(restored.conversationTurns),
+      pendingInterrupt: pendingInterruptFrom(processEvents, restored.activeTurn),
     }
   }
   return {
@@ -54,6 +73,9 @@ export function factorySessionSnapshotView(
     transcript: [],
     conversationTurns: [],
     activeTurn: null,
+    processEvents,
+    tools: [],
+    pendingInterrupt: null,
   }
 }
 
@@ -70,6 +92,7 @@ export function agentPackageSessionSnapshotView(
     agentSessionId: session.session_id,
     fallbackTimestamp: session.updated_at,
   })
+  const processEvents = normalizedProcessEvents(session?.process_events)
 
   return {
     sessionPackageId,
@@ -78,7 +101,54 @@ export function agentPackageSessionSnapshotView(
     activeTurn: restored.activeTurn,
     contextWindow: contextWindowFromSession(session),
     currentPlan: planFromSession(session),
+    processEvents,
+    tools: toolsFromTurns(restored.conversationTurns),
+    pendingInterrupt: pendingInterruptFrom(processEvents, restored.activeTurn),
   }
+}
+
+function normalizedProcessEvents(value: any): FactoryFrontendEvent[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is FactoryFrontendEvent => (
+    Boolean(item)
+    && typeof item === 'object'
+    && typeof item.event_id === 'string'
+    && typeof item.event_type === 'string'
+    && item.process_event === true
+  ))
+}
+
+function toolsFromTurns(turns: ConversationTurn[]): ToolActivity[] {
+  const byKey = new Map<string, ToolActivity>()
+  turns.forEach((turn) => {
+    turn.tools.forEach((tool) => {
+      const key = String(tool.activityKey || tool.toolCallId || '')
+      if (key) byKey.set(key, { ...tool, payload: { ...(tool.payload || {}) } })
+    })
+  })
+  return Array.from(byKey.values())
+}
+
+function pendingInterruptFrom(
+  events: FactoryFrontendEvent[],
+  activeTurn: ConversationTurn | null,
+): FactoryFrontendEvent | null {
+  if (activeTurn?.status !== 'interrupted') return null
+  let pending: FactoryFrontendEvent | null = null
+  events.forEach((event) => {
+    if (event.event_type === 'tool_approval_requested' || event.event_type === 'interrupt_requested') {
+      pending = event
+    } else if (
+      event.event_type === 'tool_approval_resolved'
+      || event.event_type === 'runtime_resumed'
+      || event.event_type === 'run_completed'
+      || event.event_type === 'run_cancelled'
+      || event.event_type === 'run_failed'
+    ) {
+      pending = null
+    }
+  })
+  return pending
 }
 
 interface TurnRestoreContext {

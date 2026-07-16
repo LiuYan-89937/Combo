@@ -91,6 +91,7 @@ export function recordDebugEvent(state: Pick<RuntimeViewState, 'debugEvents'>, e
 }
 
 export function recordTimelineEvent(state: Pick<RuntimeViewState, 'timeline'>, event: FactoryFrontendEvent) {
+  if (!event.process_event) return
   state.timeline.push({
     id: event.event_id,
     eventType: event.event_type,
@@ -104,7 +105,4 @@ export function recordTimelineEvent(state: Pick<RuntimeViewState, 'timeline'>, e
     severity: event.severity || null,
     payload: event.payload || {},
   })
-  if (state.timeline.length > 200) {
-    state.timeline.shift()
-  }
 }

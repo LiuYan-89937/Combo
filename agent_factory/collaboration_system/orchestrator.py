@@ -832,6 +832,10 @@ class CollaborationOrchestrator:
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
                 output.accept(item)
                 event_recorder.accept(item)
+                if item.process_event:
+                    self.runtime.emit_frontend_event(
+                        _worker_agent_frontend_event(item, package_id=package_id, session_id=assignee_session_id)
+                    )
                 _upsert_tool_activity(tool_activities, item)
                 if item.event_type in RUN_TERMINAL_EVENT_TYPES:
                     return WorkerRunOutcome(
@@ -1052,6 +1056,24 @@ def _main_agent_frontend_event(
         if factory_session_id:
             updates["session_id"] = factory_session_id
     return item.model_copy(update=updates)
+
+
+def _worker_agent_frontend_event(
+    item: FactoryFrontendEvent,
+    *,
+    package_id: str,
+    session_id: str | None,
+) -> FactoryFrontendEvent:
+    payload = item.payload if isinstance(item.payload, dict) else {}
+    return item.model_copy(
+        update={
+            "session_id": item.session_id or session_id,
+            "payload": {
+                **payload,
+                "package_id": package_id,
+            },
+        }
+    )
 
 
 def _is_safe_path_id(value: str) -> bool:

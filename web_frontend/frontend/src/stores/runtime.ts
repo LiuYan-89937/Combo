@@ -37,6 +37,7 @@ import {
   interruptType,
   isBackgroundEvent,
   isRequestScopedEvent,
+  isRestorableProcessStateEvent,
   isSchedulerRequest,
   isUserInputInterrupt,
   shouldRenderInterruptMessage,
@@ -975,10 +976,13 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!payload?.force_restore && this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
         return
       }
-      if (!snapshot.hasMessages) return
+      if (!snapshot.hasMessages && snapshot.processEvents.length === 0) return
 
       this.transcript = snapshot.transcript
       this.conversationTurns = snapshot.conversationTurns
+      this.tools = snapshot.tools
+      this.pendingInterrupt = snapshot.pendingInterrupt
+      this._restoreProcessEvents(snapshot.processEvents)
       this._restoreActiveTurnFromSnapshot(snapshot.activeTurn, {
         mode: snapshot.restoredMode,
         conversationScope: snapshot.scope,
@@ -1005,11 +1009,12 @@ export const useRuntimeStore = defineStore('runtime', {
       this.contextWindow = snapshot.contextWindow
       this.memoryActivity = { status: 'idle' }
       this.modelStreams = {}
-      this.tools = []
-      this.pendingInterrupt = null
+      this.tools = snapshot.tools
+      this.pendingInterrupt = snapshot.pendingInterrupt
 
       this.transcript = snapshot.transcript
       this.conversationTurns = snapshot.conversationTurns
+      this._restoreProcessEvents(snapshot.processEvents)
       this._restoreActiveTurnFromSnapshot(snapshot.activeTurn, {
         mode: 'agent_package',
         conversationScope: agentPackageConversationScope(snapshot.sessionPackageId, session.session_id),
@@ -1020,6 +1025,18 @@ export const useRuntimeStore = defineStore('runtime', {
         },
       })
       this._saveActiveConversationScope()
+    },
+
+    _restoreProcessEvents(events: FactoryFrontendEvent[]) {
+      this.timeline = []
+      this.nodes = {}
+      this.stages = {}
+      events.forEach((event) => {
+        this._recordTimelineEvent(event)
+        if (isRestorableProcessStateEvent(event.event_type)) {
+          this._dispatchEvent(event)
+        }
+      })
     },
 
     showEmptyAgentPackageSession(_packageId: string | null = null) {

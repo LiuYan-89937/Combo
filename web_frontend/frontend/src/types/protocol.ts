@@ -161,6 +161,7 @@ export interface FactoryFrontendEvent {
   severity: string | null
   message: string | null
   payload: Record<string, any>
+  process_event?: boolean
 }
 
 export interface RuntimeOptionsView {

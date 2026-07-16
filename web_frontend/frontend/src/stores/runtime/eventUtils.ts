@@ -39,6 +39,10 @@ export function isBackgroundEvent(
   )
 }
 
+export function isRestorableProcessStateEvent(eventType: string): boolean {
+  return ['stage_', 'node_', 'plan_', 'context_', 'memory_'].some((prefix) => eventType.startsWith(prefix))
+}
+
 export function interruptType(event: FactoryFrontendEvent | null): string {
   return String(event?.payload?.type || '')
 }
