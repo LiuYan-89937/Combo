@@ -106,6 +106,30 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"package": summary}
 
+    @router.patch("/{package_id}/tool-descriptions/{tool_kind}/{tool_id}")
+    async def update_agent_package_tool_description(
+        package_id: str,
+        tool_kind: str,
+        tool_id: str,
+        payload: dict[str, Any],
+    ):
+        if tool_kind not in {"model_tool", "package_tool"}:
+            raise HTTPException(status_code=400, detail=f"unsupported tool kind: {tool_kind}")
+        if "description" not in payload:
+            raise HTTPException(status_code=400, detail="description is required")
+        try:
+            summary = AgentPackageRuntimeManager().update_tool_description(
+                package_id,
+                tool_kind=tool_kind,
+                tool_id=tool_id,
+                description=str(payload["description"] or ""),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"package": summary}
+
     @router.get("/{package_id}/resources")
     async def get_agent_package_resources(package_id: str):
         try:

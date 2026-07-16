@@ -35,6 +35,7 @@ export interface ModelPoolCredential {
 export interface ModelPoolProfile {
   profile_id: string
   display_name: string
+  description: string
   kind: 'chat' | 'image_generation'
   provider: string
   credential_id: string

@@ -52,12 +52,14 @@ class ModelPoolSelector:
                     role=requirement.role,
                     profile_id=selected.profile.profile_id,
                     display_name=selected.profile.display_name,
+                    description=selected.profile.description,
                     provider=selected.profile.provider,
                     model_name=selected.profile.model_name,
                     score=round(selected.score, 6),
                     reason=selected.reason,
                     required_capabilities=_requirement_payload(requirement),
                     warnings=selected.warnings,
+                    candidates=[_candidate_payload(item) for item in candidates[: requirement.max_candidates]],
                 )
             )
         for requirement in request.tool_requirements:
@@ -81,12 +83,14 @@ class ModelPoolSelector:
                     capability=requirement.capability,
                     profile_id=selected.profile.profile_id,
                     display_name=selected.profile.display_name,
+                    description=selected.profile.description,
                     provider=selected.profile.provider,
                     model_name=selected.profile.model_name,
                     score=round(selected.score, 6),
                     reason=selected.reason,
                     required_capabilities=_requirement_payload(model_requirement),
                     warnings=selected.warnings,
+                    candidates=[_candidate_payload(item) for item in candidates[: requirement.max_candidates]],
                 )
             )
         return ModelSelectionResult(
@@ -155,6 +159,19 @@ def _missing_capabilities(requirement: ModelSelectionRequirement, profile: Model
     return missing
 
 
+def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
+    return {
+        "profile_id": candidate.profile.profile_id,
+        "display_name": candidate.profile.display_name,
+        "description": candidate.profile.description,
+        "provider": candidate.profile.provider,
+        "model_name": candidate.profile.model_name,
+        "score": round(candidate.score, 6),
+        "reason": candidate.reason,
+        "warnings": candidate.warnings,
+    }
+
+
 def _score_profile(requirement: ModelSelectionRequirement, profile: ModelPoolProfile) -> float:
     score = 0.5
     if requirement.tool_calling is True and profile.capabilities.tool_calling:
@@ -207,6 +224,8 @@ def _selection_reason(requirement: ModelSelectionRequirement, profile: ModelPool
         parts.append("Tool calling is required.")
     if requirement.reasoning_required:
         parts.append("Reasoning support is required.")
+    if profile.description:
+        parts.append("Profile guidance: " + profile.description)
     return " ".join(parts)
 
 

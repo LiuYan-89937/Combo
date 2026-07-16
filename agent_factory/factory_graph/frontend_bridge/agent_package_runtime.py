@@ -51,6 +51,10 @@ from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
     AgentPackageRepository,
 )
+from agent_factory.factory_graph.frontend_bridge.agent_package_configuration import (
+    AgentPackageConfigurationEditor,
+    ToolDescriptionKind,
+)
 from agent_factory.factory_graph.frontend_bridge.agent_package_extensions import (
     AgentPackageExtensionService,
     extensions_summary as _extensions_summary,
@@ -466,6 +470,25 @@ class AgentPackageRuntimeManager:
         contract_path.write_text(
             json.dumps(document, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
+        )
+        return self.package_summary(package_id)
+
+    def update_tool_description(
+        self,
+        package_id: str,
+        *,
+        tool_kind: ToolDescriptionKind,
+        tool_id: str,
+        description: str,
+    ) -> dict[str, Any]:
+        package_dir = self.repository.package_dir(package_id)
+        if not (package_dir / "agent_package.json").is_file():
+            raise FileNotFoundError(f"agent package not found: {package_id}")
+        AgentPackageConfigurationEditor().update_tool_description(
+            package_dir,
+            tool_kind=tool_kind,
+            tool_id=tool_id,
+            description=description,
         )
         return self.package_summary(package_id)
 

@@ -234,6 +234,14 @@
         <n-form-item :label="t('modelPool.displayName')">
           <n-input v-model:value="profileForm.display_name" :placeholder="t('modelPool.profileNamePlaceholder')" />
         </n-form-item>
+        <n-form-item :label="t('modelPool.profileDescription')">
+          <n-input
+            v-model:value="profileForm.description"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+            :placeholder="t('modelPool.profileDescriptionPlaceholder')"
+          />
+        </n-form-item>
         <n-form-item :label="t('modelPool.modelType')">
           <n-select v-model:value="profileForm.kind" :options="modelKindOptions" />
         </n-form-item>
@@ -291,7 +299,7 @@
             <n-input-number v-model:value="profileForm.image_edit_unit_price" :min="0" clearable />
           </n-form-item>
         </div>
-        <n-form-item :label="t('common.description')">
+        <n-form-item :label="t('modelPool.notes')">
           <n-input v-model:value="profileForm.notes" type="textarea" :placeholder="t('modelPool.notesPlaceholder')" />
         </n-form-item>
       </n-form>
@@ -383,6 +391,7 @@ const credentialForm = reactive({
 const profileForm = reactive({
   kind: 'chat' as 'chat' | 'image_generation',
   display_name: '',
+  description: '',
   credential_id: '',
   model_name: '',
   tool_calling: true,
@@ -573,6 +582,7 @@ function openProfile(item?: ModelPoolProfile): void {
   profileEditing.value = item || null
   profileForm.kind = item?.kind || 'chat'
   profileForm.display_name = item?.display_name || ''
+  profileForm.description = item?.description || ''
   profileForm.credential_id = item?.credential_id || firstCredentialForKind(profileForm.kind)?.credential_id || ''
   profileForm.model_name = item?.model_name || ''
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
@@ -620,6 +630,7 @@ async function saveProfile(): Promise<void> {
     if (isImageModel && (profileForm.image_to_image || profileForm.image_edit)) inputModalities.push('image')
     const payload = {
       display_name: profileForm.display_name,
+      description: profileForm.description,
       kind: profileForm.kind,
       provider: credential.provider,
       credential_id: profileForm.credential_id,
