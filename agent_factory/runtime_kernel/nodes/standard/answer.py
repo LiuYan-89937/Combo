@@ -21,7 +21,7 @@ from agent_factory.runtime_kernel.planning import (
 )
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_kernel.nodes.standard.tool_visibility import (
-    runtime_allowed_tool_ids_override,
+    runtime_excluded_tool_ids,
     runtime_extra_allowed_tool_ids,
 )
 from agent_factory.context_system.token_counter import provider_token_budget_payload
@@ -207,22 +207,22 @@ def _visible_tools(context: NodeExecutionContext, state: RuntimeState) -> list[A
 
 
 def _model_visible_tool_ids(context: NodeExecutionContext, state: RuntimeState, registry: Any) -> list[str]:
-    runtime_override = runtime_allowed_tool_ids_override(state)
-    if runtime_override is not None:
-        return runtime_override
     if _is_plan_and_execute_node(context, state):
-        return plan_and_execute_model_tool_ids(
+        visible_tool_ids = plan_and_execute_model_tool_ids(
             node_id=context.node_id,
             node_bindings=context.bindings,
             all_bindings=context.all_bindings,
             registry=registry,
             extra_tool_ids=runtime_extra_allowed_tool_ids(state),
         )
-    return merge_tool_ids([
-        *_allowed_tool_ids(context),
-        *runtime_extra_allowed_tool_ids(state),
-        *system_tool_ids(registry),
-    ])
+    else:
+        visible_tool_ids = merge_tool_ids([
+            *_allowed_tool_ids(context),
+            *runtime_extra_allowed_tool_ids(state),
+            *system_tool_ids(registry),
+        ])
+    excluded_tool_ids = set(runtime_excluded_tool_ids(state))
+    return [tool_id for tool_id in visible_tool_ids if tool_id not in excluded_tool_ids]
 
 
 def _allowed_tool_ids(context: NodeExecutionContext) -> list[str]:

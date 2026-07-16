@@ -7,29 +7,23 @@ from agent_factory.runtime_kernel.state import RuntimeState
 
 
 COLLABORATION_CONTEXT_TOOL_IDS = frozenset({"collaboration", "agent_list", "agent_search", "agent_manufacture"})
+COLLABORATION_EXCLUDED_TOOL_IDS = frozenset({"skillhub"})
 
 
-def runtime_allowed_tool_ids_override(state: RuntimeState) -> list[str] | None:
-    """Return the complete collaboration tool surface when explicitly configured.
-
-    Unlike ``extra_allowed_tool_ids``, this replaces package tool bindings. It is
-    deliberately restricted to collaboration control tools so a caller cannot
-    use runtime configuration to expand arbitrary package capabilities.
-    """
-
+def runtime_excluded_tool_ids(state: RuntimeState) -> list[str]:
     user_config = state.runtime_config.user_config
     if not isinstance(user_config, dict) or not _collaboration_context_enabled(user_config):
-        return None
+        return []
     access = user_config.get("runtime_tool_access")
-    if not isinstance(access, dict) or "allowed_tool_ids" not in access:
-        return None
-    ids = access.get("allowed_tool_ids")
+    if not isinstance(access, dict):
+        return []
+    ids = access.get("excluded_tool_ids")
     if not isinstance(ids, list):
         return []
     return merge_tool_ids([
         tool_id
         for item in ids
-        if (tool_id := str(item or "").strip()) in COLLABORATION_CONTEXT_TOOL_IDS
+        if (tool_id := str(item or "").strip()) in COLLABORATION_EXCLUDED_TOOL_IDS
     ])
 
 
