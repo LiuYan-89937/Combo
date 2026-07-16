@@ -11,6 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.runtime_attachments import normalized_runtime_attachments
 from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
+from agent_factory.runtime_protocol.turn_lifecycle import (
+    normalize_running_turn_sequence,
+    supersede_running_turns,
+)
 from agent_factory.trace_system import JSONLTraceStore
 
 
@@ -109,7 +113,7 @@ class AgentSessionManager:
         path = self._path(session_id)
         if not path.exists():
             raise FileNotFoundError(f"Agent session not found: {session_id}")
-        return AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        return _normalized_record(AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
 
     def exists(self, session_id: str) -> bool:
         return self._path(session_id).exists()
@@ -118,7 +122,7 @@ class AgentSessionManager:
         path = self._path(session_id)
         if not path.exists():
             return None
-        return AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        return _normalized_record(AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
 
     def save(self, record: AgentSessionRecord) -> None:
         record.updated_at = _now()
@@ -136,7 +140,7 @@ class AgentSessionManager:
         records: list[AgentSessionRecord] = []
         for path in self.config.root.glob("*.json"):
             try:
-                record = AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8"))
+                record = _normalized_record(AgentSessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
             except Exception:
                 continue
             if agent_id is not None and record.agent_id != agent_id:
@@ -209,6 +213,8 @@ class AgentSessionManager:
         normalized_request_id = (request_id or "").strip() or None
         turn = _find_turn(record.turns, request_id=normalized_request_id) if normalized_request_id else None
         now = _now()
+        for superseded in supersede_running_turns(record.turns, updated_at=now, keep=turn):
+            superseded.messages = _turn_messages(superseded)
         if turn is None:
             turn = AgentSessionTurn(
                 index=len(record.turns) + 1,
@@ -340,6 +346,15 @@ def _latest_running_turn(turns: list[AgentSessionTurn]) -> AgentSessionTurn | No
         if turn.status in {"running", "interrupted"}:
             return turn
     return None
+
+
+def _normalized_record(record: AgentSessionRecord) -> AgentSessionRecord:
+    for superseded in normalize_running_turn_sequence(record.turns, updated_at=_now()):
+        superseded.messages = _turn_messages(superseded)
+    for turn in record.turns:
+        if not turn.messages:
+            turn.messages = _turn_messages(turn)
+    return record
 
 
 def _runtime_refs(session_root: Path) -> dict[str, str]:
