@@ -297,7 +297,10 @@ class TraceContractBuilder:
         runtime = context.package.manifest.runtime or {}
         producer_type = "system_package" if runtime.get("system_package") else "agent_runtime"
         recorder = TraceRecorder(
-            store=JSONLTraceStore(config.root),
+            store=JSONLTraceStore(
+                config.root,
+                manifest_flush_record_interval=config.manifest_flush_record_interval,
+            ),
             package_id=context.package.package_root.name,
             producer_type=producer_type,
             max_inline_payload_chars=config.max_inline_payload_chars,

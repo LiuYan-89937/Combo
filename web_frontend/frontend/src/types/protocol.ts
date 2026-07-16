@@ -143,6 +143,7 @@ export interface FactoryFrontendEvent {
   event_id: string
   protocol_version: string
   event_type: string
+  persistence?: 'durable' | 'transient'
   producer_type: string
   request_id: string | null
   run_id: string | null

@@ -12,11 +12,18 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+DEFAULT_TRACE_MANIFEST_FLUSH_RECORD_INTERVAL = 32
+
+
 class TraceContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     root: str = ".agent_runtime/trace"
     max_inline_payload_chars: int = Field(default=12000, ge=1000)
+    manifest_flush_record_interval: int = Field(
+        default=DEFAULT_TRACE_MANIFEST_FLUSH_RECORD_INTERVAL,
+        ge=1,
+    )
 
     @field_validator("root")
     @classmethod
