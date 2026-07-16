@@ -430,6 +430,58 @@ def _record_matches_mode(record: FactorySessionRecord, mode: FactorySessionMode)
     )
 
 
+def without_mode_source(
+    record: FactorySessionRecord,
+    mode: FactorySessionMode | None,
+) -> FactorySessionRecord:
+    view = record.model_copy(deep=True)
+    if mode in {None, "chat"}:
+        view.chat_agent_package_session_id = None
+        view.chat_turn_count = 0
+        view.chat_turns = []
+    if mode in {None, "create_agent"}:
+        view.create_agent_session_id = None
+        view.create_agent_turn_count = 0
+        view.create_agent_turns = []
+    if mode in {None, "evolve_agent"}:
+        view.evolve_agent_package_id = None
+        view.evolve_agent_turn_count = 0
+        view.evolve_agent_turns = []
+    if mode is None or view.current_mode == mode:
+        view.current_mode = fallback_current_mode(view)
+    return view
+
+
+def record_has_any_source(record: FactorySessionRecord) -> bool:
+    return any(
+        record_has_mode_source(record, mode)
+        for mode in ("chat", "create_agent", "evolve_agent")
+    )
+
+
+def record_has_mode_source(record: FactorySessionRecord, mode: FactorySessionMode) -> bool:
+    if mode == "chat":
+        return bool(str(record.chat_agent_package_session_id or "").strip())
+    if mode == "create_agent":
+        return (
+            bool(str(record.create_agent_session_id or "").strip())
+            or record.create_agent_turn_count > 0
+            or bool(record.create_agent_turns)
+        )
+    return (
+        bool(str(record.evolve_agent_package_id or "").strip())
+        or record.evolve_agent_turn_count > 0
+        or bool(record.evolve_agent_turns)
+    )
+
+
+def fallback_current_mode(record: FactorySessionRecord) -> FactorySessionMode | None:
+    for mode in ("chat", "create_agent", "evolve_agent"):
+        if record_has_mode_source(record, mode):
+            return mode
+    return None
+
+
 def _record_evolution_package_id(record: FactorySessionRecord) -> str | None:
     value = (record.evolve_agent_package_id or "").strip()
     return value or None
