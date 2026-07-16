@@ -379,7 +379,7 @@ class CollaborationOrchestrator:
             task_id,
             {"assignee_session_id": assignee_session_id},
         )
-        worker_workdir = self.runtime.workdir_for_package(package_id)
+        worker_workdir = self.runtime.workdir_for_session(package_id, assignee_session_id)
         shared_materials = _materialize_authorized_artifacts(
             shared_workspace=self.store.session_workdir(collaboration_id),
             worker_workdir=worker_workdir,
@@ -433,6 +433,7 @@ class CollaborationOrchestrator:
             collaboration_id=collaboration_id,
             collaboration_task_id=task_id,
             visible_in_agent_session_list=True,
+            workdir_root=worker_workdir,
         )
         assignee_session_id = str((run.session or {}).get("session_id") or assignee_session_id).strip()
         if not assignee_session_id:
@@ -489,7 +490,7 @@ class CollaborationOrchestrator:
             raise ValueError("task assignee_package_id is required")
         if not assignee_session_id:
             raise ValueError("blocked task does not have an assignee_session_id")
-        worker_workdir = self.runtime.workdir_for_package(package_id)
+        worker_workdir = self.runtime.workdir_for_session(package_id, assignee_session_id)
         before_snapshot = _workspace_snapshot(worker_workdir)
         output = VisibleAssistantOutputAccumulator()
         event_recorder = CollaborationWorkerEventRecorder(
@@ -517,6 +518,7 @@ class CollaborationOrchestrator:
             session_id=assignee_session_id,
             resume_payload=resume_payload,
             request_id=resume_request_id,
+            workdir_root=worker_workdir,
         )
         outcome = self._consume_worker_run(
             run=run,

@@ -21,6 +21,7 @@ from agent_factory.tooling.gateway import (
     TRUST_TOOL_ACTIONS,
     parse_approval_decision,
 )
+from agent_factory.tooling.runtime_resources import runtime_resource_overrides_from_state
 
 
 ToolEventCallback = Callable[[dict[str, Any]], None]
@@ -88,7 +89,7 @@ class AgentFactoryToolNode:
         invalid_calls, executable_calls = _partition_invalid_tool_calls(tool_calls)
         outputs.extend(_invalid_tool_call_messages(invalid_calls))
         for batch in _tool_call_batches(executable_calls, self._concurrent_by_name):
-            approval_requests = self._approval_requests_for_batch(batch)
+            approval_requests = self._approval_requests_for_batch(batch, state=state)
             if approval_requests:
                 decision = interrupt(_batch_approval_payload(approval_requests))
                 parsed = parse_approval_decision(decision)
@@ -110,7 +111,12 @@ class AgentFactoryToolNode:
             outputs.extend(_messages_from_tool_node_output(raw_output, self.messages_key))
         return {self.messages_key: _complete_tool_message_set(tool_calls, outputs)}
 
-    def _approval_requests_for_batch(self, batch: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _approval_requests_for_batch(
+        self,
+        batch: Sequence[dict[str, Any]],
+        *,
+        state: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
         if current_tool_approval_override() is not None:
             return []
         requests: list[dict[str, Any]] = []
@@ -127,6 +133,7 @@ class AgentFactoryToolNode:
                 tool_call_id=tool_call_id,
                 origin_node_id=self.origin_node_id,
                 origin_impl=self.origin_impl,
+                runtime_resource_overrides=runtime_resource_overrides_from_state(state),
             ):
                 request = approval_request(dict(call.get("args") or {}), tool_call_id=tool_call_id)
             if isinstance(request, dict):
@@ -186,6 +193,7 @@ class AgentFactoryToolNode:
             origin_node_id=self.origin_node_id,
             origin_impl=self.origin_impl,
             event_sink=self._emit,
+            runtime_resource_overrides=runtime_resource_overrides_from_state(request.state),
         ):
             result = execute(request)
         if isinstance(result, ToolMessage):

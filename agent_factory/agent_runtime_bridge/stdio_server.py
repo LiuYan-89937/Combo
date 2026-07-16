@@ -39,6 +39,7 @@ from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
 from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
 from agent_factory.package_runtime import host_runtime_package_view
+from agent_factory.package_runtime.workspace_scope import apply_runtime_workspace
 from agent_factory.package_runtime.session_turns import (
     resume_user_input,
     session_attachments_from_state,
@@ -622,6 +623,7 @@ def _run_message(
     session_config = dict(compiled.runtime_config["session_config"])
     if payload.get("session_id"):
         session_config["session_id"] = str(payload["session_id"])
+    apply_runtime_workspace(session_config, payload, workdir_root=WORKDIR_ROOT)
     user_config = merge_attachments_into_user_config(
         {**compiled.runtime_config["user_config"], **(payload.get("user_config") if isinstance(payload.get("user_config"), dict) else {})},
         payload.get("attachments"),
@@ -770,6 +772,7 @@ def _resume_interrupt(
     facade = runtime.facade
     session_config = dict(compiled.runtime_config["session_config"])
     session_config["session_id"] = session_id
+    apply_runtime_workspace(session_config, payload, workdir_root=WORKDIR_ROOT)
     normalizer.session_id = session_id
     normalizer.emit_runtime_resumed(resume_payload if isinstance(resume_payload, dict) else {})
     run_context = facade.prepare_resume_context(
