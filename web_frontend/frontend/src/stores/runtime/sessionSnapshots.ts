@@ -231,7 +231,8 @@ function isActiveTurnStatus(status: RunStatus): boolean {
 }
 
 function activeTurnFrom(turns: ConversationTurn[]): ConversationTurn | null {
-  return turns.find((turn) => isActiveTurnStatus(turn.status) && Boolean(turn.requestId)) || null
+  const latest = turns[turns.length - 1]
+  return latest && isActiveTurnStatus(latest.status) && Boolean(latest.requestId) ? latest : null
 }
 
 function stringOrNull(value: any): string | null {

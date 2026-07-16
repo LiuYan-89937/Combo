@@ -13,6 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_factory.paths import resolve_project_path
 from agent_factory.runtime_attachments import normalized_runtime_attachments
 from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
+from agent_factory.runtime_protocol.turn_lifecycle import (
+    normalize_running_turn_sequence,
+    supersede_running_turns,
+)
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
@@ -230,6 +234,8 @@ class FactorySessionManager:
         turns = _turns_for_mode(record, mode)
         turn = _find_turn(turns, request_id=request_id)
         now = _now()
+        for superseded in supersede_running_turns(turns, updated_at=now, keep=turn):
+            superseded.messages = _turn_messages(superseded)
         if turn is None:
             turn = FactorySessionTurn(
                 index=len(turns) + 1,
@@ -328,6 +334,8 @@ class FactorySessionManager:
             turns.append(
                 turn
             )
+        for superseded in normalize_running_turn_sequence(turns, updated_at=_now()):
+            superseded.messages = _turn_messages(superseded)
         _set_turns_for_mode(record, mode, turns)
         first_input = _first_turn_input(turns)
         if first_input:
@@ -508,7 +516,10 @@ def _turn_messages(turn: FactorySessionTurn) -> list[dict[str, Any]]:
 
 def _normalized_record(record: FactorySessionRecord) -> FactorySessionRecord:
     for mode in ("chat", "create_agent", "evolve_agent"):
-        for turn in _turns_for_mode(record, mode):
+        turns = _turns_for_mode(record, mode)
+        for superseded in normalize_running_turn_sequence(turns, updated_at=_now()):
+            superseded.messages = _turn_messages(superseded)
+        for turn in turns:
             if not turn.messages:
                 turn.messages = _turn_messages(turn)
     return record
