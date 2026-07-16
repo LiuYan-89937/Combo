@@ -27,6 +27,14 @@
       "required": false,
       "tool_id_prefix": "bigopen",
       "risk_level_default": "medium",
+      "tool_input_property_enums": {
+        "web_search": {
+          "engine": [
+            "searxng",
+            "duckduckgo"
+          ]
+        }
+      },
       "timeout_seconds": 60
     }
   ]
