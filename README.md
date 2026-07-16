@@ -98,6 +98,9 @@ AGENTFACTORY_EMBEDDING_API_KEY=
 AGENTFACTORY_EMBEDDING_MODEL=
 AGENTFACTORY_RESOURCE_MASTER_KEY=
 AGENTFACTORY_EMBEDDING_DIMS=
+
+# Optional stable web search provider for the built-in web_search MCP.
+TAVILY_API_KEY=
 ```
 
 说明：
@@ -107,6 +110,7 @@ AGENTFACTORY_EMBEDDING_DIMS=
 - 压缩模型用于上下文压缩。
 - `factory_chat` 的对话模型默认读取主模型 env 配置；生图模型读取独立的 image model env 配置。未配置生图模型时，不影响普通对话。
 - embedding 模型用于知识库、RAG、长期记忆和 Agent 检索。
+- 配置 `TAVILY_API_KEY` 后，内置 `web_search` 默认使用 Tavily；未配置时自动回退到 SearXNG/DuckDuckGo。密钥只放在本机 `.env`，不要写入 SystemPackage JSON。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 用于加密 Agent 的运行时资源配置；请使用稳定的长随机值，丢失后无法解密已保存的资源。
 - `.env` 是本地私有配置，不要提交到 git。
 
