@@ -551,4 +551,4 @@ def _image_residency_policy(profile: ModelPoolProfile) -> str:
         inference = inference.remote_inference
     if isinstance(inference, StableDiffusionCppInferenceConfig):
         return inference.residency_policy
-    return "exclusive"
+    return "coexist_if_fit"

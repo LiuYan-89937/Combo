@@ -198,7 +198,7 @@ class StableDiffusionCppInferenceConfig(BaseModel):
     default_steps: int = Field(default=20, ge=1, le=200)
     default_cfg_scale: float = Field(default=1.0, ge=0, le=30)
     default_sampler: str = "euler"
-    residency_policy: Literal["coexist_if_fit", "exclusive"] = "exclusive"
+    residency_policy: Literal["coexist_if_fit", "exclusive"] = "coexist_if_fit"
 
     @field_validator("vae_path", "clip_l_path", "t5xxl_path")
     @classmethod

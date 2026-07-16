@@ -208,7 +208,7 @@ http://localhost:3000
 
 FLUX.1-dev Q4_0 由远端 `sd-server` 提供 OpenAI-compatible Images API。Agent 沿用项目已有的 `image_output` 模型工具链，生成结果写入当前 Package Workspace 的 `images/`；模型上下文只接收路径和元数据，不注入 base64。
 
-比赛机约 13GB 显存，`deploy.env.example` 默认 `IMAGE_ENABLED=0`：Image Profile 会注册但不自动常驻。需要生图时在“模型配置”先卸载 Chat，再启用并加载 Image Profile；默认 `exclusive` 策略会明确拒绝显存冲突，避免静默 OOM。FLUX.1-dev 受其 Non-Commercial License 约束，提交和演示前需确认使用范围。
+Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型配置页会展示实时显存预算和运行状态。FLUX.1-dev 受其 Non-Commercial License 约束，提交和演示前需确认使用范围。
 
 ![本地模型池](readme-assets/images/model-pool.png)
 

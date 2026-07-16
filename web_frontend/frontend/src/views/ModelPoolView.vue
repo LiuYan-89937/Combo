@@ -510,7 +510,7 @@ const profileForm = reactive({
   diffusion_flash_attention: true, clip_on_cpu: true, vae_tiling: true,
   offload_to_cpu: false, max_vram_gib: null as number | null, stream_layers: null as number | null,
   default_width: 768, default_height: 768, default_steps: 20, default_cfg_scale: 1.0,
-  default_sampler: 'euler', residency_policy: 'exclusive' as 'coexist_if_fit' | 'exclusive',
+  default_sampler: 'euler', residency_policy: 'coexist_if_fit' as 'coexist_if_fit' | 'exclusive',
 })
 
 const kindOptions = computed(() => [
@@ -519,7 +519,7 @@ const kindOptions = computed(() => [
   { label: '图片生成', value: 'image_generation' },
 ])
 const residencyPolicyOptions = [
-  { label: '显存不足时禁止共存（推荐）', value: 'exclusive' },
+  { label: '显存不足时禁止共存', value: 'exclusive' },
   { label: '显存足够时共存', value: 'coexist_if_fit' },
 ]
 const artifactOptions = computed(() => artifacts.value.map((item) => ({
@@ -632,7 +632,9 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.served_model_name = item?.served_model_name || artifact?.external_model_id || artifact?.display_name || ''
   const chatInference = item?.kind === 'chat' ? chatRuntimeConfiguration(item, remoteModel) : null
   const embeddingInference = item?.kind === 'embedding' ? item.inference : null
-  const imageInference = item?.kind === 'image_generation' ? imageRuntimeConfiguration(item, remoteModel) : null
+  const imageInference = kind === 'image_generation'
+    ? item ? imageRuntimeConfiguration(item, remoteModel) : remoteImageRuntimeConfiguration(remoteModel)
+    : null
   profileForm.gpu_layers = chatInference?.gpu_layers ?? 99
   profileForm.parallel_slots = chatInference?.parallel_slots ?? 1
   profileForm.cache_type_k = chatInference?.cache_type_k ?? 'f16'
@@ -654,21 +656,7 @@ function openProfile(item?: LocalModelProfile): void {
     ?? false
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.normalize_embeddings = item?.normalize_embeddings ?? true
-  profileForm.vae_path = imageInference?.vae_path ?? ''
-  profileForm.clip_l_path = imageInference?.clip_l_path ?? ''
-  profileForm.t5xxl_path = imageInference?.t5xxl_path ?? ''
-  profileForm.diffusion_flash_attention = imageInference?.diffusion_flash_attention ?? true
-  profileForm.clip_on_cpu = imageInference?.clip_on_cpu ?? true
-  profileForm.vae_tiling = imageInference?.vae_tiling ?? true
-  profileForm.offload_to_cpu = imageInference?.offload_to_cpu ?? false
-  profileForm.max_vram_gib = imageInference?.max_vram_gib ?? null
-  profileForm.stream_layers = imageInference?.stream_layers ?? null
-  profileForm.default_width = imageInference?.default_width ?? 768
-  profileForm.default_height = imageInference?.default_height ?? 768
-  profileForm.default_steps = imageInference?.default_steps ?? 20
-  profileForm.default_cfg_scale = imageInference?.default_cfg_scale ?? 1.0
-  profileForm.default_sampler = imageInference?.default_sampler ?? 'euler'
-  profileForm.residency_policy = imageInference?.residency_policy ?? 'exclusive'
+  applyImageRuntimeConfiguration(imageInference)
   profileForm.enabled = item?.enabled ?? true
   memoryEstimate.value = remoteModel?.memory_estimate || null
   profileModalOpen.value = true
@@ -691,6 +679,9 @@ function syncProfileKind(artifactId: string): void {
   profileForm.max_input_tokens = remoteModel?.context_length ?? profileForm.max_input_tokens
   profileForm.image_input = remoteModel?.capabilities.includes('multimodal') || false
   profileForm.embedding_dimensions = remoteModel?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
+  applyImageRuntimeConfiguration(
+    artifact.kind === 'image_generation' ? remoteImageRuntimeConfiguration(remoteModel) : null,
+  )
 }
 
 function syncRemoteModel(modelId: string): void {
@@ -980,9 +971,40 @@ function imageRuntimeConfiguration(
   if ('remote_inference' in profile.inference && profile.inference.remote_inference && 'vae_path' in profile.inference.remote_inference) {
     return profile.inference.remote_inference
   }
+  return remoteImageRuntimeConfiguration(remoteModel)
+}
+
+function remoteImageRuntimeConfiguration(
+  remoteModel?: LocalModelStorage['remote_models'][number] | null,
+): StableDiffusionCppRuntimeConfiguration | null {
   const value = remoteModel?.runtime_configuration
-  if (!value || typeof value.vae_path !== 'string') return null
+  if (
+    !value
+    || typeof value.vae_path !== 'string'
+    || typeof value.clip_l_path !== 'string'
+    || typeof value.t5xxl_path !== 'string'
+  ) return null
   return value as unknown as StableDiffusionCppRuntimeConfiguration
+}
+
+function applyImageRuntimeConfiguration(
+  inference: StableDiffusionCppRuntimeConfiguration | null,
+): void {
+  profileForm.vae_path = inference?.vae_path ?? ''
+  profileForm.clip_l_path = inference?.clip_l_path ?? ''
+  profileForm.t5xxl_path = inference?.t5xxl_path ?? ''
+  profileForm.diffusion_flash_attention = inference?.diffusion_flash_attention ?? true
+  profileForm.clip_on_cpu = inference?.clip_on_cpu ?? true
+  profileForm.vae_tiling = inference?.vae_tiling ?? true
+  profileForm.offload_to_cpu = inference?.offload_to_cpu ?? false
+  profileForm.max_vram_gib = inference?.max_vram_gib ?? null
+  profileForm.stream_layers = inference?.stream_layers ?? null
+  profileForm.default_width = inference?.default_width ?? 768
+  profileForm.default_height = inference?.default_height ?? 768
+  profileForm.default_steps = inference?.default_steps ?? 20
+  profileForm.default_cfg_scale = inference?.default_cfg_scale ?? 1.0
+  profileForm.default_sampler = inference?.default_sampler ?? 'euler'
+  profileForm.residency_policy = inference?.residency_policy ?? 'coexist_if_fit'
 }
 
 function artifactLocation(artifact?: LocalModelArtifact | null): string {

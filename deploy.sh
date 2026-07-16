@@ -187,10 +187,10 @@ sync_sources() {
     log "Synchronizing editable llama.cpp source to ${REMOTE_LLAMA_CPP_DIR}"
     rsync -az --delete \
         -e "${rsync_transport% }" \
-        --exclude 'build/' \
+        --exclude 'build*/' \
         "${LOCAL_LLAMA_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_CPP_DIR}/"
     log "Synchronizing editable stable-diffusion.cpp source to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
-    rsync -az --delete -e "${rsync_transport% }" --exclude 'build/' \
+    rsync -az --delete -e "${rsync_transport% }" --exclude 'build*/' \
         "${LOCAL_SD_PATH}/" "${SSH_TARGET}:${REMOTE_STABLE_DIFFUSION_CPP_DIR}/"
 }
 

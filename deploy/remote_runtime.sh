@@ -75,7 +75,7 @@ done
 
 VENV_DIR="${REMOTE_STATE_ROOT}/venv"
 PYTHON_BIN="${VENV_DIR}/bin/python"
-MODEL_POOL_STORE="${REMOTE_STATE_ROOT}/model_pool/factory.sqlite"
+MODEL_POOL_STORE="${REMOTE_MODEL_POOL_STORE:-${REMOTE_STATE_ROOT}/model_pool/factory.sqlite}"
 PID_FILE="${REMOTE_STATE_ROOT}/inference-node.pid"
 LOG_FILE="${REMOTE_STATE_ROOT}/logs/inference-node.log"
 EMBEDDING_PATH_FILE="${REMOTE_STATE_ROOT}/embedding-model-path"
@@ -227,6 +227,8 @@ build_llama() {
         -DGGML_HIP=ON \
         -DGGML_NATIVE=ON \
         -DLLAMA_CURL=OFF \
+        -DLLAMA_BUILD_UI=OFF \
+        -DLLAMA_USE_PREBUILT_UI=OFF \
         -DCMAKE_BUILD_TYPE=Release
     log "Building llama-server"
     cmake --build "${REMOTE_LLAMA_CPP_DIR}/build" --target llama-server --parallel "$(nproc)"
@@ -364,10 +366,45 @@ boolean_flag() {
     fi
 }
 
+image_profile_arguments() {
+    IMAGE_PROFILE_ARGUMENTS=(
+        --image-profile-id "${IMAGE_PROFILE_ID}"
+        --image-served-model-name "${IMAGE_SERVED_MODEL_NAME}"
+        --image-model-path "${IMAGE_MODEL_PATH}"
+        --image-vae-path "${IMAGE_VAE_PATH}"
+        --image-clip-l-path "${IMAGE_CLIP_L_PATH}"
+        --image-t5xxl-path "${IMAGE_T5XXL_PATH}"
+        --image-revision "${STABLE_DIFFUSION_CPP_REVISION:-}"
+        --image-checksum "${IMAGE_MODEL_SHA256}"
+        --image-enabled
+        "$(boolean_flag "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)"
+        "$(boolean_flag "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)"
+        "$(boolean_flag "${IMAGE_VAE_TILING:-1}" image-vae-tiling)"
+        "$(boolean_flag "${IMAGE_OFFLOAD_TO_CPU:-0}" image-offload-to-cpu)"
+        --image-default-width "${IMAGE_DEFAULT_WIDTH:-768}"
+        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-768}"
+        --image-default-steps "${IMAGE_DEFAULT_STEPS:-20}"
+        --image-default-cfg-scale "${IMAGE_DEFAULT_CFG_SCALE:-1.0}"
+        --image-residency-policy "${IMAGE_RESIDENCY_POLICY:-coexist_if_fit}"
+        --image-timeout-seconds "${IMAGE_TIMEOUT_SECONDS:-900}"
+    )
+}
+
+configure_image_profile() {
+    image_profile_arguments
+    AGENTFACTORY_MODEL_ROOT="${REMOTE_MODEL_ROOT}" \
+    "${PYTHON_BIN}" "${REMOTE_PROJECT_ROOT}/deploy/configure_model_pool.py" \
+        --mode node \
+        --only-image \
+        --store-path "${MODEL_POOL_STORE}" \
+        "${IMAGE_PROFILE_ARGUMENTS[@]}"
+}
+
 configure_profiles() {
     [[ -f "${EMBEDDING_PATH_FILE}" ]] || fail "Embedding model path is missing; run models first"
     local embedding_path
     embedding_path="$(<"${EMBEDDING_PATH_FILE}")"
+    image_profile_arguments
     AGENTFACTORY_MODEL_ROOT="${REMOTE_MODEL_ROOT}" \
     "${PYTHON_BIN}" "${REMOTE_PROJECT_ROOT}/deploy/configure_model_pool.py" \
         --mode node \
@@ -393,25 +430,7 @@ configure_profiles() {
         --embedding-revision "${EMBEDDING_MODEL_REVISION}" \
         --embedding-dimensions "${EMBEDDING_DIMENSIONS}" \
         "$(boolean_flag "${EMBEDDING_TRUST_REMOTE_CODE:-0}" embedding-trust-remote-code)" \
-        --image-profile-id "${IMAGE_PROFILE_ID}" \
-        --image-served-model-name "${IMAGE_SERVED_MODEL_NAME}" \
-        --image-model-path "${IMAGE_MODEL_PATH}" \
-        --image-vae-path "${IMAGE_VAE_PATH}" \
-        --image-clip-l-path "${IMAGE_CLIP_L_PATH}" \
-        --image-t5xxl-path "${IMAGE_T5XXL_PATH}" \
-        --image-revision "${STABLE_DIFFUSION_CPP_REVISION:-}" \
-        --image-checksum "${IMAGE_MODEL_SHA256}" \
-        --image-enabled \
-        "$(boolean_flag "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)" \
-        "$(boolean_flag "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)" \
-        "$(boolean_flag "${IMAGE_VAE_TILING:-1}" image-vae-tiling)" \
-        "$(boolean_flag "${IMAGE_OFFLOAD_TO_CPU:-0}" image-offload-to-cpu)" \
-        --image-default-width "${IMAGE_DEFAULT_WIDTH:-768}" \
-        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-768}" \
-        --image-default-steps "${IMAGE_DEFAULT_STEPS:-20}" \
-        --image-default-cfg-scale "${IMAGE_DEFAULT_CFG_SCALE:-1.0}" \
-        --image-residency-policy "${IMAGE_RESIDENCY_POLICY:-exclusive}" \
-        --image-timeout-seconds "${IMAGE_TIMEOUT_SECONDS:-900}"
+        "${IMAGE_PROFILE_ARGUMENTS[@]}"
 }
 
 node_environment() {
@@ -550,6 +569,7 @@ refresh_models() {
 
 refresh_image_models() {
     download_image_models
+    configure_image_profile
 }
 
 case "${COMMAND}" in

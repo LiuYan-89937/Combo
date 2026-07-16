@@ -23,6 +23,25 @@
         "overrides": {}
       }
     },
-    "tool_bindings": {}
+    "tool_bindings": {
+      "generate_image": {
+        "profile_id": "flux.1-dev-q4_0",
+        "source": "local_registry",
+        "capability": "image_output",
+        "selection_source": "manual",
+        "reason": "Use the configured FLUX.1-dev image profile for local text-to-image generation.",
+        "required_capabilities": {
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "image"
+          ],
+          "text_to_image": true
+        },
+        "overrides": {},
+        "description": "根据用户提供的文本提示词生成图片，并将生成结果保存为当前会话可访问的图片资产。"
+      }
+    }
   }
 }

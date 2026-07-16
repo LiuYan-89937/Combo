@@ -54,7 +54,8 @@
             "bash_stop",
             "knowledge",
             "scheduler",
-            "skillhub"
+            "skillhub",
+            "generate_image"
           ],
           "approval_policy": "standard"
         }
