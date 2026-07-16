@@ -103,16 +103,33 @@ class CollaborationOrchestrator:
         tasks: list[dict[str, Any]],
     ) -> list[CollaborationRunTaskResult]:
         if len(tasks) <= 1:
-            return [self.start_task(collaboration_id, str(task["task_id"])) for task in tasks]
+            return [
+                self._start_task_and_release_worker_lease(collaboration_id, str(task["task_id"]))
+                for task in tasks
+            ]
         results: list[CollaborationRunTaskResult] = []
         with ThreadPoolExecutor(max_workers=len(tasks), thread_name_prefix="collab-worker") as executor:
             futures = {
-                executor.submit(self.start_task, collaboration_id, str(task["task_id"])): task
+                executor.submit(
+                    self._start_task_and_release_worker_lease,
+                    collaboration_id,
+                    str(task["task_id"]),
+                ): task
                 for task in tasks
             }
             for future in as_completed(futures):
                 results.append(future.result())
         return results
+
+    def _start_task_and_release_worker_lease(
+        self,
+        collaboration_id: str,
+        task_id: str,
+    ) -> CollaborationRunTaskResult:
+        try:
+            return self.start_task(collaboration_id, task_id)
+        finally:
+            self.store.release_worker_lease_unless_blocked(collaboration_id, task_id)
 
     def continue_main_agent(
         self,
@@ -326,6 +343,25 @@ class CollaborationOrchestrator:
         package_id = str(task.get("assignee_package_id") or "").strip()
         if not package_id:
             raise ValueError("task assignee_package_id is required")
+        if not self.store.acquire_worker_lease(collaboration_id, task_id):
+            summary = f"子 Agent {package_id} 正在执行其他任务，本任务保持排队。"
+            self.store.update_task(
+                collaboration_id,
+                task_id,
+                {
+                    "status": "queued",
+                    "result_summary": summary,
+                    "result_payload": {"runtime_status": "waiting_for_package_worker"},
+                },
+            )
+            return CollaborationRunTaskResult(
+                collaboration_id=collaboration_id,
+                task_id=task_id,
+                status="queued",
+                assignee_session_id=task.get("assignee_session_id"),
+                result_summary=summary,
+                artifact_refs=list(task.get("artifact_refs") or []),
+            )
         init_request_id = f"collab-init-{task_id}"
         self.store.update_task(
             collaboration_id,
@@ -490,6 +526,16 @@ class CollaborationOrchestrator:
             raise ValueError("task assignee_package_id is required")
         if not assignee_session_id:
             raise ValueError("blocked task does not have an assignee_session_id")
+        if not self.store.acquire_worker_lease(collaboration_id, task_id):
+            summary = f"子 Agent {package_id} 正在执行其他任务，当前审批恢复需等待该任务结束。"
+            return CollaborationRunTaskResult(
+                collaboration_id=collaboration_id,
+                task_id=task_id,
+                status="blocked",
+                assignee_session_id=assignee_session_id,
+                result_summary=summary,
+                artifact_refs=list(task.get("artifact_refs") or []),
+            )
         worker_workdir = self.runtime.workdir_for_session(package_id, assignee_session_id)
         before_snapshot = _workspace_snapshot(worker_workdir)
         output = VisibleAssistantOutputAccumulator()

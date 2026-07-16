@@ -122,6 +122,8 @@ class CollaborationService:
             content=notes,
             task_id=task_id,
         )
+        if cancelled == 0:
+            self.store.release_worker_lease_unless_blocked(collaboration_id, task_id)
         return session
 
     def complete_session(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -189,6 +191,7 @@ class CollaborationService:
             result = orchestrator.start_task(collaboration_id, task_id)
         finally:
             self._release_session(collaboration_id)
+            self.store.release_worker_lease_unless_blocked(collaboration_id, task_id)
         self._continue_after_worker_result(collaboration_id, result)
         return {"result": result, "session": self.store.get_session(collaboration_id)}
 
@@ -222,6 +225,7 @@ class CollaborationService:
             )
         finally:
             self._release_session(collaboration_id)
+            self.store.release_worker_lease_unless_blocked(collaboration_id, task_id)
         self._continue_after_worker_result(collaboration_id, result)
         return {"result": result, "session": self.store.get_session(collaboration_id)}
 
@@ -329,6 +333,7 @@ class CollaborationService:
                 self.logger.exception("Failed to record collaboration worker failure for %s/%s", collaboration_id, task_id)
         finally:
             self._release_completed_worker_runtime(collaboration_id, task_id)
+            self.store.release_worker_lease_unless_blocked(collaboration_id, task_id)
         if result is not None:
             self._continue_after_worker_result(collaboration_id, result)
         else:
