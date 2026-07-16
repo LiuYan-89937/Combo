@@ -167,9 +167,10 @@ SSH_KEY=
 | `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
 | `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
 | `REMOTE_INSTALL_PYTORCH` | 缺失时允许安装配置指定的 PyTorch HIP | `1` |
-| `PYTORCH_INDEX_URL` | PyTorch HIP wheel 源；已有可用 HIP PyTorch 时无需填写 | 空 |
+| `PYTORCH_INDEX_URL` | PyTorch HIP wheel 源；已有可用 HIP PyTorch 时不会使用 | 官方 ROCm 7.2 wheel 源 |
+| `PYTORCH_PACKAGES` | 相互匹配的 Torch、TorchVision 与 TorchAudio 发布组 | ROCm 7.2 的 2.11/0.26/2.11 |
 
-部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。缺失时只安装工作空间内的用户态组件；GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供。如果 PyTorch HIP 缺失，必须配置与当前 ROCm 镜像兼容的 `PYTORCH_INDEX_URL`，脚本不会猜测不匹配的 wheel 版本。
+部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。缺失时只安装工作空间内的用户态组件；GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供。模板为比赛使用的 ROCm 7.2 镜像提供固定且相互匹配的 PyTorch 发布组；使用其他 ROCm 版本时，必须在 `deploy.env` 中同时覆盖 `PYTORCH_INDEX_URL` 和 `PYTORCH_PACKAGES`。
 
 ## 5. 首次一键部署
 
