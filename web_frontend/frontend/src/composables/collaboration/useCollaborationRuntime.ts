@@ -101,6 +101,7 @@ export function useCollaborationRuntime() {
         collaboration_id: collaborationStore.activeSession.collaboration_id,
         runtime_tool_access: {
           extra_allowed_tool_ids: ['collaboration', 'agent_list', 'agent_search', 'agent_manufacture'],
+          excluded_tool_ids: ['skillhub'],
         },
       },
     }

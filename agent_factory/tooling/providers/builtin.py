@@ -8,6 +8,7 @@ from agent_factory.tooling.builtins import (
     get_builtin_tool_ids,
     get_builtin_tool_specs,
     get_read_only_system_tool_ids,
+    get_runtime_context_builtin_tool_ids,
 )
 from agent_factory.tooling.providers.base import ToolProviderContext, ToolProviderResult
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
@@ -45,7 +46,12 @@ class BuiltinToolProvider:
             specs = [spec for spec in specs if spec.id != "skillhub"]
         if self._tool_ids:
             always_available = get_always_available_system_tool_ids()
-            specs = [spec for spec in specs if spec.id in self._tool_ids or spec.id in always_available]
+            runtime_context = get_runtime_context_builtin_tool_ids()
+            specs = [
+                spec
+                for spec in specs
+                if spec.id in self._tool_ids or spec.id in always_available or spec.id in runtime_context
+            ]
         always_available = get_always_available_system_tool_ids()
         return ToolProviderResult(
             tool_specs=specs,
