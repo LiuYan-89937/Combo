@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 import math
 import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import akshare as ak
 import numpy as np
 import pandas as pd
 
+from agent_factory.market_data.tencent import TencentMarketDataClient
+
 
 CODE_RE = re.compile(r"^[0-9]{6}$")
-SOURCE_NAME = "东方财富 A 股历史行情（通过 AkShare）"
+SOURCE_NAME = "腾讯证券公开行情"
 
 
 def run(arguments: dict, resources: dict) -> dict:
@@ -23,51 +24,27 @@ def run(arguments: dict, resources: dict) -> dict:
         raise ValueError("history_days must be between 60 and 500")
     stress_scenarios = _stress_scenarios(arguments.get("stress_scenarios", []))
     observed_at = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
-    end_date = datetime.now(ZoneInfo("Asia/Shanghai")).date()
-    start_date = end_date - timedelta(days=history_days * 2)
     warnings: list[str] = []
     close_by_code: dict[str, pd.Series] = {}
     weight_basis = "provided_weights" if "weight" in holdings[0] else "latest_market_value"
-    try:
-        names = _a_share_names([holding["code"] for holding in holdings])
-    except Exception as exc:
-        return {
-            "status": "error",
-            "observed_at": observed_at,
-            "source": SOURCE_NAME,
-            "adjustment": "qfq (前复权)",
-            "weight_basis": weight_basis,
-            "portfolio": {},
-            "holdings": [],
-            "highest_correlation": None,
-            "stress_results": [],
-            "warnings": [f"A 股证券身份校验失败: {type(exc).__name__}: {exc}"],
-            "message": "无法确认全部代码属于当前 A 股证券列表，已停止分析以避免混入其他市场或证券类型。",
-        }
-
-    for holding in holdings:
-        code = holding["code"]
-        try:
-            frame = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date.strftime("%Y%m%d"),
-                end_date=end_date.strftime("%Y%m%d"),
-                adjust="qfq",
-            )
-            required = {"日期", "收盘"}
-            missing = sorted(required - set(frame.columns))
-            if missing:
-                raise ValueError(f"history missing columns: {', '.join(missing)}")
-            dates = pd.to_datetime(frame["日期"], errors="coerce")
-            close = pd.to_numeric(frame["收盘"], errors="coerce")
-            series = pd.Series(close.to_numpy(), index=dates, name=code).dropna().tail(history_days)
-            series = series.loc[~series.index.isna()]
-            if len(series) < 2:
-                raise ValueError("not enough valid history")
-            close_by_code[code] = series
-        except Exception as exc:
-            warnings.append(f"{code} 历史行情获取失败: {type(exc).__name__}: {exc}")
+    names: dict[str, str] = {}
+    with TencentMarketDataClient() as market_data:
+        for holding in holdings:
+            code = holding["code"]
+            try:
+                quote = market_data.quote(code)
+                history = market_data.history(code, count=history_days, adjustment="qfq")
+                frame = pd.DataFrame(history)
+                dates = pd.to_datetime(frame["date"], errors="coerce")
+                close = pd.to_numeric(frame["close"], errors="coerce")
+                series = pd.Series(close.to_numpy(), index=dates, name=code).dropna().tail(history_days)
+                series = series.loc[~series.index.isna()]
+                if len(series) < 2:
+                    raise ValueError("not enough valid history")
+                names[code] = str(quote["name"])
+                close_by_code[code] = series
+            except Exception as exc:
+                warnings.append(f"{code} 腾讯行情获取失败: {type(exc).__name__}: {exc}")
 
     if len(close_by_code) != len(holdings):
         return {
@@ -178,22 +155,6 @@ def _holdings(value: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-def _a_share_names(codes: list[str]) -> dict[str, str]:
-    frame = ak.stock_info_a_code_name()
-    required = {"code", "name"}
-    missing = sorted(required - set(frame.columns))
-    if missing:
-        raise ValueError(f"A-share security list missing columns: {', '.join(missing)}")
-    indexed = {
-        _code_text(row["code"]): str(row["name"]).strip()
-        for _, row in frame.iterrows()
-    }
-    unknown = sorted(code for code in codes if code not in indexed)
-    if unknown:
-        raise ValueError("codes are not present in the current A-share security list: " + ", ".join(unknown))
-    return {code: indexed[code] or code for code in codes}
-
-
 def _weights(holdings: list[dict[str, Any]], close_by_code: dict[str, pd.Series]) -> tuple[pd.Series, str]:
     if "weight" in holdings[0]:
         raw = pd.Series({item["code"]: item["weight"] for item in holdings}, dtype=float)
@@ -251,10 +212,3 @@ def _number(value: Any) -> float | None:
 
 def _percent(value: Any) -> float | None:
     return _number(float(value) * 100)
-
-
-def _code_text(value: Any) -> str:
-    text = str(value).strip()
-    if text.endswith(".0") and text[:-2].isdigit():
-        text = text[:-2]
-    return text.zfill(6)

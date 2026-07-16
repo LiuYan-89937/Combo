@@ -1,6 +1,6 @@
 {
   "id": "research_a_share_company",
-  "description": "获取指定六位代码 A 股公司的基本资料、行情、前复权历史走势和财务摘要，并计算透明的区间趋势指标。研究当前公司事实时必须调用。",
+  "description": "通过腾讯证券获取指定六位代码 A 股公司的证券身份、当前行情和前复权历史走势，通过同花顺获取财务摘要，并计算透明的区间趋势指标。研究当前公司事实时必须调用。",
   "schema_error_guidance": "code 必须是六位数字；history_days 必须在 30 到 1000 之间；sections 只能包含 basic、quote、history、financial。",
   "entrypoint": "python:tools/research_a_share_company/tool.py:run",
   "input_schema": {

@@ -12,7 +12,7 @@ description: 对单家 A 股上市公司执行公开行情、财务数据和用�
 ## 执行流程
 
 1. 明确公司或六位股票代码、研究时间范围、复权口径和用户关注的问题；关键信息缺失时先询问，不猜测证券代码。
-2. 用 `research_a_share_company` 获取公开行情、历史走势和财务事实，保留 `observed_at`、`source`、`adjustment` 与全部 `warnings`。
+2. 用 `research_a_share_company` 从腾讯证券获取证券身份、当前行情和前复权历史走势，并从同花顺获取财务摘要；保留 `observed_at`、`source`、`adjustment` 与全部 `warnings`。
 3. 用户提到财报、内部资料、研究规范或已挂载文档时，先调用 `knowledge` 的 `search`，再对命中结果 `open/read`；没有结果必须如实说明。
 4. 对公开数据与用户资料做交叉核验。冲突时并列记录来源、时间和口径，不擅自选取更有利的数字。
 5. 把结论拆成事实、分析判断、反面证据、风险和缺失信息。需要落盘时使用 `write` 保存 Markdown 报告。

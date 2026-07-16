@@ -1,6 +1,6 @@
 {
   "id": "analyze_a_share_portfolio",
-  "description": "基于用户明确提供的 A 股持仓和前复权历史收盘价，计算持仓权重、集中度、组合收益、波动率、最大回撤、个股指标、相关性和用户指定压力情景。",
+  "description": "基于用户明确提供的 A 股持仓和腾讯证券前复权历史收盘价，计算持仓权重、集中度、组合收益、波动率、最大回撤、个股指标、相关性和用户指定压力情景。",
   "schema_error_guidance": "holdings 必须包含 1 到 20 个不重复的六位 A 股代码，并且全部使用 weight 或全部使用 shares；history_days 为 60 到 500；stress_scenarios 可选。",
   "entrypoint": "python:tools/analyze_a_share_portfolio/tool.py:run",
   "input_schema": {
