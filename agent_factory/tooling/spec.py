@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 SNAKE_CASE_ID = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -96,6 +96,65 @@ class ToolOutputCompressionConfig(BaseModel):
         return text
 
 
+class ToolLoopPolicyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_calls: int | None = Field(default=None, ge=1)
+    max_identical_calls: int | None = Field(default=None, ge=1)
+    max_semantic_calls: int | None = Field(default=None, ge=1)
+    max_consecutive_failures: int | None = Field(default=None, ge=1)
+    max_consecutive_empty_results: int | None = Field(default=None, ge=1)
+    max_consecutive_no_new_evidence: int | None = Field(default=None, ge=1)
+    semantic_argument_pointers: list[str] = Field(default_factory=list)
+    evidence_output_pointers: list[str] = Field(default_factory=list)
+
+    @field_validator("semantic_argument_pointers", "evidence_output_pointers")
+    @classmethod
+    def validate_json_pointers(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for item in value:
+            pointer = str(item or "").strip()
+            if not pointer.startswith("/"):
+                raise ValueError("tool loop policy pointers must be JSON Pointers beginning with '/'")
+            if pointer not in result:
+                result.append(pointer)
+        return result
+
+    @model_validator(mode="after")
+    def validate_required_pointers(self) -> "ToolLoopPolicyConfig":
+        bounded_fields = (
+            self.max_identical_calls,
+            self.max_semantic_calls,
+            self.max_consecutive_failures,
+            self.max_consecutive_empty_results,
+            self.max_consecutive_no_new_evidence,
+        )
+        if any(value is not None for value in bounded_fields) and self.max_calls is None:
+            raise ValueError("tool loop policies require max_calls as a total state bound")
+        if self.max_semantic_calls is not None and not self.semantic_argument_pointers:
+            raise ValueError("max_semantic_calls requires semantic_argument_pointers")
+        if (
+            self.max_consecutive_empty_results is not None
+            or self.max_consecutive_no_new_evidence is not None
+        ) and not self.evidence_output_pointers:
+            raise ValueError("empty/no-new-evidence budgets require evidence_output_pointers")
+        return self
+
+    @property
+    def enabled(self) -> bool:
+        return any(
+            value is not None
+            for value in (
+                self.max_calls,
+                self.max_identical_calls,
+                self.max_semantic_calls,
+                self.max_consecutive_failures,
+                self.max_consecutive_empty_results,
+                self.max_consecutive_no_new_evidence,
+            )
+        )
+
+
 class ToolSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -113,6 +172,7 @@ class ToolSpec(BaseModel):
     permission_tags: list[str] = Field(default_factory=list)
     output_compression: ToolOutputCompressionConfig = Field(default_factory=ToolOutputCompressionConfig)
     output_projection: ToolOutputProjectionMode = "compress"
+    loop_policy: ToolLoopPolicyConfig = Field(default_factory=ToolLoopPolicyConfig)
 
     @field_validator("id")
     @classmethod

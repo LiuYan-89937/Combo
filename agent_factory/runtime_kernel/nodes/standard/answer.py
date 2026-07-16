@@ -25,6 +25,7 @@ from agent_factory.runtime_kernel.nodes.standard.tool_visibility import (
     runtime_extra_allowed_tool_ids,
 )
 from agent_factory.context_system.token_counter import provider_token_budget_payload
+from agent_factory.runtime_kernel.tool_governance import exhausted_tool_ids
 
 
 class CognitiveAnswerNode:
@@ -222,7 +223,8 @@ def _model_visible_tool_ids(context: NodeExecutionContext, state: RuntimeState, 
             *system_tool_ids(registry),
         ])
     excluded_tool_ids = set(runtime_excluded_tool_ids(state))
-    return [tool_id for tool_id in visible_tool_ids if tool_id not in excluded_tool_ids]
+    unavailable_tool_ids = excluded_tool_ids | exhausted_tool_ids(state)
+    return [tool_id for tool_id in visible_tool_ids if tool_id not in unavailable_tool_ids]
 
 
 def _allowed_tool_ids(context: NodeExecutionContext) -> list[str]:

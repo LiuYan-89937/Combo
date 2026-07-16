@@ -201,8 +201,24 @@ def _normalize_call_result(result: Any) -> dict[str, Any]:
         return structured
     content = payload.get("content")
     if content is not None:
+        structured_text = _mcp_json_text_content(content)
+        if structured_text is not None:
+            return structured_text
         return {"content": content}
     return payload
+
+
+def _mcp_json_text_content(content: Any) -> dict[str, Any] | None:
+    if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], dict):
+        return None
+    text = content[0].get("text")
+    if not isinstance(text, str):
+        return None
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def _mcp_tool_error_message(payload: dict[str, Any]) -> str:

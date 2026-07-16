@@ -35,6 +35,22 @@
           ]
         }
       },
+      "tool_loop_policies": {
+        "web_search": {
+          "max_calls": 12,
+          "max_identical_calls": 1,
+          "max_semantic_calls": 2,
+          "max_consecutive_failures": 3,
+          "max_consecutive_empty_results": 3,
+          "max_consecutive_no_new_evidence": 3,
+          "semantic_argument_pointers": [
+            "/query"
+          ],
+          "evidence_output_pointers": [
+            "/results"
+          ]
+        }
+      },
       "timeout_seconds": 60
     }
   ]
