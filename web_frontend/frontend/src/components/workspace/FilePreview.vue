@@ -2,12 +2,12 @@
   <div class="file-preview-container">
     <div class="preview-header">
       <div class="file-info">
-        <n-text strong>{{ file.name }}</n-text>
+        <n-text strong class="file-name" :title="file.name">{{ file.name }}</n-text>
         <n-text depth="3" class="file-meta">
           {{ formatFileSize(file.sizeBytes) }} · {{ previewLabel }}
         </n-text>
       </div>
-      <n-space>
+      <div class="preview-actions">
         <n-button size="small" @click="addToReferences">
           <template #icon>
             <n-icon><AddCircleOutline /></n-icon>
@@ -35,7 +35,7 @@
           </template>
           {{ t('common.close') }}
         </n-button>
-      </n-space>
+      </div>
     </div>
 
     <div class="preview-content" :class="`preview-${previewKind}`" :data-reference-label="file.path || file.name">
@@ -84,7 +84,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NIcon, NPopconfirm, NSpace, NText } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NIcon, NPopconfirm, NText } from 'naive-ui'
 import { AddCircleOutline, Close, DocumentOutline, Download, TrashOutline } from '@/components/icons'
 import { workspaceApi } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
@@ -262,12 +262,13 @@ function handleClose() {
   display: flex;
   flex-direction: column;
   background: var(--app-surface);
+  container-type: inline-size;
 }
 
 .preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: var(--app-space-md);
   padding: var(--app-space-md) var(--app-space-lg);
   border-bottom: 1px solid var(--app-divider);
@@ -281,8 +282,44 @@ function handleClose() {
   gap: 4px;
 }
 
+.file-name {
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .file-meta {
   font-size: 12px;
+}
+
+.preview-actions {
+  min-width: 0;
+  max-width: 360px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--app-space-sm);
+}
+
+.preview-actions :deep(.n-button) {
+  flex: 0 0 auto;
+}
+
+@container (max-width: 640px) {
+  .preview-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--app-space-sm);
+    padding-inline: var(--app-space-md);
+  }
+
+  .preview-actions {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
 }
 
 .preview-content {

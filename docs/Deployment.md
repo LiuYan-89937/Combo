@@ -152,6 +152,7 @@ SSH_KEY=
 | `EMBEDDING_MODEL_ID` | Embedding 模型 | `BAAI/bge-m3` |
 | `IMAGE_*_URL/SHA256/SIZE_BYTES` | FLUX 四件套 ModelScope 国内直链与完整性信息 | 固定并校验 |
 | `IMAGE_RESIDENCY_POLICY` | Chat 与 Image 显存共存策略 | `coexist_if_fit` |
+| `IMAGE_EAGER_LOAD` | sd-server 启动时立即把图片模型参数加载到配置的计算后端 | `1` |
 | `CHAT_CONTEXT_SIZE` | llama-server Context | `256000` |
 | `CHAT_CACHE_TYPE_K/V` | KV Cache 类型 | `q8_0` |
 | `CHAT_PARALLEL_SLOTS` | Chat 并发槽位 | `1` |
@@ -192,7 +193,7 @@ SSH_KEY=
 
 部署使用 `stable-diffusion.cpp + FLUX.1-dev Q4_0`，四个文件总计约 16.3GB，其中 T5XXL FP16 常驻 CPU 内存。默认参数为单并发、768×768、20 Steps、CFG 1.0、Euler、Diffusion Flash Attention、CLIP/T5 CPU 和 VAE Tiling。
 
-Image Profile 在远端注册为 enabled，供控制节点识别；本机 external Profile 默认 disabled，因此首次启动不会占用显存。默认 `coexist_if_fit` 允许 Chat 与 Image 在显存预算足够时同时驻留。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
+Image Profile 在远端注册为 enabled，供控制节点识别；本机 external Profile 默认 disabled，因此首次启动不会占用显存。图片运行配置默认启用 `eager_load`，`sd-server` 启动后会立即将参数加载到配置的计算后端；默认 `coexist_if_fit` 允许 Chat 与 Image 在显存预算足够时同时驻留。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
 
 FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演示和提交前应保留模型来源、revision、SHA256 与许可证说明。
 

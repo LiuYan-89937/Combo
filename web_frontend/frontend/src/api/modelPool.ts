@@ -87,6 +87,7 @@ export interface StableDiffusionCppRuntimeConfiguration {
   clip_l_path: string
   t5xxl_path: string
   diffusion_flash_attention: boolean
+  eager_load: boolean
   clip_on_cpu: boolean
   vae_tiling: boolean
   offload_to_cpu: boolean

@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 import httpx
 
+from agent_factory.local_inference.config import LocalInferenceEndpoint
+from agent_factory.local_inference.http_client import create_private_http_client
 from agent_factory.models.image_generation.protocol import (
     GeneratedImageSource,
     ImageGenerationRequest,
@@ -50,10 +52,22 @@ class StableDiffusionCppImageAdapter:
             "output_format": "png",
         }
         endpoint = f"{self.settings.base_url.rstrip('/')}/images/generations"
+        timeout_seconds = float(self.settings.timeout_seconds or 900.0)
         try:
-            response = httpx.post(endpoint, json=payload, timeout=float(self.settings.timeout_seconds or 900.0))
+            private_endpoint = LocalInferenceEndpoint(
+                base_url=self.settings.base_url,
+                timeout_seconds=timeout_seconds,
+            )
+            with create_private_http_client(private_endpoint) as client:
+                response = client.post(endpoint, json=payload)
             response.raise_for_status()
             body = response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = _response_error_detail(exc.response)
+            suffix = f": {detail}" if detail else ""
+            raise ImageGenerationAdapterError(
+                f"stable-diffusion.cpp request failed with HTTP {exc.response.status_code}{suffix}"
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise ImageGenerationAdapterError(f"stable-diffusion.cpp request failed: {exc}") from exc
         return _parse_openai_images(body)
@@ -63,6 +77,19 @@ def adapter_for_image_provider(settings: ImageGenerationSettings) -> ImageGenera
     if settings.provider.strip().lower() == "stable_diffusion_cpp":
         return StableDiffusionCppImageAdapter(settings)
     raise ImageGenerationAdapterError(f"unsupported image generation provider: {settings.provider}")
+
+
+def _response_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except (ValueError, UnicodeDecodeError):
+        return response.text.strip()
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("detail") or "").strip()
+    return str(payload.get("detail") or payload.get("message") or "").strip()
 
 
 def _parse_openai_images(body: Any) -> list[GeneratedImageSource]:

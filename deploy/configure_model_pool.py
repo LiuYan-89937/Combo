@@ -180,6 +180,7 @@ def _upsert_image_profile(store: ModelPoolStore, args: argparse.Namespace) -> Mo
         clip_l_path=str(args.image_clip_l_path),
         t5xxl_path=str(args.image_t5xxl_path),
         diffusion_flash_attention=args.image_diffusion_flash_attention,
+        eager_load=args.image_eager_load,
         clip_on_cpu=args.image_clip_on_cpu,
         vae_tiling=args.image_vae_tiling,
         offload_to_cpu=args.image_offload_to_cpu,
@@ -295,6 +296,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-license", default="FLUX.1-dev Non-Commercial License")
     parser.add_argument("--image-enabled", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--image-diffusion-flash-attention", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--image-eager-load", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--image-clip-on-cpu", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--image-vae-tiling", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--image-offload-to-cpu", action=argparse.BooleanOptionalAction, default=False)

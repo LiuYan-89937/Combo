@@ -257,6 +257,7 @@ configure_local_profiles() {
         --image-t5xxl-path "${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0/${IMAGE_T5XXL_FILENAME}" \
         "$(boolean_argument "${IMAGE_ENABLED:-0}" image-enabled)" \
         "$(boolean_argument "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)" \
+        "$(boolean_argument "${IMAGE_EAGER_LOAD:-1}" image-eager-load)" \
         "$(boolean_argument "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)" \
         "$(boolean_argument "${IMAGE_VAE_TILING:-1}" image-vae-tiling)" \
         --image-default-width "${IMAGE_DEFAULT_WIDTH:-768}" \

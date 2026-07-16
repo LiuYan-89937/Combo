@@ -39,6 +39,8 @@ def main() -> None:
     ]
     if inference.diffusion_flash_attention:
         command.append("--diffusion-fa")
+    if inference.eager_load:
+        command.append("--eager-load")
     if inference.clip_on_cpu:
         command.append("--clip-on-cpu")
     if inference.vae_tiling:

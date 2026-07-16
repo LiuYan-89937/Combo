@@ -440,6 +440,7 @@
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.normalize_embeddings">{{ t('localModel.normalizeEmbeddings') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'image_generation'" v-model:checked="profileForm.diffusion_flash_attention">Diffusion Flash Attention</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'image_generation'" v-model:checked="profileForm.eager_load">启动时预加载模型</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'image_generation'" v-model:checked="profileForm.clip_on_cpu">CLIP / T5 使用 CPU</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'image_generation'" v-model:checked="profileForm.vae_tiling">VAE Tiling</n-checkbox>
         </n-space>
@@ -515,7 +516,7 @@ const profileForm = reactive({
   image_input: false,
   normalize_embeddings: true, enabled: true,
   vae_path: '', clip_l_path: '', t5xxl_path: '',
-  diffusion_flash_attention: true, clip_on_cpu: true, vae_tiling: true,
+  diffusion_flash_attention: true, eager_load: true, clip_on_cpu: true, vae_tiling: true,
   offload_to_cpu: false, max_vram_gib: null as number | null, stream_layers: null as number | null,
   default_width: 768, default_height: 768, default_steps: 20, default_cfg_scale: 1.0,
   default_sampler: 'euler', residency_policy: 'coexist_if_fit' as 'coexist_if_fit' | 'exclusive',
@@ -737,6 +738,7 @@ async function saveProfile(): Promise<void> {
       clip_l_path: profileForm.clip_l_path,
       t5xxl_path: profileForm.t5xxl_path,
       diffusion_flash_attention: profileForm.diffusion_flash_attention,
+      eager_load: profileForm.eager_load,
       clip_on_cpu: profileForm.clip_on_cpu,
       vae_tiling: profileForm.vae_tiling,
       offload_to_cpu: profileForm.offload_to_cpu,
@@ -1005,6 +1007,7 @@ function applyImageRuntimeConfiguration(
   profileForm.clip_l_path = inference?.clip_l_path ?? ''
   profileForm.t5xxl_path = inference?.t5xxl_path ?? ''
   profileForm.diffusion_flash_attention = inference?.diffusion_flash_attention ?? true
+  profileForm.eager_load = inference?.eager_load ?? true
   profileForm.clip_on_cpu = inference?.clip_on_cpu ?? true
   profileForm.vae_tiling = inference?.vae_tiling ?? true
   profileForm.offload_to_cpu = inference?.offload_to_cpu ?? false

@@ -378,6 +378,7 @@ image_profile_arguments() {
         --image-checksum "${IMAGE_MODEL_SHA256}"
         --image-enabled
         "$(boolean_flag "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)"
+        "$(boolean_flag "${IMAGE_EAGER_LOAD:-1}" image-eager-load)"
         "$(boolean_flag "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)"
         "$(boolean_flag "${IMAGE_VAE_TILING:-1}" image-vae-tiling)"
         "$(boolean_flag "${IMAGE_OFFLOAD_TO_CPU:-0}" image-offload-to-cpu)"

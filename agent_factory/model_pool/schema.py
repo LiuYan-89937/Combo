@@ -188,6 +188,7 @@ class StableDiffusionCppInferenceConfig(BaseModel):
     clip_l_path: str
     t5xxl_path: str
     diffusion_flash_attention: bool = True
+    eager_load: bool = True
     clip_on_cpu: bool = True
     vae_tiling: bool = True
     offload_to_cpu: bool = False
