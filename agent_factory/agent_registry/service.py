@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.models.embedding_model import get_embedding_model
-from agent_factory.paths import factory_artifact_path, system_package_root
+from agent_factory.paths import factory_artifact_path, system_package_root as default_system_package_root
 
 
 AGENT_REGISTRY_DB_ENV = "AGENTFACTORY_AGENT_REGISTRY_DB"
@@ -42,7 +42,7 @@ class AgentRegistryService:
         self.system_package_root = (
             Path(system_package_root).expanduser()
             if system_package_root is not None
-            else (system_package_root() if package_root is None else None)
+            else (default_system_package_root() if package_root is None else None)
         )
         self.db_path = Path(db_path).expanduser() if db_path else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
