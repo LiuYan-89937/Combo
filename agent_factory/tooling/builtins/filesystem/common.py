@@ -5,6 +5,7 @@ from typing import Any
 
 from agent_factory.create_agent.stage_context import stage_context_from_resources
 from agent_factory.tooling.spec import ToolRiskResult
+from agent_factory.tooling.workspace_paths import workspace_path_candidate
 
 
 SENSITIVE_FILE_NAMES = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519"}
@@ -42,8 +43,7 @@ def filesystem_boundary(resources: dict[str, Any]) -> tuple[Path, bool]:
 
 
 def resolve_path(*, path: str, root: Path, allow_external: bool) -> Path:
-    requested = Path(path).expanduser()
-    candidate = requested if requested.is_absolute() else root / requested
+    candidate = workspace_path_candidate(path, root=root)
     resolved = candidate.resolve(strict=False)
     if allow_external:
         return resolved

@@ -10,6 +10,8 @@ import time
 import uuid
 from typing import Any, TextIO
 
+from agent_factory.tooling.workspace_paths import workspace_path_candidate
+
 
 _OUTPUT_BUFFER_LIMIT = 1_000_000
 _DEFAULT_WAIT_SECONDS = 30
@@ -216,8 +218,7 @@ def process_runtime_boundary(resources: dict[str, Any]) -> tuple[Path, bool]:
 
 def resolve_cwd(*, cwd: str | None, root: Path, allow_external: bool) -> Path:
     value = cwd if cwd is not None and cwd.strip() else "."
-    requested = Path(value).expanduser()
-    candidate = requested if requested.is_absolute() else root / requested
+    candidate = workspace_path_candidate(value, root=root)
     resolved = candidate.resolve(strict=False)
     if allow_external:
         return resolved
