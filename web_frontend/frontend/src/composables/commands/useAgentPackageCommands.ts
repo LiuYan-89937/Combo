@@ -19,6 +19,7 @@ export function useAgentPackageCommands() {
   }
 
   const selectAgentPackage = (packageId: string, purpose?: 'run' | 'evolution') => {
+    runtimeStore.expectAgentPackageSelection(packageId, purpose || 'run')
     return transport.applyEventRequest(agentPackagesApi.select(packageId, purpose))
   }
 
@@ -98,6 +99,7 @@ export function useAgentPackageCommands() {
   }
 
   const loadAgentPackageSession = (packageId: string, sessionId: string) => {
+    runtimeStore.expectAgentPackageSession(packageId, sessionId)
     return transport.applyEventRequest(agentPackagesApi.session(packageId, sessionId))
   }
 
