@@ -194,6 +194,8 @@ def _normalize_tool(tool: Any) -> MCPDiscoveredTool:
 
 def _normalize_call_result(result: Any) -> dict[str, Any]:
     payload = _model_dump(result)
+    if payload.get("isError") is True or payload.get("is_error") is True:
+        raise MCPRuntimeError(_mcp_tool_error_message(payload))
     structured = payload.get("structured_content") or payload.get("structuredContent")
     if isinstance(structured, dict):
         return structured
@@ -201,6 +203,33 @@ def _normalize_call_result(result: Any) -> dict[str, Any]:
     if content is not None:
         return {"content": content}
     return payload
+
+
+def _mcp_tool_error_message(payload: dict[str, Any]) -> str:
+    structured = payload.get("structured_content") or payload.get("structuredContent")
+    if isinstance(structured, dict):
+        for key in ("error", "message", "detail"):
+            value = structured.get(key)
+            if value:
+                return _mcp_error_value_text(value)
+    content = payload.get("content")
+    if isinstance(content, list):
+        messages = [
+            str(item.get("text") or "").strip()
+            for item in content
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        if messages:
+            return "\n".join(messages)
+    if content:
+        return _mcp_error_value_text(content)
+    return "MCP tool returned isError=true without an error message"
+
+
+def _mcp_error_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip() or "MCP tool execution failed"
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def _model_dump(value: Any) -> dict[str, Any]:
