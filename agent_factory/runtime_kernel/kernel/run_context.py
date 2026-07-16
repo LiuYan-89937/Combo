@@ -17,6 +17,7 @@ class RuntimeKernelRunContext:
     session_manager: AgentSessionManager
     session_id: str
     first_user_input: str
+    session_turn_request_id: str | None = None
 
 
 def configure_memory_runtime_for_agent(services, agent_id: str) -> None:

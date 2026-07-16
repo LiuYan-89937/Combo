@@ -503,6 +503,7 @@ class PackageRuntimeCore:
                 compiled,
                 package=package,
                 command="resume_interrupt",
+                request_id=run_context.session_turn_request_id,
                 session_id=session_id,
                 fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
                 stop_signal=cancel_token,
@@ -515,6 +516,7 @@ class PackageRuntimeCore:
                 run_context,
                 compiled,
                 final_state,
+                request_id=run_context.session_turn_request_id,
                 session_id=session_id,
                 fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
             )
@@ -530,6 +532,7 @@ class PackageRuntimeCore:
             run_context,
             compiled,
             final_state,
+            request_id=run_context.session_turn_request_id,
             session_id=session_id,
             fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
             visible_output=visible_output,

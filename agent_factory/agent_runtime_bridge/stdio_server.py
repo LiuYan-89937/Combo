@@ -811,6 +811,7 @@ def _resume_interrupt(
             compiled,
             package=package,
             command="resume_interrupt",
+            request_id=run_context.session_turn_request_id,
             session_id=session_id,
             fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
             stop_signal=cancel_token,
@@ -823,6 +824,7 @@ def _resume_interrupt(
             run_context,
             compiled,
             final_state,
+            request_id=run_context.session_turn_request_id,
             session_id=session_id,
             fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
         )
@@ -838,6 +840,7 @@ def _resume_interrupt(
         run_context,
         compiled,
         final_state,
+        request_id=run_context.session_turn_request_id,
         session_id=session_id,
         fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
         visible_output=visible_output,
