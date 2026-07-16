@@ -42,7 +42,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "action": action,
             "status": "completed",
             "message": "协作会话状态已读取。",
-            "session": session,
+            "session": _session_state_view(session),
         }
     if action == "create_task":
         session = store.create_task(collaboration_id, _task_payload(arguments))
@@ -51,8 +51,8 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "action": action,
             "status": "completed",
             "message": "子任务已创建。宿主协作调度器会启动依赖已满足的任务。",
-            "session": session,
-            "task": task,
+            "session": _session_state_view(session),
+            "task": _task_state_view(task),
             "dispatch_hint": "任务已进入协作队列；依赖满足后可由 dispatch-ready 或右侧任务启动按钮调度 worker。",
         }
     if action == "update_task":
@@ -63,8 +63,8 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "action": action,
             "status": "completed",
             "message": "子任务已更新。",
-            "session": session,
-            "task": task,
+            "session": _session_state_view(session),
+            "task": _task_state_view(task),
         }
     if action == "cancel_task":
         task_id = _required_text(arguments, "task_id")
@@ -91,8 +91,8 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "action": action,
             "status": "completed",
             "message": "子任务已标记停止；宿主协作服务会取消对应 worker 请求。",
-            "session": session,
-            "task": task,
+            "session": _session_state_view(session),
+            "task": _task_state_view(task),
         }
     if action == "read_shared":
         path = _safe_shared_path(store.session_workdir(collaboration_id), _required_text(arguments, "path"))
@@ -153,7 +153,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "action": action,
             "status": "completed",
             "message": "协作会话已完成。",
-            "session": session,
+            "session": _session_state_view(session),
             "path": "final/final-delivery.md",
         }
     raise ValueError(f"unsupported collaboration action: {action}")
@@ -252,6 +252,82 @@ def _task_by_id(session: dict[str, Any], task_id: str) -> dict[str, Any]:
         if isinstance(task, dict) and str(task.get("task_id") or "") == task_id:
             return task
     raise ValueError(f"collaboration task not found: {task_id}")
+
+
+def _session_state_view(session: dict[str, Any]) -> dict[str, Any]:
+    tasks = [
+        _task_state_view(task)
+        for task in session.get("tasks") or []
+        if isinstance(task, dict)
+    ]
+    manufacturing_requests = [
+        {
+            "request_id": item.get("request_id"),
+            "status": item.get("status"),
+            "agent_name": item.get("agent_name"),
+            "purpose": item.get("purpose"),
+            "create_agent_session_id": item.get("create_agent_session_id"),
+            "updated_at": item.get("updated_at"),
+        }
+        for item in session.get("manufacturing_requests") or []
+        if isinstance(item, dict)
+    ]
+    status_counts: dict[str, int] = {}
+    for task in tasks:
+        status = str(task.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        "collaboration_id": session.get("collaboration_id"),
+        "title": session.get("title"),
+        "main_agent_package_id": session.get("main_agent_package_id"),
+        "main_agent_package_session_id": session.get("main_agent_package_session_id"),
+        "approval_mode": session.get("approval_mode"),
+        "status": session.get("status"),
+        "task_counts": status_counts,
+        "tasks": tasks,
+        "manufacturing_requests": manufacturing_requests,
+        "created_at": session.get("created_at"),
+        "updated_at": session.get("updated_at"),
+    }
+
+
+def _task_state_view(task: dict[str, Any]) -> dict[str, Any]:
+    payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+    artifacts = [
+        _artifact_state_view(item)
+        for item in task.get("artifact_refs") or []
+    ]
+    result_state = {
+        key: payload[key]
+        for key in ("runtime_status", "delivery_validation")
+        if key in payload
+    }
+    return {
+        "task_id": task.get("task_id"),
+        "parent_task_id": task.get("parent_task_id"),
+        "assignee_package_id": task.get("assignee_package_id"),
+        "assignee_session_id": task.get("assignee_session_id"),
+        "task_text": task.get("task_text"),
+        "depends_on": task.get("depends_on") or [],
+        "delivery_standard": task.get("delivery_standard") or {},
+        "status": task.get("status"),
+        "result_summary": task.get("result_summary") or "",
+        "result_state": result_state,
+        "artifact_refs": artifacts,
+        "review_notes": task.get("review_notes") or "",
+        "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
+    }
+
+
+def _artifact_state_view(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {"path": str(item or "").strip()}
+    return {
+        key: item[key]
+        for key in ("path", "kind", "mime_type", "size_bytes", "sha256", "created_by", "task_id", "source", "worker_path")
+        if key in item
+    }
 
 
 def _read_task_artifacts(
