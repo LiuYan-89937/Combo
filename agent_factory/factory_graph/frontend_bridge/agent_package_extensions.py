@@ -825,6 +825,11 @@ def _mcp_server_from_payload(payload: dict[str, Any], *, existing: MCPServerConf
         risk_level_default=str(raw.get("risk_level_default") or (existing.risk_level_default if existing is not None else "medium")),
         concurrent_default=bool(raw.get("concurrent_default") if "concurrent_default" in raw else existing.concurrent_default if existing is not None else False),
         timeout_seconds=float(raw.get("timeout_seconds") or (existing.timeout_seconds if existing is not None else 30.0)),
+        tool_input_property_enums=(
+            dict(raw.get("tool_input_property_enums") or {})
+            if "tool_input_property_enums" in raw
+            else dict(existing.tool_input_property_enums) if existing is not None else {}
+        ),
     )
 
 
