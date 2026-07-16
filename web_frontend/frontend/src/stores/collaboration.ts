@@ -267,6 +267,22 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     }
   }
 
+  async function retryTask(task: CollaborationTaskView, retryGuidance?: string): Promise<void> {
+    if (!activeSession.value) return
+    saving.value = true
+    error.value = null
+    try {
+      const response = await collaborationApi.retryTask(activeSession.value.collaboration_id, task.task_id, {
+        retry_guidance: retryGuidance,
+      })
+      replaceActive(response.session)
+    } catch (exc) {
+      error.value = errorMessage(exc)
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function startTask(task: CollaborationTaskView): Promise<void> {
     if (!activeSession.value) return
     saving.value = true
@@ -422,6 +438,7 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     createTask,
     updateTask,
     cancelTask,
+    retryTask,
     startTask,
     resolveTaskApproval,
     dispatchReady,

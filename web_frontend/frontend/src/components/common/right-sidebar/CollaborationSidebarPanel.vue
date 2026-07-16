@@ -221,12 +221,21 @@
           </template>
           <div class="task-actions">
             <n-button
+              v-if="canStartTask(task)"
               size="tiny"
-              :disabled="!canStartTask(task)"
-              :loading="store.saving && canStartTask(task)"
+              :loading="store.saving"
               @click="startTask(task)"
             >
               {{ t('collaboration.startTask') }}
+            </n-button>
+            <n-button
+              v-if="canRetryTask(task)"
+              size="tiny"
+              type="warning"
+              :loading="store.saving"
+              @click="retryTask(task)"
+            >
+              {{ t('collaboration.retryTask') }}
             </n-button>
             <n-button
               size="tiny"
@@ -525,6 +534,11 @@ async function cancelTask(task: CollaborationTaskView) {
   await store.cancelTask(task, reviewDrafts.value[task.task_id] || undefined)
 }
 
+async function retryTask(task: CollaborationTaskView) {
+  if (!canRetryTask(task)) return
+  await store.retryTask(task, reviewDrafts.value[task.task_id] || undefined)
+}
+
 async function resolveTaskApproval(task: CollaborationTaskView, action: 'approve' | 'deny' | 'revise') {
   await store.resolveTaskApproval(task, {
     action,
@@ -598,7 +612,11 @@ function closeAcceptanceFilePreview() {
 }
 
 function canStartTask(task: CollaborationTaskView): boolean {
-  return ['assigned', 'queued', 'revision_requested', 'cancelled'].includes(task.status)
+  return ['assigned', 'queued'].includes(task.status)
+}
+
+function canRetryTask(task: CollaborationTaskView): boolean {
+  return ['failed', 'revision_requested', 'cancelled'].includes(task.status)
 }
 
 function canCancelTask(task: CollaborationTaskView): boolean {

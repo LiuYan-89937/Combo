@@ -66,6 +66,17 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "session": _session_state_view(session),
             "task": _task_state_view(task),
         }
+    if action == "retry_task":
+        task_id = _required_text(arguments, "task_id")
+        replacement = store.retry_task(collaboration_id, task_id, _task_retry_payload(arguments))
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "旧任务已删除并由新的重跑任务替换；旧 worker 会话清理已进入宿主队列。",
+            "session": _session_state_view(replacement["session"]),
+            "task": _task_state_view(replacement["task"]),
+            "dispatch_hint": "重跑任务已进入协作队列，并使用全新 worker 会话执行。",
+        }
     if action == "cancel_task":
         task_id = _required_text(arguments, "task_id")
         session = store.get_session(collaboration_id)
@@ -163,7 +174,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     action = str(arguments.get("action") or "").strip()
     if action in {"inspect", "read_shared", "read_task_artifacts"}:
         return ToolRiskResult(action="allow", risk_level="low", reasons=["collaboration read action"]).model_dump(mode="json")
-    if action in {"create_task", "update_task", "cancel_task", "write_shared", "complete_session"}:
+    if action in {"create_task", "update_task", "retry_task", "cancel_task", "write_shared", "complete_session"}:
         return ToolRiskResult(
             action="inherit",
             risk_level="medium",
@@ -213,6 +224,19 @@ def _task_payload(arguments: dict[str, Any]) -> dict[str, Any]:
         )
         if key in arguments
     }
+
+
+def _task_retry_payload(arguments: dict[str, Any]) -> dict[str, Any]:
+    keys = {
+        "assignee_package_id",
+        "task_text",
+        "depends_on",
+        "delivery_standard",
+        "visible_context",
+        "input_artifacts",
+        "retry_guidance",
+    }
+    return {key: arguments[key] for key in keys if key in arguments}
 
 
 def _task_update_payload(arguments: dict[str, Any]) -> dict[str, Any]:

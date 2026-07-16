@@ -104,6 +104,9 @@ edges:
     to: finalize
     when: policy.blocked
   - from: final_answer
+    to: tool_exec
+    when: model.requests_tool
+  - from: final_answer
     to: commit
     when: model.ready_to_answer
   - from: commit

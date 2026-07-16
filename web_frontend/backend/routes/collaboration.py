@@ -134,6 +134,18 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
         except Exception as exc:
             raise _http_error(exc) from exc
 
+    @router.post("/sessions/{collaboration_id}/tasks/{task_id}/retry")
+    async def retry_task(collaboration_id: str, task_id: str, payload: dict[str, Any] | None = None):
+        try:
+            replacement = service.retry_task(collaboration_id, task_id, payload or {})
+            return {
+                "session": replacement["session"],
+                "task": replacement["task"],
+                "replaced_task_id": task_id,
+            }
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     @router.post("/sessions/{collaboration_id}/tasks/{task_id}/approval")
     async def resolve_task_approval(collaboration_id: str, task_id: str, payload: dict[str, Any]):
         try:
