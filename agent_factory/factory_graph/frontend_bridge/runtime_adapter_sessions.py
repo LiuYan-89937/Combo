@@ -6,6 +6,11 @@ from typing import Any
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.factory_graph.session import (
+    record_has_any_source,
+    record_has_mode_source,
+    without_mode_source,
+)
 from agent_factory.runtime_attachments import has_attachment_payload
 
 
@@ -337,7 +342,7 @@ class RuntimeSessionCommandMixin:
                 chat_session = chat_sessions.get(chat_session_id)
                 canonical = canonical_chat_records.get(chat_session_id)
                 if chat_session is None or canonical is None or canonical.session_id != record.session_id:
-                    view = _without_mode_source(record, "chat")
+                    view = without_mode_source(record, "chat")
                 else:
                     view = _with_chat_session_summary(record, chat_session)
             if _client_record_has_source(view):
@@ -368,7 +373,7 @@ class RuntimeSessionCommandMixin:
             return True
         chat_session_id = _chat_agent_session_id(record)
         if not chat_session_id:
-            return not _record_has_mode_source(record, "chat")
+            return not record_has_mode_source(record, "chat")
         if self.agent_package_runtime is None:
             return False
         try:
@@ -393,8 +398,8 @@ class RuntimeSessionCommandMixin:
         affected: set[str] = set()
         for target in targets:
             affected.add(target.session_id)
-            updated = _without_mode_source(target, mode)
-            if _record_has_any_source(updated):
+            updated = without_mode_source(target, mode)
+            if record_has_any_source(updated):
                 self.session_manager.save(updated)
             else:
                 self.session_manager.delete(target.session_id)
@@ -520,25 +525,6 @@ def _with_chat_session_summary(record: Any, chat_session: dict[str, Any]) -> Any
     return view
 
 
-def _without_mode_source(record: Any, mode: str | None) -> Any:
-    view = record.model_copy(deep=True)
-    if mode in {None, "chat"}:
-        view.chat_agent_package_session_id = None
-        view.chat_turn_count = 0
-        view.chat_turns = []
-    if mode in {None, "create_agent"}:
-        view.create_agent_session_id = None
-        view.create_agent_turn_count = 0
-        view.create_agent_turns = []
-    if mode in {None, "evolve_agent"}:
-        view.evolve_agent_package_id = None
-        view.evolve_agent_turn_count = 0
-        view.evolve_agent_turns = []
-    if mode is None or view.current_mode == mode:
-        view.current_mode = _fallback_current_mode(view)
-    return view
-
-
 def _client_record_has_source(record: Any) -> bool:
     return (
         _client_record_matches_mode(record, "chat")
@@ -547,43 +533,10 @@ def _client_record_has_source(record: Any) -> bool:
     )
 
 
-def _record_has_any_source(record: Any) -> bool:
-    return (
-        _record_has_mode_source(record, "chat")
-        or _record_has_mode_source(record, "create_agent")
-        or _record_has_mode_source(record, "evolve_agent")
-    )
-
-
 def _client_record_matches_mode(record: Any, mode: str) -> bool:
     if mode == "chat":
         return bool(_chat_agent_session_id(record))
-    return _record_has_mode_source(record, mode)
-
-
-def _record_has_mode_source(record: Any, mode: str) -> bool:
-    if mode == "chat":
-        return bool(_chat_agent_session_id(record))
-    if mode == "create_agent":
-        return (
-            bool(_create_agent_session_id(record))
-            or int(getattr(record, "create_agent_turn_count", 0) or 0) > 0
-            or bool(getattr(record, "create_agent_turns", None))
-        )
-    if mode == "evolve_agent":
-        return (
-            bool(_evolve_agent_package_id(record))
-            or int(getattr(record, "evolve_agent_turn_count", 0) or 0) > 0
-            or bool(getattr(record, "evolve_agent_turns", None))
-        )
-    return False
-
-
-def _fallback_current_mode(record: Any) -> str | None:
-    for mode in ("chat", "create_agent", "evolve_agent"):
-        if _record_has_mode_source(record, mode):
-            return mode
-    return None
+    return record_has_mode_source(record, mode)
 
 
 def _chat_agent_session_id(record: Any) -> str:

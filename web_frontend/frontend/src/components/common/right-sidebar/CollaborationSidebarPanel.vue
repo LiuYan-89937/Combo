@@ -474,15 +474,7 @@ function refreshActiveSession() {
 }
 
 async function deleteSession(session: CollaborationSessionView) {
-  const linked = await store.deleteSession(session.collaboration_id)
-  const packageId = String(linked?.main_agent_package_id || '').trim()
-  if (!packageId || packageId === SYSTEM_CHAT_PACKAGE_ID) {
-    const factorySessionId = String(linked?.main_factory_session_id || '').trim()
-    if (factorySessionId) commands.deleteSession(factorySessionId, 'chat')
-  } else {
-    const packageSessionId = String(linked?.main_agent_package_session_id || '').trim()
-    if (packageSessionId) commands.deleteAgentPackageSession(packageId, packageSessionId)
-  }
+  await store.deleteSession(session.collaboration_id)
 }
 
 async function updateMainAgent(value: string) {

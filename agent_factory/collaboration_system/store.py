@@ -861,6 +861,9 @@ class CollaborationStore:
 
     def delete_session(self, collaboration_id: str) -> dict[str, Any]:
         existing = self.get_session(collaboration_id)
+        workdir = self._session_root(collaboration_id)
+        if workdir.exists():
+            shutil.rmtree(workdir)
         with self._connect() as conn:
             conn.execute("delete from collaboration_main_agent_events where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_manufacturing_requests where collaboration_id = ?", (collaboration_id,))
@@ -868,9 +871,6 @@ class CollaborationStore:
             conn.execute("delete from collaboration_tasks where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_messages where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_sessions where collaboration_id = ?", (collaboration_id,))
-        workdir = self._session_root(collaboration_id)
-        if workdir.exists():
-            shutil.rmtree(workdir)
         return {
             "collaboration_id": collaboration_id,
             "deleted": True,

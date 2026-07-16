@@ -13,15 +13,21 @@ from agent_factory.create_agent.runtime import CreateAgentRuntime
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.collaboration_system.orchestrator import CollaborationOrchestrator
 from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
-from agent_factory.collaboration_system.store import CollaborationStore
+from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_events import RUN_TERMINAL_EVENT_TYPES, runtime_stream_status
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.factory_graph.session import (
+    FactorySessionManager,
+    record_has_any_source,
+    without_mode_source,
+)
 from agent_factory.local_inference.capacity import ChatInferenceCapacity, inspect_chat_inference_capacity
 
 
 RuntimeFactory = Callable[[], AgentPackageRuntimeManager]
 InferenceCapacityProbe = Callable[[], ChatInferenceCapacity]
+FactorySessionDeleter = Callable[[str, list[str]], dict[str, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,12 +55,14 @@ class CollaborationService:
         runtime_factory: RuntimeFactory,
         store: CollaborationStore | None = None,
         inference_capacity_probe: InferenceCapacityProbe = inspect_chat_inference_capacity,
+        factory_session_deleter: FactorySessionDeleter | None = None,
         poll_interval_seconds: float = 2.0,
         logger: logging.Logger | None = None,
     ) -> None:
         self.store = store or CollaborationStore()
         self.runtime_factory = runtime_factory
         self.inference_capacity_probe = inference_capacity_probe
+        self.factory_session_deleter = factory_session_deleter or _delete_factory_session_record
         self.poll_interval_seconds = poll_interval_seconds
         self.logger = logger or logging.getLogger(__name__)
         self._stop_event = threading.Event()
@@ -157,8 +165,35 @@ class CollaborationService:
     def delete_session(self, collaboration_id: str) -> dict[str, Any]:
         session = self.store.get_session(collaboration_id)
         cancelled = self._cancel_session_active_requests(session)
+        session_targets = _collaboration_runtime_session_targets(session)
+        runtime_cleanup = self.runtime_factory().delete_collaboration_sessions(
+            collaboration_id,
+            session_targets=session_targets,
+        )
+        cleanup_errors = runtime_cleanup.get("errors") if isinstance(runtime_cleanup.get("errors"), list) else []
+        if cleanup_errors:
+            raise RuntimeError(
+                "collaboration runtime cleanup failed: "
+                + "; ".join(
+                    str(item.get("error") or item)
+                    for item in cleanup_errors
+                    if isinstance(item, dict)
+                )
+            )
+        factory_session_id = str(session.get("main_factory_session_id") or "").strip()
+        owned_factory_chat_sessions = _factory_chat_session_ids(
+            session=session,
+            runtime_cleanup=runtime_cleanup,
+        )
+        factory_cleanup = (
+            self.factory_session_deleter(factory_session_id, owned_factory_chat_sessions)
+            if factory_session_id
+            else None
+        )
         result = self.store.delete_session(collaboration_id)
         result["cancelled_active_request_count"] = cancelled
+        result["runtime_cleanup"] = runtime_cleanup
+        result["factory_session_cleanup"] = factory_cleanup
         return result
 
     def dispatch_soon(self, collaboration_id: str) -> None:
@@ -782,6 +817,83 @@ def _active_runtime_request_targets(session: dict[str, Any]) -> list[str]:
         seen.add(request_id)
         result.append(request_id)
     return result
+
+
+def _collaboration_runtime_session_targets(session: dict[str, Any]) -> list[dict[str, str]]:
+    targets: dict[tuple[str, str], dict[str, str]] = {}
+    main_package_id = str(session.get("main_agent_package_id") or "").strip()
+    main_session_id = str(session.get("main_agent_package_session_id") or "").strip()
+    if main_package_id and main_session_id:
+        targets[(main_package_id, main_session_id)] = {
+            "package_id": main_package_id,
+            "session_id": main_session_id,
+            "source": "main_agent",
+        }
+    for task in session.get("tasks") or []:
+        package_id = str(task.get("assignee_package_id") or "").strip()
+        session_id = str(task.get("assignee_session_id") or "").strip()
+        if not package_id or not session_id:
+            continue
+        targets[(package_id, session_id)] = {
+            "package_id": package_id,
+            "session_id": session_id,
+            "source": "worker_task",
+        }
+    return [targets[key] for key in sorted(targets)]
+
+
+def _factory_chat_session_ids(
+    *,
+    session: dict[str, Any],
+    runtime_cleanup: dict[str, Any],
+) -> list[str]:
+    result: set[str] = set()
+    if str(session.get("main_agent_package_id") or "").strip() == SYSTEM_CHAT_PACKAGE_ID:
+        main_session_id = str(session.get("main_agent_package_session_id") or "").strip()
+        if main_session_id:
+            result.add(main_session_id)
+    cleanups = runtime_cleanup.get("cleanups") if isinstance(runtime_cleanup.get("cleanups"), list) else []
+    for cleanup in cleanups:
+        if not isinstance(cleanup, dict):
+            continue
+        if str(cleanup.get("package_id") or "").strip() != SYSTEM_CHAT_PACKAGE_ID:
+            continue
+        session_id = str(cleanup.get("session_id") or "").strip()
+        if session_id:
+            result.add(session_id)
+    return sorted(result)
+
+
+def _delete_factory_session_record(session_id: str, owned_chat_session_ids: list[str]) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        return {"session_id": "", "deleted": False, "missing": True}
+    manager = FactorySessionManager.from_env()
+    try:
+        record = manager.load(clean_session_id)
+    except FileNotFoundError:
+        return {"session_id": clean_session_id, "deleted": False, "missing": True}
+    _validate_factory_chat_session_owner(record, owned_chat_session_ids)
+    updated = without_mode_source(record, "chat")
+    retained = record_has_any_source(updated)
+    if retained:
+        manager.save(updated)
+    else:
+        manager.delete(clean_session_id)
+    return {
+        "session_id": record.session_id,
+        "deleted": not retained,
+        "detached_chat": True,
+    }
+
+
+def _validate_factory_chat_session_owner(record: Any, owned_chat_session_ids: list[str]) -> None:
+    linked_session_id = str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
+    owned = {str(item or "").strip() for item in owned_chat_session_ids if str(item or "").strip()}
+    if linked_session_id and linked_session_id not in owned:
+        raise ValueError(
+            "factory session chat ownership does not match the collaboration main Agent session"
+        )
 
 
 def _max_parallel_worker_tasks(inference: ChatInferenceCapacity) -> int:

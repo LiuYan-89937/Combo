@@ -525,7 +525,14 @@ class AgentPackageRuntimeManager:
         package = self.load_package(package_id)
         return self._session_manager_for_package(package_id, package).exists(session_id)
 
-    def delete_session(self, package_id: str, session_id: str) -> dict[str, Any]:
+    def delete_session(
+        self,
+        package_id: str,
+        session_id: str,
+        *,
+        delete_workdir: bool = False,
+        unlink_collaboration: bool = True,
+    ) -> dict[str, Any]:
         package = self.load_package(package_id)
         cancelled_active_request_count = self.cancel_active_requests(
             reason="session_deleted",
@@ -533,11 +540,16 @@ class AgentPackageRuntimeManager:
             session_id=session_id,
         )
         manager = self._session_manager_for_package(package_id, package)
-        result = manager.delete_if_exists(session_id)
-        if result is None:
-            collaboration_unlink = CollaborationStore().unlink_runtime_session(
-                package_id=package_id,
-                session_id=session_id,
+        record = manager.load_optional(session_id)
+        if record is None:
+            deleted_workdir = _delete_agent_session_workdir(package_id, session_id) if delete_workdir else False
+            collaboration_unlink = (
+                CollaborationStore().unlink_runtime_session(
+                    package_id=package_id,
+                    session_id=session_id,
+                )
+                if unlink_collaboration
+                else None
             )
             return {
                 "package_id": package_id,
@@ -546,6 +558,7 @@ class AgentPackageRuntimeManager:
                 "missing": True,
                 "deleted_trace_count": 0,
                 "deleted_checkpoint_count": 0,
+                "deleted_workdir": deleted_workdir,
                 "collaboration_unlink": collaboration_unlink,
                 "cancelled_active_request_count": cancelled_active_request_count,
                 "sessions": self._list_sessions_for_loaded_package(package),
@@ -553,12 +566,22 @@ class AgentPackageRuntimeManager:
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
             package_id=package_id,
             package=package,
-            session_id=result.record.session_id,
-            thread_id=result.record.thread_id,
+            session_id=record.session_id,
+            thread_id=record.thread_id,
         )
-        collaboration_unlink = CollaborationStore().unlink_runtime_session(
-            package_id=package_id,
-            session_id=result.record.session_id,
+        deleted_workdir = (
+            _delete_agent_session_workdir(package_id, record.session_id)
+            if delete_workdir
+            else False
+        )
+        result = manager.delete(record.session_id)
+        collaboration_unlink = (
+            CollaborationStore().unlink_runtime_session(
+                package_id=package_id,
+                session_id=result.record.session_id,
+            )
+            if unlink_collaboration
+            else None
         )
         return {
             "package_id": package_id,
@@ -566,10 +589,103 @@ class AgentPackageRuntimeManager:
             "deleted": True,
             "deleted_trace_count": result.deleted_trace_count,
             "deleted_checkpoint_count": deleted_checkpoint_count,
-            "deleted_workdir": False,
+            "deleted_workdir": deleted_workdir,
             "collaboration_unlink": collaboration_unlink,
             "cancelled_active_request_count": cancelled_active_request_count,
             "sessions": self._list_sessions_for_loaded_package(package),
+        }
+
+    def delete_collaboration_sessions(
+        self,
+        collaboration_id: str,
+        *,
+        session_targets: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        clean_collaboration_id = str(collaboration_id or "").strip()
+        if not clean_collaboration_id:
+            raise ValueError("collaboration_id is required")
+        targets: dict[tuple[str, str], dict[str, str]] = {}
+        for target in session_targets or []:
+            package_id = str(target.get("package_id") or "").strip()
+            session_id = str(target.get("session_id") or "").strip()
+            if package_id and session_id:
+                targets[(package_id, session_id)] = {
+                    "package_id": package_id,
+                    "session_id": session_id,
+                    "source": str(target.get("source") or "collaboration_reference"),
+                }
+
+        errors: list[dict[str, str]] = []
+        discovery_warnings: list[dict[str, str]] = []
+        for manifest_path in self.repository.manifest_paths():
+            package_id = manifest_path.parent.name
+            try:
+                package = self.repository.load_manifest(manifest_path)
+                records = self._session_manager_for_package(package_id, package).list_sessions(
+                    include_internal=True,
+                )
+            except Exception as exc:
+                discovery_warnings.append(
+                    {
+                        "package_id": package_id,
+                        "session_id": "",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            for record in records:
+                if str(record.collaboration_id or "").strip() != clean_collaboration_id:
+                    continue
+                targets[(package_id, record.session_id)] = {
+                    "package_id": package_id,
+                    "session_id": record.session_id,
+                    "source": "session_metadata",
+                }
+
+        cleanups: list[dict[str, Any]] = []
+        for package_id, session_id in sorted(targets):
+            try:
+                package = self.load_package(package_id)
+                manager = self._session_manager_for_package(package_id, package)
+                record = manager.load_optional(session_id)
+                owner = str(record.collaboration_id or "").strip() if record is not None else ""
+                if owner and owner != clean_collaboration_id:
+                    raise ValueError(
+                        f"session belongs to another collaboration: {owner}"
+                    )
+                result = self.delete_session(
+                    package_id,
+                    session_id,
+                    delete_workdir=True,
+                    unlink_collaboration=False,
+                )
+                cleanups.append({**targets[(package_id, session_id)], **result})
+                self.emit_frontend_event(
+                    event(
+                        "agent_package_session_deleted",
+                        request_id=None,
+                        session_id=None,
+                        mode="agent_package",
+                        producer_type="collaboration_service",
+                        payload=result,
+                    )
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "package_id": package_id,
+                        "session_id": session_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        return {
+            "collaboration_id": clean_collaboration_id,
+            "target_count": len(targets),
+            "processed_count": len(cleanups),
+            "deleted_count": sum(1 for item in cleanups if item.get("deleted") is True),
+            "cleanups": cleanups,
+            "errors": errors,
+            "discovery_warnings": discovery_warnings,
         }
 
     def workspace_roots(self, package_id: str, *, session_id: str | None = None) -> dict[str, Any]:
@@ -1581,6 +1697,14 @@ def _delete_agent_session_checkpoint(
     checkpoint_path = str(config.get("checkpoint_path") or ".agent_runtime/checkpoints/agent.sqlite").strip()
     path = _runtime_contract_path(_host_runtime_root(package_id), checkpoint_path)
     return 1 if delete_sqlite_checkpoint_thread(path, thread_id) else 0
+
+
+def _delete_agent_session_workdir(package_id: str, session_id: str) -> bool:
+    path = _host_session_workdir(package_id, session_id)
+    if not path.exists():
+        return False
+    shutil.rmtree(path)
+    return True
 
 
 def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
