@@ -787,6 +787,16 @@ class CollaborationStore:
             dependencies_ready = dependencies_satisfied(session, depends_on)
             if status in READY_TO_START_STATUSES and depends_on and dependencies_ready and not input_artifacts:
                 raise CollaborationStoreError("dependent tasks require at least one dependency artifact")
+            result_payload = payload.get("result_payload") if "result_payload" in payload else current["result_payload"]
+            artifact_refs = payload.get("artifact_refs") if "artifact_refs" in payload else current["artifact_refs"]
+            _validate_task_completion_transition(
+                current_status=str(current["status"]),
+                next_status=status,
+                current_delivery_standard=current["delivery_standard"],
+                next_delivery_standard=delivery_standard,
+                result_payload=result_payload,
+                artifact_refs=artifact_refs,
+            )
             now = utc_now_text()
             if status in WORKER_LEASE_HOLDING_TASK_STATUSES:
                 if not self._worker_lease_owned_conn(
@@ -820,8 +830,8 @@ class CollaborationStore:
                     else json_dumps(current["visible_context"]),
                     json_dumps(input_artifacts),
                     str(payload.get("result_summary") if "result_summary" in payload else current["result_summary"]),
-                    json_dumps(payload.get("result_payload") if "result_payload" in payload else current["result_payload"]),
-                    json_dumps(payload.get("artifact_refs") if "artifact_refs" in payload else current["artifact_refs"]),
+                    json_dumps(result_payload),
+                    json_dumps(artifact_refs),
                     str(payload.get("review_notes") if "review_notes" in payload else current["review_notes"]),
                     now,
                     collaboration_id,
@@ -1610,6 +1620,31 @@ def validate_delivery_standard(value: Any) -> dict[str, Any]:
         return normalize_delivery_standard(value)
     except (TypeError, ValueError) as exc:
         raise CollaborationStoreError(f"invalid delivery_standard: {exc}") from exc
+
+
+def _validate_task_completion_transition(
+    *,
+    current_status: str,
+    next_status: str,
+    current_delivery_standard: dict[str, Any],
+    next_delivery_standard: dict[str, Any],
+    result_payload: Any,
+    artifact_refs: Any,
+) -> None:
+    if current_status == "submitted" and next_status != "revision_requested":
+        if next_delivery_standard != current_delivery_standard:
+            raise CollaborationStoreError(
+                "a submitted task delivery standard can only change when requesting revision"
+            )
+    if next_status != "completed" or current_status == "completed":
+        return
+    if current_status != "submitted":
+        raise CollaborationStoreError("a collaboration task can only be completed after validated submission")
+    validation = result_payload.get("delivery_validation") if isinstance(result_payload, dict) else None
+    if not isinstance(validation, dict) or validation.get("passed") is not True:
+        raise CollaborationStoreError("task completion requires a passed delivery validation result")
+    if not isinstance(artifact_refs, list) or not artifact_refs:
+        raise CollaborationStoreError("task completion requires validated artifact references")
 
 
 def validate_approval_mode(value: str) -> str:
