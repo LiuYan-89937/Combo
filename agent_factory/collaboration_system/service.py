@@ -97,7 +97,6 @@ class CollaborationService:
     def cancel_task(self, collaboration_id: str, task_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         session = self.store.get_session(collaboration_id)
         task = _task_by_id(session, task_id)
-        cancelled = self._cancel_task_active_request(task, reason="collaboration_task_cancelled")
         notes = str((payload or {}).get("review_notes") or "用户停止了该子任务。").strip()
         result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
         session = self.store.update_task(
@@ -110,10 +109,11 @@ class CollaborationService:
                 "result_payload": {
                     **result_payload,
                     "runtime_status": "cancelled",
-                    "cancelled_active_request_count": cancelled,
                 },
             },
         )
+        cancelled = self._cancel_task_active_request(task, reason="collaboration_task_cancelled")
+        session["cancelled_active_request_count"] = cancelled
         self.store.record_message(
             collaboration_id,
             speaker_type="system",

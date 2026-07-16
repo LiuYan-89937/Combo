@@ -487,15 +487,7 @@ class CollaborationOrchestrator:
             output=output,
             event_recorder=event_recorder,
         )
-        self._finish_worker_session_turn(
-            package_id=package_id,
-            session_id=outcome.assignee_session_id or assignee_session_id,
-            request_id=run_request_id,
-            output=output,
-            status=outcome.status,
-            tool_activities=outcome.tool_activities,
-        )
-        return self._finalize_worker_outcome(
+        result = self._finalize_worker_outcome(
             outcome=outcome,
             collaboration_id=collaboration_id,
             task_id=task_id,
@@ -507,6 +499,15 @@ class CollaborationOrchestrator:
             before_snapshot=before_snapshot,
             shared_materials_snapshot=shared_materials_snapshot,
         )
+        self._finish_worker_session_turn(
+            package_id=package_id,
+            session_id=outcome.assignee_session_id or assignee_session_id,
+            request_id=run_request_id,
+            output=output,
+            status=_worker_session_status(result.status, outcome.status),
+            tool_activities=outcome.tool_activities,
+        )
+        return result
 
     def resume_task_approval(
         self,
@@ -572,15 +573,7 @@ class CollaborationOrchestrator:
             output=output,
             event_recorder=event_recorder,
         )
-        self._finish_worker_session_turn(
-            package_id=package_id,
-            session_id=outcome.assignee_session_id or assignee_session_id,
-            request_id=resume_request_id,
-            output=output,
-            status=outcome.status,
-            tool_activities=outcome.tool_activities,
-        )
-        return self._finalize_worker_outcome(
+        result = self._finalize_worker_outcome(
             outcome=outcome,
             collaboration_id=collaboration_id,
             task_id=task_id,
@@ -592,6 +585,15 @@ class CollaborationOrchestrator:
             before_snapshot=before_snapshot,
             shared_materials_snapshot=None,
         )
+        self._finish_worker_session_turn(
+            package_id=package_id,
+            session_id=outcome.assignee_session_id or assignee_session_id,
+            request_id=resume_request_id,
+            output=output,
+            status=_worker_session_status(result.status, outcome.status),
+            tool_activities=outcome.tool_activities,
+        )
+        return result
 
     def _submit_worker_result(
         self,
@@ -952,6 +954,10 @@ def _one_ready_task_per_assignee(tasks: list[dict[str, Any]]) -> list[dict[str, 
 
 def _has_successful_submission(results: list[CollaborationRunTaskResult]) -> bool:
     return any(result.status in {"submitted", "completed"} for result in results)
+
+
+def _worker_session_status(task_status: str, runtime_status: str) -> str:
+    return runtime_status if task_status == "submitted" else task_status
 
 
 def _main_agent_continuation_message(results: list[CollaborationRunTaskResult]) -> str:
