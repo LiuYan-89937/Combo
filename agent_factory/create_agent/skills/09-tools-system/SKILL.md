@@ -38,9 +38,8 @@ Guides runtime tools contract changes and tool access declarations.
 - Declare only tools that are available through RuntimeKernel built-ins, model tool bindings, package files, runtime skills, or inherited MCP candidates.
 - Evaluate inherited MCP candidates after model selection and before SkillHub. If no inherited MCP capability is needed, skip MCP inheritance.
 - To use an inherited MCP candidate, include its tool id through create_agent_authoring pattern assembly tool access, then call `create_agent_authoring(action="materialize_mcp_inheritance")` before validation.
-- To use a SkillHub skill at runtime, complete `model_pool_select`, model bindings, pattern assembly tool access, and needed inherited MCP materialization first, then call `skillhub(action="search", query=...)`, then install with the exact returned `install_name`: `skillhub(action="install", skill=install_name)`. The search query must be 1 to 3 short keywords or an exact skill name. Do not pass a full requirement sentence or mixed synonym pile such as `frontend design UI 网页 web`; split broad discovery into several focused searches. Do not concatenate the name with version, title, description, or compressed text. The install writes package `extensions/skills/<skill_id>` and `extensions/enabled_skills.json`; expose the runtime extension tool id `skill` through assembly tool access when the agent needs Skill Gateway access.
-- Runtime SkillHub skills are package extensions. They can provide guidance, assets, templates, scripts, or explicitly registered skill-derived tools. Only registered ToolSpec entries are executable tools; unregistered scripts are not executable capability and must not bypass the tool permission/trace system.
-- If a SkillHub skill provides a registered execution entry for the needed action, prefer that skill-derived tool before authoring a new package tool. If the skill only provides guidance/assets, use it to guide existing runtime tools. Create a package tool only for the remaining execution gap.
+- Run the complete `11-skillhub-system` protocol after MCP decisions and before package-tool authoring. This tool-system skill owns runtime tool declarations; the SkillHub skill owns search, installation verification, capability classification, and residual-gap decisions.
+- Only registered ToolSpec entries are executable tools. Guidance, assets, templates, and unregistered scripts must remain behind the runtime `skill` gateway and cannot bypass permissions or traces.
 - Keep contracts/tools.json aligned with assembly_spec tool_access bindings and package tool manifests.
 - If a required runtime tool is unavailable in built-ins, package tools, or inherited MCP candidates, state the limitation or ask for confirmed integration resources.
 
@@ -51,9 +50,9 @@ Guides runtime tools contract changes and tool access declarations.
 - If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.
 
 ## Validation And Focus
-- Validator evidence should guide repairs but must not automatically change focus.
-- Only explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) changes focus.
-- Run final validation only from validation_publish after the package behavior is actually implemented.
+- Validator evidence guides repairs; successful or failed deterministic authoring, probe, validation, and publish operations synchronize focus through the manufacturing state machine.
+- Use `create_agent_stage(action="set_focus", focus_id=..., reason=...)` only to correct or intentionally redirect focus.
+- Finalization requires `validation_publish` and a fresh passed `full_static` validation; `create_agent_control(action="finalize")` then publishes automatically.
 
 ## Resource Loading
 - Use a listed capability example when this skill provides one; otherwise rely on current package files and validator evidence.

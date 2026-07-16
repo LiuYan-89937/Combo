@@ -9,7 +9,7 @@ from typing import Any
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.agent_registry import refresh_agent_registry_index
-from agent_factory.create_agent.models import CreateAgentPublishDecision, PUBLISH_FILE
+from agent_factory.create_agent.models import PUBLISH_FILE
 from agent_factory.create_agent.package_paths import is_transient_package_path, normalize_package_relative
 from agent_factory.create_agent.stage_sync import sync_publish_stage
 from agent_factory.create_agent.validation_state import package_fingerprint
@@ -39,41 +39,15 @@ PACKAGE_ASSET_DIRS = {
 }
 
 
-def confirm_and_publish(
-    *,
-    workspace: CreateAgentWorkspace,
-    confirmation: str,
-    registry_root: Path | None = None,
-) -> dict[str, Any]:
-    confirmation_text = str(confirmation or "").strip()
-    if not confirmation_text:
-        raise ValueError("confirmation is required")
-    validation = workspace.read_validation()
-    workspace.write_publish_decision(
-        CreateAgentPublishDecision(
-            decision="approve",
-            input_text=confirmation_text,
-            package_fingerprint=package_fingerprint(workspace.root),
-            validation_scope=validation.validation_scope if validation else "",
-            validation_status=validation.status if validation else "",
-        )
-    )
-    return publish_workspace(
-        workspace=workspace,
-        confirmation=confirmation_text,
-        registry_root=registry_root,
-    )
-
-
 def publish_workspace(
     *,
     workspace: CreateAgentWorkspace,
-    confirmation: str,
+    trigger: str,
     registry_root: Path | None = None,
 ) -> dict[str, Any]:
-    confirmation_text = str(confirmation or "").strip()
-    if not confirmation_text:
-        raise ValueError("confirmation is required")
+    publish_trigger = str(trigger or "").strip()
+    if not publish_trigger:
+        raise ValueError("publish trigger is required")
     registry_root = registry_root or factory_artifact_path("packages")
     _assert_publish_ready(workspace)
     package = AgentPackageLoader().load_path(workspace.package_manifest_path())
@@ -118,7 +92,7 @@ def publish_workspace(
         "package_path": str(target),
         "manifest_path": str(target / "agent_package.json"),
         "published_at": published_at,
-        "confirmation": confirmation_text,
+        "trigger": publish_trigger,
         "validation": workspace.read_validation().to_digest().model_dump(mode="json") if workspace.read_validation() else None,
         "package_fingerprint": package_fingerprint(target),
     }
@@ -161,13 +135,6 @@ def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:
     current_fingerprint = package_fingerprint(workspace.root)
     if current_fingerprint != validation_state.package_fingerprint:
         raise ValueError("package files changed after validation; run final validation again before publishing")
-    decision = workspace.read_publish_decision()
-    if decision.decision != "approve":
-        raise ValueError("publish requires explicit user approval from the Web publish API")
-    if decision.package_fingerprint != current_fingerprint:
-        raise ValueError("package files changed after user approval; run final validation and publish from the Web UI again")
-    if decision.validation_scope != "full_static" or decision.validation_status != "passed":
-        raise ValueError("publish approval must correspond to a passed full_static validation")
     if not workspace.package_manifest_path().is_file():
         raise ValueError("agent_package.json is missing")
 

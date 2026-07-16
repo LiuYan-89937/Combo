@@ -649,8 +649,8 @@ class CreateAgentRuntime:
                         "graph_kind": graph_kind,
                         "agent_session": {"session_id": session_id},
                         **(
-                            {"publish_ready": final_state.get("publish_ready")}
-                            if isinstance(final_state.get("publish_ready"), dict)
+                            {"published_package": final_state.get("published_package")}
+                            if isinstance(final_state.get("published_package"), dict)
                             else {}
                         ),
                     },
@@ -665,8 +665,8 @@ class CreateAgentRuntime:
                             "graph_kind": graph_kind,
                             "agent_session": {"session_id": session_id},
                             **(
-                                {"publish_ready": _json_safe(final_state.get("publish_ready"))}
-                                if isinstance(final_state.get("publish_ready"), dict)
+                                {"published_package": _json_safe(final_state.get("published_package"))}
+                                if isinstance(final_state.get("published_package"), dict)
                                 else {}
                             ),
                         },

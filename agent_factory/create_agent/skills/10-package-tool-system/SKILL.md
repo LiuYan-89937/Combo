@@ -54,9 +54,8 @@ Guides adding executable package tools and their ToolSpec declarations.
 - Python requirements are normalized by distribution name and environment marker. Submit one intentional constraint per distribution and marker; a later declaration for the same identity replaces the earlier one.
 - When declaring Python or system package dependencies, provide `install_timeout_seconds` as a task-appropriate positive estimate based on dependency size, platform, and network conditions.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
-- Create package tools only after model_pool_select/model bindings are complete, pattern assembly tool access plus needed inherited MCP materialization are complete, and reusable SkillHub skills have been evaluated.
-- If a reusable SkillHub skill already provides the capability, call `skillhub(action="search", query=...)`, install with the exact returned `install_name`, and expose the runtime `skill` tool or registered skill-derived ToolSpec through assembly tool access instead of rebuilding it as a package tool. The search query must be 1 to 3 short keywords or an exact skill name; split broad discovery into multiple focused searches instead of passing a long mixed query.
-- Treat SkillHub scripts as source assets, not executable tools, unless they are explicitly registered as ToolSpec entries. Inspect listed script source with `skill(action="read_resource", path="scripts/...", ...)` when needed. Do not copy a skill script into a package tool unless the skill lacks a registered execution entry and a package-owned execution gap still remains.
+- Create package tools only after model selection, inherited MCP decisions, and the complete `11-skillhub-system` protocol have established a concrete remaining execution gap.
+- The remaining gap must describe the missing governed runtime action; do not recreate SkillHub guidance, assets, templates, scripts, or registered skill-derived tools as package-owned code.
 - After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. A call requires `timeout_seconds`, estimated to cover environment image construction and tool execution. Probe resolves and locks the Docker environment before it invokes the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 
@@ -67,9 +66,9 @@ Guides adding executable package tools and their ToolSpec declarations.
 - If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.
 
 ## Validation And Focus
-- Validator evidence should guide repairs.
-- Explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) can still manually correct focus, but deterministic authoring, probe, validation, and publish tools also synchronize manufacturing focus after successful operations.
-- Run final validation after the package behavior is actually implemented; a passed full_static validation moves the package into validation_publish readiness.
+- Validator evidence guides repairs; successful or failed deterministic authoring, probe, validation, and publish operations synchronize focus through the manufacturing state machine.
+- Use `create_agent_stage(action="set_focus", focus_id=..., reason=...)` only to correct or intentionally redirect focus.
+- Finalization requires `validation_publish` and a fresh passed `full_static` validation; `create_agent_control(action="finalize")` then publishes automatically.
 
 ## Resource Loading
 - Use a listed capability example when this skill provides one; otherwise rely on current package files and validator evidence.

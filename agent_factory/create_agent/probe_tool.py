@@ -17,6 +17,7 @@ from agent_factory.create_agent.stage_sync import sync_probe_stage
 from agent_factory.environment_system import EnvironmentResolutionError, EnvironmentResolver
 from agent_factory.create_agent.validation_state import package_digest, package_fingerprint, package_tool_digest
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.factory_graph.frontend_bridge.agent_package_paths import manufacturing_probe_runtime_workspace
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import AgentRuntimeLaunchError, DockerAgentRuntimeLauncher
 from agent_factory.models import get_task_model
 from agent_factory.runtime_contracts import AgentPackageLoader
@@ -421,12 +422,11 @@ def _run_docker_probe(
             "captured_stderr": "",
             "dependency_report": {"status": exc.status},
         }
-    runtime_root = _probe_runtime_root(workspace)
-    artifacts_root = runtime_root / "artifacts"
-    workdir_root = runtime_root / "workdir"
-    extension_root = runtime_root / "extensions"
-    for path in (runtime_root, artifacts_root, workdir_root, extension_root):
-        path.mkdir(parents=True, exist_ok=True)
+    runtime_workspace = manufacturing_probe_runtime_workspace(workspace.root.name).ensure()
+    runtime_root = runtime_workspace.root
+    artifacts_root = runtime_workspace.artifacts
+    workdir_root = runtime_workspace.workdir
+    extension_root = runtime_workspace.extensions
     try:
         plan = DockerAgentRuntimeLauncher().prepare(
             package=package,
@@ -486,10 +486,6 @@ def _run_docker_probe(
     if completed.returncode != 0 and not payload.get("errors"):
         payload["errors"] = [f"docker probe exited with code {completed.returncode}"]
     return payload
-
-
-def _probe_runtime_root(workspace: CreateAgentWorkspace) -> Path:
-    return workspace.root / ".agent_runtime" / "tool_probe"
 
 
 def _parse_docker_probe_output(*, stdout: str, stderr: str, returncode: int) -> dict[str, Any]:

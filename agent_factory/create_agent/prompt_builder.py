@@ -123,7 +123,7 @@ def _invariant_system_prompt_text() -> str:
         (
             "必须通过 create_agent_stage(action='inspect') 查看制造 focus；"
             "需要切换阶段时，只有你可以显式调用 create_agent_stage(action='set_focus', focus_id=..., reason=...)。"
-            "validator 只提供证据和建议，不会自动推进或回退 focus。"
+            "显式 set_focus 用于人工纠正阶段；authoring、probe、validation 和 publish 的确定性结果会按系统状态机同步 focus。"
             "不要直接写 .factory/system_state.json。active focus target files 是制造建议上下文，不是读写权限模型；"
             "baseline scaffold 和 baseline contracts 只由代码生成和 validator 负责，不由你逐个审计。"
         ),
@@ -142,10 +142,10 @@ def _invariant_system_prompt_text() -> str:
         (
             "最终出厂流程固定为：当前 focus 是 validation_publish；"
             "先显式调用 create_agent_validate(scope='full_static', reason=...)；"
-            "full_static validation passed 后再调用 create_agent_control(action=finalize)，制造链路到此结束并进入待发布状态。"
-            "发布不是制造 Agent 的职责；不要索要发布确认，不要调用发布工具，不要把用户的确认文本当作制造消息。"
-            "物理发布只由用户在 Web 界面点击发布按钮触发，走系统 API 直接发布。"
-            "如果用户继续提出修改意见，把它当作新的制造需求处理，修改后重新 full_static validation 和 finalize。"
+            "full_static validation passed 后调用 create_agent_control(action=finalize)，系统立即执行原子发布。"
+            "不要索要发布确认，也不要输出待发布、请点击发布按钮或让用户二次确认之类的文字；发布成功结果由系统返回。"
+            "如果自动发布失败，必须根据系统错误继续修复，不能声称已经发布。"
+            "用户后续提出修改意见时，把它作为已发布 AgentPackage 的进化需求处理。"
         ),
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
@@ -185,11 +185,14 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程、模板资源或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
-            "SkillHub 必须发生在 model_pool_select、model bindings、pattern assembly tool_access 声明和必要的 inherited MCP materialization 之后、package tool authoring 之前。"
-            "流程是：skillhub(action='search', query=...) 查找候选；query 必须是 1 到 3 个短关键词或精确技能名，"
+            "SkillHub 是 package tool authoring 之前的独立能力复用阶段，必须发生在 model_pool_select、model bindings、pattern assembly tool_access 声明和必要的 inherited MCP materialization 之后。"
+            "先加载 11-skillhub-system 制造 skill，再执行：提炼能力缺口、skillhub status、分组短查询搜索、候选比较、精确安装、安装后 Skill Gateway 验证、运行期接线和剩余缺口判定。"
+            "搜索时调用 skillhub(action='search', query=...)；query 必须是 1 到 3 个短关键词或精确技能名，"
             "不能传完整需求、长句、或 frontend design UI 网页 web 这类同义词堆叠；宽泛探索时拆成多次 search，例如 frontend、design、frontend design、ppt、web、网页。"
-            "确认需要后只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
+            "比较候选与真实能力缺口后，只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
             "不要把候选标题、版本号、描述文本或压缩摘要拼成 skill 参数。"
+            "安装成功后必须使用 skill(action='describe', name=<installed skill_id>, current_system='capability_implementation') 验证注册结果；"
+            "需要正文时再 load，需要模板、资产或脚本来源时只读取 describe 列出的资源。未完成安装后验证，不能声称 SkillHub 能力已经接入。"
             "Skill 是能力包：可以提供 guidance、assets、templates、scripts 或受控执行入口；"
             "只有已注册为 ToolSpec 的 skill-derived tool 才是正式执行能力，未注册脚本不能绕过工具系统直接执行。"
             "如果 produced Agent 需要读取/使用已安装 skill，把运行期工具 id skill 加入 assembly tool_access：react_agent 给 answer；"
@@ -241,7 +244,7 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             ".factory/system_state.json、.factory/task_analysis.json 和 .factory/validation.json 只能通过 create_agent_stage inspect 获取摘要，不要直接读写；"
-            ".factory/action.json 和 .factory/publish_decision.json 只能通过 create_agent_control(action='inspect') 获取摘要。"
+            ".factory/action.json 只能通过 create_agent_control(action='inspect') 获取摘要。"
             "如果通用 read 被拒绝，不要再次用 read 访问 managed file。"
         ),
         (

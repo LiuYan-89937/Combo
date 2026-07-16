@@ -115,7 +115,6 @@ export const useRuntimeStore = defineStore('runtime', {
     activeRequests: {},
     runStatus: 'idle',
     pendingInterrupt: null,
-    createAgentPublishReady: null,
     currentMode: null,
     activeFactorySessionId: null,
     activeAgentSessionId: null,
@@ -164,15 +163,6 @@ export const useRuntimeStore = defineStore('runtime', {
     // 制造 Agent 的业务中断需要用户继续输入，而不是审批按钮。
     isAwaitingUserInputInterrupt: (state): boolean => {
       return state.runStatus === 'interrupted' && isUserInputInterrupt(state.pendingInterrupt)
-    },
-
-    isPublishConfirmationPending: (state): boolean => {
-      return Boolean(state.createAgentPublishReady)
-    },
-
-    publishConfirmationPayload: (state): Record<string, any> | null => {
-      if (state.createAgentPublishReady) return state.createAgentPublishReady
-      return null
     },
 
     // 当前是否有活跃的运行
@@ -563,9 +553,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentRunId = event.run_id || null
       this.runStatus = 'running'
       this.pendingInterrupt = null
-      if (event.mode === 'create_agent') {
-        this.createAgentPublishReady = null
-      }
       this.nodes = {}
       this.stages = {}
       this.modelStreams = {}
@@ -598,14 +585,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this.activeRequestId = null
       }
       this.pendingInterrupt = null
-      if (event.mode === 'create_agent' && event.payload?.publish_ready) {
-        this.createAgentPublishReady = {
-          ...event.payload.publish_ready,
-          session_id: event.payload?.agent_session?.session_id || this.activeAgentSessionId,
-          workspace_path: event.payload?.workspace_path || event.payload.publish_ready?.source_workspace || null,
-        }
-      }
-
       // 同步 agent session
       this._syncAgentSessionFromRunEvent(event)
     },
@@ -1098,7 +1077,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeRequestId = null
       this.runStatus = 'idle'
       this.pendingInterrupt = null
-      this.createAgentPublishReady = null
       this.currentRunId = null
       this.nodes = {}
       this.stages = {}
@@ -1141,7 +1119,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeRequestId = restored.activeRequestId ?? null
       this.runStatus = restored.runStatus ?? 'idle'
       this.pendingInterrupt = restored.pendingInterrupt ?? null
-      this.createAgentPublishReady = restored.createAgentPublishReady ?? null
       this.currentRunId = restored.currentRunId ?? null
       this.nodes = restored.nodes || {}
       this.stages = restored.stages || {}
@@ -1432,10 +1409,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.runStatus = 'stopped'
       this.pendingInterrupt = null
       this._saveActiveConversationScope()
-    },
-
-    clearCreateAgentPublishReady() {
-      this.createAgentPublishReady = null
     },
 
   },

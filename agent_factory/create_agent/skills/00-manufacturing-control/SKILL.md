@@ -21,7 +21,7 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 ## When To Use This Skill
 - You need to inspect or change the active manufacturing focus through create_agent_stage.
 - You need to ask the user for missing non-inferable information through create_agent_control.
-- You need to decide whether to continue, wait for user input, finalize, or publish after validation evidence.
+- You need to decide whether to continue, wait for user input, or finalize into automatic publication after validation evidence.
 
 ## Focus Files
 - `.factory/system_state.json`
@@ -37,7 +37,7 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 ## Capability Write Guidance
 - Use create_agent_stage(action="inspect") instead of reading managed .factory files directly.
 - Only the model changes focus by explicitly calling create_agent_stage(action="set_focus", focus_id=..., reason=...).
-- Capability assembly order is model selection first, pattern assembly tool access plus inherited MCP materialization second, SkillHub capability package evaluation third, package tool authoring fourth. Do not write package tools before model_pool_select, needed inherited MCP materialization, and SkillHub guidance/assets/registered execution entries have been evaluated.
+- Capability assembly order is model selection first, pattern assembly tool access plus inherited MCP materialization second, the complete `11-skillhub-system` reuse phase third, and package tool authoring fourth. Do not write package tools before the preceding phases have produced evidence.
 - Ask the user only for missing secrets, accounts, external resources, delivery channels, schedules, or ambiguous product decisions.
 - After a complete capability increment, call create_agent_validate with the appropriate scope.
 
@@ -48,9 +48,9 @@ Guides create-agent focus control, user questions, and manufacturing action boun
 - If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.
 
 ## Validation And Focus
-- Validator evidence should guide repairs but must not automatically change focus.
-- Only explicit create_agent_stage(action="set_focus", focus_id=..., reason=...) changes focus.
-- Run final validation only from validation_publish after the package behavior is actually implemented.
+- Validator evidence guides repairs; successful or failed deterministic authoring, probe, validation, and publish operations synchronize focus through the manufacturing state machine.
+- Use `create_agent_stage(action="set_focus", focus_id=..., reason=...)` only to correct or intentionally redirect focus.
+- Finalization requires `validation_publish` and a fresh passed `full_static` validation; `create_agent_control(action="finalize")` then publishes automatically.
 
 ## Resource Loading
 - Use a listed capability example when this skill provides one; otherwise rely on current package files and validator evidence.
