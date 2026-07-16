@@ -106,6 +106,30 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "path": str(arguments.get("path") or ""),
             "content": _shared_artifact_text(path, store.session_workdir(collaboration_id), max_chars=max_chars),
         }
+    if action == "read_task_artifacts":
+        task_id = _required_text(arguments, "task_id")
+        session = store.get_session(collaboration_id)
+        task = _task_by_id(session, task_id)
+        max_chars = int(arguments.get("max_chars") or 20000)
+        requested_path = str(arguments.get("path") or "").strip() or None
+        artifacts = _read_task_artifacts(
+            task=task,
+            root=store.session_workdir(collaboration_id),
+            requested_path=requested_path,
+            max_chars=max_chars,
+        )
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "子任务交付物已按任务引用读取。",
+            "task": {
+                "task_id": task.get("task_id"),
+                "assignee_package_id": task.get("assignee_package_id"),
+                "status": task.get("status"),
+                "delivery_standard": task.get("delivery_standard") or {},
+            },
+            "artifacts": artifacts,
+        }
     if action == "write_shared":
         relative = _required_text(arguments, "path")
         path = _safe_shared_path(store.session_workdir(collaboration_id), relative)
@@ -137,7 +161,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
-    if action in {"inspect", "read_shared"}:
+    if action in {"inspect", "read_shared", "read_task_artifacts"}:
         return ToolRiskResult(action="allow", risk_level="low", reasons=["collaboration read action"]).model_dump(mode="json")
     if action in {"create_task", "update_task", "cancel_task", "write_shared", "complete_session"}:
         return ToolRiskResult(
@@ -223,6 +247,59 @@ def _required_text(arguments: dict[str, Any], key: str) -> str:
     return value
 
 
+def _task_by_id(session: dict[str, Any], task_id: str) -> dict[str, Any]:
+    for task in session.get("tasks") or []:
+        if isinstance(task, dict) and str(task.get("task_id") or "") == task_id:
+            return task
+    raise ValueError(f"collaboration task not found: {task_id}")
+
+
+def _read_task_artifacts(
+    *,
+    task: dict[str, Any],
+    root: Path,
+    requested_path: str | None,
+    max_chars: int,
+) -> list[dict[str, Any]]:
+    refs = task.get("artifact_refs") if isinstance(task.get("artifact_refs"), list) else []
+    indexed: dict[str, dict[str, Any]] = {}
+    for item in refs:
+        metadata = dict(item) if isinstance(item, dict) else {"path": str(item or "").strip()}
+        relative = str(metadata.get("path") or "").strip()
+        if relative and relative not in indexed:
+            indexed[relative] = metadata
+    if requested_path:
+        if requested_path not in indexed:
+            raise ValueError(f"artifact path is not referenced by task {task.get('task_id')}: {requested_path}")
+        selected = [(requested_path, indexed[requested_path])]
+    else:
+        selected = list(indexed.items())
+    if not selected:
+        raise ValueError(f"task has no artifact references: {task.get('task_id')}")
+
+    remaining = max_chars
+    artifacts: list[dict[str, Any]] = []
+    for relative, metadata in selected:
+        path = _safe_shared_path(root, relative)
+        record = {**metadata, "path": relative, "available": path.is_file()}
+        if not path.is_file():
+            record["error"] = "referenced artifact file is missing"
+            artifacts.append(record)
+            continue
+        stat = path.stat()
+        record.setdefault("size_bytes", stat.st_size)
+        if remaining > 0:
+            content, truncated = _shared_artifact_content(path, root, max_chars=remaining)
+            record["content"] = content
+            record["content_truncated"] = truncated
+            remaining = max(0, remaining - len(content))
+        else:
+            record["content"] = ""
+            record["content_truncated"] = True
+        artifacts.append(record)
+    return artifacts
+
+
 def _safe_shared_path(root: Path, relative: str) -> Path:
     root = root.resolve()
     target = (root / relative).resolve()
@@ -232,18 +309,24 @@ def _safe_shared_path(root: Path, relative: str) -> Path:
 
 
 def _shared_artifact_text(path: Path, root: Path, *, max_chars: int) -> str:
+    return _shared_artifact_content(path, root, max_chars=max_chars)[0]
+
+
+def _shared_artifact_content(path: Path, root: Path, *, max_chars: int) -> tuple[str, bool]:
     suffix = path.suffix.lower()
     if suffix in SUPPORTED_FILE_EXTENSIONS:
         try:
             parsed = parse_file(path, root=root)
             text = "\n\n".join(str(document.content or "").strip() for document in parsed.documents).strip()
             if text:
-                return text[:max_chars]
+                return text[:max_chars], len(text) > max_chars
         except Exception:
             pass
     data = path.read_bytes()[:8192]
     mime_type, _ = mimetypes.guess_type(path.name)
     if b"\x00" in data or str(mime_type or "").startswith(("image/", "application/")):
         stat = path.stat()
-        return f"二进制交付物，mime_type={mime_type or 'application/octet-stream'}, size_bytes={stat.st_size}。"
-    return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
+        return f"二进制交付物，mime_type={mime_type or 'application/octet-stream'}, size_bytes={stat.st_size}。", False
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        text = handle.read(max_chars + 1)
+    return text[:max_chars], len(text) > max_chars
