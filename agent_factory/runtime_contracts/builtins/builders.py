@@ -490,16 +490,10 @@ class ArtifactContractBuilder:
         config = contract.config.model_copy(
             update={
                 "root": package_runtime_path_text(context, contract.config.root, field_path="artifact.config.root"),
-                "index_path": package_runtime_path_text(
-                    context,
-                    contract.config.index_path,
-                    field_path="artifact.config.index_path",
-                ),
             }
         )
         artifact_store = ArtifactStore(
             root=config.root,
-            index_path=config.index_path,
             allowed_kinds=config.allowed_kinds,
         )
         return RuntimeContribution(

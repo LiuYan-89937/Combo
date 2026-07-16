@@ -8,6 +8,10 @@ interface AgentPackageContextConfigResponse {
   package: any
 }
 
+interface AgentPackageConfigurationResponse {
+  package: any
+}
+
 export interface AgentPackageResourceDescriptorView {
   resource_id: string
   description: string
@@ -56,6 +60,19 @@ export const agentPackagesApi = {
         method: 'PATCH',
         body: JSON.stringify(payload),
       }
+    ),
+  updateToolDescription: (
+    packageId: string,
+    toolKind: 'model_tool' | 'package_tool',
+    toolId: string,
+    description: string,
+  ) =>
+    requestJson<AgentPackageConfigurationResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/tool-descriptions/${toolKind}/${encodeURIComponent(toolId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ description }),
+      },
     ),
   resources: (packageId: string) =>
     requestJson<AgentPackageResourcesResponse>(`/api/agent-packages/${encodeURIComponent(packageId)}/resources`),

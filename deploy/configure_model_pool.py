@@ -117,6 +117,7 @@ def main() -> None:
         ModelPoolProfile(
             profile_id=args.chat_profile_id,
             display_name=args.chat_served_model_name,
+            description=_profile_description(store, args.chat_profile_id, args.chat_description),
             kind="chat",
             artifact_id=chat_artifact.artifact_id,
             engine=chat_engine,
@@ -141,6 +142,7 @@ def main() -> None:
         ModelPoolProfile(
             profile_id=args.embedding_profile_id,
             display_name=args.embedding_served_model_name,
+            description=_profile_description(store, args.embedding_profile_id, args.embedding_description),
             kind="embedding",
             artifact_id=embedding_artifact.artifact_id,
             engine=embedding_engine,
@@ -222,6 +224,7 @@ def _upsert_image_profile(store: ModelPoolStore, args: argparse.Namespace) -> Mo
         ModelPoolProfile(
             profile_id=args.image_profile_id,
             display_name=args.image_served_model_name,
+            description=_profile_description(store, args.image_profile_id, args.image_description),
             kind="image_generation",
             artifact_id=artifact.artifact_id,
             engine=engine,
@@ -269,6 +272,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--embedding-artifact-id", default="bge_m3_transformers")
     parser.add_argument("--embedding-profile-id")
     parser.add_argument("--embedding-served-model-name")
+    parser.add_argument("--chat-description")
+    parser.add_argument("--embedding-description")
     parser.add_argument("--embedding-model-path", type=Path)
     parser.add_argument("--embedding-revision", default="")
     parser.add_argument("--embedding-dimensions", type=int)
@@ -280,6 +285,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-artifact-id", default="flux1_dev_q4_0")
     parser.add_argument("--image-profile-id", required=True)
     parser.add_argument("--image-served-model-name", required=True)
+    parser.add_argument("--image-description")
     parser.add_argument("--image-model-path", type=Path)
     parser.add_argument("--image-vae-path", type=Path, required=True)
     parser.add_argument("--image-clip-l-path", type=Path, required=True)
@@ -301,6 +307,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-residency-policy", choices=("coexist_if_fit", "exclusive"), default="coexist_if_fit")
     parser.add_argument("--image-timeout-seconds", type=float, default=900.0)
     return parser
+
+
+def _profile_description(store: ModelPoolStore, profile_id: str, configured: str | None) -> str:
+    if configured is not None:
+        return configured.strip()
+    existing = store.get_profile(profile_id)
+    return existing.description if existing is not None else ""
 
 
 if __name__ == "__main__":

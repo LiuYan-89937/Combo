@@ -8,9 +8,8 @@ from uuid import uuid4
 
 
 class ArtifactStore:
-    def __init__(self, *, root: str | Path, index_path: str | Path, allowed_kinds: list[str] | tuple[str, ...]) -> None:
+    def __init__(self, *, root: str | Path, allowed_kinds: list[str] | tuple[str, ...]) -> None:
         self.root = Path(root)
-        self.index_path = Path(index_path)
         self.allowed_kinds = frozenset(str(kind) for kind in allowed_kinds)
         if not self.allowed_kinds:
             raise ValueError("artifact store requires at least one allowed kind")
@@ -44,7 +43,6 @@ class ArtifactStore:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": dict(metadata or {}),
         }
-        self._append_index(record)
         return record
 
     def _validate_kind(self, kind: str) -> None:
@@ -62,12 +60,6 @@ class ArtifactStore:
         except ValueError as exc:
             raise ValueError("artifact path escapes artifact root") from exc
         return target
-
-    def _append_index(self, record: dict[str, Any]) -> None:
-        self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.index_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-
 
 class ReportStore:
     def __init__(self, *, artifact_store: ArtifactStore, report_kind: str = "report") -> None:

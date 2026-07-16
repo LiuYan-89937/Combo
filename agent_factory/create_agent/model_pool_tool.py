@@ -17,7 +17,9 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
             "Select runnable model profiles from the local model pool for the AgentPackage being manufactured. "
             "This is the first capability-assembly step after task analysis: run it before inherited MCP "
             "candidate evaluation, SkillHub search/install, and package tool authoring. Pass requirements for main/task/compression models and "
-            "tool_requirements for local multimodal model capabilities. The tool returns local profile ids only."
+            "tool_requirements for local multimodal model capabilities. Structural capabilities are hard constraints; each result also includes "
+            "a ranked candidates list with every profile description. Inspect those descriptions against the requested purpose before choosing the final "
+            "profile id; the first candidate is only the deterministic capability-based default. The tool returns local profile ids only."
         ),
         entrypoint="agent_factory.create_agent.model_pool_tool:run",
         input_schema={

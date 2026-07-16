@@ -338,10 +338,9 @@ class ArtifactContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     root: str = ".agent_runtime/artifacts"
-    index_path: str = ".agent_runtime/artifacts/index.jsonl"
     allowed_kinds: list[str] = Field(default_factory=lambda: ["report", "artifact"])
 
-    @field_validator("root", "index_path")
+    @field_validator("root")
     @classmethod
     def _artifact_path_is_safe(cls, value: str) -> str:
         raw = str(value).strip()

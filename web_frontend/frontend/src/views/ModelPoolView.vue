@@ -364,6 +364,14 @@
     <n-modal v-model:show="profileModalOpen" preset="dialog" :title="t('localModel.profileEditor')" style="width: min(760px, 92vw)">
       <n-form label-placement="top">
         <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="profileForm.display_name" /></n-form-item>
+        <n-form-item :label="t('common.description')">
+          <n-input
+            v-model:value="profileForm.description"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+            placeholder="说明模型适合的场景、语言、提示词要求和能力边界，供制造链选择模型时参考"
+          />
+        </n-form-item>
         <n-form-item :label="t('localModel.artifact')">
           <n-select v-model:value="profileForm.artifact_id" :options="artifactOptions" @update:value="syncProfileKind" />
         </n-form-item>
@@ -497,7 +505,7 @@ const artifactForm = reactive({
   revision: '', checksum: '', enabled: true,
 })
 const profileForm = reactive({
-  display_name: '', artifact_id: '', kind: 'chat' as LocalModelKind,
+  display_name: '', description: '', artifact_id: '', kind: 'chat' as LocalModelKind,
   served_model_name: '', gpu_layers: 99, parallel_slots: 1,
   cache_type_k: 'f16', cache_type_v: 'f16', flash_attention: true,
   max_input_tokens: null as number | null,
@@ -627,6 +635,7 @@ function openProfile(item?: LocalModelProfile): void {
   const remoteModel = artifact ? remoteModelForArtifact(artifact) : null
   profileEditing.value = item || null
   profileForm.display_name = item?.display_name || artifact?.display_name || ''
+  profileForm.description = item?.description || ''
   profileForm.artifact_id = item?.artifact_id || artifact?.artifact_id || ''
   profileForm.kind = kind
   profileForm.served_model_name = item?.served_model_name || artifact?.external_model_id || artifact?.display_name || ''
@@ -670,6 +679,7 @@ function syncProfileKind(artifactId: string): void {
   const runtimeConfiguration = remoteChatRuntimeConfiguration(remoteModel)
   profileForm.kind = artifact.kind
   profileForm.display_name = artifact.display_name
+  profileForm.description = ''
   profileForm.served_model_name = artifact.external_model_id || artifact.display_name
   profileForm.gpu_layers = runtimeConfiguration?.gpu_layers ?? 99
   profileForm.parallel_slots = runtimeConfiguration?.parallel_slots ?? 1
@@ -742,6 +752,7 @@ async function saveProfile(): Promise<void> {
     const payload = {
       profile_id: profileEditing.value?.profile_id,
       display_name: profileForm.display_name,
+      description: profileForm.description,
       kind: profileForm.kind,
       artifact_id: profileForm.artifact_id,
       engine: externalInference.value ? 'external' : isChat ? 'llama_cpp_rocm' : isEmbedding ? 'transformers_rocm' : 'stable_diffusion_cpp_rocm',

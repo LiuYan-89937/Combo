@@ -237,6 +237,7 @@ class ModelPoolProfile(BaseModel):
 
     profile_id: str
     display_name: str
+    description: str = ""
     kind: ModelPoolProfileKind = "chat"
     artifact_id: str
     engine: LocalInferenceEngine
@@ -352,12 +353,26 @@ class ModelSelectionRequirement(BaseModel):
         return self.model_copy(update={"kind": "chat"})
 
 
+class ModelSelectionCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str
+    display_name: str
+    description: str = ""
+    engine: LocalInferenceEngine
+    model_name: str
+    score: float
+    reason: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ModelSelectionRecommendation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: ModelBindingRole
     profile_id: str
     display_name: str
+    description: str = ""
     engine: LocalInferenceEngine
     model_name: str
     score: float
@@ -365,6 +380,7 @@ class ModelSelectionRecommendation(BaseModel):
     reason: str = ""
     required_capabilities: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    candidates: list[ModelSelectionCandidate] = Field(default_factory=list)
 
 
 class ModelToolSelectionRequirement(BaseModel):
@@ -419,6 +435,7 @@ class ModelToolSelectionRecommendation(BaseModel):
     capability: ModelToolCapability
     profile_id: str
     display_name: str
+    description: str = ""
     engine: LocalInferenceEngine
     model_name: str
     score: float
@@ -426,6 +443,7 @@ class ModelToolSelectionRecommendation(BaseModel):
     reason: str = ""
     required_capabilities: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    candidates: list[ModelSelectionCandidate] = Field(default_factory=list)
 
 
 class ModelSelectionRequest(BaseModel):

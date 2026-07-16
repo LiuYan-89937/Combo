@@ -34,6 +34,7 @@
       :context-config-saving="contextConfigSaving"
       class="right-panel-body"
       @save-context-config="handleSaveContextConfig"
+      @package-updated="agentStore.addPackage"
     />
 
     <n-empty v-else-if="isPublishedRoute" :description="t('agents.empty')" class="published-detail-empty" />

@@ -122,6 +122,7 @@ export interface InferenceMemoryEstimate {
 interface LocalModelProfileBase {
   profile_id: string
   display_name: string
+  description: string
   artifact_id: string
   served_model_name: string
   enabled: boolean
