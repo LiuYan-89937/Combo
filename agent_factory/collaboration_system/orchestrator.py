@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.collaboration_system.event_projection import CollaborationWorkerEventRecorder
+from agent_factory.collaboration_system.delivery import validate_worker_delivery
 from agent_factory.collaboration_system.prompting import build_main_agent_collaboration_prompt
 from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
 from agent_factory.collaboration_system.store import CollaborationStore
@@ -718,6 +719,48 @@ class CollaborationOrchestrator:
         )
         if cancelled_result is not None:
             return cancelled_result
+
+        if outcome.status == "completed":
+            delivery_validation = validate_worker_delivery(
+                task.get("delivery_standard"),
+                visible_result=output.content,
+                worker_workdir=worker_workdir,
+                before_snapshot=before_snapshot,
+            )
+            if not delivery_validation.passed:
+                summary = "worker runtime completed without satisfying the delivery contract: " + "; ".join(
+                    delivery_validation.errors
+                )
+                self.store.update_task(
+                    collaboration_id,
+                    task_id,
+                    {
+                        "status": "failed",
+                        "assignee_session_id": outcome.assignee_session_id or assignee_session_id,
+                        "result_summary": summary,
+                        "result_payload": {
+                            "runtime_status": outcome.status,
+                            "delivery_validation": delivery_validation.model_dump(mode="json"),
+                        },
+                        "artifact_refs": [],
+                    },
+                )
+                self.store.record_message(
+                    collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=package_id,
+                    message_kind="progress",
+                    content=summary,
+                    task_id=task_id,
+                )
+                return CollaborationRunTaskResult(
+                    collaboration_id=collaboration_id,
+                    task_id=task_id,
+                    status="failed",
+                    assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+                    result_summary=summary,
+                    artifact_refs=[],
+                )
 
         # 处理非完成状态（blocked 或 failed）
         if outcome.status != "completed":
