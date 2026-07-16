@@ -11,6 +11,7 @@ RUN_TERMINAL_EVENT_TYPES = {
     "run_cancelled",
     "run_failed",
 }
+RUN_COMPLETION_STATUSES = frozenset({"completed", "stopped", "waiting_for_workers"})
 
 INTERRUPT_TERMINAL_EVENT_TYPES = {
     "tool_approval_requested",
@@ -169,4 +170,8 @@ def runtime_stream_status(item: FactoryFrontendEvent) -> str:
         return "failed"
     if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
         return "interrupted"
+    if item.event_type == "run_completed":
+        finish_status = str(item.payload.get("finish_status") or item.payload.get("status") or "").strip()
+        if finish_status in RUN_COMPLETION_STATUSES:
+            return finish_status
     return "completed"

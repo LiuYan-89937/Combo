@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from agent_factory.collaboration_system.event_projection import CollaborationWorkerEventRecorder
 from agent_factory.collaboration_system.prompting import build_main_agent_collaboration_prompt
+from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.collaboration_system.store import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
@@ -33,6 +34,8 @@ WORKER_ARTIFACT_SKIP_DIRS = {"input_files", SHARE_FILES_DIR, ".cache", "__pycach
 DEFAULT_MAX_COLLABORATION_ARTIFACT_BYTES = 200 * 1024 * 1024
 MAX_COLLABORATION_ARTIFACT_BYTES_ENV = "AGENTFACTORY_COLLABORATION_MAX_ARTIFACT_BYTES"
 MAX_DELEGATED_APPROVALS_PER_TASK = 20
+ACTIVE_MAIN_AGENT_TURN_STATUSES = frozenset({"running", "interrupted"})
+SUCCESSFUL_MAIN_AGENT_CONTINUATION_STATUSES = frozenset({"completed", "waiting_for_workers"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +55,14 @@ class WorkerRunOutcome:
     assignee_session_id: str | None
     tool_activities: list[dict[str, Any]]
     interrupt_payload: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MainAgentContinuationResult:
+    succeeded: bool
+    status: str
+    message: str
+    session_id: str | None
 
 
 class CollaborationOrchestrator:
@@ -110,10 +121,15 @@ class CollaborationOrchestrator:
         user_message: str,
         message_metadata: dict[str, Any] | None = None,
         event_ref: str | None = None,
-    ) -> None:
+    ) -> MainAgentContinuationResult:
         session = self.store.get_session(collaboration_id)
         if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
-            return
+            return MainAgentContinuationResult(
+                succeeded=True,
+                status="ignored",
+                message="collaboration session is already terminal",
+                session_id=str(session.get("main_agent_package_session_id") or "").strip() or None,
+            )
         package_id = str(session.get("main_agent_package_id") or SYSTEM_CHAT_PACKAGE_ID).strip() or SYSTEM_CHAT_PACKAGE_ID
         factory_session_id = str(session.get("main_factory_session_id") or "").strip()
         package_session_id = self._main_agent_package_session_id(session, package_id=package_id)
@@ -140,10 +156,7 @@ class CollaborationOrchestrator:
             request_id=request_id,
             user_config={
                 "collaboration_id": collaboration_id,
-                "runtime_tool_access": {
-                    "extra_allowed_tool_ids": ["collaboration", "agent_list", "agent_search", "agent_manufacture"],
-                    "excluded_tool_ids": ["skillhub"],
-                },
+                "runtime_tool_access": collaboration_runtime_tool_access(),
             },
             require_ready=True,
             session_kind="collaboration_main",
@@ -207,24 +220,66 @@ class CollaborationOrchestrator:
                     agent_session=self.runtime.load_session(package_id, main_session_id),
                 )
                 self.runtime.emit_factory_session_updated(session_record=factory_record, mode="chat")
-        if status == "completed":
+        if status in SUCCESSFUL_MAIN_AGENT_CONTINUATION_STATUSES:
+            summary = (
+                "主 Agent 已进入子任务等待状态。"
+                if status == "waiting_for_workers"
+                else _short_summary(output.content or "主 Agent 已处理协作事件。")
+            )
             self.store.record_message(
                 collaboration_id,
                 speaker_type="main_agent",
                 speaker_package_id=package_id,
                 message_kind="progress",
-                content=_short_summary(output.content or "主 Agent 已处理协作事件。"),
+                content=summary,
                 task_id=None,
             )
-            return
+            return MainAgentContinuationResult(
+                succeeded=True,
+                status=status,
+                message=summary,
+                session_id=main_session_id or None,
+            )
+        failure_message = message or status
         self.store.record_message(
             collaboration_id,
             speaker_type="system",
             speaker_package_id=package_id,
             message_kind="progress",
-            content=f"主 Agent 处理协作事件失败：{message or status}",
+            content=f"主 Agent 处理协作事件失败：{failure_message}",
             task_id=None,
         )
+        return MainAgentContinuationResult(
+            succeeded=False,
+            status=status,
+            message=failure_message,
+            session_id=main_session_id or None,
+        )
+
+    def main_agent_busy_reason(self, collaboration_id: str) -> str | None:
+        session = self.store.get_session(collaboration_id)
+        package_id = str(session.get("main_agent_package_id") or SYSTEM_CHAT_PACKAGE_ID).strip() or SYSTEM_CHAT_PACKAGE_ID
+        factory_session_id = str(session.get("main_factory_session_id") or "").strip()
+        if package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
+            try:
+                factory_record = FactorySessionManager.from_env().load(factory_session_id)
+            except Exception:
+                factory_record = None
+            if factory_record is not None:
+                factory_status = _latest_turn_status(factory_record.chat_turns)
+                if factory_status in ACTIVE_MAIN_AGENT_TURN_STATUSES:
+                    return f"factory chat turn is {factory_status}"
+        package_session_id = self._main_agent_package_session_id(session, package_id=package_id)
+        if not package_session_id:
+            return None
+        try:
+            package_session = self.runtime.load_session(package_id, package_session_id)
+        except Exception:
+            return None
+        package_status = _latest_turn_status(package_session.get("turns") or [])
+        if package_status in ACTIVE_MAIN_AGENT_TURN_STATUSES:
+            return f"agent package turn is {package_status}"
+        return None
 
     def _main_agent_package_session_id(self, session: dict[str, Any], *, package_id: str) -> str | None:
         if package_id != SYSTEM_CHAT_PACKAGE_ID:
@@ -824,6 +879,15 @@ def _task_by_id(session: dict[str, Any], task_id: str) -> dict[str, Any]:
         if str(task.get("task_id") or "") == task_id:
             return task
     raise ValueError(f"collaboration task not found: {task_id}")
+
+
+def _latest_turn_status(turns: Any) -> str:
+    if not isinstance(turns, (list, tuple)) or not turns:
+        return ""
+    latest = turns[-1]
+    if isinstance(latest, dict):
+        return str(latest.get("status") or "").strip()
+    return str(getattr(latest, "status", "") or "").strip()
 
 
 def _one_ready_task_per_assignee(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:

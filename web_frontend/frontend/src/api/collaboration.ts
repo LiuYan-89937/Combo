@@ -130,7 +130,13 @@ export const collaborationApi = {
       body: JSON.stringify(payload),
     }),
   mainAgentPrompt: (collaborationId: string, message: string) =>
-    requestJson<{ prompt: string }>(`/api/collaboration/sessions/${encodeURIComponent(collaborationId)}/main-agent-prompt`, {
+    requestJson<{
+      prompt: string
+      runtime_tool_access: {
+        extra_allowed_tool_ids: string[]
+        excluded_tool_ids: string[]
+      }
+    }>(`/api/collaboration/sessions/${encodeURIComponent(collaborationId)}/main-agent-prompt`, {
       method: 'POST',
       body: JSON.stringify({ message }),
     }),

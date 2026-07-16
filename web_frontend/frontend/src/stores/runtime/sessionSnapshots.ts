@@ -214,6 +214,7 @@ function transcriptItemFromPartMessage(
 function normalizeTurnStatus(value: any, fallback: RunStatus): RunStatus {
   if (
     value === 'running' ||
+    value === 'waiting_for_workers' ||
     value === 'interrupted' ||
     value === 'completed' ||
     value === 'stopped' ||
