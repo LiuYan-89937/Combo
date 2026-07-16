@@ -9,15 +9,15 @@ from agent_factory.tooling.factory_extensions import default_system_agent_extens
 
 
 MANUFACTURING_PROBE_RUNTIME_NAMESPACE = ".manufacturing_probes"
+SESSION_WORKDIRS_DIR = "sessions"
 
 
 @dataclass(frozen=True, slots=True)
 class PackageRuntimeWorkspace:
     """Stable writable workspace owned by exactly one AgentPackage.
 
-    A package may have many chat sessions, but it has one runtime process and
-    one persistent writable workspace. Session identity belongs in the stores
-    (for example checkpoint thread ids), never in filesystem ownership.
+    A package owns one persistent runtime process root. Each chat session owns
+    a stable child workdir so runtime reuse does not imply shared file state.
     """
 
     root: Path
@@ -29,6 +29,16 @@ class PackageRuntimeWorkspace:
         for path in (self.root, self.workdir, self.artifacts, self.extensions):
             path.mkdir(parents=True, exist_ok=True)
         return self
+
+    def session_workdir(self, session_id: str) -> Path:
+        identifier = str(session_id or "").strip()
+        if not identifier:
+            raise ValueError("session_id is required for a session workdir")
+        return root_relative_path(
+            self.workdir / SESSION_WORKDIRS_DIR,
+            Path(identifier),
+            field_path="agent package session workdir",
+        )
 
 
 def package_runtime_workspace(package_id: str) -> PackageRuntimeWorkspace:
@@ -67,6 +77,10 @@ def host_runtime_root(package_id: str) -> Path:
 
 def host_package_workdir(package_id: str) -> Path:
     return package_runtime_workspace(package_id).workdir
+
+
+def host_session_workdir(package_id: str, session_id: str) -> Path:
+    return package_runtime_workspace(package_id).session_workdir(session_id)
 
 
 def host_session_root(*, package_id: str, package: LoadedAgentPackage, configured: str) -> Path:

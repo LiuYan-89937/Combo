@@ -59,6 +59,7 @@ class SystemPackageRuntimeHandle:
         package: LoadedAgentPackage,
         package_fingerprint: str,
         runtime_root: Path,
+        workdir_root: Path,
         runtime_instance_id: str,
         instance_extension_root: Path,
         idle_timeout_seconds: int,
@@ -85,6 +86,7 @@ class SystemPackageRuntimeHandle:
         self.core = PackageRuntimeCore(
             package=package,
             runtime_root=runtime_root,
+            workdir_root=workdir_root,
             runtime_instance_id=runtime_instance_id,
             instance_extension_root=instance_extension_root,
             emit_background=self._emit_background_event,

@@ -34,6 +34,7 @@ from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
 from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
+from agent_factory.package_runtime.workspace_scope import apply_runtime_workspace
 from agent_factory.package_runtime.session_turns import (
     resume_user_input,
     session_attachments_from_state,
@@ -68,6 +69,7 @@ class PackageRuntimeCore:
         *,
         package: LoadedAgentPackage,
         runtime_root: str | Path | None = None,
+        workdir_root: str | Path | None = None,
         runtime_instance_id: str | None = None,
         instance_extension_root: str | Path | None = None,
         emit_background: Emit | None = None,
@@ -77,6 +79,7 @@ class PackageRuntimeCore:
     ) -> None:
         self.package = package
         self.runtime_root = Path(runtime_root).expanduser().resolve() if runtime_root is not None else None
+        self.workdir_root = Path(workdir_root).expanduser().resolve() if workdir_root is not None else None
         self.runtime_instance_id = str(runtime_instance_id).strip() if runtime_instance_id else None
         self.instance_extension_root = (
             Path(instance_extension_root).expanduser().resolve()
@@ -334,6 +337,8 @@ class PackageRuntimeCore:
         session_config = dict(compiled.runtime_config["session_config"])
         if payload.get("session_id"):
             session_config["session_id"] = str(payload["session_id"])
+        if self.workdir_root is not None:
+            apply_runtime_workspace(session_config, payload, workdir_root=self.workdir_root)
         user_config = merge_attachments_into_user_config(
             _merged_config(compiled.runtime_config["user_config"], payload.get("user_config")),
             payload.get("attachments"),
@@ -458,6 +463,8 @@ class PackageRuntimeCore:
         facade = runtime.facade
         session_config = dict(compiled.runtime_config["session_config"])
         session_config["session_id"] = session_id
+        if self.workdir_root is not None:
+            apply_runtime_workspace(session_config, payload, workdir_root=self.workdir_root)
         normalizer.session_id = session_id
         normalizer.emit_runtime_resumed(resume_payload if isinstance(resume_payload, dict) else {})
         run_context = facade.prepare_resume_context(

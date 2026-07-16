@@ -61,6 +61,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     host_runtime_root as _host_runtime_root,
     package_runtime_workspace as _package_runtime_workspace,
     host_package_workdir as _host_package_workdir,
+    host_session_workdir as _host_session_workdir,
     host_session_root as _host_session_root,
     is_host_system_package as _is_host_system_package,
     is_system_package as _is_system_package,
@@ -242,6 +243,11 @@ class AgentPackageRuntimeManager:
 
     def workdir_for_package(self, package_id: str) -> Path:
         return _host_package_workdir(package_id)
+
+    def workdir_for_session(self, package_id: str, session_id: str) -> Path:
+        workdir = _host_session_workdir(package_id, session_id)
+        workdir.mkdir(parents=True, exist_ok=True)
+        return workdir
 
     def list_instance_statuses(self) -> list[dict[str, Any]]:
         package_ids = {item.get("package_id") for item in self.list_packages()}
@@ -814,7 +820,8 @@ class AgentPackageRuntimeManager:
                 agent_group_id=agent_group_id,
                 visible_in_agent_session_list=visible_in_agent_session_list,
             )
-        resolved_workdir_root = workdir_root or self.workdir_for_package(package_id)
+        resolved_workdir_root = workdir_root or self.workdir_for_session(package_id, session.session_id)
+        runtime_workspace = _runtime_workspace_payload(package_id, resolved_workdir_root)
         attachment_result = self._prepare_runtime_attachments(
             package_id=package_id,
             package=package,
@@ -840,6 +847,7 @@ class AgentPackageRuntimeManager:
                 "user_config": dict(user_config or {}),
                 "attachments": attachment_result.attachments,
                 "runtime_request": self.request_policy.as_payload(),
+                "runtime_workspace": runtime_workspace,
             },
         }
         if _is_host_system_package(package):
@@ -892,7 +900,8 @@ class AgentPackageRuntimeManager:
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
-        resolved_workdir_root = workdir_root or self.workdir_for_package(package_id)
+        resolved_workdir_root = workdir_root or self.workdir_for_session(package_id, session.session_id)
+        runtime_workspace = _runtime_workspace_payload(package_id, resolved_workdir_root)
         command = {
             "type": "resume_interrupt",
             "request_id": request_id or uuid4().hex,
@@ -900,6 +909,7 @@ class AgentPackageRuntimeManager:
                 "session_id": session_id,
                 "resume_payload": resume_payload or {},
                 "runtime_request": self.request_policy.as_payload(),
+                "runtime_workspace": runtime_workspace,
             },
         }
 
@@ -1335,6 +1345,7 @@ class AgentPackageRuntimeManager:
                 package=host_package,
                 package_fingerprint=fingerprint,
                 runtime_root=runtime_root,
+                workdir_root=workdir_root,
                 runtime_instance_id=runtime_key,
                 instance_extension_root=extension_root,
                 idle_timeout_seconds=self.idle_timeout_seconds,
@@ -1442,6 +1453,17 @@ def _scoped_runtime_event(chunk: Any, *, package_id: str) -> FactoryFrontendEven
 def _runtime_handle_key(package_id: str, command: dict[str, Any]) -> str:
     del command
     return package_id
+
+
+def _runtime_workspace_payload(package_id: str, workdir_root: Path) -> dict[str, str]:
+    package_workdir = _host_package_workdir(package_id).expanduser().resolve()
+    resolved = workdir_root.expanduser().resolve()
+    try:
+        relative = resolved.relative_to(package_workdir)
+    except ValueError:
+        return {}
+    scope = "" if relative == Path(".") else relative.as_posix()
+    return {"scope": scope}
 
 
 def _runtime_key_package_id(runtime_key: str) -> str:

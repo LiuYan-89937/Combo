@@ -11,6 +11,7 @@ from agent_factory.document_processing import EMAIL_EXTENSIONS, OFFICE_EXTENSION
 from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     extension_root_for_package,
+    host_session_workdir,
     package_runtime_workspace,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_utils import humanize_identifier
@@ -99,12 +100,16 @@ class AgentPackageWorkspaceService:
 
 
 def workspace_roots(package_id: str, package: LoadedAgentPackage, *, session_id: str | None = None) -> dict[str, Path]:
-    del session_id
     workspace = package_runtime_workspace(package_id)
+    normalized_session_id = str(session_id or "").strip()
     return {
         "package": package.package_root,
         "runtime": workspace.root,
-        "workdir": workspace.workdir,
+        "workdir": (
+            host_session_workdir(package_id, normalized_session_id)
+            if normalized_session_id
+            else workspace.workdir
+        ),
         "artifacts": workspace.artifacts,
         "extensions": extension_root_for_package(package_id, package),
     }

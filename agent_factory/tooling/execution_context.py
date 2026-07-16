@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +13,7 @@ class CurrentToolCall:
     origin_node_id: str = ""
     origin_impl: str = ""
     event_sink: Callable[[dict[str, Any]], None] | None = None
+    runtime_resource_overrides: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ def tool_call_context(
     origin_node_id: str = "",
     origin_impl: str = "",
     event_sink: Callable[[dict[str, Any]], None] | None = None,
+    runtime_resource_overrides: Mapping[str, Any] | None = None,
 ) -> Iterator[None]:
     token = _CURRENT_TOOL_CALL.set(
         CurrentToolCall(
@@ -46,6 +48,7 @@ def tool_call_context(
             origin_node_id=origin_node_id,
             origin_impl=origin_impl,
             event_sink=event_sink,
+            runtime_resource_overrides=dict(runtime_resource_overrides or {}),
         )
     )
     try:
@@ -70,6 +73,11 @@ def current_tool_call() -> CurrentToolCall | None:
 def current_tool_event_sink() -> Callable[[dict[str, Any]], None] | None:
     current = current_tool_call()
     return current.event_sink if current is not None else None
+
+
+def current_tool_runtime_resource_overrides() -> Mapping[str, Any]:
+    current = current_tool_call()
+    return current.runtime_resource_overrides if current is not None and current.runtime_resource_overrides else {}
 
 
 def current_tool_approval_override() -> ToolApprovalOverride | None:
