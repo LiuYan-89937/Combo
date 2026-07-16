@@ -25,6 +25,17 @@ def list_local_inference_engines() -> list[dict[str, Any]]:
             "parameters": {},
         },
         {
+            "engine": "stable_diffusion_cpp_rocm",
+            "display_name": "stable-diffusion.cpp on AMD ROCm",
+            "kind": "image_generation",
+            "transport": "openai_compatible_images",
+            "parameters": {
+                "batch_count": {"default": 1, "min": 1, "max": 1},
+                "diffusion_flash_attention": {"default": True},
+                "clip_on_cpu": {"default": True},
+            },
+        },
+        {
             "engine": "external",
             "display_name": "External inference endpoint",
             "kind": "chat",

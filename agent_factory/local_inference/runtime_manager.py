@@ -16,20 +16,30 @@ import httpx
 from agent_factory.local_inference.config import (
     LocalInferenceEndpoint,
     load_local_embedding_endpoint,
+    load_local_image_endpoint,
     load_local_inference_endpoint,
 )
 from agent_factory.local_inference.http_client import create_private_async_http_client
 from agent_factory.local_inference.node_control import InferenceNodeClient, RuntimeAction
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
-from agent_factory.model_pool.schema import ModelPoolProfile, utc_now_text
+from agent_factory.model_pool.schema import (
+    ExternalInferenceConfig,
+    ModelPoolProfile,
+    StableDiffusionCppInferenceConfig,
+    utc_now_text,
+)
 from agent_factory.model_pool.store import ModelPoolStore
 
 
-RuntimeKind = Literal["chat", "embedding"]
+RuntimeKind = Literal["chat", "embedding", "image_generation"]
 RuntimePhase = Literal["idle", "starting", "loading", "ready", "stopping", "failed"]
 
-_RUNTIME_KINDS: tuple[RuntimeKind, ...] = ("chat", "embedding")
-_LOAD_TIMEOUT_SECONDS: dict[RuntimeKind, float] = {"chat": 900.0, "embedding": 300.0}
+_RUNTIME_KINDS: tuple[RuntimeKind, ...] = ("chat", "embedding", "image_generation")
+_LOAD_TIMEOUT_SECONDS: dict[RuntimeKind, float] = {
+    "chat": 900.0,
+    "embedding": 300.0,
+    "image_generation": 900.0,
+}
 _LOG_LIMIT = 80
 _PERCENT_PATTERN = re.compile(r"(?<!\d)(\d{1,3})%")
 
@@ -118,6 +128,7 @@ class LocalInferenceRuntimeManager:
         artifact = store.require_artifact(profile.artifact_id)
         if not profile.enabled or not artifact.enabled:
             raise ValueError("profile and model artifact must be enabled before loading")
+        self._assert_residency_allowed(profile)
         slot = self._slots[profile.kind]
         async with slot.lock:
             if slot.profile_id == profile.profile_id and slot.phase in {"starting", "loading", "ready"}:
@@ -130,6 +141,7 @@ class LocalInferenceRuntimeManager:
         artifact = store.require_artifact(profile.artifact_id)
         if not profile.enabled or not artifact.enabled:
             raise ValueError("profile and model artifact must be enabled before restarting")
+        self._assert_residency_allowed(profile)
         slot = self._slots[profile.kind]
         async with slot.lock:
             return await self._start_locked(slot, profile, external_action="restart")
@@ -161,10 +173,24 @@ class LocalInferenceRuntimeManager:
             async with slot.lock:
                 await self._stop_locked(slot, clear_active=False)
 
+    def _assert_residency_allowed(self, profile: ModelPoolProfile) -> None:
+        image_profile = profile if profile.kind == "image_generation" else _active_image_profile(self._slots)
+        if image_profile is None or _image_residency_policy(image_profile) != "exclusive":
+            return
+        conflicting_kind = "chat" if profile.kind == "image_generation" else "image_generation"
+        conflict = self._slots[conflicting_kind]
+        if conflict.phase in {"starting", "loading", "ready"}:
+            raise ValueError(
+                "exclusive image generation profile cannot share GPU residency with the chat runtime; "
+                f"unload the active {conflicting_kind} model first"
+            )
+
     def _endpoint(self, kind: RuntimeKind) -> LocalInferenceEndpoint:
         if kind == "chat":
             return load_local_inference_endpoint(timeout_seconds=2.0)
-        return load_local_embedding_endpoint(timeout_seconds=2.0)
+        if kind == "embedding":
+            return load_local_embedding_endpoint(timeout_seconds=2.0)
+        return load_local_image_endpoint(timeout_seconds=2.0)
 
     def _command(self, profile: ModelPoolProfile, endpoint: LocalInferenceEndpoint) -> list[str]:
         if profile.engine == "external":
@@ -172,8 +198,10 @@ class LocalInferenceRuntimeManager:
         host, port = _local_binding(endpoint)
         if profile.kind == "chat":
             module = "agent_factory.local_inference.run_llama_server"
-        else:
+        elif profile.kind == "embedding":
             module = "agent_factory.local_inference.embedding_server"
+        else:
+            module = "agent_factory.local_inference.run_sd_server"
         return [
             sys.executable,
             "-m",
@@ -432,6 +460,12 @@ async def _runtime_is_ready(
             isinstance(item, dict) and str(item.get("id") or "") == profile.served_model_name
             for item in models or []
         )
+    if profile.kind == "image_generation":
+        response = await client.get(endpoint.endpoint("/models"))
+        response.raise_for_status()
+        payload = response.json()
+        models = payload.get("data") if isinstance(payload, dict) else None
+        return bool(models and any(isinstance(item, dict) for item in models))
     response = await client.get(endpoint.endpoint("/health"))
     response.raise_for_status()
     payload = response.json()
@@ -502,3 +536,19 @@ def _idle_runtime_payload(kind: RuntimeKind, profile_id: str) -> dict[str, Any]:
         "updated_at": utc_now_text(),
         "logs": [],
     }
+
+
+def _active_image_profile(slots: dict[RuntimeKind, _RuntimeSlot]) -> ModelPoolProfile | None:
+    slot = slots["image_generation"]
+    if not slot.profile_id:
+        return None
+    return ModelPoolStore().get_profile(slot.profile_id)
+
+
+def _image_residency_policy(profile: ModelPoolProfile) -> str:
+    inference = profile.inference
+    if isinstance(inference, ExternalInferenceConfig):
+        inference = inference.remote_inference
+    if isinstance(inference, StableDiffusionCppInferenceConfig):
+        return inference.residency_policy
+    return "exclusive"

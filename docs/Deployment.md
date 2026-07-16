@@ -141,6 +141,8 @@ SSH_KEY=
 | `REMOTE_MODEL_ROOT` | 模型根目录 | `/root/models` |
 | `REMOTE_LLAMA_CPP_DIR` | 远端 llama.cpp 源码与构建 | `/root/llama.cpp` |
 | `LOCAL_LLAMA_CPP_DIR` | 本机可修改的 llama.cpp 工作树 | `vendor/llama.cpp` |
+| `REMOTE_STABLE_DIFFUSION_CPP_DIR` | 远端 stable-diffusion.cpp 源码与构建 | `/root/stable-diffusion.cpp` |
+| `LOCAL_STABLE_DIFFUSION_CPP_DIR` | 本机可修改的 stable-diffusion.cpp 工作树 | `vendor/stable-diffusion.cpp` |
 | `LLAMA_CPP_REPOSITORY` | llama.cpp Git 来源 | GitCode 国内镜像 |
 | `LLAMA_CPP_REVISION` | 可复现构建提交 | 固定 Commit SHA |
 | `PYPI_INDEX_URL` | 远端 Python 依赖源 | 清华 PyPI |
@@ -148,6 +150,8 @@ SSH_KEY=
 | `CHAT_MODEL_*` | Chat GGUF 版本、文件、大小和 SHA256 | 固定并校验 |
 | `CHAT_MMPROJ_*` | 视觉投影器版本、大小和 SHA256 | 固定并校验 |
 | `EMBEDDING_MODEL_ID` | Embedding 模型 | `BAAI/bge-m3` |
+| `IMAGE_*_URL/SHA256/SIZE_BYTES` | FLUX 四件套 ModelScope 国内直链与完整性信息 | 固定并校验 |
+| `IMAGE_RESIDENCY_POLICY` | Chat 与 Image 显存共存策略 | `exclusive` |
 | `CHAT_CONTEXT_SIZE` | llama-server Context | `256000` |
 | `CHAT_CACHE_TYPE_K/V` | KV Cache 类型 | `q8_0` |
 | `CHAT_PARALLEL_SLOTS` | Chat 并发槽位 | `1` |
@@ -168,22 +172,31 @@ SSH_KEY=
 
 1. 检查本机 Git、Python、uv、Node、npm、Docker、SSH 与 rsync。
 2. 验证 SSH Key 登录和端口配置。
-3. 在本机创建或复用 `vendor/llama.cpp`，切到固定 revision。
+3. 在本机创建或复用 `vendor/llama.cpp` 与 `vendor/stable-diffusion.cpp`，切到固定 revision。
 4. 上传远端控制脚本并探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP。
 5. 仅在缺失时安装普通编译工具。
 6. 同步 FastAgentFactory 当前工作树到远端项目目录。
-7. 同步本机 llama.cpp 工作树到远端并以 `GGML_HIP=ON` 增量构建。
+7. 同步两个推理源码工作树，增量构建 ROCm llama-server 与 HIPBLAS sd-server。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj。
 9. 校验模型文件大小和 SHA256；损坏的完整文件不会被复用。
 10. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
-11. 幂等创建远端本地 Profile 与本机 external Profile。
+11. 下载并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
+12. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 与本机 external Profile。
 12. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
 13. 启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
 14. 生成本机 `.env`、建立 SSH 隧道并启动本机前后端。
 
 首次下载和编译时间取决于网络、磁盘和 Radeon GPU 主机 CPU。终端会直接显示 curl 与 ModelScope 下载进度。
 
-### 5.1 幂等与续传
+### 5.1 FLUX.1-dev 与 13GB 显存
+
+部署使用 `stable-diffusion.cpp + FLUX.1-dev Q4_0`，四个文件总计约 16.3GB，其中 T5XXL FP16 常驻 CPU 内存。默认参数为单并发、768×768、20 Steps、CFG 1.0、Euler、Diffusion Flash Attention、CLIP/T5 CPU 和 VAE Tiling。
+
+Image Profile 在远端注册为 enabled，供控制节点识别；本机 external Profile 默认 disabled，因此首次启动不会占用显存。启用并加载 Image Profile 前应卸载 Chat。`exclusive` 驻留策略只拒绝冲突，不会擅自终止另一个模型。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
+
+FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演示和提交前应保留模型来源、revision、SHA256 与许可证说明。
+
+### 5.2 幂等与续传
 
 重复运行 `./deploy.sh up` 的行为：
 
@@ -191,6 +204,7 @@ SSH_KEY=
 - 部分 GGUF 使用 HTTP Range 继续下载；
 - ModelScope 复用自身缓存；
 - llama.cpp 使用 Ninja 增量构建；
+- stable-diffusion.cpp 使用 Ninja 增量构建；
 - Profile 按固定 ID 更新，不重复创建随机记录；
 - 本机 `.env` 保留已有 `AGENTFACTORY_RESOURCE_MASTER_KEY`。
 
@@ -371,6 +385,7 @@ SSH 已连接但远端转发目标未监听：
 - `18004/models`：远端目录扫描、GGUF 元数据或 Telemetry 隧道；
 - `18003/v1/chat/completions`：Chat 仍在加载、Context 过大或 GPU 正在长时间计算；
 - `18002`：Embedding 加载或隧道问题。
+- `18005/v1/models`：sd-server 未加载、启动失败或 Image 隧道问题。
 
 统一查看：
 

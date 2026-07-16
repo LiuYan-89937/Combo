@@ -24,6 +24,7 @@ _TRANSFORMERS_WEIGHT_PATTERNS = (
     "model-*.safetensors",
     "pytorch_model-*.bin",
 )
+_IMAGE_MODEL_MANIFEST = "image-model.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,8 +63,16 @@ class ModelStorage:
             if not self._contains(directory) or not self._has_supported_weights(directory):
                 continue
             models.append(self._describe(directory, config_path=config_path))
+        image_model_paths: set[Path] = set()
+        for manifest_path in self.root.rglob(_IMAGE_MODEL_MANIFEST):
+            directory = manifest_path.parent.resolve()
+            if self._contains(directory):
+                described = self._describe_image_model(directory, manifest_path)
+                if described is not None:
+                    models.append(described)
+                    image_model_paths.add(Path(described.absolute_path))
         for model_path in self.root.rglob("*.gguf"):
-            if self._contains(model_path.resolve()):
+            if self._contains(model_path.resolve()) and model_path.resolve() not in image_model_paths:
                 models.append(self._describe_gguf(model_path.resolve()))
         return sorted(models, key=lambda item: item.relative_path.casefold())
 
@@ -141,6 +150,29 @@ class ModelStorage:
             architectures=(),
             tokenizer_available=True,
             supported_kinds=("chat",),
+        )
+
+    def _describe_image_model(self, directory: Path, manifest_path: Path) -> ModelDirectoryInfo | None:
+        manifest = _read_config(manifest_path)
+        if manifest.get("format") != "stable_diffusion_cpp":
+            return None
+        filenames = [
+            _text(manifest.get(key))
+            for key in ("diffusion_model", "vae", "clip_l", "t5xxl")
+        ]
+        if not all(filenames) or not all((directory / filename).is_file() for filename in filenames):
+            return None
+        diffusion_path = (directory / filenames[0]).resolve()
+        return ModelDirectoryInfo(
+            relative_path=diffusion_path.relative_to(self.root).as_posix(),
+            absolute_path=str(diffusion_path),
+            display_name=_text(manifest.get("display_name")) or directory.name,
+            model_type=_text(manifest.get("family")) or "diffusion",
+            dtype=_text(manifest.get("quantization")) or "quantized",
+            embedding_dimensions=None,
+            architectures=("stable-diffusion.cpp",),
+            tokenizer_available=True,
+            supported_kinds=("image_generation",),
         )
 
     def _modelscope_model_id(self, directory: Path) -> str:

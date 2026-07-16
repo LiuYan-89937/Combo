@@ -3,7 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-from agent_factory.model_pool.schema import ModelProfileBinding
+from agent_factory.artifact_system import ArtifactStore
+from agent_factory.local_inference.config import load_local_image_endpoint
+from agent_factory.model_pool.schema import (
+    ExternalInferenceConfig,
+    ModelProfileBinding,
+    ModelToolBinding,
+    StableDiffusionCppInferenceConfig,
+)
 from agent_factory.model_pool.store import ModelPoolStore
 from agent_factory.models import ChatModelSettings
 from agent_factory.models.chat_model import (
@@ -13,6 +20,7 @@ from agent_factory.models.chat_model import (
     get_task_model_settings,
     settings_from_local_profile,
 )
+from agent_factory.models.image_generation import ImageGenerationService, ImageGenerationSettings
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +28,13 @@ class ResolvedChatModelProfile:
     profile_id: str
     model: Any
     settings: ChatModelSettings
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedImageGenerationProfile:
+    profile_id: str
+    service: ImageGenerationService
+    settings: ImageGenerationSettings
 
 
 def resolve_chat_model_profile(
@@ -74,6 +89,53 @@ def resolve_chat_model_binding(
             raise ValueError(f"default local model is not configured for role: {role}")
         return ResolvedChatModelProfile(profile_id=str(settings.profile_id or ""), model=model, settings=settings)
     return resolve_chat_model_profile(binding, role=role, store=store)
+
+
+def resolve_image_generation_binding(
+    binding: ModelToolBinding,
+    *,
+    artifact_store: ArtifactStore,
+    store: ModelPoolStore | None = None,
+) -> ResolvedImageGenerationProfile:
+    model_store = store or ModelPoolStore(setup=False)
+    profile_id = binding.profile_id
+    if binding.source == "local_default":
+        profile_id = model_store.resolve_default_profile_id("image_generation")
+    if not profile_id:
+        raise ValueError("image generation binding has no configured profile")
+    profile = model_store.require_profile(profile_id)
+    if profile.kind != "image_generation":
+        raise ValueError(f"local model profile {profile.profile_id} is {profile.kind}, expected image_generation")
+    artifact = model_store.require_artifact(profile.artifact_id)
+    if not profile.enabled or not artifact.enabled:
+        raise ValueError(f"local image generation profile is disabled: {profile.profile_id}")
+    endpoint = load_local_image_endpoint(
+        timeout_seconds=binding.overrides.timeout_seconds or profile.limits.timeout_seconds
+    )
+    inference = profile.inference
+    if isinstance(inference, ExternalInferenceConfig):
+        inference = inference.remote_inference
+    if not isinstance(inference, StableDiffusionCppInferenceConfig):
+        raise ValueError("image generation profile has no stable-diffusion.cpp runtime configuration")
+    settings = ImageGenerationSettings(
+        provider="stable_diffusion_cpp",
+        model=profile.served_model_name,
+        base_url=endpoint.base_url,
+        profile_id=profile.profile_id,
+        timeout_seconds=endpoint.timeout_seconds,
+        default_options={
+            "width": inference.default_width,
+            "height": inference.default_height,
+            "steps": inference.default_steps,
+            "cfg_scale": inference.default_cfg_scale,
+            "sampler": inference.default_sampler,
+        },
+    )
+    return ResolvedImageGenerationProfile(
+        profile_id=profile.profile_id,
+        service=ImageGenerationService(settings=settings, artifact_store=artifact_store),
+        settings=settings,
+    )
 
 
 def _default_settings(role: str) -> ChatModelSettings:

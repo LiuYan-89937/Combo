@@ -26,33 +26,42 @@ require_command() {
 
 set -a
 # shellcheck disable=SC1090
+source "${CONFIG_EXAMPLE}"
+# shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 set +a
 
 required_config=(
     SSH_HOST SSH_PORT SSH_USER REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT
     REMOTE_LLAMA_CPP_DIR LOCAL_LLAMA_CPP_DIR LLAMA_CPP_REPOSITORY LLAMA_CPP_REVISION
+    REMOTE_STABLE_DIFFUSION_CPP_DIR LOCAL_STABLE_DIFFUSION_CPP_DIR
+    STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
     CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION CHAT_MODEL_FILENAME CHAT_MODEL_SHA256
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION
     CHAT_PROFILE_ID CHAT_SERVED_MODEL_NAME CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
     CHAT_COMPRESSION_THRESHOLD CHAT_GPU_LAYERS CHAT_PARALLEL_SLOTS CHAT_CACHE_TYPE_K
     CHAT_CACHE_TYPE_V EMBEDDING_PROFILE_ID EMBEDDING_SERVED_MODEL_NAME EMBEDDING_DIMENSIONS
     REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT
-    LOCAL_CHAT_PORT LOCAL_EMBEDDING_PORT LOCAL_TELEMETRY_PORT
+    REMOTE_IMAGE_PORT LOCAL_CHAT_PORT LOCAL_EMBEDDING_PORT LOCAL_TELEMETRY_PORT LOCAL_IMAGE_PORT
+    IMAGE_PROFILE_ID IMAGE_SERVED_MODEL_NAME IMAGE_MODEL_FILENAME IMAGE_VAE_FILENAME
+    IMAGE_CLIP_L_FILENAME IMAGE_T5XXL_FILENAME
 )
 for name in "${required_config[@]}"; do
     [[ -n "${!name:-}" ]] || fail "Missing deployment setting: ${name}"
 done
 [[ "${SSH_PORT}" =~ ^[0-9]+$ ]] || fail "SSH_PORT must be an integer"
 (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fail "SSH_PORT must be between 1 and 65535"
-for name in LOCAL_CHAT_PORT LOCAL_EMBEDDING_PORT LOCAL_TELEMETRY_PORT; do
+for name in LOCAL_CHAT_PORT LOCAL_EMBEDDING_PORT LOCAL_TELEMETRY_PORT LOCAL_IMAGE_PORT; do
     [[ "${!name}" =~ ^[0-9]+$ ]] && (( ${!name} >= 1 && ${!name} <= 65535 )) \
         || fail "${name} must be an integer between 1 and 65535"
 done
 [[ "${LOCAL_CHAT_PORT}" != "${LOCAL_EMBEDDING_PORT}" \
     && "${LOCAL_CHAT_PORT}" != "${LOCAL_TELEMETRY_PORT}" \
-    && "${LOCAL_EMBEDDING_PORT}" != "${LOCAL_TELEMETRY_PORT}" ]] \
-    || fail "Local Chat, Embedding and Telemetry ports must be different"
+    && "${LOCAL_CHAT_PORT}" != "${LOCAL_IMAGE_PORT}" \
+    && "${LOCAL_EMBEDDING_PORT}" != "${LOCAL_TELEMETRY_PORT}" \
+    && "${LOCAL_EMBEDDING_PORT}" != "${LOCAL_IMAGE_PORT}" \
+    && "${LOCAL_TELEMETRY_PORT}" != "${LOCAL_IMAGE_PORT}" ]] \
+    || fail "Local inference ports must be different"
 
 require_command ssh "Install the OpenSSH client."
 require_command scp "Install the OpenSSH client."
@@ -98,13 +107,17 @@ LOCAL_LLAMA_PATH="${LOCAL_LLAMA_CPP_DIR}"
 if [[ "${LOCAL_LLAMA_PATH}" != /* ]]; then
     LOCAL_LLAMA_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_PATH}"
 fi
+LOCAL_SD_PATH="${LOCAL_STABLE_DIFFUSION_CPP_DIR}"
+if [[ "${LOCAL_SD_PATH}" != /* ]]; then
+    LOCAL_SD_PATH="${PROJECT_ROOT}/${LOCAL_SD_PATH}"
+fi
 
 ssh_run() {
     ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "$@"
 }
 
 upload_controller() {
-    scp "${SCP_ARGS[@]}" "${REMOTE_CONTROLLER}" "${CONFIG_FILE}" \
+    scp "${SCP_ARGS[@]}" "${REMOTE_CONTROLLER}" "${CONFIG_EXAMPLE}" "${CONFIG_FILE}" \
         "${SSH_TARGET}:/tmp/"
     ssh_run chmod 700 /tmp/remote_runtime.sh
     ssh_run chmod 600 /tmp/"$(basename "${CONFIG_FILE}")"
@@ -115,30 +128,42 @@ remote_command() {
     ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")"
 }
 
-prepare_local_llama() {
+prepare_local_source() {
+    local name="$1"
+    local path="$2"
+    local repository="$3"
+    local revision="$4"
     require_command git "Install Git first."
-    if [[ ! -d "${LOCAL_LLAMA_PATH}/.git" ]]; then
-        if [[ -e "${LOCAL_LLAMA_PATH}" ]]; then
-            fail "LOCAL_LLAMA_CPP_DIR exists but is not a Git checkout: ${LOCAL_LLAMA_PATH}"
+    if [[ ! -d "${path}/.git" ]]; then
+        if [[ -e "${path}" ]]; then
+            fail "${name} source path exists but is not a Git checkout: ${path}"
         fi
-        log "Cloning the editable llama.cpp source to ${LOCAL_LLAMA_PATH}"
-        mkdir -p "$(dirname "${LOCAL_LLAMA_PATH}")"
-        git clone "${LLAMA_CPP_REPOSITORY}" "${LOCAL_LLAMA_PATH}"
+        log "Cloning editable ${name} source to ${path}"
+        mkdir -p "$(dirname "${path}")"
+        git clone "${repository}" "${path}"
     fi
 
     local current_revision
-    current_revision="$(git -C "${LOCAL_LLAMA_PATH}" rev-parse HEAD)"
-    if [[ -n "$(git -C "${LOCAL_LLAMA_PATH}" status --porcelain)" ]]; then
-        log "llama.cpp contains local operator changes; keeping the current working tree at ${current_revision}"
+    current_revision="$(git -C "${path}" rev-parse HEAD)"
+    if [[ -n "$(git -C "${path}" status --porcelain)" ]]; then
+        log "${name} contains local operator changes; keeping revision ${current_revision}"
         return
     fi
-    if [[ "${current_revision}" != "${LLAMA_CPP_REVISION}" ]]; then
-        log "Checking out pinned llama.cpp revision ${LLAMA_CPP_REVISION}"
-        git -C "${LOCAL_LLAMA_PATH}" fetch "${LLAMA_CPP_REPOSITORY}" "${LLAMA_CPP_REVISION}"
-        git -C "${LOCAL_LLAMA_PATH}" checkout --detach "${LLAMA_CPP_REVISION}"
+    if [[ "${current_revision}" != "${revision}" ]]; then
+        log "Checking out pinned ${name} revision ${revision}"
+        git -C "${path}" fetch "${repository}" "${revision}"
+        git -C "${path}" checkout --detach "${revision}"
     else
-        log "llama.cpp source is pinned at ${current_revision}"
+        log "${name} source is pinned at ${current_revision}"
     fi
+    if [[ -f "${path}/.gitmodules" ]]; then
+        git -C "${path}" submodule update --init --recursive
+    fi
+}
+
+prepare_local_sources() {
+    prepare_local_source "llama.cpp" "${LOCAL_LLAMA_PATH}" "${LLAMA_CPP_REPOSITORY}" "${LLAMA_CPP_REVISION}"
+    prepare_local_source "stable-diffusion.cpp" "${LOCAL_SD_PATH}" "${STABLE_DIFFUSION_CPP_REPOSITORY}" "${STABLE_DIFFUSION_CPP_REVISION}"
 }
 
 sync_sources() {
@@ -156,6 +181,7 @@ sync_sources() {
         --exclude '.venv/' \
         --exclude 'node_modules/' \
         --exclude 'vendor/llama.cpp/' \
+        --exclude 'vendor/stable-diffusion.cpp/' \
         "${PROJECT_ROOT}/" "${SSH_TARGET}:${REMOTE_PROJECT_ROOT}/"
 
     log "Synchronizing editable llama.cpp source to ${REMOTE_LLAMA_CPP_DIR}"
@@ -163,6 +189,9 @@ sync_sources() {
         -e "${rsync_transport% }" \
         --exclude 'build/' \
         "${LOCAL_LLAMA_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_CPP_DIR}/"
+    log "Synchronizing editable stable-diffusion.cpp source to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
+    rsync -az --delete -e "${rsync_transport% }" --exclude 'build/' \
+        "${LOCAL_SD_PATH}/" "${SSH_TARGET}:${REMOTE_STABLE_DIFFUSION_CPP_DIR}/"
 }
 
 configure_local_env() {
@@ -178,7 +207,9 @@ configure_local_env() {
         --embedding-local-port "${LOCAL_EMBEDDING_PORT}" \
         --embedding-remote-port "${REMOTE_EMBEDDING_PORT}" \
         --telemetry-local-port "${LOCAL_TELEMETRY_PORT}" \
-        --telemetry-remote-port "${REMOTE_TELEMETRY_PORT}"
+        --telemetry-remote-port "${REMOTE_TELEMETRY_PORT}" \
+        --image-local-port "${LOCAL_IMAGE_PORT}" \
+        --image-remote-port "${REMOTE_IMAGE_PORT}"
 }
 
 boolean_argument() {
@@ -218,7 +249,22 @@ configure_local_profiles() {
         --embedding-served-model-name "${EMBEDDING_SERVED_MODEL_NAME}" \
         --embedding-revision "${EMBEDDING_MODEL_REVISION}" \
         --embedding-dimensions "${EMBEDDING_DIMENSIONS}" \
-        "$(boolean_argument "${EMBEDDING_TRUST_REMOTE_CODE:-0}" embedding-trust-remote-code)"
+        "$(boolean_argument "${EMBEDDING_TRUST_REMOTE_CODE:-0}" embedding-trust-remote-code)" \
+        --image-profile-id "${IMAGE_PROFILE_ID}" \
+        --image-served-model-name "${IMAGE_SERVED_MODEL_NAME}" \
+        --image-vae-path "${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0/${IMAGE_VAE_FILENAME}" \
+        --image-clip-l-path "${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0/${IMAGE_CLIP_L_FILENAME}" \
+        --image-t5xxl-path "${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0/${IMAGE_T5XXL_FILENAME}" \
+        "$(boolean_argument "${IMAGE_ENABLED:-0}" image-enabled)" \
+        "$(boolean_argument "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)" \
+        "$(boolean_argument "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)" \
+        "$(boolean_argument "${IMAGE_VAE_TILING:-1}" image-vae-tiling)" \
+        --image-default-width "${IMAGE_DEFAULT_WIDTH:-768}" \
+        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-768}" \
+        --image-default-steps "${IMAGE_DEFAULT_STEPS:-20}" \
+        --image-default-cfg-scale "${IMAGE_DEFAULT_CFG_SCALE:-1.0}" \
+        --image-residency-policy "${IMAGE_RESIDENCY_POLICY:-exclusive}" \
+        --image-timeout-seconds "${IMAGE_TIMEOUT_SECONDS:-900}"
 }
 
 check_bootstrap_prerequisites() {
@@ -239,7 +285,7 @@ bootstrap() {
     check_bootstrap_prerequisites
     log "Checking SSH connectivity"
     ssh_run true
-    prepare_local_llama
+    prepare_local_sources
     upload_controller
     remote_command prepare-host
     sync_sources
@@ -261,16 +307,16 @@ case "${COMMAND}" in
         bootstrap
         ;;
     sync)
-        prepare_local_llama
+        prepare_local_sources
         upload_controller
         remote_command prepare-host
         sync_sources
         ;;
-    models|build-llama|restart|down|status|doctor|logs)
+    models|image-models|build-llama|build-sd|restart|down|status|doctor|logs)
         upload_controller
         remote_command "${COMMAND}"
         ;;
     *)
-        fail "Unsupported command: ${COMMAND}. Use up, bootstrap, sync, models, build-llama, restart, down, status, doctor, or logs."
+        fail "Unsupported command: ${COMMAND}. Use up, bootstrap, sync, models, image-models, build-llama, build-sd, restart, down, status, doctor, or logs."
         ;;
 esac

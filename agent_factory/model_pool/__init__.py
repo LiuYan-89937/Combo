@@ -11,8 +11,10 @@ from agent_factory.model_pool.config import (
 from agent_factory.model_pool.providers import list_local_inference_engines
 from agent_factory.model_pool.resolver import (
     ResolvedChatModelProfile,
+    ResolvedImageGenerationProfile,
     resolve_chat_model_binding,
     resolve_chat_model_profile,
+    resolve_image_generation_binding,
 )
 from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
@@ -32,6 +34,7 @@ from agent_factory.model_pool.schema import (
     ModelToolBinding,
     ModelToolSelectionRecommendation,
     ModelToolSelectionRequirement,
+    StableDiffusionCppInferenceConfig,
     TransformersInferenceConfig,
 )
 from agent_factory.model_pool.selector import ModelPoolSelector
@@ -68,6 +71,8 @@ __all__ = [
     "TransformersInferenceConfig",
     "ModelUsageStore",
     "ResolvedChatModelProfile",
+    "ResolvedImageGenerationProfile",
+    "StableDiffusionCppInferenceConfig",
     "default_model_pool_store_path",
     "default_model_root",
     "list_local_inference_engines",
@@ -75,6 +80,7 @@ __all__ = [
     "record_model_usage_frontend_event",
     "resolve_chat_model_binding",
     "resolve_chat_model_profile",
+    "resolve_image_generation_binding",
     "resolve_model_pool_store_path",
     "resolve_model_root",
 ]

@@ -234,7 +234,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                             "source": {"type": "string", "enum": ["local_registry"]},
                             "capability": {
                                 "type": "string",
-                                "enum": ["image_input", "audio_input"],
+                                "enum": ["image_input", "image_output", "image_edit", "audio_input"],
                             },
                             "selection_source": {"type": "string", "enum": ["auto", "manual"]},
                             "reason": {"type": "string"},

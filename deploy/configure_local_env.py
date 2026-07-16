@@ -26,6 +26,8 @@ def main() -> None:
     parser.add_argument("--embedding-remote-port", required=True, type=int)
     parser.add_argument("--telemetry-local-port", required=True, type=int)
     parser.add_argument("--telemetry-remote-port", required=True, type=int)
+    parser.add_argument("--image-local-port", required=True, type=int)
+    parser.add_argument("--image-remote-port", required=True, type=int)
     args = parser.parse_args()
 
     source = args.env_file if args.env_file.is_file() else args.example_file
@@ -36,6 +38,7 @@ def main() -> None:
         "AGENTFACTORY_INFERENCE_RUNTIME_MODE": "external",
         "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT": f"http://127.0.0.1:{args.chat_local_port}/v1",
         "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT": f"http://127.0.0.1:{args.embedding_local_port}",
+        "AGENTFACTORY_LOCAL_IMAGE_ENDPOINT": f"http://127.0.0.1:{args.image_local_port}/v1",
         "AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT": (
             f"http://127.0.0.1:{args.telemetry_local_port}"
         ),
@@ -49,6 +52,8 @@ def main() -> None:
         "AGENTFACTORY_INFERENCE_SSH_EMBEDDING_REMOTE_PORT": str(args.embedding_remote_port),
         "AGENTFACTORY_INFERENCE_SSH_TELEMETRY_LOCAL_PORT": str(args.telemetry_local_port),
         "AGENTFACTORY_INFERENCE_SSH_TELEMETRY_REMOTE_PORT": str(args.telemetry_remote_port),
+        "AGENTFACTORY_INFERENCE_SSH_IMAGE_LOCAL_PORT": str(args.image_local_port),
+        "AGENTFACTORY_INFERENCE_SSH_IMAGE_REMOTE_PORT": str(args.image_remote_port),
         "AGENTFACTORY_RESOURCE_MASTER_KEY": resource_key,
     }
 

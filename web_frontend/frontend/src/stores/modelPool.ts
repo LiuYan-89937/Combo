@@ -12,6 +12,7 @@ const EMPTY_DEFAULTS: LocalModelDefaults = {
   task: null,
   compression: null,
   embedding: null,
+  image_generation: null,
 }
 
 export const useModelPoolStore = defineStore('modelPool', () => {

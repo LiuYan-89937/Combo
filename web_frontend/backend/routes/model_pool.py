@@ -133,7 +133,7 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
     @router.get("/profiles")
     async def list_profiles(kind: str | None = None):
         profile_kind = (kind or "").strip().lower() or None
-        if profile_kind not in {None, "chat", "embedding"}:
+        if profile_kind not in {None, "chat", "embedding", "image_generation"}:
             raise HTTPException(status_code=400, detail="unsupported local model profile kind")
         store = ModelPoolStore()
         artifacts = {item.artifact_id: item for item in store.list_artifacts()}
@@ -290,9 +290,14 @@ def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) ->
     if kind == "chat":
         data["model_format"] = "llama_cpp"
         data["local_path"] = str(storage.require_llama_model_file(str(data.get("local_path") or "")))
-    else:
+    elif kind == "embedding":
         data["model_format"] = "transformers"
         data["local_path"] = str(storage.require_model_directory(str(data.get("local_path") or "")))
+    elif kind == "image_generation":
+        data["model_format"] = "stable_diffusion_cpp"
+        data["local_path"] = str(storage.require_llama_model_file(str(data.get("local_path") or "")))
+    else:
+        raise ValueError(f"unsupported local model artifact kind: {kind}")
     if not str(data.get("artifact_id") or "").strip():
         data["artifact_id"] = _unique_id(
             _slug(str(data.get("display_name") or Path(str(data.get("local_path") or "model")).name)),

@@ -16,6 +16,7 @@ from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.model_pool import (
     resolve_chat_model_binding,
+    resolve_image_generation_binding,
 )
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution
@@ -378,7 +379,29 @@ class ModelContractBuilder:
             for role, resolved in resolved_profiles.items()
         }
         model_tool_runtime = {}
+        artifact_store = context.tool_runtime_resources.get("artifact_store")
         for tool_id, binding in contract.config.tool_bindings.items():
+            if binding.capability in {"image_output", "image_edit"}:
+                if not isinstance(artifact_store, ArtifactStore):
+                    raise ValueError("image generation model tools require an artifact contract")
+                resolved_image = resolve_image_generation_binding(
+                    binding,
+                    artifact_store=artifact_store,
+                )
+                model_tool_runtime[tool_id] = {
+                    "tool_id": tool_id,
+                    "capability": binding.capability,
+                    "description": binding.description,
+                    "profile_id": resolved_image.profile_id,
+                    "provider": resolved_image.settings.provider,
+                    "model_name": resolved_image.settings.model,
+                    "model_source": resolved_image.settings.source,
+                    "image_generation_service": resolved_image.service,
+                    "settings": resolved_image.settings,
+                    "runtime_root": str(context.runtime_root or context.package_root / ".agent_runtime"),
+                    "package_root": str(context.package_root),
+                }
+                continue
             resolved = resolve_chat_model_binding(binding, role=f"tool:{tool_id}")
             model_tool_runtime[tool_id] = {
                 "tool_id": tool_id,

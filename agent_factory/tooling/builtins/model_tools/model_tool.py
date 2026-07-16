@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from agent_factory.models.image_generation import ImageGenerationRequest
 from agent_factory.tooling.envelope import tool_envelope
 
 
@@ -16,6 +17,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(runtime_tool, dict):
         raise ValueError("model_tool runtime resource is missing")
     capability = str(runtime_tool.get("capability") or "")
+    if capability in {"image_output", "image_edit"}:
+        return _run_image_generation(arguments, runtime_tool, capability=capability)
     if capability not in {"image_input", "audio_input"}:
         raise ValueError(f"unsupported local model tool capability: {capability}")
     model = runtime_tool.get("model")
@@ -44,6 +47,50 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         evidence={"model_tool": {"tool_id": output["metadata"]["tool_id"], "profile_id": profile_id, "capability": capability}},
         summary=summary,
     )
+
+
+def _run_image_generation(
+    arguments: dict[str, Any],
+    runtime_tool: dict[str, Any],
+    *,
+    capability: str,
+) -> dict[str, Any]:
+    service = runtime_tool.get("image_generation_service")
+    if service is None or not hasattr(service, "generate"):
+        raise ValueError("model_tool runtime resource has no image generation service")
+    if capability != "image_output":
+        raise ValueError("the configured FLUX.1-dev profile does not support image editing")
+    request = ImageGenerationRequest(
+        operation="text_to_image",
+        prompt=str(arguments.get("prompt") or ""),
+        size=_optional_text(arguments.get("size")),
+        count=1,
+        seed=arguments.get("seed") if isinstance(arguments.get("seed"), int) else None,
+        negative_prompt=_optional_text(arguments.get("negative_prompt")),
+        provider_options=dict(arguments.get("provider_options") or {}),
+    )
+    assets = service.generate(request)
+    output = {
+        "capability": capability,
+        "profile_id": str(runtime_tool.get("profile_id") or ""),
+        "assets": [asset.model_payload() for asset in assets],
+        "metadata": {
+            "tool_id": str(runtime_tool.get("tool_id") or ""),
+            "model": str(runtime_tool.get("model_name") or ""),
+            "provider": str(runtime_tool.get("provider") or ""),
+            "model_source": str(runtime_tool.get("model_source") or ""),
+        },
+    }
+    return tool_envelope(
+        output,
+        evidence={"model_tool": {"tool_id": output["metadata"]["tool_id"], "profile_id": output["profile_id"], "capability": capability}},
+        summary=f"Generated {len(assets)} image asset(s).",
+    )
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def _message_content(*, capability: str, arguments: dict[str, Any], runtime_tool: dict[str, Any]) -> Any:

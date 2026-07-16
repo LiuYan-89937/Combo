@@ -99,7 +99,7 @@ def _task_analysis_messages(*, user_input: str, candidates: list[dict[str, Any]]
                 "requirement, and add task/compression requirements only when the produced agent needs "
                 "a distinct role. Requirements describe capabilities, not provider names or secrets. "
                 "When the produced agent needs local image or audio understanding, infer model_tool_requirements "
-                "with stable snake_case tool ids and the image_input or audio_input capability. The competition "
+                "with stable snake_case tool ids and the image_input, image_output, image_edit, or audio_input capability. The competition "
                 "runtime does not expose cloud image or audio generation models. "
                 "When reusable SkillHub skills may reduce custom package-tool authoring, note intended SkillHub search queries "
                 "in manufacturing_notes. Each query must contain 1 to 3 short keywords, not a full requirement sentence "

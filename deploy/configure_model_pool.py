@@ -10,6 +10,7 @@ from agent_factory.model_pool.schema import (
     ModelPoolCapabilities,
     ModelPoolLimits,
     ModelPoolProfile,
+    StableDiffusionCppInferenceConfig,
     TransformersInferenceConfig,
 )
 from agent_factory.model_pool.store import ModelPoolStore
@@ -18,8 +19,12 @@ from agent_factory.model_pool.store import ModelPoolStore
 def main() -> None:
     parser = _parser()
     args = parser.parse_args()
-    if args.mode == "node" and (args.chat_model_path is None or args.embedding_model_path is None):
-        parser.error("node mode requires --chat-model-path and --embedding-model-path")
+    if args.mode == "node" and (
+        args.chat_model_path is None
+        or args.embedding_model_path is None
+        or args.image_model_path is None
+    ):
+        parser.error("node mode requires chat, embedding, and image model paths")
     store = ModelPoolStore(path=args.store_path)
     chat_inference = LlamaCppInferenceConfig(
         gpu_layers=args.gpu_layers,
@@ -31,6 +36,22 @@ def main() -> None:
     )
     embedding_inference = TransformersInferenceConfig(
         trust_remote_code=args.embedding_trust_remote_code,
+    )
+    image_inference = StableDiffusionCppInferenceConfig(
+        vae_path=str(args.image_vae_path),
+        clip_l_path=str(args.image_clip_l_path),
+        t5xxl_path=str(args.image_t5xxl_path),
+        diffusion_flash_attention=args.image_diffusion_flash_attention,
+        clip_on_cpu=args.image_clip_on_cpu,
+        vae_tiling=args.image_vae_tiling,
+        offload_to_cpu=args.image_offload_to_cpu,
+        max_vram_gib=args.image_max_vram_gib,
+        stream_layers=args.image_stream_layers,
+        default_width=args.image_default_width,
+        default_height=args.image_default_height,
+        default_steps=args.image_default_steps,
+        default_cfg_scale=args.image_default_cfg_scale,
+        residency_policy=args.image_residency_policy,
     )
 
     if args.mode == "node":
@@ -53,10 +74,23 @@ def main() -> None:
             model_format="transformers",
             revision=args.embedding_revision,
         )
+        image_artifact = LocalModelArtifact(
+            artifact_id=args.image_artifact_id,
+            display_name=args.image_served_model_name,
+            kind="image_generation",
+            source="local_storage",
+            local_path=str(args.image_model_path),
+            model_format="stable_diffusion_cpp",
+            revision=args.image_revision,
+            checksum=args.image_checksum,
+            license=args.image_license,
+        )
         chat_engine = "llama_cpp_rocm"
         embedding_engine = "transformers_rocm"
         chat_profile_inference = chat_inference
         embedding_profile_inference = embedding_inference
+        image_engine = "stable_diffusion_cpp_rocm"
+        image_profile_inference = image_inference
     else:
         chat_artifact = LocalModelArtifact(
             artifact_id=args.chat_artifact_id,
@@ -77,13 +111,27 @@ def main() -> None:
             model_format="transformers",
             revision=args.embedding_revision,
         )
+        image_artifact = LocalModelArtifact(
+            artifact_id=args.image_artifact_id,
+            display_name=args.image_served_model_name,
+            kind="image_generation",
+            source="external_endpoint",
+            external_model_id=args.image_served_model_name,
+            model_format="stable_diffusion_cpp",
+            revision=args.image_revision,
+            checksum=args.image_checksum,
+            license=args.image_license,
+        )
         chat_engine = "external"
         embedding_engine = "external"
         chat_profile_inference = ExternalInferenceConfig(remote_inference=chat_inference)
         embedding_profile_inference = ExternalInferenceConfig(remote_inference=embedding_inference)
+        image_engine = "external"
+        image_profile_inference = ExternalInferenceConfig(remote_inference=image_inference)
 
     store.upsert_artifact(chat_artifact)
     store.upsert_artifact(embedding_artifact)
+    store.upsert_artifact(image_artifact)
     chat_profile = store.upsert_profile(
         ModelPoolProfile(
             profile_id=args.chat_profile_id,
@@ -128,13 +176,39 @@ def main() -> None:
             normalize_embeddings=True,
         )
     )
+    image_profile = store.upsert_profile(
+        ModelPoolProfile(
+            profile_id=args.image_profile_id,
+            display_name=args.image_served_model_name,
+            kind="image_generation",
+            artifact_id=image_artifact.artifact_id,
+            engine=image_engine,
+            served_model_name=args.image_served_model_name,
+            enabled=args.image_enabled,
+            capabilities=ModelPoolCapabilities(
+                input_modalities=["text"],
+                output_modalities=["image"],
+                tool_calling=False,
+                structured_output_methods=[],
+                text_to_image=True,
+                async_job=True,
+            ),
+            limits=ModelPoolLimits(timeout_seconds=args.image_timeout_seconds),
+            inference=image_profile_inference,
+        )
+    )
     store.disable_other_profiles("chat", chat_profile.profile_id)
     store.disable_other_profiles("embedding", embedding_profile.profile_id)
+    if image_profile.enabled:
+        store.disable_other_profiles("image_generation", image_profile.profile_id)
     for role in ("main", "task", "compression"):
         store.set_default_profile_id(role, chat_profile.profile_id)
     store.set_default_profile_id("embedding", embedding_profile.profile_id)
+    if image_profile.enabled:
+        store.set_default_profile_id("image_generation", image_profile.profile_id)
     store.set_active_profile_id("chat", chat_profile.profile_id)
     store.set_active_profile_id("embedding", embedding_profile.profile_id)
+    store.set_active_profile_id("image_generation", None)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -172,6 +246,29 @@ def _parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
     )
+    parser.add_argument("--image-artifact-id", default="flux1_dev_q4_0")
+    parser.add_argument("--image-profile-id", required=True)
+    parser.add_argument("--image-served-model-name", required=True)
+    parser.add_argument("--image-model-path", type=Path)
+    parser.add_argument("--image-vae-path", type=Path, required=True)
+    parser.add_argument("--image-clip-l-path", type=Path, required=True)
+    parser.add_argument("--image-t5xxl-path", type=Path, required=True)
+    parser.add_argument("--image-revision", default="")
+    parser.add_argument("--image-checksum", default="")
+    parser.add_argument("--image-license", default="FLUX.1-dev Non-Commercial License")
+    parser.add_argument("--image-enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--image-diffusion-flash-attention", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--image-clip-on-cpu", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--image-vae-tiling", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--image-offload-to-cpu", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--image-max-vram-gib", type=float)
+    parser.add_argument("--image-stream-layers", type=int)
+    parser.add_argument("--image-default-width", type=int, default=768)
+    parser.add_argument("--image-default-height", type=int, default=768)
+    parser.add_argument("--image-default-steps", type=int, default=20)
+    parser.add_argument("--image-default-cfg-scale", type=float, default=1.0)
+    parser.add_argument("--image-residency-policy", choices=("coexist_if_fit", "exclusive"), default="exclusive")
+    parser.add_argument("--image-timeout-seconds", type=float, default=900.0)
     return parser
 
 

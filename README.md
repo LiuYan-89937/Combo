@@ -128,14 +128,15 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 首次执行会依次完成：
 
 1. 校验本机配置和 SSH Key 登录。
-2. 将固定版本的 llama.cpp 拉到本机 `vendor/llama.cpp`。
+2. 将固定版本的 llama.cpp 与 stable-diffusion.cpp 拉到本机 `vendor/`，作为后续 AMD 算子改造工作树。
 3. 探查 RadeonCloud GPU、显存、磁盘、ROCm、PyTorch HIP 与现有 llama-server。
 4. 仅在缺失时安装远端普通构建工具。
 5. 同步当前 FastAgentFactory 工作树和本机 llama.cpp 源码到远端。
-6. 在远端使用 `GGML_HIP=ON` 构建 `llama-server`。
+6. 在远端构建 ROCm `llama-server` 与 HIPBLAS `sd-server`。
 7. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
 8. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
-9. 幂等创建远端本地 Profile 和本机 external Profile，设置 `main`、`task`、`compression`、`embedding` 默认角色。
+9. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
+10. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile和本机 external Profile。
 10. 启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
 11. 生成本机 `.env` 的 SSH 隧道配置与资源加密密钥。
 12. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
@@ -164,8 +165,9 @@ http://localhost:3000
 | `./deploy.sh models` | 续传/校验模型并更新远端 Profile；节点已运行时自动重启模型，不重装 ROCm。 |
 | `./deploy.sh sync` | 同步当前 FastAgentFactory 与本机 llama.cpp 工作树到远端。 |
 | `./deploy.sh build-llama` | 在远端对已同步源码增量构建 llama-server。 |
+| `./deploy.sh build-sd` | 在远端对已同步源码增量构建 sd-server。 |
 
-更换 RadeonCloud 实例时只需修改 `deploy/deploy.env` 中的 SSH Host 和 Port，再运行 `./deploy.sh up`。持久盘路径变化时同时修改 `REMOTE_MODEL_ROOT`、`REMOTE_STATE_ROOT` 和 `REMOTE_LLAMA_CPP_DIR`。
+更换实例时只需修改 SSH Host 和 Port。持久盘路径变化时同时修改 `REMOTE_MODEL_ROOT`、`REMOTE_STATE_ROOT`、`REMOTE_LLAMA_CPP_DIR` 和 `REMOTE_STABLE_DIFFUSION_CPP_DIR`。
 
 ## 日常启动
 
@@ -178,7 +180,7 @@ http://localhost:3000
 `start.sh` 会：
 
 - 读取 `.env`。
-- 建立并验证 Chat、Embedding、Telemetry 三条 SSH 转发。
+- 建立并验证 Chat、Embedding、Image、Telemetry 四条 SSH 转发。
 - 使用 uv 同步本机 Python Web 依赖。
 - 使用 npm 准备前端依赖。
 - 检查并构建 Docker Agent Runtime。
@@ -196,10 +198,17 @@ http://localhost:3000
 - 查看 Chat 与 Embedding 的加载阶段、日志和实际 Profile 参数。
 - 加载、卸载、重启模型。
 - 设置默认 `main`、`task`、`compression` 与 `embedding` Profile。
+- 配置 stable-diffusion.cpp 生图 Profile、默认尺寸、Steps、CFG、Diffusion Flash Attention、CPU 文本编码器和显存驻留策略。
 - 修改 Context、最大输出、压缩阈值、GPU Layers、KV Cache 类型、并发、Flash Attention 和图片输入能力。
 - 根据 GGUF 元数据、上下文、并发和 KV Cache 类型查看预计显存占用及余量。
 
 保存一个已经加载的 external Profile 后，本机后端会将配置透传到 RadeonCloud 并重启对应模型，新的 `--ctx-size`、KV Cache、Flash Attention 等参数会真正进入远端 llama-server 命令行。
+
+### 本地图片生成
+
+FLUX.1-dev Q4_0 由远端 `sd-server` 提供 OpenAI-compatible Images API。Agent 沿用项目已有的 `image_output` 模型工具链，生成结果写入当前 Package Workspace 的 `images/`；模型上下文只接收路径和元数据，不注入 base64。
+
+比赛机约 13GB 显存，`deploy.env.example` 默认 `IMAGE_ENABLED=0`：Image Profile 会注册但不自动常驻。需要生图时在“模型配置”先卸载 Chat，再启用并加载 Image Profile；默认 `exclusive` 策略会明确拒绝显存冲突，避免静默 OOM。FLUX.1-dev 受其 Non-Commercial License 约束，提交和演示前需确认使用范围。
 
 ![本地模型池](readme-assets/images/model-pool.png)
 

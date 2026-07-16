@@ -6,17 +6,23 @@ COMMAND="${1:-}"
 CONFIG_FILE="${2:-}"
 
 if [[ -z "${COMMAND}" || -z "${CONFIG_FILE}" || ! -r "${CONFIG_FILE}" ]]; then
-    echo "Usage: remote_runtime.sh <prepare-host|bootstrap|up|down|restart|status|doctor|logs|models|build-llama> <config-file>" >&2
+    echo "Usage: remote_runtime.sh <prepare-host|bootstrap|up|down|restart|status|doctor|logs|models|image-models|build-llama|build-sd> <config-file>" >&2
     exit 2
 fi
 
 set -a
+DEFAULT_CONFIG_FILE="$(dirname "${CONFIG_FILE}")/deploy.env.example"
+if [[ -r "${DEFAULT_CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${DEFAULT_CONFIG_FILE}"
+fi
 # shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 set +a
 
 required_config=(
     REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT REMOTE_LLAMA_CPP_DIR
+    REMOTE_STABLE_DIFFUSION_CPP_DIR
     PYPI_INDEX_URL HF_ENDPOINT CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
     CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MODEL_SIZE_BYTES
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 CHAT_MMPROJ_SIZE_BYTES
@@ -25,6 +31,11 @@ required_config=(
     CHAT_PARALLEL_SLOTS CHAT_CACHE_TYPE_K CHAT_CACHE_TYPE_V EMBEDDING_PROFILE_ID
     EMBEDDING_SERVED_MODEL_NAME EMBEDDING_DIMENSIONS REMOTE_CHAT_PORT
     REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT
+    REMOTE_IMAGE_PORT IMAGE_PROFILE_ID IMAGE_SERVED_MODEL_NAME IMAGE_MODEL_URL
+    IMAGE_MODEL_FILENAME IMAGE_MODEL_SHA256 IMAGE_MODEL_SIZE_BYTES IMAGE_VAE_URL
+    IMAGE_VAE_FILENAME IMAGE_VAE_SHA256 IMAGE_VAE_SIZE_BYTES IMAGE_CLIP_L_URL
+    IMAGE_CLIP_L_FILENAME IMAGE_CLIP_L_SHA256 IMAGE_CLIP_L_SIZE_BYTES IMAGE_T5XXL_URL
+    IMAGE_T5XXL_FILENAME IMAGE_T5XXL_SHA256 IMAGE_T5XXL_SIZE_BYTES
 )
 for name in "${required_config[@]}"; do
     if [[ -z "${!name:-}" ]]; then
@@ -37,6 +48,8 @@ numeric_config=(
     CHAT_MODEL_SIZE_BYTES CHAT_MMPROJ_SIZE_BYTES CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
     CHAT_COMPRESSION_THRESHOLD CHAT_GPU_LAYERS CHAT_PARALLEL_SLOTS EMBEDDING_DIMENSIONS
     REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT
+    REMOTE_IMAGE_PORT IMAGE_MODEL_SIZE_BYTES IMAGE_VAE_SIZE_BYTES IMAGE_CLIP_L_SIZE_BYTES
+    IMAGE_T5XXL_SIZE_BYTES
 )
 for name in "${numeric_config[@]}"; do
     [[ "${!name}" =~ ^[0-9]+$ ]] || {
@@ -44,7 +57,7 @@ for name in "${numeric_config[@]}"; do
         exit 2
     }
 done
-for name in REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT; do
+for name in REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT REMOTE_IMAGE_PORT; do
     (( ${!name} >= 1 && ${!name} <= 65535 )) || {
         echo "Deployment port must be between 1 and 65535: ${name}" >&2
         exit 2
@@ -52,8 +65,11 @@ for name in REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT; do
 done
 [[ "${REMOTE_CHAT_PORT}" != "${REMOTE_EMBEDDING_PORT}" \
     && "${REMOTE_CHAT_PORT}" != "${REMOTE_TELEMETRY_PORT}" \
-    && "${REMOTE_EMBEDDING_PORT}" != "${REMOTE_TELEMETRY_PORT}" ]] || {
-    echo "Remote Chat, Embedding and Telemetry ports must be different" >&2
+    && "${REMOTE_CHAT_PORT}" != "${REMOTE_IMAGE_PORT}" \
+    && "${REMOTE_EMBEDDING_PORT}" != "${REMOTE_TELEMETRY_PORT}" \
+    && "${REMOTE_EMBEDDING_PORT}" != "${REMOTE_IMAGE_PORT}" \
+    && "${REMOTE_TELEMETRY_PORT}" != "${REMOTE_IMAGE_PORT}" ]] || {
+    echo "Remote inference ports must be distinct" >&2
     exit 2
 }
 
@@ -64,8 +80,14 @@ PID_FILE="${REMOTE_STATE_ROOT}/inference-node.pid"
 LOG_FILE="${REMOTE_STATE_ROOT}/logs/inference-node.log"
 EMBEDDING_PATH_FILE="${REMOTE_STATE_ROOT}/embedding-model-path"
 LLAMA_SERVER_BIN="${REMOTE_LLAMA_CPP_DIR}/build/bin/llama-server"
+SD_SERVER_BIN="${REMOTE_STABLE_DIFFUSION_CPP_DIR}/build/bin/sd-server"
 CHAT_MODEL_PATH="${REMOTE_MODEL_ROOT}/gguf/${CHAT_MODEL_FILENAME}"
 CHAT_MMPROJ_PATH="${REMOTE_MODEL_ROOT}/gguf/${CHAT_MMPROJ_FILENAME}"
+IMAGE_MODEL_DIR="${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0"
+IMAGE_MODEL_PATH="${IMAGE_MODEL_DIR}/${IMAGE_MODEL_FILENAME}"
+IMAGE_VAE_PATH="${IMAGE_MODEL_DIR}/${IMAGE_VAE_FILENAME}"
+IMAGE_CLIP_L_PATH="${IMAGE_MODEL_DIR}/${IMAGE_CLIP_L_FILENAME}"
+IMAGE_T5XXL_PATH="${IMAGE_MODEL_DIR}/${IMAGE_T5XXL_FILENAME}"
 
 log() {
     printf '[remote] %s\n' "$*"
@@ -102,7 +124,9 @@ prepare_host() {
         "${REMOTE_STATE_ROOT}/model_pool" \
         "${REMOTE_MODEL_ROOT}/gguf" \
         "${REMOTE_MODEL_ROOT}/modelscope" \
-        "${REMOTE_LLAMA_CPP_DIR}"
+        "${REMOTE_LLAMA_CPP_DIR}" \
+        "${REMOTE_STABLE_DIFFUSION_CPP_DIR}" \
+        "${IMAGE_MODEL_DIR}"
 }
 
 doctor() {
@@ -142,6 +166,12 @@ PY
         "${LLAMA_SERVER_BIN}" --version | head -n 1
     else
         echo "llama-server: not built"
+    fi
+    log "stable-diffusion.cpp"
+    if [[ -x "${SD_SERVER_BIN}" ]]; then
+        "${SD_SERVER_BIN}" --version | head -n 1 || true
+    else
+        echo "sd-server: not built"
     fi
 }
 
@@ -202,6 +232,29 @@ build_llama() {
     cmake --build "${REMOTE_LLAMA_CPP_DIR}/build" --target llama-server --parallel "$(nproc)"
     [[ -x "${LLAMA_SERVER_BIN}" ]] || fail "llama-server build did not produce ${LLAMA_SERVER_BIN}"
     "${LLAMA_SERVER_BIN}" --version | head -n 1
+}
+
+build_sd() {
+    [[ -f "${REMOTE_STABLE_DIFFUSION_CPP_DIR}/CMakeLists.txt" ]] \
+        || fail "stable-diffusion.cpp source is not synchronized to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
+    local gfx_name c_compiler cxx_compiler
+    gfx_name="$(rocminfo 2>/dev/null | awk '/Name: *gfx[0-9]/ && !found {value=$2; found=1} END {print value}')"
+    [[ -n "${gfx_name}" ]] || fail "Unable to detect AMD GPU target from rocminfo"
+    c_compiler="$(command -v clang || true)"
+    cxx_compiler="$(command -v clang++ || true)"
+    [[ -n "${c_compiler}" && -n "${cxx_compiler}" ]] || {
+        c_compiler=/opt/rocm/llvm/bin/clang
+        cxx_compiler=/opt/rocm/llvm/bin/clang++
+    }
+    [[ -x "${c_compiler}" && -x "${cxx_compiler}" ]] \
+        || fail "ROCm clang/clang++ compiler is unavailable"
+    log "Configuring stable-diffusion.cpp for ${gfx_name} with HIPBLAS"
+    cmake -S "${REMOTE_STABLE_DIFFUSION_CPP_DIR}" -B "${REMOTE_STABLE_DIFFUSION_CPP_DIR}/build" -G Ninja \
+        -DCMAKE_C_COMPILER="${c_compiler}" -DCMAKE_CXX_COMPILER="${cxx_compiler}" \
+        -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release \
+        -DGPU_TARGETS="${gfx_name}" -DAMDGPU_TARGETS="${gfx_name}"
+    cmake --build "${REMOTE_STABLE_DIFFUSION_CPP_DIR}/build" --target sd-server --parallel "$(nproc)"
+    [[ -x "${SD_SERVER_BIN}" ]] || fail "stable-diffusion.cpp build did not produce ${SD_SERVER_BIN}"
 }
 
 download_file() {
@@ -272,6 +325,33 @@ download_models() {
     )"
     [[ -d "${embedding_path}" ]] || fail "Embedding download did not return a model directory: ${embedding_path}"
     printf '%s\n' "${embedding_path}" > "${EMBEDDING_PATH_FILE}"
+    download_image_models
+}
+
+download_image_models() {
+    download_file "${IMAGE_MODEL_URL}" "${IMAGE_MODEL_PATH}" "${IMAGE_MODEL_SHA256}" "${IMAGE_MODEL_SIZE_BYTES}"
+    download_file "${IMAGE_VAE_URL}" "${IMAGE_VAE_PATH}" "${IMAGE_VAE_SHA256}" "${IMAGE_VAE_SIZE_BYTES}"
+    download_file "${IMAGE_CLIP_L_URL}" "${IMAGE_CLIP_L_PATH}" "${IMAGE_CLIP_L_SHA256}" "${IMAGE_CLIP_L_SIZE_BYTES}"
+    download_file "${IMAGE_T5XXL_URL}" "${IMAGE_T5XXL_PATH}" "${IMAGE_T5XXL_SHA256}" "${IMAGE_T5XXL_SIZE_BYTES}"
+    "${PYTHON_BIN}" - "${IMAGE_MODEL_DIR}/image-model.json" \
+        "${IMAGE_MODEL_FILENAME}" "${IMAGE_VAE_FILENAME}" "${IMAGE_CLIP_L_FILENAME}" "${IMAGE_T5XXL_FILENAME}" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = {
+    "format": "stable_diffusion_cpp",
+    "family": "flux1",
+    "display_name": "FLUX.1-dev Q4_0",
+    "quantization": "Q4_0",
+    "diffusion_model": sys.argv[2],
+    "vae": sys.argv[3],
+    "clip_l": sys.argv[4],
+    "t5xxl": sys.argv[5],
+}
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
 }
 
 boolean_flag() {
@@ -312,15 +392,36 @@ configure_profiles() {
         --embedding-model-path "${embedding_path}" \
         --embedding-revision "${EMBEDDING_MODEL_REVISION}" \
         --embedding-dimensions "${EMBEDDING_DIMENSIONS}" \
-        "$(boolean_flag "${EMBEDDING_TRUST_REMOTE_CODE:-0}" embedding-trust-remote-code)"
+        "$(boolean_flag "${EMBEDDING_TRUST_REMOTE_CODE:-0}" embedding-trust-remote-code)" \
+        --image-profile-id "${IMAGE_PROFILE_ID}" \
+        --image-served-model-name "${IMAGE_SERVED_MODEL_NAME}" \
+        --image-model-path "${IMAGE_MODEL_PATH}" \
+        --image-vae-path "${IMAGE_VAE_PATH}" \
+        --image-clip-l-path "${IMAGE_CLIP_L_PATH}" \
+        --image-t5xxl-path "${IMAGE_T5XXL_PATH}" \
+        --image-revision "${STABLE_DIFFUSION_CPP_REVISION:-}" \
+        --image-checksum "${IMAGE_MODEL_SHA256}" \
+        --image-enabled \
+        "$(boolean_flag "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)" \
+        "$(boolean_flag "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)" \
+        "$(boolean_flag "${IMAGE_VAE_TILING:-1}" image-vae-tiling)" \
+        "$(boolean_flag "${IMAGE_OFFLOAD_TO_CPU:-0}" image-offload-to-cpu)" \
+        --image-default-width "${IMAGE_DEFAULT_WIDTH:-768}" \
+        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-768}" \
+        --image-default-steps "${IMAGE_DEFAULT_STEPS:-20}" \
+        --image-default-cfg-scale "${IMAGE_DEFAULT_CFG_SCALE:-1.0}" \
+        --image-residency-policy "${IMAGE_RESIDENCY_POLICY:-exclusive}" \
+        --image-timeout-seconds "${IMAGE_TIMEOUT_SECONDS:-900}"
 }
 
 node_environment() {
     export AGENTFACTORY_MODEL_ROOT="${REMOTE_MODEL_ROOT}"
     export AGENTFACTORY_MODEL_POOL_STORE_PATH="${MODEL_POOL_STORE}"
     export AGENTFACTORY_LLAMA_SERVER_PATH="${LLAMA_SERVER_BIN}"
+    export AGENTFACTORY_SD_SERVER_PATH="${SD_SERVER_BIN}"
     export AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT="http://127.0.0.1:${REMOTE_CHAT_PORT}/v1"
     export AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT="http://127.0.0.1:${REMOTE_EMBEDDING_PORT}"
+    export AGENTFACTORY_LOCAL_IMAGE_ENDPOINT="http://127.0.0.1:${REMOTE_IMAGE_PORT}/v1"
     export AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT="http://127.0.0.1:${REMOTE_TELEMETRY_PORT}"
 }
 
@@ -334,6 +435,7 @@ node_running() {
 start_node() {
     prepare_python
     [[ -x "${LLAMA_SERVER_BIN}" ]] || fail "llama-server is not built"
+    [[ -x "${SD_SERVER_BIN}" ]] || fail "sd-server is not built"
     [[ -f "${MODEL_POOL_STORE}" ]] || fail "Model pool is not configured"
     if node_running; then
         log "Inference node is already running with PID $(<"${PID_FILE}")"
@@ -396,8 +498,7 @@ import sys
 payload = json.load(sys.stdin)
 states = {item.get("kind"): item.get("phase") for item in payload.get("runtimes", [])}
 raise SystemExit(0 if states.get("chat") == states.get("embedding") == "ready" else 1)
-' \
-        then
+'; then
             log "Chat and Embedding runtimes are ready"
             return
         fi
@@ -428,6 +529,7 @@ bootstrap() {
     verify_rocm_runtime
     prepare_python
     build_llama
+    build_sd
     download_models
     configure_profiles
     stop_node
@@ -446,6 +548,10 @@ refresh_models() {
     fi
 }
 
+refresh_image_models() {
+    download_image_models
+}
+
 case "${COMMAND}" in
     prepare-host) prepare_host ;;
     bootstrap) bootstrap ;;
@@ -456,6 +562,8 @@ case "${COMMAND}" in
     doctor) doctor ;;
     logs) tail -n 200 "${LOG_FILE}" 2>/dev/null || true ;;
     models) refresh_models ;;
+    image-models) refresh_image_models ;;
     build-llama) build_llama ;;
+    build-sd) build_sd ;;
     *) fail "Unsupported command: ${COMMAND}" ;;
 esac

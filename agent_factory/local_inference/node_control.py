@@ -12,11 +12,12 @@ from agent_factory.model_pool.schema import (
     ModelPoolCapabilities,
     ModelPoolLimits,
     ModelPoolProfile,
+    StableDiffusionCppInferenceConfig,
     TransformersInferenceConfig,
 )
 
 
-RuntimeKind = Literal["chat", "embedding"]
+RuntimeKind = Literal["chat", "embedding", "image_generation"]
 RuntimeAction = Literal["load", "unload", "restart"]
 
 
@@ -33,7 +34,7 @@ class InferenceNodeProfileConfiguration(BaseModel):
 
     limits: ModelPoolLimits
     capabilities: ModelPoolCapabilities
-    inference: LlamaCppInferenceConfig | TransformersInferenceConfig | None = None
+    inference: LlamaCppInferenceConfig | TransformersInferenceConfig | StableDiffusionCppInferenceConfig | None = None
     embedding_dimensions: int | None = None
     normalize_embeddings: bool = True
 

@@ -425,6 +425,7 @@ const zhCN = {
   'localModel.defaultRole.task': '默认任务模型',
   'localModel.defaultRole.compression': '默认压缩模型',
   'localModel.defaultRole.embedding': '默认 Embedding',
+  'localModel.defaultRole.image_generation': '默认生图模型',
 
   'modelPool.toolCalling': '工具调用',
   'modelPool.reasoning': '思考模式',
@@ -1229,6 +1230,7 @@ const enUS: Record<MessageKey, string> = {
   'localModel.defaultRole.task': 'Default task model',
   'localModel.defaultRole.compression': 'Default compression model',
   'localModel.defaultRole.embedding': 'Default embedding',
+  'localModel.defaultRole.image_generation': 'Default image model',
 
   'modelPool.toolCalling': 'Tool calling',
   'modelPool.reasoning': 'Reasoning',

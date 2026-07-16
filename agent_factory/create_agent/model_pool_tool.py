@@ -65,7 +65,7 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                             "tool_id": {"type": "string"},
                             "capability": {
                                 "type": "string",
-                                "enum": ["image_input", "audio_input"],
+                                "enum": ["image_input", "image_output", "image_edit", "audio_input"],
                             },
                             "purpose": {"type": "string"},
                             "min_context_window_tokens": {"type": "integer", "minimum": 1},

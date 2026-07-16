@@ -152,6 +152,11 @@
                   <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.parallel_slots ?? '—' }}</strong></div>
                   <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.cache_type_k || '—' }} / {{ chatRuntimeConfiguration(profile)?.cache_type_v || '—' }}</strong></div>
                 </template>
+                <template v-else-if="profile.kind === 'image_generation'">
+                  <div class="spec-item"><span>默认尺寸</span><strong>{{ imageRuntimeConfiguration(profile)?.default_width }} × {{ imageRuntimeConfiguration(profile)?.default_height }}</strong></div>
+                  <div class="spec-item"><span>采样步数</span><strong>{{ imageRuntimeConfiguration(profile)?.default_steps ?? '—' }}</strong></div>
+                  <div class="spec-item"><span>驻留策略</span><strong>{{ imageRuntimeConfiguration(profile)?.residency_policy || '—' }}</strong></div>
+                </template>
                 <div v-else class="spec-item"><span>{{ t('localModel.embeddingDimensions') }}</span><strong>{{ profile.embedding_dimensions || '—' }}</strong></div>
                 <div class="spec-item"><span>{{ t('modelPool.maxInput') }}</span><strong>{{ formatTokens(profile.limits.max_input_tokens) }}</strong></div>
               </div>
@@ -388,6 +393,15 @@
           <n-form-item v-if="profileForm.kind === 'embedding'" :label="t('localModel.embeddingDimensions')">
             <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" />
           </n-form-item>
+          <template v-if="profileForm.kind === 'image_generation'">
+            <n-form-item label="默认宽度"><n-input-number v-model:value="profileForm.default_width" :min="64" :step="64" /></n-form-item>
+            <n-form-item label="默认高度"><n-input-number v-model:value="profileForm.default_height" :min="64" :step="64" /></n-form-item>
+            <n-form-item label="采样步数"><n-input-number v-model:value="profileForm.default_steps" :min="1" :max="200" /></n-form-item>
+            <n-form-item label="CFG Scale"><n-input-number v-model:value="profileForm.default_cfg_scale" :min="0" :max="30" :step="0.1" /></n-form-item>
+            <n-form-item label="显存驻留策略">
+              <n-select v-model:value="profileForm.residency_policy" :options="residencyPolicyOptions" />
+            </n-form-item>
+          </template>
         </div>
         <div v-if="profileForm.kind === 'chat'" class="memory-preview" :class="memoryBudgetClass(memoryEstimate)">
           <div class="memory-budget-heading">
@@ -417,6 +431,9 @@
           </n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.normalize_embeddings">{{ t('localModel.normalizeEmbeddings') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'image_generation'" v-model:checked="profileForm.diffusion_flash_attention">Diffusion Flash Attention</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'image_generation'" v-model:checked="profileForm.clip_on_cpu">CLIP / T5 使用 CPU</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'image_generation'" v-model:checked="profileForm.vae_tiling">VAE Tiling</n-checkbox>
         </n-space>
       </n-form>
       <template #action>
@@ -451,6 +468,7 @@ import {
   type LocalModelRuntime,
   type InferenceMemoryEstimate,
   type LlamaCppRuntimeConfiguration,
+  type StableDiffusionCppRuntimeConfiguration,
   type RocmRuntimeInfo,
 } from '@/api/modelPool'
 
@@ -488,12 +506,22 @@ const profileForm = reactive({
   trust_remote_code: false, tool_calling: true, reasoning_supported: false,
   image_input: false,
   normalize_embeddings: true, enabled: true,
+  vae_path: '', clip_l_path: '', t5xxl_path: '',
+  diffusion_flash_attention: true, clip_on_cpu: true, vae_tiling: true,
+  offload_to_cpu: false, max_vram_gib: null as number | null, stream_layers: null as number | null,
+  default_width: 768, default_height: 768, default_steps: 20, default_cfg_scale: 1.0,
+  default_sampler: 'euler', residency_policy: 'exclusive' as 'coexist_if_fit' | 'exclusive',
 })
 
 const kindOptions = computed(() => [
   { label: t('localModel.chat'), value: 'chat' },
   { label: t('localModel.embedding'), value: 'embedding' },
+  { label: '图片生成', value: 'image_generation' },
 ])
+const residencyPolicyOptions = [
+  { label: '显存不足时禁止共存（推荐）', value: 'exclusive' },
+  { label: '显存足够时共存', value: 'coexist_if_fit' },
+]
 const artifactOptions = computed(() => artifacts.value.map((item) => ({
   label: `${item.display_name} · ${item.kind}`,
   value: item.artifact_id,
@@ -582,7 +610,7 @@ async function saveArtifact(): Promise<void> {
       local_path: externalInference.value ? null : artifactForm.local_path,
       model_format: externalInference.value
         ? selectedRemoteModel.value?.format || 'external'
-        : artifactForm.kind === 'chat' ? 'llama_cpp' : 'transformers',
+        : artifactForm.kind === 'chat' ? 'llama_cpp' : artifactForm.kind === 'embedding' ? 'transformers' : 'stable_diffusion_cpp',
       artifact_id: artifactEditing.value?.artifact_id,
     }
     if (artifactEditing.value) await modelPoolApi.patchArtifact(artifactEditing.value.artifact_id, payload)
@@ -604,6 +632,7 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.served_model_name = item?.served_model_name || artifact?.external_model_id || artifact?.display_name || ''
   const chatInference = item?.kind === 'chat' ? chatRuntimeConfiguration(item, remoteModel) : null
   const embeddingInference = item?.kind === 'embedding' ? item.inference : null
+  const imageInference = item?.kind === 'image_generation' ? imageRuntimeConfiguration(item, remoteModel) : null
   profileForm.gpu_layers = chatInference?.gpu_layers ?? 99
   profileForm.parallel_slots = chatInference?.parallel_slots ?? 1
   profileForm.cache_type_k = chatInference?.cache_type_k ?? 'f16'
@@ -625,6 +654,21 @@ function openProfile(item?: LocalModelProfile): void {
     ?? false
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.normalize_embeddings = item?.normalize_embeddings ?? true
+  profileForm.vae_path = imageInference?.vae_path ?? ''
+  profileForm.clip_l_path = imageInference?.clip_l_path ?? ''
+  profileForm.t5xxl_path = imageInference?.t5xxl_path ?? ''
+  profileForm.diffusion_flash_attention = imageInference?.diffusion_flash_attention ?? true
+  profileForm.clip_on_cpu = imageInference?.clip_on_cpu ?? true
+  profileForm.vae_tiling = imageInference?.vae_tiling ?? true
+  profileForm.offload_to_cpu = imageInference?.offload_to_cpu ?? false
+  profileForm.max_vram_gib = imageInference?.max_vram_gib ?? null
+  profileForm.stream_layers = imageInference?.stream_layers ?? null
+  profileForm.default_width = imageInference?.default_width ?? 768
+  profileForm.default_height = imageInference?.default_height ?? 768
+  profileForm.default_steps = imageInference?.default_steps ?? 20
+  profileForm.default_cfg_scale = imageInference?.default_cfg_scale ?? 1.0
+  profileForm.default_sampler = imageInference?.default_sampler ?? 'euler'
+  profileForm.residency_policy = imageInference?.residency_policy ?? 'exclusive'
   profileForm.enabled = item?.enabled ?? true
   memoryEstimate.value = remoteModel?.memory_estimate || null
   profileModalOpen.value = true
@@ -686,23 +730,46 @@ async function saveProfile(): Promise<void> {
   saving.value = true
   try {
     const isChat = profileForm.kind === 'chat'
+    const isEmbedding = profileForm.kind === 'embedding'
+    const imageInference = {
+      vae_path: profileForm.vae_path,
+      clip_l_path: profileForm.clip_l_path,
+      t5xxl_path: profileForm.t5xxl_path,
+      diffusion_flash_attention: profileForm.diffusion_flash_attention,
+      clip_on_cpu: profileForm.clip_on_cpu,
+      vae_tiling: profileForm.vae_tiling,
+      offload_to_cpu: profileForm.offload_to_cpu,
+      max_vram_gib: profileForm.max_vram_gib,
+      stream_layers: profileForm.stream_layers,
+      default_width: profileForm.default_width,
+      default_height: profileForm.default_height,
+      default_steps: profileForm.default_steps,
+      default_cfg_scale: profileForm.default_cfg_scale,
+      default_sampler: profileForm.default_sampler,
+      residency_policy: profileForm.residency_policy,
+    }
     const payload = {
       profile_id: profileEditing.value?.profile_id,
       display_name: profileForm.display_name,
       kind: profileForm.kind,
       artifact_id: profileForm.artifact_id,
-      engine: externalInference.value ? 'external' : isChat ? 'llama_cpp_rocm' : 'transformers_rocm',
+      engine: externalInference.value ? 'external' : isChat ? 'llama_cpp_rocm' : isEmbedding ? 'transformers_rocm' : 'stable_diffusion_cpp_rocm',
       served_model_name: profileForm.served_model_name,
       enabled: profileForm.enabled,
       capabilities: {
         input_modalities: isChat && profileForm.image_input ? ['text', 'image'] : ['text'],
-        output_modalities: ['text'],
+        output_modalities: isChat || isEmbedding ? ['text'] : ['image'],
         tool_calling: isChat && profileForm.tool_calling,
         streaming_tool_calls: false, strict_tool_schema: false,
         structured_output_methods: isChat ? ['function_calling', 'json_mode'] : [],
         reasoning_supported: isChat && profileForm.reasoning_supported,
         reasoning_efforts: [], reasoning_content: isChat && profileForm.reasoning_supported,
         cache_usage: false,
+        text_to_image: !isChat && !isEmbedding,
+        image_to_image: false,
+        image_edit: false,
+        batch_generation: false,
+        async_job: !isChat && !isEmbedding,
       },
       limits: {
         max_input_tokens: profileForm.max_input_tokens,
@@ -721,7 +788,7 @@ async function saveProfile(): Promise<void> {
                   cache_type_v: profileForm.cache_type_v,
                   flash_attention: profileForm.flash_attention,
                 }
-              : { trust_remote_code: profileForm.trust_remote_code },
+              : isEmbedding ? { trust_remote_code: profileForm.trust_remote_code } : imageInference,
           }
         : isChat
         ? {
@@ -731,8 +798,8 @@ async function saveProfile(): Promise<void> {
             cache_type_v: profileForm.cache_type_v,
             flash_attention: profileForm.flash_attention,
           }
-        : { trust_remote_code: profileForm.trust_remote_code },
-      embedding_dimensions: isChat ? null : profileForm.embedding_dimensions,
+        : isEmbedding ? { trust_remote_code: profileForm.trust_remote_code } : imageInference,
+      embedding_dimensions: isEmbedding ? profileForm.embedding_dimensions : null,
       normalize_embeddings: profileForm.normalize_embeddings,
       notes: '',
     }
@@ -843,7 +910,9 @@ function profileDefaultRoles(profileId: string): LocalModelDefaultRole[] {
 function defaultRoleOptions(profile: LocalModelProfile) {
   const roles: LocalModelDefaultRole[] = profile.kind === 'embedding'
     ? ['embedding']
-    : ['main', 'task', 'compression']
+    : profile.kind === 'image_generation'
+      ? ['image_generation']
+      : ['main', 'task', 'compression']
   return roles.map((role) => ({
     key: role,
     label: defaultRoleLabel(role),
@@ -890,12 +959,30 @@ function removeProfile(item: LocalModelProfile): void {
 }
 
 function kindLabel(kind: LocalModelKind): string {
-  return kind === 'chat' ? t('localModel.chat') : t('localModel.embedding')
+  if (kind === 'chat') return t('localModel.chat')
+  if (kind === 'embedding') return t('localModel.embedding')
+  return '图片生成'
 }
 
 function engineLabel(engine: LocalModelProfile['engine']): string {
   if (engine === 'external') return t('localModel.externalEndpoint')
-  return engine === 'llama_cpp_rocm' ? 'llama.cpp · ROCm' : 'Transformers · ROCm'
+  if (engine === 'llama_cpp_rocm') return 'llama.cpp · ROCm'
+  if (engine === 'stable_diffusion_cpp_rocm') return 'stable-diffusion.cpp · ROCm'
+  return 'Transformers · ROCm'
+}
+
+function imageRuntimeConfiguration(
+  profile: LocalModelProfile,
+  remoteModel = remoteModelForProfile(profile),
+): StableDiffusionCppRuntimeConfiguration | null {
+  if (profile.kind !== 'image_generation') return null
+  if ('vae_path' in profile.inference) return profile.inference
+  if ('remote_inference' in profile.inference && profile.inference.remote_inference && 'vae_path' in profile.inference.remote_inference) {
+    return profile.inference.remote_inference
+  }
+  const value = remoteModel?.runtime_configuration
+  if (!value || typeof value.vae_path !== 'string') return null
+  return value as unknown as StableDiffusionCppRuntimeConfiguration
 }
 
 function artifactLocation(artifact?: LocalModelArtifact | null): string {

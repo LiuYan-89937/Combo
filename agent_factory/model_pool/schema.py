@@ -10,15 +10,20 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
 
 
-ModelPoolProfileKind = Literal["chat", "embedding"]
+ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]
 ModelBindingRole = Literal["main", "task", "compression"]
-ModelPoolDefaultRole = Literal["main", "task", "compression", "embedding"]
+ModelPoolDefaultRole = Literal["main", "task", "compression", "embedding", "image_generation"]
 ModelBindingSource = Literal["local_registry", "local_default"]
 ModelPoolModality = Literal["text", "image", "audio"]
-ModelToolCapability = Literal["image_input", "audio_input"]
+ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input"]
 ModelSelectionSource = Literal["auto", "manual"]
 ModelSelectionOptimizeFor = Literal["balanced", "quality", "latency", "context"]
-LocalInferenceEngine = Literal["llama_cpp_rocm", "transformers_rocm", "external"]
+LocalInferenceEngine = Literal[
+    "llama_cpp_rocm",
+    "transformers_rocm",
+    "stable_diffusion_cpp_rocm",
+    "external",
+]
 ModelArtifactSource = Literal["local_storage", "external_endpoint"]
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
@@ -111,6 +116,11 @@ class ModelPoolCapabilities(BaseModel):
     reasoning_efforts: list[str] = Field(default_factory=list)
     reasoning_content: bool = False
     cache_usage: bool = False
+    text_to_image: bool = False
+    image_to_image: bool = False
+    image_edit: bool = False
+    batch_generation: bool = False
+    async_job: bool = False
 
     @field_validator("input_modalities", "output_modalities", "structured_output_methods", "reasoning_efforts")
     @classmethod
@@ -171,14 +181,55 @@ class TransformersInferenceConfig(BaseModel):
     trust_remote_code: bool = False
 
 
+class StableDiffusionCppInferenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vae_path: str
+    clip_l_path: str
+    t5xxl_path: str
+    diffusion_flash_attention: bool = True
+    clip_on_cpu: bool = True
+    vae_tiling: bool = True
+    offload_to_cpu: bool = False
+    max_vram_gib: float | None = Field(default=None, gt=0)
+    stream_layers: int | None = Field(default=None, ge=1)
+    default_width: int = Field(default=768, ge=64, le=4096, multiple_of=64)
+    default_height: int = Field(default=768, ge=64, le=4096, multiple_of=64)
+    default_steps: int = Field(default=20, ge=1, le=200)
+    default_cfg_scale: float = Field(default=1.0, ge=0, le=30)
+    default_sampler: str = "euler"
+    residency_policy: Literal["coexist_if_fit", "exclusive"] = "exclusive"
+
+    @field_validator("vae_path", "clip_l_path", "t5xxl_path")
+    @classmethod
+    def _required_absolute_path(cls, value: str) -> str:
+        path = Path(str(value or "").strip()).expanduser()
+        if not path.is_absolute():
+            raise ValueError("stable-diffusion.cpp component paths must be absolute")
+        return str(path)
+
+    @field_validator("default_sampler")
+    @classmethod
+    def _sampler(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            raise ValueError("default_sampler is required")
+        return text
+
+
 class ExternalInferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     external: Literal[True] = True
-    remote_inference: LlamaCppInferenceConfig | TransformersInferenceConfig | None = None
+    remote_inference: LlamaCppInferenceConfig | TransformersInferenceConfig | StableDiffusionCppInferenceConfig | None = None
 
 
-LocalInferenceConfig = LlamaCppInferenceConfig | TransformersInferenceConfig | ExternalInferenceConfig
+LocalInferenceConfig = (
+    LlamaCppInferenceConfig
+    | TransformersInferenceConfig
+    | StableDiffusionCppInferenceConfig
+    | ExternalInferenceConfig
+)
 
 
 class ModelPoolProfile(BaseModel):
@@ -238,6 +289,17 @@ class ModelPoolProfile(BaseModel):
                 raise ValueError("unsupported embedding inference engine")
             if self.embedding_dimensions is None:
                 raise ValueError("embedding profiles require embedding_dimensions")
+        if self.kind == "image_generation":
+            if self.engine == "stable_diffusion_cpp_rocm" and not isinstance(
+                self.inference, StableDiffusionCppInferenceConfig
+            ):
+                raise ValueError("image generation profiles require stable-diffusion.cpp settings")
+            if self.engine == "external" and not isinstance(self.inference, ExternalInferenceConfig):
+                raise ValueError("external image generation profiles require external inference settings")
+            if self.engine not in {"stable_diffusion_cpp_rocm", "external"}:
+                raise ValueError("unsupported image generation inference engine")
+            if "image" not in self.capabilities.output_modalities or not self.capabilities.text_to_image:
+                raise ValueError("image generation profiles require image output and text_to_image capability")
         return self
 
     @property
@@ -325,6 +387,17 @@ class ModelToolSelectionRequirement(BaseModel):
         return tool_id
 
     def as_model_requirement(self) -> ModelSelectionRequirement:
+        if self.capability in {"image_output", "image_edit"}:
+            return ModelSelectionRequirement(
+                role="task",
+                purpose=self.purpose,
+                kind="image_generation",
+                input_modalities=["text"],
+                output_modalities=["image"],
+                excluded_profile_ids=self.excluded_profile_ids,
+                optimize_for=self.optimize_for,
+                max_candidates=self.max_candidates,
+            )
         modality = "image" if self.capability == "image_input" else "audio"
         return ModelSelectionRequirement(
             role="task",

@@ -25,6 +25,7 @@ _DEFAULT_PROFILE_ROLES: tuple[ModelPoolDefaultRole, ...] = (
     "task",
     "compression",
     "embedding",
+    "image_generation",
 )
 
 
@@ -279,7 +280,7 @@ class ModelPoolStore:
     @staticmethod
     def _validate_profile_kind(kind: str) -> str:
         normalized = str(kind or "").strip().lower()
-        if normalized not in {"chat", "embedding"}:
+        if normalized not in {"chat", "embedding", "image_generation"}:
             raise ModelPoolStoreError(f"unsupported local model profile kind: {kind}")
         return normalized
 
@@ -298,7 +299,7 @@ class ModelPoolStore:
             if profile is not None and self._profile_can_be_default(profile, normalized_role):
                 return profile.profile_id
 
-        kind = "embedding" if normalized_role == "embedding" else "chat"
+        kind = normalized_role if normalized_role in {"embedding", "image_generation"} else "chat"
         candidates = sorted(
             self.list_profiles(kind=kind, enabled=True),
             key=lambda profile: (profile.created_at, profile.profile_id),
@@ -322,7 +323,7 @@ class ModelPoolStore:
 
         profile = self.require_profile(normalized_profile_id)
         if not self._profile_can_be_default(profile, normalized_role):
-            expected_kind = "embedding" if normalized_role == "embedding" else "chat"
+            expected_kind = normalized_role if normalized_role in {"embedding", "image_generation"} else "chat"
             raise ModelPoolStoreError(
                 f"default role {normalized_role!r} requires an enabled {expected_kind} profile and artifact"
             )
@@ -351,7 +352,7 @@ class ModelPoolStore:
         profile: ModelPoolProfile,
         role: ModelPoolDefaultRole,
     ) -> bool:
-        expected_kind = "embedding" if role == "embedding" else "chat"
+        expected_kind = role if role in {"embedding", "image_generation"} else "chat"
         if profile.kind != expected_kind or not profile.enabled:
             return False
         artifact = self.get_artifact(profile.artifact_id)

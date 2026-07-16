@@ -1,8 +1,8 @@
 import { requestJson, withQuery } from './http'
 
-export type LocalModelKind = 'chat' | 'embedding'
-export type LocalInferenceEngine = 'llama_cpp_rocm' | 'transformers_rocm' | 'external'
-export type LocalModelDefaultRole = 'main' | 'task' | 'compression' | 'embedding'
+export type LocalModelKind = 'chat' | 'embedding' | 'image_generation'
+export type LocalInferenceEngine = 'llama_cpp_rocm' | 'transformers_rocm' | 'stable_diffusion_cpp_rocm' | 'external'
+export type LocalModelDefaultRole = 'main' | 'task' | 'compression' | 'embedding' | 'image_generation'
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
 
 export type LocalModelDefaults = Record<LocalModelDefaultRole, string | null>
@@ -82,6 +82,24 @@ export interface TransformersRuntimeConfiguration {
   trust_remote_code: boolean
 }
 
+export interface StableDiffusionCppRuntimeConfiguration {
+  vae_path: string
+  clip_l_path: string
+  t5xxl_path: string
+  diffusion_flash_attention: boolean
+  clip_on_cpu: boolean
+  vae_tiling: boolean
+  offload_to_cpu: boolean
+  max_vram_gib?: number | null
+  stream_layers?: number | null
+  default_width: number
+  default_height: number
+  default_steps: number
+  default_cfg_scale: number
+  default_sampler: string
+  residency_policy: 'coexist_if_fit' | 'exclusive'
+}
+
 export interface InferenceMemoryEstimate {
   available: boolean
   model_id: string
@@ -118,6 +136,11 @@ interface LocalModelProfileBase {
     reasoning_efforts: string[]
     reasoning_content: boolean
     cache_usage: boolean
+    text_to_image: boolean
+    image_to_image: boolean
+    image_edit: boolean
+    batch_generation: boolean
+    async_job: boolean
   }
   limits: {
     max_input_tokens?: number | null
@@ -158,7 +181,16 @@ export interface LocalEmbeddingModelProfile extends LocalModelProfileBase {
   }
 }
 
-export type LocalModelProfile = LocalChatModelProfile | LocalEmbeddingModelProfile
+export interface LocalImageGenerationProfile extends LocalModelProfileBase {
+  kind: 'image_generation'
+  engine: 'stable_diffusion_cpp_rocm' | 'external'
+  inference: StableDiffusionCppRuntimeConfiguration | {
+    external: true
+    remote_inference?: StableDiffusionCppRuntimeConfiguration | null
+  }
+}
+
+export type LocalModelProfile = LocalChatModelProfile | LocalEmbeddingModelProfile | LocalImageGenerationProfile
 
 export type LocalModelRuntimePhase = 'idle' | 'starting' | 'loading' | 'ready' | 'stopping' | 'failed'
 

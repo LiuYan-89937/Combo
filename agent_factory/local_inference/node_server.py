@@ -27,6 +27,7 @@ from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeM
 from agent_factory.model_pool.schema import (
     LlamaCppInferenceConfig,
     ModelPoolProfile,
+    StableDiffusionCppInferenceConfig,
     TransformersInferenceConfig,
 )
 from agent_factory.model_pool.store import ModelPoolStore
@@ -84,7 +85,13 @@ def create_app() -> FastAPI:
             if artifact.local_path:
                 path = artifact.resolved_path()
                 size_bytes = path.stat().st_size if path.is_file() else None
-            capabilities = ["embedding"] if profile.kind == "embedding" else ["completion"]
+            capabilities = (
+                ["embedding"]
+                if profile.kind == "embedding"
+                else ["image_generation"]
+                if profile.kind == "image_generation"
+                else ["completion"]
+            )
             if "image" in profile.capabilities.input_modalities:
                 capabilities.append("multimodal")
             model_payload = {
@@ -168,7 +175,7 @@ def _resolve_profile_identity(kind: str, model_id: str) -> ModelPoolProfile:
     if len(profiles) != 1:
         raise HTTPException(
             status_code=404,
-            detail=f"enabled {request.kind} model is not registered on the inference node: {request.model_id}",
+            detail=f"enabled {kind} model is not registered on the inference node: {model_id}",
         )
     return profiles[0]
 
@@ -188,6 +195,11 @@ def _apply_profile_configuration(
         TransformersInferenceConfig,
     ):
         raise ValueError("embedding inference nodes require Transformers settings")
+    if profile.kind == "image_generation" and inference is not None and not isinstance(
+        inference,
+        StableDiffusionCppInferenceConfig,
+    ):
+        raise ValueError("image generation inference nodes require stable-diffusion.cpp settings")
 
     payload = profile.model_dump(mode="json")
     payload.update(
@@ -231,6 +243,8 @@ def _runtime_configuration(profile: ModelPoolProfile) -> dict[str, Any]:
 def _software_payload() -> dict[str, Any]:
     configured_binary = str(os.environ.get("AGENTFACTORY_LLAMA_SERVER_PATH") or "llama-server").strip()
     binary = shutil.which(configured_binary)
+    configured_sd_binary = str(os.environ.get("AGENTFACTORY_SD_SERVER_PATH") or "sd-server").strip()
+    sd_binary = shutil.which(configured_sd_binary)
     return {
         "python_version": sys.version.split()[0],
         "project_revision": _command_output(
@@ -238,6 +252,7 @@ def _software_payload() -> dict[str, Any]:
             cwd=Path(__file__).resolve().parents[2],
         ),
         "llama_server_version": _command_output([binary, "--version"]) if binary else "",
+        "sd_server_version": _command_output([sd_binary, "--version"]) if sd_binary else "",
     }
 
 
