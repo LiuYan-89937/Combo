@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
@@ -16,9 +17,32 @@ from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_events import RUN_TERMINAL_EVENT_TYPES, runtime_stream_status
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.collaboration_system.capacity import (
+    ChatInferenceCapacity,
+    inspect_configured_inference_capacity,
+)
 
 
 RuntimeFactory = Callable[[], AgentPackageRuntimeManager]
+InferenceCapacityProbe = Callable[[], ChatInferenceCapacity]
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationDispatchCapacity:
+    capacity: int
+    max_parallel_workers: int
+    active_worker_tasks: int
+    inference: ChatInferenceCapacity
+    reason: str
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "capacity": self.capacity,
+            "max_parallel_workers": self.max_parallel_workers,
+            "active_worker_tasks": self.active_worker_tasks,
+            "reason": self.reason,
+            "inference": self.inference.payload(),
+        }
 
 
 class CollaborationService:
@@ -27,17 +51,21 @@ class CollaborationService:
         *,
         runtime_factory: RuntimeFactory,
         store: CollaborationStore | None = None,
+        inference_capacity_probe: InferenceCapacityProbe = inspect_configured_inference_capacity,
         poll_interval_seconds: float = 2.0,
         logger: logging.Logger | None = None,
     ) -> None:
         self.store = store or CollaborationStore()
         self.runtime_factory = runtime_factory
+        self.inference_capacity_probe = inference_capacity_probe
         self.poll_interval_seconds = poll_interval_seconds
         self.logger = logger or logging.getLogger(__name__)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._dispatch_lock = threading.Lock()
         self._dispatching_sessions: set[str] = set()
+        self._reserved_worker_tasks: set[tuple[str, str]] = set()
         self._manufacturing_requests: set[str] = set()
 
     def start(self) -> None:
@@ -154,8 +182,32 @@ class CollaborationService:
                 "message": "协作会话正在调度中。",
             }
         try:
-            capacity = self._dispatch_capacity(collaboration_id, limit=limit)
-            tasks = self.store.claim_ready_tasks(collaboration_id, limit=capacity)
+            with self._dispatch_lock:
+                dispatch_capacity = self._dispatch_capacity(limit=limit)
+                ready_tasks = self.store.ready_tasks(collaboration_id)
+                tasks = self.store.claim_ready_tasks(
+                    collaboration_id,
+                    limit=dispatch_capacity.capacity,
+                )
+                session = self.store.get_session(collaboration_id)
+                if not tasks and ready_tasks and dispatch_capacity.capacity == 0:
+                    waiting_tasks = [
+                        task
+                        for task in ready_tasks
+                        if str((task.get("result_payload") or {}).get("runtime_status") or "")
+                        != "waiting_for_inference_capacity"
+                    ]
+                    if waiting_tasks:
+                        session = self.store.mark_tasks_waiting_for_inference_capacity(
+                            collaboration_id,
+                            task_ids=[str(task.get("task_id") or "") for task in waiting_tasks],
+                            capacity=dispatch_capacity.payload(),
+                            message=dispatch_capacity.reason,
+                        )
+                        self.runtime_factory().emit_collaboration_session_updated(
+                            collaboration_id=collaboration_id,
+                            session=session,
+                        )
         finally:
             self._release_session(collaboration_id)
         for task in tasks:
@@ -174,6 +226,8 @@ class CollaborationService:
             "results": [],
             "claimed_tasks": tasks,
             "session": self.store.get_session(collaboration_id),
+            "dispatch_capacity": dispatch_capacity.payload(),
+            "message": dispatch_capacity.reason if not tasks else "协作 worker 已进入执行队列。",
         }
 
     def start_task(self, collaboration_id: str, task_id: str) -> dict[str, Any]:
@@ -183,13 +237,44 @@ class CollaborationService:
                 "session": self.store.get_session(collaboration_id),
                 "message": "协作会话正在调度中。",
             }
+        reservation = (collaboration_id, task_id)
+        reserved = False
         try:
+            ready_task_ids = {
+                str(task.get("task_id") or "")
+                for task in self.store.ready_tasks(collaboration_id)
+            }
+            if task_id in ready_task_ids:
+                with self._dispatch_lock:
+                    dispatch_capacity = self._dispatch_capacity(limit=1)
+                    if dispatch_capacity.capacity == 0:
+                        session = self.store.mark_tasks_waiting_for_inference_capacity(
+                            collaboration_id,
+                            task_ids=[task_id],
+                            capacity=dispatch_capacity.payload(),
+                            message=dispatch_capacity.reason,
+                        )
+                        self.runtime_factory().emit_collaboration_session_updated(
+                            collaboration_id=collaboration_id,
+                            session=session,
+                        )
+                        return {
+                            "result": None,
+                            "session": session,
+                            "message": dispatch_capacity.reason,
+                            "dispatch_capacity": dispatch_capacity.payload(),
+                        }
+                    self._reserved_worker_tasks.add(reservation)
+                    reserved = True
             orchestrator = CollaborationOrchestrator(
                 store=self.store,
                 runtime=self.runtime_factory(),
             )
             result = orchestrator.start_task(collaboration_id, task_id)
         finally:
+            if reserved:
+                with self._dispatch_lock:
+                    self._reserved_worker_tasks.discard(reservation)
             self._release_session(collaboration_id)
             self.store.release_worker_lease_unless_blocked(collaboration_id, task_id)
         self._continue_after_worker_result(collaboration_id, result)
@@ -295,13 +380,27 @@ class CollaborationService:
         with self._lock:
             self._dispatching_sessions.discard(collaboration_id)
 
-    def _dispatch_capacity(self, collaboration_id: str, *, limit: int | None = None) -> int:
-        max_parallel = _max_parallel_worker_tasks()
-        active = self.store.active_worker_task_count(collaboration_id)
-        capacity = max(0, max_parallel - active)
+    def _dispatch_capacity(self, *, limit: int | None = None) -> CollaborationDispatchCapacity:
+        inference = self.inference_capacity_probe()
+        max_parallel = _max_parallel_worker_tasks(inference)
+        active_keys = self.store.active_worker_task_keys() | self._reserved_worker_tasks
+        active = len(active_keys)
+        worker_capacity = max(0, max_parallel - active)
+        capacity = min(worker_capacity, inference.available_slots)
         if limit is not None:
             capacity = min(capacity, max(0, limit))
-        return capacity
+        return CollaborationDispatchCapacity(
+            capacity=capacity,
+            max_parallel_workers=max_parallel,
+            active_worker_tasks=active,
+            inference=inference,
+            reason=_dispatch_capacity_reason(
+                capacity=capacity,
+                max_parallel_workers=max_parallel,
+                active_worker_tasks=active,
+                inference=inference,
+            ),
+        )
 
     def _run_worker_task(self, collaboration_id: str, task_id: str) -> None:
         result = None
@@ -688,16 +787,48 @@ def _active_runtime_request_targets(session: dict[str, Any]) -> list[str]:
     return result
 
 
-def _max_parallel_worker_tasks() -> int:
+def _max_parallel_worker_tasks(inference: ChatInferenceCapacity) -> int:
     raw = str(os.getenv("AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS") or "").strip()
     if raw:
         try:
             value = int(raw)
-        except ValueError:
-            value = 0
-        if value > 0:
-            return value
-    return 3
+        except ValueError as exc:
+            raise ValueError("AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS must be a positive integer") from exc
+        if value <= 0:
+            raise ValueError("AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS must be a positive integer")
+        return value
+    return inference.total_slots
+
+
+def _dispatch_capacity_reason(
+    *,
+    capacity: int,
+    max_parallel_workers: int,
+    active_worker_tasks: int,
+    inference: ChatInferenceCapacity,
+) -> str:
+    if capacity > 0:
+        source = "推理服务实时容量" if inference.live else "显式协作并发配置"
+        return f"可启动 {capacity} 个协作 worker，容量来源：{source}。"
+    if max_parallel_workers <= 0:
+        detail = f"（{inference.detail}）" if inference.detail else ""
+        return f"未找到可用的聊天推理并发配置，协作任务正在等待推理服务{detail}。"
+    if active_worker_tasks >= max_parallel_workers:
+        return (
+            f"协作任务正在等待推理容量：{active_worker_tasks}/{max_parallel_workers} "
+            "个 worker 槽位已占用。"
+        )
+    if inference.deferred_requests > 0:
+        return (
+            f"协作任务正在等待推理容量：llama-server 已有 "
+            f"{inference.deferred_requests} 个排队请求。"
+        )
+    if inference.busy_slots >= inference.total_slots:
+        return (
+            f"协作任务正在等待推理容量：llama-server 的 "
+            f"{inference.busy_slots}/{inference.total_slots} 个槽位正在处理请求。"
+        )
+    return "协作任务正在等待推理容量。"
 
 
 def _main_agent_continuation_message_from_result(result: Any) -> str:

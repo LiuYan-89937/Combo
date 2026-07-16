@@ -1258,13 +1258,93 @@ class CollaborationStore:
         session = self.get_session(collaboration_id)
         return self._ready_tasks_from_session(session)
 
-    def active_worker_task_count(self, collaboration_id: str) -> int:
+    def active_worker_task_keys(self) -> set[tuple[str, str]]:
+        statuses = sorted(ACTIVE_WORKER_TASK_STATUSES)
+        placeholders = ", ".join("?" for _ in statuses)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select collaboration_id, task_id
+                from collaboration_tasks
+                where status in ({placeholders})
+                """,
+                tuple(statuses),
+            ).fetchall()
+        return {
+            (str(row["collaboration_id"]), str(row["task_id"]))
+            for row in rows
+        }
+
+    def active_worker_task_count(self, collaboration_id: str | None = None) -> int:
+        keys = self.active_worker_task_keys()
+        if collaboration_id is None:
+            return len(keys)
+        return sum(1 for active_collaboration_id, _ in keys if active_collaboration_id == collaboration_id)
+
+    def mark_tasks_waiting_for_inference_capacity(
+        self,
+        collaboration_id: str,
+        *,
+        task_ids: list[str],
+        capacity: dict[str, Any],
+        message: str,
+    ) -> dict[str, Any]:
+        requested_ids = {str(task_id or "").strip() for task_id in task_ids if str(task_id or "").strip()}
+        if not requested_ids:
+            return self.get_session(collaboration_id)
         session = self.get_session(collaboration_id)
-        return sum(
-            1
-            for task in session.get("tasks") or []
-            if str(task.get("status") or "") in ACTIVE_WORKER_TASK_STATUSES
-        )
+        ready_by_id = {
+            str(task.get("task_id") or ""): task
+            for task in self._ready_tasks_from_session(session)
+            if str(task.get("task_id") or "") in requested_ids
+        }
+        if not ready_by_id:
+            return session
+        now = utc_now_text()
+        changed = False
+        with self._connect() as conn:
+            conn.execute("begin immediate")
+            for task_id, task in ready_by_id.items():
+                result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+                if result_payload.get("runtime_status") == "waiting_for_inference_capacity":
+                    continue
+                next_payload = {
+                    **result_payload,
+                    "runtime_status": "waiting_for_inference_capacity",
+                    "inference_capacity": capacity,
+                }
+                updated = conn.execute(
+                    """
+                    update collaboration_tasks
+                    set result_summary = ?, result_payload_json = ?, updated_at = ?
+                    where collaboration_id = ? and task_id = ? and status in (?, ?, ?)
+                    """,
+                    (
+                        message,
+                        json_dumps(next_payload),
+                        now,
+                        collaboration_id,
+                        task_id,
+                        *sorted(READY_TO_START_STATUSES),
+                    ),
+                )
+                if updated.rowcount != 1:
+                    continue
+                changed = True
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=task.get("assignee_package_id"),
+                    message_kind="progress",
+                    content=message,
+                    task_id=task_id,
+                    event_ref=f"inference-capacity-wait:{task_id}:{now}",
+                    created_at=now,
+                )
+            if changed:
+                self._mark_session_running_conn(conn, collaboration_id, now)
+        return self.get_session(collaboration_id)
 
     @staticmethod
     def _worker_lease_owned_conn(
