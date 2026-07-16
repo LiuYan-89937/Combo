@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import shutil
 import sqlite3
@@ -34,12 +34,15 @@ TASK_STATUSES = {
     "failed",
     "cancelled",
 }
-READY_TO_START_STATUSES = {"assigned", "queued", "revision_requested"}
+READY_TO_START_STATUSES = {"assigned", "queued"}
+RETRYABLE_TASK_STATUSES = {"failed", "revision_requested", "cancelled"}
 DEPENDENCY_SATISFIED_TASK_STATUSES = {"completed"}
 RECOVERABLE_RUNNING_TASK_STATUSES = {"accepted", "planning", "working"}
 ACTIVE_WORKER_TASK_STATUSES = {"accepted", "planning", "working"}
 WORKER_LEASE_HOLDING_TASK_STATUSES = {*ACTIVE_WORKER_TASK_STATUSES, "blocked"}
 SQLITE_BUSY_TIMEOUT_MS = 10000
+TASK_RETRY_CLEANUP_BASE_DELAY_SECONDS = 5
+TASK_RETRY_CLEANUP_MAX_DELAY_SECONDS = 300
 
 
 class CollaborationStoreError(RuntimeError):
@@ -663,6 +666,13 @@ class CollaborationStore:
         assignee = normalize_package_id(payload.get("assignee_package_id"))
         depends_on = normalize_dependency_ids(payload.get("depends_on"))
         delivery_standard = validate_delivery_standard(payload.get("delivery_standard"))
+        _reject_duplicate_retry_task(
+            session.get("tasks") or [],
+            assignee_package_id=assignee,
+            task_text=task_text,
+            depends_on=depends_on,
+            delivery_standard=delivery_standard,
+        )
         self._validate_task_dependencies(collaboration_id, task_id=None, depends_on=depends_on)
         input_artifacts = merge_artifact_refs(
             dependency_artifact_refs(session, depends_on),
@@ -713,6 +723,300 @@ class CollaborationStore:
             )
             self._mark_session_running_conn(conn, collaboration_id, now)
         return self.get_session(collaboration_id)
+
+    def retry_task(
+        self,
+        collaboration_id: str,
+        task_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        retry_payload = dict(payload or {})
+        replacement_task_id = uuid4().hex
+        retry_cleanup_id: str | None = None
+        current: dict[str, Any]
+        current_status: str
+        retry_context: dict[str, Any]
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute("begin immediate")
+            session_row = conn.execute(
+                "select * from collaboration_sessions where collaboration_id = ?",
+                (collaboration_id,),
+            ).fetchone()
+            if session_row is None:
+                raise CollaborationStoreError(f"collaboration session not found: {collaboration_id}")
+            task_rows = conn.execute(
+                "select * from collaboration_tasks where collaboration_id = ? order by created_at, task_id",
+                (collaboration_id,),
+            ).fetchall()
+            current_row = next((row for row in task_rows if str(row["task_id"]) == task_id), None)
+            if current_row is None:
+                raise CollaborationStoreError(f"collaboration task not found: {task_id}")
+            current = self._task_view(current_row)
+            current_status = str(current.get("status") or "")
+            if current_status not in RETRYABLE_TASK_STATUSES:
+                raise CollaborationStoreError(
+                    f"task {task_id} cannot be retried from status {current_status!r}; "
+                    f"expected one of {sorted(RETRYABLE_TASK_STATUSES)}"
+                )
+
+            assignee = normalize_package_id(
+                retry_payload.get("assignee_package_id")
+                if "assignee_package_id" in retry_payload
+                else current.get("assignee_package_id")
+            )
+            task_text = str(
+                retry_payload.get("task_text")
+                if "task_text" in retry_payload
+                else current.get("task_text")
+                or ""
+            ).strip()
+            if not task_text:
+                raise CollaborationStoreError("task_text must not be empty")
+            depends_on = (
+                normalize_dependency_ids(retry_payload.get("depends_on"))
+                if "depends_on" in retry_payload
+                else list(current.get("depends_on") or [])
+            )
+            task_views = [self._task_view(row) for row in task_rows]
+            _validate_replacement_task_dependencies(
+                task_views,
+                replaced_task_id=task_id,
+                replacement_task_id=replacement_task_id,
+                depends_on=depends_on,
+            )
+            delivery_standard = (
+                validate_delivery_standard(retry_payload.get("delivery_standard"))
+                if "delivery_standard" in retry_payload
+                else dict(current.get("delivery_standard") or {})
+            )
+            input_artifacts = merge_artifact_refs(
+                dependency_artifact_refs({"tasks": task_views}, depends_on),
+                normalize_artifact_refs(
+                    retry_payload.get("input_artifacts")
+                    if "input_artifacts" in retry_payload
+                    else current.get("input_artifacts")
+                ),
+            )
+            visible_context = dict(current.get("visible_context") or {})
+            if "visible_context" in retry_payload:
+                replacement_context = retry_payload.get("visible_context")
+                if not isinstance(replacement_context, dict):
+                    raise CollaborationStoreError("visible_context must be an object")
+                visible_context = dict(replacement_context)
+            retry_context = _task_retry_context(current, retry_payload)
+            visible_context["retry"] = retry_context
+            retry_cleanup_id = uuid4().hex if str(current.get("assignee_session_id") or "").strip() else None
+
+            conn.execute(
+                """
+                insert into collaboration_tasks (
+                  task_id, collaboration_id, parent_task_id, assignee_package_id,
+                  assignee_session_id, task_text, depends_on_json, delivery_standard_json,
+                  visible_context_json, input_artifacts_json, status, result_summary,
+                  result_payload_json, artifact_refs_json, review_notes, created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    replacement_task_id,
+                    collaboration_id,
+                    normalize_optional_text(current.get("parent_task_id")),
+                    assignee,
+                    None,
+                    task_text,
+                    json_dumps(depends_on),
+                    json_dumps(delivery_standard),
+                    json_dumps(visible_context),
+                    json_dumps(input_artifacts),
+                    "assigned",
+                    "",
+                    json_dumps({}),
+                    json_dumps([]),
+                    "",
+                    now,
+                    now,
+                ),
+            )
+            dependent_rows = conn.execute(
+                """
+                select task_id, depends_on_json from collaboration_tasks
+                where collaboration_id = ? and task_id not in (?, ?)
+                """,
+                (collaboration_id, task_id, replacement_task_id),
+            ).fetchall()
+            for dependent in dependent_rows:
+                dependency_ids = json_loads(dependent["depends_on_json"], [])
+                if task_id not in dependency_ids:
+                    continue
+                migrated = [replacement_task_id if item == task_id else item for item in dependency_ids]
+                conn.execute(
+                    """
+                    update collaboration_tasks set depends_on_json = ?, updated_at = ?
+                    where collaboration_id = ? and task_id = ?
+                    """,
+                    (json_dumps(migrated), now, collaboration_id, dependent["task_id"]),
+                )
+            conn.execute(
+                """
+                update collaboration_tasks set parent_task_id = ?, updated_at = ?
+                where collaboration_id = ? and parent_task_id = ?
+                """,
+                (replacement_task_id, now, collaboration_id, task_id),
+            )
+            conn.execute(
+                "delete from collaboration_worker_leases where collaboration_id = ? and task_id = ?",
+                (collaboration_id, task_id),
+            )
+            conn.execute(
+                "delete from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                (collaboration_id, task_id),
+            )
+            if retry_cleanup_id is not None:
+                conn.execute(
+                    """
+                    insert into collaboration_task_retry_cleanups (
+                      retry_id, collaboration_id, replaced_task_id, replacement_task_id,
+                      assignee_package_id, assignee_session_id, status, attempts,
+                      last_error, next_attempt_at, created_at, updated_at
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        retry_cleanup_id,
+                        collaboration_id,
+                        task_id,
+                        replacement_task_id,
+                        str(current.get("assignee_package_id") or ""),
+                        str(current.get("assignee_session_id") or ""),
+                        "pending",
+                        0,
+                        "",
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+            self._insert_message_conn(
+                conn,
+                collaboration_id=collaboration_id,
+                speaker_type="system",
+                speaker_package_id=assignee,
+                message_kind="task_retried",
+                content=(
+                    f"任务 {task_id} 已由新任务 {replacement_task_id} 原子替换。"
+                    f" 上次状态：{current_status}。"
+                    f" 失败原因：{retry_context['failure_reason']}"
+                ),
+                task_id=replacement_task_id,
+                event_ref=f"task-retry:{task_id}:{replacement_task_id}",
+                created_at=now,
+            )
+            self._mark_session_running_conn(conn, collaboration_id, now)
+
+        replacement_session = self.get_session(collaboration_id)
+        replacement_task = next(
+            task
+            for task in replacement_session.get("tasks") or []
+            if str(task.get("task_id") or "") == replacement_task_id
+        )
+        return {
+            "session": replacement_session,
+            "task": replacement_task,
+            "replaced_task": current,
+            "retry_cleanup_id": retry_cleanup_id,
+        }
+
+    def recover_task_retry_cleanups(self) -> int:
+        now = utc_now_text()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                update collaboration_task_retry_cleanups
+                set status = 'pending', next_attempt_at = ?, updated_at = ?
+                where status = 'processing'
+                """,
+                (now, now),
+            )
+            return int(cursor.rowcount)
+
+    def claim_task_retry_cleanups(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        if limit < 1:
+            return []
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute("begin immediate")
+            rows = conn.execute(
+                """
+                select * from collaboration_task_retry_cleanups
+                where status = 'pending' and (next_attempt_at = '' or next_attempt_at <= ?)
+                order by created_at asc, retry_id asc
+                limit ?
+                """,
+                (now, limit),
+            ).fetchall()
+            retry_ids = [str(row["retry_id"]) for row in rows]
+            if not retry_ids:
+                return []
+            placeholders = ", ".join("?" for _ in retry_ids)
+            conn.execute(
+                f"""
+                update collaboration_task_retry_cleanups
+                set status = 'processing', attempts = attempts + 1, updated_at = ?
+                where status = 'pending' and retry_id in ({placeholders})
+                """,
+                (now, *retry_ids),
+            )
+            claimed = conn.execute(
+                f"""
+                select * from collaboration_task_retry_cleanups
+                where status = 'processing' and retry_id in ({placeholders})
+                order by created_at asc, retry_id asc
+                """,
+                tuple(retry_ids),
+            ).fetchall()
+        return [dict(row) for row in claimed]
+
+    def resolve_task_retry_cleanup(
+        self,
+        retry_id: str,
+        *,
+        succeeded: bool,
+        error: str = "",
+    ) -> None:
+        now = utc_now_text()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select attempts from collaboration_task_retry_cleanups where retry_id = ? and status = 'processing'",
+                (retry_id,),
+            ).fetchone()
+            if row is None:
+                raise CollaborationStoreError(f"task retry cleanup is not processing: {retry_id}")
+            attempts = max(1, int(row["attempts"] or 1))
+            delay_seconds = TASK_RETRY_CLEANUP_BASE_DELAY_SECONDS
+            for _ in range(attempts - 1):
+                if delay_seconds >= TASK_RETRY_CLEANUP_MAX_DELAY_SECONDS:
+                    break
+                delay_seconds = min(TASK_RETRY_CLEANUP_MAX_DELAY_SECONDS, delay_seconds * 2)
+            next_attempt_at = (
+                now
+                if succeeded
+                else (datetime.now(UTC) + timedelta(seconds=delay_seconds)).isoformat()
+            )
+            cursor = conn.execute(
+                """
+                update collaboration_task_retry_cleanups
+                set status = ?, last_error = ?, next_attempt_at = ?, updated_at = ?
+                where retry_id = ? and status = 'processing'
+                """,
+                (
+                    "completed" if succeeded else "pending",
+                    "" if succeeded else str(error),
+                    next_attempt_at,
+                    now,
+                    retry_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise CollaborationStoreError(f"task retry cleanup is not processing: {retry_id}")
 
     def create_manufacturing_request(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.get_session(collaboration_id)
@@ -1014,6 +1318,7 @@ class CollaborationStore:
             )
             conn.execute("delete from collaboration_main_agent_events where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_manufacturing_requests where collaboration_id = ?", (collaboration_id,))
+            conn.execute("delete from collaboration_task_retry_cleanups where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_worker_leases where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_tasks where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_messages where collaboration_id = ?", (collaboration_id,))
@@ -1229,6 +1534,36 @@ class CollaborationStore:
                   acquired_at text not null
                 )
                 """
+            )
+            conn.execute(
+                """
+                create table if not exists collaboration_task_retry_cleanups (
+                  retry_id text primary key,
+                  collaboration_id text not null,
+                  replaced_task_id text not null unique,
+                  replacement_task_id text not null,
+                  assignee_package_id text not null,
+                  assignee_session_id text not null,
+                  status text not null,
+                  attempts integer not null default 0,
+                  last_error text not null default '',
+                  next_attempt_at text not null default '',
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """
+            )
+            conn.execute(
+                """
+                create index if not exists idx_collaboration_task_retry_cleanups_pending
+                on collaboration_task_retry_cleanups(status, created_at, retry_id)
+                """
+            )
+            self._ensure_column(
+                conn,
+                "collaboration_task_retry_cleanups",
+                "next_attempt_at",
+                "text not null default ''",
             )
             self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
 
@@ -2041,6 +2376,79 @@ def validate_delivery_standard(value: Any) -> dict[str, Any]:
         return normalize_delivery_standard(value)
     except (TypeError, ValueError) as exc:
         raise CollaborationStoreError(f"invalid delivery_standard: {exc}") from exc
+
+
+def _validate_replacement_task_dependencies(
+    tasks: list[dict[str, Any]],
+    *,
+    replaced_task_id: str,
+    replacement_task_id: str,
+    depends_on: list[str],
+) -> None:
+    if replaced_task_id in depends_on or replacement_task_id in depends_on:
+        raise CollaborationStoreError("task cannot depend on itself")
+    existing_ids = {str(task.get("task_id") or "") for task in tasks if task.get("task_id")}
+    missing = [dependency_id for dependency_id in depends_on if dependency_id not in existing_ids]
+    if missing:
+        raise CollaborationStoreError("unknown collaboration task dependencies: " + ", ".join(missing))
+    graph: dict[str, list[str]] = {}
+    for task in tasks:
+        existing_task_id = str(task.get("task_id") or "")
+        if not existing_task_id or existing_task_id == replaced_task_id:
+            continue
+        graph[existing_task_id] = [
+            replacement_task_id if dependency_id == replaced_task_id else dependency_id
+            for dependency_id in normalize_dependency_ids(task.get("depends_on"))
+        ]
+    graph[replacement_task_id] = list(depends_on)
+    _ensure_acyclic_dependency_graph(graph)
+
+
+def _reject_duplicate_retry_task(
+    tasks: list[dict[str, Any]],
+    *,
+    assignee_package_id: str,
+    task_text: str,
+    depends_on: list[str],
+    delivery_standard: dict[str, Any],
+) -> None:
+    for task in tasks:
+        if str(task.get("status") or "") not in RETRYABLE_TASK_STATUSES:
+            continue
+        if str(task.get("assignee_package_id") or "") != assignee_package_id:
+            continue
+        if str(task.get("task_text") or "").strip() != task_text:
+            continue
+        if normalize_dependency_ids(task.get("depends_on")) != depends_on:
+            continue
+        if dict(task.get("delivery_standard") or {}) != delivery_standard:
+            continue
+        raise CollaborationStoreError(
+            f"matching retryable task already exists: {task.get('task_id')}; use retry_task instead of create_task"
+        )
+
+
+def _task_retry_context(task: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    previous_context = task.get("visible_context") if isinstance(task.get("visible_context"), dict) else {}
+    previous_retry = previous_context.get("retry") if isinstance(previous_context.get("retry"), dict) else {}
+    result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+    reasons = [
+        str(task.get("review_notes") or "").strip(),
+        str(task.get("result_summary") or "").strip(),
+        str(result_payload.get("error") or result_payload.get("last_error") or "").strip(),
+    ]
+    failure_reason = next((reason for reason in reasons if reason), "上一次任务未完成，需要重新执行。")
+    previous_attempt = previous_retry.get("attempt")
+    attempt = int(previous_attempt) + 1 if isinstance(previous_attempt, int) and previous_attempt > 0 else 1
+    return {
+        "attempt": attempt,
+        "previous_task_id": str(task.get("task_id") or ""),
+        "previous_status": str(task.get("status") or ""),
+        "failure_reason": failure_reason,
+        "retry_guidance": str(payload.get("retry_guidance") or "").strip(),
+        "review_notes": str(task.get("review_notes") or "").strip(),
+        "previous_result_summary": str(task.get("result_summary") or "").strip(),
+    }
 
 
 def _validate_task_completion_transition(

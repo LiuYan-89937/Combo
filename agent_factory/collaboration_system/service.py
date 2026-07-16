@@ -128,6 +128,9 @@ class CollaborationService:
         recovered_event_count = int(event_recovery.get("recovered_count") or 0)
         if recovered_event_count:
             self.logger.info("Recovered %s interrupted collaboration main agent event(s)", recovered_event_count)
+        recovered_cleanup_count = self.store.recover_task_retry_cleanups()
+        if recovered_cleanup_count:
+            self.logger.info("Recovered %s collaboration task retry cleanup(s)", recovered_cleanup_count)
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -177,6 +180,50 @@ class CollaborationService:
         if session.get("approval_mode") == "main_agent_delegated":
             self.dispatch_soon(collaboration_id)
         return session
+
+    def retry_task(
+        self,
+        collaboration_id: str,
+        task_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        replacement = self.store.retry_task(collaboration_id, task_id, payload)
+        self.cleanup_retried_task_sessions()
+        session = replacement["session"]
+        if session.get("approval_mode") == "main_agent_delegated":
+            self.dispatch_soon(collaboration_id)
+        return replacement
+
+    def cleanup_retried_task_sessions(self) -> int:
+        cleaned = 0
+        for cleanup in self.store.claim_task_retry_cleanups():
+            retry_id = str(cleanup.get("retry_id") or "")
+            package_id = str(cleanup.get("assignee_package_id") or "").strip()
+            session_id = str(cleanup.get("assignee_session_id") or "").strip()
+            try:
+                self.runtime_factory().delete_session(
+                    package_id,
+                    session_id,
+                    delete_workdir=True,
+                    unlink_collaboration=False,
+                )
+            except Exception as exc:
+                self.store.resolve_task_retry_cleanup(
+                    retry_id,
+                    succeeded=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                self.logger.warning(
+                    "Failed to clean replaced collaboration worker session %s/%s: %s: %s",
+                    package_id,
+                    session_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
+            self.store.resolve_task_retry_cleanup(retry_id, succeeded=True)
+            cleaned += 1
+        return cleaned
 
     def cancel_task(self, collaboration_id: str, task_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         session = self.store.get_session(collaboration_id)
@@ -450,6 +497,7 @@ class CollaborationService:
         return {"result": result, "session": self.store.get_session(collaboration_id)}
 
     def dispatch_delegated_sessions(self) -> None:
+        self.cleanup_retried_task_sessions()
         self.cancel_requested_tasks()
         for session in self.store.list_auto_dispatch_sessions():
             collaboration_id = str(session.get("collaboration_id") or "").strip()
@@ -494,6 +542,7 @@ class CollaborationService:
 
     def _dispatch_soon_worker(self, collaboration_id: str) -> None:
         try:
+            self.cleanup_retried_task_sessions()
             self._drain_main_agent_events(collaboration_id)
             self.dispatch_ready(collaboration_id)
         except Exception as exc:

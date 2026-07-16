@@ -19,6 +19,7 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                 "inspect 是状态同步动作；只有运行中任务且没有 submitted/blocked/failed 时，inspect 会返回轻量 deferred，主 Agent 应等待状态变化而不是连续查看。"
                 "验收 worker 交付物时使用 read_task_artifacts 并传 task_id，由宿主解析权威 artifact_refs；"
                 "read_shared 仅用于读取已知的普通共享路径。验收后 update_task 为 completed 或 revision_requested。"
+                "需要重跑 failed/revision_requested/cancelled 任务时必须使用 retry_task；宿主会原子替换旧任务并清理旧 worker 会话，禁止另行 create_task。"
                 "所有任务验收完成并形成最终答复后，用 complete_session 写入最终交付并结束协作会话。"
                 "不要用它代替普通业务工具；启动 worker 由宿主协作调度器根据任务状态执行。"
             ),
@@ -167,6 +168,21 @@ def _collaboration_input_schema() -> dict:
                     "result_summary": {"type": "string"},
                     "review_notes": {"type": "string"},
                     "artifact_refs": artifact_array,
+                },
+                required=["task_id"],
+            ),
+            _action_schema(
+                "retry_task",
+                {
+                    **common,
+                    "task_id": {"type": "string"},
+                    "assignee_package_id": {"type": "string"},
+                    "task_text": {"type": "string"},
+                    "depends_on": {"type": "array", "items": {"type": "string"}},
+                    "delivery_standard": delivery_standard,
+                    "visible_context": flexible_object,
+                    "input_artifacts": artifact_array,
+                    "retry_guidance": {"type": "string"},
                 },
                 required=["task_id"],
             ),

@@ -1297,6 +1297,14 @@ def _interrupt_summary(item: FactoryFrontendEvent) -> str:
 
 def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_materials: dict[str, Any]) -> str:
     materials = _shared_materials_prompt(shared_materials)
+    visible_context = task.get("visible_context") if isinstance(task.get("visible_context"), dict) else {}
+    retry_context = visible_context.get("retry") if isinstance(visible_context.get("retry"), dict) else None
+    retry_guidance = (
+        "这是一次全新会话中的任务重跑。请针对上次失败原因修正执行方式，不要假设旧会话、旧 checkpoint 或旧工作区仍然存在。\n"
+        f"重试上下文：{retry_context}"
+        if retry_context is not None
+        else ""
+    )
     return "\n\n".join(
         item
         for item in [
@@ -1309,7 +1317,8 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
             f"任务 ID：{task.get('task_id')}",
             f"任务要求：{task.get('task_text')}",
             f"验收标准：{task.get('delivery_standard')}",
-            f"可见上下文：{task.get('visible_context')}",
+            f"可见上下文：{visible_context}",
+            retry_guidance,
             materials,
             "交付要求：给出可由主 Agent 验收的完整结果。你在工作区中新建或修改的普通文件会被系统收集到协作共享工作区作为任务交付物。",
         ]

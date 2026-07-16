@@ -171,6 +171,14 @@ export const collaborationApi = {
         body: JSON.stringify(payload),
       },
     ),
+  retryTask: (collaborationId: string, taskId: string, payload: { retry_guidance?: string } = {}) =>
+    requestJson<{ session: CollaborationSessionView; task: CollaborationTaskView; replaced_task_id: string }>(
+      `/api/collaboration/sessions/${encodeURIComponent(collaborationId)}/tasks/${encodeURIComponent(taskId)}/retry`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    ),
   resolveTaskApproval: (collaborationId: string, taskId: string, payload: {
     action: 'approve' | 'deny' | 'revise'
     revision_guidance?: string
