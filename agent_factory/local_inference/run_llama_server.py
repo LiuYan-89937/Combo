@@ -59,6 +59,7 @@ def main() -> None:
         profile.inference.cache_type_v,
         "--jinja",
         "--metrics",
+        "--slots",
     ]
     command.extend(["--flash-attn", "on" if profile.inference.flash_attention else "off"])
     if profile.inference.mmproj_path:

@@ -172,6 +172,8 @@ SSH_KEY=
 | `PYTORCH_INDEX_URL` | 预装运行时不可用时的 PyTorch HIP wheel 后备源 | 官方 ROCm 7.2 wheel 源 |
 | `PYTORCH_PACKAGES` | 相互匹配的 Torch、TorchVision 与 TorchAudio 发布组 | ROCm 7.2 的 2.11/0.26/2.11 |
 
+协作调度器会读取 llama-server 的 `/slots` 与 `/metrics`，按实际空闲槽位、排队请求以及所有协作会话中正在运行的 worker 统一背压。遥测暂时不可用时，调度器使用当前已启用推理 Profile 的 `parallel_slots` 作为容量依据，不会回退到固定并发数。若需要主动限制协作 worker 数量，可在本机 `.env` 设置 `AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS`；留空时自动跟随推理服务槽位。
+
 部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。比赛镜像的 PyTorch 位于 `/opt/venv`，脚本会校验 Python ABI、HIP 和 GPU 可用性，再通过 `.pth` 接入项目隔离 venv，不重新下载或替换镜像 Torch。只有预装运行时不可用时才安装后备 wheel。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供；使用其他 ROCm 版本时，应覆盖预装 Python 路径，或同时覆盖 `PYTORCH_INDEX_URL` 和 `PYTORCH_PACKAGES`。
 
 ## 5. 首次一键部署
