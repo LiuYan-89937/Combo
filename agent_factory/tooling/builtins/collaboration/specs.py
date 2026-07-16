@@ -17,7 +17,8 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                 "share_files/ 是 worker 工作区中的只读上游材料目录，只接收系统复制的前置产物；不要要求 worker 把交付物写入 share_files/。"
                 "worker 交付物应写入当前工作区普通路径，宿主会自动收集为 artifact_refs。visible_context 只表示文本上下文，不授权文件读取。"
                 "inspect 是状态同步动作；只有运行中任务且没有 submitted/blocked/failed 时，inspect 会返回轻量 deferred，主 Agent 应等待状态变化而不是连续查看。"
-                "验收 worker 交付物时先 read_shared 读取 artifact_refs，再 update_task 为 completed 或 revision_requested。"
+                "验收 worker 交付物时使用 read_task_artifacts 并传 task_id，由宿主解析权威 artifact_refs；"
+                "read_shared 仅用于读取已知的普通共享路径。验收后 update_task 为 completed 或 revision_requested。"
                 "所有任务验收完成并形成最终答复后，用 complete_session 写入最终交付并结束协作会话。"
                 "不要用它代替普通业务工具；启动 worker 由宿主协作调度器根据任务状态执行。"
             ),
@@ -35,6 +36,10 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                     "updated_at": {"type": "string"},
                     "path": {"type": "string"},
                     "content": {"type": "string"},
+                    "artifacts": {
+                        "type": "array",
+                        "items": {"type": "object", "additionalProperties": True},
+                    },
                     "dispatch_hint": {"type": "string"},
                 },
                 "required": ["action", "status", "message"],
@@ -137,6 +142,7 @@ def _collaboration_input_schema() -> dict:
         "update_task",
         "cancel_task",
         "read_shared",
+        "read_task_artifacts",
         "write_shared",
         "complete_session",
     ]
@@ -169,6 +175,7 @@ def _collaboration_input_schema() -> dict:
             _action_requirements("update_task", ["task_id"]),
             _action_requirements("cancel_task", ["task_id"]),
             _action_requirements("read_shared", ["path"]),
+            _action_requirements("read_task_artifacts", ["task_id"]),
             _action_requirements("write_shared", ["path", "content"]),
             _action_requirements("complete_session", ["content"]),
         ],
