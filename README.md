@@ -297,6 +297,7 @@ deploy/deploy.env            一键部署配置，不提交
 .agent_runtime/              Agent 工作区、Trace 与 Checkpoint，不提交
 vendor/llama.cpp-official/   随仓库提交的官方 Baseline 源码
 vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
+vendor/stable-diffusion.cpp/ 随仓库提交的图片推理服务源码
 ```
 
 ### RadeonCloud
@@ -316,7 +317,7 @@ vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
 ## 安全边界
 
 - SSH 必须使用 Key 登录，不在配置文件中保存密码。
-- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 源码属于交付源码。
+- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 与 stable-diffusion.cpp 源码属于交付源码。
 - 远端 `8002`、`8003`、`8004` 只监听 `127.0.0.1`，不要直接暴露公网。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 首次部署自动生成并写入本机 `.env`；丢失后旧的加密资源无法恢复。
 - 部署脚本先复用可用的 ROCm/PyTorch HIP 环境，仅在缺失且配置允许时安装用户态组件。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 工作空间提供。

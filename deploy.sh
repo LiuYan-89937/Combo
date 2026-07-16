@@ -46,7 +46,7 @@ required_config=(
     LOCAL_LLAMA_OFFICIAL_DIR LOCAL_LLAMA_AMD_DIR
     LLAMA_OFFICIAL_REVISION LLAMA_AMD_BASE_REVISION LLAMA_DEFAULT_IMPLEMENTATION
     REMOTE_STABLE_DIFFUSION_CPP_DIR LOCAL_STABLE_DIFFUSION_CPP_DIR
-    STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
+    STABLE_DIFFUSION_CPP_REVISION
     CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION CHAT_MODEL_FILENAME CHAT_MODEL_SHA256
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION
     CHAT_PROFILE_ID CHAT_SERVED_MODEL_NAME CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
@@ -144,45 +144,15 @@ remote_command() {
     ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")" "$@"
 }
 
-prepare_local_source() {
-    local name="$1"
-    local path="$2"
-    local repository="$3"
-    local revision="$4"
-    require_command git "Install Git first."
-    if [[ ! -d "${path}/.git" ]]; then
-        if [[ -e "${path}" ]]; then
-            fail "${name} source path exists but is not a Git checkout: ${path}"
-        fi
-        log "Cloning editable ${name} source to ${path}"
-        mkdir -p "$(dirname "${path}")"
-        git clone "${repository}" "${path}"
-    fi
-
-    local current_revision
-    current_revision="$(git -C "${path}" rev-parse HEAD)"
-    if [[ -n "$(git -C "${path}" status --porcelain)" ]]; then
-        log "${name} contains local operator changes; keeping revision ${current_revision}"
-        return
-    fi
-    if [[ "${current_revision}" != "${revision}" ]]; then
-        log "Checking out pinned ${name} revision ${revision}"
-        git -C "${path}" fetch "${repository}" "${revision}"
-        git -C "${path}" checkout --detach "${revision}"
-    else
-        log "${name} source is pinned at ${current_revision}"
-    fi
-    if [[ -f "${path}/.gitmodules" ]]; then
-        git -C "${path}" submodule update --init --recursive
-    fi
-}
-
 prepare_local_sources() {
     [[ -f "${LOCAL_LLAMA_OFFICIAL_PATH}/CMakeLists.txt" ]] \
         || fail "Bundled official llama.cpp source is missing: ${LOCAL_LLAMA_OFFICIAL_PATH}"
     [[ -f "${LOCAL_LLAMA_AMD_PATH}/CMakeLists.txt" ]] \
         || fail "Bundled AMD llama.cpp source is missing: ${LOCAL_LLAMA_AMD_PATH}"
-    prepare_local_source "stable-diffusion.cpp" "${LOCAL_SD_PATH}" "${STABLE_DIFFUSION_CPP_REPOSITORY}" "${STABLE_DIFFUSION_CPP_REVISION}"
+    [[ -f "${LOCAL_SD_PATH}/CMakeLists.txt" ]] \
+        || fail "Bundled stable-diffusion.cpp source is missing: ${LOCAL_SD_PATH}"
+    [[ -f "${LOCAL_SD_PATH}/ggml/CMakeLists.txt" ]] \
+        || fail "Bundled stable-diffusion.cpp ggml dependency is missing: ${LOCAL_SD_PATH}/ggml"
 }
 
 sync_sources() {
@@ -215,7 +185,7 @@ sync_sources() {
         -e "${rsync_transport% }" \
         --exclude 'build*/' \
         "${LOCAL_LLAMA_AMD_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/amd/"
-    log "Synchronizing editable stable-diffusion.cpp source to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
+    log "Synchronizing bundled stable-diffusion.cpp source to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
     rsync -az --delete -e "${rsync_transport% }" --exclude 'build*/' \
         "${LOCAL_SD_PATH}/" "${SSH_TARGET}:${REMOTE_STABLE_DIFFUSION_CPP_DIR}/"
 }

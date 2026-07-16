@@ -146,7 +146,8 @@ SSH_KEY=
 | `LOCAL_LLAMA_OFFICIAL_DIR` | 仓库内官方 Baseline 源码 | `vendor/llama.cpp-official` |
 | `LOCAL_LLAMA_AMD_DIR` | 仓库内 AMD 优化源码 | `vendor/llama.cpp-amd` |
 | `REMOTE_STABLE_DIFFUSION_CPP_DIR` | 远端 stable-diffusion.cpp 源码与构建 | `/root/stable-diffusion.cpp` |
-| `LOCAL_STABLE_DIFFUSION_CPP_DIR` | 本机可修改的 stable-diffusion.cpp 工作树 | `vendor/stable-diffusion.cpp` |
+| `LOCAL_STABLE_DIFFUSION_CPP_DIR` | 仓库内 stable-diffusion.cpp 源码 | `vendor/stable-diffusion.cpp` |
+| `STABLE_DIFFUSION_CPP_REVISION` | 仓库内图片推理源码的上游基线 revision | 固定 Commit SHA |
 | `LLAMA_OFFICIAL_REVISION` | 官方 Baseline 来源 revision | 固定 Commit SHA |
 | `LLAMA_AMD_BASE_REVISION` | AMD 版本基于的官方 revision | 与 Baseline 对齐 |
 | `LLAMA_DEFAULT_IMPLEMENTATION` | 一键部署后激活的实现 | `amd` |
@@ -182,7 +183,7 @@ SSH_KEY=
 
 1. 检查本机 Git、Python、uv、Node、npm、Docker、SSH 与 rsync。
 2. 验证 SSH Key 登录和端口配置。
-3. 验证仓库自带的 `vendor/llama.cpp-official` 与 `vendor/llama.cpp-amd`；llama.cpp 不在线拉取。
+3. 验证仓库自带的 `vendor/llama.cpp-official`、`vendor/llama.cpp-amd` 与 `vendor/stable-diffusion.cpp`；原生推理服务源码不在线拉取。
 4. 上传远端控制脚本并探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP。
 5. 仅在缺失时安装普通编译工具、ROCm 用户态组件和配置指定的 PyTorch HIP 包。
 6. 同步 FastAgentFactory 当前工作树到远端项目目录。
