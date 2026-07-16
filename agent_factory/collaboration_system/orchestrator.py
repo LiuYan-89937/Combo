@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.collaboration_system.event_projection import CollaborationWorkerEventRecorder
-from agent_factory.collaboration_system.delivery import validate_worker_delivery
+from agent_factory.collaboration_system.delivery import WorkerDeliveryValidation, validate_worker_delivery
 from agent_factory.collaboration_system.prompting import build_main_agent_collaboration_prompt
 from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
 from agent_factory.collaboration_system.store import CollaborationStore
@@ -606,13 +606,18 @@ class CollaborationOrchestrator:
         output: VisibleAssistantOutputAccumulator,
         worker_workdir: Path,
         before_snapshot: dict[str, tuple[int, int]],
-        shared_materials_snapshot: dict[str, tuple[int, int]],
+        shared_materials_snapshot: dict[str, tuple[int, int]] | None,
+        delivery_validation: WorkerDeliveryValidation,
     ) -> CollaborationRunTaskResult:
         task_id = str(task.get("task_id") or "")
         content = str(output.content or "").strip()
         if not content:
             content = "Worker completed but did not return visible content."
-        shared_material_changes = _share_files_changes(worker_workdir, shared_materials_snapshot)
+        shared_material_changes = (
+            _share_files_changes(worker_workdir, shared_materials_snapshot)
+            if shared_materials_snapshot is not None
+            else []
+        )
         if shared_material_changes:
             summary = "worker 写入或修改了只读共享材料目录 share_files/，交付被拒绝：" + "、".join(shared_material_changes)
             self.store.update_task(
@@ -666,7 +671,11 @@ class CollaborationOrchestrator:
                 "status": "submitted",
                 "assignee_session_id": assignee_session_id,
                 "result_summary": _short_summary(content),
-                "result_payload": {"content": content, "reasoning_content": output.reasoning_content or ""},
+                "result_payload": {
+                    "content": content,
+                    "reasoning_content": output.reasoning_content or "",
+                    "delivery_validation": delivery_validation.model_dump(mode="json"),
+                },
                 "artifact_refs": artifact_refs,
             },
         )
@@ -706,8 +715,8 @@ class CollaborationOrchestrator:
         assignee_session_id: str,
         output: VisibleAssistantOutputAccumulator,
         worker_workdir: Path,
-        before_snapshot: dict[str, str],
-        shared_materials_snapshot: dict[str, str] | None = None,
+        before_snapshot: dict[str, tuple[int, int]],
+        shared_materials_snapshot: dict[str, tuple[int, int]] | None = None,
     ) -> CollaborationRunTaskResult:
         """统一处理 worker 运行结果的收尾逻辑：检查取消、处理非完成状态、提交结果"""
         # 检查任务是否已被取消
@@ -720,6 +729,7 @@ class CollaborationOrchestrator:
         if cancelled_result is not None:
             return cancelled_result
 
+        delivery_validation: WorkerDeliveryValidation | None = None
         if outcome.status == "completed":
             delivery_validation = validate_worker_delivery(
                 task.get("delivery_standard"),
@@ -805,6 +815,8 @@ class CollaborationOrchestrator:
             )
 
         # 正常完成，提交结果
+        if delivery_validation is None:
+            raise RuntimeError("completed worker outcome is missing delivery validation")
         return self._submit_worker_result(
             collaboration_id=collaboration_id,
             task=task,
@@ -814,6 +826,7 @@ class CollaborationOrchestrator:
             worker_workdir=worker_workdir,
             before_snapshot=before_snapshot,
             shared_materials_snapshot=shared_materials_snapshot,
+            delivery_validation=delivery_validation,
         )
 
     def _cancelled_worker_result(

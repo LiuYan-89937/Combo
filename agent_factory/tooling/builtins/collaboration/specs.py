@@ -69,12 +69,43 @@ def _collaboration_input_schema() -> dict:
             },
             "required_fields": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1},
+                "description": (
+                    "对真实交付文件执行的字段验收规则。文本报告使用 markdown_section，JSON 使用 json_pointer；"
+                    "需要数值、列表或表格数据时必须选择对应 value_type 并设置 minimum_items，不能只声明标题。"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "minLength": 1},
+                        "path": {"type": "string", "minLength": 1},
+                        "selector": {
+                            "type": "string",
+                            "enum": ["document", "markdown_section", "json_pointer"],
+                        },
+                        "selector_value": {"type": "string", "minLength": 1},
+                        "value_type": {
+                            "type": "string",
+                            "enum": ["text", "number", "list", "table", "object"],
+                        },
+                        "minimum_chars": {"type": "integer", "minimum": 1},
+                        "minimum_items": {"type": "integer", "minimum": 1},
+                        "contains_all": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                        "contains_any": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                    },
+                    "required": ["name", "selector", "value_type"],
+                    "additionalProperties": False,
+                },
             },
             "require_visible_result": {"type": "boolean"},
             "minimum_visible_chars": {"type": "integer", "minimum": 1},
         },
-        "additionalProperties": True,
+        "additionalProperties": False,
     }
     artifact_array = {
         "type": "array",

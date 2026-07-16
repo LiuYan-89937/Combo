@@ -67,6 +67,7 @@ def build_main_agent_collaboration_prompt(
             "当只有 worker 任务仍在 working/planning/accepted 时，不要连续 inspect；等待协作状态变化或超过 working_inspect_cooldown_seconds 后再看。",
             "当存在 submitted 任务时立即验收；当存在 blocked 任务时立即处理审批/阻塞；这两类状态不需要冷却。",
             "创建子任务时必须包含 collaboration_id、assignee_package_id、task_text、delivery_standard；如需使用前置产物，声明 depends_on，不要手抄 artifact 路径。",
+            "delivery_standard.required_fields 是宿主执行的文件内容契约：每项必须声明 name、selector 和 value_type；需要真实数值、列表或表格时设置对应 value_type 与 minimum_items，不能把标题出现当作数据完整。",
             "创建子任务时，task_text/delivery_standard 不得把 share_files/ 作为交付目录；如需命名输出文件，只写相对普通路径，不带 share_files/ 前缀。",
             "不要声称已经启动子 Agent；启动由宿主协作调度器根据任务状态和依赖自动执行，只有任务状态为 working/submitted/completed 时才代表实际运行进展。",
             "验收 submitted 任务时，先用 read_shared 读取 artifact_refs 中的交付物，再对照 delivery_standard 判断。",
