@@ -22,9 +22,20 @@
       "top_turnover": {"type": "array", "items": {"type": "object"}},
       "industries": {"type": "array", "items": {"type": "object"}},
       "warnings": {"type": "array", "items": {"type": "string"}},
+      "provider_diagnostics": {
+        "type": "object",
+        "properties": {
+          "provider": {"type": "string"},
+          "hosts_used": {"type": "array", "items": {"type": "string"}},
+          "fallback_count": {"type": "integer", "minimum": 0},
+          "pages_fetched": {"type": "integer", "minimum": 0}
+        },
+        "required": ["provider", "hosts_used", "fallback_count", "pages_fetched"],
+        "additionalProperties": false
+      },
       "message": {"type": "string"}
     },
-    "required": ["status", "observed_at", "source", "warnings"],
+    "required": ["status", "observed_at", "source", "warnings", "provider_diagnostics"],
     "additionalProperties": false
   },
   "resources": {},
