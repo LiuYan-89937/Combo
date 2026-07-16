@@ -163,6 +163,8 @@ SSH_KEY=
 | `CHAT_CACHE_TYPE_K/V` | KV Cache 类型 | `q8_0` |
 | `CHAT_PARALLEL_SLOTS` | Chat 并发槽位 | `1` |
 | `CHAT_FLASH_ATTENTION` | Flash Attention | `1`，开启 |
+| `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS` | 子 Agent 事件触发主 Agent 恢复前的短聚合窗口 | `0.75` 秒 |
+| `AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` | 单次主 Agent 恢复最多合并的原始事件数 | `64` |
 | `REMOTE_INSTALL_BUILD_TOOLS` | 缺少普通工具时允许 apt 安装 | `1` |
 | `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
 | `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
@@ -173,6 +175,8 @@ SSH_KEY=
 | `PYTORCH_PACKAGES` | 相互匹配的 Torch、TorchVision 与 TorchAudio 发布组 | ROCm 7.2 的 2.11/0.26/2.11 |
 
 协作调度器会读取 llama-server 的 `/slots` 与 `/metrics`，按实际空闲槽位、排队请求以及所有协作会话中正在运行的 worker 统一背压。遥测暂时不可用时，调度器使用当前已启用推理 Profile 的 `parallel_slots` 作为容量依据，不会回退到固定并发数。若需要主动限制协作 worker 数量，可在本机 `.env` 设置 `AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS`；留空时自动跟随推理服务槽位。
+
+多个 worker 几乎同时提交、阻塞、失败或取消时，每条协作事件仍会独立写入审计表；服务在 `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS` 指定的短窗口后，将当时待处理的事件批量领取并只恢复一次主 Agent。批次中的每条事件独立累计 attempts，并在同一事务中统一完成或失败。`AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` 用于限制一次恢复输入的事件数量，超过限制的事件会进入后续批次。
 
 部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。比赛镜像的 PyTorch 位于 `/opt/venv`，脚本会校验 Python ABI、HIP 和 GPU 可用性，再通过 `.pth` 接入项目隔离 venv，不重新下载或替换镜像 Torch。只有预装运行时不可用时才安装后备 wheel。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供；使用其他 ROCm 版本时，应覆盖预装 Python 路径，或同时覆盖 `PYTORCH_INDEX_URL` 和 `PYTORCH_PACKAGES`。
 
