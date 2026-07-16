@@ -72,6 +72,7 @@ class AgentSessionManager:
         self,
         *,
         agent_id: str,
+        session_id: str | None = None,
         first_user_input: str | None = None,
         session_kind: str = "normal",
         collaboration_id: str | None = None,
@@ -81,8 +82,11 @@ class AgentSessionManager:
     ) -> AgentSessionRecord:
         now = _now()
         kind = _normalize_session_kind(session_kind)
+        resolved_session_id = str(session_id or "").strip() or uuid4().hex
+        if self.exists(resolved_session_id):
+            raise ValueError(f"Agent session already exists: {resolved_session_id}")
         record = AgentSessionRecord(
-            session_id=uuid4().hex,
+            session_id=resolved_session_id,
             agent_id=agent_id,
             thread_id=f"agent-{agent_id}-{uuid4().hex}",
             session_kind=kind,
@@ -301,7 +305,7 @@ def _optional_text(value: str | None) -> str | None:
 
 def _normalize_session_kind(value: str | None) -> str:
     kind = str(value or "").strip() or "normal"
-    allowed = {"normal", "collaboration_main", "collaboration_worker", "agent_group_member"}
+    allowed = {"normal", "collaboration_main", "collaboration_worker", "agent_group_member", "scheduler"}
     if kind not in allowed:
         raise ValueError(f"unsupported agent session kind: {kind}")
     return kind

@@ -20,6 +20,7 @@ from agent_factory.scheduler_system import (
     SchedulerExecutor,
     SchedulerWorker,
     default_factory_scheduler_runtime,
+    scheduler_run_session_id,
     scheduler_tool_approval_override,
 )
 from agent_factory.scheduler_system.events import SchedulerEventPayload
@@ -142,37 +143,42 @@ class RuntimeSchedulerCommandMixin:
         if target_scope != "chat":
             return {"status": "failed", "error": f"unsupported scheduler graph target_scope: {target_scope}"}
         package_id = SYSTEM_CHAT_PACKAGE_ID
-        thread_policy = str(payload.get("thread_policy") or "new_thread_per_run")
-        agent_session_id = str(payload.get("fixed_thread_id") or "").strip() if thread_policy == "fixed_thread" else None
-        factory_session = self.session_manager.create(mode="chat")
+        agent_session_id = scheduler_run_session_id(
+            job,
+            _run,
+            namespace=f"agent_package:{package_id}",
+        )
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=request_id,
-            session_id=factory_session.session_id,
-            mode="chat",
+            session_id=agent_session_id,
+            mode="agent_package",
             graph_id="scheduled_factory_chat",
             producer_type="factory_runtime",
         )
         try:
+            self.agent_package_runtime.ensure_session(
+                package_id,
+                session_id=agent_session_id,
+                first_user_input=message,
+                session_kind="scheduler",
+                visible_in_agent_session_list=False,
+            )
             run = self.agent_package_runtime.stream(
                 package_id,
                 user_input=message,
                 session_id=agent_session_id,
                 request_id=request_id,
+                session_kind="scheduler",
+                visible_in_agent_session_list=False,
             )
             consume_result = self._consume_agent_package_stream(
                 package_id=package_id,
                 run=run,
                 normalizer=normalizer,
-                frontend_mode="chat",
-                frontend_session_id=factory_session.session_id,
+                frontend_mode="agent_package",
+                frontend_session_id=None,
                 sync_system_chat_session=False,
-            )
-            self._sync_scheduled_chat_session(
-                factory_session_id=factory_session.session_id,
-                request_id=request_id,
-                user_input=redacted_message,
-                agent_session=run.session if isinstance(run.session, dict) else {},
             )
         except AttachmentImportError as exc:
             payload = attachment_import_error_payload(exc)
@@ -196,7 +202,6 @@ class RuntimeSchedulerCommandMixin:
                 "target_scope": "chat",
                 "package_id": package_id,
                 "agent_session": run.session,
-                "conversation": {"mode": "chat", "session_id": factory_session.session_id},
                 "output_summary": "factory scheduled chat run requested user input",
             }
         return {
@@ -205,7 +210,6 @@ class RuntimeSchedulerCommandMixin:
             "target_scope": "chat",
             "package_id": package_id,
             "agent_session": run.session,
-            "conversation": {"mode": "chat", "session_id": factory_session.session_id},
             "output_summary": "factory scheduled chat run completed",
         }
 
@@ -214,12 +218,7 @@ class RuntimeSchedulerCommandMixin:
         package_id = str(payload.get("package_id") or "").strip()
         if not package_id:
             return {"status": "failed", "error": "scheduled agent package run requires package_id"}
-        thread_policy = str(payload.get("thread_policy") or "new_thread_per_run")
-        session_id = (
-            str(payload.get("fixed_thread_id") or payload.get("session_id") or "").strip()
-            if thread_policy == "fixed_thread"
-            else ""
-        ) or None
+        session_id = scheduler_run_session_id(job, run, namespace=f"agent_package:{package_id}")
         package_name = package_id
         try:
             summary = self.agent_package_runtime.package_summary(package_id)
@@ -235,11 +234,20 @@ class RuntimeSchedulerCommandMixin:
             producer_type="factory_runtime",
         )
         try:
+            self.agent_package_runtime.ensure_session(
+                package_id,
+                session_id=session_id,
+                first_user_input=message,
+                session_kind="scheduler",
+                visible_in_agent_session_list=False,
+            )
             package_run = self.agent_package_runtime.stream(
                 package_id,
                 user_input=message,
                 session_id=session_id,
                 request_id=request_id,
+                session_kind="scheduler",
+                visible_in_agent_session_list=False,
             )
             consume_result = self._consume_agent_package_stream(
                 package_id=package_id,
@@ -303,11 +311,6 @@ class RuntimeSchedulerCommandMixin:
             "package_id": package_id,
             "package_name": package_name,
             "agent_session": package_run.session,
-            "conversation": {
-                "mode": "agent_package",
-                "package_id": package_id,
-                "session_id": package_run.session.get("session_id") if isinstance(package_run.session, dict) else None,
-            },
             "output_summary": "scheduled agent package run completed",
         }
 
@@ -321,30 +324,6 @@ class RuntimeSchedulerCommandMixin:
         if self.scheduler_runtime is None:
             return {}
         return {"scheduler_runtime": self.scheduler_runtime}
-
-    def _sync_scheduled_chat_session(
-        self,
-        *,
-        factory_session_id: str,
-        request_id: str,
-        user_input: str,
-        agent_session: dict[str, Any],
-    ) -> None:
-        agent_session_id = str(agent_session.get("session_id") or "").strip()
-        record = self.session_manager.remember_first_user_input(factory_session_id, user_input)
-        if agent_session_id:
-            record.chat_agent_package_session_id = agent_session_id
-            self.session_manager.save(record)
-        turns = agent_session.get("turns")
-        if isinstance(turns, list):
-            self.session_manager.replace_turns_from_agent_session(
-                factory_session_id,
-                "chat",
-                [turn for turn in turns if isinstance(turn, dict)],
-            )
-            return
-        self.session_manager.start_turn(factory_session_id, "chat", request_id=request_id, user_input=user_input)
-
 
 def _scheduled_failure_result(result: Any, *, fallback: str) -> dict[str, Any]:
     terminal_event = getattr(result, "terminal_event", None)

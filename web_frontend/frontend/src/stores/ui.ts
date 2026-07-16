@@ -84,6 +84,7 @@ export const useUiStore = defineStore('ui', () => {
   // ========== 弹窗/抽屉 ==========
   const settingsDrawerOpen = ref(false)
   const debugDrawerOpen = ref(false)
+  const schedulerActivityDrawerOpen = ref(false)
 
   // ========== 通知 ==========
   interface Notification {
@@ -196,6 +197,14 @@ export const useUiStore = defineStore('ui', () => {
     debugDrawerOpen.value = !debugDrawerOpen.value
   }
 
+  function openSchedulerActivityDrawer(): void {
+    schedulerActivityDrawerOpen.value = true
+  }
+
+  function closeSchedulerActivityDrawer(): void {
+    schedulerActivityDrawerOpen.value = false
+  }
+
   // 初始化主题监听
   if (typeof window !== 'undefined') {
     watch(
@@ -234,6 +243,7 @@ export const useUiStore = defineStore('ui', () => {
     activeRightSidebarTab,
     settingsDrawerOpen,
     debugDrawerOpen,
+    schedulerActivityDrawerOpen,
     notifications,
     globalLoading,
     loadingTasks,
@@ -251,6 +261,8 @@ export const useUiStore = defineStore('ui', () => {
     setLocale,
     toggleSettingsDrawer,
     toggleDebugDrawer,
+    openSchedulerActivityDrawer,
+    closeSchedulerActivityDrawer,
     addNotification,
     removeNotification,
     startLoading,

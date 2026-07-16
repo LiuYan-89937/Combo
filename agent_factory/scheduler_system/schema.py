@@ -15,7 +15,6 @@ SchedulerTargetType = Literal["graph_run", "script_run", "tool_call"]
 SchedulerConcurrencyPolicy = Literal["skip", "queue", "replace"]
 SchedulerUnattendedPolicy = Literal["deny_if_approval_required", "pause_and_wait_for_user", "allow_preapproved_only"]
 SchedulerRunStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled"]
-SchedulerThreadPolicy = Literal["new_thread_per_run", "fixed_thread", "inherit_agent_default"]
 SchedulerFeedbackMode = Literal["llm_summary"]
 SchedulerFailureAction = Literal["pause"]
 SchedulerSeedSourceType = Literal["package_seed"]
@@ -58,11 +57,6 @@ class SchedulerTarget(BaseModel):
                 raise ValueError("graph_run target payload has invalid target_scope")
             if target_scope == "agent_package" and not str(self.payload.get("package_id") or "").strip():
                 raise ValueError("graph_run target payload agent_package requires package_id")
-            thread_policy = str(self.payload.get("thread_policy") or "new_thread_per_run")
-            if thread_policy not in {"new_thread_per_run", "fixed_thread", "inherit_agent_default"}:
-                raise ValueError("graph_run target payload has invalid thread_policy")
-            if thread_policy == "fixed_thread" and not str(self.payload.get("fixed_thread_id") or "").strip():
-                raise ValueError("graph_run target payload fixed_thread requires fixed_thread_id")
         elif self.target_type == "script_run":
             command = self.payload.get("command")
             if not isinstance(command, str) or not command.strip():

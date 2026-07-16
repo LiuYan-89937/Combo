@@ -636,7 +636,6 @@ def _runtime_contract_issue_from_pydantic_error(package: Any, error: dict[str, A
                     "target_type": "graph_run",
                     "payload": {
                         "message": "Natural-language instruction for the scheduled agent run.",
-                        "thread_policy": "new_thread_per_run",
                     },
                 }
             },
@@ -655,7 +654,6 @@ def _runtime_contract_issue_from_pydantic_error(package: Any, error: dict[str, A
                             "target_type": "graph_run",
                             "payload": {
                                 "message": "<scheduled task instruction from task_content/user request>",
-                                "thread_policy": "new_thread_per_run",
                             },
                         },
                         "task_content": "<scheduled task instruction>",

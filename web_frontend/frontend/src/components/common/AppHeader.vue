@@ -47,6 +47,23 @@
         {{ runStatusText }}
       </n-tag>
 
+      <n-badge
+        :value="schedulerUnreadCount || undefined"
+        :show="schedulerUnreadCount > 0 || schedulerRunning"
+        :dot="schedulerUnreadCount === 0 && schedulerRunning"
+      >
+        <n-button
+          text
+          class="header-icon-btn"
+          :class="{ 'is-active': schedulerRunning }"
+          :title="t('scheduler.activityTitle')"
+          :aria-label="t('scheduler.activityTitle')"
+          @click="uiStore.openSchedulerActivityDrawer"
+        >
+          <n-icon size="20"><Time /></n-icon>
+        </n-button>
+      </n-badge>
+
       <n-button
         text
         class="header-icon-btn"
@@ -78,8 +95,8 @@
 <script setup lang="ts">
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
-import { Bug, Settings } from '@/components/icons'
+import { NBadge, NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
+import { Bug, Settings, Time } from '@/components/icons'
 import appIcon from '@/assets/fast-agent-factory-icon.png'
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
@@ -90,6 +107,8 @@ const route = useRoute()
 const { t } = useI18n()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
+const schedulerUnreadCount = computed(() => runtimeStore.schedulerRunNotices.filter((notice) => notice.unread).length)
+const schedulerRunning = computed(() => runtimeStore.schedulerRunNotices.some((notice) => ['scheduled', 'pending', 'running'].includes(notice.status)))
 
 const headerCenterStyle = computed(() => ({
   left: `${uiStore.leftSidebarCollapsed ? 0 : uiStore.leftSidebarWidth}px`,
@@ -296,6 +315,11 @@ watchEffect(() => {
   transition: transform var(--app-transition-fast), background-color var(--app-transition-fast);
   border-radius: var(--app-radius-md);
   padding: 6px;
+}
+
+.header-icon-btn.is-active {
+  color: var(--app-info);
+  animation: app-pulse-soft 1.6s ease-in-out infinite;
 }
 
 .header-icon-btn:hover {

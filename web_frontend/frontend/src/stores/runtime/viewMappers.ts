@@ -142,7 +142,8 @@ export function schedulerRunNoticeView(event: FactoryFrontendEvent): SchedulerRu
   const factorySessionId = conversation.mode === 'chat' && conversation.session_id ? String(conversation.session_id) : null
   const packageId = String(payload.package_id || execution.package_id || '').trim() || null
   const packageName = String(payload.package_name || execution.package_name || '').trim() || null
-  const title = schedulerNoticeTitle(packageName, targetScope, targetType, packageId)
+  const title = String(payload.task_content || '').trim()
+    || schedulerNoticeTitle(packageName, targetScope, targetType, packageId)
   const summary = String(
     payload.summary ||
     execution.output_summary ||
@@ -169,6 +170,7 @@ export function schedulerRunNoticeView(event: FactoryFrontendEvent): SchedulerRu
     reportPath: payload.report_path ? String(payload.report_path) : null,
     timestamp: event.timestamp,
     unread: !['scheduled', 'running', 'pending'].includes(status),
+    conversationScope: null,
     payload,
   }
 }

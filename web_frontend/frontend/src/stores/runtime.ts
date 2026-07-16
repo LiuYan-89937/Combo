@@ -86,6 +86,7 @@ import {
   applyExtensionsEvent,
   applyWorkspaceEvent,
   markSchedulerRunNoticeRead,
+  dismissSchedulerRunNoticeFromConversation,
 } from './runtime/resourceMutations'
 import {
   applyToolApprovalRequested,
@@ -1065,6 +1066,10 @@ export const useRuntimeStore = defineStore('runtime', {
 
     markSchedulerNoticeRead(noticeId: string) {
       markSchedulerRunNoticeRead(this, noticeId)
+    },
+
+    dismissSchedulerNoticeFromConversation(noticeId: string) {
+      dismissSchedulerRunNoticeFromConversation(this, noticeId)
     },
 
     _upsertAgentSession(session: any) {

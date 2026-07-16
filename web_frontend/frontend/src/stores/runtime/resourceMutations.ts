@@ -24,6 +24,9 @@ export type ResourceMutationState = Pick<
   | 'knowledgeSources'
   | 'schedulerJobs'
   | 'schedulerRunNotices'
+  | 'activeConversationScope'
+  | 'activeFactorySessionId'
+  | 'activeAgentSessionId'
   | 'schedulerToolOptions'
   | 'workspaceEntries'
   | 'workspaceFile'
@@ -100,6 +103,13 @@ export function markSchedulerRunNoticeRead(state: ResourceMutationState, noticeI
   }
 }
 
+export function dismissSchedulerRunNoticeFromConversation(state: ResourceMutationState, noticeId: string) {
+  const notice = state.schedulerRunNotices.find((item) => item.id === noticeId)
+  if (notice) {
+    notice.conversationScope = null
+  }
+}
+
 function updateKnowledgeSources(state: ResourceMutationState, event: FactoryFrontendEvent) {
   if (Array.isArray(event.payload?.sources)) {
     state.knowledgeSources = event.payload.sources.map((source: any) => knowledgeSourceView(source, event.timestamp))
@@ -173,11 +183,18 @@ function updateSchedulerRunNotices(state: ResourceMutationState, event: FactoryF
       ...state.schedulerRunNotices[index],
       ...notice,
       unread: notice.status === 'running' ? state.schedulerRunNotices[index].unread : true,
+      conversationScope: state.schedulerRunNotices[index].conversationScope,
     }
   } else {
+    notice.conversationScope = activeConversationScope(state)
     state.schedulerRunNotices.unshift(notice)
   }
   if (state.schedulerRunNotices.length > 30) {
     state.schedulerRunNotices = state.schedulerRunNotices.slice(0, 30)
   }
+}
+
+function activeConversationScope(state: ResourceMutationState): string | null {
+  if (!state.activeFactorySessionId && !state.activeAgentSessionId) return null
+  return state.activeConversationScope
 }
