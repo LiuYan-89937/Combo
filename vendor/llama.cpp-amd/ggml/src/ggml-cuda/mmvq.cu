@@ -2,6 +2,7 @@
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
+#include "fastagentfactory-operator-trace.h"
 
 #include <cstdint>
 
@@ -857,6 +858,8 @@ static void mul_mat_vec_q_switch_ncols_dst(
     const mmvq_parameter_table_id table_id  = get_device_table_id(cc);
 
     const bool has_ids = ids != nullptr;
+    const bool has_fusion = fusion.x_bias != nullptr || fusion.gate != nullptr ||
+        fusion.gate_bias != nullptr || fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
 
     const auto should_use_small_k = [&](int c_ncols_dst) {
         // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
@@ -900,6 +903,18 @@ static void mul_mat_vec_q_switch_ncols_dst(
         return use;
     };
 
+    const bool selected_small_k = ncols_dst == 1 && should_use_small_k(ncols_dst);
+    const int selected_nwarps = has_ids && ncols_dst > 1
+        ? ncols_dst
+        : calc_nwarps(type, ncols_dst, table_id);
+    const int selected_rows_per_block = has_ids && ncols_dst > 1
+        ? 2
+        : calc_rows_per_block(ncols_dst, table_id, selected_small_k, selected_nwarps);
+    fastagentfactory::operator_trace::record_mmvq(
+        ggml_type_name(type), nrows_x, ncols_dst, ncols_x, has_ids, has_fusion,
+        has_ids ? nchannels_x : 0, has_ids ? nchannels_dst : 0,
+        selected_nwarps, selected_rows_per_block, static_cast<int>(table_id), selected_small_k);
+
     if (has_ids && ncols_dst > 1) {
         // Multi-token MUL_MAT_ID path - dedicated MoE kernel
         mul_mat_vec_q_moe_launch<type>(
@@ -914,7 +929,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
         case 1: {
             constexpr int c_ncols_dst = 1;
 
-            bool use_small_k = should_use_small_k(c_ncols_dst);
+            const bool use_small_k = selected_small_k;
 
             if (use_small_k) {
                 std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst,

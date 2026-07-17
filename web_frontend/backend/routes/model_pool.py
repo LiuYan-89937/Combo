@@ -13,6 +13,7 @@ from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.local_inference.implementation import inspect_llama_implementations
 from agent_factory.local_inference.memory_budget import estimate_inference_memory
 from agent_factory.local_inference.node_control import (
+    InferenceLlamaImplementationAction,
     InferenceMemoryEstimateRequest,
     InferenceNodeClient,
 )
@@ -64,6 +65,19 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
                 }
             return status.model_dump(mode="json")
         return inspect_llama_implementations().model_dump(mode="json")
+
+    @router.post("/runtime/llama/activate")
+    async def activate_llama_runtime(payload: dict[str, Any]):
+        try:
+            request = InferenceLlamaImplementationAction.model_validate(payload)
+            if load_inference_runtime_mode() != "external":
+                raise ValueError("llama.cpp implementation switching requires an external inference node")
+            result = await InferenceNodeClient().activate_llama_implementation(
+                request.implementation
+            )
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return result
 
     @router.get("/runtimes")
     async def inference_runtimes():

@@ -391,6 +391,8 @@ class ModelContractBuilder:
                     binding,
                     artifact_store=artifact_store,
                 )
+                if resolved_image is None:
+                    continue
                 model_tool_runtime[tool_id] = {
                     "tool_id": tool_id,
                     "capability": binding.capability,

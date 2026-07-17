@@ -260,7 +260,9 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 
 每次优化应使用相同 Prompt、输出上限、Context、并发和采样参数。Benchmark 会从远端自动记录活动 implementation、源码 revision、源码摘要和二进制 SHA256，不能手填实现身份。
 
-页面还提供独立的“算子分析”。它不会与普通 TTFT/TPS 测试混跑，而是临时卸载 Chat 模型，使用同一 Profile 参数分别执行 `llama-bench` Prefill 与 Decode，并通过 `GGML_SCHED_DEBUG=2` 记录 GGML 图算子/执行后端、通过 `rocprofv3` 汇总 HIP Kernel 调用次数与耗时占比。分析产物保存在远端 `.agentfactory/benchmark/operator-analysis/`，完成后自动恢复 Chat 模型。
+页面还提供独立的“算子分析”。它不会与普通 TTFT/TPS 测试混跑，而是临时卸载 Chat 模型，使用同一 Profile 参数分别执行 `llama-bench` Prefill 与 Decode。该子进程通过 llama.cpp 原生的 `GGML_CUDA_DISABLE_GRAPHS=1` 关闭 HIP Graph replay，使每次 GPU Kernel 都重新经过 Host 分派点；实际服务和普通性能测试不受影响，仍保留 HIP Graph。算子分析通过 `GGML_SCHED_DEBUG=2` 记录 GGML 图算子/执行后端、通过 `rocprofv3` 汇总 HIP Kernel 调用次数与耗时占比。两套 llama.cpp 还会在 Host 分派点记录 MMVQ/MMQ 的权重量化、M/N/K Shape、MoE/融合状态和实际启动配置，其中 M 是输出行数、N 是同次分派的目标列/Token 数、K 是归约维度。分析器只在 Host 记录数与 rocprof Kernel 时间线事件数完全一致时按顺序配对并展示变体耗时，数量不一致时明确告警且不猜测。算子分析耗时只用于归因，真实吞吐必须以普通性能测试为准。分析产物保存在远端 `.agentfactory/benchmark/operator-analysis/`，完成后自动恢复 Chat 模型。
+
+Benchmark 页面可以直接在 Official Baseline 与 AMD 优化实现之间切换。两套实现共享模型文件和推理 Profile，控制节点会互斥卸载当前实现、切换活动二进制并重新加载模型，因此不会让两份模型同时占用显存。Kernel 结果按计算家族聚合展示，完整 rocprof 符号作为可展开的原始变体保留。
 
 ## llama.cpp AMD 算子改造
 
@@ -269,6 +271,7 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 ```text
 vendor/llama.cpp-official/   固定官方 Baseline，不接受 AMD 算子修改
 vendor/llama.cpp-amd/        AMD 优化承载目录
+vendor/llama.cpp-common/     两套实现共享的算子分析追踪协议
 vendor/stable-diffusion.cpp/ 完整图片推理源码与递归子模块
 ```
 
@@ -288,7 +291,7 @@ cd ../..
 ./deploy.sh switch-llama amd
 ```
 
-官方和 AMD 使用相互独立的 CMake/Ninja 构建目录，并同时生成 `llama-server` 与 `llama-bench`。切换实现不会改变模型 Profile；性能测试和算子分析都会自动识别当前活动构建。实现 AMD Kernel 后必须把构建清单的 `custom_kernels` 和 `optimization_status` 更新为真实状态，并用算子分析中的 Kernel 调用与耗时数据证明命中，不能只改显示名称。
+官方和 AMD 使用相互独立的 CMake/Ninja 构建目录，并同时生成 `llama-server` 与 `llama-bench`。切换实现不会改变模型 Profile；性能测试和算子分析都会自动识别当前活动构建。Kernel 名称、家族、符号匹配和中英文作用说明来自构建产物中的 Kernel Catalog，Benchmark 页面支持悬浮查看说明和展开原始符号；未登记 Kernel 会明确标记，不使用 Python 硬编码猜测。实现 AMD Kernel 后，需要将描述加入 `vendor/llama.cpp-amd/.fastagentfactory-kernel-catalog.json`，并把构建清单的 `custom_kernels` 和 `optimization_status` 更新为真实状态，再用算子分析中的 Kernel 调用与耗时数据证明命中。
 
 ## 配置与数据目录
 
@@ -301,6 +304,7 @@ deploy/deploy.env            一键部署配置，不提交
 .agent_runtime/              Agent 工作区、Trace 与 Checkpoint，不提交
 vendor/llama.cpp-official/   随仓库提交的官方 Baseline 源码
 vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
+vendor/llama.cpp-common/     两套实现共享的 Host 分派追踪源码
 vendor/stable-diffusion.cpp/ 随仓库提交的图片推理源码与递归子模块
 ```
 

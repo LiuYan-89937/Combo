@@ -133,6 +133,14 @@ class PolicyState(BaseModel):
     checks: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class RuntimeWaitState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    reason: str
+    message: str = ""
+
+
 class ExecutionState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -149,6 +157,7 @@ class ExecutionState(BaseModel):
     interrupt_payload: dict[str, Any] = Field(default_factory=dict)
     resume_payload: dict[str, Any] = Field(default_factory=dict)
     resume_token: str | None = None
+    pending_wait: RuntimeWaitState | None = None
     finished: bool = False
     finish_status: str | None = None
     finish_message: str | None = None

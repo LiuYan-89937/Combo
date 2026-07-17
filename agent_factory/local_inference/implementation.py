@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +25,8 @@ class LlamaImplementationBuild(BaseModel):
     binary_sha256: str
     benchmark_binary_path: str = ""
     benchmark_binary_sha256: str = ""
+    kernel_catalog_path: str = ""
+    kernel_catalog_sha256: str = ""
     custom_kernels: bool = False
     optimization_status: Literal["baseline", "placeholder", "optimized"]
     build_options: dict[str, Any] = Field(default_factory=dict)
@@ -65,6 +68,55 @@ def inspect_llama_implementations() -> LlamaImplementationStatus:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return LlamaImplementationStatus(error=f"{type(exc).__name__}: {exc}")
+
+
+def activate_llama_implementation(
+    implementation: LlamaImplementationId,
+) -> LlamaImplementationStatus:
+    root = _implementation_root()
+    build = _read_manifest(root, implementation)
+    if build is None:
+        raise ValueError(f"llama.cpp implementation is not built: {implementation}")
+    binary = Path(build.binary_path).expanduser().resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ValueError(f"llama.cpp server binary is unavailable: {binary}")
+
+    active = _read_active_implementation(root)
+    active_dir = root / "active"
+    active_dir.mkdir(parents=True, exist_ok=True)
+    link_path = active_dir / "llama-server"
+    temporary_link = active_dir / f".llama-server.{os.getpid()}.tmp"
+    temporary_link.unlink(missing_ok=True)
+    temporary_link.symlink_to(binary)
+    os.replace(temporary_link, link_path)
+    if active is not None and active != implementation:
+        _atomic_write_text(root / "previous-implementation", f"{active}\n")
+    _atomic_write_text(root / "active-implementation", f"{implementation}\n")
+    status = inspect_llama_implementations()
+    if not status.available or status.active != implementation:
+        raise RuntimeError("llama.cpp implementation activation did not become visible")
+    return status
+
+
+def _implementation_root() -> Path:
+    configured_root = str(os.environ.get("AGENTFACTORY_LLAMA_IMPLEMENTATION_ROOT") or "").strip()
+    if not configured_root:
+        raise ValueError("llama.cpp implementation root is not configured")
+    return Path(configured_root).expanduser().resolve()
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _read_active_implementation(root: Path) -> LlamaImplementationId | None:

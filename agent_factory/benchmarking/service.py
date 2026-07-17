@@ -400,6 +400,7 @@ async def _active_benchmark_implementation() -> BenchmarkImplementation:
             "source_sha256": active_build.source_sha256,
             "binary_sha256": active_build.binary_sha256,
             "benchmark_binary_sha256": active_build.benchmark_binary_sha256,
+            "kernel_catalog_sha256": active_build.kernel_catalog_sha256,
             "custom_kernels": active_build.custom_kernels,
             "optimization_status": active_build.optimization_status,
             "build_options": active_build.build_options,

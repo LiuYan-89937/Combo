@@ -91,6 +91,7 @@ LOG_FILE="${REMOTE_STATE_ROOT}/logs/inference-node.log"
 EMBEDDING_PATH_FILE="${REMOTE_STATE_ROOT}/embedding-model-path"
 LLAMA_OFFICIAL_SOURCE_DIR="${REMOTE_LLAMA_SOURCE_ROOT}/official"
 LLAMA_AMD_SOURCE_DIR="${REMOTE_LLAMA_SOURCE_ROOT}/amd"
+LLAMA_COMMON_SOURCE_DIR="${REMOTE_LLAMA_SOURCE_ROOT}/llama.cpp-common"
 LLAMA_BUILDS_ROOT="${REMOTE_LLAMA_RUNTIME_ROOT}/builds"
 LLAMA_ACTIVE_DIR="${REMOTE_LLAMA_RUNTIME_ROOT}/active"
 LLAMA_ACTIVE_LINK="${LLAMA_ACTIVE_DIR}/llama-server"
@@ -139,10 +140,14 @@ validate_llama_source_tree() {
         cmake/build-info.cmake \
         common/CMakeLists.txt \
         common/build-info.cpp.in \
-        common/build-info.h; do
+        common/build-info.h \
+        .fastagentfactory-kernel-catalog.json; do
         [[ -f "${source_dir}/${required_file}" ]] \
             || fail "Bundled ${implementation} llama.cpp source is incomplete: ${source_dir}/${required_file}"
     done
+    [[ -f "${LLAMA_COMMON_SOURCE_DIR}/fastagentfactory-operator-trace.h" \
+        && -f "${LLAMA_COMMON_SOURCE_DIR}/fastagentfactory-operator-trace.cpp" ]] \
+        || fail "Shared llama.cpp operator trace source is incomplete: ${LLAMA_COMMON_SOURCE_DIR}"
 }
 
 llama_build_dir() {
@@ -467,7 +472,7 @@ prepare_python() {
 
 llama_source_digest() {
     local source_dir="$1"
-    find "${source_dir}" \
+    find "${source_dir}" "${LLAMA_COMMON_SOURCE_DIR}" \
         -path '*/.git' -prune -o \
         -type d -name 'build*' -prune -o \
         -type f -print0 \
@@ -480,12 +485,13 @@ llama_source_digest() {
 build_llama_implementation() {
     local implementation="$1"
     validate_llama_implementation "${implementation}"
-    local source_dir build_dir cmake_dir source_revision source_build_number source_digest binary binary_sha benchmark_binary benchmark_binary_sha custom_kernels
+    local source_dir build_dir cmake_dir source_revision source_build_number source_digest binary binary_sha benchmark_binary benchmark_binary_sha kernel_catalog kernel_catalog_sha custom_kernels
     source_dir="$(llama_source_dir "${implementation}")"
     build_dir="$(llama_build_dir "${implementation}")"
     cmake_dir="${build_dir}/cmake"
     binary="$(llama_binary_path "${implementation}")"
     benchmark_binary="$(llama_benchmark_binary_path "${implementation}")"
+    kernel_catalog="${build_dir}/kernel-catalog.json"
     validate_llama_source_tree "${implementation}" "${source_dir}"
     if [[ "${implementation}" == "official" ]]; then
         source_revision="${LLAMA_OFFICIAL_REVISION}"
@@ -522,9 +528,44 @@ build_llama_implementation() {
     source_digest="$(llama_source_digest "${source_dir}")"
     binary_sha="$(sha256sum "${binary}" | awk '{print $1}')"
     benchmark_binary_sha="$(sha256sum "${benchmark_binary}" | awk '{print $1}')"
+    python3 - \
+        "${REMOTE_PROJECT_ROOT}/deploy/kernel-catalogs/llama-cpp-rocm-base.json" \
+        "${source_dir}/.fastagentfactory-kernel-catalog.json" \
+        "${kernel_catalog}" \
+        "${implementation}" <<'PY'
+import json
+import pathlib
+import sys
+
+base_path = pathlib.Path(sys.argv[1])
+overlay_path = pathlib.Path(sys.argv[2])
+output_path = pathlib.Path(sys.argv[3])
+implementation = sys.argv[4]
+base = json.loads(base_path.read_text(encoding="utf-8"))
+overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+if base.get("schema_version") != 1 or overlay.get("schema_version") != 1:
+    raise SystemExit("kernel catalog schema_version must be 1")
+if overlay.get("implementation") != implementation:
+    raise SystemExit("kernel catalog overlay implementation does not match the build")
+kernels = [*base.get("kernels", []), *overlay.get("kernels", [])]
+kernel_ids = [item.get("kernel_id") for item in kernels]
+if len(kernel_ids) != len(set(kernel_ids)):
+    raise SystemExit("kernel catalog contains duplicate kernel_id values")
+payload = {
+    "schema_version": 1,
+    "implementation": implementation,
+    "kernels": kernels,
+}
+output_path.write_text(
+    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
+    kernel_catalog_sha="$(sha256sum "${kernel_catalog}" | awk '{print $1}')"
     python3 - "${build_dir}/manifest.json" "${implementation}" "${source_revision}" \
         "${source_build_number}" "${source_digest}" "${binary}" "${binary_sha}" \
-        "${benchmark_binary}" "${benchmark_binary_sha}" "${custom_kernels}" <<'PY'
+        "${benchmark_binary}" "${benchmark_binary_sha}" "${kernel_catalog}" \
+        "${kernel_catalog_sha}" "${custom_kernels}" <<'PY'
 import datetime
 import json
 import pathlib
@@ -542,7 +583,9 @@ payload = {
     "binary_sha256": sys.argv[7],
     "benchmark_binary_path": sys.argv[8],
     "benchmark_binary_sha256": sys.argv[9],
-    "custom_kernels": sys.argv[10].lower() == "true",
+    "kernel_catalog_path": sys.argv[10],
+    "kernel_catalog_sha256": sys.argv[11],
+    "custom_kernels": sys.argv[12].lower() == "true",
     "optimization_status": "baseline" if implementation == "official" else "placeholder",
     "build_options": {
         "GGML_HIP": True,

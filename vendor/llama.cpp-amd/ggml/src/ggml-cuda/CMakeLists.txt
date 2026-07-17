@@ -103,6 +103,9 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+    set(FASTAGENTFACTORY_OPERATOR_TRACE_DIR "${CMAKE_SOURCE_DIR}/../llama.cpp-common")
+    list(APPEND GGML_SOURCES_CUDA
+        "${FASTAGENTFACTORY_OPERATOR_TRACE_DIR}/fastagentfactory-operator-trace.cpp")
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
@@ -128,6 +131,7 @@ if (CUDAToolkit_FOUND)
                              ${GGML_HEADERS_CUDA}
                              ${GGML_SOURCES_CUDA}
                             )
+    target_include_directories(ggml-cuda PRIVATE "${FASTAGENTFACTORY_OPERATOR_TRACE_DIR}")
 
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 

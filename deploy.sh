@@ -129,6 +129,7 @@ LOCAL_LLAMA_AMD_PATH="${LOCAL_LLAMA_AMD_DIR}"
 if [[ "${LOCAL_LLAMA_AMD_PATH}" != /* ]]; then
     LOCAL_LLAMA_AMD_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_AMD_PATH}"
 fi
+LOCAL_LLAMA_COMMON_PATH="${PROJECT_ROOT}/vendor/llama.cpp-common"
 LOCAL_STABLE_DIFFUSION_CPP_PATH="${LOCAL_STABLE_DIFFUSION_CPP_DIR}"
 if [[ "${LOCAL_STABLE_DIFFUSION_CPP_PATH}" != /* ]]; then
     LOCAL_STABLE_DIFFUSION_CPP_PATH="${PROJECT_ROOT}/${LOCAL_STABLE_DIFFUSION_CPP_PATH}"
@@ -159,7 +160,8 @@ validate_llama_source_tree() {
         cmake/build-info.cmake \
         common/CMakeLists.txt \
         common/build-info.cpp.in \
-        common/build-info.h; do
+        common/build-info.h \
+        .fastagentfactory-kernel-catalog.json; do
         [[ -f "${source_dir}/${required_file}" ]] \
             || fail "Bundled ${implementation} llama.cpp source is incomplete: ${source_dir}/${required_file}"
     done
@@ -186,6 +188,9 @@ validate_stable_diffusion_source_tree() {
 prepare_local_sources() {
     validate_llama_source_tree official "${LOCAL_LLAMA_OFFICIAL_PATH}"
     validate_llama_source_tree amd "${LOCAL_LLAMA_AMD_PATH}"
+    [[ -f "${LOCAL_LLAMA_COMMON_PATH}/fastagentfactory-operator-trace.h" \
+        && -f "${LOCAL_LLAMA_COMMON_PATH}/fastagentfactory-operator-trace.cpp" ]] \
+        || fail "Bundled shared llama.cpp operator trace source is incomplete: ${LOCAL_LLAMA_COMMON_PATH}"
     validate_stable_diffusion_source_tree "${LOCAL_STABLE_DIFFUSION_CPP_PATH}"
 }
 
@@ -216,6 +221,8 @@ sync_sources() {
         --include '/agent_factory/models/protocol.py' \
         --include '/deploy/' \
         --include '/deploy/configure_model_pool.py' \
+        --include '/deploy/kernel-catalogs/' \
+        --include '/deploy/kernel-catalogs/*.json' \
         --exclude '*' \
         "${PROJECT_ROOT}/" "${SSH_TARGET}:${REMOTE_PROJECT_ROOT}/"
 
@@ -229,6 +236,10 @@ sync_sources() {
         -e "${rsync_transport% }" \
         --exclude 'build*/' \
         "${LOCAL_LLAMA_AMD_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/amd/"
+    log "Synchronizing shared llama.cpp operator trace source"
+    rsync -az --delete \
+        -e "${rsync_transport% }" \
+        "${LOCAL_LLAMA_COMMON_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/llama.cpp-common/"
     log "Synchronizing bundled stable-diffusion.cpp source"
     rsync -az --delete \
         -e "${rsync_transport% }" \

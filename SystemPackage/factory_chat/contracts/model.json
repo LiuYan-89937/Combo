@@ -25,11 +25,11 @@
     },
     "tool_bindings": {
       "generate_image": {
-        "profile_id": "flux.1-dev-q4_0",
-        "source": "local_registry",
+        "source": "local_default",
         "capability": "image_output",
-        "selection_source": "manual",
-        "reason": "Use the configured FLUX.1-dev image profile for local text-to-image generation.",
+        "required": false,
+        "selection_source": "auto",
+        "reason": "Use the enabled default image generation profile when one is configured.",
         "required_capabilities": {
           "input_modalities": [
             "text"

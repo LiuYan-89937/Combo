@@ -6,7 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.local_inference.config import load_inference_telemetry_endpoint
 from agent_factory.local_inference.http_client import create_private_async_http_client
-from agent_factory.local_inference.implementation import LlamaImplementationStatus
+from agent_factory.local_inference.implementation import (
+    LlamaImplementationId,
+    LlamaImplementationStatus,
+)
 from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
     LlamaCppInferenceConfig,
@@ -80,6 +83,12 @@ class InferenceOperatorAnalysisRequest(BaseModel):
     profile: InferenceNodeProfileConfiguration
     analysis_id: str
     options: InferenceOperatorAnalysisOptions
+
+
+class InferenceLlamaImplementationAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    implementation: LlamaImplementationId
 
 
 class InferenceNodeClient:
@@ -181,3 +190,20 @@ class InferenceNodeClient:
         if not isinstance(result, dict):
             raise ValueError("inference node response does not contain operator analysis results")
         return result
+
+    async def activate_llama_implementation(
+        self,
+        implementation: LlamaImplementationId,
+    ) -> dict[str, Any]:
+        endpoint = load_inference_telemetry_endpoint(timeout_seconds=1200.0)
+        request = InferenceLlamaImplementationAction(implementation=implementation)
+        async with create_private_async_http_client(endpoint) as client:
+            response = await client.post(
+                endpoint.endpoint("/runtime/llama/activate"),
+                json=request.model_dump(mode="json"),
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("inference node response does not contain activation status")
+        return payload

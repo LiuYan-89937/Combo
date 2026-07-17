@@ -18,9 +18,13 @@ from agent_factory.local_inference.memory_budget import (
     estimate_inference_memory,
     warm_inference_memory_metadata,
 )
-from agent_factory.local_inference.implementation import inspect_llama_implementations
+from agent_factory.local_inference.implementation import (
+    activate_llama_implementation,
+    inspect_llama_implementations,
+)
 from agent_factory.local_inference.node_control import (
     InferenceMemoryEstimateRequest,
+    InferenceLlamaImplementationAction,
     InferenceNodeAction,
     InferenceOperatorAnalysisRequest,
     InferenceNodeProfileConfiguration,
@@ -42,7 +46,7 @@ def create_app() -> FastAPI:
         allow_external_control=False,
         restore_enabled_fallback=False,
     )
-    operator_analysis_lock = asyncio.Lock()
+    chat_maintenance_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -71,6 +75,18 @@ def create_app() -> FastAPI:
     @app.get("/runtime/llama")
     async def llama_runtime() -> dict[str, Any]:
         return inspect_llama_implementations().model_dump(mode="json")
+
+    @app.post("/runtime/llama/activate")
+    async def activate_llama_runtime(
+        request: InferenceLlamaImplementationAction,
+    ) -> dict[str, Any]:
+        if chat_maintenance_lock.locked():
+            raise HTTPException(
+                status_code=409,
+                detail="another chat runtime maintenance operation is already running",
+            )
+        async with chat_maintenance_lock:
+            return await _execute_implementation_activation(runtime_manager, request)
 
     @app.get("/runtimes")
     async def runtimes() -> dict[str, Any]:
@@ -148,44 +164,104 @@ def create_app() -> FastAPI:
 
     @app.post("/runtimes/load")
     async def load_runtime(request: InferenceNodeAction) -> dict[str, Any]:
-        _reject_chat_runtime_action_during_analysis(request, operator_analysis_lock)
+        _reject_chat_runtime_action_during_maintenance(request, chat_maintenance_lock)
         profile = _resolve_profile(request, apply_configuration=True)
         return {"runtime": _runtime_payload(await runtime_manager.load(profile.profile_id))}
 
     @app.post("/runtimes/unload")
     async def unload_runtime(request: InferenceNodeAction) -> dict[str, Any]:
-        _reject_chat_runtime_action_during_analysis(request, operator_analysis_lock)
+        _reject_chat_runtime_action_during_maintenance(request, chat_maintenance_lock)
         profile = _resolve_profile(request)
         return {"runtime": _runtime_payload(await runtime_manager.unload(profile.profile_id), profile=profile)}
 
     @app.post("/runtimes/restart")
     async def restart_runtime(request: InferenceNodeAction) -> dict[str, Any]:
-        _reject_chat_runtime_action_during_analysis(request, operator_analysis_lock)
+        _reject_chat_runtime_action_during_maintenance(request, chat_maintenance_lock)
         profile = _resolve_profile(request, apply_configuration=True)
         return {"runtime": _runtime_payload(await runtime_manager.restart(profile.profile_id))}
 
     @app.post("/benchmarks/operator-analysis")
     async def operator_analysis(request: InferenceOperatorAnalysisRequest) -> dict[str, Any]:
-        if operator_analysis_lock.locked():
+        if chat_maintenance_lock.locked():
             raise HTTPException(
                 status_code=409,
                 detail="another operator analysis is already running",
             )
-        async with operator_analysis_lock:
+        async with chat_maintenance_lock:
             return await _execute_operator_analysis(runtime_manager, request)
 
     return app
 
 
-def _reject_chat_runtime_action_during_analysis(
+def _reject_chat_runtime_action_during_maintenance(
     request: InferenceNodeAction,
     lock: asyncio.Lock,
 ) -> None:
     if request.kind == "chat" and lock.locked():
         raise HTTPException(
             status_code=409,
-            detail="chat runtime control is unavailable during operator analysis",
+            detail="chat runtime control is unavailable during maintenance",
         )
+
+
+async def _execute_implementation_activation(
+    runtime_manager: LocalInferenceRuntimeManager,
+    request: InferenceLlamaImplementationAction,
+) -> dict[str, Any]:
+    current = inspect_llama_implementations()
+    if current.active == request.implementation and current.available:
+        return {
+            "implementation": current.model_dump(mode="json"),
+            "runtime": _chat_runtime_state(runtime_manager),
+        }
+    chat_state = _chat_runtime_state(runtime_manager)
+    phase = str(chat_state.get("phase") or "idle")
+    if phase not in {"idle", "ready"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"chat runtime must be idle or ready before switching implementation: {phase}",
+        )
+    profile_id = str(chat_state.get("profile_id") or "") if phase == "ready" else ""
+    if profile_id:
+        await runtime_manager.unload(profile_id)
+    try:
+        activated = activate_llama_implementation(request.implementation)
+        if profile_id:
+            await runtime_manager.load(profile_id)
+            await _wait_runtime_ready(runtime_manager, profile_id)
+    except Exception as activation_error:
+        rollback_error: Exception | None = None
+        if current.active is not None:
+            try:
+                active_state = _chat_runtime_state(runtime_manager)
+                active_profile_id = str(active_state.get("profile_id") or "")
+                if active_profile_id:
+                    await runtime_manager.unload(active_profile_id)
+                activate_llama_implementation(current.active)
+                if profile_id:
+                    await runtime_manager.load(profile_id)
+                    await _wait_runtime_ready(runtime_manager, profile_id)
+            except Exception as exc:
+                rollback_error = exc
+        detail = f"{type(activation_error).__name__}: {activation_error}"
+        if rollback_error is not None:
+            detail += f"; rollback failed: {type(rollback_error).__name__}: {rollback_error}"
+        raise HTTPException(status_code=500, detail=detail) from activation_error
+    return {
+        "implementation": activated.model_dump(mode="json"),
+        "runtime": _chat_runtime_state(runtime_manager),
+    }
+
+
+def _chat_runtime_state(runtime_manager: LocalInferenceRuntimeManager) -> dict[str, Any]:
+    return next(
+        (
+            state
+            for state in runtime_manager.states()
+            if str(state.get("kind") or "") == "chat"
+        ),
+        {"kind": "chat", "phase": "idle", "profile_id": ""},
+    )
 
 
 async def _execute_operator_analysis(

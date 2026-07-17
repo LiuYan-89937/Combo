@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.cuh"
+#include "fastagentfactory-operator-trace.h"
 
 #include <climits>
 #include <cstdint>
@@ -1295,6 +1296,13 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     GGML_ASSERT(config.nthreads % warp_size == 0);
     const int nwarps = config.nthreads / warp_size;
     const int nbytes_shared = mmq_get_nbytes_shared(config, cc);
+
+    const bool has_ids = args.ids_dst != nullptr;
+    fastagentfactory::operator_trace::record_mmq(
+        ggml_type_name(type), args.nrows_x, args.ncols_dst, args.ncols_x,
+        has_ids, has_ids ? args.nchannels_x : 0, has_ids ? args.nchannels_y : 0,
+        config.nthreads, config.occupancy, config.I, config.J, config.K_vram,
+        nwarps, static_cast<std::size_t>(nbytes_shared), config.stream_k, config.fallback);
 
     const dim3 block_dims(warp_size, nwarps, 1);
 

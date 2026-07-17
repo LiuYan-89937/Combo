@@ -260,6 +260,8 @@ export interface LlamaImplementationBuild {
   binary_sha256: string
   benchmark_binary_path: string
   benchmark_binary_sha256: string
+  kernel_catalog_path: string
+  kernel_catalog_sha256: string
   custom_kernels: boolean
   optimization_status: 'baseline' | 'placeholder' | 'optimized'
   build_options: Record<string, unknown>
@@ -300,6 +302,14 @@ export const modelPoolApi = {
   runtimes: () => requestJson<LocalModelRuntimeSummary>('/api/model-pool/runtimes'),
   rocmRuntime: () => requestJson<RocmRuntimeInfo>('/api/model-pool/runtime/rocm'),
   llamaRuntime: () => requestJson<LlamaImplementationStatus>('/api/model-pool/runtime/llama'),
+  activateLlamaImplementation: (implementation: LlamaImplementationId) =>
+    requestJson<{ implementation: LlamaImplementationStatus; runtime: LocalModelRuntime }>(
+      '/api/model-pool/runtime/llama/activate',
+      {
+        method: 'POST',
+        body: JSON.stringify({ implementation }),
+      },
+    ),
   storage: () => requestJson<LocalModelStorage>('/api/model-pool/storage'),
   defaults: () => requestJson<{ defaults: LocalModelDefaults }>('/api/model-pool/defaults'),
   setDefault: (role: LocalModelDefaultRole, profileId: string) =>

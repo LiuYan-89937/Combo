@@ -34,9 +34,41 @@
           {{ llamaStatus?.error || t('benchmark.implementationUnavailable') }}
         </n-alert>
 
+        <div class="benchmark-kind-selector implementation-selector">
+          <div class="selector-label">
+            <span>{{ t('benchmark.implementationSelector') }}</span>
+            <small>{{ t('benchmark.implementationSwitchHint') }}</small>
+          </div>
+          <n-radio-group
+            :value="selectedImplementation"
+            size="small"
+            class="benchmark-kind-control soft-segmented-control"
+            :disabled="Boolean(activeRun) || switchingImplementation"
+            @update:value="switchImplementation"
+          >
+            <n-radio-button
+              v-for="build in llamaStatus?.builds || []"
+              :key="build.implementation"
+              :value="build.implementation"
+            >
+              {{ build.implementation === 'official'
+                ? t('benchmark.officialImplementation')
+                : t('benchmark.amdImplementation') }}
+            </n-radio-button>
+          </n-radio-group>
+          <n-tag v-if="switchingImplementation" type="warning" :bordered="false">
+            {{ t('benchmark.switchingImplementation') }}
+          </n-tag>
+        </div>
+
         <div class="benchmark-kind-selector">
           <span>{{ t('benchmark.kind') }}</span>
-          <n-radio-group v-model:value="form.kind" :disabled="Boolean(activeRun)">
+          <n-radio-group
+            v-model:value="form.kind"
+            size="small"
+            class="benchmark-kind-control soft-segmented-control"
+            :disabled="Boolean(activeRun)"
+          >
             <n-radio-button value="performance">{{ t('benchmark.performanceKind') }}</n-radio-button>
             <n-radio-button value="operator_analysis">{{ t('benchmark.operatorKind') }}</n-radio-button>
           </n-radio-group>
@@ -279,6 +311,14 @@
               : t('benchmark.runtimeRestoreFailed') }}
           </n-alert>
           <n-alert
+            v-if="selectedRun.operator_analysis.gpu_graphs_disabled_for_attribution"
+            type="info"
+            :show-icon="true"
+            class="operator-warning"
+          >
+            {{ t('benchmark.operatorGraphAttributionNotice') }}
+          </n-alert>
+          <n-alert
             v-for="warning in selectedRun.operator_analysis.warnings"
             :key="warning"
             type="warning"
@@ -306,7 +346,21 @@
                 </tr></thead>
                 <tbody>
                   <tr v-for="kernel in phase.top_kernels" :key="kernel.name">
-                    <td class="kernel-name">{{ kernel.name }}</td>
+                    <td class="kernel-name">
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <strong class="kernel-display-name">
+                            {{ kernel.display_name || kernel.name }}
+                            <n-icon class="kernel-info-icon" :component="InformationCircleOutline" />
+                          </strong>
+                        </template>
+                        <div class="kernel-description">{{ kernelDescription(kernel.descriptions) }}</div>
+                      </n-tooltip>
+                      <details v-if="kernel.variants.length" class="kernel-variants">
+                        <summary>{{ t('benchmark.kernelVariants', { count: kernel.variant_count || kernel.variants.length }) }}</summary>
+                        <code v-for="variant in kernel.variants" :key="variant">{{ variant }}</code>
+                      </details>
+                    </td>
                     <td>{{ kernel.calls.toLocaleString() }}</td>
                     <td>{{ formatKernelTime(kernel.total_duration_ns) }}</td>
                     <td>{{ formatPercent(kernel.duration_percent) }}</td>
@@ -314,7 +368,38 @@
                 </tbody>
               </table>
             </div>
-            <div class="operator-table-wrap graph-table-wrap">
+            <div v-if="phase.dispatch_variants?.length" class="operator-table-wrap dispatch-variant-table-wrap">
+              <table class="sample-table dispatch-variant-table">
+                <thead><tr>
+                  <th>{{ t('benchmark.dispatchPath') }}</th>
+                  <th>{{ t('benchmark.weightType') }}</th>
+                  <th>{{ t('benchmark.matrixShape') }}</th>
+                  <th>{{ t('benchmark.dispatchFeatures') }}</th>
+                  <th>{{ t('benchmark.kernelConfiguration') }}</th>
+                  <th>{{ t('benchmark.kernelCalls') }}</th>
+                  <th>{{ t('benchmark.kernelTotalTime') }}</th>
+                  <th>{{ t('benchmark.kernelAverageTime') }}</th>
+                  <th>{{ t('benchmark.kernelShare') }}</th>
+                </tr></thead>
+                <tbody>
+                  <tr
+                    v-for="item in phase.dispatch_variants"
+                    :key="dispatchVariantKey(item)"
+                  >
+                    <td><strong>{{ item.operation.toUpperCase() }}</strong></td>
+                    <td><code>{{ item.weight_type }}</code></td>
+                    <td><code>{{ item.m.toLocaleString() }} × {{ item.n.toLocaleString() }} × {{ item.k.toLocaleString() }}</code></td>
+                    <td>{{ formatDispatchFeatures(item) }}</td>
+                    <td class="dispatch-configuration"><code>{{ formatDispatchConfiguration(item.configuration) }}</code></td>
+                    <td>{{ item.calls.toLocaleString() }}</td>
+                    <td>{{ formatKernelTime(item.total_duration_ns) }}</td>
+                    <td>{{ formatKernelTime(item.average_duration_ns) }}</td>
+                    <td>{{ formatPercent(item.duration_percent) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="phase.graph_operators.length" class="operator-table-wrap graph-table-wrap">
               <table class="sample-table">
                 <thead><tr>
                   <th>{{ t('benchmark.graphOperation') }}</th>
@@ -330,6 +415,11 @@
                 </tbody>
               </table>
             </div>
+            <n-empty
+              v-else
+              class="graph-empty"
+              :description="t('benchmark.graphUnavailable')"
+            />
             <div v-if="phase.custom_kernels.length" class="operator-table-wrap graph-table-wrap">
               <table class="sample-table">
                 <thead><tr>
@@ -341,7 +431,18 @@
                 </tr></thead>
                 <tbody>
                   <tr v-for="item in phase.custom_kernels" :key="item.kernel_id">
-                    <td>{{ item.kernel_id }}</td>
+                    <td class="kernel-name">
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <strong class="kernel-display-name">
+                            {{ item.display_name || item.kernel_id }}
+                            <n-icon class="kernel-info-icon" :component="InformationCircleOutline" />
+                          </strong>
+                        </template>
+                        <div class="kernel-description">{{ kernelDescription(item.descriptions) }}</div>
+                      </n-tooltip>
+                      <code class="kernel-id">{{ item.kernel_id }}</code>
+                    </td>
                     <td>{{ item.selected_count.toLocaleString() }}</td>
                     <td>{{ item.dispatch_count.toLocaleString() }}</td>
                     <td>{{ item.fallback_count.toLocaleString() }}</td>
@@ -467,9 +568,17 @@ import {
   NSelect,
   NTag,
   NText,
+  NTooltip,
   useMessage,
 } from 'naive-ui'
-import { BarChartOutline, Play, Refresh, Stop, TrashOutline } from '@/components/icons'
+import {
+  BarChartOutline,
+  InformationCircleOutline,
+  Play,
+  Refresh,
+  Stop,
+  TrashOutline,
+} from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { benchmarkApi } from '@/api/benchmarks'
 import type {
@@ -480,7 +589,12 @@ import type {
   BenchmarkSample,
 } from '@/api/benchmarks'
 import { modelPoolApi } from '@/api/modelPool'
-import type { LlamaImplementationStatus, LocalModelProfile, LocalModelRuntime } from '@/api/modelPool'
+import type {
+  LlamaImplementationId,
+  LlamaImplementationStatus,
+  LocalModelProfile,
+  LocalModelRuntime,
+} from '@/api/modelPool'
 
 type MetricKey =
   | 'ttft_ms'
@@ -499,7 +613,7 @@ interface MetricDefinition {
   higherIsBetter: boolean
 }
 
-const { t } = useI18n()
+const { locale, t } = useI18n()
 const message = useMessage()
 const loading = ref(false)
 const submitting = ref(false)
@@ -507,6 +621,8 @@ const runs = ref<BenchmarkRun[]>([])
 const profiles = ref<LocalModelProfile[]>([])
 const runtimes = ref<LocalModelRuntime[]>([])
 const llamaStatus = ref<LlamaImplementationStatus | null>(null)
+const selectedImplementation = ref<LlamaImplementationId | null>(null)
+const switchingImplementation = ref(false)
 const selectedRunId = ref<string | null>(null)
 const baselineRunId = ref<string | null>(null)
 let pollTimer: number | undefined
@@ -564,7 +680,8 @@ const baselineOptions = computed(() => runs.value
   .filter((run) => run.status === 'completed' && run.run_id !== selectedRun.value?.run_id)
   .map((run) => ({ label: `${run.spec.name} · ${formatDate(run.created_at)}`, value: run.run_id })))
 const canStart = computed(() => Boolean(
-  form.name.trim()
+  !switchingImplementation.value
+  && form.name.trim()
   && form.profile_id
   && (form.kind === 'operator_analysis' || form.prompt.trim())
   && readyProfileIds.value.has(form.profile_id)
@@ -593,12 +710,33 @@ async function refresh(showLoading = true) {
     profiles.value = profileResult.profiles
     runtimes.value = runtimeResult.runtimes
     llamaStatus.value = llamaResult
+    if (!switchingImplementation.value) {
+      selectedImplementation.value = llamaResult.active || null
+    }
     if (!selectedRunId.value && runs.value.length) selectedRunId.value = runs.value[0].run_id
     if (!form.profile_id && readyChatProfiles.value.length) form.profile_id = readyChatProfiles.value[0].profile_id
   } catch (error) {
     if (showLoading) message.error(errorMessage(error))
   } finally {
     if (showLoading) loading.value = false
+  }
+}
+
+async function switchImplementation(value: string | number | boolean) {
+  if (value !== 'official' && value !== 'amd') return
+  if (value === llamaStatus.value?.active || switchingImplementation.value || activeRun.value) return
+  switchingImplementation.value = true
+  try {
+    const result = await modelPoolApi.activateLlamaImplementation(value)
+    llamaStatus.value = result.implementation
+    selectedImplementation.value = result.implementation.active || value
+    await refresh(false)
+    message.success(t('benchmark.implementationSwitched'))
+  } catch (error) {
+    message.error(errorMessage(error))
+    await refresh(false)
+  } finally {
+    switchingImplementation.value = false
   }
 }
 
@@ -698,9 +836,63 @@ function formatKernelTime(value: number) {
   return `${value.toFixed(0)} ns`
 }
 
+function kernelDescription(descriptions: Record<string, string> | undefined): string {
+  if (!descriptions) return t('benchmark.kernelDescriptionUnavailable')
+  return descriptions[locale.value]
+    || descriptions['zh-CN']
+    || descriptions['en-US']
+    || t('benchmark.kernelDescriptionUnavailable')
+}
+
 function formatFallbackReasons(reasons: Record<string, number>) {
   const entries = Object.entries(reasons)
   return entries.length ? entries.map(([reason, count]) => `${reason}: ${count}`).join(' · ') : '—'
+}
+
+function formatDispatchConfiguration(configuration: Record<string, unknown>) {
+  const entries = Object.entries(configuration)
+  return entries.length
+    ? entries.map(([key, value]) => `${key}=${String(value)}`).join(' · ')
+    : '—'
+}
+
+function formatDispatchFeatures(item: {
+  has_ids: boolean
+  has_fusion: boolean
+  active_experts: number
+  experts: number
+}) {
+  const features: string[] = []
+  if (item.has_ids) {
+    features.push(t('benchmark.moeExperts', {
+      active: item.active_experts.toLocaleString(),
+      total: item.experts.toLocaleString(),
+    }))
+  }
+  if (item.has_fusion) features.push(t('benchmark.fusedDispatch'))
+  return features.length ? features.join(' · ') : '—'
+}
+
+function dispatchVariantKey(item: {
+  operation: string
+  weight_type: string
+  m: number
+  n: number
+  k: number
+  has_ids: boolean
+  has_fusion: boolean
+  configuration: Record<string, unknown>
+}) {
+  return [
+    item.operation,
+    item.weight_type,
+    item.m,
+    item.n,
+    item.k,
+    item.has_ids,
+    item.has_fusion,
+    JSON.stringify(item.configuration),
+  ].join(':')
 }
 
 function sampleProcessedPromptTokens(run: BenchmarkRun, sample: BenchmarkSample) {
@@ -893,7 +1085,20 @@ onUnmounted(() => {
   gap: var(--app-space-md);
   margin: var(--app-space-lg) 0;
 }
-.benchmark-kind-selector > span { color: var(--app-text); font-size: 12px; font-weight: 600; }
+.benchmark-kind-selector > span {
+  flex-shrink: 0;
+  color: var(--app-text);
+  font-size: var(--app-font-md);
+  font-weight: 500;
+}
+.benchmark-kind-control { flex-shrink: 0; }
+.implementation-selector {
+  padding-bottom: var(--app-space-lg);
+  border-bottom: 1px solid var(--app-divider);
+}
+.selector-label { min-width: 0; display: grid; gap: 3px; }
+.selector-label > span { color: var(--app-text); font-size: var(--app-font-md); font-weight: 500; }
+.selector-label > small { color: var(--app-text-muted); line-height: var(--app-leading-normal); }
 
 .form-grid {
   display: grid;
@@ -980,8 +1185,45 @@ onUnmounted(() => {
   border-radius: var(--app-radius-md);
 }
 .graph-table-wrap { margin-top: var(--app-space-md); }
+.dispatch-variant-table-wrap { margin-top: var(--app-space-md); }
+.dispatch-variant-table { min-width: 1180px !important; }
+.dispatch-configuration { min-width: 300px; max-width: 520px; white-space: normal; overflow-wrap: anywhere; }
 .operator-table-wrap .sample-table { min-width: 680px; }
-.kernel-name { max-width: 640px; white-space: normal; overflow-wrap: anywhere; }
+.kernel-name { min-width: 260px; max-width: 640px; white-space: normal; overflow-wrap: anywhere; }
+.kernel-display-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--app-text-strong);
+  cursor: help;
+}
+.kernel-info-icon { flex: 0 0 auto; color: var(--app-text-muted); font-size: 15px; }
+.kernel-description { max-width: 400px; white-space: normal; line-height: 1.6; }
+.kernel-id {
+  display: block;
+  margin-top: 4px;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.kernel-variants { margin-top: 6px; color: var(--app-text-muted); font-size: 11px; }
+.kernel-variants summary { cursor: pointer; user-select: none; }
+.kernel-variants code {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.graph-empty {
+  margin-top: var(--app-space-md);
+  padding: var(--app-space-lg);
+  border: 1px dashed var(--app-border);
+  border-radius: var(--app-radius-md);
+}
 
 .environment-collapse { margin-top: var(--app-space-lg); }
 .environment-collapse pre {

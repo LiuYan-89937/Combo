@@ -510,6 +510,7 @@ class ModelToolBinding(BaseModel):
     profile_id: str | None = None
     source: ModelBindingSource = "local_registry"
     capability: ModelToolCapability
+    required: bool = True
     selection_source: ModelSelectionSource = "auto"
     reason: str = ""
     required_capabilities: dict[str, Any] = Field(default_factory=dict)

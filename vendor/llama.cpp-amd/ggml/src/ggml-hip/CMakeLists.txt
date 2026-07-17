@@ -61,6 +61,10 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
+set(FASTAGENTFACTORY_OPERATOR_TRACE_DIR "${CMAKE_SOURCE_DIR}/../llama.cpp-common")
+set(FASTAGENTFACTORY_OPERATOR_TRACE_SOURCE
+    "${FASTAGENTFACTORY_OPERATOR_TRACE_DIR}/fastagentfactory-operator-trace.cpp")
+list(APPEND GGML_SOURCES_ROCM "${FASTAGENTFACTORY_OPERATOR_TRACE_SOURCE}")
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
@@ -86,6 +90,7 @@ ggml_add_backend_library(ggml-hip
                          ${GGML_HEADERS_ROCM}
                          ${GGML_SOURCES_ROCM}
                         )
+target_include_directories(ggml-hip PRIVATE "${FASTAGENTFACTORY_OPERATOR_TRACE_DIR}")
 
 # TODO: do not use CUDA definitions for HIP
 if (NOT GGML_BACKEND_DL)
@@ -148,6 +153,7 @@ if (CXX_IS_HIPCC)
 else()
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE HIP)
 endif()
+set_source_files_properties("${FASTAGENTFACTORY_OPERATOR_TRACE_SOURCE}" PROPERTIES LANGUAGE CXX)
 
 if (GGML_STATIC)
     message(FATAL_ERROR "Static linking not supported for HIP/ROCm")

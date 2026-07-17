@@ -85,6 +85,11 @@ export interface BenchmarkPromptCacheSummary {
 
 export interface BenchmarkOperatorKernelStat {
   name: string
+  display_name: string
+  family: string
+  descriptions: Record<string, string>
+  variants: string[]
+  variant_count: number
   calls: number
   total_duration_ns: number
   average_duration_ns: number
@@ -99,10 +104,30 @@ export interface BenchmarkOperatorGraphStat {
 
 export interface BenchmarkCustomKernelStat {
   kernel_id: string
+  display_name: string
+  family: string
+  descriptions: Record<string, string>
   selected_count: number
   dispatch_count: number
   fallback_count: number
   fallback_reasons: Record<string, number>
+}
+
+export interface BenchmarkOperatorDispatchVariantStat {
+  operation: 'mmvq' | 'mmq'
+  weight_type: string
+  m: number
+  n: number
+  k: number
+  has_ids: boolean
+  has_fusion: boolean
+  experts: number
+  active_experts: number
+  configuration: Record<string, unknown>
+  calls: number
+  total_duration_ns: number
+  average_duration_ns: number
+  duration_percent: number
 }
 
 export interface BenchmarkOperatorPhaseResult {
@@ -112,12 +137,14 @@ export interface BenchmarkOperatorPhaseResult {
   top_kernels: BenchmarkOperatorKernelStat[]
   graph_operators: BenchmarkOperatorGraphStat[]
   custom_kernels: BenchmarkCustomKernelStat[]
+  dispatch_variants: BenchmarkOperatorDispatchVariantStat[]
   artifact_directory: string
   warnings: string[]
 }
 
 export interface BenchmarkOperatorAnalysisResult {
   profiler: string
+  gpu_graphs_disabled_for_attribution: boolean
   runtime_was_paused: boolean
   runtime_restored: boolean
   phases: BenchmarkOperatorPhaseResult[]

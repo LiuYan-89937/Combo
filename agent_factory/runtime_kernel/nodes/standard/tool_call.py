@@ -125,10 +125,7 @@ class OperationalToolCallNode:
         if wait_control is not None:
             execution_patch.update(
                 {
-                    "route_decision": "execution.finished",
-                    "finished": True,
-                    "finish_status": wait_control["status"],
-                    "finish_message": wait_control.get("message") or wait_control["reason"],
+                    "pending_wait": wait_control,
                 }
             )
         patch: dict[str, Any] = {

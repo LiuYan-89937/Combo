@@ -96,18 +96,30 @@ def resolve_image_generation_binding(
     *,
     artifact_store: ArtifactStore,
     store: ModelPoolStore | None = None,
-) -> ResolvedImageGenerationProfile:
+) -> ResolvedImageGenerationProfile | None:
     model_store = store or ModelPoolStore(setup=False)
     profile_id = binding.profile_id
     if binding.source == "local_default":
         profile_id = model_store.resolve_default_profile_id("image_generation")
     if not profile_id:
+        if not binding.required:
+            return None
         raise ValueError("image generation binding has no configured profile")
-    profile = model_store.require_profile(profile_id)
+    profile = model_store.get_profile(profile_id)
+    if profile is None:
+        if not binding.required:
+            return None
+        raise ValueError(f"unknown local image generation profile: {profile_id}")
     if profile.kind != "image_generation":
         raise ValueError(f"local model profile {profile.profile_id} is {profile.kind}, expected image_generation")
-    artifact = model_store.require_artifact(profile.artifact_id)
+    artifact = model_store.get_artifact(profile.artifact_id)
+    if artifact is None:
+        if not binding.required:
+            return None
+        raise ValueError(f"image generation artifact is unavailable: {profile.artifact_id}")
     if not profile.enabled or not artifact.enabled:
+        if not binding.required:
+            return None
         raise ValueError(f"local image generation profile is disabled: {profile.profile_id}")
     endpoint = load_local_image_endpoint(
         timeout_seconds=binding.overrides.timeout_seconds or profile.limits.timeout_seconds

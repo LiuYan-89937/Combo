@@ -21,6 +21,7 @@
 | 本机 | Telemetry SSH 转发 | `127.0.0.1:18004 -> remote:8004` |
 | 本机 | 官方 llama.cpp 源码 | `vendor/llama.cpp-official` |
 | 本机 | AMD llama.cpp 源码 | `vendor/llama.cpp-amd` |
+| 本机 | 共享算子追踪源码 | `vendor/llama.cpp-common` |
 | 本机 | stable-diffusion.cpp 完整源码与递归子模块 | `vendor/stable-diffusion.cpp` |
 | 远端 | llama-server ROCm | `127.0.0.1:8003` |
 | 远端 | Embedding 服务 | `127.0.0.1:8002` |
@@ -382,11 +383,20 @@ cd ../..
 Benchmark 页面中的“算子分析”使用活动构建的 `llama-bench`，按当前 Profile 的模型、GPU Layers、KV Cache 类型和 Flash Attention 参数分别运行 Prefill 与 Decode。每个阶段同时启用：
 
 - `GGML_SCHED_DEBUG=2`：记录 GGML 图算子及其 HIP/CPU 后端分配；
+- `GGML_CUDA_DISABLE_GRAPHS=1`：仅在算子分析子进程关闭 HIP Graph replay，保证 Host 分派与实际 Kernel 一一对应；
 - `rocprofv3 --kernel-trace --stats`：记录真实 HIP Kernel、调用次数、总耗时与耗时占比。
 
-分析进程还会设置 `AGENTFACTORY_KERNEL_TRACE_OUTPUT`。AMD 自定义分派器可向该 JSONL 文件写入 `kernel_id`、`event`（`selected` / `dispatch` / `fallback`）和可选 `fallback_reason`；Benchmark 会统一汇总选中、实际分派、回退次数及原因，从而区分“满足选择条件”和“真正命中 Kernel”。
+关闭 HIP Graph 后的阶段耗时只用于算子归因，不能作为生产吞吐结果。普通性能测试和 `llama-server` 不设置该变量，继续使用 HIP Graph；优化前后的 TTFT/TPS 结论必须来自普通性能测试。
+
+每套构建都生成带 SHA256 的 `kernel-catalog.json`。公共 Catalog 描述 llama.cpp ROCm Kernel 的稳定 ID、显示名称、家族、作用说明和符号匹配器；Official/AMD 源码根目录下的 `.fastagentfactory-kernel-catalog.json` 只登记该实现新增的 Kernel。rocprof 原始符号由活动构建的 Catalog 归一化，未登记符号使用通用解析结果并明确标记为 `unregistered`，不在 Python 或前端维护 Kernel 名称规则。Benchmark 页面可悬浮 Kernel 名称查看当前语言的作用说明，并可展开核对原始符号。
+
+`vendor/llama.cpp-common` 提供 Official 与 AMD 共用的 Host 分派追踪协议。仅在算子分析设置 `AGENTFACTORY_KERNEL_TRACE_OUTPUT` 时，MMVQ/MMQ 分派点才把权重量化类型、M/N/K Shape、MoE/融合信息以及 waves、tile、shared memory、stream-k 等实际配置暂存在进程内，并在进程退出时一次性写入 JSON。这里 M 表示输出行数，N 表示同次分派的目标列/Token 数，K 表示归约维度。Python 分析器将该序列与按开始时间排序的 rocprof Kernel Trace 配对；每条执行路径的两侧数量必须完全一致，否则该路径的变体耗时不会展示。修改共享追踪源码会进入两套实现的 source digest，并触发重新构建。
+
+同一个 JSON 还保留 `kernels` 汇总区，供后续 AMD 自定义分派器记录 `selected_count`、`dispatch_count`、`fallback_count` 和回退原因。文件中的 `kernel_id` 必须存在于活动构建的 Kernel Catalog。该协议能区分“满足选择条件”和“真正命中 Kernel”，同时避免逐次磁盘写入污染性能数据。
 
 普通性能测试不会启用 profiler，避免 TTFT/TPS 被采样开销污染。算子分析会临时卸载 Chat runtime 以释放显存，结束或失败后都尝试恢复原 Profile；分析期间 Chat API 暂时不可用。原始 stdout、stderr 和 rocprof CSV 保存在远端 `.agentfactory/benchmark/operator-analysis/<run_id>/`，前端只展示结构化 Top Kernel 与图算子摘要。
+
+Benchmark 页面提供 Official/AMD 实现切换器。切换由远端控制节点在 Chat 维护锁内完成：卸载当前模型、原子替换活动 `llama-server`、用同一 Profile 重新加载，并在失败时回滚原实现。两套实现不会同时驻留显存。rocprof 结果只从 Kernel stats 数据域计算总耗时，调度/API 汇总域不参与 Top Kernel 排名；原始模板符号按 Kernel 家族聚合后在前端展开查看。
 
 ## 10. 更换或重建 RadeonCloud 实例
 

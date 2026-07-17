@@ -150,6 +150,11 @@ class BenchmarkOperatorKernelStat(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
+    display_name: str = ""
+    family: str = ""
+    descriptions: dict[str, str] = Field(default_factory=dict)
+    variants: list[str] = Field(default_factory=list)
+    variant_count: int = Field(default=0, ge=0)
     calls: int = Field(ge=0)
     total_duration_ns: float = Field(ge=0)
     average_duration_ns: float = Field(ge=0)
@@ -168,10 +173,32 @@ class BenchmarkCustomKernelStat(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kernel_id: str
+    display_name: str = ""
+    family: str = ""
+    descriptions: dict[str, str] = Field(default_factory=dict)
     selected_count: int = Field(ge=0)
     dispatch_count: int = Field(ge=0)
     fallback_count: int = Field(ge=0)
     fallback_reasons: dict[str, int] = Field(default_factory=dict)
+
+
+class BenchmarkOperatorDispatchVariantStat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["mmvq", "mmq"]
+    weight_type: str
+    m: int = Field(ge=1)
+    n: int = Field(ge=1)
+    k: int = Field(ge=1)
+    has_ids: bool = False
+    has_fusion: bool = False
+    experts: int = Field(default=0, ge=0)
+    active_experts: int = Field(default=0, ge=0)
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    calls: int = Field(ge=1)
+    total_duration_ns: float = Field(ge=0)
+    average_duration_ns: float = Field(ge=0)
+    duration_percent: float = Field(ge=0, le=100)
 
 
 class BenchmarkOperatorPhaseResult(BaseModel):
@@ -183,6 +210,7 @@ class BenchmarkOperatorPhaseResult(BaseModel):
     top_kernels: list[BenchmarkOperatorKernelStat] = Field(default_factory=list)
     graph_operators: list[BenchmarkOperatorGraphStat] = Field(default_factory=list)
     custom_kernels: list[BenchmarkCustomKernelStat] = Field(default_factory=list)
+    dispatch_variants: list[BenchmarkOperatorDispatchVariantStat] = Field(default_factory=list)
     artifact_directory: str = ""
     warnings: list[str] = Field(default_factory=list)
 
@@ -191,6 +219,7 @@ class BenchmarkOperatorAnalysisResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     profiler: str
+    gpu_graphs_disabled_for_attribution: bool = False
     runtime_was_paused: bool = False
     runtime_restored: bool = False
     phases: list[BenchmarkOperatorPhaseResult] = Field(default_factory=list)

@@ -136,6 +136,7 @@ class AgentPackageRuntimeManager:
         self._containers: dict[str, AgentRuntimeContainerHandle] = {}
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
         self._runtime_handle_lock = threading.RLock()
+        self._package_initialization_locks: dict[str, threading.Lock] = {}
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
         self._skillhub_gateways = HostSkillHubGatewayManager()
@@ -314,7 +315,24 @@ class AgentPackageRuntimeManager:
         *,
         request_id: str | None = None,
     ) -> dict[str, Any]:
-        package = self.load_package(package_id)
+        initialization_lock = self._package_initialization_lock(package_id)
+        with initialization_lock:
+            package = self.load_package(package_id)
+            if self._package_runtime_is_initialized(package_id, package):
+                return self.package_instance_status(package_id)
+            return self._initialize_package_locked(
+                package_id,
+                package=package,
+                request_id=request_id,
+            )
+
+    def _initialize_package_locked(
+        self,
+        package_id: str,
+        *,
+        package: LoadedAgentPackage,
+        request_id: str | None,
+    ) -> dict[str, Any]:
         initializing_status = self._instance_status_payload(
             package_id=package_id,
             package=package,
@@ -404,6 +422,24 @@ class AgentPackageRuntimeManager:
                 )
             raise
         return latest_status or self.package_instance_status(package_id)
+
+    def _package_initialization_lock(self, package_id: str) -> threading.Lock:
+        with self._runtime_handle_lock:
+            lock = self._package_initialization_locks.get(package_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._package_initialization_locks[package_id] = lock
+            return lock
+
+    def _package_runtime_is_initialized(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+    ) -> bool:
+        if not self._has_ready_runtime(package_id, package):
+            return False
+        status = self.package_instance_status(package_id)
+        return bool(status.get("ready")) and status.get("status") == "ready"
 
     def shutdown_package_instance(
         self,
