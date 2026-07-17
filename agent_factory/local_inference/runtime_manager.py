@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from agent_factory.local_inference.context_allocation import resolve_llama_context_allocation
 from agent_factory.local_inference.config import (
     LocalInferenceEndpoint,
     load_local_embedding_endpoint,
@@ -24,6 +25,7 @@ from agent_factory.local_inference.node_control import InferenceNodeClient, Runt
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
+    LlamaCppInferenceConfig,
     ModelPoolProfile,
     StableDiffusionCppInferenceConfig,
     utc_now_text,
@@ -223,19 +225,22 @@ class LocalInferenceRuntimeManager:
         require_process: bool,
     ) -> None:
         deadline = asyncio.get_running_loop().time() + _LOAD_TIMEOUT_SECONDS[slot.kind]
+        readiness_error: Exception | None = None
         async with create_private_async_http_client(endpoint) as client:
             while asyncio.get_running_loop().time() < deadline:
                 if require_process and (slot.process is None or slot.process.returncode is not None):
                     return
                 try:
                     ready = await _runtime_is_ready(client, endpoint, profile)
-                except (httpx.HTTPError, ValueError):
+                except (httpx.HTTPError, ValueError) as exc:
+                    readiness_error = exc
                     ready = False
                 if ready:
                     self._update(slot, phase="ready", stage="ready", progress_percent=100)
                     return
                 await asyncio.sleep(1.0)
-        self._fail(slot, TimeoutError(f"{slot.kind} model loading timed out"))
+        failure = readiness_error or TimeoutError(f"{slot.kind} model loading timed out")
+        self._fail(slot, failure)
         if require_process:
             await self._terminate(slot)
 
@@ -456,10 +461,42 @@ async def _runtime_is_ready(
         response.raise_for_status()
         payload = response.json()
         models = payload.get("data") if isinstance(payload, dict) else None
-        return any(
+        model_ready = any(
             isinstance(item, dict) and str(item.get("id") or "") == profile.served_model_name
             for item in models or []
         )
+        if not model_ready:
+            return False
+        inference = _llama_inference(profile)
+        allocation = (
+            resolve_llama_context_allocation(profile.limits, inference)
+            if inference is not None
+            else None
+        )
+        if allocation is None:
+            return True
+        slots_response = await client.get(endpoint.server_endpoint("/slots"))
+        slots_response.raise_for_status()
+        slots = slots_response.json()
+        if not isinstance(slots, list) or len(slots) != allocation.parallel_slots:
+            actual_slots = len(slots) if isinstance(slots, list) else 0
+            raise ValueError(
+                "llama-server parallel slot validation failed: "
+                f"configured={allocation.parallel_slots}, actual={actual_slots}"
+            )
+        slot_contexts = [
+            int(item.get("n_ctx") or 0)
+            for item in slots
+            if isinstance(item, dict)
+        ]
+        if len(slot_contexts) != allocation.parallel_slots or any(
+            value < allocation.per_slot_tokens for value in slot_contexts
+        ):
+            raise ValueError(
+                "llama-server per-slot context validation failed: "
+                f"configured={allocation.per_slot_tokens}, actual={slot_contexts}"
+            )
+        return True
     if profile.kind == "image_generation":
         response = await client.get(endpoint.endpoint("/models"))
         response.raise_for_status()
@@ -478,6 +515,13 @@ async def _runtime_is_ready(
         }
         return profile.served_model_name in remote_model_ids
     return str(payload.get("profile_id") or "") == profile.profile_id
+
+
+def _llama_inference(profile: ModelPoolProfile) -> LlamaCppInferenceConfig | None:
+    inference = profile.inference
+    if isinstance(inference, ExternalInferenceConfig):
+        inference = inference.remote_inference
+    return inference if isinstance(inference, LlamaCppInferenceConfig) else None
 
 
 def _update_progress_from_log(slot: _RuntimeSlot, text: str) -> None:

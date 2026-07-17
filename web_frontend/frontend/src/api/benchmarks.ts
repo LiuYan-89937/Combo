@@ -9,6 +9,7 @@ export interface BenchmarkImplementation {
 }
 
 export interface BenchmarkRunSpec {
+  kind: 'performance' | 'operator_analysis'
   name: string
   profile_id: string
   prompt: string
@@ -19,6 +20,14 @@ export interface BenchmarkRunSpec {
   measured_iterations: number
   telemetry_interval_ms: number
   implementation: BenchmarkImplementation
+  operator_analysis?: BenchmarkOperatorAnalysisSpec | null
+}
+
+export interface BenchmarkOperatorAnalysisSpec {
+  prefill_tokens: number
+  decode_tokens: number
+  repetitions: number
+  top_kernels: number
 }
 
 export interface BenchmarkTelemetryPoint {
@@ -67,10 +76,52 @@ export interface BenchmarkMetricStats {
 }
 
 export interface BenchmarkPromptCacheSummary {
+  metric_version: 'legacy' | 'prompt_prefix_reuse.v1'
   prompt_tokens: number
   cached_tokens: number
   processed_tokens: number
   hit_rate_percent: number
+}
+
+export interface BenchmarkOperatorKernelStat {
+  name: string
+  calls: number
+  total_duration_ns: number
+  average_duration_ns: number
+  duration_percent: number
+}
+
+export interface BenchmarkOperatorGraphStat {
+  operation: string
+  backend: string
+  count: number
+}
+
+export interface BenchmarkCustomKernelStat {
+  kernel_id: string
+  selected_count: number
+  dispatch_count: number
+  fallback_count: number
+  fallback_reasons: Record<string, number>
+}
+
+export interface BenchmarkOperatorPhaseResult {
+  phase: 'prefill' | 'decode'
+  elapsed_seconds: number
+  benchmark_rows: Array<Record<string, unknown>>
+  top_kernels: BenchmarkOperatorKernelStat[]
+  graph_operators: BenchmarkOperatorGraphStat[]
+  custom_kernels: BenchmarkCustomKernelStat[]
+  artifact_directory: string
+  warnings: string[]
+}
+
+export interface BenchmarkOperatorAnalysisResult {
+  profiler: string
+  runtime_was_paused: boolean
+  runtime_restored: boolean
+  phases: BenchmarkOperatorPhaseResult[]
+  warnings: string[]
 }
 
 export interface BenchmarkSummary {
@@ -97,6 +148,7 @@ export interface BenchmarkRun {
   environment: Record<string, unknown>
   samples: BenchmarkSample[]
   summary?: BenchmarkSummary | null
+  operator_analysis?: BenchmarkOperatorAnalysisResult | null
   error: string
   created_at: string
   started_at: string

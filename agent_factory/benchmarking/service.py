@@ -13,6 +13,7 @@ import httpx
 from agent_factory.benchmarking.schema import (
     BenchmarkImplementation,
     BenchmarkMetricStats,
+    BenchmarkOperatorAnalysisResult,
     BenchmarkPromptCacheSummary,
     BenchmarkRun,
     BenchmarkRunSpec,
@@ -27,7 +28,12 @@ from agent_factory.local_inference.config import (
     load_local_inference_endpoint,
 )
 from agent_factory.local_inference.http_client import create_private_async_http_client
-from agent_factory.local_inference.node_control import InferenceNodeClient
+from agent_factory.local_inference.node_control import (
+    InferenceNodeClient,
+    InferenceNodeProfileConfiguration,
+    InferenceOperatorAnalysisOptions,
+    InferenceOperatorAnalysisRequest,
+)
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.model_pool.store import ModelPoolStore
 
@@ -66,7 +72,11 @@ class BenchmarkService:
             update={"implementation": await _active_benchmark_implementation()},
             deep=True,
         )
-        total = spec.warmup_iterations + spec.measured_iterations
+        total = (
+            1
+            if spec.kind == "operator_analysis"
+            else spec.warmup_iterations + spec.measured_iterations
+        )
         run = self._store.save(
             BenchmarkRun(
                 run_id=uuid4().hex,
@@ -80,6 +90,10 @@ class BenchmarkService:
 
     async def cancel_run(self, run_id: str) -> BenchmarkRun:
         run = self._store.require(run_id)
+        if run.spec.kind == "operator_analysis" and run.status in {"queued", "running"}:
+            raise ValueError(
+                "operator analysis cannot be cancelled while profiler cleanup and runtime restore are pending"
+            )
         task = self._tasks.get(run_id)
         if task is not None and not task.done():
             task.cancel()
@@ -115,6 +129,9 @@ class BenchmarkService:
                     deep=True,
                 )
             )
+            if run.spec.kind == "operator_analysis":
+                await self._execute_operator_analysis(run)
+                return
             for sample_index in range(run.progress_total):
                 current = self._store.require(run_id)
                 sample = await self._run_sample(
@@ -173,6 +190,35 @@ class BenchmarkService:
             self._tasks.pop(run_id, None)
             if self._active_run_id == run_id:
                 self._active_run_id = ""
+
+    async def _execute_operator_analysis(self, run: BenchmarkRun) -> None:
+        settings = run.spec.operator_analysis
+        if settings is None:
+            raise ValueError("operator analysis settings are missing")
+        profile = ModelPoolStore().require_profile(run.spec.profile_id)
+        result_payload = await InferenceNodeClient().operator_analysis(
+            InferenceOperatorAnalysisRequest(
+                model_id=profile.served_model_name,
+                profile=InferenceNodeProfileConfiguration.from_profile(profile),
+                analysis_id=run.run_id,
+                options=InferenceOperatorAnalysisOptions.model_validate(
+                    settings.model_dump(mode="json")
+                ),
+            )
+        )
+        result = BenchmarkOperatorAnalysisResult.model_validate(result_payload)
+        current = self._store.require(run.run_id)
+        self._store.save(
+            current.model_copy(
+                update={
+                    "status": "completed",
+                    "progress_completed": 1,
+                    "operator_analysis": result,
+                    "completed_at": utc_now_text(),
+                },
+                deep=True,
+            )
+        )
 
     async def _run_sample(
         self,
@@ -353,6 +399,7 @@ async def _active_benchmark_implementation() -> BenchmarkImplementation:
             "implementation": active_build.implementation,
             "source_sha256": active_build.source_sha256,
             "binary_sha256": active_build.binary_sha256,
+            "benchmark_binary_sha256": active_build.benchmark_binary_sha256,
             "custom_kernels": active_build.custom_kernels,
             "optimization_status": active_build.optimization_status,
             "build_options": active_build.build_options,
@@ -397,6 +444,7 @@ def _completed_sample(
     finish_reason: str,
     telemetry: list[BenchmarkTelemetryPoint],
 ) -> BenchmarkSample:
+    prompt_tokens, cache_tokens = _prompt_token_counts(timings, usage)
     gpu_usage = _values(telemetry, "gpu_utilization_percent")
     power = _values(telemetry, "power_watts")
     temperatures = _values(telemetry, "temperature_celsius")
@@ -406,15 +454,11 @@ def _completed_sample(
         warmup=warmup,
         ttft_ms=_elapsed_ms(started_ns, first_token_ns) if first_token_ns else None,
         end_to_end_ms=_elapsed_ms(started_ns, completed_ns),
-        prompt_tokens=_optional_int(
-            _first_defined(timings.get("prompt_n"), usage.get("prompt_tokens"))
-        ),
+        prompt_tokens=prompt_tokens,
         completion_tokens=_optional_int(
-            timings.get("predicted_n") or usage.get("completion_tokens")
+            _first_defined(timings.get("predicted_n"), usage.get("completion_tokens"))
         ),
-        cache_tokens=_optional_int(
-            _first_defined(timings.get("cache_n"), _usage_cached_tokens(usage))
-        ),
+        cache_tokens=cache_tokens,
         prompt_ms=_optional_float(timings.get("prompt_ms")),
         decode_ms=_optional_float(timings.get("predicted_ms")),
         prompt_tokens_per_second=_optional_float(timings.get("prompt_per_second")),
@@ -463,11 +507,9 @@ def _prompt_cache_summary(
     if not reported:
         return None
     prompt_tokens = sum(sample.prompt_tokens or 0 for sample in reported)
-    cached_tokens = sum(
-        min(sample.prompt_tokens or 0, sample.cache_tokens or 0)
-        for sample in reported
-    )
+    cached_tokens = sum(sample.cache_tokens or 0 for sample in reported)
     return BenchmarkPromptCacheSummary(
+        metric_version="prompt_prefix_reuse.v1",
         prompt_tokens=prompt_tokens,
         cached_tokens=cached_tokens,
         processed_tokens=prompt_tokens - cached_tokens,
@@ -538,6 +580,24 @@ def _optional_int(value: Any) -> int | None:
 def _usage_cached_tokens(usage: dict[str, Any]) -> Any:
     details = usage.get("prompt_tokens_details")
     return details.get("cached_tokens") if isinstance(details, dict) else None
+
+
+def _prompt_token_counts(
+    timings: dict[str, Any],
+    usage: dict[str, Any],
+) -> tuple[int | None, int | None]:
+    processed_tokens = _optional_int(timings.get("prompt_n"))
+    cache_tokens = _optional_int(
+        _first_defined(timings.get("cache_n"), _usage_cached_tokens(usage))
+    )
+    prompt_tokens = _optional_int(usage.get("prompt_tokens"))
+    if prompt_tokens is None and processed_tokens is not None:
+        prompt_tokens = processed_tokens + (cache_tokens or 0)
+    if prompt_tokens is not None and cache_tokens is not None and cache_tokens > prompt_tokens:
+        raise ValueError(
+            "llama.cpp reported cached prompt tokens greater than total prompt tokens"
+        )
+    return prompt_tokens, cache_tokens
 
 
 def _first_defined(*values: Any) -> Any:

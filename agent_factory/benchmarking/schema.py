@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 BenchmarkRunStatus = Literal[
@@ -15,6 +15,7 @@ BenchmarkRunStatus = Literal[
     "interrupted",
 ]
 BenchmarkSampleStatus = Literal["completed", "failed"]
+BenchmarkRunKind = Literal["performance", "operator_analysis"]
 
 
 def utc_now_text() -> str:
@@ -34,12 +35,22 @@ class BenchmarkImplementation(BaseModel):
         return str(value or "").strip()
 
 
+class BenchmarkOperatorAnalysisSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prefill_tokens: int = Field(default=512, ge=32, le=32768)
+    decode_tokens: int = Field(default=128, ge=1, le=4096)
+    repetitions: int = Field(default=3, ge=1, le=20)
+    top_kernels: int = Field(default=20, ge=5, le=100)
+
+
 class BenchmarkRunSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    kind: BenchmarkRunKind = "performance"
     name: str
     profile_id: str
-    prompt: str
+    prompt: str = ""
     max_output_tokens: int = Field(default=256, ge=1, le=32768)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     seed: int = Field(default=42, ge=0)
@@ -47,14 +58,31 @@ class BenchmarkRunSpec(BaseModel):
     measured_iterations: int = Field(default=3, ge=1, le=50)
     telemetry_interval_ms: int = Field(default=250, ge=100, le=2000)
     implementation: BenchmarkImplementation = Field(default_factory=BenchmarkImplementation)
+    operator_analysis: BenchmarkOperatorAnalysisSpec | None = None
 
-    @field_validator("name", "profile_id", "prompt")
+    @field_validator("name", "profile_id")
     @classmethod
     def _required_text(cls, value: str) -> str:
         text = str(value or "").strip()
         if not text:
             raise ValueError("value must not be empty")
         return text
+
+    @field_validator("prompt")
+    @classmethod
+    def _trim_prompt(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @model_validator(mode="after")
+    def _validate_kind_configuration(self) -> "BenchmarkRunSpec":
+        if self.kind == "performance":
+            if not self.prompt:
+                raise ValueError("performance benchmark prompt must not be empty")
+            if self.operator_analysis is not None:
+                raise ValueError("performance benchmark does not accept operator_analysis settings")
+        elif self.operator_analysis is None:
+            raise ValueError("operator analysis settings are required")
+        return self
 
 
 class BenchmarkTelemetryPoint(BaseModel):
@@ -111,10 +139,62 @@ class BenchmarkMetricStats(BaseModel):
 class BenchmarkPromptCacheSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    metric_version: Literal["legacy", "prompt_prefix_reuse.v1"] = "legacy"
     prompt_tokens: int = Field(ge=0)
     cached_tokens: int = Field(ge=0)
     processed_tokens: int = Field(ge=0)
     hit_rate_percent: float = Field(ge=0, le=100)
+
+
+class BenchmarkOperatorKernelStat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    calls: int = Field(ge=0)
+    total_duration_ns: float = Field(ge=0)
+    average_duration_ns: float = Field(ge=0)
+    duration_percent: float = Field(ge=0, le=100)
+
+
+class BenchmarkOperatorGraphStat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: str
+    backend: str
+    count: int = Field(ge=1)
+
+
+class BenchmarkCustomKernelStat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kernel_id: str
+    selected_count: int = Field(ge=0)
+    dispatch_count: int = Field(ge=0)
+    fallback_count: int = Field(ge=0)
+    fallback_reasons: dict[str, int] = Field(default_factory=dict)
+
+
+class BenchmarkOperatorPhaseResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phase: Literal["prefill", "decode"]
+    elapsed_seconds: float = Field(ge=0)
+    benchmark_rows: list[dict[str, Any]] = Field(default_factory=list)
+    top_kernels: list[BenchmarkOperatorKernelStat] = Field(default_factory=list)
+    graph_operators: list[BenchmarkOperatorGraphStat] = Field(default_factory=list)
+    custom_kernels: list[BenchmarkCustomKernelStat] = Field(default_factory=list)
+    artifact_directory: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BenchmarkOperatorAnalysisResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profiler: str
+    runtime_was_paused: bool = False
+    runtime_restored: bool = False
+    phases: list[BenchmarkOperatorPhaseResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class BenchmarkSummary(BaseModel):
@@ -145,6 +225,7 @@ class BenchmarkRun(BaseModel):
     environment: dict[str, Any] = Field(default_factory=dict)
     samples: list[BenchmarkSample] = Field(default_factory=list)
     summary: BenchmarkSummary | None = None
+    operator_analysis: BenchmarkOperatorAnalysisResult | None = None
     error: str = ""
     created_at: str = Field(default_factory=utc_now_text)
     started_at: str = ""

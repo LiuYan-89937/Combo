@@ -22,6 +22,8 @@ class LlamaImplementationBuild(BaseModel):
     source_sha256: str
     binary_path: str
     binary_sha256: str
+    benchmark_binary_path: str = ""
+    benchmark_binary_sha256: str = ""
     custom_kernels: bool = False
     optimization_status: Literal["baseline", "placeholder", "optimized"]
     build_options: dict[str, Any] = Field(default_factory=dict)

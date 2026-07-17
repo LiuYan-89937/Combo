@@ -153,6 +153,7 @@
                 <template v-if="profile.kind === 'chat'">
                   <div class="spec-item"><span>{{ t('localModel.gpuLayers') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.gpu_layers ?? '—' }}</strong></div>
                   <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.parallel_slots ?? '—' }}</strong></div>
+                  <div class="spec-item"><span>{{ t('localModel.totalContextBudget') }}</span><strong>{{ formatTokens(profileTotalContextTokens(profile)) }}</strong></div>
                   <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.cache_type_k || '—' }} / {{ chatRuntimeConfiguration(profile)?.cache_type_v || '—' }}</strong></div>
                 </template>
                 <template v-else-if="profile.kind === 'image_generation'">
@@ -427,7 +428,9 @@
           <div v-if="memoryEstimate?.available" class="memory-preview-grid">
             <div><span>{{ t('localModel.modelAllocation') }}</span><strong>{{ formatBytes(memoryEstimate.model_allocation_bytes) }}</strong></div>
             <div><span>{{ t('localModel.kvEstimate') }}</span><strong>{{ formatBytes(memoryEstimate.kv_cache_bytes) }}</strong></div>
+            <div><span>{{ t('localModel.perSlotContext') }}</span><strong>{{ formatTokens(memoryEstimate.context_tokens) }}</strong></div>
             <div><span>{{ t('localModel.estimatedParallelSlots') }}</span><strong>{{ memoryEstimate.parallel_slots }}</strong></div>
+            <div><span>{{ t('localModel.totalContextBudget') }}</span><strong>{{ formatTokens(memoryEstimate.total_context_tokens) }}</strong></div>
             <div><span>{{ t('localModel.projectedVram') }}</span><strong>{{ formatBytes(memoryEstimate.projected_used_bytes) }} / {{ formatBytes(memoryEstimate.total_memory_bytes) }}</strong></div>
             <div><span>{{ t('localModel.remainingVram') }}</span><strong>{{ formatBytes(memoryEstimate.remaining_memory_bytes) }}</strong></div>
           </div>
@@ -1051,10 +1054,20 @@ function remoteChatRuntimeConfiguration(remoteModel?: LocalModelStorage['remote_
   return {
     gpu_layers: configuration.gpu_layers,
     parallel_slots: typeof configuration.parallel_slots === 'number' ? configuration.parallel_slots : 1,
+    per_slot_context_tokens: typeof configuration.per_slot_context_tokens === 'number' ? configuration.per_slot_context_tokens : null,
+    server_context_tokens: typeof configuration.server_context_tokens === 'number' ? configuration.server_context_tokens : null,
     cache_type_k: typeof configuration.cache_type_k === 'string' ? configuration.cache_type_k : 'f16',
     cache_type_v: typeof configuration.cache_type_v === 'string' ? configuration.cache_type_v : 'f16',
     flash_attention: configuration.flash_attention !== false,
   }
+}
+
+function profileTotalContextTokens(profile: LocalModelProfile): number | null {
+  if (profile.kind !== 'chat') return null
+  const inference = chatRuntimeConfiguration(profile)
+  if (typeof inference?.server_context_tokens === 'number') return inference.server_context_tokens
+  const perSlotTokens = profile.limits.max_input_tokens
+  return perSlotTokens ? perSlotTokens * (inference?.parallel_slots ?? 1) : null
 }
 
 function profileMemoryEstimate(profile: LocalModelProfile): InferenceMemoryEstimate | null {
@@ -1179,6 +1192,8 @@ async function refreshMemoryEstimate(): Promise<void> {
       memoryEstimate.value = {
         available: false,
         model_id: modelId,
+        context_tokens: profileForm.max_input_tokens,
+        total_context_tokens: profileForm.max_input_tokens * profileForm.parallel_slots,
         parallel_slots: profileForm.parallel_slots,
         cache_type_k: profileForm.cache_type_k,
         cache_type_v: profileForm.cache_type_v,

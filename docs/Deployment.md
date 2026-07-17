@@ -175,7 +175,7 @@ SSH_KEY=
 | `REMOTE_REPAIR_CA_TRUST` | 证书链缺失或损坏时允许重建并按需重装 `ca-certificates` | `1` |
 | `REMOTE_CA_PROBE_URL` | CA 探针使用的国内 HTTPS 地址 | 清华 PyPI |
 | `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
-| `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
+| `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态、HIP 构建与分析工具 | `rocminfo rocm-hip-sdk rocprofiler-sdk` |
 | `REMOTE_INSTALL_PYTORCH` | 缺失时允许安装配置指定的 PyTorch HIP | `1` |
 | `PYTORCH_RUNTIME_PYTHON` | 镜像预装 HIP PyTorch 的 Python；以 `.pth` 接入项目 venv | `/opt/venv/bin/python` |
 | `REMOTE_INFERENCE_PYTHON_PACKAGES` | 远端推理节点最小依赖，不安装主项目 | FastAPI、HTTP、模型加载和 GGUF 解析依赖 |
@@ -183,6 +183,8 @@ SSH_KEY=
 | `PYTORCH_PACKAGES` | 相互匹配的 Torch、TorchVision 与 TorchAudio 发布组 | ROCm 7.2 的 2.11/0.26/2.11 |
 
 协作调度器会读取 llama-server 的 `/slots` 与 `/metrics`，按实际空闲槽位、排队请求以及所有协作会话中正在运行的 worker 统一背压。遥测暂时不可用时，调度器使用当前已启用推理 Profile 的 `parallel_slots` 作为容量依据，不会回退到固定并发数。若需要主动限制协作 worker 数量，可在本机 `.env` 设置 `AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS`；留空时自动跟随推理服务槽位。
+
+Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在不同协作任务、不同会话和各自独立工作区中并行运行；同一任务仍只能被一个 worker 领取。实际并发上限仍由上述推理容量背压统一控制，而不是由 Package ID 互斥。
 
 多个 worker 几乎同时提交、阻塞、失败或取消时，每条协作事件仍会独立写入审计表；服务在 `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS` 指定的短窗口后，将当时待处理的事件批量领取并只恢复一次主 Agent。批次中的每条事件独立累计 attempts，并在同一事务中统一完成或失败。`AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` 用于限制一次恢复输入的事件数量，超过限制的事件会进入后续批次。
 
@@ -204,7 +206,7 @@ SSH_KEY=
 4. 上传远端控制脚本，准备缺失的普通编译工具，验证并按需修复系统 CA 信任链。
 5. 探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP；仅在缺失时安装 ROCm 用户态组件和配置指定的 PyTorch HIP 包。
 6. 同步 FastAgentFactory 当前工作树到远端项目目录。
-7. 同步官方与 AMD 两套 llama.cpp，以及完整 stable-diffusion.cpp 源码；远端不访问 GitHub，直接构建两个 ROCm llama-server 和 HIPBLAS sd-server。
+7. 同步官方与 AMD 两套 llama.cpp，以及完整 stable-diffusion.cpp 源码；远端不访问 GitHub，直接为两套实现构建 ROCm `llama-server`、`llama-bench`，并构建 HIPBLAS `sd-server`。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj。
 9. 校验模型文件大小和 SHA256；损坏的完整文件不会被复用。
 10. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
@@ -375,7 +377,16 @@ cd ../..
 }
 ```
 
-完成算子实现后再把这些字段改为真实值，并增加 Kernel 命中计数与 rocprofv3 证据。Benchmark 会自动读取活动构建的 source revision、源码摘要、二进制 SHA256 和构建参数，不接受手填实现名称。
+部署构建会为每套实现同时生成 `llama-server` 与 `llama-bench`，并在 manifest 中分别记录二进制路径和 SHA256。完成算子实现后再把上述字段改为真实值。
+
+Benchmark 页面中的“算子分析”使用活动构建的 `llama-bench`，按当前 Profile 的模型、GPU Layers、KV Cache 类型和 Flash Attention 参数分别运行 Prefill 与 Decode。每个阶段同时启用：
+
+- `GGML_SCHED_DEBUG=2`：记录 GGML 图算子及其 HIP/CPU 后端分配；
+- `rocprofv3 --kernel-trace --stats`：记录真实 HIP Kernel、调用次数、总耗时与耗时占比。
+
+分析进程还会设置 `AGENTFACTORY_KERNEL_TRACE_OUTPUT`。AMD 自定义分派器可向该 JSONL 文件写入 `kernel_id`、`event`（`selected` / `dispatch` / `fallback`）和可选 `fallback_reason`；Benchmark 会统一汇总选中、实际分派、回退次数及原因，从而区分“满足选择条件”和“真正命中 Kernel”。
+
+普通性能测试不会启用 profiler，避免 TTFT/TPS 被采样开销污染。算子分析会临时卸载 Chat runtime 以释放显存，结束或失败后都尝试恢复原 Profile；分析期间 Chat API 暂时不可用。原始 stdout、stderr 和 rocprof CSV 保存在远端 `.agentfactory/benchmark/operator-analysis/<run_id>/`，前端只展示结构化 Top Kernel 与图算子摘要。
 
 ## 10. 更换或重建 RadeonCloud 实例
 

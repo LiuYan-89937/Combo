@@ -155,6 +155,12 @@ llama_binary_path() {
     printf '%s/cmake/bin/llama-server-%s\n' "${build_dir}" "$1"
 }
 
+llama_benchmark_binary_path() {
+    local build_dir
+    build_dir="$(llama_build_dir "$1")"
+    printf '%s/cmake/bin/llama-bench-%s\n' "${build_dir}" "$1"
+}
+
 validate_llama_implementation "${LLAMA_DEFAULT_IMPLEMENTATION}"
 
 CA_TRUST_PREPARED=0
@@ -302,6 +308,12 @@ PY
     else
         echo "llama-server: no active implementation"
     fi
+    log "ROCm profiler"
+    if command_exists rocprofv3; then
+        rocprofv3 --version 2>&1 | head -n 1 || true
+    else
+        echo "rocprofv3: not installed"
+    fi
     log "stable-diffusion.cpp"
     if [[ -x "${SD_SERVER_BIN}" ]]; then
         "${SD_SERVER_BIN}" --version | head -n 1 || true
@@ -313,15 +325,17 @@ PY
 prepare_rocm_userspace() {
     [[ -e /dev/kfd ]] \
         || fail "/dev/kfd is unavailable; select a RadeonCloud GPU workspace with ROCm device access"
-    if command_exists rocminfo && { command_exists hipcc || [[ -x /opt/rocm/llvm/bin/clang++ ]]; }; then
-        log "ROCm user-space runtime and compiler are ready"
+    if command_exists rocminfo \
+        && command_exists rocprofv3 \
+        && { command_exists hipcc || [[ -x /opt/rocm/llvm/bin/clang++ ]]; }; then
+        log "ROCm user-space runtime, compiler, and profiler are ready"
         return
     fi
     [[ "${REMOTE_INSTALL_ROCM_USERSPACE:-1}" == "1" ]] \
         || fail "ROCm user-space tools are missing and REMOTE_INSTALL_ROCM_USERSPACE is disabled"
     command_exists apt-get \
         || fail "ROCm user-space tools are missing and apt-get is unavailable"
-    local packages_text="${ROCM_USERSPACE_PACKAGES:-rocminfo rocm-hip-sdk}"
+    local packages_text="${ROCM_USERSPACE_PACKAGES:-rocminfo rocm-hip-sdk rocprofiler-sdk}"
     local packages=()
     read -r -a packages <<< "${packages_text}"
     (( ${#packages[@]} > 0 )) || fail "ROCM_USERSPACE_PACKAGES must contain at least one package"
@@ -339,6 +353,7 @@ prepare_rocm_userspace() {
 
 verify_rocm_runtime() {
     command_exists rocminfo || fail "rocminfo is unavailable after environment preparation"
+    command_exists rocprofv3 || fail "rocprofv3 is unavailable after environment preparation"
     rocminfo >/dev/null 2>&1 || fail "rocminfo cannot access the AMD GPU"
 }
 
@@ -465,11 +480,12 @@ llama_source_digest() {
 build_llama_implementation() {
     local implementation="$1"
     validate_llama_implementation "${implementation}"
-    local source_dir build_dir cmake_dir source_revision source_build_number source_digest binary binary_sha custom_kernels
+    local source_dir build_dir cmake_dir source_revision source_build_number source_digest binary binary_sha benchmark_binary benchmark_binary_sha custom_kernels
     source_dir="$(llama_source_dir "${implementation}")"
     build_dir="$(llama_build_dir "${implementation}")"
     cmake_dir="${build_dir}/cmake"
     binary="$(llama_binary_path "${implementation}")"
+    benchmark_binary="$(llama_benchmark_binary_path "${implementation}")"
     validate_llama_source_tree "${implementation}" "${source_dir}"
     if [[ "${implementation}" == "official" ]]; then
         source_revision="${LLAMA_OFFICIAL_REVISION}"
@@ -493,16 +509,22 @@ build_llama_implementation() {
         -DLLAMA_BUILD_COMMIT="${source_revision}" \
         -DLLAMA_BUILD_NUMBER="${source_build_number}" \
         -DCMAKE_BUILD_TYPE=Release
-    log "Building ${implementation} llama-server"
-    cmake --build "${cmake_dir}" --target llama-server --parallel "$(nproc)"
+    log "Building ${implementation} llama-server and llama-bench"
+    cmake --build "${cmake_dir}" --target llama-server llama-bench --parallel "$(nproc)"
     [[ -x "${cmake_dir}/bin/llama-server" ]] \
         || fail "llama-server build did not produce ${cmake_dir}/bin/llama-server"
     cp -f "${cmake_dir}/bin/llama-server" "${binary}"
+    [[ -x "${cmake_dir}/bin/llama-bench" ]] \
+        || fail "llama-bench build did not produce ${cmake_dir}/bin/llama-bench"
+    cp -f "${cmake_dir}/bin/llama-bench" "${benchmark_binary}"
     chmod 755 "${binary}"
+    chmod 755 "${benchmark_binary}"
     source_digest="$(llama_source_digest "${source_dir}")"
     binary_sha="$(sha256sum "${binary}" | awk '{print $1}')"
+    benchmark_binary_sha="$(sha256sum "${benchmark_binary}" | awk '{print $1}')"
     python3 - "${build_dir}/manifest.json" "${implementation}" "${source_revision}" \
-        "${source_build_number}" "${source_digest}" "${binary}" "${binary_sha}" "${custom_kernels}" <<'PY'
+        "${source_build_number}" "${source_digest}" "${binary}" "${binary_sha}" \
+        "${benchmark_binary}" "${benchmark_binary_sha}" "${custom_kernels}" <<'PY'
 import datetime
 import json
 import pathlib
@@ -518,7 +540,9 @@ payload = {
     "source_sha256": sys.argv[5],
     "binary_path": sys.argv[6],
     "binary_sha256": sys.argv[7],
-    "custom_kernels": sys.argv[8].lower() == "true",
+    "benchmark_binary_path": sys.argv[8],
+    "benchmark_binary_sha256": sys.argv[9],
+    "custom_kernels": sys.argv[10].lower() == "true",
     "optimization_status": "baseline" if implementation == "official" else "placeholder",
     "build_options": {
         "GGML_HIP": True,
@@ -531,6 +555,7 @@ path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encodi
 PY
     "${binary}" --version | head -n 1
     log "Built ${implementation} llama-server: ${binary}"
+    log "Built ${implementation} llama-bench: ${benchmark_binary}"
 }
 
 build_llama() {

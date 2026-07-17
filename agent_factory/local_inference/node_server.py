@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from agent_factory.local_inference.context_allocation import resolve_llama_context_allocation
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.local_inference.memory_budget import (
     estimate_inference_memory,
@@ -21,8 +22,10 @@ from agent_factory.local_inference.implementation import inspect_llama_implement
 from agent_factory.local_inference.node_control import (
     InferenceMemoryEstimateRequest,
     InferenceNodeAction,
+    InferenceOperatorAnalysisRequest,
     InferenceNodeProfileConfiguration,
 )
+from agent_factory.local_inference.operator_analysis import run_llama_operator_analysis
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.model_pool.schema import (
@@ -39,6 +42,7 @@ def create_app() -> FastAPI:
         allow_external_control=False,
         restore_enabled_fallback=False,
     )
+    operator_analysis_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -144,20 +148,127 @@ def create_app() -> FastAPI:
 
     @app.post("/runtimes/load")
     async def load_runtime(request: InferenceNodeAction) -> dict[str, Any]:
+        _reject_chat_runtime_action_during_analysis(request, operator_analysis_lock)
         profile = _resolve_profile(request, apply_configuration=True)
         return {"runtime": _runtime_payload(await runtime_manager.load(profile.profile_id))}
 
     @app.post("/runtimes/unload")
     async def unload_runtime(request: InferenceNodeAction) -> dict[str, Any]:
+        _reject_chat_runtime_action_during_analysis(request, operator_analysis_lock)
         profile = _resolve_profile(request)
         return {"runtime": _runtime_payload(await runtime_manager.unload(profile.profile_id), profile=profile)}
 
     @app.post("/runtimes/restart")
     async def restart_runtime(request: InferenceNodeAction) -> dict[str, Any]:
+        _reject_chat_runtime_action_during_analysis(request, operator_analysis_lock)
         profile = _resolve_profile(request, apply_configuration=True)
         return {"runtime": _runtime_payload(await runtime_manager.restart(profile.profile_id))}
 
+    @app.post("/benchmarks/operator-analysis")
+    async def operator_analysis(request: InferenceOperatorAnalysisRequest) -> dict[str, Any]:
+        if operator_analysis_lock.locked():
+            raise HTTPException(
+                status_code=409,
+                detail="another operator analysis is already running",
+            )
+        async with operator_analysis_lock:
+            return await _execute_operator_analysis(runtime_manager, request)
+
     return app
+
+
+def _reject_chat_runtime_action_during_analysis(
+    request: InferenceNodeAction,
+    lock: asyncio.Lock,
+) -> None:
+    if request.kind == "chat" and lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="chat runtime control is unavailable during operator analysis",
+        )
+
+
+async def _execute_operator_analysis(
+    runtime_manager: LocalInferenceRuntimeManager,
+    request: InferenceOperatorAnalysisRequest,
+) -> dict[str, Any]:
+    profile = _resolve_profile(
+        InferenceNodeAction(
+            kind="chat",
+            model_id=request.model_id,
+            profile=request.profile,
+        ),
+        apply_configuration=True,
+    )
+    state = runtime_manager.state_for_profile(profile.profile_id)
+    if state is None or state.get("phase") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail="operator analysis requires the selected chat runtime to be ready",
+        )
+    implementation = inspect_llama_implementations()
+    if not implementation.available or implementation.active_build is None:
+        raise HTTPException(
+            status_code=409,
+            detail=implementation.error or "active llama.cpp implementation is unavailable",
+        )
+    artifact = ModelPoolStore().require_artifact(profile.artifact_id)
+    await runtime_manager.unload(profile.profile_id)
+    result: dict[str, Any] | None = None
+    analysis_error: Exception | None = None
+    restore_error: Exception | None = None
+    try:
+        result = await run_llama_operator_analysis(
+            profile=profile,
+            artifact=artifact,
+            build=implementation.active_build,
+            analysis_id=request.analysis_id,
+            options=request.options,
+        )
+    except Exception as exc:
+        analysis_error = exc
+    finally:
+        try:
+            await runtime_manager.load(profile.profile_id)
+            await _wait_runtime_ready(runtime_manager, profile.profile_id)
+        except Exception as exc:
+            restore_error = exc
+    if analysis_error is not None:
+        detail = f"{type(analysis_error).__name__}: {analysis_error}"
+        if restore_error is not None:
+            detail += f"; runtime restore failed: {type(restore_error).__name__}: {restore_error}"
+        raise HTTPException(status_code=500, detail=detail)
+    if result is None:
+        raise HTTPException(status_code=500, detail="operator analysis did not produce a result")
+    result.update(
+        {
+            "runtime_was_paused": True,
+            "runtime_restored": restore_error is None,
+        }
+    )
+    if restore_error is not None:
+        result.setdefault("warnings", []).append(
+            f"runtime restore failed: {type(restore_error).__name__}: {restore_error}"
+        )
+    return {"result": result}
+
+
+async def _wait_runtime_ready(
+    runtime_manager: LocalInferenceRuntimeManager,
+    profile_id: str,
+    *,
+    timeout_seconds: float = 900.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        state = runtime_manager.state_for_profile(profile_id)
+        phase = str(state.get("phase") or "") if state else ""
+        if phase == "ready":
+            return
+        if phase == "failed":
+            raise RuntimeError(str(state.get("error") or "runtime restore failed"))
+        await asyncio.sleep(1.0)
+    raise TimeoutError("chat runtime restore timed out after operator analysis")
 
 
 def _resolve_profile(
@@ -242,6 +353,11 @@ def _runtime_configuration(profile: ModelPoolProfile) -> dict[str, Any]:
     mmproj_path = configuration.pop("mmproj_path", None)
     if mmproj_path is not None:
         configuration["multimodal_projector"] = bool(mmproj_path)
+    if isinstance(profile.inference, LlamaCppInferenceConfig):
+        allocation = resolve_llama_context_allocation(profile.limits, profile.inference)
+        if allocation is not None:
+            configuration["per_slot_context_tokens"] = allocation.per_slot_tokens
+            configuration["server_context_tokens"] = allocation.server_context_tokens
     return configuration
 
 

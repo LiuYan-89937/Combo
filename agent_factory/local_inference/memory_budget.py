@@ -5,6 +5,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from agent_factory.local_inference.context_allocation import (
+    LlamaContextAllocation,
+    resolve_llama_context_allocation,
+)
 from agent_factory.local_inference.node_control import InferenceNodeProfileConfiguration
 from agent_factory.local_inference.rocm import RocmDeviceInfo
 from agent_factory.model_pool.schema import (
@@ -27,6 +31,7 @@ class InferenceMemoryEstimate:
     available: bool
     model_id: str
     context_tokens: int | None
+    total_context_tokens: int | None
     parallel_slots: int
     cache_type_k: str
     cache_type_v: str
@@ -75,13 +80,13 @@ def estimate_inference_memory(
         return _unavailable(profile.served_model_name, "memory estimation requires a llama.cpp chat profile")
     if device is None or device.total_memory_bytes <= 0:
         return _unavailable(profile.served_model_name, "ROCm VRAM telemetry is unavailable")
-    context_tokens = requested.limits.max_input_tokens
-    if context_tokens is None:
+    context_allocation = resolve_llama_context_allocation(requested.limits, requested_inference)
+    if context_allocation is None:
         return _unavailable(profile.served_model_name, "context length is required for memory estimation")
 
     try:
         metadata = _read_attention_metadata(artifact.resolved_path())
-        requested_kv = _kv_cache_bytes(metadata, context_tokens, requested_inference)
+        requested_kv = _kv_cache_bytes(metadata, context_allocation, requested_inference)
         model_allocation = _model_allocation_bytes(artifact, profile)
         current_used = device.used_memory_bytes
         projected_used, basis = _projected_used_bytes(
@@ -104,8 +109,9 @@ def estimate_inference_memory(
     return InferenceMemoryEstimate(
         available=True,
         model_id=profile.served_model_name,
-        context_tokens=context_tokens,
-        parallel_slots=requested_inference.parallel_slots,
+        context_tokens=context_allocation.per_slot_tokens,
+        total_context_tokens=context_allocation.server_context_tokens,
+        parallel_slots=context_allocation.parallel_slots,
         cache_type_k=requested_inference.cache_type_k,
         cache_type_v=requested_inference.cache_type_v,
         model_allocation_bytes=model_allocation,
@@ -196,7 +202,7 @@ def _optional_positive_int(value: Any) -> int | None:
 
 def _kv_cache_bytes(
     metadata: _GgufAttentionMetadata,
-    context_tokens: int,
+    context_allocation: LlamaContextAllocation,
     inference: LlamaCppInferenceConfig,
 ) -> int:
     key_bytes = _ELEMENT_BYTES[inference.cache_type_k]
@@ -205,7 +211,7 @@ def _kv_cache_bytes(
     bytes_per_token = elements_per_token * (
         metadata.key_length * key_bytes + metadata.value_length * value_bytes
     )
-    return int(bytes_per_token * context_tokens * inference.parallel_slots)
+    return int(bytes_per_token * context_allocation.server_context_tokens)
 
 
 def _model_allocation_bytes(artifact: LocalModelArtifact, profile: ModelPoolProfile) -> int:
@@ -235,9 +241,13 @@ def _projected_used_bytes(
         and str(runtime.get("profile_id") or "") == profile.profile_id
     )
     current_inference = profile.inference
-    current_context = profile.limits.max_input_tokens
-    if runtime_ready and isinstance(current_inference, LlamaCppInferenceConfig) and current_context:
-        current_kv = _kv_cache_bytes(metadata, current_context, current_inference)
+    current_allocation = (
+        resolve_llama_context_allocation(profile.limits, current_inference)
+        if isinstance(current_inference, LlamaCppInferenceConfig)
+        else None
+    )
+    if runtime_ready and current_allocation is not None:
+        current_kv = _kv_cache_bytes(metadata, current_allocation, current_inference)
         return max(0, current_used - current_kv) + requested_kv, "live_runtime_adjusted"
     return current_used + model_allocation + requested_kv, "unloaded_conservative"
 
@@ -247,6 +257,7 @@ def _unavailable(model_id: str, error: str) -> InferenceMemoryEstimate:
         available=False,
         model_id=model_id,
         context_tokens=None,
+        total_context_tokens=None,
         parallel_slots=1,
         cache_type_k="",
         cache_type_v="",

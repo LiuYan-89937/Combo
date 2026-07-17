@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.local_inference.config import load_inference_telemetry_endpoint
 from agent_factory.local_inference.http_client import create_private_async_http_client
@@ -62,6 +62,24 @@ class InferenceMemoryEstimateRequest(BaseModel):
     kind: RuntimeKind
     model_id: str
     profile: InferenceNodeProfileConfiguration
+
+
+class InferenceOperatorAnalysisOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prefill_tokens: int = Field(ge=32, le=32768)
+    decode_tokens: int = Field(ge=1, le=4096)
+    repetitions: int = Field(ge=1, le=20)
+    top_kernels: int = Field(ge=5, le=100)
+
+
+class InferenceOperatorAnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str
+    profile: InferenceNodeProfileConfiguration
+    analysis_id: str
+    options: InferenceOperatorAnalysisOptions
 
 
 class InferenceNodeClient:
@@ -146,3 +164,20 @@ class InferenceNodeClient:
         if not isinstance(estimate, dict):
             raise ValueError("inference node response does not contain a memory estimate")
         return estimate
+
+    async def operator_analysis(
+        self,
+        request: InferenceOperatorAnalysisRequest,
+    ) -> dict[str, Any]:
+        endpoint = load_inference_telemetry_endpoint(timeout_seconds=7200.0)
+        async with create_private_async_http_client(endpoint) as client:
+            response = await client.post(
+                endpoint.endpoint("/benchmarks/operator-analysis"),
+                json=request.model_dump(mode="json"),
+            )
+            response.raise_for_status()
+            payload = response.json()
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, dict):
+            raise ValueError("inference node response does not contain operator analysis results")
+        return result

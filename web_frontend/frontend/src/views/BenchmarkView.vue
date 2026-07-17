@@ -34,6 +34,26 @@
           {{ llamaStatus?.error || t('benchmark.implementationUnavailable') }}
         </n-alert>
 
+        <div class="benchmark-kind-selector">
+          <span>{{ t('benchmark.kind') }}</span>
+          <n-radio-group v-model:value="form.kind" :disabled="Boolean(activeRun)">
+            <n-radio-button value="performance">{{ t('benchmark.performanceKind') }}</n-radio-button>
+            <n-radio-button value="operator_analysis">{{ t('benchmark.operatorKind') }}</n-radio-button>
+          </n-radio-group>
+        </div>
+
+        <n-alert v-if="form.kind === 'operator_analysis'" type="warning" :show-icon="true">
+          {{ t('benchmark.operatorPauseWarning') }}
+        </n-alert>
+        <n-alert
+          v-if="form.kind === 'operator_analysis' && llamaStatus?.active_build && !llamaStatus.active_build.benchmark_binary_path"
+          type="error"
+          :show-icon="true"
+          class="operator-warning"
+        >
+          {{ t('benchmark.operatorBinaryUnavailable') }}
+        </n-alert>
+
         <div class="form-grid">
           <label class="field field-wide">
             <span>{{ t('benchmark.runName') }}</span>
@@ -48,7 +68,7 @@
               :disabled="Boolean(activeRun)"
             />
           </label>
-          <label class="field field-full">
+          <label v-if="form.kind === 'performance'" class="field field-full">
             <span>{{ t('benchmark.prompt') }}</span>
             <n-input
               v-model:value="form.prompt"
@@ -58,27 +78,27 @@
               :disabled="Boolean(activeRun)"
             />
           </label>
-          <label class="field">
+          <label v-if="form.kind === 'performance'" class="field">
             <span>{{ t('benchmark.maxOutputTokens') }}</span>
             <n-input-number v-model:value="form.max_output_tokens" :min="1" :max="32768" :disabled="Boolean(activeRun)" />
           </label>
-          <label class="field">
+          <label v-if="form.kind === 'performance'" class="field">
             <span>{{ t('benchmark.temperature') }}</span>
             <n-input-number v-model:value="form.temperature" :min="0" :max="2" :step="0.1" :disabled="Boolean(activeRun)" />
           </label>
-          <label class="field">
+          <label v-if="form.kind === 'performance'" class="field">
             <span>{{ t('benchmark.seed') }}</span>
             <n-input-number v-model:value="form.seed" :min="0" :disabled="Boolean(activeRun)" />
           </label>
-          <label class="field">
+          <label v-if="form.kind === 'performance'" class="field">
             <span>{{ t('benchmark.warmupIterations') }}</span>
             <n-input-number v-model:value="form.warmup_iterations" :min="0" :max="10" :disabled="Boolean(activeRun)" />
           </label>
-          <label class="field">
+          <label v-if="form.kind === 'performance'" class="field">
             <span>{{ t('benchmark.measuredIterations') }}</span>
             <n-input-number v-model:value="form.measured_iterations" :min="1" :max="50" :disabled="Boolean(activeRun)" />
           </label>
-          <label class="field">
+          <label v-if="form.kind === 'performance'" class="field">
             <span>{{ t('benchmark.telemetryInterval') }}</span>
             <n-select
               v-model:value="form.telemetry_interval_ms"
@@ -86,6 +106,24 @@
               :disabled="Boolean(activeRun)"
             />
           </label>
+          <template v-else>
+            <label class="field">
+              <span>{{ t('benchmark.prefillTokens') }}</span>
+              <n-input-number v-model:value="operatorForm.prefill_tokens" :min="32" :max="32768" :disabled="Boolean(activeRun)" />
+            </label>
+            <label class="field">
+              <span>{{ t('benchmark.decodeTokens') }}</span>
+              <n-input-number v-model:value="operatorForm.decode_tokens" :min="1" :max="4096" :disabled="Boolean(activeRun)" />
+            </label>
+            <label class="field">
+              <span>{{ t('benchmark.operatorRepetitions') }}</span>
+              <n-input-number v-model:value="operatorForm.repetitions" :min="1" :max="20" :disabled="Boolean(activeRun)" />
+            </label>
+            <label class="field">
+              <span>{{ t('benchmark.topKernels') }}</span>
+              <n-input-number v-model:value="operatorForm.top_kernels" :min="5" :max="100" :disabled="Boolean(activeRun)" />
+            </label>
+          </template>
         </div>
 
         <div class="form-actions">
@@ -99,10 +137,11 @@
             <template #icon><n-icon><Play /></n-icon></template>
             {{ t('benchmark.start') }}
           </n-button>
-          <n-button v-else type="error" secondary :loading="submitting" @click="cancelRun(activeRun)">
+          <n-button v-else-if="activeRun.spec.kind === 'performance'" type="error" secondary :loading="submitting" @click="cancelRun(activeRun)">
             <template #icon><n-icon><Stop /></n-icon></template>
             {{ t('benchmark.cancel') }}
           </n-button>
+          <n-tag v-else type="warning" :bordered="false">{{ t('benchmark.operatorCannotCancel') }}</n-tag>
         </div>
       </section>
 
@@ -158,6 +197,14 @@
               <h3>{{ t('benchmark.promptCache') }}</h3>
               <span>{{ t('benchmark.weightedHitRateHint') }}</span>
             </div>
+            <n-alert
+              v-if="selectedRun.summary.prompt_cache.metric_version === 'legacy'"
+              type="warning"
+              :show-icon="true"
+              class="cache-legacy-warning"
+            >
+              {{ t('benchmark.legacyCacheMetric') }}
+            </n-alert>
             <div class="metric-grid cache-metric-grid">
               <article class="metric-card">
                 <span class="metric-label">{{ t('benchmark.cacheHitRate') }}</span>
@@ -218,6 +265,94 @@
           </div>
         </template>
 
+        <section v-if="selectedRun.operator_analysis" class="operator-results">
+          <div class="section-heading">
+            <h3>{{ t('benchmark.operatorResults') }}</h3>
+            <span>{{ selectedRun.operator_analysis.profiler }}</span>
+          </div>
+          <n-alert
+            :type="selectedRun.operator_analysis.runtime_restored ? 'success' : 'warning'"
+            :show-icon="true"
+          >
+            {{ selectedRun.operator_analysis.runtime_restored
+              ? t('benchmark.runtimeRestored')
+              : t('benchmark.runtimeRestoreFailed') }}
+          </n-alert>
+          <n-alert
+            v-for="warning in selectedRun.operator_analysis.warnings"
+            :key="warning"
+            type="warning"
+            :show-icon="true"
+            class="operator-warning"
+          >
+            {{ warning }}
+          </n-alert>
+          <article
+            v-for="phase in selectedRun.operator_analysis.phases"
+            :key="phase.phase"
+            class="operator-phase"
+          >
+            <div class="section-heading">
+              <h3>{{ phase.phase === 'prefill' ? t('benchmark.prefillPhase') : t('benchmark.decodePhase') }}</h3>
+              <span>{{ phase.elapsed_seconds.toFixed(1) }} s · {{ phase.artifact_directory }}</span>
+            </div>
+            <div class="operator-table-wrap">
+              <table class="sample-table">
+                <thead><tr>
+                  <th>{{ t('benchmark.kernelName') }}</th>
+                  <th>{{ t('benchmark.kernelCalls') }}</th>
+                  <th>{{ t('benchmark.kernelTotalTime') }}</th>
+                  <th>{{ t('benchmark.kernelShare') }}</th>
+                </tr></thead>
+                <tbody>
+                  <tr v-for="kernel in phase.top_kernels" :key="kernel.name">
+                    <td class="kernel-name">{{ kernel.name }}</td>
+                    <td>{{ kernel.calls.toLocaleString() }}</td>
+                    <td>{{ formatKernelTime(kernel.total_duration_ns) }}</td>
+                    <td>{{ formatPercent(kernel.duration_percent) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="operator-table-wrap graph-table-wrap">
+              <table class="sample-table">
+                <thead><tr>
+                  <th>{{ t('benchmark.graphOperation') }}</th>
+                  <th>{{ t('benchmark.graphBackend') }}</th>
+                  <th>{{ t('benchmark.graphCount') }}</th>
+                </tr></thead>
+                <tbody>
+                  <tr v-for="item in phase.graph_operators" :key="`${item.operation}:${item.backend}`">
+                    <td>{{ item.operation }}</td>
+                    <td>{{ item.backend }}</td>
+                    <td>{{ item.count.toLocaleString() }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="phase.custom_kernels.length" class="operator-table-wrap graph-table-wrap">
+              <table class="sample-table">
+                <thead><tr>
+                  <th>{{ t('benchmark.customKernel') }}</th>
+                  <th>{{ t('benchmark.kernelSelected') }}</th>
+                  <th>{{ t('benchmark.kernelDispatched') }}</th>
+                  <th>{{ t('benchmark.kernelFallback') }}</th>
+                  <th>{{ t('benchmark.fallbackReason') }}</th>
+                </tr></thead>
+                <tbody>
+                  <tr v-for="item in phase.custom_kernels" :key="item.kernel_id">
+                    <td>{{ item.kernel_id }}</td>
+                    <td>{{ item.selected_count.toLocaleString() }}</td>
+                    <td>{{ item.dispatch_count.toLocaleString() }}</td>
+                    <td>{{ item.fallback_count.toLocaleString() }}</td>
+                    <td>{{ formatFallbackReasons(item.fallback_reasons) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
         <div v-if="selectedRun.samples.length" class="samples-section">
           <div class="section-heading"><h3>{{ t('benchmark.samples') }}</h3></div>
           <div class="sample-table-wrap">
@@ -250,8 +385,8 @@
                   <td>{{ formatMetric('decode_tokens_per_second', sample.decode_tokens_per_second) }}</td>
                   <td>{{ formatMetric('end_to_end_ms', sample.end_to_end_ms) }}</td>
                   <td>{{ formatTokenCount(sample.cache_tokens) }}</td>
-                  <td>{{ formatTokenCount(sampleProcessedPromptTokens(sample)) }}</td>
-                  <td>{{ formatPercent(sampleCacheHitRate(sample)) }}</td>
+                  <td>{{ formatTokenCount(sampleProcessedPromptTokens(selectedRun, sample)) }}</td>
+                  <td>{{ formatPercent(sampleCacheHitRate(selectedRun, sample)) }}</td>
                   <td>{{ formatMetric('peak_vram_bytes', sample.peak_vram_bytes) }}</td>
                   <td>{{ formatMetric('peak_gpu_utilization_percent', sample.peak_gpu_utilization_percent) }}</td>
                 </tr>
@@ -286,8 +421,11 @@
               <small>{{ run.spec.implementation.label || run.spec.profile_id }}</small>
             </span>
             <span class="history-metrics">
-              <span>{{ formatMetric('ttft_ms', metricMean(run, 'ttft_ms')) }}</span>
-              <span>{{ formatMetric('decode_tokens_per_second', metricMean(run, 'decode_tokens_per_second')) }}</span>
+              <template v-if="run.spec.kind === 'performance'">
+                <span>{{ formatMetric('ttft_ms', metricMean(run, 'ttft_ms')) }}</span>
+                <span>{{ formatMetric('decode_tokens_per_second', metricMean(run, 'decode_tokens_per_second')) }}</span>
+              </template>
+              <span v-else>{{ t('benchmark.operatorKind') }}</span>
             </span>
             <n-tag size="small" :bordered="false" :type="statusTagType(run.status)">{{ statusLabel(run.status) }}</n-tag>
             <span class="history-date">{{ formatDate(run.created_at) }}</span>
@@ -324,6 +462,8 @@ import {
   NInputNumber,
   NPopconfirm,
   NProgress,
+  NRadioButton,
+  NRadioGroup,
   NSelect,
   NTag,
   NText,
@@ -373,6 +513,7 @@ let pollTimer: number | undefined
 let pollInProgress = false
 
 const form = reactive<BenchmarkRunSpec>({
+  kind: 'performance',
   name: '',
   profile_id: '',
   prompt: '',
@@ -383,6 +524,13 @@ const form = reactive<BenchmarkRunSpec>({
   measured_iterations: 3,
   telemetry_interval_ms: 250,
   implementation: { label: '', revision: '', parameters: {} },
+  operator_analysis: null,
+})
+const operatorForm = reactive({
+  prefill_tokens: 512,
+  decode_tokens: 128,
+  repetitions: 3,
+  top_kernels: 20,
 })
 
 const readyProfileIds = computed(() => new Set(
@@ -418,9 +566,10 @@ const baselineOptions = computed(() => runs.value
 const canStart = computed(() => Boolean(
   form.name.trim()
   && form.profile_id
-  && form.prompt.trim()
+  && (form.kind === 'operator_analysis' || form.prompt.trim())
   && readyProfileIds.value.has(form.profile_id)
-  && llamaStatus.value?.available,
+  && llamaStatus.value?.available
+  && (form.kind === 'performance' || Boolean(llamaStatus.value?.active_build?.benchmark_binary_path))
 ))
 const primaryMetrics = computed<MetricDefinition[]>(() => [
   { key: 'ttft_ms', label: t('benchmark.ttft'), higherIsBetter: false },
@@ -460,7 +609,8 @@ async function startRun() {
     const result = await benchmarkApi.start({
       ...form,
       name: form.name.trim(),
-      prompt: form.prompt.trim(),
+      prompt: form.kind === 'performance' ? form.prompt.trim() : '',
+      operator_analysis: form.kind === 'operator_analysis' ? { ...operatorForm } : null,
       implementation: {
         ...form.implementation,
         label: form.implementation.label.trim(),
@@ -540,13 +690,28 @@ function formatPercent(value: number | null | undefined) {
   return `${value.toFixed(1)}%`
 }
 
-function sampleProcessedPromptTokens(sample: BenchmarkSample) {
+function formatKernelTime(value: number) {
+  if (!Number.isFinite(value)) return '—'
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} s`
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} ms`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)} μs`
+  return `${value.toFixed(0)} ns`
+}
+
+function formatFallbackReasons(reasons: Record<string, number>) {
+  const entries = Object.entries(reasons)
+  return entries.length ? entries.map(([reason, count]) => `${reason}: ${count}`).join(' · ') : '—'
+}
+
+function sampleProcessedPromptTokens(run: BenchmarkRun, sample: BenchmarkSample) {
+  if (run.summary?.prompt_cache?.metric_version !== 'prompt_prefix_reuse.v1') return null
   if (sample.prompt_tokens === null || sample.prompt_tokens === undefined) return null
   if (sample.cache_tokens === null || sample.cache_tokens === undefined) return null
   return Math.max(0, sample.prompt_tokens - sample.cache_tokens)
 }
 
-function sampleCacheHitRate(sample: BenchmarkSample) {
+function sampleCacheHitRate(run: BenchmarkRun, sample: BenchmarkSample) {
+  if (run.summary?.prompt_cache?.metric_version !== 'prompt_prefix_reuse.v1') return null
   if (!sample.prompt_tokens || sample.cache_tokens === null || sample.cache_tokens === undefined) return null
   return Math.min(100, Math.max(0, sample.cache_tokens / sample.prompt_tokens * 100))
 }
@@ -721,6 +886,15 @@ onUnmounted(() => {
 .section-heading span,
 .run-time { color: var(--app-text-muted); font-size: 12px; }
 
+.benchmark-kind-selector {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+  margin: var(--app-space-lg) 0;
+}
+.benchmark-kind-selector > span { color: var(--app-text); font-size: 12px; font-weight: 600; }
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -754,6 +928,8 @@ onUnmounted(() => {
 }
 .progress-copy { margin-bottom: 8px; }
 .run-error { margin-top: var(--app-space-md); }
+.cache-legacy-warning,
+.operator-warning { margin-top: var(--app-space-md); }
 
 .metric-grid {
   display: grid;
@@ -796,6 +972,16 @@ onUnmounted(() => {
 .sample-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--app-divider); }
 .sample-table th { background: var(--app-surface-muted); color: var(--app-text-muted); font-size: 12px; }
 .sample-table tr:last-child td { border-bottom: 0; }
+
+.operator-phase { margin-top: var(--app-space-xl); }
+.operator-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--app-divider);
+  border-radius: var(--app-radius-md);
+}
+.graph-table-wrap { margin-top: var(--app-space-md); }
+.operator-table-wrap .sample-table { min-width: 680px; }
+.kernel-name { max-width: 640px; white-space: normal; overflow-wrap: anywhere; }
 
 .environment-collapse { margin-top: var(--app-space-lg); }
 .environment-collapse pre {
@@ -852,6 +1038,7 @@ onUnmounted(() => {
   .panel-heading,
   .section-heading,
   .progress-copy { align-items: flex-start; flex-wrap: wrap; }
+  .benchmark-kind-selector { align-items: stretch; flex-direction: column; }
   .form-grid, .metric-grid { grid-template-columns: 1fr; }
   .field, .field-wide, .field-full { grid-column: 1; }
   .comparison-heading { align-items: stretch; flex-direction: column; }

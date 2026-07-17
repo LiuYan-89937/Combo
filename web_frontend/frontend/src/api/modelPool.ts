@@ -72,6 +72,8 @@ export interface RemoteInferenceModel {
 export interface LlamaCppRuntimeConfiguration {
   gpu_layers: number
   parallel_slots: number
+  per_slot_context_tokens?: number | null
+  server_context_tokens?: number | null
   cache_type_k: string
   cache_type_v: string
   flash_attention: boolean
@@ -105,6 +107,7 @@ export interface InferenceMemoryEstimate {
   available: boolean
   model_id: string
   context_tokens?: number | null
+  total_context_tokens?: number | null
   parallel_slots: number
   cache_type_k: string
   cache_type_v: string
@@ -255,6 +258,8 @@ export interface LlamaImplementationBuild {
   source_sha256: string
   binary_path: string
   binary_sha256: string
+  benchmark_binary_path: string
+  benchmark_binary_sha256: string
   custom_kernels: boolean
   optimization_status: 'baseline' | 'placeholder' | 'optimized'
   build_options: Record<string, unknown>

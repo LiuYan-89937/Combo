@@ -129,7 +129,7 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 首次执行会依次完成：
 
 1. 校验本机配置和 SSH Key 登录。
-2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp。
+2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp，并分别构建 `llama-server` 与 `llama-bench`。
 3. 准备缺失的普通构建工具并验证远端国内下载源的 HTTPS CA 信任链；仅在证书链缺失或损坏时重建并按需重装 `ca-certificates`。
 4. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
 5. 仅在缺失时安装 ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
@@ -256,9 +256,11 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 - Peak VRAM
 - Average / Peak GPU Usage
 - Power
-- KV Cache 命中相关指标
+- Prompt KV 前缀复用 Token、实际计算 Token 与按 Token 总量加权的复用率
 
 每次优化应使用相同 Prompt、输出上限、Context、并发和采样参数。Benchmark 会从远端自动记录活动 implementation、源码 revision、源码摘要和二进制 SHA256，不能手填实现身份。
+
+页面还提供独立的“算子分析”。它不会与普通 TTFT/TPS 测试混跑，而是临时卸载 Chat 模型，使用同一 Profile 参数分别执行 `llama-bench` Prefill 与 Decode，并通过 `GGML_SCHED_DEBUG=2` 记录 GGML 图算子/执行后端、通过 `rocprofv3` 汇总 HIP Kernel 调用次数与耗时占比。分析产物保存在远端 `.agentfactory/benchmark/operator-analysis/`，完成后自动恢复 Chat 模型。
 
 ## llama.cpp AMD 算子改造
 
@@ -286,7 +288,7 @@ cd ../..
 ./deploy.sh switch-llama amd
 ```
 
-官方和 AMD 使用相互独立的 CMake/Ninja 构建目录。切换实现不会改变模型 Profile；Performance Benchmark 自动识别当前活动二进制。实现 AMD Kernel 后必须把构建清单的 `custom_kernels` 和 `optimization_status` 更新为真实状态，并增加 Kernel 命中证据，不能只改显示名称。
+官方和 AMD 使用相互独立的 CMake/Ninja 构建目录，并同时生成 `llama-server` 与 `llama-bench`。切换实现不会改变模型 Profile；性能测试和算子分析都会自动识别当前活动构建。实现 AMD Kernel 后必须把构建清单的 `custom_kernels` 和 `optimization_status` 更新为真实状态，并用算子分析中的 Kernel 调用与耗时数据证明命中，不能只改显示名称。
 
 ## 配置与数据目录
 
