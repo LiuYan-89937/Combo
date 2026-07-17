@@ -133,7 +133,7 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 3. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
 4. 仅在缺失时安装普通构建工具、ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
 5. 仅同步推理控制、模型池所需的最小 Python bundle，以及两套 llama.cpp 源码到远端；Factory 前后端不上传。
-6. 独立构建 `official` 与 `amd` 两个 ROCm llama-server，并构建 HIPBLAS `sd-server`。
+6. 独立构建 `official` 与 `amd` 两个 ROCm llama-server；远端按固定 revision 递归拉取 stable-diffusion.cpp 及其子模块，再构建 HIPBLAS `sd-server`。
 7. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
 8. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 9. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
@@ -170,7 +170,7 @@ http://localhost:3000
 | `./deploy.sh switch-llama <official\|amd>` | 切换活动实现并使用相同 Profile 重载模型，失败时恢复原实现。 |
 | `./deploy.sh list-llama-builds` | 查看两套构建的 revision、源码与二进制校验值及活动状态。 |
 | `./deploy.sh rollback-llama` | 切回上一次活动实现。 |
-| `./deploy.sh build-sd` | 在远端对已同步源码增量构建 sd-server。 |
+| `./deploy.sh build-sd` | 在远端同步固定 revision 及完整子模块并增量构建 sd-server。 |
 
 更换实例时只需修改 SSH Host 和 Port。持久盘路径变化时同时修改 `REMOTE_MODEL_ROOT`、`REMOTE_STATE_ROOT`、`REMOTE_LLAMA_SOURCE_ROOT`、`REMOTE_LLAMA_RUNTIME_ROOT` 和 `REMOTE_STABLE_DIFFUSION_CPP_DIR`。
 
@@ -297,7 +297,6 @@ deploy/deploy.env            一键部署配置，不提交
 .agent_runtime/              Agent 工作区、Trace 与 Checkpoint，不提交
 vendor/llama.cpp-official/   随仓库提交的官方 Baseline 源码
 vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
-vendor/stable-diffusion.cpp/ 随仓库提交的图片推理服务源码
 ```
 
 ### RadeonCloud
@@ -310,6 +309,7 @@ vendor/stable-diffusion.cpp/ 随仓库提交的图片推理服务源码
 /root/models                 GGUF、mmproj 与 ModelScope 模型
 /root/fastagentfactory-llama-sources  两套同步源码
 /root/.fastagentfactory/llama        两套构建、清单和活动软链接
+/root/stable-diffusion.cpp           远端固定 revision 与递归子模块源码、构建产物
 ```
 
 `/root` 是否持久取决于实例类型。若平台提供持久卷，应在 `deploy/deploy.env` 将模型、状态和 llama.cpp 路径改到其挂载点；否则工作空间到期前必须备份 Benchmark、Profile、Trace、演示材料和 llama.cpp 改动。
@@ -317,7 +317,7 @@ vendor/stable-diffusion.cpp/ 随仓库提交的图片推理服务源码
 ## 安全边界
 
 - SSH 必须使用 Key 登录，不在配置文件中保存密码。
-- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 与 stable-diffusion.cpp 源码属于交付源码。
+- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 属于交付源码，stable-diffusion.cpp 仅在远端按固定 revision 获取。
 - 远端 `8002`、`8003`、`8004` 只监听 `127.0.0.1`，不要直接暴露公网。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 首次部署自动生成并写入本机 `.env`；丢失后旧的加密资源无法恢复。
 - 部署脚本先复用可用的 ROCm/PyTorch HIP 环境，仅在缺失且配置允许时安装用户态组件。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 工作空间提供。

@@ -25,7 +25,7 @@ required_config=(
     REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT REMOTE_LLAMA_SOURCE_ROOT
     REMOTE_LLAMA_RUNTIME_ROOT LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
     LLAMA_AMD_BASE_REVISION LLAMA_AMD_BASE_BUILD_NUMBER LLAMA_DEFAULT_IMPLEMENTATION
-    REMOTE_STABLE_DIFFUSION_CPP_DIR
+    REMOTE_STABLE_DIFFUSION_CPP_DIR STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
     PYPI_INDEX_URL HF_ENDPOINT CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
     CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MODEL_SIZE_BYTES
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 CHAT_MMPROJ_SIZE_BYTES
@@ -185,7 +185,6 @@ prepare_host() {
         "${LLAMA_AMD_SOURCE_DIR}" \
         "${LLAMA_BUILDS_ROOT}" \
         "${LLAMA_ACTIVE_DIR}" \
-        "${REMOTE_STABLE_DIFFUSION_CPP_DIR}" \
         "${IMAGE_MODEL_DIR}"
 }
 
@@ -514,9 +513,54 @@ print(json.dumps({"active": active, "builds": builds}, ensure_ascii=False, inden
 PY
 }
 
+validate_stable_diffusion_source() {
+    local source_dir="$1"
+    local required_file
+    for required_file in \
+        CMakeLists.txt \
+        ggml/CMakeLists.txt \
+        thirdparty/libwebm/build/cxx_flags.cmake \
+        thirdparty/libwebm/build/msvc_runtime.cmake; do
+        [[ -f "${source_dir}/${required_file}" ]] \
+            || fail "stable-diffusion.cpp source is incomplete: ${source_dir}/${required_file}"
+    done
+}
+
+sync_stable_diffusion_source() {
+    local source_dir="${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
+    local source_parent temp_dir current_revision
+    source_parent="$(dirname "${source_dir}")"
+    mkdir -p "${source_parent}"
+
+    if [[ ! -d "${source_dir}/.git" ]]; then
+        temp_dir="${source_dir}.clone"
+        rm -rf "${temp_dir}"
+        log "Cloning stable-diffusion.cpp revision ${STABLE_DIFFUSION_CPP_REVISION} with recursive submodules"
+        git init "${temp_dir}"
+        git -C "${temp_dir}" remote add origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
+        git -C "${temp_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
+        git -C "${temp_dir}" checkout --detach FETCH_HEAD
+        git -C "${temp_dir}" submodule sync --recursive
+        git -C "${temp_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
+        validate_stable_diffusion_source "${temp_dir}"
+        rm -rf "${source_dir}"
+        mv "${temp_dir}" "${source_dir}"
+    else
+        git -C "${source_dir}" remote set-url origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
+        git -C "${source_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
+        git -C "${source_dir}" checkout --detach --force FETCH_HEAD
+        git -C "${source_dir}" submodule sync --recursive
+        git -C "${source_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
+        validate_stable_diffusion_source "${source_dir}"
+    fi
+
+    current_revision="$(git -C "${source_dir}" rev-parse HEAD)"
+    [[ "${current_revision}" == "${STABLE_DIFFUSION_CPP_REVISION}" ]] \
+        || fail "stable-diffusion.cpp revision mismatch: expected ${STABLE_DIFFUSION_CPP_REVISION}, got ${current_revision}"
+}
+
 build_sd() {
-    [[ -f "${REMOTE_STABLE_DIFFUSION_CPP_DIR}/CMakeLists.txt" ]] \
-        || fail "stable-diffusion.cpp source is not synchronized to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
+    sync_stable_diffusion_source
     local gfx_name c_compiler cxx_compiler
     gfx_name="$(rocminfo 2>/dev/null | awk '/Name: *gfx[0-9]/ && !found {value=$2; found=1} END {print value}')"
     [[ -n "${gfx_name}" ]] || fail "Unable to detect AMD GPU target from rocminfo"

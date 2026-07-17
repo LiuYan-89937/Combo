@@ -46,8 +46,7 @@ required_config=(
     LOCAL_LLAMA_OFFICIAL_DIR LOCAL_LLAMA_AMD_DIR
     LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
     LLAMA_AMD_BASE_REVISION LLAMA_AMD_BASE_BUILD_NUMBER LLAMA_DEFAULT_IMPLEMENTATION
-    REMOTE_STABLE_DIFFUSION_CPP_DIR LOCAL_STABLE_DIFFUSION_CPP_DIR
-    STABLE_DIFFUSION_CPP_REVISION
+    REMOTE_STABLE_DIFFUSION_CPP_DIR STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
     CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION CHAT_MODEL_FILENAME CHAT_MODEL_SHA256
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION
     CHAT_PROFILE_ID CHAT_SERVED_MODEL_NAME CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
@@ -127,11 +126,6 @@ LOCAL_LLAMA_AMD_PATH="${LOCAL_LLAMA_AMD_DIR}"
 if [[ "${LOCAL_LLAMA_AMD_PATH}" != /* ]]; then
     LOCAL_LLAMA_AMD_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_AMD_PATH}"
 fi
-LOCAL_SD_PATH="${LOCAL_STABLE_DIFFUSION_CPP_DIR}"
-if [[ "${LOCAL_SD_PATH}" != /* ]]; then
-    LOCAL_SD_PATH="${PROJECT_ROOT}/${LOCAL_SD_PATH}"
-fi
-
 ssh_run() {
     ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "$@"
 }
@@ -167,10 +161,6 @@ validate_llama_source_tree() {
 prepare_local_sources() {
     validate_llama_source_tree official "${LOCAL_LLAMA_OFFICIAL_PATH}"
     validate_llama_source_tree amd "${LOCAL_LLAMA_AMD_PATH}"
-    [[ -f "${LOCAL_SD_PATH}/CMakeLists.txt" ]] \
-        || fail "Bundled stable-diffusion.cpp source is missing: ${LOCAL_SD_PATH}"
-    [[ -f "${LOCAL_SD_PATH}/ggml/CMakeLists.txt" ]] \
-        || fail "Bundled stable-diffusion.cpp ggml dependency is missing: ${LOCAL_SD_PATH}/ggml"
 }
 
 sync_sources() {
@@ -213,9 +203,6 @@ sync_sources() {
         -e "${rsync_transport% }" \
         --exclude 'build*/' \
         "${LOCAL_LLAMA_AMD_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/amd/"
-    log "Synchronizing bundled stable-diffusion.cpp source to ${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
-    rsync -az --delete -e "${rsync_transport% }" --exclude 'build*/' \
-        "${LOCAL_SD_PATH}/" "${SSH_TARGET}:${REMOTE_STABLE_DIFFUSION_CPP_DIR}/"
 }
 
 configure_local_env() {

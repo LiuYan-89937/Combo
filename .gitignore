@@ -2,6 +2,7 @@
 deploy/deploy.env
 .deploy/
 vendor/llama.cpp/
+vendor/stable-diffusion.cpp/
 .DS_Store
 .idea/
 .agentfactory/

@@ -27,6 +27,7 @@
 | 远端 | 最小推理 bundle | `/root/FastAgentFactory` |
 | 远端 | 两套 llama.cpp 源码 | `/root/fastagentfactory-llama-sources` |
 | 远端 | 两套构建与活动入口 | `/root/.fastagentfactory/llama` |
+| 远端 | stable-diffusion.cpp 完整 Git 源码与子模块 | `/root/stable-diffusion.cpp` |
 | 远端 | 模型文件 | `/root/models` |
 | 远端 | 推理状态与日志 | `/root/.fastagentfactory` |
 
@@ -146,8 +147,8 @@ SSH_KEY=
 | `LOCAL_LLAMA_OFFICIAL_DIR` | 仓库内官方 Baseline 源码 | `vendor/llama.cpp-official` |
 | `LOCAL_LLAMA_AMD_DIR` | 仓库内 AMD 优化源码 | `vendor/llama.cpp-amd` |
 | `REMOTE_STABLE_DIFFUSION_CPP_DIR` | 远端 stable-diffusion.cpp 源码与构建 | `/root/stable-diffusion.cpp` |
-| `LOCAL_STABLE_DIFFUSION_CPP_DIR` | 仓库内 stable-diffusion.cpp 源码 | `vendor/stable-diffusion.cpp` |
-| `STABLE_DIFFUSION_CPP_REVISION` | 仓库内图片推理源码的上游基线 revision | 固定 Commit SHA |
+| `STABLE_DIFFUSION_CPP_REPOSITORY` | 远端获取图片推理源码的 Git 仓库 | stable-diffusion.cpp 官方仓库 |
+| `STABLE_DIFFUSION_CPP_REVISION` | 远端图片推理源码 revision | 固定 Commit SHA |
 | `LLAMA_OFFICIAL_REVISION` | 官方 Baseline 来源 revision | 固定 Commit SHA |
 | `LLAMA_OFFICIAL_BUILD_NUMBER` | 官方 Baseline 的上游构建序号 | 与固定 revision 对应的提交计数 |
 | `LLAMA_AMD_BASE_REVISION` | AMD 版本基于的官方 revision | 与 Baseline 对齐 |
@@ -195,19 +196,19 @@ SSH_KEY=
 
 1. 检查本机 Git、Python、uv、Node、npm、Docker、SSH 与 rsync。
 2. 验证 SSH Key 登录和端口配置。
-3. 验证仓库自带的 `vendor/llama.cpp-official`、`vendor/llama.cpp-amd` 与 `vendor/stable-diffusion.cpp`；原生推理服务源码不在线拉取。
+3. 验证仓库自带的 `vendor/llama.cpp-official` 与 `vendor/llama.cpp-amd`；图片推理源码不进入仓库。
 4. 上传远端控制脚本并探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP。
 5. 仅在缺失时安装普通编译工具、ROCm 用户态组件和配置指定的 PyTorch HIP 包。
 6. 同步 FastAgentFactory 当前工作树到远端项目目录。
-7. 同步官方与 AMD 两套 llama.cpp 源码，使用独立目录构建两个 ROCm llama-server，并构建 HIPBLAS sd-server。
+7. 同步官方与 AMD 两套 llama.cpp 源码并使用独立目录构建两个 ROCm llama-server；远端检出固定 stable-diffusion.cpp revision、递归初始化完整子模块并构建 HIPBLAS sd-server。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj。
 9. 校验模型文件大小和 SHA256；损坏的完整文件不会被复用。
 10. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 11. 下载并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
 12. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 与本机 external Profile。
-12. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
-13. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动远端推理节点并等待 Chat 与 Embedding 都进入 `ready`。
-14. 生成本机 `.env`；默认建立 SSH 隧道并启动本机前后端，传入 `--no-web` 时跳过此步骤。
+13. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
+14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动远端推理节点并等待 Chat 与 Embedding 都进入 `ready`。
+15. 生成本机 `.env`；默认建立 SSH 隧道并启动本机前后端，传入 `--no-web` 时跳过此步骤。
 
 首次下载和编译时间取决于网络、磁盘和 Radeon GPU 主机 CPU。终端会直接显示 curl 与 ModelScope 下载进度。
 
@@ -227,7 +228,7 @@ FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演�
 - 部分 GGUF 使用 HTTP Range 继续下载；
 - ModelScope 复用自身缓存；
 - llama.cpp 使用 Ninja 增量构建；
-- stable-diffusion.cpp 使用 Ninja 增量构建；
+- stable-diffusion.cpp 固定 revision 的 Git 工作树和递归子模块会幂等复用，并使用 Ninja 增量构建；
 - Profile 按固定 ID 更新，不重复创建随机记录；
 - 本机 `.env` 保留已有 `AGENTFACTORY_RESOURCE_MASTER_KEY`。
 
@@ -339,7 +340,7 @@ git pull --ff-only origin AMD-Hackson
 ./deploy.sh up
 ```
 
-远端同步以本机工作树为代码源，只传输 inference node、model pool 及其必要公共模块，并使用 `rsync --delete-excluded` 清除 bundle 中不属于该边界的旧文件。Factory 前后端、制造系统、会话与知识库代码不会上传；远端模型、状态、venv 和 llama.cpp build 位于 bundle 之外，不在删除范围内。
+远端同步以本机工作树为代码源，只传输 inference node、model pool 及其必要公共模块，并使用 `rsync --delete-excluded` 清除 bundle 中不属于该边界的旧文件。Factory 前后端、制造系统、会话与知识库代码不会上传；远端模型、状态、venv、llama.cpp build 和 stable-diffusion.cpp Git 工作树位于 bundle 之外，不在删除范围内。
 
 ## 9. llama.cpp 算子开发与部署
 
