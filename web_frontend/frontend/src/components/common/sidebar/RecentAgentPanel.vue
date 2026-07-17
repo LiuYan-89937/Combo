@@ -34,9 +34,11 @@
         type="button"
         @click="openRecentAgentSession(session)"
       >
-        <span class="recent-agent-item-name">{{ agentSessionPackageLabel(session) }}</span>
-        <span v-if="collaborationSessionLabel(session)" class="recent-agent-session-tag">
-          {{ collaborationSessionLabel(session) }}
+        <span class="recent-agent-item-heading">
+          <span class="recent-agent-item-name">{{ agentSessionPackageLabel(session) }}</span>
+          <span v-if="collaborationSessionLabel(session)" class="recent-agent-session-tag">
+            {{ collaborationSessionLabel(session) }}
+          </span>
         </span>
         <span class="recent-agent-item-title">{{ agentSessionTitle(session) }}</span>
         <span class="recent-agent-item-time">{{ formatRecentTime(session.updated_at || session.created_at) }}</span>
@@ -247,7 +249,8 @@ watch(
 
 .recent-agent-item {
   width: 100%;
-  min-height: 58px;
+  min-height: 64px;
+  flex: 0 0 auto;
   border-radius: var(--app-radius-md);
   padding: 7px 9px;
   display: grid;
@@ -261,23 +264,37 @@ watch(
   border-color: var(--app-border-hover);
 }
 
+.recent-agent-item-heading,
 .recent-agent-item-name,
 .recent-agent-item-title,
 .recent-agent-item-time {
   min-width: 0;
+}
+
+.recent-agent-item-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recent-agent-item-name,
+.recent-agent-item-title,
+.recent-agent-item-time {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .recent-agent-item-name {
+  flex: 1 1 auto;
   font-size: 12px;
   font-weight: 600;
 }
 
 .recent-agent-session-tag {
+  flex: 0 0 auto;
   width: fit-content;
-  max-width: 100%;
+  max-width: 45%;
   padding: 1px 6px;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-pill);
@@ -285,6 +302,9 @@ watch(
   color: var(--app-text-muted);
   font-size: 10px;
   line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .recent-agent-item-title {

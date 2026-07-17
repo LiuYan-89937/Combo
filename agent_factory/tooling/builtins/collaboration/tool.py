@@ -105,6 +105,34 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "session": _session_state_view(session),
             "task": _task_state_view(task),
         }
+    if action == "resolve_task_approval":
+        task_id = _required_text(arguments, "task_id")
+        decision = _required_text(arguments, "decision")
+        decision_reason = _required_text(arguments, "decision_reason")
+        revision_guidance = str(arguments.get("revision_guidance") or "").strip()
+        session = store.queue_task_approval_decision(
+            collaboration_id,
+            task_id,
+            {
+                "action": decision,
+                "decision_reason": decision_reason,
+                "revision_guidance": revision_guidance,
+            },
+        )
+        task = _task_by_id(session, task_id)
+        return {
+            "action": action,
+            "status": "completed",
+            "message": "主 Agent 工具审批决定已记录；宿主将恢复原 worker。",
+            "session": _session_state_view(session),
+            "task": _task_state_view(task),
+            "approval": {
+                "decision": decision,
+                "decision_reason": decision_reason,
+                "revision_guidance": revision_guidance,
+                "status": "pending",
+            },
+        }
     if action == "read_shared":
         path = _safe_shared_path(store.session_workdir(collaboration_id), _required_text(arguments, "path"))
         if not path.is_file():
@@ -174,6 +202,12 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     action = str(arguments.get("action") or "").strip()
     if action in {"inspect", "read_shared", "read_task_artifacts"}:
         return ToolRiskResult(action="allow", risk_level="low", reasons=["collaboration read action"]).model_dump(mode="json")
+    if action == "resolve_task_approval":
+        return ToolRiskResult(
+            action="allow",
+            risk_level="low",
+            reasons=["main Agent collaboration approval decision"],
+        ).model_dump(mode="json")
     if action in {"create_task", "update_task", "retry_task", "cancel_task", "write_shared", "complete_session"}:
         return ToolRiskResult(
             action="inherit",
@@ -204,7 +238,11 @@ def _inspect_gate(session: dict[str, Any]) -> dict[str, Any] | None:
         return {
             "action": "inspect",
             "status": "deferred",
-            "message": "当前只有运行中任务，尚无 submitted/blocked 状态；请等待协作状态变化后再继续验收或调度。",
+            "message": f"当前仍有 {len(active)} 个子任务在运行，协作状态变化后宿主会自动恢复主 Agent。",
+            "response_guidance": (
+                "根据 active_tasks 向用户自然、简短地说明当前进展和下一步，不要逐字复述工具消息，"
+                "不要再次调用 inspect；本轮回复后进入等待。"
+            ),
             "active_tasks": active,
             "updated_at": session.get("updated_at"),
         }
@@ -326,6 +364,25 @@ def _task_state_view(task: dict[str, Any]) -> dict[str, Any]:
         for key in ("runtime_status", "delivery_validation")
         if key in payload
     }
+    pending_approval = _pending_approval_view(payload)
+    if pending_approval:
+        result_state["pending_approval"] = pending_approval
+    approval_decision = payload.get("approval_decision")
+    if isinstance(approval_decision, dict):
+        result_state["approval_decision"] = {
+            key: approval_decision[key]
+            for key in (
+                "action",
+                "decision_reason",
+                "revision_guidance",
+                "decided_by",
+                "status",
+                "error",
+                "created_at",
+                "updated_at",
+            )
+            if key in approval_decision
+        }
     return {
         "task_id": task.get("task_id"),
         "parent_task_id": task.get("parent_task_id"),
@@ -341,6 +398,37 @@ def _task_state_view(task: dict[str, Any]) -> dict[str, Any]:
         "review_notes": task.get("review_notes") or "",
         "created_at": task.get("created_at"),
         "updated_at": task.get("updated_at"),
+    }
+
+
+def _pending_approval_view(payload: dict[str, Any]) -> dict[str, Any]:
+    pending = payload.get("pending_interrupt") if isinstance(payload.get("pending_interrupt"), dict) else {}
+    resume = pending.get("resume_payload") if isinstance(pending.get("resume_payload"), dict) else {}
+    if str(resume.get("type") or "") != "tool_approval":
+        return {}
+    requests = resume.get("requests") if isinstance(resume.get("requests"), list) else []
+    return {
+        "event_id": pending.get("event_id"),
+        "request_id": pending.get("request_id"),
+        "requests": [
+            {
+                key: request[key]
+                for key in (
+                    "tool_call_id",
+                    "tool_name",
+                    "tool_id",
+                    "name",
+                    "args",
+                    "arguments",
+                    "risk_level",
+                    "risk_reasons",
+                    "risk_facts",
+                )
+                if key in request
+            }
+            for request in requests
+            if isinstance(request, dict)
+        ],
     }
 
 
