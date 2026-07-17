@@ -31,7 +31,7 @@ def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     router = APIRouter(prefix="/api/memory")
 
     @router.get("/query")
-    async def query_memory(
+    def query_memory(
         query: str = Query(default=""),
         package_id: str | None = None,
         limit: int = Query(default=8, ge=1, le=32),
@@ -47,7 +47,7 @@ def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return _pack_response(pack, package_id=resolved_package_id)
 
     @router.delete("/items")
-    async def delete_memory_item(payload: MemoryDeleteRequest):
+    def delete_memory_item(payload: MemoryDeleteRequest):
         resolved_package_id = _memory_package_id(payload.package_id)
         runtime = _memory_runtime_for_scope(runtime_bridge, package_id=resolved_package_id)
         store = runtime.store

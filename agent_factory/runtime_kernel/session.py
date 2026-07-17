@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 from uuid import uuid4
 
@@ -104,7 +105,7 @@ class AgentSessionManager:
             updated_at=now,
             first_user_input=(first_user_input or "").strip() or None,
             display_title=_display_title(first_user_input),
-            runtime_refs=_runtime_refs(self.config.root),
+            runtime_refs=_runtime_refs(self.config.root, session_id=resolved_session_id),
         )
         self.save(record)
         return record
@@ -177,6 +178,7 @@ class AgentSessionManager:
     def delete(self, session_id: str) -> AgentSessionDeletionResult:
         record = self.load(session_id)
         deleted_trace_count = _delete_record_traces(record)
+        _delete_record_tool_outputs(record)
         self._path(record.session_id).unlink(missing_ok=True)
         return AgentSessionDeletionResult(record=record, deleted_trace_count=deleted_trace_count)
 
@@ -185,6 +187,7 @@ class AgentSessionManager:
         if record is None:
             return None
         deleted_trace_count = _delete_record_traces(record)
+        _delete_record_tool_outputs(record)
         self._path(record.session_id).unlink(missing_ok=True)
         return AgentSessionDeletionResult(record=record, deleted_trace_count=deleted_trace_count)
 
@@ -208,7 +211,7 @@ class AgentSessionManager:
         if not record.display_title:
             record.display_title = _display_title(record.first_user_input)
         if not record.runtime_refs:
-            record.runtime_refs = _runtime_refs(self.config.root)
+            record.runtime_refs = _runtime_refs(self.config.root, session_id=record.session_id)
         turn_input = (user_input or first_user_input or "").strip() or None
         normalized_request_id = (request_id or "").strip() or None
         turn = _find_turn(record.turns, request_id=normalized_request_id) if normalized_request_id else None
@@ -357,14 +360,14 @@ def _normalized_record(record: AgentSessionRecord) -> AgentSessionRecord:
     return record
 
 
-def _runtime_refs(session_root: Path) -> dict[str, str]:
+def _runtime_refs(session_root: Path, *, session_id: str) -> dict[str, str]:
     root = session_root.expanduser().resolve()
     runtime_root = root.parent if root.name == "sessions" else root
     return {
         "runtime_root": str(runtime_root),
         "sessions": str(root),
         "checkpoints": str(runtime_root / "checkpoints"),
-        "tool_outputs": str(runtime_root / "tool_outputs" / "records"),
+        "tool_outputs": str(runtime_root / "tool_outputs" / "sessions" / session_id / "records"),
         "state": str(runtime_root / "state"),
         "memory": str(runtime_root / "memory"),
         "trace": str(runtime_root / "trace"),
@@ -394,6 +397,16 @@ def _delete_record_traces(record: AgentSessionRecord) -> int:
             JSONLTraceStore(trace_root).delete_trace(trace_id)
             deleted += 1
     return deleted
+
+
+def _delete_record_tool_outputs(record: AgentSessionRecord) -> None:
+    records_path = str(record.runtime_refs.get("tool_outputs") or "").strip()
+    if not records_path:
+        return
+    records_dir = Path(records_path).expanduser().resolve()
+    if records_dir.name != "records" or records_dir.parent.name != record.session_id:
+        return
+    shutil.rmtree(records_dir.parent, ignore_errors=True)
 
 
 def _trace_root(payload: dict[str, Any] | None) -> Path | None:

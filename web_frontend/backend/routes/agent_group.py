@@ -11,6 +11,7 @@ Agent 群聊系统 - HTTP API 路由
 - GET /api/agent-group/agents - 可用 Agent 列表
 """
 
+import asyncio
 from typing import Any
 from uuid import uuid4
 
@@ -30,7 +31,7 @@ def create_agent_group_router(
     # ===== 群聊会话管理 =====
 
     @router.get("/groups")
-    async def list_groups() -> dict[str, Any]:
+    def list_groups() -> dict[str, Any]:
         """列出所有群聊"""
         try:
             groups = service.list_groups()
@@ -39,7 +40,7 @@ def create_agent_group_router(
             raise _http_error(e)
 
     @router.post("/groups")
-    async def create_group(payload: dict[str, Any]) -> dict[str, Any]:
+    def create_group(payload: dict[str, Any]) -> dict[str, Any]:
         """创建新群聊"""
         try:
             title = payload.get("title", "").strip()
@@ -55,7 +56,7 @@ def create_agent_group_router(
             raise _http_error(e)
 
     @router.get("/groups/{group_id}")
-    async def get_group(group_id: str) -> dict[str, Any]:
+    def get_group(group_id: str) -> dict[str, Any]:
         """获取群聊详情"""
         try:
             group = service.get_group(group_id)
@@ -64,7 +65,7 @@ def create_agent_group_router(
             raise _http_error(e)
 
     @router.patch("/groups/{group_id}")
-    async def update_group(group_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_group(group_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """更新群聊"""
         try:
             group = service.update_group(group_id, payload)
@@ -73,7 +74,7 @@ def create_agent_group_router(
             raise _http_error(e)
 
     @router.delete("/groups/{group_id}")
-    async def delete_group(group_id: str) -> dict[str, Any]:
+    def delete_group(group_id: str) -> dict[str, Any]:
         """删除群聊"""
         try:
             result = service.delete_group(group_id)
@@ -84,7 +85,7 @@ def create_agent_group_router(
     # ===== 成员管理 =====
 
     @router.post("/groups/{group_id}/members")
-    async def add_member(group_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def add_member(group_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """添加成员"""
         try:
             package_id = payload.get("package_id", "").strip()
@@ -98,7 +99,7 @@ def create_agent_group_router(
             raise _http_error(e)
 
     @router.delete("/groups/{group_id}/members/{package_id}")
-    async def remove_member(group_id: str, package_id: str) -> dict[str, Any]:
+    def remove_member(group_id: str, package_id: str) -> dict[str, Any]:
         """移除成员"""
         try:
             result = service.remove_member(group_id, package_id)
@@ -122,7 +123,8 @@ def create_agent_group_router(
                 raise HTTPException(status_code=400, detail="content is required")
             if not client_message_id:
                 raise HTTPException(status_code=400, detail="client_message_id is required")
-            group = service.send_user_message(
+            await asyncio.to_thread(
+                service.send_user_message,
                 group_id,
                 content,
                 client_message_id,
@@ -131,11 +133,11 @@ def create_agent_group_router(
                 context_references=context_references,
             )
             runtime = _agent_package_runtime(runtime_bridge)
-            commands = service.prepare_queued_run_commands(group_id, runtime)
+            commands = await asyncio.to_thread(service.prepare_queued_run_commands, group_id, runtime)
             for command in commands:
                 await runtime_bridge.send_frontend_command(command)
 
-            return {"group": service.get_group(group_id)}
+            return {"group": await asyncio.to_thread(service.get_group, group_id)}
         except Exception as e:
             raise _http_error(e)
 
@@ -145,7 +147,7 @@ def create_agent_group_router(
     async def cancel_run(group_id: str, run_id: str) -> dict[str, Any]:
         """Request cancellation; terminal runtime events remain the state transition source."""
         try:
-            run = service.get_run(run_id)
+            run = await asyncio.to_thread(service.get_run, run_id)
             if run is None or str(run.get("group_id") or "") != group_id:
                 raise HTTPException(status_code=404, detail="group run not found")
             request_id = str(run.get("request_id") or "").strip()
@@ -158,8 +160,8 @@ def create_agent_group_router(
                     )
                 )
             else:
-                service.cancel_run(run_id)
-            group = service.get_group(group_id)
+                await asyncio.to_thread(service.cancel_run, run_id)
+            group = await asyncio.to_thread(service.get_group, group_id)
             return {"group": group}
         except Exception as e:
             raise _http_error(e)
@@ -167,13 +169,13 @@ def create_agent_group_router(
     @router.post("/groups/{group_id}/runs/{run_id}/resume")
     async def resume_run(group_id: str, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            run = service.get_run(run_id)
+            run = await asyncio.to_thread(service.get_run, run_id)
             if run is None or str(run.get("group_id") or "") != group_id:
                 raise HTTPException(status_code=404, detail="group run not found")
             if str(run.get("status") or "") != "awaiting_approval":
                 raise HTTPException(status_code=409, detail="group run is not awaiting approval")
             request_id = uuid4().hex
-            service.update_run(run_id, {"request_id": request_id})
+            await asyncio.to_thread(service.update_run, run_id, {"request_id": request_id})
             await runtime_bridge.send_frontend_command(
                 FactoryFrontendCommand(
                     type="resume_interrupt",
@@ -182,28 +184,29 @@ def create_agent_group_router(
                     payload={**payload, "group_run_id": run_id, "mode": "agent_group"},
                 )
             )
-            return {"group": service.get_group(group_id)}
+            return {"group": await asyncio.to_thread(service.get_group, group_id)}
         except Exception as e:
             raise _http_error(e)
 
     @router.post("/groups/{group_id}/runs/{run_id}/retry")
     async def retry_run(group_id: str, run_id: str) -> dict[str, Any]:
         try:
-            run = service.get_run(run_id)
+            run = await asyncio.to_thread(service.get_run, run_id)
             if run is None or str(run.get("group_id") or "") != group_id:
                 raise HTTPException(status_code=404, detail="group run not found")
-            service.retry_run(run_id)
+            await asyncio.to_thread(service.retry_run, run_id)
             runtime = _agent_package_runtime(runtime_bridge)
-            for command in service.prepare_queued_run_commands(group_id, runtime):
+            commands = await asyncio.to_thread(service.prepare_queued_run_commands, group_id, runtime)
+            for command in commands:
                 await runtime_bridge.send_frontend_command(command)
-            return {"group": service.get_group(group_id)}
+            return {"group": await asyncio.to_thread(service.get_group, group_id)}
         except Exception as e:
             raise _http_error(e)
 
     # ===== Agent 列表 =====
 
     @router.get("/agents")
-    async def list_agents() -> dict[str, Any]:
+    def list_agents() -> dict[str, Any]:
         """List the same published packages exposed by the normal Agent surface."""
         try:
             runtime = _agent_package_runtime(runtime_bridge)

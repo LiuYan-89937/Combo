@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Any
 
 from agent_factory.collaboration_system.store import CollaborationStore
@@ -14,6 +15,7 @@ class CollaborationWorkerEventRecorder:
     collaboration_id: str
     task_id: str
     package_id: str
+    on_change: Callable[[], None] | None = None
     max_output_chars: int = 900
     _seen_progress_keys: set[str] = field(default_factory=set)
 
@@ -35,6 +37,8 @@ class CollaborationWorkerEventRecorder:
             task_id=self.task_id,
             event_ref=item.event_id,
         )
+        if self.on_change is not None:
+            self.on_change()
 
 
 def _message_for_event(item: FactoryFrontendEvent, *, max_output_chars: int) -> str | None:

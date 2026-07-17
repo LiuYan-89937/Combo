@@ -32,6 +32,8 @@ class DependencyPoolResolution:
     python_entries: list[dict[str, str]]
     system_entries: list[dict[str, str]]
     npm_profile: dict[str, str] | None
+    profile_key: str = ""
+    cache_status: str = "resolved"
 
     def to_lock_payload(self) -> dict[str, Any]:
         return {
@@ -64,19 +66,28 @@ class DependencyPool:
             normalized_python_requirements = normalize_python_requirements(python_requirements)
         except PythonRequirementError as exc:
             raise DependencyPoolError("unsupported", str(exc)) from exc
-        profile_key = _fingerprint(
-            {
-                "base_image": base_image,
-                "architecture": architecture,
-                "python_requirements": normalized_python_requirements,
-                "system_packages": _normalized_values(system_packages),
-                "npm_requirements": _normalized_values(npm_requirements),
-            }
-        )
+        profile_request = {
+            "runtime_compatibility": self._runtime_compatibility(
+                docker=docker,
+                base_image=base_image,
+                architecture=architecture,
+                timeout_seconds=timeout_seconds,
+            ),
+            "python_requirements": normalized_python_requirements,
+            "system_packages": _normalized_values(system_packages),
+            "npm_requirements": _normalized_values(npm_requirements),
+        }
+        profile_key = _fingerprint(profile_request)
         with self._profile_lock(profile_key):
             existing = self._read_profile(profile_key)
             if existing is not None and self.references_available(existing.to_lock_payload()):
-                return existing
+                return DependencyPoolResolution(
+                    python_entries=existing.python_entries,
+                    system_entries=existing.system_entries,
+                    npm_profile=existing.npm_profile,
+                    profile_key=profile_key,
+                    cache_status="profile_hit",
+                )
             python_entries = self._resolve_python(
                 docker=docker,
                 base_image=base_image,
@@ -99,10 +110,72 @@ class DependencyPool:
                 python_entries=python_entries,
                 system_entries=system_entries,
                 npm_profile=npm_profile,
+                profile_key=profile_key,
+                cache_status="resolved",
             )
             with self._exclusive_lock():
-                self._write_profile(profile_key, resolution)
+                self._write_profile(profile_key, resolution, request=profile_request)
             return resolution
+
+    def _runtime_compatibility(
+        self,
+        *,
+        docker: str,
+        base_image: str,
+        architecture: str,
+        timeout_seconds: int | None,
+    ) -> dict[str, str]:
+        cache_key = _fingerprint({"image": base_image, "architecture": architecture})
+        cache_path = self.root / "runtime_compatibility" / f"{cache_key}.json"
+        if cache_path.is_file():
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                cached = None
+            if isinstance(cached, dict) and all(isinstance(key, str) and isinstance(value, str) for key, value in cached.items()):
+                return cached
+        probe = (
+            "import json, pathlib, platform, sys, sysconfig; "
+            "os_release = {}; "
+            "path = pathlib.Path('/etc/os-release'); "
+            "lines = path.read_text(encoding='utf-8').splitlines() if path.is_file() else []; "
+            "os_release.update(line.split('=', 1) for line in lines if '=' in line); "
+            "print(json.dumps({"
+            "'architecture': platform.machine().lower(), "
+            "'implementation': platform.python_implementation().lower(), "
+            "'python_version': platform.python_version(), "
+            "'python_cache_tag': str(sys.implementation.cache_tag or ''), "
+            "'python_platform': sysconfig.get_platform(), "
+            "'libc': ':'.join(platform.libc_ver()), "
+            "'os_id': os_release.get('ID', '').strip('\\\"'), "
+            "'os_version_id': os_release.get('VERSION_ID', '').strip('\\\"')"
+            "}, sort_keys=True))"
+        )
+        try:
+            completed = subprocess.run(
+                [docker, "run", "--rm", base_image, "python", "-c", probe],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise DependencyPoolError("build_failed", "runtime compatibility probe timed out") from exc
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "runtime compatibility probe failed").strip()
+            raise DependencyPoolError("build_failed", detail[-4000:])
+        try:
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise DependencyPoolError("build_failed", "runtime compatibility probe returned invalid JSON") from exc
+        if not isinstance(value, dict) or not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+            raise DependencyPoolError("build_failed", "runtime compatibility probe returned an invalid payload")
+        value["architecture"] = architecture or value.get("architecture", "")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = cache_path.with_name(f".{cache_path.name}.{uuid4().hex}.tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(cache_path)
+        return value
 
     def references_available(self, payload: object) -> bool:
         if not isinstance(payload, dict) or payload.get("version") != DEPENDENCY_POOL_VERSION:
@@ -499,11 +572,18 @@ class DependencyPool:
             npm_profile=dict(npm_profile) if isinstance(npm_profile, dict) else None,
         )
 
-    def _write_profile(self, key: str, resolution: DependencyPoolResolution) -> None:
+    def _write_profile(
+        self,
+        key: str,
+        resolution: DependencyPoolResolution,
+        *,
+        request: dict[str, Any],
+    ) -> None:
         path = self.root / "profiles" / f"{key}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(resolution.to_lock_payload(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        payload = {**resolution.to_lock_payload(), "request": request}
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(path)
 
     @contextmanager

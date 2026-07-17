@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from datetime import UTC, datetime
 import logging
+import os
 import threading
 import uuid
 from typing import Any, Callable
@@ -17,6 +18,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
 from agent_factory.model_pool.usage import record_model_usage_frontend_event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter import FactoryRuntimeAdapter
 from web_frontend.backend.runtime_event_journal import RuntimeEventJournal
+from web_frontend.backend.runtime_event_pipeline import RuntimeEventPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,9 @@ TERMINAL_REQUEST_EVENTS = {
     "error",
 }
 
+RUNTIME_EVENT_PIPELINE_CAPACITY_ENV = "AGENTFACTORY_RUNTIME_EVENT_PIPELINE_CAPACITY"
+DEFAULT_RUNTIME_EVENT_PIPELINE_CAPACITY = 2048
+
 
 class RuntimeBridge:
     """Owns the in-process factory runtime and SSE event fan-out."""
@@ -77,6 +82,12 @@ class RuntimeBridge:
         self._active_requests: dict[str, dict[str, Any]] = {}
         self._background_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._event_pipeline = RuntimeEventPipeline(
+            prepare=self._prepare_runtime_event,
+            deliver=self._schedule_runtime_event_delivery,
+            report_failure=self._report_event_pipeline_failure,
+            capacity=_runtime_event_pipeline_capacity(),
+        )
 
     @property
     def active(self) -> bool:
@@ -88,6 +99,7 @@ class RuntimeBridge:
             return
 
         self._loop = asyncio.get_running_loop()
+        self._event_pipeline.start()
         self.adapter = await asyncio.to_thread(FactoryRuntimeAdapter, emit=self._emit_from_runtime)
         self._emit_from_runtime(self._runtime_ready_event())
         logger.info("Runtime service started")
@@ -95,6 +107,8 @@ class RuntimeBridge:
     async def stop(self) -> None:
         adapter = self.adapter
         if adapter is None:
+            await asyncio.to_thread(self._event_pipeline.stop, drain=True)
+            self._loop = None
             logger.info("Runtime service already stopped")
             return
 
@@ -104,6 +118,7 @@ class RuntimeBridge:
         )
         await asyncio.to_thread(adapter.handle, shutdown_cmd)
         self.adapter = None
+        await asyncio.to_thread(self._event_pipeline.stop, drain=True)
         self._loop = None
         with self._background_lock:
             self._background_threads.clear()
@@ -297,13 +312,9 @@ class RuntimeBridge:
             return
 
         self._observe_runtime_event(event_payload)
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            self.event_history.append(event_payload)
-            return
-        loop.call_soon_threadsafe(self._record_and_broadcast, event_payload)
+        self._event_pipeline.submit(event_payload)
 
-    def _record_and_broadcast(self, event_payload: dict[str, Any]) -> None:
+    def _prepare_runtime_event(self, event_payload: dict[str, Any]) -> dict[str, Any]:
         try:
             event_payload = self.event_journal.prepare_for_delivery(event_payload)
         except Exception:
@@ -312,12 +323,22 @@ class RuntimeBridge:
             record_model_usage_frontend_event(event_payload)
         except Exception:
             logger.exception("Failed to record model usage event")
-        self.event_history.append(event_payload)
         for observer in tuple(self.event_observers):
             try:
                 observer(event_payload)
             except Exception:
                 logger.exception("Runtime event observer failed")
+        return event_payload
+
+    def _schedule_runtime_event_delivery(self, event_payload: dict[str, Any]) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            self.event_history.append(event_payload)
+            return
+        loop.call_soon_threadsafe(self._record_and_broadcast, event_payload)
+
+    def _record_and_broadcast(self, event_payload: dict[str, Any]) -> None:
+        self.event_history.append(event_payload)
         stale_subscribers: list[asyncio.Queue[dict[str, Any]]] = []
         for queue in list(self.subscribers):
             try:
@@ -326,6 +347,25 @@ class RuntimeBridge:
                 stale_subscribers.append(queue)
         for queue in stale_subscribers:
             self.unsubscribe(queue)
+
+    def schedule_coroutine(self, coroutine: Any) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            close = getattr(coroutine, "close", None)
+            if callable(close):
+                close()
+            return
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        future.add_done_callback(_log_scheduled_coroutine_failure)
+
+    def _report_event_pipeline_failure(self, stage: str, exc: BaseException) -> None:
+        logger.error(
+            "Runtime event pipeline %s failed: %s: %s",
+            stage,
+            type(exc).__name__,
+            exc,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
 
     def _runtime_ready_event(
         self,
@@ -349,6 +389,7 @@ class RuntimeBridge:
                     "gap": replay_gap,
                     "after_event_id": replay_after_event_id,
                 },
+                "event_pipeline": self._event_pipeline.stats().payload(),
             },
         )
 
@@ -387,6 +428,26 @@ def _is_long_running_command(command: FactoryFrontendCommand) -> bool:
         return False
     action = str(command.payload.get("action") or "").strip()
     return action in long_running_actions
+
+
+def _runtime_event_pipeline_capacity() -> int:
+    raw = str(os.getenv(RUNTIME_EVENT_PIPELINE_CAPACITY_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_RUNTIME_EVENT_PIPELINE_CAPACITY
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{RUNTIME_EVENT_PIPELINE_CAPACITY_ENV} must be an integer") from exc
+    if value <= 0:
+        raise ValueError(f"{RUNTIME_EVENT_PIPELINE_CAPACITY_ENV} must be greater than zero")
+    return value
+
+
+def _log_scheduled_coroutine_failure(future: Any) -> None:
+    try:
+        future.result()
+    except BaseException:
+        logger.exception("Runtime event observer coroutine failed")
 
 
 def _active_request_from_command(command: FactoryFrontendCommand, request_id: str) -> dict[str, Any]:

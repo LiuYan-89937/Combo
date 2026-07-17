@@ -41,7 +41,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         return {"event": event}
 
     @router.get("/recent-sessions")
-    async def list_recent_agent_package_sessions(limit: int = Query(default=5, ge=1, le=20)):
+    def list_recent_agent_package_sessions(limit: int = Query(default=5, ge=1, le=20)):
         runtime = AgentPackageRuntimeManager()
         sessions: list[dict[str, Any]] = []
         for package in runtime.list_packages():
@@ -95,7 +95,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         return {"event": event}
 
     @router.get("/{package_id}/export")
-    async def export_agent_package(package_id: str):
+    def export_agent_package(package_id: str):
         try:
             archive_path = AgentPackageRuntimeManager().export_package_archive(package_id)
         except FileNotFoundError as exc:
@@ -113,7 +113,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         )
 
     @router.patch("/{package_id}/context-config")
-    async def update_agent_package_context_config(package_id: str, payload: dict[str, Any]):
+    def update_agent_package_context_config(package_id: str, payload: dict[str, Any]):
         try:
             summary = AgentPackageRuntimeManager().update_context_config(
                 package_id,
@@ -126,7 +126,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         return {"package": summary}
 
     @router.patch("/{package_id}/tool-descriptions/{tool_kind}/{tool_id}")
-    async def update_agent_package_tool_description(
+    def update_agent_package_tool_description(
         package_id: str,
         tool_kind: str,
         tool_id: str,
@@ -150,7 +150,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
         return {"package": summary}
 
     @router.get("/{package_id}/resources")
-    async def get_agent_package_resources(package_id: str):
+    def get_agent_package_resources(package_id: str):
         try:
             return AgentPackageRuntimeManager().resource_status(package_id, include_values=True)
         except FileNotFoundError as exc:
@@ -159,7 +159,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.put("/{package_id}/resources/{resource_id}")
-    async def put_agent_package_resource(package_id: str, resource_id: str, payload: dict[str, Any]):
+    def put_agent_package_resource(package_id: str, resource_id: str, payload: dict[str, Any]):
         if "value" not in payload:
             raise HTTPException(status_code=400, detail="resource value is required")
         try:
@@ -172,7 +172,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.delete("/{package_id}/resources/{resource_id}")
-    async def delete_agent_package_resource(package_id: str, resource_id: str):
+    def delete_agent_package_resource(package_id: str, resource_id: str):
         try:
             return AgentPackageRuntimeManager().delete_resource(package_id, resource_id)
         except FileNotFoundError as exc:

@@ -14,6 +14,7 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                 "多 Agent 协作工具。仅在用户消息提供 collaboration_id 的协作会话中使用。"
                 "主 Agent 用它创建/更新/停止子任务、查看任务状态、读写协作共享工作区。"
                 "create_task/update_task 声明 depends_on 后，系统会自动把前置任务 artifact_refs 授权给子 Agent，不需要手抄 input_artifacts。"
+                "delivery_standard 由主 Agent 根据子 Agent 能力动态声明产物路径和语义验收标准；宿主只验证文件确由本轮产生且非空，内容是否达标由主 Agent 读取产物后决定。"
                 "share_files/ 是 worker 工作区中的只读上游材料目录，只接收系统复制的前置产物；不要要求 worker 把交付物写入 share_files/。"
                 "worker 交付物应写入当前工作区普通路径，宿主会自动收集为 artifact_refs。visible_context 只表示文本上下文，不授权文件读取。"
                 "inspect 是状态同步动作；只有运行中任务且没有 submitted/blocked/failed 时，inspect 会返回轻量 deferred，主 Agent 应等待状态变化而不是连续查看。"
@@ -65,56 +66,47 @@ def _collaboration_input_schema() -> dict:
     delivery_standard = {
         "type": "object",
         "description": (
-            "可执行的交付契约。至少提供 output_path 或非空 output_paths；路径必须是 worker 工作区内的安全相对路径，"
+            "可执行的交付契约。至少提供 output_path、非空 output_paths 或 artifacts；路径必须是 worker 工作区内的安全相对路径，"
             "且不得位于 share_files/。路径直接相对于工作区根目录，不得添加工作区名称、宿主路径或容器挂载路径前缀。"
-            "runtime 正常结束后，指定文件必须由本轮新建或修改。"
+            "runtime 正常结束后，指定文件必须由本轮新建或修改且非空。acceptance_criteria 由主 Agent 在读取实际产物后执行语义验收。"
         ),
         "properties": {
             "format": {"type": "string"},
             "output_path": {"type": "string", "minLength": 1},
             "output_paths": {
                 "type": "array",
-                "minItems": 1,
                 "items": {"type": "string", "minLength": 1},
             },
-            "required_fields": {
+            "artifacts": {
                 "type": "array",
                 "description": (
-                    "对真实交付文件执行的字段验收规则。文本报告使用 markdown_section，JSON 使用 json_pointer；"
-                    "需要数值、列表或表格数据时必须选择对应 value_type 并设置 minimum_items，不能只声明标题。"
+                    "产物声明。description 说明该文件应该交付什么；宿主只验证 path 对应文件由本轮产生且非空。"
                 ),
                 "items": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "minLength": 1},
                         "path": {"type": "string", "minLength": 1},
-                        "selector": {
+                        "kind": {
                             "type": "string",
-                            "enum": ["document", "markdown_section", "json_pointer"],
+                            "enum": ["markdown", "json", "text", "binary"],
                         },
-                        "selector_value": {"type": "string", "minLength": 1},
-                        "value_type": {
-                            "type": "string",
-                            "enum": ["text", "number", "list", "table", "object"],
-                        },
-                        "minimum_chars": {"type": "integer", "minimum": 1},
-                        "minimum_items": {"type": "integer", "minimum": 1},
-                        "contains_all": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 1},
-                        },
-                        "contains_any": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 1},
-                        },
+                        "description": {"type": "string", "minLength": 1},
                     },
-                    "required": ["name", "selector", "value_type"],
+                    "required": ["path", "description"],
                     "additionalProperties": False,
                 },
             },
-            "require_visible_result": {"type": "boolean"},
-            "minimum_visible_chars": {"type": "integer", "minimum": 1},
+            "acceptance_criteria": {
+                "type": "array",
+                "description": (
+                    "主 Agent 基于任务目标和子 Agent 能力制定的语义验收标准。worker 提交后，主 Agent 必须读取真实产物逐项判断；"
+                    "宿主不做关键词、章节或 JSON Schema 内容判定。"
+                ),
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1},
+            },
         },
+        "required": ["acceptance_criteria"],
         "additionalProperties": False,
     }
     artifact_array = {

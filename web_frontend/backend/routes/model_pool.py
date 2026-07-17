@@ -41,7 +41,7 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
     router = APIRouter(prefix="/api/model-pool")
 
     @router.get("/engines")
-    async def list_engines():
+    def list_engines():
         return {"engines": list_local_inference_engines()}
 
     @router.get("/runtime/rocm")
@@ -89,7 +89,7 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
         return {"runtimes": runtime_manager.states(), "rocm": rocm_payload}
 
     @router.get("/defaults")
-    async def default_profiles():
+    def default_profiles():
         return {"defaults": ModelPoolStore().default_profile_ids()}
 
     @router.get("/storage")
@@ -116,7 +116,7 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
         }
 
     @router.put("/defaults/{role}")
-    async def set_default_profile(role: str, payload: dict[str, Any]):
+    def set_default_profile(role: str, payload: dict[str, Any]):
         try:
             requested_profile_id = str(payload.get("profile_id") or "").strip()
             if requested_profile_id and not runtime_manager.is_ready(requested_profile_id):
@@ -131,11 +131,11 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
         return {"role": role, "profile_id": profile_id}
 
     @router.get("/artifacts")
-    async def list_artifacts():
+    def list_artifacts():
         return {"artifacts": [item.model_dump(mode="json") for item in ModelPoolStore().list_artifacts()]}
 
     @router.post("/artifacts")
-    async def upsert_artifact(payload: dict[str, Any]):
+    def upsert_artifact(payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
             artifact = store.upsert_artifact(_artifact_from_payload(payload, store=store))
@@ -144,7 +144,7 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
         return {"artifact": artifact.model_dump(mode="json")}
 
     @router.patch("/artifacts/{artifact_id}")
-    async def patch_artifact(artifact_id: str, payload: dict[str, Any]):
+    def patch_artifact(artifact_id: str, payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
             existing = store.require_artifact(artifact_id)
@@ -155,14 +155,14 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
         return {"artifact": artifact.model_dump(mode="json")}
 
     @router.delete("/artifacts/{artifact_id}")
-    async def delete_artifact(artifact_id: str):
+    def delete_artifact(artifact_id: str):
         try:
             return {"deleted": ModelPoolStore().delete_artifact(artifact_id)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.get("/profiles")
-    async def list_profiles(kind: str | None = None):
+    def list_profiles(kind: str | None = None):
         profile_kind = (kind or "").strip().lower() or None
         if profile_kind not in {None, "chat", "embedding", "image_generation"}:
             raise HTTPException(status_code=400, detail="unsupported local model profile kind")
@@ -271,14 +271,14 @@ def create_model_pool_router(runtime_manager: LocalInferenceRuntimeManager) -> A
             raise _http_error(exc) from exc
 
     @router.get("/usage")
-    async def usage_summary(group_by: str = "model", days: int = 14):
+    def usage_summary(group_by: str = "model", days: int = 14):
         value = group_by.strip().lower()
         if value not in {"model", "provider", "agent"}:
             raise HTTPException(status_code=400, detail="unsupported usage group_by")
         return ModelUsageStore().summary(group_by=value, days=days)
 
     @router.post("/select")
-    async def select_models(payload: dict[str, Any]):
+    def select_models(payload: dict[str, Any]):
         try:
             result = ModelPoolSelector().select(ModelSelectionRequest.model_validate(payload))
         except Exception as exc:

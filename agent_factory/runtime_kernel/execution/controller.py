@@ -14,6 +14,7 @@ from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_kernel.state.checkpoint_projection import runtime_checkpoint_payload
+from agent_factory.tooling.execution_context import tool_output_session_context
 
 
 LANGGRAPH_TECHNICAL_RECURSION_LIMIT = 1000
@@ -24,49 +25,51 @@ class ExecutionController:
         pass
 
     def run(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> RuntimeState:
-        self._emit(
-            compiled_app,
-            state,
-            "run_started",
-            message="Kernel run started.",
-            payload={
-                "agent_id": state.run.agent_id,
-                "pattern_id": state.run.pattern_id,
-                "pattern_version": state.run.pattern_version,
-            },
-        )
-        state, graph_messages = self._invoke_graph(compiled_app, state, thread_id=thread_id)
-        self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
-        self._emit_run_completed(compiled_app, state)
-        return state
+        with tool_output_session_context(state.run.session_id):
+            self._emit(
+                compiled_app,
+                state,
+                "run_started",
+                message="Kernel run started.",
+                payload={
+                    "agent_id": state.run.agent_id,
+                    "pattern_id": state.run.pattern_id,
+                    "pattern_version": state.run.pattern_version,
+                },
+            )
+            state, graph_messages = self._invoke_graph(compiled_app, state, thread_id=thread_id)
+            self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
+            self._emit_run_completed(compiled_app, state)
+            return state
 
     def stream(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> Iterator[tuple[str, Any]]:
-        self._emit(
-            compiled_app,
-            state,
-            "run_started",
-            message="Kernel run started.",
-            payload={
-                "agent_id": state.run.agent_id,
-                "pattern_id": state.run.pattern_id,
-                "pattern_version": state.run.pattern_version,
-            },
-        )
-        final_raw: dict[str, Any] = {"runtime": state.model_dump(mode="python")}
-        graph_messages: list[Any] = []
-        for stream_mode, chunk in self._stream_graph(compiled_app, state, thread_id=thread_id):
-            if stream_mode == "values" and isinstance(chunk, dict):
-                final_raw = chunk
-                graph_messages = list(chunk.get("messages") or [])
-            yield stream_mode, chunk
-        final_raw = _authoritative_raw(compiled_app, final_raw, thread_id=thread_id)
-        graph_messages = list(final_raw.get("messages") or graph_messages)
-        result = self._final_state_from_raw(final_raw, messages=graph_messages)
-        memory_event = self._enqueue_memory_write(compiled_app, result, thread_id=thread_id, messages=graph_messages)
-        if memory_event is not None:
-            yield "custom", memory_event
-        self._emit_run_completed(compiled_app, result)
-        yield "runtime_final", result
+        with tool_output_session_context(state.run.session_id):
+            self._emit(
+                compiled_app,
+                state,
+                "run_started",
+                message="Kernel run started.",
+                payload={
+                    "agent_id": state.run.agent_id,
+                    "pattern_id": state.run.pattern_id,
+                    "pattern_version": state.run.pattern_version,
+                },
+            )
+            final_raw: dict[str, Any] = {"runtime": state.model_dump(mode="python")}
+            graph_messages: list[Any] = []
+            for stream_mode, chunk in self._stream_graph(compiled_app, state, thread_id=thread_id):
+                if stream_mode == "values" and isinstance(chunk, dict):
+                    final_raw = chunk
+                    graph_messages = list(chunk.get("messages") or [])
+                yield stream_mode, chunk
+            final_raw = _authoritative_raw(compiled_app, final_raw, thread_id=thread_id)
+            graph_messages = list(final_raw.get("messages") or graph_messages)
+            result = self._final_state_from_raw(final_raw, messages=graph_messages)
+            memory_event = self._enqueue_memory_write(compiled_app, result, thread_id=thread_id, messages=graph_messages)
+            if memory_event is not None:
+                yield "custom", memory_event
+            self._emit_run_completed(compiled_app, result)
+            yield "runtime_final", result
 
     def stream_resume(
         self,
@@ -76,29 +79,30 @@ class ExecutionController:
         thread_id: str,
         resume_payload: dict[str, Any] | None = None,
     ) -> Iterator[tuple[str, Any]]:
-        state = _prepare_resume_state(state, resume_payload=resume_payload)
-        self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
-        final_raw: dict[str, Any] = {"runtime": state.model_dump(mode="python")}
-        graph_messages: list[Any] = []
-        for stream_mode, chunk in self._stream_graph(
-            compiled_app,
-            state,
-            thread_id=thread_id,
-            stream_input=Command(resume=resume_payload or {}),
-        ):
-            if stream_mode == "values" and isinstance(chunk, dict):
-                final_raw = chunk
-                graph_messages = list(chunk.get("messages") or [])
-            yield stream_mode, chunk
-        final_raw = _authoritative_raw(compiled_app, final_raw, thread_id=thread_id)
-        graph_messages = list(final_raw.get("messages") or graph_messages)
-        result = self._final_state_from_raw(final_raw, messages=graph_messages)
-        memory_event = self._enqueue_memory_write(compiled_app, result, thread_id=thread_id, messages=graph_messages)
-        if memory_event is not None:
-            yield "custom", memory_event
-        self._emit(compiled_app, result, "resume_completed", message="Kernel resumed from checkpoint.")
-        self._emit_run_completed(compiled_app, result)
-        yield "runtime_final", result
+        with tool_output_session_context(state.run.session_id):
+            state = _prepare_resume_state(state, resume_payload=resume_payload)
+            self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
+            final_raw: dict[str, Any] = {"runtime": state.model_dump(mode="python")}
+            graph_messages: list[Any] = []
+            for stream_mode, chunk in self._stream_graph(
+                compiled_app,
+                state,
+                thread_id=thread_id,
+                stream_input=Command(resume=resume_payload or {}),
+            ):
+                if stream_mode == "values" and isinstance(chunk, dict):
+                    final_raw = chunk
+                    graph_messages = list(chunk.get("messages") or [])
+                yield stream_mode, chunk
+            final_raw = _authoritative_raw(compiled_app, final_raw, thread_id=thread_id)
+            graph_messages = list(final_raw.get("messages") or graph_messages)
+            result = self._final_state_from_raw(final_raw, messages=graph_messages)
+            memory_event = self._enqueue_memory_write(compiled_app, result, thread_id=thread_id, messages=graph_messages)
+            if memory_event is not None:
+                yield "custom", memory_event
+            self._emit(compiled_app, result, "resume_completed", message="Kernel resumed from checkpoint.")
+            self._emit_run_completed(compiled_app, result)
+            yield "runtime_final", result
 
     def resume(
         self,
@@ -108,18 +112,19 @@ class ExecutionController:
         thread_id: str,
         resume_payload: dict[str, Any] | None = None,
     ) -> RuntimeState:
-        state = _prepare_resume_state(state, resume_payload=resume_payload)
-        self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
-        state, graph_messages = self._invoke_graph(
-            compiled_app,
-            state,
-            thread_id=thread_id,
-            graph_input=Command(resume=resume_payload or {}),
-        )
-        self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
-        self._emit(compiled_app, state, "resume_completed", message="Kernel resumed from checkpoint.")
-        self._emit_run_completed(compiled_app, state)
-        return state
+        with tool_output_session_context(state.run.session_id):
+            state = _prepare_resume_state(state, resume_payload=resume_payload)
+            self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
+            state, graph_messages = self._invoke_graph(
+                compiled_app,
+                state,
+                thread_id=thread_id,
+                graph_input=Command(resume=resume_payload or {}),
+            )
+            self._enqueue_memory_write(compiled_app, state, thread_id=thread_id, messages=graph_messages)
+            self._emit(compiled_app, state, "resume_completed", message="Kernel resumed from checkpoint.")
+            self._emit_run_completed(compiled_app, state)
+            return state
 
     def _invoke_graph(
         self,
