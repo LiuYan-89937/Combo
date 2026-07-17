@@ -52,6 +52,7 @@ def make_subgraph_executor(
         child_input.execution.subgraph_depth = parent_state.execution.subgraph_depth + 1
         child_input.execution.finished = False
         child_input.execution.finish_status = None
+        child_input.execution.finish_message = None
         child_state = controller.run(compiled, child_input, thread_id=child_input.run.session_id)
         route = child_state.execution.route_decision or ""
         if route.startswith("subgraph."):

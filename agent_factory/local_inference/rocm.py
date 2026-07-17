@@ -23,6 +23,7 @@ class RocmDeviceInfo:
     total_memory_bytes: int
     used_memory_bytes: int | None = None
     gpu_utilization_percent: float | None = None
+    gpu_utilization_source: str = ""
     memory_activity_percent: float | None = None
     temperature_edge_celsius: float | None = None
     temperature_hotspot_celsius: float | None = None
@@ -104,6 +105,8 @@ def inspect_rocm_runtime(*, require_available: bool = False) -> RocmRuntimeInfo:
         "--temperature",
         "--mem-usage",
     )
+    kernel_busy_devices = _kernel_gpu_busy_devices()
+    rocm_smi_busy_devices = _rocm_smi_busy_devices()
 
     devices: list[RocmDeviceInfo] = []
     for index in range(torch.cuda.device_count()):
@@ -113,10 +116,17 @@ def inspect_rocm_runtime(*, require_available: bool = False) -> RocmRuntimeInfo:
         asic = _mapping(static.get("asic"))
         bus = _mapping(static.get("bus"))
         vram = _mapping(static.get("vram"))
-
         architecture = _text(asic.get("target_graphics_version"))
         pci_bus = _text(bus.get("bdf"))
         pci_device_id = _text(asic.get("device_id"))
+        gpu_utilization, gpu_utilization_source = _gpu_utilization(
+            index=index,
+            pci_bus=pci_bus,
+            kernel_devices=kernel_busy_devices,
+            rocm_smi_devices=rocm_smi_busy_devices,
+            amd_smi_metrics=metrics,
+        )
+
         torch_name = _text(getattr(properties, "name", ""))
         name = _device_name(
             market_name=_text(asic.get("market_name")),
@@ -135,7 +145,8 @@ def inspect_rocm_runtime(*, require_available: bool = False) -> RocmRuntimeInfo:
                 name=name,
                 total_memory_bytes=total_memory_bytes,
                 used_memory_bytes=_memory_bytes(metrics, "mem_usage", "used_vram"),
-                gpu_utilization_percent=_number(metrics, "usage", "gfx_activity"),
+                gpu_utilization_percent=gpu_utilization,
+                gpu_utilization_source=gpu_utilization_source,
                 memory_activity_percent=_number(metrics, "usage", "umc_activity"),
                 temperature_edge_celsius=_number(metrics, "temperature", "edge"),
                 temperature_hotspot_celsius=_number(metrics, "temperature", "hotspot"),
@@ -156,7 +167,11 @@ def inspect_rocm_runtime(*, require_available: bool = False) -> RocmRuntimeInfo:
         rocm_version=rocm_version,
         device_count=len(devices),
         devices=tuple(devices),
-        telemetry_source="amd-smi" if static_devices or metric_devices else "torch",
+        telemetry_source=_telemetry_source(
+            kernel_busy_devices=kernel_busy_devices,
+            rocm_smi_busy_devices=rocm_smi_busy_devices,
+            amd_smi_available=bool(static_devices or metric_devices),
+        ),
     )
     return _require(info, require_available=require_available)
 
@@ -200,6 +215,121 @@ def _amd_smi_devices(command: str, *arguments: str) -> dict[int, dict[str, Any]]
         if index is not None:
             devices[index] = raw_device
     return devices
+
+
+def _kernel_gpu_busy_devices() -> dict[str, float]:
+    devices: dict[str, float] = {}
+    for busy_path in sorted(Path("/sys/class/drm").glob("card*/device/gpu_busy_percent")):
+        value = _percent(_read_text(busy_path))
+        if value is None:
+            continue
+        pci_bus = _pci_bus_from_sysfs_device(busy_path.parent)
+        if pci_bus:
+            devices[pci_bus] = value
+    return devices
+
+
+def _rocm_smi_busy_devices() -> dict[int, float]:
+    try:
+        result = subprocess.run(
+            ["rocm-smi", "--showuse", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_AMD_SMI_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    devices: dict[int, float] = {}
+    for card_name, metrics in payload.items():
+        match = re.fullmatch(r"card(\d+)", str(card_name).strip().lower())
+        if match is None or not isinstance(metrics, dict):
+            continue
+        value = next(
+            (
+                _percent(metric_value)
+                for metric_name, metric_value in metrics.items()
+                if "gpu use" in str(metric_name).strip().lower()
+            ),
+            None,
+        )
+        if value is not None:
+            devices[int(match.group(1))] = value
+    return devices
+
+
+def _gpu_utilization(
+    *,
+    index: int,
+    pci_bus: str,
+    kernel_devices: dict[str, float],
+    rocm_smi_devices: dict[int, float],
+    amd_smi_metrics: dict[str, Any],
+) -> tuple[float | None, str]:
+    normalized_bus = _normalize_pci_bus(pci_bus)
+    if normalized_bus and normalized_bus in kernel_devices:
+        return kernel_devices[normalized_bus], "linux-sysfs"
+    if index in rocm_smi_devices:
+        return rocm_smi_devices[index], "rocm-smi"
+    value = _percent(_number(amd_smi_metrics, "usage", "gfx_activity"))
+    return (value, "amd-smi") if value is not None else (None, "")
+
+
+def _telemetry_source(
+    *,
+    kernel_busy_devices: dict[str, float],
+    rocm_smi_busy_devices: dict[int, float],
+    amd_smi_available: bool,
+) -> str:
+    sources = [
+        source
+        for available, source in (
+            (bool(kernel_busy_devices), "linux-sysfs"),
+            (bool(rocm_smi_busy_devices), "rocm-smi"),
+            (amd_smi_available, "amd-smi"),
+        )
+        if available
+    ]
+    return "+".join(sources) if sources else "torch"
+
+
+def _pci_bus_from_sysfs_device(device_path: Path) -> str:
+    try:
+        resolved_name = device_path.resolve(strict=True).name
+    except OSError:
+        return ""
+    return _normalize_pci_bus(resolved_name)
+
+
+def _normalize_pci_bus(value: str) -> str:
+    match = re.search(r"(?:[0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", value)
+    if match is None:
+        return ""
+    bus = match.group(0).lower()
+    return bus if bus.count(":") == 2 else f"0000:{bus}"
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _percent(value: object) -> float | None:
+    try:
+        number = float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return None
+    return number if 0.0 <= number <= 100.0 else None
 
 
 def _device_name(

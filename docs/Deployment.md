@@ -209,7 +209,7 @@ SSH_KEY=
 9. 校验模型文件大小和 SHA256；损坏的完整文件不会被复用。
 10. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 11. 下载并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
-12. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 与本机 external Profile。
+12. 幂等同步 Chat、Embedding、Image Generation 的远端本地 Profile 与本机 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 13. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
 14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动远端推理节点并等待 Chat 与 Embedding 都进入 `ready`。
 15. 生成本机 `.env`；默认建立 SSH 隧道并启动本机前后端，传入 `--no-web` 时跳过此步骤。
@@ -235,6 +235,7 @@ FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演�
 - stable-diffusion.cpp 固定 revision 的完整 vendor 源码会幂等同步，并使用 Ninja 增量构建；
 - 远端无需访问 GitHub；CA 探针只验证国内 Python/模型下载链路，DNS、路由或防火墙问题会原样报错；
 - Profile 按固定 ID 更新，不重复创建随机记录；
+- 部署生成的模型池以当前清单为准，旧主机、旧命名规则和已移除模型留下的 Profile 与 Artifact 会被清理；
 - 本机 `.env` 保留已有 `AGENTFACTORY_RESOURCE_MASTER_KEY`。
 
 ## 6. 部署验收

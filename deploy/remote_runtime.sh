@@ -767,6 +767,7 @@ configure_image_profile() {
     "${PYTHON_BIN}" "${REMOTE_PROJECT_ROOT}/deploy/configure_model_pool.py" \
         --mode node \
         --only-image \
+        --prune-unconfigured-models \
         --store-path "${MODEL_POOL_STORE}" \
         "${IMAGE_PROFILE_ARGUMENTS[@]}"
 }
@@ -779,6 +780,7 @@ configure_profiles() {
     AGENTFACTORY_MODEL_ROOT="${REMOTE_MODEL_ROOT}" \
     "${PYTHON_BIN}" "${REMOTE_PROJECT_ROOT}/deploy/configure_model_pool.py" \
         --mode node \
+        --prune-unconfigured-models \
         --store-path "${MODEL_POOL_STORE}" \
         --chat-profile-id "${CHAT_PROFILE_ID}" \
         --chat-served-model-name "${CHAT_SERVED_MODEL_NAME}" \

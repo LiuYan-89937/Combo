@@ -41,18 +41,24 @@ def unpack_tool_envelope(value: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     )
 
 
-def runtime_wait_evidence(*, status: str, reason: str) -> dict[str, Any]:
+def runtime_wait_evidence(*, status: str, reason: str, message: str | None = None) -> dict[str, Any]:
     clean_status = str(status or "").strip()
     clean_reason = str(reason or "").strip()
     if not clean_status:
         raise ValueError("runtime wait status is required")
     if not clean_reason:
         raise ValueError("runtime wait reason is required")
+    control = {
+        "action": RUNTIME_CONTROL_WAIT_ACTION,
+        "status": clean_status,
+        "reason": clean_reason,
+    }
+    clean_message = str(message or "").strip()
+    if clean_message:
+        control["message"] = clean_message
     return {
         RUNTIME_CONTROL_EVIDENCE_KEY: {
-            "action": RUNTIME_CONTROL_WAIT_ACTION,
-            "status": clean_status,
-            "reason": clean_reason,
+            **control,
         }
     }
 
@@ -66,8 +72,9 @@ def runtime_wait_control(observations: list[dict[str, Any]]) -> dict[str, str] |
             continue
         status = str(control.get("status") or "").strip()
         reason = str(control.get("reason") or "").strip()
+        message = str(control.get("message") or "").strip()
         if status and reason:
-            controls.append({"status": status, "reason": reason})
+            controls.append({"status": status, "reason": reason, "message": message})
     if not controls:
         return None
     statuses = {item["status"] for item in controls}

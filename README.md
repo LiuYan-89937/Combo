@@ -138,7 +138,7 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
 9. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 10. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
-11. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 和本机 external Profile。
+11. 幂等同步 Chat、Embedding、Image Generation 的远端本地 Profile 和本机 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 12. 激活配置指定的 llama.cpp 实现并启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
 13. 生成本机 `.env` 的 SSH 隧道配置与资源加密密钥。
 14. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。

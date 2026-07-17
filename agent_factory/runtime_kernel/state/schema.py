@@ -151,6 +151,7 @@ class ExecutionState(BaseModel):
     resume_token: str | None = None
     finished: bool = False
     finish_status: str | None = None
+    finish_message: str | None = None
     last_error: str | None = None
     last_error_location: str | None = None
 

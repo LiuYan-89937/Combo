@@ -35,7 +35,10 @@
                 <span>{{ device.pci_bus || `GPU ${device.index}` }}</span>
               </div>
               <div class="runtime-metrics">
-                <span>{{ t('localModel.gpuUsage') }} {{ formatPercent(device.gpu_utilization_percent) }}</span>
+                <span :title="gpuUtilizationSourceLabel(device.gpu_utilization_source)">
+                  {{ t('localModel.gpuBusy') }} {{ formatPercent(device.gpu_utilization_percent) }}
+                  <small v-if="device.gpu_utilization_source">· {{ gpuUtilizationSourceLabel(device.gpu_utilization_source) }}</small>
+                </span>
                 <span>{{ t('localModel.vramUsage') }} {{ formatMemoryUsage(device) }}</span>
                 <span>{{ t('localModel.gpuTemperature') }} {{ formatTemperature(device.temperature_hotspot_celsius) }}</span>
                 <span>{{ t('localModel.gpuPower') }} {{ formatPower(device.power_watts) }}</span>
@@ -380,7 +383,11 @@
           <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.gpuLayers')">
             <n-input-number v-model:value="profileForm.gpu_layers" :min="0" />
           </n-form-item>
-          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.parallelSlots')">
+          <n-form-item
+            v-if="profileForm.kind === 'chat'"
+            :label="t('localModel.parallelSlots')"
+            :feedback="t('localModel.parallelSlotsHint')"
+          >
             <n-input-number v-model:value="profileForm.parallel_slots" :min="1" />
           </n-form-item>
           <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.kCacheType')">
@@ -420,6 +427,7 @@
           <div v-if="memoryEstimate?.available" class="memory-preview-grid">
             <div><span>{{ t('localModel.modelAllocation') }}</span><strong>{{ formatBytes(memoryEstimate.model_allocation_bytes) }}</strong></div>
             <div><span>{{ t('localModel.kvEstimate') }}</span><strong>{{ formatBytes(memoryEstimate.kv_cache_bytes) }}</strong></div>
+            <div><span>{{ t('localModel.estimatedParallelSlots') }}</span><strong>{{ memoryEstimate.parallel_slots }}</strong></div>
             <div><span>{{ t('localModel.projectedVram') }}</span><strong>{{ formatBytes(memoryEstimate.projected_used_bytes) }} / {{ formatBytes(memoryEstimate.total_memory_bytes) }}</strong></div>
             <div><span>{{ t('localModel.remainingVram') }}</span><strong>{{ formatBytes(memoryEstimate.remaining_memory_bytes) }}</strong></div>
           </div>
@@ -1071,6 +1079,16 @@ function memoryFitLabel(estimate?: InferenceMemoryEstimate | null): string {
 
 function formatPercent(value?: number | null): string {
   return typeof value === 'number' ? `${Math.round(value)}%` : '—'
+}
+
+function gpuUtilizationSourceLabel(source?: string): string {
+  if (!source) return t('localModel.telemetryUnavailable')
+  const labels: Record<string, string> = {
+    'linux-sysfs': 'Linux sysfs',
+    'rocm-smi': 'rocm-smi',
+    'amd-smi': 'amd-smi',
+  }
+  return labels[source] || source
 }
 
 function formatBytes(value?: number | null): string {

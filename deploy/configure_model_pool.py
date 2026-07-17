@@ -46,6 +46,12 @@ def main() -> None:
     store = ModelPoolStore(path=args.store_path)
     if args.only_image:
         image_profile = _upsert_image_profile(store, args)
+        if args.prune_unconfigured_models:
+            store.prune_catalog(
+                kinds={"image_generation"},
+                keep_profile_ids={image_profile.profile_id},
+                keep_artifact_ids={image_profile.artifact_id},
+            )
         if image_profile.enabled:
             store.disable_other_profiles("image_generation", image_profile.profile_id)
             store.set_default_profile_id("image_generation", image_profile.profile_id)
@@ -160,6 +166,20 @@ def main() -> None:
         )
     )
     image_profile = _upsert_image_profile(store, args)
+    if args.prune_unconfigured_models:
+        store.prune_catalog(
+            kinds={"chat", "embedding", "image_generation"},
+            keep_profile_ids={
+                chat_profile.profile_id,
+                embedding_profile.profile_id,
+                image_profile.profile_id,
+            },
+            keep_artifact_ids={
+                chat_profile.artifact_id,
+                embedding_profile.artifact_id,
+                image_profile.artifact_id,
+            },
+        )
     store.disable_other_profiles("chat", chat_profile.profile_id)
     store.disable_other_profiles("embedding", embedding_profile.profile_id)
     if image_profile.enabled:
@@ -250,6 +270,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("node", "client"), required=True)
     parser.add_argument("--store-path", type=Path, required=True)
     parser.add_argument("--only-image", action="store_true")
+    parser.add_argument("--prune-unconfigured-models", action="store_true")
     parser.add_argument("--chat-artifact-id", default="qwen3_6_35b_a3b_apex_i_quality_gguf")
     parser.add_argument("--chat-profile-id")
     parser.add_argument("--chat-served-model-name")

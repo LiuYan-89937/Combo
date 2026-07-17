@@ -273,6 +273,7 @@ configure_local_profiles() {
     [[ -x "${python_bin}" ]] || fail "Local Python environment was not created"
     "${python_bin}" "${PROJECT_ROOT}/deploy/configure_model_pool.py" \
         --mode client \
+        --prune-unconfigured-models \
         --store-path "${PROJECT_ROOT}/.agentfactory/model_pool/factory.sqlite" \
         --chat-profile-id "${CHAT_PROFILE_ID}" \
         --chat-served-model-name "${CHAT_SERVED_MODEL_NAME}" \

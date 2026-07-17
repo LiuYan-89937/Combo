@@ -681,6 +681,7 @@ class RuntimeEventNormalizer:
     def complete_visible_assistant_output_from_state(self, final_state: Any, *, reason: str) -> VisibleAssistantMessage:
         self.complete_open_model_streams(reason=reason)
         self._fill_visible_assistant_output_from_state(final_state, reason=reason)
+        self._append_runtime_finish_message(final_state, reason=reason)
         return self.visible_assistant_output
 
     def complete_visible_assistant_output_from_text(
@@ -749,6 +750,61 @@ class RuntimeEventNormalizer:
             "model_message_completed",
             stream=self.model_streams[stream_id],
             payload=payload,
+        )
+
+    def _append_runtime_finish_message(self, final_state: Any, *, reason: str) -> None:
+        execution = getattr(final_state, "execution", None)
+        text = strip_internal_snapshot_blocks(str(getattr(execution, "finish_message", None) or "").strip())
+        if not text:
+            return
+        existing = str(self.visible_assistant_output.content or "").strip()
+        if text == existing or (existing and text in existing):
+            return
+
+        node_id = "runtime_wait"
+        stream_id = uuid.uuid4().hex
+        span_id = uuid.uuid4().hex
+        part = _message_part_payload(stream_id, "text", status="completed")
+        common = {
+            "message_id": stream_id,
+            "stream_id": stream_id,
+        }
+        self.runtime_event(
+            "message_started",
+            node_id=node_id,
+            stage_id=self.current_stage_id,
+            span_id=span_id,
+            parent_span_id=self.run_span_id,
+            payload={**common, "role": "assistant", "status": "streaming"},
+        )
+        self.runtime_event(
+            "message_part_completed",
+            node_id=node_id,
+            stage_id=self.current_stage_id,
+            span_id=span_id,
+            parent_span_id=self.run_span_id,
+            payload={
+                **common,
+                "part_id": part["part_id"],
+                "part_type": "text",
+                "part_status": "completed",
+                "format": "markdown",
+                "content": text,
+            },
+        )
+        self.runtime_event(
+            "message_completed",
+            node_id=node_id,
+            stage_id=self.current_stage_id,
+            span_id=span_id,
+            parent_span_id=self.run_span_id,
+            payload={**common, "status": "completed", "completion_reason": reason},
+        )
+        self.visible_assistant_output = VisibleAssistantMessage(
+            content="\n\n".join(value for value in (existing, text) if value),
+            reasoning_content=self.visible_assistant_output.reasoning_content,
+            stream_id=stream_id,
+            node_id=node_id,
         )
 
     def _complete_model_stream_for_node(self, node_id: str, *, reason: str) -> None:

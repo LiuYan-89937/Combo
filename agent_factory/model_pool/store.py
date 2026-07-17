@@ -244,6 +244,85 @@ class ModelPoolStore:
             cursor = conn.execute("delete from local_model_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
 
+    def prune_catalog(
+        self,
+        *,
+        kinds: set[str],
+        keep_profile_ids: set[str],
+        keep_artifact_ids: set[str],
+    ) -> dict[str, list[str]]:
+        normalized_kinds = {self._validate_profile_kind(kind) for kind in kinds}
+        normalized_profile_ids = {str(value).strip() for value in keep_profile_ids if str(value).strip()}
+        normalized_artifact_ids = {str(value).strip() for value in keep_artifact_ids if str(value).strip()}
+        if not normalized_kinds:
+            raise ModelPoolStoreError("catalog pruning requires at least one model kind")
+
+        with self._connect(write=True) as conn:
+            kept_profiles = conn.execute(
+                "select profile_id, artifact_id, kind from local_model_profiles"
+            ).fetchall()
+            kept_by_id = {str(row["profile_id"]): row for row in kept_profiles}
+            missing_profiles = sorted(normalized_profile_ids - set(kept_by_id))
+            if missing_profiles:
+                raise ModelPoolStoreError(
+                    "catalog pruning cannot keep unknown profiles: " + ", ".join(missing_profiles)
+                )
+            for profile_id in normalized_profile_ids:
+                row = kept_by_id[profile_id]
+                if str(row["kind"]) not in normalized_kinds:
+                    raise ModelPoolStoreError(
+                        f"kept profile kind is outside the pruning scope: {profile_id}"
+                    )
+                if str(row["artifact_id"]) not in normalized_artifact_ids:
+                    raise ModelPoolStoreError(
+                        f"kept profile references an artifact outside the retained catalog: {profile_id}"
+                    )
+
+            removed_profiles = sorted(
+                str(row["profile_id"])
+                for row in kept_profiles
+                if str(row["kind"]) in normalized_kinds
+                and str(row["profile_id"]) not in normalized_profile_ids
+            )
+            if removed_profiles:
+                placeholders = ", ".join("?" for _ in removed_profiles)
+                conn.execute(
+                    f"delete from local_model_default_profiles where profile_id in ({placeholders})",
+                    removed_profiles,
+                )
+                conn.execute(
+                    f"delete from local_model_active_profiles where profile_id in ({placeholders})",
+                    removed_profiles,
+                )
+                conn.execute(
+                    f"delete from local_model_profiles where profile_id in ({placeholders})",
+                    removed_profiles,
+                )
+
+            artifact_rows = conn.execute(
+                "select artifact_id, kind from local_model_artifacts"
+            ).fetchall()
+            removed_artifacts: list[str] = []
+            for row in artifact_rows:
+                artifact_id = str(row["artifact_id"])
+                if str(row["kind"]) not in normalized_kinds or artifact_id in normalized_artifact_ids:
+                    continue
+                referenced = conn.execute(
+                    "select 1 from local_model_profiles where artifact_id = ? limit 1",
+                    (artifact_id,),
+                ).fetchone()
+                if referenced is None:
+                    conn.execute(
+                        "delete from local_model_artifacts where artifact_id = ?",
+                        (artifact_id,),
+                    )
+                    removed_artifacts.append(artifact_id)
+
+        return {
+            "profiles": removed_profiles,
+            "artifacts": sorted(removed_artifacts),
+        }
+
     def active_profile_id(self, kind: str) -> str | None:
         normalized_kind = self._validate_profile_kind(kind)
         with self._connect() as conn:

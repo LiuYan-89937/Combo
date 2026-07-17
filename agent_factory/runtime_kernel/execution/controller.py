@@ -334,6 +334,7 @@ def _messages_delta(state: RuntimeState) -> list[dict[str, str]]:
 def _prepare_resume_state(state: RuntimeState, *, resume_payload: dict[str, Any] | None) -> RuntimeState:
     state.execution.finished = False
     state.execution.finish_status = None
+    state.execution.finish_message = None
     state.execution.interrupted = False
     state.execution.resume_payload = resume_payload or {}
     state.policy.interrupted = False

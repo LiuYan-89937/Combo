@@ -18,15 +18,17 @@ IMMEDIATE_ATTENTION_TASK_STATUSES = {"submitted", "blocked", "failed"}
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     output = _run_action(arguments, resources)
+    summary = str(output.get("message") or "")
     evidence = (
         runtime_wait_evidence(
             status="waiting_for_workers",
             reason="collaboration workers are still running",
+            message=summary,
         )
         if output.get("status") == "deferred"
         else None
     )
-    return tool_envelope(output, evidence=evidence, summary=str(output.get("message") or ""))
+    return tool_envelope(output, evidence=evidence, summary=summary)
 
 
 def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
@@ -204,7 +206,7 @@ def _inspect_gate(session: dict[str, Any]) -> dict[str, Any] | None:
         return {
             "action": "inspect",
             "status": "deferred",
-            "message": "当前只有运行中任务，尚无 submitted/blocked 状态；请等待协作状态变化后再继续验收或调度。",
+            "message": "子任务已分配并正在执行，主 Agent 正在等待结果；子任务提交、阻塞或失败后，宿主会自动恢复当前协作，无需重复发送检查请求。",
             "active_tasks": active,
             "updated_at": session.get("updated_at"),
         }

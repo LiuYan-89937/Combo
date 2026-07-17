@@ -232,6 +232,7 @@ export interface RocmDeviceInfo {
   total_memory_bytes: number
   used_memory_bytes?: number | null
   gpu_utilization_percent?: number | null
+  gpu_utilization_source?: string
   memory_activity_percent?: number | null
   temperature_edge_celsius?: number | null
   temperature_hotspot_celsius?: number | null
