@@ -170,6 +170,8 @@ SSH_KEY=
 | `AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` | 单次主 Agent 恢复最多合并的原始事件数 | `64` |
 | `TAVILY_API_KEY` | 内置 `web_search` 的 Tavily Provider 密钥；只配置在本机 `.env`，由 MCP 子进程继承 | 留空时回退到 SearXNG/DuckDuckGo |
 | `REMOTE_INSTALL_BUILD_TOOLS` | 缺少普通工具时允许 apt 安装 | `1` |
+| `REMOTE_CA_BUNDLE` | Git、curl、pip 和 ModelScope 共用的远端 CA bundle | `/etc/ssl/certs/ca-certificates.crt` |
+| `REMOTE_REPAIR_CA_TRUST` | 证书链缺失或损坏时允许重建并按需重装 `ca-certificates` | `1` |
 | `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
 | `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
 | `REMOTE_INSTALL_PYTORCH` | 缺失时允许安装配置指定的 PyTorch HIP | `1` |
@@ -197,8 +199,8 @@ SSH_KEY=
 1. 检查本机 Git、Python、uv、Node、npm、Docker、SSH 与 rsync。
 2. 验证 SSH Key 登录和端口配置。
 3. 验证仓库自带的 `vendor/llama.cpp-official` 与 `vendor/llama.cpp-amd`；图片推理源码不进入仓库。
-4. 上传远端控制脚本并探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP。
-5. 仅在缺失时安装普通编译工具、ROCm 用户态组件和配置指定的 PyTorch HIP 包。
+4. 上传远端控制脚本，准备缺失的普通编译工具，验证并按需修复系统 CA 信任链。
+5. 探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP；仅在缺失时安装 ROCm 用户态组件和配置指定的 PyTorch HIP 包。
 6. 同步 FastAgentFactory 当前工作树到远端项目目录。
 7. 同步官方与 AMD 两套 llama.cpp 源码并使用独立目录构建两个 ROCm llama-server；远端检出固定 stable-diffusion.cpp revision、递归初始化完整子模块并构建 HIPBLAS sd-server。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj。
@@ -229,6 +231,7 @@ FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演�
 - ModelScope 复用自身缓存；
 - llama.cpp 使用 Ninja 增量构建；
 - stable-diffusion.cpp 固定 revision 的 Git 工作树和递归子模块会幂等复用，并使用 Ninja 增量构建；
+- 远端会先验证 stable-diffusion.cpp 仓库的 TLS 信任链；仅在 curl 返回证书链错误时重建 CA，DNS、路由或防火墙问题会原样报错；
 - Profile 按固定 ID 更新，不重复创建随机记录；
 - 本机 `.env` 保留已有 `AGENTFACTORY_RESOURCE_MASTER_KEY`。
 

@@ -130,17 +130,18 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 
 1. 校验本机配置和 SSH Key 登录。
 2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp。
-3. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
-4. 仅在缺失时安装普通构建工具、ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
-5. 仅同步推理控制、模型池所需的最小 Python bundle，以及两套 llama.cpp 源码到远端；Factory 前后端不上传。
-6. 独立构建 `official` 与 `amd` 两个 ROCm llama-server；远端按固定 revision 递归拉取 stable-diffusion.cpp 及其子模块，再构建 HIPBLAS `sd-server`。
-7. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
-8. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
-9. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
-10. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 和本机 external Profile。
-11. 激活配置指定的 llama.cpp 实现并启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
-12. 生成本机 `.env` 的 SSH 隧道配置与资源加密密钥。
-13. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
+3. 准备缺失的普通构建工具并验证远端 HTTPS CA 信任链；仅在证书链缺失或损坏时重建并按需重装 `ca-certificates`，随后让 Git、curl、pip 与 ModelScope 共用同一 CA bundle。
+4. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
+5. 仅在缺失时安装 ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
+6. 仅同步推理控制、模型池所需的最小 Python bundle，以及两套 llama.cpp 源码到远端；Factory 前后端不上传。
+7. 独立构建 `official` 与 `amd` 两个 ROCm llama-server；远端按固定 revision 递归拉取 stable-diffusion.cpp 及其子模块，再构建 HIPBLAS `sd-server`。
+8. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
+9. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
+10. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
+11. 幂等创建 Chat、Embedding、Image Generation 的远端本地 Profile 和本机 external Profile。
+12. 激活配置指定的 llama.cpp 实现并启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
+13. 生成本机 `.env` 的 SSH 隧道配置与资源加密密钥。
+14. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
 
 模型下载支持续传。已校验文件会通过旁路校验标记直接复用，重复执行不会重新下载 20 GB 以上的 GGUF。
 

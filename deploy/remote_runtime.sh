@@ -26,7 +26,8 @@ required_config=(
     REMOTE_LLAMA_RUNTIME_ROOT LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
     LLAMA_AMD_BASE_REVISION LLAMA_AMD_BASE_BUILD_NUMBER LLAMA_DEFAULT_IMPLEMENTATION
     REMOTE_STABLE_DIFFUSION_CPP_DIR STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
-    PYPI_INDEX_URL HF_ENDPOINT CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
+    REMOTE_CA_BUNDLE REMOTE_REPAIR_CA_TRUST PYPI_INDEX_URL HF_ENDPOINT
+    CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
     CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MODEL_SIZE_BYTES
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 CHAT_MMPROJ_SIZE_BYTES
     EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION CHAT_PROFILE_ID CHAT_SERVED_MODEL_NAME
@@ -62,6 +63,10 @@ for name in "${numeric_config[@]}"; do
         exit 2
     }
 done
+[[ "${REMOTE_REPAIR_CA_TRUST}" =~ ^[01]$ ]] || {
+    echo "REMOTE_REPAIR_CA_TRUST must be 0 or 1" >&2
+    exit 2
+}
 for name in REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT REMOTE_IMAGE_PORT; do
     (( ${!name} >= 1 && ${!name} <= 65535 )) || {
         echo "Deployment port must be between 1 and 65535: ${name}" >&2
@@ -152,8 +157,76 @@ llama_binary_path() {
 
 validate_llama_implementation "${LLAMA_DEFAULT_IMPLEMENTATION}"
 
+CA_TRUST_PREPARED=0
+
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+probe_remote_tls_trust() {
+    [[ -s "${REMOTE_CA_BUNDLE}" ]] || return 77
+    curl \
+        --silent \
+        --show-error \
+        --head \
+        --location \
+        --max-time 20 \
+        --cacert "${REMOTE_CA_BUNDLE}" \
+        --output /dev/null \
+        "${STABLE_DIFFUSION_CPP_REPOSITORY}"
+}
+
+activate_remote_ca_environment() {
+    export SSL_CERT_FILE="${REMOTE_CA_BUNDLE}"
+    export REQUESTS_CA_BUNDLE="${REMOTE_CA_BUNDLE}"
+    export CURL_CA_BUNDLE="${REMOTE_CA_BUNDLE}"
+    export GIT_SSL_CAINFO="${REMOTE_CA_BUNDLE}"
+    export PIP_CERT="${REMOTE_CA_BUNDLE}"
+}
+
+prepare_ca_trust() {
+    local probe_status
+    if [[ "${CA_TRUST_PREPARED}" == "1" ]]; then
+        return
+    fi
+    if probe_remote_tls_trust; then
+        log "System CA trust is ready: ${REMOTE_CA_BUNDLE}"
+        activate_remote_ca_environment
+        CA_TRUST_PREPARED=1
+        return
+    else
+        probe_status=$?
+    fi
+
+    if [[ "${probe_status}" != "60" && "${probe_status}" != "77" ]]; then
+        fail "TLS probe failed with curl status ${probe_status}; check DNS, routing, proxy, or firewall access to ${STABLE_DIFFUSION_CPP_REPOSITORY}"
+    fi
+    [[ "${REMOTE_REPAIR_CA_TRUST}" == "1" ]] \
+        || fail "Remote CA trust is unavailable and REMOTE_REPAIR_CA_TRUST is disabled"
+    command_exists apt-get \
+        || fail "Remote CA trust is unavailable and apt-get cannot repair ca-certificates"
+
+    log "Repairing the remote system CA trust store"
+    if command_exists update-ca-certificates; then
+        update-ca-certificates --fresh
+    fi
+    if ! probe_remote_tls_trust; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get -o Acquire::Retries=5 update
+        apt-get -o Acquire::Retries=5 install -y --reinstall --no-install-recommends ca-certificates
+        command_exists update-ca-certificates \
+            || fail "ca-certificates was installed without update-ca-certificates"
+        update-ca-certificates --fresh
+    fi
+    probe_remote_tls_trust \
+        || fail "Remote CA trust repair completed, but TLS verification still fails for ${STABLE_DIFFUSION_CPP_REPOSITORY}"
+    activate_remote_ca_environment
+    CA_TRUST_PREPARED=1
+    log "System CA trust repair completed"
+}
+
+git_with_ca() {
+    git -c http.sslCAInfo="${REMOTE_CA_BUNDLE}" "$@"
 }
 
 prepare_host() {
@@ -165,6 +238,9 @@ prepare_host() {
     if command_exists python3 && ! python3 -m venv --help >/dev/null 2>&1; then
         missing+=("python3-venv")
     fi
+    if command_exists curl; then
+        prepare_ca_trust
+    fi
     if (( ${#missing[@]} > 0 )); then
         [[ "${REMOTE_INSTALL_BUILD_TOOLS:-1}" == "1" ]] \
             || fail "Missing build commands: ${missing[*]}. Set REMOTE_INSTALL_BUILD_TOOLS=1 or install them manually."
@@ -175,6 +251,7 @@ prepare_host() {
         apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
             build-essential ca-certificates cmake curl git ninja-build python3-pip python3-venv rsync
     fi
+    prepare_ca_trust
     mkdir -p \
         "${REMOTE_PROJECT_ROOT}" \
         "${REMOTE_STATE_ROOT}/logs" \
@@ -330,6 +407,7 @@ prepare_pytorch_runtime() {
 }
 
 prepare_python() {
+    prepare_ca_trust
     [[ -f "${REMOTE_PROJECT_ROOT}/agent_factory/local_inference/node_server.py" ]] \
         || fail "Inference runtime is not synchronized to ${REMOTE_PROJECT_ROOT}"
     [[ -f "${REMOTE_PROJECT_ROOT}/deploy/configure_model_pool.py" ]] \
@@ -527,6 +605,7 @@ validate_stable_diffusion_source() {
 }
 
 sync_stable_diffusion_source() {
+    prepare_ca_trust
     local source_dir="${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
     local source_parent temp_dir current_revision
     source_parent="$(dirname "${source_dir}")"
@@ -536,21 +615,21 @@ sync_stable_diffusion_source() {
         temp_dir="${source_dir}.clone"
         rm -rf "${temp_dir}"
         log "Cloning stable-diffusion.cpp revision ${STABLE_DIFFUSION_CPP_REVISION} with recursive submodules"
-        git init "${temp_dir}"
-        git -C "${temp_dir}" remote add origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
-        git -C "${temp_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
-        git -C "${temp_dir}" checkout --detach FETCH_HEAD
-        git -C "${temp_dir}" submodule sync --recursive
-        git -C "${temp_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
+        git_with_ca init "${temp_dir}"
+        git_with_ca -C "${temp_dir}" remote add origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
+        git_with_ca -C "${temp_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
+        git_with_ca -C "${temp_dir}" checkout --detach FETCH_HEAD
+        git_with_ca -C "${temp_dir}" submodule sync --recursive
+        git_with_ca -C "${temp_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
         validate_stable_diffusion_source "${temp_dir}"
         rm -rf "${source_dir}"
         mv "${temp_dir}" "${source_dir}"
     else
-        git -C "${source_dir}" remote set-url origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
-        git -C "${source_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
-        git -C "${source_dir}" checkout --detach --force FETCH_HEAD
-        git -C "${source_dir}" submodule sync --recursive
-        git -C "${source_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
+        git_with_ca -C "${source_dir}" remote set-url origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
+        git_with_ca -C "${source_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
+        git_with_ca -C "${source_dir}" checkout --detach --force FETCH_HEAD
+        git_with_ca -C "${source_dir}" submodule sync --recursive
+        git_with_ca -C "${source_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
         validate_stable_diffusion_source "${source_dir}"
     fi
 
@@ -582,6 +661,7 @@ build_sd() {
 }
 
 download_file() {
+    prepare_ca_trust
     local url="$1"
     local destination="$2"
     local checksum="$3"
@@ -615,6 +695,7 @@ download_file() {
         --location \
         --retry 10 \
         --retry-all-errors \
+        --cacert "${REMOTE_CA_BUNDLE}" \
         --continue-at - \
         --output "${destination}" \
         "${url}"
